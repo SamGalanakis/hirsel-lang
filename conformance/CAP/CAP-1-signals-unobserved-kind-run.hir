@@ -1,0 +1,20 @@
+// rule: CAP-1
+// expect: run
+// signals: {"provider":"signals.script@1","kinds":["terminate"],"script":[]}
+// stdout: not granted
+// stdout: invalid input
+// A wait names only kinds its grant observes, and at least one: Hangup is outside a
+// Terminate-only grant, and the checks precede any wait.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let signals = io.signals(rt)?
+  let _ = match signal.wait(signals, [Terminate(), Hangup()]) {
+    Error(NotGranted()) => out.print(stdout, "not granted\n"),
+    _ => out.print(stdout, "wrong\n"),
+  }
+  let _ = match signal.wait(signals, []) {
+    Error(InvalidInput()) => out.print(stdout, "invalid input\n"),
+    _ => out.print(stdout, "wrong\n"),
+  }
+  Ok(())
+}

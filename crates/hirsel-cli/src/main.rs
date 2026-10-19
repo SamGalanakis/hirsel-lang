@@ -1671,6 +1671,11 @@ fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
         RunOutcome::Refused(reason) => eprintln!("hirsel: launch: {reason}"),
         RunOutcome::Diverged(reason) => eprintln!("hirsel: replay refused: {reason}"),
         RunOutcome::Tooling(reason) => eprintln!("hirsel: {reason}"),
+        // A signal's default action ended the run: this process ends by it too.
+        RunOutcome::Signaled(kind) => {
+            eprintln!("ended by signal: {}", kind.name());
+            return hirsel_driver::end_by_signal(*kind);
+        }
     }
     outcome.exit_code() as u8
 }

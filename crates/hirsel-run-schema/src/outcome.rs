@@ -72,6 +72,10 @@ pub enum RunOutcome {
     Blocked(Vec<Wait>),
     /// A run budget was spent; the run stopped like a Blocked run.
     BudgetExceeded(BudgetKind),
+    /// A signal the run did not capture arrived, or a second Interrupt while one was
+    /// pending, in a scripted world (`signals.script@1`): the host's default action ends the
+    /// run, which stops like a Blocked run. On a host the process itself dies by the signal.
+    Signaled(crate::SignalKind),
     /// The host refused the run before entry, or an adapter refused a request mid-run.
     Refused(String),
     /// A replay's requests left its recording (mismatch, missing or unconsumed events).
@@ -99,6 +103,9 @@ pub mod exit {
     pub const BLOCKED: i32 = 4;
     pub const BUDGET_EXCEEDED: i32 = 5;
     pub const ENVIRONMENTAL: i32 = 6;
+    /// Added to a signal's number for a `Signaled` run whose launcher cannot end by the
+    /// signal itself, as a shell reports a process a signal killed.
+    pub const SIGNALED_BASE: i32 = 128;
 }
 
 impl RunOutcome {
@@ -118,6 +125,7 @@ impl RunOutcome {
             Self::Blocked(_) => exit::BLOCKED,
             Self::BudgetExceeded(_) => exit::BUDGET_EXCEEDED,
             Self::Environmental(_) => exit::ENVIRONMENTAL,
+            Self::Signaled(kind) => exit::SIGNALED_BASE + kind.number(),
         }
     }
 }

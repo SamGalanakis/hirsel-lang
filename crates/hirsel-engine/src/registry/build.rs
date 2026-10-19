@@ -23,6 +23,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Stdin",
         "Stderr",
         "Stdout",
+        "Signals",
         "MonotonicClock",
         "WallClock",
         "Random",
@@ -206,6 +207,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("RandomError", "", "Unavailable()"),
         ("TelemetryError", "", "TooLarge()|InvalidParent()"),
         ("WaitError", "", "Clock(ClockError)|Canceled(CancelCause)"),
+        ("SignalKind", "", "Interrupt()|Terminate()|Hangup()"),
+        (
+            "SignalError",
+            "",
+            "Canceled(CancelCause)|NotGranted()|InvalidInput()",
+        ),
         ("ArgError", "", "MissingArgument()|InvalidUtf8()"),
         ("FloatIntError", "", "NotFinite()|OutOfRange()"),
         ("OutOfSpace", "", "OutOfSpace()"),
@@ -1121,6 +1128,8 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "RandomError"
             | "TelemetryError"
             | "WaitError"
+            | "SignalKind"
+            | "SignalError"
             | "ArgError"
             | "FloatIntError"
             | "OutOfSpace"
@@ -1394,6 +1403,7 @@ impl Builder {
                                 | "Stdin"
                                 | "Stderr"
                                 | "Stdout"
+                                | "Signals"
                                 | "MonotonicClock"
                                 | "WallClock"
                                 | "Random"

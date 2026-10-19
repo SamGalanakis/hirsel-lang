@@ -186,6 +186,9 @@ pub fn replay_interpreter_with_fixture(
                 Request::RunnerCall(_) | Request::RunnerCancel { .. } | Request::CallReturn(_) => {
                     panic!("runner tapes replay through hirsel-cli's runner tests")
                 }
+                Request::Signals { .. } | Request::SignalWait { .. } => {
+                    panic!("signal tapes replay through tests/it/signals.rs")
+                }
                 Request::RandomBytes { .. } | Request::SleepUntil { .. } => {
                     panic!("random and wait tapes replay through tests/it/waits.rs")
                 }
@@ -516,6 +519,7 @@ pub fn replay_interpreter_with_fixture(
                         hirsel_rt::handles::Grant::Span { telemetry, .. } => ObservedGrant::Span {
                             telemetry: *telemetry,
                         },
+                        hirsel_rt::handles::Grant::Signals => ObservedGrant::Root("Signals".into()),
                         hirsel_rt::handles::Grant::Net { rules, world } => ObservedGrant::Net {
                             world: match world {
                                 hirsel_rt::net::NetWorld::Host => 0,

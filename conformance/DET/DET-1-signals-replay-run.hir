@@ -1,0 +1,23 @@
+// rule: DET-1
+// expect: run
+// signals: {"provider":"signals.script@1","kinds":["hangup","interrupt","terminate"],"script":["hangup","terminate","interrupt"]}
+// stdout: hangup
+// stdout: terminate
+// stdout: interrupt
+// Each scripted arrival is delivered at an idle point, recorded as the completion of the
+// wait it ends, and replayed from the recording with no signal sent.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let signals = io.signals(rt)?
+  let mut seen: u64 = 0
+  while seen < 3 {
+    let _ = match signal.wait(signals, [Interrupt(), Terminate(), Hangup()]) {
+      Ok(Interrupt()) => out.print(stdout, "interrupt\n"),
+      Ok(Terminate()) => out.print(stdout, "terminate\n"),
+      Ok(Hangup()) => out.print(stdout, "hangup\n"),
+      Error(_) => out.print(stdout, "wrong\n"),
+    }
+    seen += 1
+  }
+  Ok(())
+}

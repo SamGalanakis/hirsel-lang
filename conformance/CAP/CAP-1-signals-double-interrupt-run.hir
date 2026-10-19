@@ -1,0 +1,24 @@
+// rule: CAP-1
+// expect: signaled interrupt
+// grant: clock
+// signals: {"provider":"signals.script@1","kinds":["interrupt"],"script":["interrupt","interrupt"]}
+// stdout: sleeping
+// The first Interrupt is pending while the run sleeps without waiting for it; the second,
+// at the next idle point, arrives while the first is unhandled and keeps the default kill.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let signals = io.signals(rt)?
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let at = match instant.checked_add(c, now, 10u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  let _ = out.print(stdout, "sleeping\n")
+  let _ = clock.sleep_until(c, at)
+  let _ = out.print(stdout, "woke\n")
+  Ok(())
+}

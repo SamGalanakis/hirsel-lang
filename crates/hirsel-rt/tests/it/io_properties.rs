@@ -39,6 +39,8 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::TelemetryLog { .. } => false,
             Request::TelemetryMeasure { .. } => false,
             Request::SleepUntil { .. } => true,
+            Request::Signals { .. } => false,
+            Request::SignalWait { .. } => true,
             Request::Tasks { .. } => false,
             Request::Net { .. } => false,
             Request::Process { .. } => false,

@@ -74,6 +74,10 @@ pub fn run_with_runtime(
             execution.outcome = Outcome::BudgetExceeded(kind);
             Ok(())
         }
+        (Err(Error::Signaled(kind)), _) => {
+            execution.outcome = Outcome::Signaled(kind);
+            Ok(())
+        }
         (Err(Error::Environmental(cause)), _) => {
             execution.outcome = Outcome::Environmental(cause);
             Ok(())

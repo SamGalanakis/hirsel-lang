@@ -368,6 +368,7 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
             "blocked {}",
             hex(hirsel_run_schema::Wait::encode(waits).as_bytes())
         ),
+        RunOutcome::Signaled(kind) => format!("signaled {}", kind.name()),
         RunOutcome::BudgetExceeded(BudgetKind::Fuel) => "budget fuel".into(),
         RunOutcome::BudgetExceeded(BudgetKind::Memory) => "budget memory".into(),
         RunOutcome::Refused(why) => format!("refused {}", hex(why.as_bytes())),
@@ -442,6 +443,9 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
             }
         }
         "blocked" => RunOutcome::Blocked(hirsel_run_schema::Wait::decode(&unhex(next()?)?)?),
+        "signaled" => RunOutcome::Signaled(
+            hirsel_run_schema::SignalKind::parse(next()?).ok_or("bad journal signal")?,
+        ),
         "budget" => match next()? {
             "fuel" => RunOutcome::BudgetExceeded(BudgetKind::Fuel),
             "memory" => RunOutcome::BudgetExceeded(BudgetKind::Memory),
@@ -1108,6 +1112,7 @@ mod tests {
                 kind: "channel.receive".into(),
                 targets: vec![3],
             }]),
+            RunOutcome::Signaled(hirsel_run_schema::SignalKind::Hangup),
             RunOutcome::BudgetExceeded(BudgetKind::Memory),
             RunOutcome::Refused("".into()),
             RunOutcome::Diverged("x y".into()),

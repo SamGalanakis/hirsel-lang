@@ -224,6 +224,7 @@ fn runtime_error(e: Error) -> LaunchError {
         // Checked execution reports traps as an outcome; this is unreachable.
         Error::Blocked(_) => LaunchError::Runtime("unhandled Blocked stop signal".into()),
         Error::BudgetExceeded(_) => LaunchError::Runtime("unhandled budget stop signal".into()),
+        Error::Signaled(_) => LaunchError::Runtime("unhandled signal stop".into()),
         Error::Trapped(trap) => LaunchError::Runtime(trap.to_string()),
         Error::Environmental(cause) => LaunchError::Runtime(format!("environmental: {cause}")),
         Error::Ended(failure) => LaunchError::Runtime(format!("unhandled run end: {failure:?}")),

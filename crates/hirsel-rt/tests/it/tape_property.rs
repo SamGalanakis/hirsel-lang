@@ -156,6 +156,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Tasks { io: n.wrapping_add(12) },
         Net { io: n.wrapping_add(12) },
         Process { io: n.wrapping_add(12) },
+        Signals { io: n.wrapping_add(41) },
+        SignalWait { signals: n.wrapping_add(42), kinds: (n % 8) as u8 },
         TestProcess { test: n.wrapping_add(29), runs: runs, children: children },
         ProcessNarrow { process: n.wrapping_add(22), rules: vec![ProcessRule { program: if n == 0 { String::new() } else { format!("{text}#program") }, env: vec![text.clone()] }] },
         ProcessRun { process: n.wrapping_add(22), command: command.clone(), stdin: bytes.clone(), max_output: n.wrapping_add(15), deadline: deadline },
@@ -292,6 +294,16 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Wall(result!(n as i64, ClockError::Unavailable)),
         Completion::Random(result!(bytes.clone(), RandomError::Unavailable)),
         Completion::Wait(result!((), WaitError::Canceled(n as u32))),
+        Completion::Signal(if n % 2 == 0 {
+            Ok(hirsel_run_schema::SignalKind::ALL[n as usize / 2 % 3])
+        } else {
+            Err([
+                SignalError::Canceled(n as u32),
+                SignalError::NotGranted,
+                SignalError::InvalidInput,
+            ][n as usize / 2 % 3]
+                .clone())
+        }),
         Completion::Refused(n),
         Completion::Checked(n % 2 == 0),
         Completion::Handle(result!(n, io_error.clone())),
@@ -402,6 +414,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::Wall(_) => (),
             Completion::Random(_) => (),
             Completion::Wait(_) => (),
+            Completion::Signal(_) => (),
             Completion::Refused(_) => (),
             Completion::Checked(_) => (),
             Completion::Handle(_) => (),

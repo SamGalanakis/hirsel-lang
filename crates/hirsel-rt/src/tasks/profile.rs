@@ -149,6 +149,8 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::Tasks { .. } => "Tasks",
         Request::Net { .. } => "Net",
         Request::Process { .. } => "Process",
+        Request::Signals { .. } => "Signals",
+        Request::SignalWait { .. } => "SignalWait",
         Request::TestProcess { .. } => "TestProcess",
         Request::ProcessNarrow { .. } => "ProcessNarrow",
         Request::ProcessRun { .. } => "ProcessRun",

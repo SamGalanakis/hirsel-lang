@@ -94,6 +94,7 @@ pub fn baseline(root: &Path) -> Result<Vec<Case>, String> {
                 | crate::Expect::Run { .. }
                 | crate::Expect::Fail { .. }
                 | crate::Expect::Blocked { .. }
+                | crate::Expect::Signaled { .. }
         ) && crate::gate_exclusions(&pending, &id, &source).is_empty()
         {
             cases.push(Case {

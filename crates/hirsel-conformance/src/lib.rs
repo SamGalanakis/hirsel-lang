@@ -97,6 +97,11 @@ pub enum Expect {
     Blocked {
         stdout: String,
     },
+    /// A scripted signal's default action ends the run (`// signals:`).
+    Signaled {
+        kind: hirsel_run_schema::SignalKind,
+        stdout: String,
+    },
     Reject {
         rule: RuleId,
         line: usize,
@@ -134,6 +139,8 @@ pub enum End {
     Exit(i32),
     /// Every task waits and none can wake.
     Blocked,
+    /// A signal's default action ended the run.
+    Signaled(hirsel_run_schema::SignalKind),
     /// The first runtime failure's rule, at its stable site's line.
     Failure {
         rule: RuleId,
@@ -150,6 +157,7 @@ impl Expect {
             Expect::Accept => "accept",
             Expect::Test => "test",
             Expect::Blocked { .. } => "blocked",
+            Expect::Signaled { .. } => "signaled",
             Expect::Reject { .. } => "reject",
             Expect::Run { .. } => "run",
             Expect::Fail { .. } => "fail",
@@ -178,6 +186,13 @@ impl Expect {
                 },
             ) => stdout.as_bytes() == out,
             (
+                Expect::Signaled { kind, stdout },
+                Actual::Ran {
+                    end: End::Signaled(k),
+                    stdout: out,
+                },
+            ) => kind == k && stdout.as_bytes() == out,
+            (
                 Expect::Fail { rule, line, stdout },
                 Actual::Ran {
                     end: End::Failure { rule: r, line: l },
@@ -198,7 +213,7 @@ pub struct Header {
 }
 
 /// Header directive names; other colon-bearing comments are prose.
-const DIRECTIVES: [&str; 16] = [
+const DIRECTIVES: [&str; 17] = [
     "rule",
     "expect",
     "stdout",
@@ -214,6 +229,7 @@ const DIRECTIVES: [&str; 16] = [
     "oracle-reason",
     "runners",
     "fault_seed",
+    "signals",
     "twin",
 ];
 
@@ -289,6 +305,17 @@ pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
                 }
                 fixture.net = Some(grant);
             }
+            "signals" => {
+                if fixture.signals.is_some() {
+                    return Err("duplicate signals directive".into());
+                }
+                let grant = hirsel_run_config::validate_signals_grant(value.trim().as_bytes())
+                    .map_err(|e| e.to_string())?;
+                if grant.provider != "signals.script@1" {
+                    return Err("signals fixture must use signals.script@1".into());
+                }
+                fixture.signals = Some(grant);
+            }
             "steps" => {
                 if fixture.steps.is_some() {
                     return Err("duplicate steps directive".into());
@@ -349,6 +376,7 @@ pub(crate) fn simulation(source: &str) -> Result<hirsel_engine::SimulationConfig
     let mut simulation = hirsel_engine::SimulationConfig {
         net: fixture.net,
         process: fixture.process,
+        signals: fixture.signals,
         env: fixture.env.unwrap_or_default(),
         runners: fixture.runners,
         fault_seed: fixture.fault_seed.unwrap_or(0),
@@ -433,6 +461,11 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                             stdout: String::new(),
                             exit: 0,
                         },
+                        ["signaled", kind] => Expect::Signaled {
+                            kind: hirsel_run_schema::SignalKind::parse(kind)
+                                .ok_or_else(|| format!("unknown signal kind {kind:?}"))?,
+                            stdout: String::new(),
+                        },
                         [kind @ ("reject" | "fail"), id, "at", "line", number] => {
                             let rule = known_rule(id, rules)?;
                             if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
@@ -477,9 +510,14 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                 "stdout" => {
                     if !matches!(
                         expect,
-                        Some(Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. })
+                        Some(
+                            Expect::Run { .. }
+                                | Expect::Fail { .. }
+                                | Expect::Blocked { .. }
+                                | Expect::Signaled { .. }
+                        )
                     ) {
-                        return Err("stdout must follow expect: run, fail or blocked".into());
+                        return Err("stdout must follow expect: run, fail, blocked or signaled".into());
                     }
                     saw_stdout = true;
                     stdout.push_str(value.strip_prefix(' ').unwrap_or(value));
@@ -498,7 +536,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                             .map_err(|_| "exit must be an integer")?,
                     );
                 }
-                "grant" | "env" | "net" | "process" | "runners" | "fault_seed" => {}
+                "grant" | "env" | "net" | "process" | "runners" | "fault_seed" | "signals" => {}
                 "twin" => {
                     if twin.is_some() {
                         return Err("duplicate twin directive".into());
@@ -549,10 +587,19 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         let mut expect = expect.ok_or("missing expect directive")?;
         if !matches!(
             expect,
-            Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. }
-        ) && (fixture.monotonic.is_some() || fixture.net.is_some() || fixture.process.is_some())
+            Expect::Run { .. }
+                | Expect::Fail { .. }
+                | Expect::Blocked { .. }
+                | Expect::Signaled { .. }
+        ) && (fixture.monotonic.is_some()
+            || fixture.net.is_some()
+            || fixture.process.is_some()
+            || fixture.signals.is_some())
         {
-            return Err("fixture directives require expect: run, fail or blocked".into());
+            return Err("fixture directives require expect: run, fail, blocked or signaled".into());
+        }
+        if matches!(expect, Expect::Signaled { .. }) && fixture.signals.is_none() {
+            return Err("expect: signaled requires a signals directive".into());
         }
         if matches!(expect, Expect::Accept | Expect::Reject { .. }) && fixture.steps.is_some() {
             return Err("steps requires expect: run, fail, blocked or test".into());
@@ -580,6 +627,8 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             *output = stdout;
             *code = exit.unwrap_or(0);
         } else if let Expect::Blocked { stdout: output } = &mut expect {
+            *output = stdout;
+        } else if let Expect::Signaled { stdout: output, .. } = &mut expect {
             *output = stdout;
         } else if let Expect::Fail { stdout: output, .. } = &mut expect {
             *output = saw_stdout.then_some(stdout);

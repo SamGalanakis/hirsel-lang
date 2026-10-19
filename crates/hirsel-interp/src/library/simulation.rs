@@ -91,6 +91,9 @@ pub struct SimulationConfig {
     pub net: Option<hirsel_run_schema::NetGrant>,
     /// Exact process rules; scripted runs never widen them.
     pub process: Option<hirsel_run_schema::ProcessGrant>,
+    /// The observed kinds and the `signals.script@1` arrivals; absent, the run has no
+    /// Signals and receives no signal.
+    pub signals: Option<hirsel_run_schema::SignalsGrant>,
     pub random_seed: u64,
     pub test_seed: u64,
     /// The `telemetry.null@1` identity seed: a stream separate from Random's.
@@ -134,6 +137,7 @@ impl Default for SimulationConfig {
             debug: SimulationDebug::default(),
             net: None,
             process: None,
+            signals: None,
             random_seed: 0,
             test_seed: 0,
             telemetry_seed: 0,

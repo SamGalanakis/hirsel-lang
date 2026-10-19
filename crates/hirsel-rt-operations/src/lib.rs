@@ -204,6 +204,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.walk"
         | "io.stdin"
         | "io.stderr"
+        | "io.signals"
+        | "signal.wait"
         | "stdin.read"
         | "err.print"
         | "env.get"
@@ -349,6 +351,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "capture.measure"
             | "io.stdin"
             | "io.stderr"
+            | "io.signals"
+            | "signal.wait"
             | "stdin.read"
             | "env.get"
             | "env.narrow"
@@ -1927,6 +1931,20 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_io_signals",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_signal_wait",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_io_stdin",
         destination: true,
         result: Some((16, 8)),
@@ -2234,6 +2252,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "io.random",
     "io.stdin",
     "io.stderr",
+    "io.signals",
+    "signal.wait",
     "stdin.read",
     "err.print",
     "env.get",

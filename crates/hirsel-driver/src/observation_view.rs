@@ -602,6 +602,7 @@ mod tests {
         let mut view = View::parse("fixture", bytes.as_bytes()).unwrap();
         let observed = Observable {
             blocked: None,
+            signaled: None,
             schema_version: 1,
             returned_type: None,
             returned: None,

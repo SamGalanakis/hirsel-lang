@@ -43,6 +43,8 @@ pub use net::{
     net_client_unaccepted, net_client_unmet,
 };
 mod child;
+mod signals;
+pub use signals::{SignalKind, SignalsGrant, signal_kinds};
 pub mod tls;
 pub use child::{ChildStream, ScriptChild, ScriptGroup, ScriptRead, Signal};
 mod process;
@@ -70,6 +72,8 @@ pub enum ProviderContract {
     NetScript,
     ProcessSpawn,
     ProcessScript,
+    SignalsHost,
+    SignalsScript,
     AdmitAny,
     AdmitSafe,
     BudgetsNone,
@@ -96,6 +100,8 @@ impl ProviderContract {
         Self::RandomSplitMix64,
         Self::RandomSystem,
         Self::RunnerRemoteTls,
+        Self::SignalsHost,
+        Self::SignalsScript,
         Self::RunnerSim,
         Self::StderrBytes,
         Self::StdinBytes,
@@ -120,6 +126,8 @@ impl ProviderContract {
             Self::NetScript => "net.script@2",
             Self::ProcessSpawn => "process.spawn@1",
             Self::ProcessScript => "process.script@1",
+            Self::SignalsHost => "signals.host@1",
+            Self::SignalsScript => "signals.script@1",
             Self::AdmitAny => "admit.any@1",
             Self::AdmitSafe => "admit.safe@1",
             Self::BudgetsNone => "budgets.none@1",
@@ -242,6 +250,10 @@ pub struct IoGrants {
     /// records without telemetry keep their identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<TelemetryGrant>,
+    /// Omitted, not null, when denied, so records without signals keep the bytes and
+    /// identity they had before the member existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<SignalsGrant>,
 }
 /// `io.telemetry`: `telemetry.capture@1` (span identities from the host's secure
 /// generator) or `telemetry.null@1` (identities from `seed`, and, with `queue`, a simulated

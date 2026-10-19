@@ -34,6 +34,12 @@ impl SimIo {
     ) -> Result<(), AdapterError> {
         self.state.set_net_script(peers, listeners)
     }
+    /// The kinds the admitted `io.signals` grant observes, as bits; replay re-derives each
+    /// wait's checks from them.
+    pub fn set_signal_kinds(&mut self, kinds: u8) {
+        self.state.signal_kinds = kinds;
+        self.state.projections.insert("signals".into());
+    }
     /// Replay uses the admitted projection set, independently of tape completions.
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {
         self.state.projections = projections;
@@ -338,6 +344,7 @@ impl Adapter for SimIo {
                 | Request::RandomBytes { .. }
                 | Request::TelemetryBegin { .. }
                 | Request::SleepUntil { .. }
+                | Request::SignalWait { .. }
         ) {
             if event.fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);

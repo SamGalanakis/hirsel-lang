@@ -50,6 +50,7 @@ pub mod process;
 pub mod program;
 pub mod readiness;
 pub mod runner;
+pub mod signals;
 mod standalone;
 pub mod telemetry;
 pub mod test_net_abi;

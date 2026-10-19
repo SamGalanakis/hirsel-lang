@@ -6,7 +6,7 @@ hirsel_guard::install!();
 use hirsel_run_schema::{
     Admission, Budgets, CallRecord, CodeReach, Inputs, IoGrants, LaunchKind, NetGrant,
     ProcessGrant, ProgramRevision, ProviderContract, RecordingLevel, RunRefusal, Scheduler,
-    call_key, callee_instance, hash_parts, hex,
+    SignalsGrant, call_key, callee_instance, hash_parts, hex,
 };
 use serde::{Deserialize, Serialize};
 pub mod managed_cores;
@@ -25,7 +25,9 @@ mod net;
 mod process;
 pub use net::validate_net_grant;
 pub use process::validate_process_grant;
+mod signals;
 use sha2::{Digest as _, Sha256};
+pub use signals::validate_signals_grant;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -483,6 +485,7 @@ impl ValidatedRun {
             ("net", io.net.is_some()),
             ("process", io.process.is_some()),
             ("random", io.random.is_some()),
+            ("signals", io.signals.is_some()),
             ("dir", !io.dirs.is_empty()),
             ("telemetry", io.telemetry.is_some()),
         ]
@@ -521,6 +524,10 @@ impl ValidatedRun {
     /// Exact validated process policy; scripted runs never widen its rules.
     pub fn process_grant(&self) -> Option<&ProcessGrant> {
         self.record.io.as_ref()?.process.as_ref()
+    }
+    /// The observed signal kinds and their provider; a script never widens the kinds.
+    pub fn signals_grant(&self) -> Option<&SignalsGrant> {
+        self.record.io.as_ref()?.signals.as_ref()
     }
     /// Bind launch to semantic code, independently of native artifact provenance.
     pub fn check_revision(
@@ -922,6 +929,10 @@ fn validate_io(io: &mut IoGrants, field: &str) -> Result<(), RunRefusal> {
         provider(&at("process.provider"), &process.provider)?;
         process::validate(process)?;
     }
+    if let Some(signals) = &mut io.signals {
+        provider(&at("signals.provider"), &signals.provider)?;
+        signals::validate(signals)?;
+    }
     if let Some(telemetry) = &io.telemetry {
         provider(&at("telemetry.provider"), &telemetry.provider)?;
         // The host provider draws its identities; only the null provider takes a seed
@@ -1010,6 +1021,14 @@ fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
         )
     {
         return Err(unsupported(&at("telemetry.provider")));
+    }
+    if let Some(signals) = &io.signals
+        && !matches!(
+            ProviderContract::parse(&signals.provider),
+            Some(ProviderContract::SignalsHost | ProviderContract::SignalsScript)
+        )
+    {
+        return Err(unsupported(&at("signals.provider")));
     }
     Ok(())
 }

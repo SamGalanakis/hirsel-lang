@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 /// The comparison's own version: bump when a field is added or its meaning
 /// changes, so stored mismatch artifacts name what they compared.
-pub const OBSERVATION_SCHEMA: u32 = 3;
+pub const OBSERVATION_SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -34,6 +34,9 @@ pub struct Observation {
     pub blocked: bool,
     /// The run spent this budget (`budgets.limits@2`) and stopped as a Blocked run does.
     pub budget: Option<hirsel_run_schema::BudgetKind>,
+    /// The run ended by this signal's default action (schema 4): a native executable is
+    /// terminated by the signal itself, which an ordinary exit status never matches.
+    pub signaled: Option<hirsel_run_schema::SignalKind>,
     pub output: Vec<u8>,
     /// The primary failure, then cleanup failures in order.
     pub failures: Vec<Failure>,
@@ -49,6 +52,7 @@ impl Observation {
             exit_code: observable.exit_code,
             blocked: observable.blocked.is_some(),
             budget: None,
+            signaled: observable.signaled,
             output: observable.output.clone(),
             failures: observable
                 .failures
@@ -78,6 +82,9 @@ impl Observation {
         use hirsel_run_schema::{Returned, RunOutcome};
         if let Some(kind) = self.budget {
             return Ok(RunOutcome::BudgetExceeded(kind));
+        }
+        if let Some(kind) = self.signaled {
+            return Ok(RunOutcome::Signaled(kind));
         }
         if self.blocked {
             return Ok(RunOutcome::Blocked(waits));
@@ -120,6 +127,9 @@ impl Observation {
         }
         if self.blocked {
             out.push_str("blocked\n");
+        }
+        if let Some(kind) = self.signaled {
+            let _ = writeln!(out, "signaled {}", kind.name());
         }
         let _ = writeln!(out, "output {:?}", String::from_utf8_lossy(&self.output));
         for f in &self.failures {

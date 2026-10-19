@@ -102,6 +102,9 @@ pub enum Outcome {
     Trapped(checked::Trap),
     /// A host resource stopped the run; nothing further ran (`RunOutcome::Environmental`).
     Environmental(hirsel_run_schema::Environmental),
+    /// A scripted signal took its default action (`RunOutcome::Signaled`); nothing further
+    /// ran, as for Blocked.
+    Signaled(hirsel_run_schema::SignalKind),
 }
 /// One suspended root-task wait; ordinals identify runtime-owned targets only.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -189,6 +192,8 @@ pub enum Error {
     Blocked(Vec<BlockedWait>),
     /// Internal stop signal, converted to Outcome::BudgetExceeded before returning.
     BudgetExceeded(BudgetKind),
+    /// Internal stop signal, converted to Outcome::Signaled before returning.
+    Signaled(hirsel_run_schema::SignalKind),
     InvalidTir(String),
     Unavailable(String),
     Query(QueryError),

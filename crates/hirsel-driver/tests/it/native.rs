@@ -1122,6 +1122,7 @@ fn agreement_rejects_exit_codes_that_disagree_with_the_run_outcome() {
                 exit: Some(outcome.exit_code()),
                 stdout: vec![],
                 stderr: vec![],
+                signal: None,
                 record: format!(
                     "hirsel-observation {}\n{record}",
                     hirsel_rt::launch::OBSERVATION_VERSION
@@ -1135,5 +1136,28 @@ fn agreement_rejects_exit_codes_that_disagree_with_the_run_outcome() {
                 "{error:?}"
             );
         }
+        // A signaled record matches only a process ended by that signal, never an exit status
+        // that spells it.
+        let mut launched = Launched {
+            audit_required: false,
+            exit: None,
+            stdout: vec![],
+            stderr: vec![],
+            signal: Some(hirsel_run_schema::SignalKind::Interrupt.number()),
+            record: format!(
+                "hirsel-observation {}\nsignaled interrupt\naudit unavailable\n",
+                hirsel_rt::launch::OBSERVATION_VERSION
+            ),
+        };
+        let observation = observe(&launched, &program, &sites).unwrap();
+        assert_eq!(
+            observation.outcome(&sites, vec![]).unwrap(),
+            RunOutcome::Signaled(hirsel_run_schema::SignalKind::Interrupt)
+        );
+        launched.signal = None;
+        launched.exit =
+            Some(RunOutcome::Signaled(hirsel_run_schema::SignalKind::Interrupt).exit_code());
+        let error = observe(&launched, &program, &sites).unwrap_err();
+        assert!(error.message.contains("was not ended by"), "{error:?}");
     });
 }

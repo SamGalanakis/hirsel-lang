@@ -23,6 +23,7 @@ mod recording;
 mod regions;
 mod release;
 mod roots;
+mod signals;
 #[path = "../support/mod.rs"]
 mod support;
 mod tape_property;

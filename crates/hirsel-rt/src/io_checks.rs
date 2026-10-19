@@ -1,7 +1,8 @@
 //! Effect-free program checks shared by live, replay and modeled cancellation (CONC-3).
 use crate::handles::Grant;
 use crate::io::{
-    Adapter, AdapterError, Completion as C, InputError, IoError, Request as R, State, WaitError,
+    Adapter, AdapterError, Completion as C, InputError, IoError, Request as R, SignalError, State,
+    WaitError,
 };
 use crate::net::NetError;
 use crate::process::{ProcessFailure, ProcessOutcome};
@@ -55,6 +56,10 @@ impl State {
             R::SleepUntil { clock, .. } => {
                 self.expect(*clock, Grant::MonotonicClock)?;
                 Ok(None)
+            }
+            R::SignalWait { signals, kinds } => {
+                self.expect(*signals, Grant::Signals)?;
+                Ok(self.signal_check(*kinds).map(|e| C::Signal(Err(e))))
             }
             _ => Ok(self
                 .file_error(request)?
@@ -231,6 +236,7 @@ pub fn cancel(
         R::ReadStdin { .. } => C::Input(Err(InputError::Canceled(cause))),
         R::Print { .. } | R::PrintStderr { .. } => C::Unit(Err(IoError::Canceled(cause))),
         R::SleepUntil { .. } => C::Wait(Err(WaitError::Canceled(cause))),
+        R::SignalWait { .. } => C::Signal(Err(SignalError::Canceled(cause))),
         R::ProcessRun { .. } => C::Process(ProcessOutcome::Error(ProcessFailure::Canceled(cause))),
         R::ProcessPipeline { .. } => C::Pipeline(hirsel_run_schema::PipelineOutcome::Error(
             ProcessFailure::Canceled(cause),

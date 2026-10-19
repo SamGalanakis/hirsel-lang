@@ -278,6 +278,8 @@ pub struct ObservedWait {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Observable {
     pub blocked: Option<Vec<ObservedWait>>,
+    /// A scripted signal's default action ended the run (`signals.script@1`).
+    pub signaled: Option<hirsel_run_schema::SignalKind>,
     pub schema_version: u32,
     /// Canonical declared result graph, populated by the driver (no arena IDs).
     pub returned_type: Option<Vec<u8>>,
@@ -366,8 +368,13 @@ impl Execution {
         } else {
             None
         };
+        let signaled = match self.outcome {
+            Outcome::Signaled(kind) => Some(kind),
+            _ => None,
+        };
         Some(Observable {
             blocked,
+            signaled,
             schema_version: 2,
             returned_type: None,
             returned,

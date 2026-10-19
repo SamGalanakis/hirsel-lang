@@ -274,6 +274,9 @@ fn core_error(error: hirsel_interp::Error) -> RuntimeError {
         hirsel_interp::Error::BudgetExceeded(_) => {
             RuntimeError::Tool("unhandled budget stop signal".into())
         }
+        hirsel_interp::Error::Signaled(_) => {
+            RuntimeError::Tool("unhandled signal stop signal".into())
+        }
         hirsel_interp::Error::Trapped(trap) => RuntimeError::Tool(trap.to_string()),
         hirsel_interp::Error::Environmental(cause) => RuntimeError::Tool(cause.to_string()),
         hirsel_interp::Error::Ended(failure) => {
@@ -374,6 +377,7 @@ pub fn project_outcome(
             RunOutcome::Blocked(waits)
         }
         hirsel_interp::Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(*kind),
+        hirsel_interp::Outcome::Signaled(kind) => RunOutcome::Signaled(*kind),
         hirsel_interp::Outcome::Environmental(cause) => RunOutcome::Environmental(cause.clone()),
         hirsel_interp::Outcome::ToolingLimit(limit) => RunOutcome::ToolingLimit(ToolingLimit {
             kind: format!("{:?}", limit.kind),

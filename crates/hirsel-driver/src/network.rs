@@ -329,6 +329,13 @@ impl HostLibrary {
         }
         let config = SimulationConfig {
             grants,
+            // The host's source delivers every arrival; the library keeps the checks.
+            signals: admitted
+                .signals_grant()
+                .map(|grant| hirsel_run_schema::SignalsGrant {
+                    script: None,
+                    ..grant.clone()
+                }),
             projections: admitted.io_projections(),
             mounts: Default::default(),
             args: record.args.clone().unwrap_or_default(),
@@ -624,7 +631,7 @@ impl HostLibrary {
         let a = &*call.arguments;
         if matches!(
             name,
-            "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.tasks"
+            "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.tasks" | "io.signals"
         ) {
             // The library validates the root and records the semantic projection once.
             let result = self.library.call(call, cx)?;
@@ -633,6 +640,7 @@ impl HostLibrary {
                 "io.stderr" => R::Stderr { io: 1 },
                 "io.stdout" => R::Stdout { io: 1 },
                 "io.random" => R::Random { io: 1 },
+                "io.signals" => R::Signals { io: 1 },
                 _ => R::Tasks { io: 1 },
             })?;
             match (&result, completion) {
@@ -906,6 +914,68 @@ impl HostLibrary {
                 self.library.expire_deadline(scope, cx)
             }
         }
+    }
+    /// `signal.wait` through the host's signal source; the library then consumes the kind
+    /// it supplied. A cancelled wait reaches no provider: the library makes the checks and
+    /// returns Canceled.
+    fn host_signal(
+        &mut self,
+        call: OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        if self.library.cancellation().is_some() {
+            return self.library.call(call, cx);
+        }
+        let a = &*call.arguments;
+        let token = self.next_wait;
+        self.next_wait += 1;
+        if self.host_signal_wait(a, token)? {
+            return self.library.call(call, cx);
+        }
+        self.waits.insert(
+            token,
+            HostWait {
+                name: "signal.wait".into(),
+                arguments: a.to_vec(),
+            },
+        );
+        Ok(Some(OperationResult::Park {
+            token,
+            wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                kind: "signal.wait".into(),
+                targets: vec![],
+            },
+        }))
+    }
+    /// Issue `signal.wait` under `token`, supplying an arrival to the library. False while
+    /// none among its kinds is pending: the token keeps the source's readiness interest.
+    fn host_signal_wait(&mut self, a: &[Value], token: u64) -> Result<bool, Error> {
+        let kinds = fields(&a[1])?.into_iter().try_fold(0u8, |bits, kind| {
+            hirsel_run_schema::SignalKind::from_ordinal(tag(kind)?)
+                .map(|kind| bits | kind.bit())
+                .ok_or_else(invalid)
+        })?;
+        let request = R::SignalWait {
+            signals: self.id(&a[0])?,
+            kinds,
+        };
+        self.io.adapter().enter(token);
+        let completion = match self.host(request) {
+            Err(Error::Blocked(_)) => return Ok(false),
+            completion => {
+                self.io.adapter().finish(token);
+                completion?
+            }
+        };
+        match completion {
+            C::Signal(Ok(kind)) => self.library.supply_signal(kind),
+            // The library derives the same program error.
+            C::Signal(Err(_)) => {}
+            _ => return Err(invalid()),
+        }
+        Ok(true)
     }
     /// Read host stdin into the simulation the library then consumes. False when no
     /// byte is available yet: the token keeps the descriptor's readiness interest.
@@ -2218,10 +2288,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     }
     fn wait(&mut self) -> Result<bool, Error> {
         self.remote_deliveries();
-        self.io
-            .adapter()
-            .wait()
-            .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
+        self.io.adapter().wait().map_err(|e| match e {
+            hirsel_rt::io::AdapterError::Signaled(kind) => Error::Signaled(kind),
+            e => Error::Unavailable(format!("host readiness: {e:?}")),
+        })
     }
     fn ready_now(&mut self) -> Result<bool, Error> {
         self.remote_deliveries();
@@ -2337,6 +2407,16 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
+        if name == "signal.wait" {
+            // A canceled wait consumes nothing; the library reports Canceled.
+            if canceled {
+                self.io.adapter().finish(token);
+            } else if !self.host_signal_wait(&arguments, token)? {
+                return Ok(None);
+            }
+            self.waits.remove(&token);
+            return self.library.wait_signal(&arguments, cx).map(Some);
+        }
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
@@ -2377,6 +2457,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                     | "io.stdout"
                     | "io.random"
                     | "io.tasks"
+                    | "io.signals"
                     | "stdin.read"
                     | "err.print"
                     | "out.print"
@@ -2389,6 +2470,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             if name == "random.bytes" {
                 return self.host_random(call, cx);
+            }
+            if name == "signal.wait" {
+                return self.host_signal(call, cx);
             }
             if name == "io.telemetry"
                 || (name.starts_with("capture.")

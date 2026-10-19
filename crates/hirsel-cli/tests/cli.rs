@@ -38,6 +38,8 @@ mod runners;
 mod schema;
 #[path = "cli/select_race.rs"]
 mod select_race;
+#[path = "cli/signals.rs"]
+mod signals;
 #[path = "cli/split.rs"]
 mod split;
 #[path = "cli/store.rs"]

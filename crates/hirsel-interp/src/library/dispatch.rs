@@ -25,6 +25,7 @@ pub struct Library {
     /// Parked `watcher.next` calls: watcher, Dir and recorded input.
     pub(super) watch_waits: std::collections::BTreeMap<u64, (u64, u64, Vec<u8>)>,
     pub(super) timers: super::timers::Timers,
+    pub(super) signals: super::signals::Signals,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
     pub(super) next_shared: u64,
@@ -56,6 +57,7 @@ impl Library {
             network_waits: Default::default(),
             watch_waits: Default::default(),
             timers: Default::default(),
+            signals: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
             next_shared: 0,
@@ -189,6 +191,10 @@ impl Library {
                 } else {
                     error(variant(0, vec![]))
                 }
+            }
+            "io.signals" => {
+                self.simulation.id(arg(a, 0)?, "Io")?;
+                self.project_signals()
             }
             "io.monotonic_clock" | "io.wall_clock" => {
                 self.simulation.id(arg(a, 0)?, "Io")?;
@@ -1248,6 +1254,16 @@ impl Library {
         if self.runners.waits_on(token) {
             return self.poll_runner(token, context);
         }
+        if self.signals.contains(token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+            let result = self.poll_signal(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.simulation = saved;
+            }
+            return result;
+        }
         if self.watch_waits.contains_key(&token) {
             let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
             let result = self.poll_watch(token, context);
@@ -1440,9 +1456,10 @@ impl Operations for Library {
     fn expire_deadlines(&mut self, context: &mut OperationContext<'_>) -> Result<(), Error> {
         self.expire_due(context)
     }
-    /// Virtual time: pending timer waits are the simulation's only outstanding event source.
+    /// The outstanding event sources: the signal script's next arrival, then virtual time
+    /// for pending timer waits.
     fn wait(&mut self) -> Result<bool, Error> {
-        Ok(self.advance_virtual_time())
+        Ok(self.deliver_signal()? || self.advance_virtual_time())
     }
     fn take_calls(&mut self) -> Vec<crate::CalleeStart> {
         self.take_runner_starts()
@@ -1778,7 +1795,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
+    Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1836,6 +1853,13 @@ primary_operations! { self, call, context, name, a, value;
     },
     Capability: "io.runner" | "runner.grants" | "runner.narrow" | "runner.only" | "runner.compute" | "runner.call" | "runner.spawn" | "test.runner" => {
         return self.runner_call(name, &call, context).map(Some);
+    },
+    Capability: "signal.wait" => {
+        // A rejected replay never publishes effects, consumes arrivals or keeps a wait.
+        let saved = (!context.configuration.inputs.is_empty()).then(|| (self.simulation.clone(), self.signals.clone()));
+        let result = self.wait_signal(a, context);
+        if result.is_err() && let Some((simulation, signals)) = saved { self.simulation = simulation; self.signals = signals; }
+        return result.map(Some);
     },
     Capability: "clock.sleep_until" => {
         // A rejected replay never publishes effects, consumes faults or keeps a timer.

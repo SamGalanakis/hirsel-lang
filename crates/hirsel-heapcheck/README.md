@@ -429,6 +429,13 @@ controls whose leak lies only where the deadline fires first (a scope deadline c
 sleep, a run timing out): the clean run and every injected failure pass, the fired run finds
 the leak, and each fixed twin passes every run.
 
+`Operations::deliver_signal` runs at H's idle points, before virtual time advances: a
+scripted signal (`signals.script@1`) that becomes pending re-polls the parked tasks, and one
+that takes its default action ends the run with a `Signaled` observation
+(`Observation::signaled`, the kind's ordinal), reported like Blocked without the terminal
+audit. The driver's model (`heap/signals.rs`) serves `io.signals` and `signal.wait` as the
+reference does; a wait with nothing pending is `OpOutcome::Pending`.
+
 The driver's model grants a monotonic clock, and a Main launch's scripted process
 (process.script@1) and network (net.script@2) worlds, only when its launch says so (`hirsel_driver::native::HeapWorld`); a wall
 clock is never granted. Its `proc.run` goes through the runtime's scripted policy

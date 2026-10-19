@@ -1,0 +1,15 @@
+// rule: CAP-1
+// expect: run
+// stdout: not granted
+// A run whose record grants no signals cannot project them, so every signal it receives
+// keeps its default action.
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let stdout = match io.stdout(rt) {
+    Ok(stdout) => stdout,
+    Error(_) => return Ok(()),
+  }
+  match io.signals(rt) {
+    Ok(_) => out.print(stdout, "granted\n"),
+    Error(NotGranted()) => out.print(stdout, "not granted\n"),
+  }
+}

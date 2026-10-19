@@ -36,6 +36,14 @@ pub struct RealIo {
     children: Option<Box<dyn crate::process::ProcessHost>>,
     /// Runner call outcomes delivered and not yet taken, by wait token (RUN-11).
     delivered: BTreeMap<u64, hirsel_run_schema::RunnerCompletion>,
+    /// The admitted `io.signals` source, and the parked signal waits by token: their kinds
+    /// as bits and whether their task parked.
+    signals: Option<crate::signals::SignalSource>,
+    signal_waits: BTreeMap<u64, (u8, bool)>,
+    /// The entered wait token, with or without cooperative admission.
+    current: u64,
+    /// A script delivered an arrival at the last idle point (no cooperative readiness).
+    signal_delivered: bool,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -70,6 +78,22 @@ impl RealIo {
         listeners: Vec<hirsel_run_schema::NetListener>,
     ) -> Result<(), AdapterError> {
         self.state.set_net_script(peers, listeners)
+    }
+    /// The admitted `io.signals` grant: its script, or the process's signal hold, which a
+    /// second holder is refused.
+    pub fn set_signal_grant(
+        &mut self,
+        grant: &hirsel_run_schema::SignalsGrant,
+    ) -> Result<(), hirsel_run_schema::RunRefusal> {
+        let source = crate::host_launch::signal_source(grant)?;
+        self.set_signals(grant.bits(), source);
+        Ok(())
+    }
+    /// The admitted `io.signals` grant's observed kinds and its source.
+    pub(crate) fn set_signals(&mut self, observed: u8, source: crate::signals::SignalSource) {
+        self.state.signal_kinds = observed;
+        self.state.projections.insert("signals".into());
+        self.signals = Some(source);
     }
     /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
     pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
@@ -178,6 +202,10 @@ impl RealIo {
             test_clock: None,
             children: None,
             delivered: BTreeMap::new(),
+            signals: None,
+            signal_waits: BTreeMap::new(),
+            current: 0,
+            signal_delivered: false,
         })
     }
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
@@ -609,6 +637,7 @@ impl Adapter for RealIo {
         }
     }
     fn enter(&mut self, token: u64) {
+        self.current = token;
         if let Some(clock) = &self.test_clock {
             clock.enter(token);
         }
@@ -618,6 +647,7 @@ impl Adapter for RealIo {
         }
     }
     fn finish(&mut self, token: u64) {
+        self.signal_waits.remove(&token);
         if let Some(clock) = &self.test_clock {
             clock.finish(token);
         }
@@ -633,6 +663,9 @@ impl Adapter for RealIo {
     fn parked(&mut self, token: u64) {
         if let Some(clock) = &self.test_clock {
             clock.parked(token);
+        }
+        if let Some((_, parked)) = self.signal_waits.get_mut(&token) {
+            *parked = true;
         }
         if let Some((readiness, log)) = &mut self.cooperative {
             readiness.parked(token);
@@ -665,7 +698,13 @@ impl Adapter for RealIo {
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         let released = self.journal.released().map_err(recording_failed)?;
         let Some((readiness, log)) = &mut self.cooperative else {
-            return Ok(Ready::Tokens(Vec::new()));
+            return Ok(Ready::Tokens(
+                if std::mem::take(&mut self.signal_delivered) {
+                    self.signals_ready(Vec::new())
+                } else {
+                    Vec::new()
+                },
+            ));
         };
         log.point();
         let mut tokens = readiness.ready()?;
@@ -677,6 +716,14 @@ impl Adapter for RealIo {
             tokens.sort_unstable();
             tokens.dedup();
         }
+        let tokens = if self.signal_waits.is_empty() {
+            tokens
+        } else {
+            self.signals_ready(tokens)
+        };
+        let Some((_, log)) = &mut self.cooperative else {
+            unreachable!()
+        };
         let events: Vec<Event> = tokens
             .iter()
             .filter_map(|&token| log.ready(token))
@@ -692,15 +739,31 @@ impl Adapter for RealIo {
         Ok(Ready::Tokens(tokens))
     }
     fn has_ready(&mut self) -> Result<bool, AdapterError> {
+        if self.signal_delivered && !self.signal_waits.is_empty() {
+            return Ok(true);
+        }
         match &self.cooperative {
             Some((readiness, _)) => readiness.has_ready(),
             None => Ok(false),
         }
     }
+    /// An idle point delivers the signal script's next arrival before anything waits.
     fn wait(&mut self) -> Result<bool, AdapterError> {
         // The run would wait for the host: first close the journal's batch.
         if self.journal.idle().map_err(recording_failed)? {
             return Ok(true);
+        }
+        if let Some(source) = &mut self.signals {
+            match source.deliver() {
+                crate::signals::Delivery::Pending => {
+                    self.signal_delivered = true;
+                    return Ok(true);
+                }
+                crate::signals::Delivery::Default(kind) => {
+                    return Err(AdapterError::Signaled(kind));
+                }
+                crate::signals::Delivery::Exhausted => {}
+            }
         }
         if let Some(clock) = &self.test_clock
             && clock.wait()?
@@ -712,11 +775,55 @@ impl Adapter for RealIo {
             None => Ok(false),
         }
     }
+    fn scripted_input(&self) -> bool {
+        self.signals.as_ref().is_some_and(|s| s.scripted())
+    }
 }
 fn recording_failed(error: std::io::Error) -> AdapterError {
     AdapterError::RecordingFailed(error.to_string())
 }
 impl RealIo {
+    /// A scheduling point's ready tokens with the parked signal waits decided by what is
+    /// pending, not by the wake pipe: a wait is ready exactly when an arrival among its
+    /// kinds is pending. The pipe is drained here, so an arrival no wait wants never keeps
+    /// the readiness set awake.
+    fn signals_ready(&mut self, mut tokens: Vec<u64>) -> Vec<u64> {
+        let Some(source) = &mut self.signals else {
+            return tokens;
+        };
+        source.drain();
+        let pending = source.pending();
+        tokens.retain(|token| !self.signal_waits.contains_key(token));
+        tokens.extend(
+            self.signal_waits
+                .iter()
+                .filter(|(_, (bits, parked))| *parked && bits & pending != 0)
+                .map(|(token, _)| *token),
+        );
+        tokens.sort_unstable();
+        tokens
+    }
+    /// `signal.wait` after its handle check: its program checks, a pending arrival, or a
+    /// wait (the readiness interest of the source's wake pipe under cooperative admission).
+    fn signal_wait(&mut self, kinds: u8) -> Result<Completion, AdapterError> {
+        if let Some(error) = self.state.signal_check(kinds) {
+            return Ok(Completion::Signal(Err(error)));
+        }
+        let source = self
+            .signals
+            .as_mut()
+            .ok_or(AdapterError::InvalidCompletion)?;
+        if let Some(kind) = source.take(kinds) {
+            return Ok(Completion::Signal(Ok(kind)));
+        }
+        if let Some((readiness, _)) = &self.cooperative {
+            readiness.pending().interest = Some((source.interest(), libc::POLLIN));
+        } else if source.is_host() {
+            return Ok(Completion::Signal(Ok(source.block(kinds))));
+        }
+        self.signal_waits.insert(self.current, (kinds, false));
+        Err(AdapterError::Blocked)
+    }
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
         match &request {
             // A runner call completes with its delivered outcome, else waits for it.
@@ -766,6 +873,8 @@ impl RealIo {
                 request,
                 Request::Stdin { .. }
                     | Request::Stderr { .. }
+                    | Request::Signals { .. }
+                    | Request::SignalWait { .. }
                     | Request::ReadStdin { max: 0, .. }
                     | Request::EnvGet { .. }
                     | Request::EnvNarrow { .. }
@@ -778,6 +887,25 @@ impl RealIo {
         let before = self.state.stdout.len();
         let stderr_before = self.state.stderr.len();
         let result = match &request {
+            Request::SignalWait { signals, kinds } => {
+                self.state
+                    .expect(*signals, crate::handles::Grant::Signals)?;
+                let completion = self.signal_wait(*kinds)?;
+                self.state.sample(&request, completion)
+            }
+            Request::Signals { .. } => {
+                let net: &mut dyn NetProvider = match &mut self.net {
+                    Some(net) => &mut **net,
+                    None => &mut crate::net::NoNet,
+                };
+                let result = self.state.execute(&mut self.disk, net, &request, None);
+                if let Ok(Completion::Handle(Ok(_))) = &result
+                    && let Some(source) = &mut self.signals
+                {
+                    source.install();
+                }
+                result
+            }
             Request::ReadStdin { stdin, max } => {
                 // Validate authority before touching the provider, including injected faults.
                 match self.state.expect(*stdin, crate::handles::Grant::Stdin) {

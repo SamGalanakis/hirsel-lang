@@ -11,6 +11,7 @@ pub enum Grant {
     Stdin,
     Stderr,
     Stdout,
+    Signals,
     MonotonicClock,
     WallClock,
     Random,

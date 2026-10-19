@@ -61,6 +61,8 @@ N fn instant.ticks(value: Instant) -> u64 uses {}
 N fn instant.checked_add(clock: MonotonicClock, start: Instant of clock, nanoseconds: u64) -> Option[Instant of clock]
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
+N fn io.signals(rt: Io) -> Result[Signals, GrantError]
+N fn signal.wait(s: Signals, kinds: List[SignalKind]) -> Result[SignalKind, SignalError]
 fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
@@ -340,6 +342,8 @@ InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | Inval
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
 ClockError    = Unavailable() | OutOfRange()
 WaitError     = Clock(ClockError) | Canceled(CancelCause)
+SignalKind    = Interrupt() | Terminate() | Hangup()
+SignalError   = Canceled(CancelCause) | NotGranted() | InvalidInput()
 RandomError   = Unavailable()
 TelemetryError = TooLarge() | InvalidParent()
 EnvError      = NotGranted() | InvalidUtf8()
@@ -646,6 +650,32 @@ draw is a recorded capability input. The provider is chosen at launch
 simulation, predictable from the run's Random seed, and never protects a secret;
 `random.system@1` reads the host's cryptographically secure generator.
 `std@1/random` builds integer and bounded draws on this one operation.
+
+`io.signals(rt)` projects the run's `Signals` when the run configuration grants
+`io.signals` ([CAP-1](capabilities.md#cap-1-authority)); the grant names the kinds the run
+observes. `SignalKind` is closed: `Interrupt()` is SIGINT, `Terminate()` SIGTERM and
+`Hangup()` SIGHUP; later versions may add kinds, and no other host signal is observable.
+From the run's first successful projection until the run ends, an arrival of an observed
+kind is **pending** rather than taking the host's default action. At most one arrival of a
+kind is pending: a repeated `Terminate` or `Hangup` coalesces with the pending one, but a
+second `Interrupt` while one is pending takes the default action, so the process ends by the
+signal and a program that never reaches a wait can still be stopped. Arrivals before the
+projection, of kinds the grant does not name, and every signal of a run without the grant
+keep the default action. Pending arrivals left when the run ends are discarded.
+
+`signal.wait(s, kinds)` returns the earliest pending arrival whose kind is in `kinds`,
+which it consumes; arrivals of other kinds stay pending. An empty `kinds` returns
+`InvalidInput()` and a kind the grant does not name `NotGranted()`, both before
+cancellation; then, in a cancelled scope, it returns `Canceled(cause)`. Otherwise it returns
+at once when such an arrival is pending, and suspends its task, without polling, until one
+arrives. Waiting has no effect, so cancelling a suspended wait is always allowed. Under
+`tasks.cooperative@1` only its task waits, so a program can race a wait against its other
+work with `task.select` and let the first to finish cancel the rest. A host provider waits
+on the process's signals and is an external event source of unknown completion, so a run
+waiting on it is never Blocked ([CONC-8](concurrency.md#conc-8-global-quiescence)). A
+scripted provider delivers its arrivals at the run's idle points
+([providers](determinism.md#run-configuration)); a run waiting with none left to deliver is
+Blocked. A completed wait is recorded with its kind; replay returns it without a signal.
 
 ### Telemetry capture
 

@@ -501,6 +501,7 @@ fn directives(source: &str) -> Vec<&str> {
                             | "grant"
                             | "net"
                             | "process"
+                            | "signals"
                     )
                 })
         })

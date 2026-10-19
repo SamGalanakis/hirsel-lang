@@ -1,6 +1,6 @@
 //! The grant subset relation (CAP-3): whether one validated grant record holds no
 //! authority another lacks. It is lexical over validated data and reads no host state.
-use crate::{Access, IoGrants, Mount, NetGrant, NetRule, ProcessGrant, ProcessRule};
+use crate::{Access, IoGrants, Mount, NetGrant, NetRule, ProcessGrant, ProcessRule, SignalsGrant};
 use std::collections::BTreeMap;
 
 fn optional<T>(a: &Option<T>, b: &Option<T>, within: impl Fn(&T, &T) -> bool) -> bool {
@@ -26,6 +26,12 @@ pub fn io_within(a: &IoGrants, b: &IoGrants) -> bool {
         && optional(&a.net, &b.net, net_within)
         && optional(&a.process, &b.process, process_within)
         && optional(&a.telemetry, &b.telemetry, |a, b| a == b)
+        && optional(&a.signals, &b.signals, signals_within)
+}
+
+/// The same provider, observing a subset of the other's kinds.
+fn signals_within(a: &SignalsGrant, b: &SignalsGrant) -> bool {
+    a.provider == b.provider && a.kinds.iter().all(|kind| b.kinds.contains(kind))
 }
 
 /// A mount is within another when its virtual path and its host root extend the

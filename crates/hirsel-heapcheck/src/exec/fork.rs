@@ -25,6 +25,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             sites: self.sites,
             choices: self.choices,
             steps: self.steps,
+            signaled: self.signaled,
             runtime_iterators: self.runtime_iterators.clone(),
             version_slots: self.version_slots.clone(),
             map_storage: self.map_storage.clone(),
@@ -112,6 +113,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     })
                     .map_err(|v| *v),
                 &self.output,
+                self.signaled,
             ),
         }
     }

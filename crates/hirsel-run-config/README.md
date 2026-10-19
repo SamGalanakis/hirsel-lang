@@ -68,7 +68,7 @@ artifact/compiler/position/instance details never belong in those fields.
 Known provider contracts have one closed enumeration, `ProviderContract`:
 `tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1` and
 `clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1`,
-`process.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@2`. The validator checks the exact projection and version.
+`process.script@1`, `signals.host@1`, `signals.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@2`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
 belongs to tooling provenance. Unknown contracts and versions refuse as Unsupported.
 `inputs.scheduler` names `fifo`, `random` or `pct`, version 1 (docs/spec/determinism.md,
@@ -109,6 +109,17 @@ ProcessError tag such as `"not_found"`, `"timed_out"` or `{"fault":7}`, never
 `Canceled`. It may also take `children`, ordered `{program, args, steps}` streaming
 child entries whose steps are `{"print":[..]}`, `{"print_err":[..]}`, `{"expect":[..]}` or
 `{"exit":status}`. Runs and children grant nothing beyond the rules.
+
+`io.signals` (`SignalsGrant`, `src/signals.rs`) takes `provider` and `kinds`, the
+observed `SignalKind`s `interrupt`, `terminate` and `hangup`, nonempty and sorted by name
+and unique after admission; `signals.script@1` additionally requires `script`, the arrivals
+in delivery order (possibly empty), forbidden under every other provider. The member is
+omitted from canonical bytes when absent, so records without it keep their identities, and
+an explicit null is absent. `grants_within` holds a signals grant within another's under the
+same provider with a subset of its kinds. `RunOutcome::Signaled(kind)` is a scripted
+signal's default action: `exit_code` is `128 + kind.number()`, the status a launcher that
+cannot raise the signal itself exits with. `validate_signals_grant` admits a standalone
+grant as the field is admitted, for a harness launcher (`HIRSEL_RT_SIGNALS`).
 
 `validate_env` validates a standalone Env snapshot object exactly as a record's `env`.
 

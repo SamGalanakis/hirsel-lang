@@ -1772,6 +1772,8 @@ pub struct Launched {
     /// The selected archive promises a leak audit; an unavailable record must then refuse.
     pub audit_required: bool,
     pub exit: Option<i32>,
+    /// The signal that terminated the process, which then has no exit status.
+    pub signal: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     /// The launcher's observation record (`hirsel_rt::launch`).
@@ -1966,6 +1968,9 @@ fn launch_impl(
     if let Some(process) = &fixture.process {
         command.env("HIRSEL_RT_PROCESS", serde_json::to_string(process).unwrap());
     }
+    if let Some(signals) = &fixture.signals {
+        command.env("HIRSEL_RT_SIGNALS", serde_json::to_string(signals).unwrap());
+    }
     if let Some(env) = &fixture.env {
         command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());
     }
@@ -2043,6 +2048,11 @@ fn launch_impl(
     let output = match live {
         Some(live) => {
             let (mut process, _hold) = process(runnable, target, toolchain, &tooling, &command)?;
+            let observed = live
+                .run
+                .signals_grant()
+                .filter(|grant| grant.script.is_none() && !matches!(tape, Tape::Replay(_)));
+            let _deferred = DeferredSignals::to_child(&mut process, observed);
             let output = run_live(&mut process, stdin, live.inherit, live.stdout, live.stderr)?;
             if let Runnable::Image(image) = runnable {
                 if let Some(error) = super::runner::tooling_failure(&tooling) {
@@ -2074,6 +2084,7 @@ fn launch_impl(
     Ok(Launched {
         audit_required: toolchain.runtime_build.diagnostic || toolchain.runtime_build.measurement,
         exit: output.status.code(),
+        signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
         stdout: output.stdout,
         stderr: output.stderr,
         record: std::fs::read_to_string(&record)
@@ -2188,6 +2199,46 @@ pub(crate) fn run_bounded(
         super::runner::count_image(image);
     }
     Ok(output)
+}
+
+/// While a live child that observes host signals (`signals.host@1`) runs, the launcher
+/// leaves those signals to it: a terminal's Interrupt reaches the whole foreground group, and
+/// the run's fate is the child's, not the launcher's. The child starts from the default
+/// dispositions; the launcher's are restored when the child is done.
+struct DeferredSignals(Vec<(libc::c_int, libc::sighandler_t)>);
+impl DeferredSignals {
+    fn to_child(command: &mut Command, grant: Option<&hirsel_run_schema::SignalsGrant>) -> Self {
+        use std::os::unix::process::CommandExt;
+        let Some(grant) = grant else {
+            return Self(Vec::new());
+        };
+        let numbers: Vec<libc::c_int> = grant.kinds.iter().map(|kind| kind.number()).collect();
+        let reset = numbers.clone();
+        // SAFETY: signal(2) is async-signal-safe, and the closure allocates nothing.
+        unsafe {
+            command.pre_exec(move || {
+                for number in &reset {
+                    libc::signal(*number, libc::SIG_DFL);
+                }
+                Ok(())
+            });
+        }
+        Self(
+            numbers
+                .into_iter()
+                // SAFETY: replaces this process's disposition, which drop restores.
+                .map(|number| (number, unsafe { libc::signal(number, libc::SIG_IGN) }))
+                .collect(),
+        )
+    }
+}
+impl Drop for DeferredSignals {
+    fn drop(&mut self) {
+        for (number, previous) in self.0.drain(..).rev() {
+            // SAFETY: restores the disposition `to_child` replaced.
+            unsafe { libc::signal(number, previous) };
+        }
+    }
 }
 
 fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
@@ -2373,12 +2424,33 @@ pub fn observe_run(
         NativeError::new(
             StageName::Launch,
             format!(
-                "{what} (exit {:?}, stderr {:?})",
+                "{what} (exit {:?}, signal {:?}, stderr {:?})",
                 launched.exit,
+                launched.signal,
                 String::from_utf8_lossy(&launched.stderr)
             ),
         )
     };
+    // A host signal's default action ends the process before it writes a record.
+    if launched.record.is_empty()
+        && launched.exit.is_none()
+        && let Some(kind) = hirsel_run_schema::SignalKind::ALL
+            .into_iter()
+            .find(|kind| launched.signal == Some(kind.number()))
+    {
+        return Ok(Observed::Ran(
+            Observation {
+                exit_code: None,
+                blocked: false,
+                budget: None,
+                signaled: Some(kind),
+                roots: Vec::new(),
+                output: launched.stdout.clone(),
+                failures: Vec::new(),
+            },
+            Vec::new(),
+        ));
+    }
     let mut lines = launched.record.lines();
     let version = format!(
         "hirsel-observation {}",
@@ -2397,6 +2469,7 @@ pub fn observe_run(
     let mut waits = None;
     let mut ended = false;
     let mut budget = None;
+    let mut signaled = None;
     let mut stopped = None;
     for line in lines {
         let words: Vec<&str> = line.split(' ').collect();
@@ -2442,6 +2515,12 @@ pub fn observe_run(
                 budget = Some(
                     hirsel_run_schema::BudgetKind::parse(kind)
                         .ok_or_else(|| bad(format!("an unknown budget in `{line}`")))?,
+                )
+            }
+            ["signaled", kind] => {
+                signaled = Some(
+                    hirsel_run_schema::SignalKind::parse(kind)
+                        .ok_or_else(|| bad(format!("an unknown signal in `{line}`")))?,
                 )
             }
             ["result", hex] => result = Some(*hex),
@@ -2514,12 +2593,37 @@ pub fn observe_run(
                 exit_code: None,
                 blocked: false,
                 budget: Some(kind),
+                signaled: None,
                 output: launched.stdout.clone(),
                 failures,
                 roots: Vec::new(),
             },
             vec![],
         );
+    }
+    if let Some(kind) = signaled {
+        if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
+            return Err(bad("an inconsistent signaled observation record".into()));
+        }
+        // Terminated by the signal itself, never an exit status that spells it.
+        if launched.signal != Some(kind.number()) || launched.exit.is_some() {
+            return Err(bad(format!(
+                "a signaled process was not ended by {}",
+                kind.name()
+            )));
+        }
+        return Ok(Observed::Ran(
+            Observation {
+                exit_code: None,
+                blocked: false,
+                budget: None,
+                signaled: Some(kind),
+                roots: Vec::new(),
+                output: launched.stdout.clone(),
+                failures,
+            },
+            Vec::new(),
+        ));
     }
     if blocked {
         if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
@@ -2532,6 +2636,7 @@ pub fn observe_run(
                 exit_code: None,
                 blocked: true,
                 budget: None,
+                signaled: None,
                 output: launched.stdout.clone(),
                 failures,
                 roots: Vec::new(),
@@ -2560,6 +2665,7 @@ pub fn observe_run(
             exit_code,
             blocked: false,
             budget: None,
+            signaled: None,
             output: launched.stdout.clone(),
             failures,
             roots: Vec::new(),

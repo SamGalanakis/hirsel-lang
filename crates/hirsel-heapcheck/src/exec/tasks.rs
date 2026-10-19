@@ -1373,6 +1373,18 @@ impl<S: Stage> Machine<'_, S> {
         loop {
             let s = self.scheduler();
             let Some(next) = s.runnable.pop_front() else {
+                // A script's next signal arrives first, at this idle point.
+                match self.ops.deliver_signal() {
+                    SignalDelivery::Pending => {
+                        self.poll_parked()?;
+                        continue;
+                    }
+                    SignalDelivery::Default(kind) => {
+                        self.signaled = Some(kind);
+                        return fail(V::Signaled, "a signal's default action ended the run");
+                    }
+                    SignalDelivery::None => {}
+                }
                 // Virtual time: a pending deadline is an outstanding event source.
                 if self.advance()? {
                     self.poll_parked()?;

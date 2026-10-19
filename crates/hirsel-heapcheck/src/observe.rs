@@ -53,6 +53,8 @@ pub struct Observation {
     pub failures: Vec<ObservedFailure>,
     /// The run is Blocked (CONC-8): it neither returned nor failed.
     pub blocked: bool,
+    /// The `SignalKind` ordinal whose default action ended the run, as Blocked ends it.
+    pub signaled: Option<u32>,
 }
 
 impl Observation {

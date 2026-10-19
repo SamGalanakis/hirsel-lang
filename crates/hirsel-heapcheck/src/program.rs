@@ -257,6 +257,17 @@ pub enum OpOutcome {
     Unsupported,
 }
 
+/// What an idle point's signal delivery did ([`Operations::deliver_signal`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignalDelivery {
+    /// No scripted arrival is left.
+    None,
+    /// The arrival is pending: the parked tasks are polled again.
+    Pending,
+    /// The arrival of this `SignalKind` ordinal takes the default action, ending the run.
+    Default(u32),
+}
+
 /// Simulation state can be forked; host capabilities cannot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationDomain {
@@ -316,6 +327,11 @@ pub trait Operations {
     }
     /// Advance the virtual monotonic reading to `ticks`; it never moves backward.
     fn advance_monotonic(&mut self, _ticks: u64) {}
+    /// With no task runnable, before virtual time advances: deliver a signal script's next
+    /// arrival (`signals.script@1`).
+    fn deliver_signal(&mut self) -> SignalDelivery {
+        SignalDelivery::None
+    }
     /// Implicit File close/AtomicFile abort or network close, after H has checked its
     /// linear identity. `Some(rule)`: the close raised that language failure, after
     /// appending its report to `output`.

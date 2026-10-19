@@ -97,6 +97,9 @@ pub enum ViolationKind {
     /// Every task of the run waits on another (CONC-8): no violation but the run's
     /// Blocked observation, which `run` reports without the terminal audit.
     Blocked,
+    /// A scripted signal's default action ended the run: like Blocked, no violation but the
+    /// run's observation.
+    Signaled,
 }
 
 /// Where a violation was detected: the unit, block and statement (the

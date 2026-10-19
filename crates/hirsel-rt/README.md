@@ -388,6 +388,36 @@ the last stage's output, waits for the capture, reaps every stage and returns
 (`max_stderr`, the stage count, then each command) and `group_wait` requests and
 `group_exit` completions.
 
+## Signals
+
+`io.signals` is `Request::Signals` and `signal.wait` `Request::SignalWait` with the waited
+kinds as `SignalKind::bit`s; the completion is `Completion::Signal`, the consumed kind or a
+`SignalError` (`Canceled(cause)`, `NotGranted`, `InvalidInput`, checked in that reverse
+order: an empty set, then a kind outside the grant, then cancellation). Tape forms are
+`signals <io>`, `signal_wait <signals> <bits>` and the completions `signal <kind>`,
+`signal canceled <cause>`, `signal not_granted` and `signal invalid_input`. The native entry
+`hirsel_rt_v2_signal_wait` reads a `List[SignalKind]` of u32 ordinals and writes a
+`hirsel_rt_v2_signal_result` (tag, then the kind's ordinal or the error's tag, then a
+cancellation's cause).
+
+`signals::SignalSource` is the admitted provider. `signals.host@1` takes the process-wide
+`ProcessSignals` hold at admission (a second holder is refused `Unauthorized`), installs
+`sigaction` handlers for the granted kinds at the first projection and restores the
+replaced dispositions when the hold drops. The handler only enqueues: it stores an arrival
+number in its kind's pending slot (atomics), saves and restores errno, and writes one byte to
+a nonblocking close-on-exec self-pipe; a second SIGINT while one is pending sets `SIG_DFL`
+and re-raises. A parked wait registers the pipe's read end as POLLIN interest in the
+cooperative Readiness; `RealIo::signals_ready` decides readiness from the pending slots, not
+the pipe, and drains the pipe so a spurious byte never spins. Without a cooperative scheduler
+a wait blocks in `poll(2)` on the pipe. `signals.script@1` keeps its script and pending
+arrivals in the source: `RealIo::wait` delivers the next arrival at an idle point, before
+virtual time, and a default action stops the run `Stop::Signaled`, which the launcher reports
+as `signaled <kind>` and realizes by restoring `SIG_DFL` and raising the signal
+(`process_exit`); its recording gets no trailer. Replay (`SimIo`) installs nothing and
+returns the recorded completions. The harness launch records under the cooperative park/ready protocol whenever a signals
+grant is present, so a parked wait's interleaving with other parked requests replays; a
+`Signaled` run's recording has no trailer, and the native gate checks that instead of replaying.
+
 ## Random draws and timer waits
 
 `RandomSource` is the admitted Random provider: `random.splitmix64@1` keeps the SplitMix64
@@ -803,7 +833,7 @@ exact, and 64 Ki points without a budget. A spent budget raises
 `Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
 an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
 `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
-writes the observation record (`hirsel-observation 5`, the status, the result
+writes the observation record (`hirsel-observation 5`, the status, a default-action `signaled <kind>`, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production;
 version 5 adds `ended` for a failure that ended the run unaudited, FAIL-3). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape

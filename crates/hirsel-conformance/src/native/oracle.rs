@@ -75,6 +75,7 @@ pub(super) fn expected_stdout(
         exit_code: Some(0),
         blocked: false,
         budget: None,
+        signaled: None,
         output,
         failures: Vec::new(),
         roots: Vec::new(),

@@ -228,6 +228,7 @@ impl Registry {
             | R::Tasks { .. }
             | R::Net { .. }
             | R::Process { .. }
+            | R::Signals { .. }
             | R::Telemetry { .. } => keys.push((ROOT, S)),
             R::EnvGet { .. } | R::EnvNarrow { .. } | R::Ready { .. } | R::Schedule { .. } => {}
             R::Print { stdout: h, .. } | R::PrintStderr { stderr: h, .. } => {
@@ -238,6 +239,8 @@ impl Registry {
                 on(self, &mut keys, *clock, X)
             }
             R::RandomBytes { random, .. } => on(self, &mut keys, *random, X),
+            // A wait consumes the pending arrival it returns from its Signals.
+            R::SignalWait { signals, .. } => on(self, &mut keys, *signals, X),
             // A Telemetry's observations are ordered on it; its spans are its own state.
             R::TelemetryBegin { telemetry, .. }
             | R::TelemetryEvent { telemetry, .. }

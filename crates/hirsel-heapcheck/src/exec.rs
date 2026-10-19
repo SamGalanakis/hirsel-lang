@@ -12,7 +12,9 @@ use crate::ledger::{
     ResourceId, ResourceState, Token, TokenId,
 };
 use crate::observe::{OBSERVATION_SCHEMA_VERSION, Observation, Observed, ObservedFailure};
-use crate::program::{Arg, Config, INJECTED_RULE, OpOutcome, OpValue, Operations, Program};
+use crate::program::{
+    Arg, Config, INJECTED_RULE, OpOutcome, OpValue, Operations, Program, SignalDelivery,
+};
 use crate::scalar;
 use crate::snapshot::Snapshot;
 use crate::violation::{Checked, Site, ViolationKind as V, err, fail};
@@ -266,6 +268,8 @@ pub(crate) struct Machine<'p, S> {
     /// Timer choice points executed: the early-firing domain ([`clock`]).
     pub choices: u64,
     pub(crate) steps: u64,
+    /// The kind (`SignalKind` ordinal) whose default action ended the run.
+    pub signaled: Option<u32>,
     runtime_iterators: Snapshot<std::sync::Arc<[OpValue]>>,
     version_slots: std::sync::Arc<Vec<Vec<Option<SlotId>>>>,
     map_storage: std::sync::Arc<hirsel_lir::logical_storage::MapStorage>,
@@ -412,6 +416,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             open_elements: BTreeMap::new(),
             tasks: None,
             choices: 0,
+            signaled: None,
             full_recount_due: false,
         }
     }
@@ -9546,6 +9551,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             output: self.output.clone(),
             failures: self.failures.clone(),
             blocked: false,
+            signaled: None,
         };
         self.terminal = Some(observation);
         if self.ended {

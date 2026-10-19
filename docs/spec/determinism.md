@@ -132,6 +132,14 @@ that the program's children may receive, passed through from the launcher's envi
 or set by a `Command`; `env` may be omitted for none. For example
 `{"provider": "process.spawn@1", "rules": [{"program": "/usr/bin/git", "env": ["HOME"]}]}`.
 
+**Signals grants** name a provider and `kinds`, a nonempty list of the observed
+`SignalKind` spellings `interrupt`, `terminate` and `hangup`, sorted and unique, for example
+`{"provider": "signals.host@1", "kinds": ["interrupt", "terminate"]}`. The `io` record holds
+it as its `signals` member, which a record without the grant omits rather than spells null,
+so adding the member leaves every earlier record's identity unchanged; a null member is
+read as absent. Absent, the projection is denied and every host signal keeps its default
+action ([CAP-1](capabilities.md#cap-1-authority)).
+
 **Providers** name versioned observable contracts, identical for real hosts, simulation
 and replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`,
 `clock.monotonic.ns@1`, `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `tasks.free@1`,
@@ -212,6 +220,20 @@ from them exactly as `test.process` does; both are invalid under any other provi
 `{"fault": code}`, `"timed_out"` or `"input_closed"`. A step is `{"print": [bytes]}`,
 `{"print_err": [bytes]}`, `{"expect": [bytes]}` or `{"exit": status}`. Script entries grant
 no authority beyond the explicit rules.
+
+`signals.host@1` observes the process's SIGINT, SIGTERM and SIGHUP for the granted kinds.
+Its handlers are installed at the run's first `io.signals` projection and only enqueue: a
+handler marks its kind pending and wakes the provider's readiness wait, never running
+program code, and a second SIGINT while one is pending restores the default disposition
+and re-raises it. The dispositions the handlers replaced are restored when the run ends,
+and arrivals still pending then are discarded. One run of a process holds its signals at a
+time; a second run asking for them is refused at admission. `signals.script@1` additionally
+takes `script`, the arrivals in delivery order (an array of kind spellings, possibly empty),
+invalid under any other provider, and delivers them in simulation: when no task is
+runnable, before virtual time advances or the run is Blocked, the next scripted arrival is
+delivered as a host arrival would be, then the parked tasks are polled. An exhausted script
+delivers nothing, and the scripted signals' default action ends the run as one sent to the
+process would (**The Signaled end** below).
 
 **Budgets.** A host bounds the resources one run may use, for example to host untrusted
 code, by choosing a budget implementation in the record; budgets are host policy and grant
@@ -648,6 +670,17 @@ deadline only when no task is runnable. When several timer waits are ready at on
 poll, the scheduler resumes them in deadline order, with ties in suspension order;
 this applies to real host and native runs as well as virtual time.
 
+### Signal recording
+
+A signal is a capability input, recorded where the program observes it: `io.signals` is
+recorded as a projection, and each `signal.wait` at the call, with the request (the
+`Signals` handle and the waited kinds) and the completion (the kind it consumed, or the
+error). A wait that parks records `blocked` and a `ready` event like a network request,
+and its completion when the poll that finds it ready completes it; a cancelled wait records
+nothing more. The arrival's host timing, the handler and an arrival no wait consumed are
+never recorded. Replay returns the recorded kinds at the recorded polls without installing
+a handler, so a replayed run neither needs nor reacts to a signal.
+
 ## The Blocked observation
 
 `Blocked { waits }` is separate from language exits and from tooling resource limits. Each
@@ -655,6 +688,17 @@ wait records the stable spawn path, the suspended operation's source anchor, the
 and the logical creation ordinals of its target. Reports keep the output and effect prefix.
 Wait rows are ordered by spawn path, source anchor, wait kind and target ordinals. Host
 identifiers and elapsed host time are excluded. Abandonment runs no speculative drop.
+
+## The Signaled end
+
+An arrival that takes its default action ends the run `Signaled(kind)`: no cleanup runs,
+no further output is written, and the report keeps the output and effect prefix, as a
+Blocked run's does. A launcher realizes it by terminating its process by that signal, so a
+parent sees a signal death, not an exit status; a host that cannot (one evaluating several
+runs in one process) exits `128` plus the signal number (130 for Interrupt, 143 for
+Terminate, 129 for Hangup) instead. Observation keeps the two distinct: a native run
+expected to end `Signaled` must end by the signal itself. A recording of a run ended this
+way has no completion trailer and is not replayable, as a killed process's is not.
 
 ### Host input streams and environment
 

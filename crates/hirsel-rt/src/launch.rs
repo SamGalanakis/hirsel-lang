@@ -167,6 +167,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().wait()
     }
+    fn scripted_input(&self) -> bool {
+        self.0.borrow().scripted_input()
+    }
 }
 
 /// Complete typed completion tape. Hex fields preserve empty paths and arbitrary bytes.
@@ -1351,7 +1354,23 @@ unsafe fn harness(
     };
     let program = Program::harness(code, result_size, layouts, layout_count, *config);
     // SAFETY: caller contract.
-    unsafe { launch(&program, std::env::args_os().skip(1).collect()) }.exit_code()
+    process_exit(unsafe { launch(&program, std::env::args_os().skip(1).collect()) })
+}
+
+/// A standalone process's exit status for `outcome`. A `Signaled` run ends the process by its
+/// signal, as the host's default action would have: the default disposition is restored and
+/// the signal raised. Only if the process survives that does it exit with the fallback
+/// status.
+fn process_exit(outcome: hirsel_run_schema::RunOutcome) -> i32 {
+    if let hirsel_run_schema::RunOutcome::Signaled(kind) = &outcome {
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        // SAFETY: resetting a disposition and raising a signal on this process.
+        unsafe {
+            libc::signal(kind.number(), libc::SIG_DFL);
+            libc::raise(kind.number());
+        }
+    }
+    outcome.exit_code()
 }
 
 /// The entry of a compiled executable or program library: load its program and launch one run
@@ -1379,7 +1398,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_main(
     // SAFETY: caller contract.
     match unsafe { Program::load(descriptor) } {
         // SAFETY: the program's data lives for the process.
-        Ok(program) => unsafe { launch(&program, arguments) }.exit_code(),
+        Ok(program) => process_exit(unsafe { launch(&program, arguments) }),
         Err(error) => refuse(&error),
     }
 }
@@ -1600,6 +1619,21 @@ pub(crate) unsafe fn execute(
             }
         }
     };
+    // The launcher's `io.signals` grant (`HIRSEL_RT_SIGNALS`), like `HIRSEL_RT_NET`.
+    let signals = if requested.is_some() {
+        None
+    } else {
+        match std::env::var("HIRSEL_RT_SIGNALS") {
+            Ok(text) => match hirsel_run_config::validate_signals_grant(text.as_bytes()) {
+                Ok(grant) => Some(grant),
+                Err(error) => return Err(format!("the signals grant: {error}")),
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("the signals grant is not UTF-8".into());
+            }
+        }
+    };
     // The launcher's root Env snapshot (`HIRSEL_RT_ENV`), like `HIRSEL_RT_NET`.
     let env = if requested.is_some() {
         None
@@ -1684,6 +1718,9 @@ pub(crate) unsafe fn execute(
                 if let Some(grant) = &process {
                     io.set_process_grant(grant);
                 }
+                if let Some(grant) = &signals {
+                    io.set_signal_kinds(grant.bits());
+                }
                 if let Some((peers, listeners)) = net_script.clone()
                     && let Err(error) = io.set_net_script(peers, listeners)
                 {
@@ -1740,6 +1777,10 @@ pub(crate) unsafe fn execute(
                             return Err("invalid harness virtual clock".into());
                         };
                         io.virtual_clock(ticks);
+                    } else if signals.is_some() {
+                        // A scripted signal parks its waits: record them and each ready poll,
+                        // so replay interleaves them with the other parked requests.
+                        io.set_cooperative(crate::readiness::Readiness::default());
                     }
                     io.set_net_rules(net_rules.clone());
                     if let Some(env) = &env {
@@ -1753,6 +1794,11 @@ pub(crate) unsafe fn execute(
                     );
                     if let Some(grant) = &process {
                         io.set_process_grant(grant);
+                    }
+                    if let Some(grant) = &signals {
+                        if let Err(error) = io.set_signal_grant(grant) {
+                            return Err(format!("the signals grant: {error:?}"));
+                        }
                     }
                     if let Some((peers, listeners)) = net_script.clone()
                         && let Err(error) = io.set_net_script(peers, listeners)
@@ -2112,6 +2158,9 @@ pub(crate) unsafe fn execute(
             hirsel_run_schema::RunOutcome::BudgetExceeded(kind) => {
                 let _ = writeln!(record, "budget_exceeded {}", kind.name());
             }
+            hirsel_run_schema::RunOutcome::Signaled(kind) => {
+                let _ = writeln!(record, "signaled {}", kind.name());
+            }
             _ => {}
         }
         record.push_str("audit unavailable\n");
@@ -2206,6 +2255,11 @@ pub(crate) unsafe fn execute(
                     "hirsel-rt: environmental failure: {cause}"
                 );
             }
+            write_observation(&record)?;
+        }
+        // The process would have ended by the signal: its recording has no trailer.
+        hirsel_run_schema::RunOutcome::Signaled(_) => {
+            stopped_output(sinks, &echo_replay);
             write_observation(&record)?;
         }
         hirsel_run_schema::RunOutcome::Tooling(reason) => return Err(reason.clone()),

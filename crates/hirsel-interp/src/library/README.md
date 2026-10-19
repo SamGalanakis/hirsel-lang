@@ -68,6 +68,15 @@ order they suspended. Pending timers are the simulation's outstanding event
 source (`Operations::wait`), so sleepers never make a run Blocked. A suspended
 wait records `clock.sleep_until.suspend`, and its completion (Ok, Canceled or an
 injected Clock fault) records `clock.sleep_until`; cancellation drops its timer.
+Scripted signals (`signals.rs`, `signals.script@1`): `io.signals` projects a root
+`Signals` handle when `SimulationConfig::signals` grants one and marks the handlers
+installed; `Operations::wait` delivers the script's next arrival before advancing virtual
+time. An observed kind becomes pending (one per kind; a second pending Interrupt, an arrival
+before the projection or of an unobserved kind is `Error::Signaled`, which ends the run
+`Outcome::Signaled`). `signal.wait` checks an empty set, then an unobserved kind, then
+cancellation, returns the earliest pending arrival among its kinds, or parks recording
+`signal.wait.suspend`; its completion records `signal.wait`. A host adapter supplies a host
+arrival through `supply_signal` and completes a parked wait through `wait_signal`.
 `random.bytes` draws `random.splitmix64@1`: successive SplitMix64 words of the
 run's Random seed, little-endian, the last cut short; a zero count touches
 nothing. A host adapter supplies its own provider's draw through `supply_random`.

@@ -24,7 +24,7 @@ pub use ledger::{Counters, Event, Exemption, History, Trace};
 pub use observe::{Observation, Observed};
 pub use program::{
     Arg, Config, INJECTED_RULE, NoOperations, OpOutcome, OpValue, OperationDomain, Operations,
-    Program,
+    Program, SignalDelivery,
 };
 pub use violation::{Violation, ViolationKind};
 
@@ -86,7 +86,7 @@ pub fn run<S: Stage>(
         })
     })()
     .map_err(|v: Box<Violation>| *v);
-    let result = blocked(result, &machine.output);
+    let result = blocked(result, &machine.output, machine.signaled);
     Run {
         output: machine.output.clone(),
         sites: machine.sites,
@@ -101,15 +101,20 @@ pub fn run<S: Stage>(
 /// CONC-8: reporting Blocked runs no user code, cancellation or destruction, so the blocked
 /// tasks keep their storage and no terminal audit applies: a Blocked violation is the run's
 /// observation.
-fn blocked(result: Result<Audit, Violation>, output: &[u8]) -> Result<Audit, Violation> {
+fn blocked(
+    result: Result<Audit, Violation>,
+    output: &[u8],
+    signaled: Option<u32>,
+) -> Result<Audit, Violation> {
     match result {
-        Err(v) if v.kind == ViolationKind::Blocked => Ok(Audit {
+        Err(v) if matches!(v.kind, ViolationKind::Blocked | ViolationKind::Signaled) => Ok(Audit {
             observation: Observation {
                 schema_version: observe::OBSERVATION_SCHEMA_VERSION,
                 returned: None,
                 output: output.to_vec(),
                 failures: Vec::new(),
-                blocked: true,
+                blocked: v.kind == ViolationKind::Blocked,
+                signaled: signaled.filter(|_| v.kind == ViolationKind::Signaled),
             },
             exemptions: Default::default(),
         }),

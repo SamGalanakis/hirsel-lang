@@ -91,13 +91,14 @@ pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
-/// wait, a process run or pipeline, a child or group write, read or wait, a runner call, a
-/// watcher's next event, or a network request.
+/// wait, a signal wait, a process run or pipeline, a child or group write, read or wait, a
+/// runner call, a watcher's next event, or a network request.
 pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
         Request::ReadStdin { .. }
             | Request::SleepUntil { .. }
+            | Request::SignalWait { .. }
             | Request::ProcessRun { .. }
             | Request::ProcessPipeline { .. }
             | Request::ChildWrite { .. }
@@ -393,15 +394,19 @@ pub(crate) unsafe fn poll(
     Ok(true)
 }
 
-/// With no runnable task: sleep until some parked request's descriptor is ready or the
-/// earliest deadline passes (in replay, until the recording's next `ready`). False when
-/// nothing can wake a task.
+/// With no runnable task: deliver a script's next signal, or sleep until some parked
+/// request's descriptor is ready or the earliest deadline passes (in replay, until the
+/// recording's next `ready`). False when nothing can wake a task.
 ///
 /// # Safety
 /// `ctx` is live and its Binding bound.
 pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
-    if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
+    // A script's undelivered signals are an event source even when nothing is parked.
+    if binding.waits.parked.is_empty()
+        && binding.waits.armed.is_empty()
+        && !binding.adapter.scripted_input()
+    {
         return Ok(false);
     }
     binding.adapter.wait().map_err(Stop::refusal)

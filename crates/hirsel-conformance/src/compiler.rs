@@ -217,7 +217,7 @@ fn evaluate_on_compiler_thread(
     observation.actual = "accept".into();
     if !matches!(
         expect,
-        Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. }
+        Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. } | Expect::Signaled { .. }
     ) {
         return (
             verdict(expect, &Actual::Accepted, &observation.actual),
@@ -325,7 +325,10 @@ fn evaluate_on_compiler_thread(
             {
                 End::Blocked
             }
-            (None, None) => End::Other,
+            (None, None) => match (actual.signaled, &outcome) {
+                (Some(kind), RunOutcome::Signaled(k)) if kind == *k => End::Signaled(kind),
+                _ => End::Other,
+            },
         },
         None => End::Other,
     };

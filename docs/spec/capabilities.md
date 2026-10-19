@@ -85,6 +85,19 @@ program already holds; it grants nothing, and no implicit clock is read. The chi
 file system, network and process access is outside Hirsel's model: granting a program is
 trusting it with whatever the host lets it do ([processes](core-library.md#processes)).
 
+**Signals.** `Signals` is a global capability over the host signals a run observes, a
+nonempty subset of `SignalKind` (`Interrupt()`, `Terminate()`, `Hangup()`, for SIGINT,
+SIGTERM and SIGHUP), which the run configuration's `io.signals` grant fixes. Absent, the
+grant is denied: `io.signals` returns `NotGranted()` and every signal the process receives
+keeps its default action, so a program that never asked for signals dies by one as any
+process does. From the run's first projection, an arrival of an observed kind is pending
+instead of fatal, and only `signal.wait` consumes it ([signals](core-library.md#effects-and-cancellation)):
+no program code runs in a handler. A wait naming a kind outside the grant returns
+`NotGranted()` before any effect. At most one arrival of a kind is pending; a second
+Interrupt while one is pending keeps the default action, so a program that stops waiting
+can still be interrupted. An arrival before the projection or of an unobserved kind takes
+the default action as well.
+
 **Runners and stores.** A `Runner` (planned) designates a place functions can run together
 with a grant set the run configuration fixes; it can only be narrowed, a call through it
 carries data and a definition's identity, never authority, and the callee's capabilities
@@ -185,7 +198,9 @@ other grants it with the same snapshot, set or unset. Absent Io or Env is within
 grants, and a present one only within a present one. The relation is total and lexical over
 validated records and reads no host state; program, entry, inputs, Args, admission and
 scripted provider data (peers, listeners, runs, children) are not authority and take no
-part. It is reflexive and transitive, removing a grant or narrowing one stays within the
+part. A signals grant is within another's only under the same provider contract, its kinds a
+subset of the other's; a script (`signals.script@1`) is provider data and takes no part.
+It is reflexive and transitive, removing a grant or narrowing one stays within the
 original, and adding one never does.
 
 ### CAP-4: Synchronisation

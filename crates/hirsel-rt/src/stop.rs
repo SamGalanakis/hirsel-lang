@@ -34,6 +34,8 @@ pub enum Stop {
     /// codec (FAIL-3). The run ends with its recorded failure, as if its entry had failed,
     /// with no cleanup.
     Failed,
+    /// A scripted signal took its default action (`signals.script@1`).
+    Signaled(hirsel_run_schema::SignalKind),
 }
 
 impl Stop {
@@ -43,6 +45,7 @@ impl Stop {
             AdapterError::ReplayMismatch(_)
             | AdapterError::MissingInput(_)
             | AdapterError::UnconsumedInput(_) => Stop::Diverged(format!("{error:?}")),
+            AdapterError::Signaled(kind) => Stop::Signaled(kind),
             AdapterError::RecordingFailed(_) => {
                 Stop::Environmental(Environmental::Recording(format!("{error:?}")))
             }
@@ -59,6 +62,7 @@ impl Stop {
             Stop::Diverged(reason) => RunOutcome::Diverged(reason),
             Stop::Environmental(cause) => RunOutcome::Environmental(cause),
             Stop::Failed => crate::fault("a failed run reported as a stop"),
+            Stop::Signaled(kind) => RunOutcome::Signaled(kind),
         }
     }
 }

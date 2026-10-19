@@ -840,6 +840,17 @@ pub(crate) fn call_schemas(
     ))
 }
 
+/// End this process by `kind`'s default action, as a standalone launcher ends a `Signaled`
+/// run, and return the status a parent sees if it is not ended (`RunOutcome::exit_code`).
+pub fn end_by_signal(kind: hirsel_run_schema::SignalKind) -> u8 {
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    // SAFETY: resetting a disposition and raising a signal on this process.
+    unsafe {
+        libc::signal(kind.number(), libc::SIG_DFL);
+        libc::raise(kind.number());
+    }
+    hirsel_run_schema::RunOutcome::Signaled(kind).exit_code() as u8
+}
 pub(crate) fn admission_time() -> Result<i64, ToolError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

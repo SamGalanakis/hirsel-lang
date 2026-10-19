@@ -18,6 +18,7 @@ mod env;
 mod filesystem;
 mod net;
 mod process;
+mod signals;
 
 /// The Io operations with a native entry (`hirsel_rt_operations`), over
 /// logical handles numbered as the runtime's adapter numbers them.
@@ -55,6 +56,7 @@ struct Io {
     serials: durability::Serials,
     /// Each failure site's line and column, for a program that isolates (FAIL-2).
     positions: Positions,
+    signals: signals::Signals,
 }
 
 type Positions = std::sync::Arc<BTreeMap<(DefPath, (u32, u32)), (u64, u64)>>;
@@ -104,6 +106,7 @@ impl Io {
         if let Some(env) = &world.env {
             io.network.set_env(env.clone());
         }
+        io.signals = signals::Signals::new(world.signals.clone());
         match kind {
             super::link::LaunchKind::Zero => io.grants.clear(),
             super::link::LaunchKind::Test => {
@@ -138,6 +141,7 @@ impl Io {
             stale: BTreeSet::new(),
             serials: Default::default(),
             positions: Positions::default(),
+            signals: Default::default(),
         }
     }
 }
@@ -206,6 +210,9 @@ impl Operations for Io {
         matches!(self.grants.get(&clock), Some(IoGrant::Monotonic))
             .then_some(self.monotonic)
             .flatten()
+    }
+    fn deliver_signal(&mut self) -> hirsel_heapcheck::SignalDelivery {
+        self.signals.deliver()
     }
     fn advance_monotonic(&mut self, ticks: u64) {
         if let Some(now) = &mut self.monotonic {
@@ -293,6 +300,10 @@ impl Operations for Io {
                 output.extend(self.network.take_report());
                 return outcome;
             }
+            (Some("signal"), "wait", _) => {
+                self.yielded = true;
+                return self.signals(module, &path.name, args, Some(cause));
+            }
             (Some("file"), _, _) | (Some("dir"), "remove_all", _) => {
                 self.yielded = true;
                 return self.cancel_file(&path.name, args, cause);
@@ -330,6 +341,9 @@ impl Operations for Io {
         }
         if let Some(outcome) = self.process(module, &path.name, args, None) {
             output.extend(self.network.take_report());
+            return outcome;
+        }
+        if let Some(outcome) = self.signals(module, &path.name, args, None) {
             return outcome;
         }
         if let Some(outcome) = self.detached_filesystem(module, &path.name, args) {
@@ -438,6 +452,7 @@ enum IoGrant {
         context: Vec<u8>,
     },
     Monotonic,
+    Signals,
     Stdin,
     Stderr,
     Root,
@@ -1986,6 +2001,14 @@ fn observation(
         exit_code,
         blocked: o.blocked,
         budget: None,
+        signaled: o
+            .signaled
+            .map(|ordinal| {
+                hirsel_run_schema::SignalKind::from_ordinal(ordinal).ok_or_else(|| {
+                    NativeError::new(StageName::Heap, "a signal of no SignalKind ended the run")
+                })
+            })
+            .transpose()?,
         output: output.to_vec(),
         failures: o
             .failures
@@ -2028,6 +2051,8 @@ pub struct HeapWorld {
     pub process: Option<hirsel_run_schema::ProcessGrant>,
     /// A Main launch's `io.net` grant; only a scripted one (net.script@2, with peers) runs.
     pub net: Option<hirsel_run_schema::NetGrant>,
+    /// A Main launch's `io.signals` grant; only a scripted one (signals.script@1) delivers.
+    pub signals: Option<hirsel_run_schema::SignalsGrant>,
     /// A Main launch's Env snapshot; absent, the root Env grants no name.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// A raised interpreter step budget; H's instruction limit scales with it.

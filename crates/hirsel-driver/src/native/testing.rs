@@ -129,6 +129,7 @@ impl Executable {
         let launched = super::Launched {
             audit_required: false,
             exit: output.status.code(),
+            signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
             stdout: output.stdout,
             stderr: output.stderr,
             record: std::fs::read_to_string(&record).unwrap_or_default(),

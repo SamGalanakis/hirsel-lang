@@ -1,6 +1,8 @@
 //! Additional typed tape forms for host streams, exact environment reads, processes,
 //! random draws and timer waits.
-use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
+use crate::io::{
+    ClockError, Completion, EnvError, InputError, RandomError, Request, SignalError, WaitError,
+};
 use hirsel_run_schema::{
     ChildStream, ExitStatus, PipelineOutcome, ProcessFailure, ProcessOutcome, Signal, hex,
 };
@@ -88,6 +90,9 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             text
         }
         Request::Process { io } => format!("process {io}"),
+        Request::Signals { io } => format!("signals {io}"),
+        // The kinds are their bits (`SignalKind::bit`).
+        Request::SignalWait { signals, kinds } => format!("signal_wait {signals} {kinds}"),
         Request::Ready { wait, points } => format!("ready {wait} {points}"),
         // Every member is one word, so the request needs no counts.
         Request::RunnerCall(call) => format!(
@@ -288,6 +293,12 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
             "wait out_of_range".into()
         }
         Completion::Wait(Err(WaitError::Canceled(cause))) => format!("wait canceled {cause}"),
+        Completion::Signal(Ok(kind)) => format!("signal {}", kind.name()),
+        Completion::Signal(Err(SignalError::Canceled(cause))) => {
+            format!("signal canceled {cause}")
+        }
+        Completion::Signal(Err(SignalError::NotGranted)) => "signal not_granted".into(),
+        Completion::Signal(Err(SignalError::InvalidInput)) => "signal invalid_input".into(),
         Completion::Process(ProcessOutcome::Output {
             status,
             stdout,
@@ -457,6 +468,11 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
     Ok(Some(match words {
         ["stdin", io] => Request::Stdin { io: number(io)? },
         ["stderr", io] => Request::Stderr { io: number(io)? },
+        ["signals", io] => Request::Signals { io: number(io)? },
+        ["signal_wait", signals, kinds] => Request::SignalWait {
+            signals: number(signals)?,
+            kinds: number(kinds)?,
+        },
         ["stdin_read", stdin, max] => Request::ReadStdin {
             stdin: number(stdin)?,
             max: number(max)?,
@@ -741,6 +757,14 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["wait", "unavailable"] => Completion::Wait(Err(WaitError::Clock(ClockError::Unavailable))),
         ["wait", "out_of_range"] => Completion::Wait(Err(WaitError::Clock(ClockError::OutOfRange))),
         ["wait", "canceled", cause] => Completion::Wait(Err(WaitError::Canceled(number(cause)?))),
+        ["signal", "canceled", cause] => {
+            Completion::Signal(Err(SignalError::Canceled(number(cause)?)))
+        }
+        ["signal", "not_granted"] => Completion::Signal(Err(SignalError::NotGranted)),
+        ["signal", "invalid_input"] => Completion::Signal(Err(SignalError::InvalidInput)),
+        ["signal", kind] => Completion::Signal(Ok(
+            hirsel_run_schema::SignalKind::parse(kind).ok_or("unknown signal kind")?
+        )),
         [
             "process",
             kind @ ("exited" | "signaled"),

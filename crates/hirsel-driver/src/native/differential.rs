@@ -336,6 +336,8 @@ pub struct Fixture {
     pub monotonic: Option<u64>,
     pub net: Option<hirsel_run_schema::NetGrant>,
     pub process: Option<hirsel_run_schema::ProcessGrant>,
+    /// The `io.signals` grant, with its script under `signals.script@1`.
+    pub signals: Option<hirsel_run_schema::SignalsGrant>,
     /// The root Env's snapshot: each granted name and its value, null when unset.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// A corpus program's raised interpreter step budget (`// steps:`); H's
@@ -387,6 +389,7 @@ pub fn differential_in(
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),
         net: fixture.net.clone(),
+        signals: fixture.signals.clone(),
         env: fixture.env.clone(),
         steps: fixture.steps,
     };
@@ -714,6 +717,21 @@ pub fn real_io_replay_in(
         }
         let text = std::fs::read_to_string(&tape)
             .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
+        // A run a signal's default action ended leaves a recording with no trailer, as a
+        // killed process does (determinism.md, The Signaled end): nothing to replay.
+        if reference.signaled.is_some() {
+            return match hirsel_rt::launch::parse_recording_prefix(&text) {
+                Ok((_, false)) => Ok(real),
+                Ok((_, true)) => Err(NativeError::new(
+                    StageName::Launch,
+                    "a signaled run's recording is complete",
+                )),
+                Err(error) => Err(NativeError::new(
+                    StageName::Launch,
+                    format!("the Io tape: {error}"),
+                )),
+            };
+        }
         let events = hirsel_rt::launch::parse_recording(&text)
             .map(|record| record.events)
             .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;

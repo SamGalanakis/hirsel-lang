@@ -1,0 +1,86 @@
+// rule: CAP-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"tls":"plain","steps":["stall"]}]}]}
+// signals: {"provider":"signals.script@1","kinds":["interrupt","terminate"],"script":["interrupt"]}
+// stdout: serving
+// stdout: connection released
+// stdout: stopped by interrupt
+// A server and a signal wait race in one task set. The client stalls, so the run's first
+// idle point delivers the Interrupt; the wait wins the select, the server is canceled out
+// of its read and joined, its resources are dropped, and main returns Ok after its cleanup.
+// Each member reports a plain code: 1 for a served client, 2 for a stopped server and the
+// waited kind's ordinal plus 10 for a signal.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "connection released\n")
+}
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn serve(n: Net, stdout: Stdout) -> Result[u64, NetError] {
+  let mut listener = net.listen(n, home())?
+  let _ = out.print(stdout, "serving\n")
+  let mut (stream, _) = net.accept(n, mut listener)?
+  let trace = Trace(stdout: stdout)
+  let mut buffer: List[u8] = []
+  let read = net.read(n, mut stream, mut buffer, 16u64)?
+  net.close(n, take stream)
+  Ok(read)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let signals = io.signals(rt) ? Grant
+  let (index, reason) = task.scope(
+    tasks,
+    fn(s: Scope) -> (u64, u64) {
+      let mut set: TaskSet[u64] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> u64 {
+            match serve(n, stdout) {
+              Ok(_) => 1u64,
+              Error(_) => 2u64,
+            }
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> u64 {
+            match signal.wait(signals, [Interrupt(), Terminate()]) {
+              Ok(Interrupt()) => 10u64,
+              Ok(Terminate()) => 11u64,
+              Ok(Hangup()) => 12u64,
+              Error(_) => 0u64,
+            }
+          }
+        )
+      )
+      task.select(s, take set)
+    }
+  )
+  out.print(
+    stdout,
+    if index == 1 && reason == 10u64 {
+      "stopped by interrupt\n"
+    } else {
+      "wrong\n"
+    }
+  ) ? Output
+  Ok(())
+}

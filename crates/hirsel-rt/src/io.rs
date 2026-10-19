@@ -76,6 +76,8 @@ pub enum AdapterError {
     Blocked,
     /// The provider of this run cannot perform the admitted operation.
     Unsupported(String),
+    /// A scripted signal took its default action, which ends the run.
+    Signaled(hirsel_run_schema::SignalKind),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
@@ -168,6 +170,14 @@ pub enum Request {
     },
     Process {
         io: u64,
+    },
+    Signals {
+        io: u64,
+    },
+    /// `signal.wait`: the kinds as bits (`hirsel_run_schema::SignalKind::bit`).
+    SignalWait {
+        signals: u64,
+        kinds: u8,
     },
     TestProcess {
         test: u64,
@@ -619,6 +629,13 @@ pub enum WaitError {
     Clock(ClockError),
     Canceled(u32),
 }
+/// `SignalError`, in its core variant order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignalError {
+    Canceled(u32),
+    NotGranted,
+    InvalidInput,
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RandomError {
     Unavailable,
@@ -685,6 +702,8 @@ pub enum Completion {
     Random(Result<Vec<u8>, RandomError>),
     /// A completed timer wait.
     Wait(Result<(), WaitError>),
+    /// A completed `signal.wait`.
+    Signal(Result<hirsel_run_schema::SignalKind, SignalError>),
     /// Deterministic capability refusal; the operation issued no host effect.
     Refused(u64),
     Checked(bool),
@@ -980,6 +999,8 @@ pub(crate) struct State {
     pub(crate) test_last_monotonic: Option<u64>,
     pub(crate) test_clocks: BTreeSet<u64>,
     pub(crate) random: RandomSource,
+    /// The kinds the run's Signals observes, as bits; zero without the grant.
+    pub(crate) signal_kinds: u8,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub env: BTreeMap<String, Option<String>>,
@@ -1031,6 +1052,7 @@ impl Default for State {
             test_last_monotonic: None,
             test_clocks: Default::default(),
             random: RandomSource::SplitMix64(0),
+            signal_kinds: 0,
             stdout: vec![],
             stderr: Vec::new(),
             env: BTreeMap::new(),
@@ -1111,6 +1133,7 @@ impl State {
             Request::Process { .. } => "process",
             Request::Random { .. } => "random",
             Request::Telemetry { .. } => "telemetry",
+            Request::Signals { .. } => "signals",
             Request::Directory { .. } => "dir",
             _ => return false,
         };
@@ -1127,6 +1150,16 @@ impl State {
             }?;
             Some((selector.as_str(), local, *access))
         })
+    }
+    /// `signal.wait`'s program checks, in order: an empty set, then an unobserved kind.
+    pub(crate) fn signal_check(&self, kinds: u8) -> Option<SignalError> {
+        if kinds == 0 {
+            Some(SignalError::InvalidInput)
+        } else if kinds & !self.signal_kinds != 0 {
+            Some(SignalError::NotGranted)
+        } else {
+            None
+        }
     }
     /// Whether Env `env` grants `name`: the root grants every name of the run's Env.
     pub(crate) fn env_granted(&self, env: u64, name: &str) -> Result<bool, AdapterError> {
@@ -1389,6 +1422,20 @@ impl State {
             self.expect(*stdin, Grant::Stdin)?;
         }
         match (request, &input) {
+            (Request::SignalWait { signals, kinds }, Completion::Signal(value)) => {
+                self.expect(*signals, Grant::Signals)?;
+                let check = self.signal_check(*kinds);
+                let valid = match value {
+                    Ok(kind) => check.is_none() && kinds & kind.bit() != 0,
+                    Err(SignalError::Canceled(cause)) => {
+                        check.is_none() && *cause <= crate::tasks::CANCEL_DEADLINE
+                    }
+                    Err(error) => check.as_ref() == Some(error),
+                };
+                if !valid {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+            }
             (Request::ReadStdin { max, .. }, Completion::Input(value)) => {
                 let valid = match value {
                     Err(InputError::InvalidInput) => *max == 0,
@@ -1633,7 +1680,14 @@ impl State {
                 }
                 Ok(C::Handle(Ok(self.handles.insert(grant))))
             }
-            R::ReadStdin { .. } => Err(AdapterError::InvalidCompletion),
+            R::ReadStdin { .. } | R::SignalWait { .. } => Err(AdapterError::InvalidCompletion),
+            R::Signals { io } => {
+                self.expect(*io, Grant::Io)?;
+                if !self.projections.contains("signals") {
+                    return Ok(C::Handle(Err(IoError::NotGranted)));
+                }
+                Ok(C::Handle(Ok(self.handles.insert(Grant::Signals))))
+            }
             R::EnvGet { env, name } => Ok(C::Env(if self.env_granted(*env, name)? {
                 self.env.get(name).cloned().ok_or(EnvError::NotGranted)
             } else {
@@ -2351,6 +2405,11 @@ pub trait Adapter {
     /// source can make one ready.
     fn wait(&mut self) -> Result<bool, AdapterError> {
         Ok(false)
+    }
+    /// Whether a script still holds input the run's idle points deliver (signals), so an
+    /// idle run with nothing parked is not yet Blocked.
+    fn scripted_input(&self) -> bool {
+        false
     }
 }
 
@@ -3684,6 +3743,72 @@ telemetry_record_export!(hirsel_rt_v2_capture_measure, TelemetryMeasure);
 grant_projection_export!(hirsel_rt_v2_io_tasks, Tasks);
 grant_projection_export!(hirsel_rt_v2_io_net, Net);
 grant_projection_export!(hirsel_rt_v2_io_process, Process);
+grant_projection_export!(hirsel_rt_v2_io_signals, Signals);
+
+/// Result[SignalKind, SignalError]: the Ok kind's ordinal, or the SignalError tag and its
+/// CancelCause ordinal, each a word after the Result tag.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignalResult {
+    pub tag: u32,
+    pub value: u32,
+    pub cause: u32,
+}
+/// `signal.wait`: the kinds are a List[SignalKind], each element its u32 variant ordinal.
+/// # Safety
+/// Context, borrowed Signals word and List are live; out is writable Result storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_signal_wait(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut SignalResult,
+    signals: *const u64,
+    kinds: *mut crate::Header,
+) -> u8 {
+    let kinds = unsafe {
+        crate::process::list(kinds, 4, |at| {
+            hirsel_run_schema::SignalKind::from_ordinal(at.cast::<u32>().read())
+                .unwrap_or_else(|| crate::fault("SignalKind tag"))
+                .bit()
+        })
+    }
+    .into_iter()
+    .fold(0, |bits, bit| bits | bit);
+    let request = Request::SignalWait {
+        signals: unsafe { signals.read() },
+        kinds,
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Signal(value) = completion else {
+        crate::fault("signal wait completion mismatch");
+    };
+    let result = match value {
+        Ok(kind) => SignalResult {
+            tag: 0,
+            value: kind.ordinal(),
+            cause: 0,
+        },
+        Err(SignalError::Canceled(cause)) => SignalResult {
+            tag: 1,
+            value: 0,
+            cause,
+        },
+        Err(SignalError::NotGranted) => SignalResult {
+            tag: 1,
+            value: 1,
+            cause: 0,
+        },
+        Err(SignalError::InvalidInput) => SignalResult {
+            tag: 1,
+            value: 2,
+            cause: 0,
+        },
+    };
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
 
 /// Result with an eight-byte success payload and a nullary error tag.
 #[repr(C)]

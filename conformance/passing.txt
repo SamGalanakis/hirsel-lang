@@ -89,6 +89,11 @@ conformance/CAP/CAP-1-process-ungranted-run.hir
 conformance/CAP/CAP-1-random-draws-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
+conformance/CAP/CAP-1-signals-before-projection-run.hir
+conformance/CAP/CAP-1-signals-double-interrupt-run.hir
+conformance/CAP/CAP-1-signals-graceful-shutdown-run.hir
+conformance/CAP/CAP-1-signals-not-granted-run.hir
+conformance/CAP/CAP-1-signals-unobserved-kind-run.hir
 conformance/CAP/CAP-1-std-iter-file-pipeline-run.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir
 conformance/CAP/CAP-1-stderr-parameter-ok.hir
@@ -878,6 +883,7 @@ conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
+conformance/DET/DET-1-signals-replay-run.hir
 conformance/DET/DET-1-std-store-crash-boundaries-run.hir
 conformance/DET/DET-1-std-store-crash-compaction-run.hir
 conformance/DET/DET-1-std-store-fence-chain-run.hir

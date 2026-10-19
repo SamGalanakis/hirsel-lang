@@ -497,6 +497,10 @@ impl QueryEngine {
                 Err(QueryError::Diagnostics(vec![diagnostic]))
             }
             Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
+            Outcome::Signaled(kind) => Err(operational(format!(
+                "compile-time evaluation ended by {}",
+                kind.name()
+            ))),
             Outcome::BudgetExceeded(kind) => Err(operational(format!(
                 "compile-time evaluation exceeded its {} budget",
                 kind.name()

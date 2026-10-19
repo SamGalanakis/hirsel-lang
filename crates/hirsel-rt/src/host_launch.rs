@@ -190,6 +190,9 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     if let Some(grant) = run.process_grant() {
         io.set_process_grant(grant);
     }
+    if let Some(grant) = run.signals_grant() {
+        io.set_signal_kinds(grant.bits());
+    }
     Ok((io, run))
 }
 
@@ -211,6 +214,27 @@ pub fn read_recording(path: &Path) -> Result<Recording, RunRefusal> {
         String::from_utf8(bytes)
             .map_err(|_| invalid("bad recording UTF-8".into()))
             .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))
+    }
+}
+
+/// The admitted `io.signals` source: the process's signals, which one run holds at a time,
+/// or the grant's script.
+pub(crate) fn signal_source(
+    grant: &hirsel_run_schema::SignalsGrant,
+) -> Result<crate::signals::SignalSource, RunRefusal> {
+    let unauthorized = |detail: String| RunRefusal::Unauthorized {
+        field: format!("io.signals: {detail}"),
+    };
+    match &grant.script {
+        Some(script) => crate::signals::SignalSource::script(grant.bits(), script)
+            .map_err(|e| unauthorized(e.to_string())),
+        None => match crate::signals::ProcessSignals::take(grant.bits()) {
+            Ok(Some(signals)) => Ok(crate::signals::SignalSource::Host(signals)),
+            Ok(None) => Err(unauthorized(
+                "another run of this process holds its signals".into(),
+            )),
+            Err(error) => Err(unauthorized(error.to_string())),
+        },
     }
 }
 
@@ -360,6 +384,9 @@ impl HostAuthority for HostGrants {
         }
         if let Some(grant) = run.process_grant() {
             io.set_process_grant(grant);
+        }
+        if let Some(grant) = run.signals_grant() {
+            io.set_signal_grant(grant)?;
         }
         self.io = Some(io);
         Ok(())

@@ -23,6 +23,8 @@ N fn instant.ticks(value: Instant) -> u64 uses {}
 N fn instant.checked_add(clock: MonotonicClock, start: Instant of clock, nanoseconds: u64) -> Option[Instant of clock]
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
+N fn io.signals(rt: Io) -> Result[Signals, GrantError]
+N fn signal.wait(s: Signals, kinds: List[SignalKind]) -> Result[SignalKind, SignalError]
 fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]

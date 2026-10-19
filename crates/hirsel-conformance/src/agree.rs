@@ -93,7 +93,8 @@ impl Execution {
         match expect {
             crate::Expect::Run { .. }
             | crate::Expect::Fail { .. }
-            | crate::Expect::Blocked { .. } => Self::Entry,
+            | crate::Expect::Blocked { .. }
+            | crate::Expect::Signaled { .. } => Self::Entry,
             crate::Expect::Test => Self::Tests,
             crate::Expect::Accept | crate::Expect::Reject { .. } => Self::None,
         }

@@ -87,6 +87,10 @@ typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_env_result;
 uint8_t hirsel_rt_v2_io_stdin(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
+/* Result[SignalKind, SignalError]: the kind's ordinal, or the error tag and its cause. */
+typedef struct { uint32_t tag, value, cause; } hirsel_rt_v2_signal_result;
+uint8_t hirsel_rt_v2_io_signals(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
+uint8_t hirsel_rt_v2_signal_wait(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_signal_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_stdin_read(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header**, uint64_t);
 uint8_t hirsel_rt_v2_err_print(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_env_get(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_env_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
