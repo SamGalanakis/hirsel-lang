@@ -572,6 +572,34 @@ fn cleanup_releases_temporaries_before_names_of_one_scope() {
     );
 }
 
+/// A Replace's displaced owner is a TIR temporary: it releases before an
+/// earlier temporary of its scope and before the scope's names.
+#[test]
+fn a_displaced_owner_releases_as_a_temporary() {
+    pair(
+        |swap| {
+            cleanup_order(
+                &[None],
+                (SlotKind::Temporary, 0),
+                (SlotKind::Displaced, 0),
+                swap,
+            )
+        },
+        |k| *k == K::CleanupOrder(SlotId(1)),
+    );
+    pair(
+        |swap| {
+            cleanup_order(
+                &[None],
+                (SlotKind::Local, 0),
+                (SlotKind::Displaced, 0),
+                swap,
+            )
+        },
+        |k| *k == K::CleanupOrder(SlotId(1)),
+    );
+}
+
 /// The scope parent relation is a forest.
 #[test]
 fn a_scope_cycle_is_rejected() {

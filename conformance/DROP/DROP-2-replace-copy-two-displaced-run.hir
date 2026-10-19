@@ -1,0 +1,24 @@
+// rule: DROP-2
+// expect: run
+// stdout: swapped
+// Each tuple operand deep-copies a Replace's displaced owner. The second copy
+// can fail while the first copy and both displaced owners are live; its
+// cleanup releases them latest first.
+pub type Pair {
+  a: List[Bytes],
+  b: List[Bytes],
+}
+
+fn swap_out(mut p: Pair) -> (List[Bytes], List[Bytes]) uses {} {
+  (unique replace(mut p.a, []), unique replace(mut p.b, []))
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut p = Pair(a: [b"x"], b: [b"y", b"z"])
+  let (a, b) = swap_out(mut p)
+  if list.len(a) == 1 && list.len(b) == 2 && list.len(p.b) == 0 {
+    let _ = out.print(stdout, "swapped\n")
+  }
+  Ok(())
+}

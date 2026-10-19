@@ -109,3 +109,9 @@ conformance/SEM/SEM-3-tour-15-format-run.hir
 conformance/SER/SER-2-char-run.hir
 conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
+conformance/DROP/DROP-2-replace-copy-beside-temporary-run.hir
+conformance/DROP/DROP-2-replace-copy-three-temporaries-run.hir
+conformance/DROP/DROP-2-replace-copy-two-displaced-run.hir
+conformance/OWN/OWN-4-inline-element-take-run.hir
+conformance/DROP/DROP-2-variant-payload-part-take-run.hir
+native-tests/regressions/http2-drain-frames.hir

@@ -172,6 +172,11 @@ impl Importer<'_, '_> {
                 tir::Projection::Index(_) => {
                     fixed = false;
                     steps.push(Step::Index);
+                    if matches!(record.kind, LayoutKind::Inline { .. }) {
+                        // A computed position in inline storage: a drop of
+                        // the rest cannot skip it.
+                        crosses = temporary;
+                    }
                     match record.kind {
                         // Element i of a flat sequence, at its cursor.
                         LayoutKind::Flat => flat_sequence(self.layouts, layout),
@@ -762,10 +767,12 @@ impl Importer<'_, '_> {
             && self.record(ty).copy != CopyRecipe::NotCopyable
         {
             // A copyable part taken out of a temporary's block (an element of
-            // a call's list result, say) is copied, and the temporary is
-            // dropped whole: a take would detach a shared block (OWN-4) only
-            // to leave a hole in it that its drop would have to skip. Nothing
-            // tells the two apart, as copyable content has no finalizer.
+            // a call's list result, say) or out of its inline storage at a
+            // computed position (an element of a const) is copied, and the
+            // temporary is dropped whole: a take would detach a shared block
+            // (OWN-4), or leave a hole at a position the drop cannot name,
+            // that its drop would have to skip. Nothing tells the two apart,
+            // as copyable content has no finalizer.
             UseKind::Copy
         } else {
             usage

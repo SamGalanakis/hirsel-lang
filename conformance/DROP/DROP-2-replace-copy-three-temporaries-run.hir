@@ -1,0 +1,43 @@
+// rule: DROP-2
+// expect: run
+// stdout: preface, goaway and two frames
+// stdout: nothing pending
+// Three statement temporaries are live when the last tuple operand's deep copy
+// can fail: two joined owned values and a Replace's displaced owner. Its
+// cleanup releases them latest first, the displaced owner before both.
+pub type Session {
+  pending: bool,
+  closing: bool,
+  outgoing: List[Bytes],
+}
+
+fn drain(mut s: Session) -> (Bytes, Bytes, List[Bytes]) uses {} {
+  (
+    if replace(mut s.pending, false) {
+      b"PRI"
+    } else {
+      b""
+    },
+    if replace(mut s.closing, false) {
+      b"GOAWAY"
+    } else {
+      b""
+    },
+    unique replace(mut s.outgoing, [])
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut s = Session(pending: true, closing: true, outgoing: [b"a", b"b"])
+  let (prefix, close, frames) = drain(mut s)
+  let emptied = list.len(s.outgoing) == 0
+  if prefix == b"PRI" && close == b"GOAWAY" && list.len(frames) == 2 && emptied {
+    let _ = out.print(stdout, "preface, goaway and two frames\n")
+  }
+  let (again, closed, rest) = drain(mut s)
+  if again == b"" && closed == b"" && list.len(rest) == 0 {
+    let _ = out.print(stdout, "nothing pending\n")
+  }
+  Ok(())
+}

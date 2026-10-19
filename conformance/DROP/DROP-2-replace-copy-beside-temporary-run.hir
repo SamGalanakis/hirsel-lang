@@ -1,0 +1,34 @@
+// rule: DROP-2
+// expect: run
+// stdout: preface and two frames
+// stdout: nothing pending
+// A deep copy of a Replace's displaced owner, built straight into a tuple
+// beside an earlier statement temporary, can fail. Its cleanup releases the
+// displaced owner first, as the later of two temporaries of one scope.
+pub type Session {
+  pending: bool,
+  outgoing: List[Bytes],
+}
+
+fn drain(mut s: Session) -> (Bytes, List[Bytes]) uses {} {
+  let prefix = if replace(mut s.pending, false) {
+    b"PRI"
+  } else {
+    b""
+  }
+  (prefix, unique replace(mut s.outgoing, []))
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut s = Session(pending: true, outgoing: [b"a", b"b"])
+  let (prefix, frames) = drain(mut s)
+  if prefix == b"PRI" && list.len(frames) == 2 && list.len(s.outgoing) == 0 {
+    let _ = out.print(stdout, "preface and two frames\n")
+  }
+  let (again, rest) = drain(mut s)
+  if again == b"" && list.len(rest) == 0 {
+    let _ = out.print(stdout, "nothing pending\n")
+  }
+  Ok(())
+}

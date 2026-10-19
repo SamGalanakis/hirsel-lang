@@ -289,7 +289,9 @@ Invariants:
   and each inline resource among them has run `FinalizeEnd`; storage may then
   end and the function exit. Moved parts and finalization phases describe
   initialized paths only, so a join with a path where the slot is
-  uninitialized keeps them.
+  uninitialized keeps them. A part inside a part moved out on one path is
+  moved on that path too, so a join keeps it moved where every path moved it
+  or an enclosing part.
   Each inline resource place goes `Live -> Finalizing -> FieldsPending`: a
   second `FinalizeBegin`, a `FinalizeEnd` without one, a field take from a
   resource with a finalizer before its `FinalizeEnd`, and storage ending
@@ -379,6 +381,9 @@ Runtime descriptor field partitioning consumes each declaration's exact ordered
 drop contribution, with independent borrowed-scan evidence for absent borrowed
 fields and the existing LiveBit guards. Byte ranges do not decide ownership:
 zero-sized fields still contribute finalizers under their own field ordinals.
+
+Within one scope, cleanup releases temporaries before names. A Replace's
+`Displaced` slot is a TIR temporary and releases as one.
 
 Cleanup order applies within one cleanup activation. A failing statement cleanup
 starts a separate frame unwind at its FailureCleanup edge; retained statement

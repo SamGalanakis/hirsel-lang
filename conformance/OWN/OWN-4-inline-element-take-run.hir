@@ -1,0 +1,44 @@
+// rule: OWN-4
+// expect: run
+// stdout: :method GET
+// stdout: right left
+// An element of inline storage taken at a computed position, from a const or
+// from a call's result, is copied out: the temporary holding the inline value
+// is then dropped whole, with no hole its drop would have to skip.
+pub type Field {
+  name: Bytes,
+  value: Bytes,
+}
+
+const NAMES: Inline[Bytes, 2] = [b":authority", b":method"]
+
+const VALUES: Inline[Bytes, 2] = [b"", b"GET"]
+
+fn lookup(index: u64) -> Result[Field, String] uses {} {
+  if index == 0 || index > 2 {
+    return Error("range")
+  }
+  Ok(Field(name: NAMES[index - 1], value: VALUES[index - 1]))
+}
+
+fn make() -> Inline[Bytes, 2] {
+  [unique b"left", unique b"right"]
+}
+
+fn pick(i: u64) -> Bytes {
+  make()[i]
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let Ok(f) = lookup(2) else {
+    return Ok(())
+  }
+  if f.name == b":method" && f.value == b"GET" {
+    let _ = out.print(stdout, ":method GET\n")
+  }
+  if pick(1) == b"right" && pick(0) == b"left" {
+    let _ = out.print(stdout, "right left\n")
+  }
+  Ok(())
+}

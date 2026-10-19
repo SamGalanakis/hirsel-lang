@@ -622,9 +622,9 @@ struct PlaceRef {
     /// No index or variant step and no block crossing: preparable once.
     fixed: bool,
     /// The place lies inside a block's payload (an element of a list, a
-    /// field behind a box) and is named through a temporary (a call's or a
-    /// block's result, perhaps a view of a block-local it extends), which
-    /// nothing writes again.
+    /// field behind a box) or at a computed position of inline storage, and
+    /// is named through a temporary (a call's or a block's result, perhaps a
+    /// view of a block-local it extends), which nothing writes again.
     crosses: bool,
     /// The loan a borrowed read of the place is inside.
     loan: Option<tir::LoanId>,

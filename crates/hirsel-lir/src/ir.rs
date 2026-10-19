@@ -209,6 +209,15 @@ pub enum SlotKind {
     Displaced,
 }
 
+impl SlotKind {
+    /// Whether the slot releases as a statement temporary in cleanup order
+    /// (before its scope's names): TIR `Temporary` storage, which includes a
+    /// Replace's displaced owner.
+    pub fn is_temporary(self) -> bool {
+        matches!(self, SlotKind::Temporary | SlotKind::Displaced)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SlotInfo {
     pub ty: LirTypeId,

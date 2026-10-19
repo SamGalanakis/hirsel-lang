@@ -1,0 +1,59 @@
+// std http2 sessions exchange a preface, settings and two requests through
+// `http2.output` and HPACK. No program using std http2 built natively: the
+// import validator rejected `drain_frames`'s tuple built straight from
+// `unique replace(mut s.outgoing, [])` with CleanupOrder, as it ranked the
+// displaced owner as a name, and the Ready validator rejected `hpack.lookup`'s
+// const elements placed in a record with MovedPart, as the import took them at
+// a computed position that the temporary's drop then released again.
+fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
+  std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
+}
+
+fn request_fields() -> List[std@1/hpack.Field] {
+  [
+    field(b":method", b"GET"),
+    field(b":scheme", b"http"),
+    field(b":path", b"/"),
+    field(b":authority", b"localhost")
+  ]
+}
+
+// Feeds `wire` to `endpoint` and counts the events it yields.
+fn transfer(mut endpoint: std@1/http2.Session, wire: Bytes) -> u64 {
+  let mut offset: u64 = if bytes.len(wire) >= 24 && bytes.slice(wire, 0, 24) == std@1/http2_wire.preface() {
+    24
+  } else {
+    0
+  }
+  let mut events: u64 = 0
+  while offset < bytes.len(wire) {
+    let Ok(Some((frame, end))) = std@1/http2_wire.parse(wire, offset, 16384) else {
+      return 1000
+    }
+    let Ok(_) = std@1/http2.receive(mut endpoint, frame) else {
+      return 2000
+    }
+    events += 1
+    offset = end
+  }
+  events
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdout(rt)?
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  let first = std@1/http2.output(mut client)
+  let preface = bytes.len(first) >= 24 && bytes.slice(first, 0, 24) == std@1/http2_wire.preface()
+  let settings = transfer(mut server, first)
+  let acks = transfer(mut client, std@1/http2.output(mut server))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let a = std@1/http2.open(mut client, request_fields(), true) == Ok(1)
+  let b = std@1/http2.open(mut client, request_fields(), true) == Ok(3)
+  let requests = transfer(mut server, std@1/http2.output(mut client))
+  let _ = out.print(
+    s,
+    f"preface {preface}, settings {settings}, replies {acks}, opened {a && b}, requests {requests}\n"
+  )
+  Ok(())
+}

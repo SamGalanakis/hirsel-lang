@@ -1,0 +1,44 @@
+// rule: DROP-2
+// expect: run
+// stdout: kept first
+// stdout: dropped second
+// stdout: dropped first
+// A match takes a resource out of one variant's tuple payload and ignores the
+// other variant's payload. The scrutinee's drop after the join releases
+// exactly what remains on each path: nothing after the take, the whole
+// payload after the wildcard.
+resource type Conn {
+  stdout: Stdout,
+  name: String,
+}
+drop(c) {
+  let _ = out.print(c.stdout, "dropped ")
+  let _ = out.print(c.stdout, c.name)
+  let _ = out.print(c.stdout, "\n")
+}
+
+type Outcome = Finished((bool, Conn)) | Expired((bool, Conn))
+
+fn settle(take outcome: Outcome, mut slot: Option[Conn]) -> bool {
+  match take outcome {
+    Finished((_, live)) => {
+      slot = Some(take live)
+      true
+    },
+    Expired(_) => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut slot: Option[Conn] = None
+  let first = Conn(stdout: stdout, name: "first")
+  if settle(Finished((true, take first)), mut slot) {
+    let _ = out.print(stdout, "kept first\n")
+  }
+  let second = Conn(stdout: stdout, name: "second")
+  if !settle(Expired((false, take second)), mut slot) {
+    ()
+  }
+  Ok(())
+}

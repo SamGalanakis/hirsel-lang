@@ -59,3 +59,5 @@ conformance/MEM/MEM-7-soa-reserve-refs-run.hir
 
 conformance/MEM/MEM-14-soa-read-bounds-refs-fail.hir
 conformance/MEM/MEM-14-soa-write-bounds-refs-fail.hir
+conformance/OWN/OWN-4-inline-element-take-run.hir
+conformance/DROP/DROP-2-variant-payload-part-take-run.hir

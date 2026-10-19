@@ -86,7 +86,7 @@ impl Importer<'_, '_> {
             let info = &self.out.slots[s.index()];
             (
                 std::cmp::Reverse(info.scope),
-                info.kind != SlotKind::Temporary,
+                !info.kind.is_temporary(),
                 std::cmp::Reverse(s.0),
             )
         });

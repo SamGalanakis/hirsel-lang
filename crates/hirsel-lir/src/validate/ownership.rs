@@ -215,6 +215,19 @@ fn part_content(s: &SlotState, path: &[Step]) -> Tri {
     state
 }
 
+/// A part's state in one side's moved or taken rows: a part under a part
+/// moved out on that side is absent there too, so a join keeps a part
+/// absent on every path where some enclosing part is.
+fn absence(rows: &BTreeMap<Vec<Step>, Tri>, path: &[Step]) -> Tri {
+    if rows
+        .iter()
+        .any(|(prefix, &t)| t == Tri::Yes && path.starts_with(prefix))
+    {
+        return Tri::Yes;
+    }
+    rows.get(path).copied().unwrap_or(Tri::No)
+}
+
 fn join_slot(x: &mut SlotState, y: &SlotState) {
     {
         x.live = x.live.join(y.live);
@@ -226,20 +239,20 @@ fn join_slot(x: &mut SlotState, y: &SlotState) {
             x.moved = y.moved.clone();
         } else if y.init != Tri::No && !y.owned_empty && x.moved != y.moved {
             let keys: BTreeSet<_> = x.moved.keys().chain(y.moved.keys()).cloned().collect();
+            let (l, r) = (x.moved.clone(), y.moved.clone());
             for key in keys {
-                let l = x.moved.get(&key).copied().unwrap_or(Tri::No);
-                let r = y.moved.get(&key).copied().unwrap_or(Tri::No);
-                x.moved.insert(key, l.join(r));
+                let joined = absence(&l, &key).join(absence(&r, &key));
+                x.moved.insert(key, joined);
             }
         }
         if x.init == Tri::No {
             x.taken = y.taken.clone();
         } else if y.init != Tri::No && x.taken != y.taken {
             let keys: BTreeSet<_> = x.taken.keys().chain(y.taken.keys()).cloned().collect();
+            let (l, r) = (x.taken.clone(), y.taken.clone());
             for key in keys {
-                let left = x.taken.get(&key).copied().unwrap_or(Tri::No);
-                let right = y.taken.get(&key).copied().unwrap_or(Tri::No);
-                x.taken.insert(key, left.join(right));
+                let joined = absence(&l, &key).join(absence(&r, &key));
+                x.taken.insert(key, joined);
             }
         }
         x.versions = x.versions.join(y.versions);
@@ -1825,7 +1838,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             return;
         }
         let info = &self.cx.unit.slots[slot.index()];
-        let next = (info.scope, info.kind == SlotKind::Temporary, slot.0);
+        let next = (info.scope, info.kind.is_temporary(), slot.0);
         if st
             .order
             .iter()

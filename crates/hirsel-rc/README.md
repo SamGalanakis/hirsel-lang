@@ -448,7 +448,9 @@ A copyable part taken out of a temporary's block (an element of a call's
 list result, or of a block expression's local it extends) is copied, and the
 temporary is dropped whole; elision keeps such a copy and its release. A take
 would write through a block that may be shared (`WriteShared` in the heap
-checker) and leave a hole its drop cannot skip.
+checker) and leave a hole its drop cannot skip. A copyable element taken out
+of a temporary's inline storage at a computed position (an element of a const)
+is copied the same way: cleanup names inline elements by constant index only.
 
 Drop flags (LIR revisions 8 and 13):
 when content must survive a join with different moved parts, `join_flags` adds

@@ -2548,7 +2548,7 @@ pub(crate) fn synthesize_failure<S: Stage>(
         let info = &unit.slots[s.index()];
         (
             std::cmp::Reverse(depth(unit, info.scope)),
-            info.kind != SlotKind::Temporary,
+            !info.kind.is_temporary(),
             std::cmp::Reverse(s.0),
         )
     });
