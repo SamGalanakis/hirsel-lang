@@ -1,4 +1,4 @@
-//! Corpus headers, the corpus verdict and the gate over it, with an additive passing ratchet.
+//! Corpus headers, the corpus verdict and the gate over it: every file passes or is pending with a reason.
 
 #[cfg(test)]
 hirsel_guard::install!();
@@ -693,23 +693,12 @@ fn discover(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(), Strin
     Ok(())
 }
 
-/// The gate over the whole corpus with no exclusions; see `ratchet_selected`.
-pub fn ratchet(existing: &str, tests: &[TestResult], update: bool) -> Result<String, Vec<String>> {
-    ratchet_selected(
-        existing,
-        tests,
-        &BTreeMap::new(),
-        update,
-        Selection::default(),
-    )
-}
-
 use hirsel_cli_args::Shard;
 fn in_shard(shard: Option<Shard>, path: &str) -> bool {
     shard.is_none_or(|shard| shard.holds(path))
 }
 
-/// A corpus selection shared by execution, formatting and the passing ratchet.
+/// A corpus selection shared by execution, formatting and the gate.
 #[derive(Clone, Copy, Default)]
 pub struct Selection<'a> {
     pub shard: Option<Shard>,
@@ -719,9 +708,6 @@ impl Selection<'_> {
     pub fn holds(self, path: &str) -> bool {
         in_shard(self.shard, path)
             && (self.paths.is_empty() || self.paths.iter().any(|prefix| path.starts_with(prefix)))
-    }
-    fn whole(self) -> bool {
-        self.shard.is_none() && self.paths.is_empty()
     }
     pub(crate) fn files(self, root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
         let mut files = Vec::new();
@@ -738,103 +724,93 @@ impl Selection<'_> {
     }
 }
 
-/// The gate over a selection: every in-gate file must pass, listed or not, and
-/// every listed path the selection holds must be present and passing, in the
-/// gate or out. Updates only add passing paths; they never forget old ones.
-fn ratchet_selected(
-    existing: &str,
+/// The gate's only opt-out list besides open spec issues.
+pub const PENDING: &str = "conformance/pending.txt";
+
+/// The corpus files that cannot pass yet, each with its reason: the lines of
+/// `conformance/pending.txt`, `conformance/<path>.hir # <reason>`, sorted and unique.
+pub(crate) fn pending(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let text = fs::read_to_string(root.join(PENDING)).map_err(|e| format!("{PENDING}: {e}"))?;
+    let mut pending = BTreeMap::new();
+    let mut previous: Option<&str> = None;
+    for line in text.lines() {
+        let Some((path, reason)) = line.split_once(" # ").filter(|(path, reason)| {
+            !reason.trim().is_empty()
+                && path.starts_with("conformance/")
+                && Path::new(path).extension().is_some_and(|s| s == "hir")
+                && Path::new(path)
+                    .components()
+                    .all(|c| matches!(c, Component::Normal(_)))
+                && !path.contains('\\')
+        }) else {
+            return Err(format!(
+                "{PENDING}: {line:?} is not `conformance/<path>.hir # <reason>`"
+            ));
+        };
+        if previous.is_some_and(|p| p >= path) {
+            return Err(format!("{PENDING}: paths must be sorted and unique"));
+        }
+        previous = Some(path);
+        pending.insert(path.to_owned(), reason.trim().to_owned());
+    }
+    Ok(pending)
+}
+
+/// The gate over a selection: every in-gate file must pass, and every pending
+/// path the selection holds must name a discovered file that does not pass yet,
+/// so the pending list only shrinks.
+fn gate(
+    pending: &BTreeMap<String, String>,
+    discovered: &BTreeSet<String>,
     tests: &[TestResult],
     exclusions: &BTreeMap<String, Vec<String>>,
-    update: bool,
     selection: Selection<'_>,
-) -> Result<String, Vec<String>> {
-    let mut listed = BTreeSet::new();
+) -> Vec<String> {
     let mut errors = Vec::new();
-    let mut previous = None;
-    for line in existing.lines() {
-        let path = Path::new(line);
-        if line.is_empty()
-            || !line.starts_with("conformance/")
-            || path.extension().is_none_or(|s| s != "hir")
-            || path
-                .components()
-                .any(|c| !matches!(c, Component::Normal(_)))
-            || line.contains('\\')
-        {
-            errors.push(format!("conformance/passing.txt: invalid path {line:?}"));
-        }
-        if previous.is_some_and(|p| p >= line) {
-            errors.push("conformance/passing.txt: paths must be sorted and unique".into());
-        }
-        previous = Some(line);
-        listed.insert(line.to_owned());
-    }
     let statuses: BTreeMap<_, _> = tests.iter().map(|t| (t.path.as_str(), &t.status)).collect();
-    for path in listed.iter().filter(|path| selection.holds(path)) {
-        match statuses.get(path.as_str()) {
-            Some(Status::Pass) => {}
-            Some(status) => errors.push(format!("{path}: ratchet requires pass, got {status:?}")),
-            None => errors.push(format!("{path}: ratchet path missing or failed validation")),
+    for path in pending.keys().filter(|path| selection.holds(path)) {
+        if !discovered.contains(path) {
+            errors.push(format!("{path}: pending path names no corpus file"));
+        } else if statuses.get(path.as_str()) == Some(&&Status::Pass) {
+            errors.push(format!("{path}: passes; remove it from {PENDING}"));
         }
     }
-    for test in tests.iter().filter(|t| {
-        t.status != Status::Pass && !listed.contains(&t.path) && !exclusions.contains_key(&t.path)
-    }) {
+    for test in tests
+        .iter()
+        .filter(|t| t.status != Status::Pass && !exclusions.contains_key(&t.path))
+    {
         errors.push(format!(
             "{}: an in-gate file must pass, got {:?}",
             test.path, test.status
         ));
     }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    if update {
-        listed.extend(
-            tests
-                .iter()
-                .filter(|t| t.status == Status::Pass)
-                .map(|t| t.path.clone()),
-        );
-    }
-    Ok(listed.into_iter().map(|p| p + "\n").collect())
+    errors
 }
 
-pub fn run_suite(root: &Path, driver: &impl Driver, update: bool) -> Result<Report, String> {
-    run_suite_shard(root, driver, update, None)
+pub fn run_suite(root: &Path, driver: &impl Driver) -> Result<Report, String> {
+    run_suite_shard(root, driver, None)
 }
 
-/// `run_suite` over one shard of the corpus. A shard never updates the ratchet.
+/// `run_suite` over one shard of the corpus.
 pub fn run_suite_shard(
     root: &Path,
     driver: &impl Driver,
-    update: bool,
     shard: Option<Shard>,
 ) -> Result<Report, String> {
-    run_suite_selected(root, driver, update, Selection { shard, paths: &[] })
+    run_suite_selected(root, driver, Selection { shard, paths: &[] })
 }
 
-/// Execute precisely a selection; filtered runs cannot update the passing ratchet.
+/// Execute precisely a selection.
 pub fn run_suite_selected(
     root: &Path,
     driver: &impl Driver,
-    update: bool,
     selection: Selection<'_>,
 ) -> Result<Report, String> {
-    if update && !selection.whole() {
-        return Err(
-            "--update-passing needs the whole corpus, not a shard or --path selection".into(),
-        );
-    }
     let rules = spec_rules(root)?;
     let files = selection.files(root)?;
     let mut report = Report::default();
-    let runtime =
-        fs::read_to_string(root.join("conformance/m2-runtime.txt")).map_err(|e| e.to_string())?;
-    let runtime: BTreeSet<_> = runtime
-        .lines()
-        .filter(|line| !line.starts_with('#') && !line.is_empty())
-        .map(|line| line.split('\t').next().unwrap().to_owned())
-        .collect();
+    let pending = pending(root)?;
+    let discovered: BTreeSet<_> = files.iter().map(|file| relative(root, file)).collect();
     // Validate the selected corpus before invoking any compiler entry point.
     let mut headers = Vec::new();
     for file in files {
@@ -856,7 +832,7 @@ pub fn run_suite_selected(
         }
         report.observations.insert(path.clone(), observation);
         let exclusions = gate_exclusions(
-            &runtime,
+            &pending,
             &path,
             &fs::read_to_string(&file).map_err(|e| e.to_string())?,
         );
@@ -888,26 +864,18 @@ pub fn run_suite_selected(
             .errors
             .push("--path requires every selected test to pass its expected outcome".into());
     }
-    let passing = root.join("conformance/passing.txt");
-    let existing =
-        fs::read_to_string(&passing).map_err(|e| format!("{}: {e}", passing.display()))?;
-    match ratchet_selected(
-        &existing,
+    let errors = gate(
+        &pending,
+        &discovered,
         &report.tests,
         &report.exclusions,
-        update,
         selection,
-    ) {
-        Ok(updated) if update && report.success() => {
-            fs::write(&passing, updated).map_err(|e| format!("{}: {e}", passing.display()))?
-        }
-        Ok(_) => {}
-        Err(errors) => report.errors.extend(errors),
-    }
+    );
+    report.errors.extend(errors);
     Ok(report)
 }
 
-/// The repository-relative path the reports, the ratchet and shards key on.
+/// The repository-relative path the reports, the gate and shards key on.
 pub(crate) fn relative(root: &Path, file: &Path) -> String {
     file.strip_prefix(root)
         .unwrap_or(file)
@@ -915,11 +883,16 @@ pub(crate) fn relative(root: &Path, file: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Why a file is outside the gate: its pending reason and its open spec issues.
 /// Checked-in issue states; test execution never contacts GitHub.
-fn gate_exclusions(runtime: &BTreeSet<String>, path: &str, source: &str) -> Vec<String> {
+pub(crate) fn gate_exclusions(
+    pending: &BTreeMap<String, String>,
+    path: &str,
+    source: &str,
+) -> Vec<String> {
     let mut reasons = Vec::new();
-    if runtime.contains(path) {
-        reasons.push("M2 runtime".into());
+    if let Some(reason) = pending.get(path) {
+        reasons.push(format!("pending: {reason}"));
     }
     for (offset, marker) in source.match_indices("// spec: #") {
         // Each occurrence, including comments indented inside a fixture.

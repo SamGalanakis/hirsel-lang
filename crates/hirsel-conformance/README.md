@@ -1,6 +1,6 @@
 # hirsel-conformance
 
-Validate rule-linked corpus headers, judge each file's result against its header and gate the corpus, with an additive passing ratchet.
+Validate rule-linked corpus headers, judge each file's result against its header and gate the corpus: every file passes or is pending with a reason.
 
 Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json, hirsel-guard (the memory guard every binary installs); no phase internals.
 
@@ -9,10 +9,10 @@ Invariants and boundary:
 - Consumes conformance files, spec rule IDs and the narrow Driver adapter; produces counts/statuses and optional JSON.
 - Every language diagnostic has a rule; rejection matches the first diagnostic and exact primary line resolved from its source snapshot.
 - One matcher, `Expect::matches`, decides every verdict: the compiler driver reduces what it observed to an `Actual` (the first error's rule and line, acceptance, or an execution's end and stdout) and the matcher compares it with the header. The runner tests exercise both that matcher and the production driver on real programs.
-- Every in-gate file must pass, whether or not `passing.txt` lists it, so a new or unlisted file that fails fails its shard. A listed file must pass too, in the gate or out; a file excluded from the gate (below) and not listed may fail.
-- NotImplemented is distinct from rejection and never added to passing.txt.
-- Header validation applies even while the compiler is unimplemented.
-- Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
+- Every in-gate file must pass, so a new file that fails fails its shard. The gate exclusions are a `conformance/pending.txt` line (`conformance/<path>.hir # <reason>`, sorted and unique) and an open `// spec: #N` comment; the report names each excluded file's reasons.
+- A pending file that passes fails its shard ("remove it from pending.txt"), and so does a pending path that names no corpus file, so the list only shrinks.
+- NotImplemented is distinct from rejection.
+- Header validation applies even while the compiler is unimplemented; corpus files are never rewritten.
 
 Only rule, expect, stdout, exit, entry, spec, grant, env, net, process, steps, oracle, oracle-reason, runners and fault_seed are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
 
@@ -22,8 +22,7 @@ argument errors print to stderr and exit 2. Paths retain OS bytes.
 
 `--path PREFIX` selects only matching repository-relative corpus files for both
 execution and `--check-format`. Prefixes may repeat; a selection matching zero
-files fails. Every selected file must pass its expected outcome, including new files
-not yet in `passing.txt`. It intersects `--shard`, and cannot update the ratchet.
+files fails. Every selected file must pass its expected outcome. It intersects `--shard`.
 
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,
@@ -34,7 +33,6 @@ internal counter or incomplete validation result. Full TIR
 validation also runs in release conformance builds. Compiler invariant failures
 are reported as tool errors, not language diagnostics or unavailable phases.
 
-M2 exclusions come from the checked-in paths in `conformance/m2-runtime.txt`.
 Open issue states are checked in at `src/open-spec-issues.txt`. Regenerate from
 repository root after spec issue dispositions change (never during a test run):
 
@@ -43,9 +41,8 @@ gh issue list -R SamGalanakis/hirsel-lang --label spec --state open --limit 1000
 ```
 
 The runner intersects these numbers with each source's `// spec: #N` comments.
-The passing ratchet includes every listed test regardless of gate membership.
-`passing.txt` also names the native gate's baseline (`native::baseline`), and a
-listed path that disappears fails the shard that owns it.
+The native gate's baseline (`native::baseline`) is the executable corpus cases
+outside the gate exclusions.
 
 ## Deterministic run fixtures
 
@@ -195,16 +192,16 @@ holds everything the run executes.
 Every accepted test that executes is executed again with `run_observed_checked`.
 The checked run must reproduce the outcome, observation and output exactly; a
 trap or any difference is a report error, whatever the test's own status, so it
-fails the gate without touching `passing.txt`. A test that normal execution
+fails the gate. A test that normal execution
 cannot run (an M2 `arena.with`) is compared only for traps.
 
-Runtime gate exclusions have one authority: conformance/m2-runtime.txt (tab-separated
-path and required behavior). Handwritten documentation never controls execution.
+Gate exclusions have two authorities: `conformance/pending.txt` and the open spec
+issues above. Handwritten documentation never controls execution.
 
 ## Canonical corpus layout
 
 Every gate run of the runner passes `--check-format`. Every discovered `.hir` file,
-including unratcheted and runtime-excluded cases, must equal the output of the
+including pending and excluded cases, must equal the output of the
 same driver formatter used by `hirsel fmt`. Archived `reports/` directories are
 not corpus inputs. An intentional syntax negative is exempt only when formatting
 refuses it with the exact rejection rule and primary line in its header. IO,
@@ -237,14 +234,14 @@ declined paths, normalized-header count and each old line's mapped new line
 rule, token spelling, aligned identity, raw token and physical line/column. An
 opening grouping token projects to the first non-grouping token;
 the raw token remains in the evidence and AST equality protects the projection.
-The migration never updates `passing.txt` or excludes a semantic difference.
+The migration never excludes a semantic difference.
 
 ## Native differential gate (`src/native/`, `--bin native`)
 
 `native-select --root REPO` reports the static campaign inventory without
 checking or executing mutations. It lists every program's mutation count,
 the baseline and generated program counts, and the exhaustive configurations.
-The baseline contains passing `run` and `fail` cases; `accept` cases are never
+The baseline contains the in-gate `run`, `fail`, `test` and `blocked` cases; `accept` cases are never
 executed by this campaign. Agreement executes only `run`, `fail`, `blocked` and `test` mutations that remain
 valid and within the interpreter budget. Its reported native count is therefore
 an upper bound; an exact launch count requires running the campaign.
@@ -261,7 +258,7 @@ must agree with the interpreter.
 
 `native --cranelift` (on demand: `//:gate-native-cranelift` filtered, and the whole set
 as `//:gate-native-cranelift-shard-1` to `-8`, `--shard I/N` by path hash) is the
-Cranelift parity gate. The parity set is the executable cases of `conformance/passing.txt` and the
+Cranelift parity gate. The parity set is the executable corpus cases outside the gate exclusions and the
 programs of `native-tests/regressions` and `native-tests/library`; each runs as an
 unoptimized LLVM x86-64 executable and as a Cranelift one, both on the diagnostic
 archive. Each LLVM failure, including a compiler error, crash or failed snapshot,
@@ -275,7 +272,7 @@ prints the rows its results imply, keeping rows of cases it did not select.
 
 `native --trace-roots` (on demand: `//:gate-native-trace-roots` filtered, and the whole
 corpus as `//:gate-native-trace-roots-shard-1` to `-96`, `--shard I/N` by path hash) is
-the root-anchor gate of S-14: every executable case of `conformance/passing.txt` runs
+the root-anchor gate of S-14: every executable baseline case (`native::baseline`) runs
 in the interpreter, as an unoptimized LLVM x86-64 executable and as a Cranelift one,
 both on the diagnostic archive, each tracing every live `Shared` root's count at every
 scheduling point (`<task path> <ordinal>: <freeze ordinal>=<count> ...`, the root task's
@@ -335,7 +332,7 @@ archive `hirsel run --native` ships, with the inlined fast paths) or `system`
 of that case fails by name.
 
 `native --full` (in the full suite, `tools/main-runs`) runs a derived cover of the executable
-cases of `conformance/passing.txt` under a per-program pairwise cover of the
+corpus cases outside the gate exclusions under a per-program pairwise cover of the
 driver's legal matrix on both targets and
 writes `native-matrix.tsv` (one row per case and configuration, headed by the
 matrix and observation versions) and `case-walls.tsv` (each case's wall time,

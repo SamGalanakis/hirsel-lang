@@ -604,7 +604,7 @@ pub fn check_canonical_shard(
     check_canonical_selected(root, report, crate::Selection { shard, paths: &[] })
 }
 
-/// Check exactly the same selection as execution, including unratcheted files.
+/// Check exactly the same selection as execution, including pending and excluded files.
 pub fn check_canonical_selected(
     root: &Path,
     report: &mut Report,
@@ -659,7 +659,7 @@ pub fn check_canonical_selected(
 }
 
 /// The migration records whole-run before/after evidence and restores any file
-/// whose runner verdict, rule or primary token changed. No ratchet is updated.
+/// whose runner verdict, rule or primary token changed.
 pub fn migrate(root: &Path, hirsel: &Path, evidence: &Path) -> Result<serde_json::Value, String> {
     if hirsel
         .parent()
@@ -670,7 +670,7 @@ pub fn migrate(root: &Path, hirsel: &Path, evidence: &Path) -> Result<serde_json
         return Err("--hirsel must name the built release/hirsel binary".into());
     }
     fs::create_dir_all(evidence).map_err(|e| e.to_string())?;
-    let before = run_suite(root, &Compiler, false)?;
+    let before = run_suite(root, &Compiler)?;
     fs::write(evidence.join("before.json"), before.json().to_string())
         .map_err(|e| e.to_string())?;
     if !before.success() {
@@ -770,7 +770,7 @@ pub fn migrate(root: &Path, hirsel: &Path, evidence: &Path) -> Result<serde_json
         }
     }
     fs::remove_file(temporary).map_err(|e| e.to_string())?;
-    let after = run_suite(root, &Compiler, false)?;
+    let after = run_suite(root, &Compiler)?;
     fs::write(evidence.join("after.json"), after.json().to_string()).map_err(|e| e.to_string())?;
     if !after.success()
         || before.tests.len() != after.tests.len()
@@ -1038,7 +1038,7 @@ mod tests {
         });
     }
     #[test]
-    fn gate_checks_even_unratcheted_files_and_ignores_archived_reports() {
+    fn gate_checks_even_pending_files_and_ignores_archived_reports() {
         on_stack(|| {
             let root =
                 std::env::temp_dir().join(format!("hirsel-format-gate-{}", std::process::id()));

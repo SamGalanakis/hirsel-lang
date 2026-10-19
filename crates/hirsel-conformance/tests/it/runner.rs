@@ -1,7 +1,7 @@
 use hirsel_cli_args::Shard;
 use hirsel_conformance::{
     Actual, Compiler, Driver, End, Expect, Observation, Status, TestResult, extract_rules,
-    parse_header, ratchet, run_suite, run_suite_shard,
+    parse_header, run_suite, run_suite_shard,
 };
 use hirsel_diag::RuleId;
 use std::{
@@ -419,56 +419,131 @@ fn result(path: &str, status: Status) -> TestResult {
         status,
     }
 }
+fn pending(root: &Fixture, text: &str) {
+    fs::write(root.0.join("conformance/pending.txt"), text).unwrap();
+}
+fn errors_with(report: &hirsel_conformance::Report, text: &str) -> Vec<String> {
+    report
+        .errors
+        .iter()
+        .filter(|e| e.contains(text))
+        .cloned()
+        .collect()
+}
 #[test]
-fn ratchet_adds_passes_and_never_drops_regressions_or_missing_paths() {
-    let a = "conformance/OWN/a.hir";
-    let b = "conformance/OWN/b.hir";
-    let tests = [result(b, Status::Pass), result(a, Status::Pass)];
-    assert_eq!(ratchet("", &tests, true).unwrap(), format!("{a}\n{b}\n"));
-    // An unlisted in-gate file must pass as well, and is never added otherwise.
-    let c = "conformance/OWN/c.hir";
+fn an_unlisted_failing_file_fails_its_shard() {
+    let root = Fixture::new();
+    let path = "conformance/OWN/reject.hir";
     for status in [Status::NotImplemented, Status::Fail("new".into())] {
-        let tests = [result(a, Status::Pass), result(c, status)];
+        let driver = Statuses(vec![("reject.hir", status.clone())]);
+        let owners: Vec<_> = (1..=3)
+            .map(|index| run_suite_shard(&root.0, &driver, Some(Shard { index, count: 3 })).unwrap())
+            .filter(|report| !report.success())
+            .collect();
+        assert_eq!(owners.len(), 1);
         assert_eq!(
-            ratchet(&format!("{a}\n"), &tests, true).unwrap_err(),
-            [format!(
-                "{c}: an in-gate file must pass, got {:?}",
-                tests[1].status
-            )]
+            owners[0].errors,
+            [format!("{path}: an in-gate file must pass, got {status:?}")]
         );
     }
+}
+#[test]
+fn a_pending_failing_file_is_reported_with_its_reason_and_does_not_fail() {
+    let root = Fixture::new();
+    let path = "conformance/OWN/reject.hir";
+    pending(&root, &format!("{path} # needs the M2 runtime\n"));
+    let report = run_suite(&root.0, &failing("reject.hir")).unwrap();
+    assert!(report.success(), "{:?}", report.errors);
+    assert_eq!(report.counts.failing, 1);
+    assert_eq!(report.in_gate.failing, 0);
+    assert_eq!(report.exclusions[path], ["pending: needs the M2 runtime"]);
+    let json = report.json();
+    let case = json["tests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["path"] == path)
+        .unwrap();
+    assert_eq!(case["in_gate"], false);
+    assert_eq!(case["exclusions"][0], "pending: needs the M2 runtime");
+}
+#[test]
+fn a_pending_passing_file_fails() {
+    let root = Fixture::new();
+    let path = "conformance/OWN/reject.hir";
+    pending(&root, &format!("{path} # needs the M2 runtime\n"));
+    let report = run_suite(&root.0, &passing()).unwrap();
     assert_eq!(
-        ratchet(&format!("{a}\n"), &tests, false).unwrap(),
-        format!("{a}\n")
+        report.errors,
+        [format!("{path}: passes; remove it from conformance/pending.txt")]
     );
-    for status in [Status::NotImplemented, Status::Fail("regression".into())] {
+}
+#[test]
+fn a_pending_missing_path_fails_the_shard_that_owns_it() {
+    let root = Fixture::new();
+    let path = "conformance/OWN/absent.hir";
+    pending(&root, &format!("{path} # needs the M2 runtime\n"));
+    let owners: Vec<_> = (1..=3)
+        .filter(|&index| {
+            let report =
+                run_suite_shard(&root.0, &passing(), Some(Shard { index, count: 3 })).unwrap();
+            !errors_with(&report, "pending path names no corpus file").is_empty()
+        })
+        .collect();
+    assert_eq!(owners.len(), 1);
+    assert!(
+        Shard {
+            index: owners[0],
+            count: 3
+        }
+        .holds(path)
+    );
+}
+#[test]
+fn every_pending_line_is_a_sorted_unique_path_with_a_reason() {
+    let root = Fixture::new();
+    let a = "conformance/OWN/fail.hir";
+    let b = "conformance/OWN/reject.hir";
+    for malformed in [
+        format!("{a}\n"),
+        format!("{a} # \n"),
+        format!("{a} #reason\n"),
+        format!("{b} # x\n{a} # y\n"),
+        format!("{a} # x\n{a} # y\n"),
+        "conformance/../escape.hir # x\n".into(),
+        "OWN/fail.hir # x\n".into(),
+        "\n".into(),
+    ] {
+        pending(&root, &malformed);
         assert!(
-            ratchet(&format!("{a}\n"), &[result(a, status)], true).unwrap_err()[0]
-                .contains("ratchet requires pass")
+            run_suite(&root.0, &failing("fail.hir"))
+                .unwrap_err()
+                .starts_with("conformance/pending.txt: "),
+            "{malformed:?}"
         );
     }
-    assert!(ratchet(&format!("{a}\n"), &[], true).unwrap_err()[0].contains("missing"));
-    for malformed in [
-        format!("{b}\n{a}\n"),
-        format!("{a}\n{a}\n"),
-        "../escape.hir\n".into(),
-    ] {
-        assert!(ratchet(&malformed, &tests, true).is_err());
-    }
+    pending(&root, &format!("{a} # x\n{b} # y\n"));
+    let driver = Statuses(vec![
+        ("fail.hir", Status::Fail("x".into())),
+        ("reject.hir", Status::NotImplemented),
+    ]);
+    assert!(run_suite(&root.0, &driver).unwrap().success());
+    fs::remove_file(root.0.join("conformance/pending.txt")).unwrap();
+    assert!(run_suite(&root.0, &passing()).is_err());
 }
 
 #[test]
-fn shards_partition_the_corpus_and_ratchet_only_their_own_paths() {
+fn shards_partition_the_corpus() {
     assert_eq!(Shard::parse("2/3"), Some(Shard { index: 2, count: 3 }));
     for invalid in ["0/3", "4/3", "1/0", "3", "a/b"] {
         assert_eq!(Shard::parse(invalid), None, "{invalid}");
     }
     let root = Fixture::new();
-    let whole = run_suite(&root.0, &passing(), false).unwrap();
+    let whole = run_suite(&root.0, &passing()).unwrap();
     for count in [1, 2, 3, 5] {
         let shards: Vec<_> = (1..=count)
             .map(|index| {
-                run_suite_shard(&root.0, &passing(), false, Some(Shard { index, count })).unwrap()
+                run_suite_shard(&root.0, &passing(), Some(Shard { index, count })).unwrap()
             })
             .collect();
         let mut paths: Vec<_> = shards
@@ -495,41 +570,6 @@ fn shards_partition_the_corpus_and_ratchet_only_their_own_paths() {
             );
         }
     }
-    // A listed path that vanished fails exactly the shard that owns it.
-    fs::write(
-        root.0.join("conformance/passing.txt"),
-        "conformance/OWN/accept.hir\n",
-    )
-    .unwrap();
-    fs::remove_file(root.0.join("conformance/OWN/accept.hir")).unwrap();
-    let missing = |r: &hirsel_conformance::Report| {
-        r.errors.iter().any(|e| e.contains("ratchet path missing"))
-    };
-    let owners: Vec<_> = (1..=3)
-        .filter(|&index| {
-            missing(
-                &run_suite_shard(&root.0, &passing(), false, Some(Shard { index, count: 3 }))
-                    .unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(owners.len(), 1);
-    assert!(
-        Shard {
-            index: owners[0],
-            count: 3
-        }
-        .holds("conformance/OWN/accept.hir")
-    );
-    assert!(
-        run_suite_shard(
-            &root.0,
-            &passing(),
-            true,
-            Some(Shard { index: 1, count: 3 })
-        )
-        .is_err()
-    );
 }
 
 struct Fixture(PathBuf);
@@ -546,7 +586,6 @@ impl Fixture {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         for file in [
             "docs/spec/ownership.md",
-            "conformance/passing.txt",
             "conformance/OWN/accept.hir",
             "conformance/OWN/reject.hir",
             "conformance/OWN/fail.hir",
@@ -555,7 +594,7 @@ impl Fixture {
             // A fresh file: the tests edit the copies, whatever the fixtures' modes.
             fs::write(root.join(file), fs::read(fixtures.join(file)).unwrap()).unwrap();
         }
-        fs::write(root.join("conformance/m2-runtime.txt"), "").unwrap();
+        fs::write(root.join("conformance/pending.txt"), "").unwrap();
         Self(root)
     }
 }
@@ -568,7 +607,7 @@ impl Drop for Fixture {
 #[test]
 fn suite_discovers_nested_files_and_fails_every_unpassed_in_gate_file() {
     let root = Fixture::new();
-    let report = run_suite(&root.0, &Compiler, false).unwrap();
+    let report = run_suite(&root.0, &Compiler).unwrap();
     assert_eq!(report.counts.validated, 4);
     assert_eq!(report.counts.not_implemented, 1);
     assert_eq!(report.counts.passing, 1);
@@ -591,35 +630,16 @@ fn suite_discovers_nested_files_and_fails_every_unpassed_in_gate_file() {
         "{:?}",
         report.errors
     );
-    let passing_txt = root.0.join("conformance/passing.txt");
-    assert!(
-        !run_suite(&root.0, &failing("reject.hir"), true)
-            .unwrap()
-            .success()
-    );
-    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), "");
-    let report = run_suite(&root.0, &passing(), true).unwrap();
-    assert!(report.success(), "{:?}", report.errors);
-    let listed = "conformance/OWN/accept.hir\nconformance/OWN/fail.hir\nconformance/OWN/nested/run.hir\nconformance/OWN/reject.hir\n";
-    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), listed);
+    assert!(run_suite(&root.0, &passing()).unwrap().success());
     fs::write(
         root.0.join("conformance/OWN/invalid.hir"),
         "// rule: OWN-99\n// expect: accept\n",
     )
     .unwrap();
-    assert!(!run_suite(&root.0, &passing(), true).unwrap().success());
-    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), listed);
-    fs::remove_file(root.0.join("conformance/OWN/accept.hir")).unwrap();
-    assert!(
-        run_suite(&root.0, &Compiler, false)
-            .unwrap()
-            .errors
-            .iter()
-            .any(|e| e.contains("ratchet path missing"))
-    );
+    assert!(!run_suite(&root.0, &passing()).unwrap().success());
 }
 #[test]
-fn binary_json_and_exit_status_follow_validation_and_ratchet() {
+fn binary_json_and_exit_status_follow_validation_and_the_gate() {
     let root = Fixture::new();
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_hirsel-conformance"))
@@ -629,10 +649,10 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
             .unwrap()
     };
     // The fixtures the real compiler does not pass leave the gate.
-    let m2 = root.0.join("conformance/m2-runtime.txt");
+    let pending = root.0.join("conformance/pending.txt");
     fs::write(
-        &m2,
-        "conformance/OWN/fail.hir\tM2\nconformance/OWN/nested/run.hir\tM2\nconformance/OWN/reject.hir\tM2\n",
+        &pending,
+        "conformance/OWN/fail.hir # M2\nconformance/OWN/nested/run.hir # M2\nconformance/OWN/reject.hir # M2\n",
     )
     .unwrap();
     let output = run();
@@ -651,8 +671,8 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
     );
     // Back in the gate, an unlisted file that does not pass fails the run.
     fs::write(
-        &m2,
-        "conformance/OWN/fail.hir\tM2\nconformance/OWN/nested/run.hir\tM2\n",
+        &pending,
+        "conformance/OWN/fail.hir # M2\nconformance/OWN/nested/run.hir # M2\n",
     )
     .unwrap();
     let output = run();
@@ -664,21 +684,6 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
             .as_str()
             .unwrap()
             .starts_with("conformance/OWN/reject.hir: an in-gate file must pass, got Fail(")
-    );
-    fs::write(
-        root.0.join("conformance/passing.txt"),
-        "conformance/OWN/reject.hir\n",
-    )
-    .unwrap();
-    let output = run();
-    assert!(!output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["success"], false);
-    assert!(
-        json["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("ratchet requires pass")
     );
     fs::write(
         root.0.join("conformance/OWN/invalid.hir"),
@@ -696,36 +701,25 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
 }
 
 #[test]
-fn gate_exclusions_are_offline_union_and_never_bypass_the_ratchet() {
+fn gate_exclusions_are_an_offline_union_of_pending_and_open_spec_issues() {
     let root = Fixture::new();
     fs::write(
-        root.0.join("conformance/m2-runtime.txt"),
-        "conformance/OWN/accept.hir\tM2\n",
-    )
-    .unwrap();
-    fs::write(
-        root.0.join("conformance/M2-RUNTIME.md"),
-        "`conformance/OWN/reject.hir`",
+        root.0.join("conformance/pending.txt"),
+        "conformance/OWN/accept.hir # M2\n",
     )
     .unwrap();
     let accept = root.0.join("conformance/OWN/accept.hir");
     let source = fs::read_to_string(&accept).unwrap();
-    // Open issues overlap M2; the closed #5 marker must add no exclusion.
+    // Open issues overlap the pending line; the closed #5 marker must add no exclusion.
     fs::write(
         &accept,
         format!("// spec: #4\n// spec: #7\n// spec: #5\n{source}"),
     )
     .unwrap();
-    // Out of the gate, an unlisted file may fail; listed, it may not.
-    let report = run_suite(&root.0, &failing("accept.hir"), true).unwrap();
+    // Out of the gate, a file may fail.
+    let report = run_suite(&root.0, &failing("accept.hir")).unwrap();
     assert!(report.success(), "{:?}", report.errors);
     assert_eq!(report.counts.failing, 1);
-    assert!(
-        !fs::read_to_string(root.0.join("conformance/passing.txt"))
-            .unwrap()
-            .contains("accept.hir")
-    );
-    let report = run_suite(&root.0, &passing(), true).unwrap();
     assert_eq!(report.counts.validated, 4);
     assert_eq!(report.in_gate.validated, 3);
     assert_eq!(report.exclusions["conformance/OWN/accept.hir"].len(), 3);
@@ -745,17 +739,15 @@ fn gate_exclusions_are_offline_union_and_never_bypass_the_ratchet() {
     assert_eq!(case["unchecked"], 0);
     assert_eq!(case["in_gate"], false);
     assert_eq!(case["exclusions"].as_array().unwrap().len(), 3);
-    assert!(
-        run_suite(&root.0, &failing("accept.hir"), true)
-            .unwrap()
-            .errors
-            .iter()
-            .any(|e| e.contains("ratchet requires pass"))
-    );
+    // Only a pending line leaves the gate; open spec issues alone keep it out too.
+    fs::write(root.0.join("conformance/pending.txt"), "").unwrap();
+    let report = run_suite(&root.0, &failing("accept.hir")).unwrap();
+    assert!(report.success(), "{:?}", report.errors);
+    assert_eq!(report.exclusions["conformance/OWN/accept.hir"].len(), 2);
 }
 
 #[test]
-fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
+fn path_selection_runs_only_matches_and_gates_them() {
     use hirsel_conformance::{Selection, run_suite_selected};
     let root = Fixture::new();
     let paths = ["conformance/OWN/accept.hir".to_owned()];
@@ -763,22 +755,15 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
         shard: None,
         paths: &paths,
     };
-    fs::write(
-        root.0.join("conformance/passing.txt"),
-        "conformance/OWN/accept.hir\nconformance/OWN/reject.hir\n",
-    )
-    .unwrap();
-    let report = run_suite_selected(&root.0, &passing(), false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &passing(), selection).unwrap();
     assert!(report.success(), "{:?}", report.errors);
     assert_eq!(report.counts.validated, 1);
     assert_eq!(report.tests[0].path, paths[0]);
-    assert!(run_suite_selected(&root.0, &passing(), true, selection).is_err());
     let empty = ["conformance/absent".to_owned()];
     assert!(
         run_suite_selected(
             &root.0,
             &passing(),
-            false,
             Selection {
                 shard: None,
                 paths: &empty
@@ -787,13 +772,13 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
         .unwrap_err()
         .contains("selected no corpus files")
     );
-    let report = run_suite_selected(&root.0, &failing("accept.hir"), false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("accept.hir"), selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         report
             .errors
             .iter()
-            .any(|e| e.contains("ratchet requires pass"))
+            .any(|e| e.contains("an in-gate file must pass"))
     );
     // Formatting shares the filter: an unrelated malformed file cannot enter it.
     let mut report = hirsel_conformance::Report::default();
@@ -865,22 +850,21 @@ fn a_run_past_the_memory_limit_ends_the_runner_with_the_guard_message() {
 }
 
 #[test]
-fn path_selection_requires_unratcheted_expected_outcomes() {
+fn path_selection_requires_expected_outcomes() {
     use hirsel_conformance::{Selection, run_suite_selected};
     let root = Fixture::new();
-    fs::write(root.0.join("conformance/passing.txt"), "").unwrap();
     let paths = ["conformance/OWN/accept.hir".to_owned()];
     let selection = Selection {
         shard: None,
         paths: &paths,
     };
-    let report = run_suite_selected(&root.0, &failing("accept.hir"), false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("accept.hir"), selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         !report.success(),
         "unlisted selected failures must fail the run"
     );
-    let passed = run_suite_selected(&root.0, &passing(), false, selection).unwrap();
+    let passed = run_suite_selected(&root.0, &passing(), selection).unwrap();
     assert!(passed.success());
     for (source, passes) in [
         (

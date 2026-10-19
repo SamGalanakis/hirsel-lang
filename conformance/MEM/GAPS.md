@@ -14,4 +14,4 @@
 - MEM-12: @ growable is field-only and validated by owner/type/position pairs.
   Exact flat bytes remain #1; no prototype format is silently normative.
 - MEM-11/14: physical sharing, generation wrap and storage reclamation retain
-  their model oracles. `conformance/m2-runtime.txt` lists the dynamic runtime dependencies.
+  their model oracles. `conformance/pending.txt` lists any that cannot pass yet.

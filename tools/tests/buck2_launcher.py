@@ -239,7 +239,7 @@ class LauncherBless(LauncherFixture):
 
     def test_every_bless_form_fails_on_the_pool(self):
         for args, env in [((), dict(HIRSEL_BLESS='1')), ((), dict(INSTA_UPDATE='always')),
-                          (('--bless',), {}), (('--update-passing',), {})]:
+                          (('--bless',), {})]:
             run = self.launch(*args, HIRSEL_TEST_POOL='1', **env)
             self.assertEqual(run.returncode, 2, (args, env, run.stderr))
             self.assertIn('discarded copy of the checkout', run.stderr)

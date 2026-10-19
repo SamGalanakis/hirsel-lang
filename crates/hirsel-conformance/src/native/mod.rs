@@ -1,10 +1,10 @@
-//! The native differential gate: every baseline-passing
-//! executable corpus case is run by the heap executor and as native code under
+//! The native differential gate: every executable corpus case in the baseline
+//! is run by the heap executor and as native code under
 //! a named configuration matrix and compared with the reference observation.
 //! Large library evidence can explicitly select a stdout sidecar instead;
 //! those cases run only compiled configurations.
 //!
-//! Promotion is set-wise. B is the executable cases in `conformance/passing.txt`;
+//! Promotion is set-wise. B is the executable corpus cases outside the gate exclusions;
 //! N is the cases every configuration of an engine agrees on. Every case and
 //! configuration that did not agree must be exactly one row of
 //! `native-tests/regressions/exclusions.tsv`, naming the configuration, a
@@ -78,25 +78,27 @@ impl Case {
     }
 }
 
-/// The executable cases the ratchet lists as passing: B of the set rule.
+/// B of the set rule: every discovered executable corpus case outside the gate
+/// exclusions (a `pending.txt` line or an open `// spec: #N` issue).
 pub fn baseline(root: &Path) -> Result<Vec<Case>, String> {
     let rules = crate::spec_rules(root)?;
-    let passing = std::fs::read_to_string(root.join("conformance/passing.txt"))
-        .map_err(|e| format!("conformance/passing.txt: {e}"))?;
+    let pending = crate::pending(root)?;
     let mut cases = Vec::new();
-    for id in passing.lines().filter(|l| !l.is_empty()) {
-        let source = std::fs::read_to_string(root.join(id)).map_err(|e| format!("{id}: {e}"))?;
-        let header = crate::parse_header(Path::new(id), &source, &rules)?;
+    for file in crate::Selection::default().files(root)? {
+        let id = crate::relative(root, &file);
+        let source = std::fs::read_to_string(&file).map_err(|e| format!("{id}: {e}"))?;
+        let header = crate::parse_header(Path::new(&id), &source, &rules)?;
         if matches!(
             header.expect,
             crate::Expect::Test
                 | crate::Expect::Run { .. }
                 | crate::Expect::Fail { .. }
                 | crate::Expect::Blocked { .. }
-        ) {
+        ) && crate::gate_exclusions(&pending, &id, &source).is_empty()
+        {
             cases.push(Case {
-                id: id.to_string(),
-                path: Some(root.join(id)),
+                id,
+                path: Some(file),
                 source,
             });
         }

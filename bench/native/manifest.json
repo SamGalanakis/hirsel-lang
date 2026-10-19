@@ -690,7 +690,7 @@
     "programs/common.hir": "fc994d9b8a0c26413476c00fd2946157fcdbf9cf0d7ce977e50fc462c0b506ec",
     "programs/binarytrees.hir": "6aa7ff8cd7e6832bfe11bbd6e034ccac999de9d2ab2e7f29a1068d51c9d0f4e2",
     "programs/records-messages-scalar.hir": "fa72621052b4e6d4901cd6cbb8188cdb339eff79c207d82b5b561a6d05ba90dd",
-    "check-program": "ea15a6b929d4ccd22fcce222ecc779d2c0daec01b4883102e6c061b0e5230433",
+    "check-program": "68860eb6be1a622dbda4ad1e44f179146d7208dfc5f68dae680dcfa701381a96",
     "programs/saxpy-checked-integer.hir": "d319638dd6ff2a4e922a035ce7bada78b88c0db9f17feaccdc27eb8cf4b0020f",
     "programs/slots-churn.hir": "de7155012284da057a1e8acdc841e140387eb16b552c67d3a6127dab57d631b0",
     "programs/closure-iter-scoped.hir": "d9a2a288edaa85ff6557d7678f4faa4638c9e4130e897523ef534829da59ad5f",

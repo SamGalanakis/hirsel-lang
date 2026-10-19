@@ -313,7 +313,6 @@ files it writes. Review the diff it prints before committing.
 tools/bless.sh heap                # native-tests/heap goldens
 tools/bless.sh layout rc-import    # several at once
 tools/bless.sh all                 # every in-test bless
-tools/bless.sh passing             # conformance/passing.txt (adds only)
 ```
 
 A test rewrites its expectation when it runs with `HIRSEL_BLESS=1` (insta
@@ -321,15 +320,14 @@ snapshots: `INSTA_UPDATE=always`). The script runs those cases on this host
 (`-c hirsel.tests=host --env HIRSEL_BLESS=1`), where a test reads and writes
 the checkout through its relative `CARGO_MANIFEST_DIR`. It fails unless a
 case ran, then runs the same cases again without the bless, on the pool, which
-fails unless the rewritten files now pass. `passing` runs
-`hirsel-conformance --update-passing` with `buck2 run --root "$PWD"`, and `exclusions` runs
+fails unless the rewritten files now pass. `exclusions` runs
 `native --full --bless` through `gate-native-full` with explicit host execution.
 
 A pool action reads a copy of the checkout that is discarded afterwards, so a
 bless there writes nothing that lasts: a read-only input fails with a bare
 `PermissionDenied` and a writable one passes. `test_launcher.sh` therefore
 refuses, with exit 2, a pool test run under `HIRSEL_BLESS`, a writing
-`INSTA_UPDATE`, `--bless` or `--update-passing`.
+`INSTA_UPDATE` or `--bless`.
 
 A new expectation file gets its rewrite under `HIRSEL_BLESS` in the test that
 checks it, and a row in `tools/bless.sh`. A test whose expectation is compiled

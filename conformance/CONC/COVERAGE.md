@@ -19,4 +19,4 @@ unique payloads/results and scalar atomic constraints.
 
 Exhaustive cancellation injection, causal failure ordering and fair scheduling
 remain model oracles (UNTESTABLE.md). Dead-mutex re-acquisition is still #22.
-These dynamic programs require M2 runtime behavior (`conformance/m2-runtime.txt`).
+`conformance/pending.txt` lists any dynamic program that cannot pass yet.

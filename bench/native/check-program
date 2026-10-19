@@ -53,7 +53,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
                                           package=dict(name='std', version='1'), expose=[])])
         (root/case).with_suffix('.hir.json').write_text(json.dumps(sidecar, indent=2)+'\n')
         (root/'conformance').mkdir(exist_ok=True)
-        (root/'conformance/passing.txt').write_text(str(case)+'\n')
+        (root/'conformance/pending.txt').write_text('')
         (root/'docs').mkdir(); (root/'docs/spec').symlink_to(repo/'docs/spec',target_is_directory=True)
         (root/'native-tests/regressions').mkdir(parents=True)
         (root/'native-tests/regressions/exclusions.tsv').write_text('# case\tconfiguration\tclass\treason\n')

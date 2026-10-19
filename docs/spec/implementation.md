@@ -120,11 +120,13 @@ this specification. `expect` is one of:
 `// entry: name` selects a test entry other than `main`. Every rejected program has an
 accepted twin that differs only in the violation. Directives appear only in the leading
 comment block. A program with a `// spec: #N` comment depends on an open specification
-question; a program in `conformance/m2-runtime.txt` needs runtime features not every engine
-supports yet. Both stay in the corpus and are excluded from the gate.
+question; a program in `conformance/pending.txt` cannot produce its expected outcome yet, for the
+reason its line gives. Both stay in the corpus and are excluded from the gate.
 
-Every corpus file is in canonical format, and the passing list `conformance/passing.txt` is
-a ratchet: a passing program never silently stops passing.
+Every corpus file is in canonical format and is gated: it must produce its expected outcome. A
+file that cannot yet is listed in `conformance/pending.txt` with its reason, and leaves that list
+as soon as it passes; a file depending on an open specification question carries a `// spec: #N`
+comment.
 
 ## Agreement
 

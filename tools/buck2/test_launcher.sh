@@ -22,7 +22,7 @@ if [ -n "${HIRSEL_TEST_POOL:-}" ]; then
   [ -z "${HIRSEL_BLESS:-}" ] || bless="HIRSEL_BLESS=$HIRSEL_BLESS"
   case "${INSTA_UPDATE:-}" in always | 1 | force | new | unseen) bless="INSTA_UPDATE=$INSTA_UPDATE" ;; esac
   for argument in "$@"; do
-    case "$argument" in --bless | --update-passing) bless="$argument" ;; esac
+    case "$argument" in --bless) bless="$argument" ;; esac
   done
   if [ -n "$bless" ]; then
     echo "test_launcher.sh: $bless on the pool would rewrite a discarded copy of the checkout; run it with tools/bless.sh" >&2

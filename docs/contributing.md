@@ -77,11 +77,12 @@ tools/capped target/debug/hirsel-conformance --verbose --shard 1/1 \
 `hirsel-conformance` reports counts by rule prefix; `--json` gives tool
 output. It finds the repository from the current directory; `--root <repo>`
 selects another checkout. The whole corpus is a many-program run:
-`python3 tools/buck2/conformance.py` runs its shards on the pool. `--update-passing` (run on this host by `tools/bless.sh passing`) adds newly
-passing tests to `conformance/passing.txt` without removing existing entries.
-Every in-gate corpus file must pass whether or not that list names it; a listed
-file must pass even when excluded from the gate, and the list is the native
-gate's baseline, so add a new corpus file's path to it (the list is sorted).
+`python3 tools/buck2/conformance.py` runs its shards on the pool. Every corpus
+file must pass its expected outcome unless `conformance/pending.txt` lists it
+with a reason (`conformance/<path>.hir # <reason>`, sorted) or it carries an
+open `// spec: #N` comment. A pending file that passes, or a pending path that
+names no file, fails its shard, so the list only shrinks. The executable files
+outside those exclusions are the native gate's baseline.
 
 ## Growing inventories: no hand-maintained totals
 
@@ -100,8 +101,8 @@ native operation tables; the registry and native coverage tests check their
 identities and contracts. Only main's runs write `docs/api.md`; the full gate's
 drift tests compare it with every public core and std export on main. Sorted
 lists such as these merge without conflicts when contributors add or remove different
-entries (the `hirsel` merge driver, `tools/buck2/merging.py`). The conformance ratchet checks
-each sorted, unique path in `conformance/passing.txt`; the full-gate counter
+entries (the `hirsel` merge driver, `tools/buck2/merging.py`). The conformance gate checks
+each sorted, unique `path # reason` line of `conformance/pending.txt`; the full-gate counter
 checks every compiled test identity executes exactly once. Neither needs a total
 updated when another contributor adds an item.
 
@@ -215,9 +216,8 @@ canonical formatter check, on the pool:
 `--path` matches repository-relative prefixes, may repeat, and fails if no files
 match. A complete filename selects that program. The explicit `1/1` overrides
 the target's default shard so that a selected file always runs. The runner
-checks only matched files and their ratchet entries. Every match must meet its
-expected outcome, including new files absent from `passing.txt`; filtered runs
-cannot update that file.
+checks only matched files and their pending lines. Every match must meet its
+expected outcome.
 
 ## Testing and landing
 

@@ -21,7 +21,6 @@
 #   snapshots          insta snapshots: lowering, grammar examples, mode explanations
 #   all                every in-test bless above
 # Corpus-wide blesses:
-#   passing            conformance/passing.txt: hirsel-conformance --update-passing (adds only)
 #   exclusions         native-tests/regressions/exclusions.tsv: native --full --bless (hours)
 #   native-selection   native-tests/regressions/native-selection.json: the frozen program
 #                      cover, derived on the pool (-c hirsel.native_selection=derive)
@@ -104,7 +103,6 @@ bless_in_test() {
 for what in "$@"; do
   case "$what" in
     all) for each in "${in_test[@]}"; do bless_in_test "$each"; done ;;
-    passing) "$buck2" run //:hirsel-conformance-bin-hirsel-conformance -- --update-passing --root "$PWD" ;;
     exclusions) "$buck2" test -c hirsel.full=true -c hirsel.tests=host //:gate-native-full -- --test-arg=--bless --timeout 14400 ;;
     native-selection)
       derived="$("$buck2" build -c hirsel.native_selection=derive //:native-selection --show-full-simple-output)"

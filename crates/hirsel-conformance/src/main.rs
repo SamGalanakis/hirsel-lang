@@ -16,7 +16,6 @@ fn main_on_compiler_thread() -> ExitCode {
     let mut paths = Vec::new();
     let mut json = false;
     let mut verbose = false;
-    let mut update = false;
     let mut check_format = false;
     let help = parse_or_exit((|| {
         let mut args = Parser::from_env();
@@ -29,7 +28,6 @@ fn main_on_compiler_thread() -> ExitCode {
                 Long("path") => paths.push(args.value()?.string()?),
                 Long("json") => json = true,
                 Long("verbose") => verbose = true,
-                Long("update-passing") => update = true,
                 Long("check-format") => check_format = true,
                 Long("help") | Short('h') => return Ok(true),
                 _ => return Err(arg.unexpected()),
@@ -39,7 +37,7 @@ fn main_on_compiler_thread() -> ExitCode {
     })());
     if help {
         println!(
-            "usage: hirsel-conformance [--json] [--verbose] [--update-passing] [--check-format] [--path PREFIX]... [--root <repo>] [--hash-seed N] [--shard I/N]"
+            "usage: hirsel-conformance [--json] [--verbose] [--check-format] [--path PREFIX]... [--root <repo>] [--hash-seed N] [--shard I/N]"
         );
         return ExitCode::SUCCESS;
     }
@@ -64,7 +62,7 @@ fn main_on_compiler_thread() -> ExitCode {
             shard,
             paths: &paths,
         };
-        let mut report = run_suite_selected(&root, &SeededCompiler(hash_seed), update, selection)?;
+        let mut report = run_suite_selected(&root, &SeededCompiler(hash_seed), selection)?;
         if check_format {
             hirsel_conformance::corpus_format::check_canonical_selected(
                 &root,

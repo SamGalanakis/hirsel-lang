@@ -715,7 +715,7 @@ mod tests {
         for path in [corpus, fixture] {
             std::fs::write(root.join(path), source).unwrap();
         }
-        std::fs::write(root.join("conformance/passing.txt"), format!("{corpus}\n")).unwrap();
+        std::fs::write(root.join("conformance/pending.txt"), "").unwrap();
         std::fs::write(root.join("docs/spec/language.md"), "### LANG-7: Types\n").unwrap();
         for path in [
             "native-tests/regressions/history.tsv",
