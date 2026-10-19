@@ -21,6 +21,7 @@ mod regions;
 mod release;
 #[path = "../support/mod.rs"]
 mod support;
+mod tape_property;
 mod tasks;
 mod test_reporting;
 mod text;

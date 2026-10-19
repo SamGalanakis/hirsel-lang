@@ -1098,3 +1098,8 @@ and compares the existing file's bytes on EEXIST. Test trees keep their durable 
 `FileIdentities` (`hirsel_kernels::disk::Durable`): stream and whole-file writes note the
 last write, syncs and `put_new(Durable())` record listings and bytes, and `test.crash`
 rebuilds the tree from it and marks every File and AtomicFile of the tree stale.
+
+B15 (`tests/it/tape_property.rs`) round-trips generated fields across every
+request and completion variant, including populated network and process scripts.
+Exhaustive matches require a specimen for new variants. It catches omitted,
+misframed and lossy fields; its ignored `full_gate_` version expands the draws.
