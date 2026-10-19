@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// Exact key encodings of every scalar schema, each decoding back. The byte
+// string escapes and float transforms are FoundationDB's tuple-layer test
+// cases (design/tuple.md) without their type codes, and with `00 01` ending a
+// byte string where the tuple layer writes `00`.
+fn key_is[K: serializable](t: Test, value: K, expected: Bytes) -> () {
+  let encoded = std@1/keys.encode(value)
+  test.check(t, encoded == expected)
+  let back: Result[K, DecodeError] = std@1/keys.decode(encoded)
+  match back {
+    Ok(v) => test.check(t, std@1/keys.encode(v) == expected),
+    Error(_) => test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  key_is(t, false, b"\x00")
+  key_is(t, true, b"\x01")
+  key_is(t, 18u8, b"\x12")
+  key_is(t, 4660u16, b"\x12\x34")
+  key_is(t, 1u32, b"\x00\x00\x00\x01")
+  key_is(t, 18446744073709551615u64, b"\xff\xff\xff\xff\xff\xff\xff\xff")
+  key_is(t, 1u128, b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01")
+  key_is(t, -128i8, b"\x00")
+  key_is(t, -1i8, b"\x7f")
+  key_is(t, 0i8, b"\x80")
+  key_is(t, 127i8, b"\xff")
+  // FoundationDB's integer case -5551212, at a fixed width of four bytes.
+  key_is(t, -5551212i32, b"\x7f\xab\x4b\x94")
+  key_is(t, -9223372036854775808i64, b"\x00\x00\x00\x00\x00\x00\x00\x00")
+  key_is(t, -1i128, b"\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff")
+  // FoundationDB's float case -42f, then signed zeros, infinities and NaN.
+  key_is(t, -42.0f32, b"\x3d\xd7\xff\xff")
+  key_is(t, -42.0f64, b"\x3f\xba\xff\xff\xff\xff\xff\xff")
+  key_is(t, 0.0f32, b"\x80\x00\x00\x00")
+  key_is(t, -0.0f32, b"\x7f\xff\xff\xff")
+  key_is(t, f64.from_bits(9218868437227405312u64), b"\xff\xf0\x00\x00\x00\x00\x00\x00")
+  key_is(t, f64.from_bits(18442240474082181120u64), b"\x00\x0f\xff\xff\xff\xff\xff\xff")
+  key_is(t, f64.from_bits(9221120237041090560u64), b"\xff\xf8\x00\x00\x00\x00\x00\x00")
+  key_is(t, 'a', b"\x00\x00\x00\x61")
+  // FoundationDB's byte and Unicode string cases.
+  key_is(t, b"foo\x00bar", b"foo\x00\xffbar\x00\x01")
+  key_is(t, "F\u{d4}O\u{0}bar", b"F\xc3\x94O\x00\xffbar\x00\x01")
+  key_is(t, b"", b"\x00\x01")
+  key_is(t, b"\xff", b"\xff\x00\x01")
+  Ok(())
+}

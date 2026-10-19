@@ -137,6 +137,7 @@ the license named in its row; the license texts follow once each.
 | num-bigint | `src/biguint/{addition,subtraction,multiplication,division,shift,power}.rs` magnitude kernels (Karatsuba step of mac3 and its 32-limb threshold, Knuth D div_rem_core with sub_mul_digit_same_len), the Stein gcd of `src/biguint.rs`; `tests/consts` SUM_TRIPLES, MUL_TRIPLES, DIV_REM_QUADRUPLES and `tests/{bigint,biguint}.rs` conversion and big-division cases | `stdlib/std@1/bigint.hir`, `conformance/SEM/SEM-1-bigint-*` | rust-num/num-bigint `41f0b035d12971c5c7f7501917e31f0f6439c26c` | MIT |
 | Go standard library | `src/math/big/{natconv,int}.go` chunked radix conversion and two's-complement bitwise identities; `int_test.go` sumZZ, prodZZ, divisionSignsTests, quoTests, gcdTests, lshTests, rshTests, bitLenTests, expTests, notTests, bitwiseTests and `natconv_test.go` strTests | `stdlib/std@1/bigint.hir`, `conformance/SEM/SEM-1-bigint-go-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | rust_decimal | `src/ops/{add,mul,div}.rs` scale rules and `src/decimal.rs` rounding strategies, without the 96-bit limit; `tests/decimal_tests/{arithmetic,rounding,scale}.rs` add, subtract, multiply, divide, rounding, normalize and rescale vectors with exact expectations | `stdlib/std@1/bigdecimal.hir`, `conformance/SEM/SEM-1-decimal-*` | paupino/rust-decimal `b23fb077e301e77cb0ac36cc1ac4df1fba6c45d5` | MIT |
+| FoundationDB | tuple layer `design/tuple.md` and `bindings/python/fdb/tuple.py`: the order-preserving byte-string escape, sign-bit integer transform, IEEE total-order float transform and `strinc`; the typecode table's test cases (`foo\x00bar`, `F\u00d4O\u0000bar`, `-5551212`, `-42f`) without their type codes | `stdlib/std@1/keys.hir`, `conformance/SEM/SEM-3-keys-*`, `docs/spec/std-library.md` | apple/foundationdb `487620d5aa41152b1f034f4e932005a87eb2947f` | Apache-2.0 (text below, without the LLVM exception) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -174,6 +175,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - rust_decimal: Copyright (c) 2016 Paul Mason
 - cespare/xxhash: Copyright (c) 2016 Caleb Spare
 - zlib: Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler
+- FoundationDB: Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 
 ## Zlib License (zlib)
 

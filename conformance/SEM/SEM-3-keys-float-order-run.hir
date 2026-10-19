@@ -1,0 +1,147 @@
+// rule: SEM-3
+// expect: run
+// Key order law for f32 and f64, after FoundationDB's tuple-layer float
+// tests (bindings/python/tests/tuple_tests.py): the bytewise order of the
+// encodings is IEEE total order on canonical values, with -0.0 before 0.0 and
+// the canonical NaN after infinity, and each encoding decodes back.
+type Case {
+  wide: bool,
+  x: u64,
+  y: u64,
+}
+
+fn bytes_order(a: Bytes, b: Bytes) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+// IEEE totalOrder, written from its definition rather than from bits.
+fn total_order(a: f64, b: f64) -> i32 uses {} {
+  let a_nan = a != a
+  let b_nan = b != b
+  if a_nan || b_nan {
+    if a_nan && b_nan {
+      0
+    } else if a_nan {
+      1
+    } else {
+      -1
+    }
+  } else if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    let a_negative = f64.bits(a) >= 9223372036854775808u64
+    let b_negative = f64.bits(b) >= 9223372036854775808u64
+    if a_negative == b_negative {
+      0
+    } else if a_negative {
+      -1
+    } else {
+      1
+    }
+  }
+}
+
+fn agrees[K: serializable](a: K, b: K, expected: i32, trip: bool) -> bool uses {} {
+  let ea = std@1/keys.encode(a)
+  if bytes_order(ea, std@1/keys.encode(b)) != expected {
+    return false
+  }
+  if !trip {
+    return true
+  }
+  let back: Result[K, DecodeError] = std@1/keys.decode(ea)
+  match back {
+    Ok(v) => std@1/keys.encode(v) == ea,
+    Error(_) => false,
+  }
+}
+
+fn check(c: Case, trip: bool) -> bool uses {} {
+  if c.wide {
+    let a = f64.from_bits(c.x)
+    let b = f64.from_bits(c.y)
+    agrees(a, b, total_order(a, b), trip)
+  } else {
+    let a = f32.from_bits(int.truncate(c.x))
+    let b = f32.from_bits(int.truncate(c.y))
+    agrees(a, b, total_order(f64.from_f32(a), f64.from_f32(b)), trip)
+  }
+}
+
+fn ordered(c: Case) -> bool uses {} {
+  check(c, false)
+}
+
+fn round_trips(c: Case) -> bool uses {} {
+  check(c, true)
+}
+
+// Signed zeros, the least subnormals, one, the infinities, the largest
+// finite values and NaN, as f64 and then f32 bits; or random bits.
+fn draw(mut s: test.Source, wide: bool) -> u64 uses {} {
+  let doubles: List[u64] = [
+    0u64,
+    9223372036854775808u64,
+    1u64,
+    9223372036854775809u64,
+    4607182418800017408u64,
+    13830554455654793216u64,
+    9218868437227405312u64,
+    18442240474082181120u64,
+    9218868437227405311u64,
+    18442240474082181119u64,
+    9221120237041090560u64
+  ]
+  let singles: List[u64] = [
+    0u64,
+    2147483648u64,
+    1u64,
+    2147483649u64,
+    1065353216u64,
+    3212836864u64,
+    2139095040u64,
+    4286578688u64,
+    2139095039u64,
+    4286578687u64,
+    2143289344u64
+  ]
+  if test.bool(mut s) {
+    let i = test.choice(mut s, 10)
+    if wide {
+      doubles[i]
+    } else {
+      singles[i]
+    }
+  } else {
+    test.any_u64(mut s)
+  }
+}
+
+fn draw_case(mut s: test.Source) -> Case uses {} {
+  let wide = test.bool(mut s)
+  let x = draw(mut s, wide)
+  let y = if test.choice(mut s, 3) == 0 {
+    x
+  } else {
+    draw(mut s, wide)
+  }
+  Case(wide: wide, x: x, y: y)
+}
+
+fn show(c: Case) -> String uses {} {
+  f"wide {c.wide}: {c.x} {c.y}"
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 64, draw_case, ordered, show)
+  test.property_cases(t, 10, draw_case, round_trips, show)
+  Ok(())
+}

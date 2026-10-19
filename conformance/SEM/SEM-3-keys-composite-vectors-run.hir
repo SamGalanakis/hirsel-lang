@@ -1,0 +1,71 @@
+// rule: SEM-3
+// expect: run
+// Exact key encodings of unit, tuples, options, results, sequences, inline
+// arrays, records, user variants and a boxed recursive variant, each decoding
+// back: fields in order, a big-endian u32 arm ordinal, `01` before each
+// sequence element and `00` after the last.
+@serializable
+type Point {
+  x: i32,
+  y: String,
+}
+
+@serializable
+type Shape = Dot | Line(u8) | Area(u16, u16)
+
+@serializable
+type Chain = End | Link(u8, box Chain)
+
+fn line(x: u8) -> Shape uses {} {
+  Line(x)
+}
+
+fn area(w: u16, h: u16) -> Shape uses {} {
+  Area(w, h)
+}
+
+fn link(x: u8, take rest: Chain) -> Chain uses {} {
+  Link(x, box rest)
+}
+
+fn key_is[K: serializable](t: Test, value: K, expected: Bytes) -> () {
+  let encoded = std@1/keys.encode(value)
+  test.check(t, encoded == expected)
+  let back: Result[K, DecodeError] = std@1/keys.decode(encoded)
+  match back {
+    Ok(v) => test.check(t, std@1/keys.encode(v) == expected),
+    Error(_) => test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  key_is(t, (), b"")
+  key_is(t, (1u8, "a"), b"\x01a\x00\x01")
+  let none: Option[u8] = None
+  key_is(t, none, b"\x00\x00\x00\x00")
+  let some: Option[u8] = Some(5)
+  key_is(t, some, b"\x00\x00\x00\x01\x05")
+  let ok: Result[u8, String] = Ok(1)
+  key_is(t, ok, b"\x00\x00\x00\x00\x01")
+  let error: Result[u8, String] = Error("x")
+  key_is(t, error, b"\x00\x00\x00\x01x\x00\x01")
+  let empty: List[u8] = []
+  key_is(t, empty, b"\x00")
+  let two: List[u8] = [1, 2]
+  key_is(t, two, b"\x01\x01\x01\x02\x00")
+  let words: Array[String] = ["", "a"]
+  key_is(t, words, b"\x01\x00\x01\x01a\x00\x01\x00")
+  let fixed: Inline[u16, 2] = [1, 2]
+  key_is(t, fixed, b"\x00\x01\x00\x02")
+  key_is(t, Point(x: -1, y: "a\u{0}b"), b"\x7f\xff\xff\xffa\x00\xffb\x00\x01")
+  let dot: Shape = Dot()
+  key_is(t, dot, b"\x00\x00\x00\x00")
+  key_is(t, line(7), b"\x00\x00\x00\x01\x07")
+  key_is(t, area(1, 2), b"\x00\x00\x00\x02\x00\x01\x00\x02")
+  key_is(
+    t,
+    link(1, link(2, End())),
+    b"\x00\x00\x00\x01\x01\x00\x00\x00\x01\x02\x00\x00\x00\x00"
+  )
+  Ok(())
+}

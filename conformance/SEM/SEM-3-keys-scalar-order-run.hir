@@ -1,0 +1,188 @@
+// rule: SEM-3
+// expect: run
+// Key order law for bool, char and every integer width, after FoundationDB's
+// tuple-layer ordering tests (bindings/python/tests/tuple_tests.py): for each
+// generated pair, the bytewise order of the encodings is the numeric order,
+// and each encoding decodes back to its key.
+type Case {
+  width: u64,
+  x: u128,
+  y: u128,
+}
+
+fn bytes_order(a: Bytes, b: Bytes) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+fn unsigned_order(a: u128, b: u128) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn signed_order(a: i128, b: i128) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+// The encodings of `a` and `b` compare as `expected`; with `trip`, `a` also
+// decodes from its encoding.
+fn agrees[K: serializable](a: K, b: K, expected: i32, trip: bool) -> bool uses {} {
+  let ea = std@1/keys.encode(a)
+  if bytes_order(ea, std@1/keys.encode(b)) != expected {
+    return false
+  }
+  if !trip {
+    return true
+  }
+  let back: Result[K, DecodeError] = std@1/keys.decode(ea)
+  match back {
+    Ok(v) => std@1/keys.encode(v) == ea,
+    Error(_) => false,
+  }
+}
+
+fn ordered(c: Case) -> bool uses {} {
+  check(c, false)
+}
+
+fn round_trips(c: Case) -> bool uses {} {
+  check(c, true)
+}
+
+fn check(c: Case, trip: bool) -> bool uses {} {
+  let u = unsigned_order(c.x, c.y)
+  match c.width {
+    0 => agrees(c.x % 2 == 1, c.y % 2 == 1, unsigned_order(c.x % 2, c.y % 2), trip),
+    1 => {
+      let a: u8 = int.truncate(c.x)
+      let b: u8 = int.truncate(c.y)
+      agrees(a, b, unsigned_order(int.widen(a), int.widen(b)), trip)
+    },
+    2 => {
+      let a: u16 = int.truncate(c.x)
+      let b: u16 = int.truncate(c.y)
+      agrees(a, b, unsigned_order(int.widen(a), int.widen(b)), trip)
+    },
+    3 => {
+      let a: u32 = int.truncate(c.x)
+      let b: u32 = int.truncate(c.y)
+      agrees(a, b, unsigned_order(int.widen(a), int.widen(b)), trip)
+    },
+    4 => {
+      let a: u64 = int.truncate(c.x)
+      let b: u64 = int.truncate(c.y)
+      agrees(a, b, unsigned_order(int.widen(a), int.widen(b)), trip)
+    },
+    5 => agrees(c.x, c.y, u, trip),
+    6 => {
+      let a: i8 = int.truncate(c.x)
+      let b: i8 = int.truncate(c.y)
+      agrees(a, b, signed_order(int.widen(a), int.widen(b)), trip)
+    },
+    7 => {
+      let a: i16 = int.truncate(c.x)
+      let b: i16 = int.truncate(c.y)
+      agrees(a, b, signed_order(int.widen(a), int.widen(b)), trip)
+    },
+    8 => {
+      let a: i32 = int.truncate(c.x)
+      let b: i32 = int.truncate(c.y)
+      agrees(a, b, signed_order(int.widen(a), int.widen(b)), trip)
+    },
+    9 => {
+      let a: i64 = int.truncate(c.x)
+      let b: i64 = int.truncate(c.y)
+      agrees(a, b, signed_order(int.widen(a), int.widen(b)), trip)
+    },
+    10 => {
+      let a: i128 = int.truncate(c.x)
+      let b: i128 = int.truncate(c.y)
+      agrees(a, b, signed_order(a, b), trip)
+    },
+    _ => {
+      let a = scalar(c.x)
+      let b = scalar(c.y)
+      agrees(
+        a,
+        b,
+        unsigned_order(int.widen(char.to_u32(a)), int.widen(char.to_u32(b))),
+        trip
+      )
+    },
+  }
+}
+
+// A Unicode scalar near a boundary: 0, 0x7F/0x80, the surrogate gap and
+// the last scalar.
+fn scalar(x: u128) -> char uses {} {
+  let values: List[u32] = [
+    0u32,
+    1u32,
+    127u32,
+    128u32,
+    55295u32,
+    57344u32,
+    1114110u32,
+    1114111u32
+  ]
+  let Some(c) = char.from_u32(values[int.truncate(x % 8)]) else {
+    return 'a'
+  }
+  c
+}
+
+// A draw near zero, the sign boundary of some width, or the top of the
+// range, so that ties and sign changes come up often.
+fn draw(mut s: test.Source) -> u128 uses {} {
+  let near: u128 = int.widen(test.choice(mut s, 2))
+  match test.choice(mut s, 4) {
+    0 => near,
+    1 => 340282366920938463463374607431768211455u128 - near,
+    2 => {
+      let shift: u128 = int.widen(8u64 * (1u64 + test.choice(mut s, 14)))
+      (1u128 << shift - 1) - 1 + near
+    },
+    _ => {
+      let high: u128 = int.widen(test.any_u64(mut s))
+      let low: u128 = int.widen(test.any_u64(mut s))
+      high << 64 | low
+    },
+  }
+}
+
+fn draw_case(mut s: test.Source) -> Case uses {} {
+  let width = test.choice(mut s, 11)
+  let x = draw(mut s)
+  let y = if test.choice(mut s, 3) == 0 {
+    x
+  } else {
+    draw(mut s)
+  }
+  Case(width: width, x: x, y: y)
+}
+
+fn show(c: Case) -> String uses {} {
+  f"width {c.width}: {c.x} {c.y}"
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 64, draw_case, ordered, show)
+  test.property_cases(t, 10, draw_case, round_trips, show)
+  Ok(())
+}

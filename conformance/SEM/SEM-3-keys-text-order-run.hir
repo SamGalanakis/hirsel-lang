@@ -1,0 +1,189 @@
+// rule: SEM-3
+// expect: run
+// Key order law for String, Bytes, tuples ending or continuing after them,
+// and lists of strings, after FoundationDB's tuple-layer byte-string tests
+// (bindings/python/tests/tuple_tests.py): embedded zero bytes, `FF` bytes
+// and proper prefixes order exactly as byte-lexicographic order requires,
+// whatever field follows, and each encoding decodes back.
+type Case {
+  which: u64,
+  x: List[u64],
+  y: List[u64],
+  m: u8,
+  n: u8,
+}
+
+fn bytes_order(a: Bytes, b: Bytes) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+fn text_order(a: String, b: String) -> i32 uses {} {
+  bytes_order(string.as_bytes(a), string.as_bytes(b))
+}
+
+fn small_order(a: u8, b: u8) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn then(first: i32, second: i32) -> i32 uses {} {
+  if first != 0 {
+    first
+  } else {
+    second
+  }
+}
+
+fn texts_order(a: List[String], b: List[String]) -> i32 uses {} {
+  let mut i: u64 = 0
+  while i < list.len(a) && i < list.len(b) {
+    let c = text_order(a[i], b[i])
+    if c != 0 {
+      return c
+    }
+    i += 1
+  }
+  if list.len(a) < list.len(b) {
+    -1
+  } else if list.len(a) > list.len(b) {
+    1
+  } else {
+    0
+  }
+}
+
+const OCTETS: List[u8] = [0, 1, 97, 98, 254, 255]
+
+const PIECES: List[String] = ["\u{0}", "\u{1}", "a", "b", "\u{ff}", "\u{10ffff}"]
+
+fn octets(codes: List[u64]) -> Bytes uses {} {
+  let mut out: List[u8] = []
+  for code in codes {
+    list.push(mut out, OCTETS[code])
+  }
+  bytes.from_list(take out)
+}
+
+fn text(codes: List[u64]) -> String uses {} {
+  let mut out: List[u8] = []
+  for code in codes {
+    std@1/text.append(mut out, PIECES[code])
+  }
+  std@1/text.finish_valid(take out)
+}
+
+// One string per code, the empty string for code 0.
+fn texts(codes: List[u64]) -> List[String] uses {} {
+  let mut out: List[String] = []
+  for code in codes {
+    if code == 0 {
+      list.push(mut out, "")
+    } else {
+      list.push(mut out, PIECES[code])
+    }
+  }
+  take out
+}
+
+fn agrees[K: serializable](a: K, b: K, expected: i32, trip: bool) -> bool uses {} {
+  let ea = std@1/keys.encode(a)
+  if bytes_order(ea, std@1/keys.encode(b)) != expected {
+    return false
+  }
+  if !trip {
+    return true
+  }
+  let back: Result[K, DecodeError] = std@1/keys.decode(ea)
+  match back {
+    Ok(v) => std@1/keys.encode(v) == ea,
+    Error(_) => false,
+  }
+}
+
+fn check(c: Case, trip: bool) -> bool uses {} {
+  match c.which {
+    0 => {
+      let a = text(c.x)
+      let b = text(c.y)
+      agrees(a, b, text_order(a, b), trip)
+    },
+    1 => {
+      let a = octets(c.x)
+      let b = octets(c.y)
+      agrees(a, b, bytes_order(a, b), trip)
+    },
+    2 => {
+      let a = text(c.x)
+      let b = text(c.y)
+      let expected = then(text_order(a, b), small_order(c.m, c.n))
+      agrees((a, c.m), (b, c.n), expected, trip)
+    },
+    3 => {
+      let a = octets(c.x)
+      let b = octets(c.y)
+      let p = text(c.y)
+      let q = text(c.x)
+      let expected = then(bytes_order(a, b), text_order(p, q))
+      agrees((a, p), (b, q), expected, trip)
+    },
+    _ => {
+      let a = texts(c.x)
+      let b = texts(c.y)
+      agrees(a, b, texts_order(a, b), trip)
+    },
+  }
+}
+
+fn ordered(c: Case) -> bool uses {} {
+  check(c, false)
+}
+
+fn round_trips(c: Case) -> bool uses {} {
+  check(c, true)
+}
+
+fn draw_code(mut s: test.Source) -> u64 uses {} {
+  test.choice(mut s, 5)
+}
+
+fn draw_case(mut s: test.Source) -> Case uses {} {
+  let which = test.choice(mut s, 4)
+  let x = test.list_of(mut s, 4, draw_code)
+  // The second key is often the first, or the first extended or cut.
+  let y = match test.choice(mut s, 3) {
+    0 => copy x,
+    1 => {
+      let mut longer = copy x
+      list.push(mut longer, draw_code(mut s))
+      take longer
+    },
+    _ => test.list_of(mut s, 4, draw_code),
+  }
+  let m: u8 = int.truncate(test.choice(mut s, 2))
+  let n: u8 = int.truncate(test.choice(mut s, 2))
+  Case(which: which, x: x, y: y, m: m, n: n)
+}
+
+fn show(c: Case) -> String uses {} {
+  f"which {c.which}: {test.show_list(c.x, u64.to_string)} {test.show_list(
+    c.y,
+    u64.to_string
+  )} {c.m} {c.n}"
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 40, draw_case, ordered, show)
+  test.property_cases(t, 6, draw_case, round_trips, show)
+  Ok(())
+}

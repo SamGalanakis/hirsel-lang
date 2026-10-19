@@ -638,6 +638,12 @@
       ]
     },
     {
+      "path": "keys.hir",
+      "module": [
+        "keys"
+      ]
+    },
+    {
       "path": "iter.hir",
       "module": [
         "iter"

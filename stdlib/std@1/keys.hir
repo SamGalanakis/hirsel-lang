@@ -1,0 +1,493 @@
+// The order-preserving key encoding `hirsel.key.v1`, after the FoundationDB
+// tuple layer (design/tuple.md, bindings/python/fdb/tuple.py; Apache-2.0, see
+// NOTICES): big-endian integers with the sign bit inverted, the IEEE total
+// order transform for floats, and byte strings with `00` escaped as `00 FF`.
+// The schema fixes every element's type, so no element carries a type code,
+// and a byte string ends with `00 01`, below the escape, so a proper prefix
+// precedes its extensions whatever field follows.
+//
+// Encoding reads the canonical codec envelope of the key (SER-2) and rewrites
+// its payload under the envelope's schema descriptor. Decoding rewrites a key
+// back into a canonical payload of `Option[K]`, whose descriptor comes from
+// encoding `None`, and lets `codec.decode` validate it.
+// A descriptor node, reduced to what the key encoding reads. Child and size
+// fields are descriptor indexes and constants.
+type Node = Scalar(u8) | Fields(List[u64]) | Arms(List[List[u64]]) | Forward(u64) | Sequence(
+  u64
+) | Repeat(u64, u64)
+
+// A parsed envelope: its schema nodes and where its payload starts.
+type Envelope {
+  nodes: List[Node],
+  payload_start: u64,
+}
+
+// The little-endian `u32` and `u64` at `at`.
+fn u32_at(data: Bytes, at: u64) -> u64 uses {} {
+  let b0: u64 = core@1/int.widen(data[at])
+  let b1: u64 = core@1/int.widen(data[at + 1])
+  let b2: u64 = core@1/int.widen(data[at + 2])
+  let b3: u64 = core@1/int.widen(data[at + 3])
+  b0 | b1 << 8 | b2 << 16 | b3 << 24
+}
+
+fn u64_at(data: Bytes, at: u64) -> u64 uses {} {
+  u32_at(data, at) | u32_at(data, at + 4) << 32
+}
+
+// The offset just past the descriptor text atom at `at`.
+fn skip_text(data: Bytes, at: u64) -> u64 uses {} {
+  at + 8 + u64_at(data, at)
+}
+
+// The nodes of a codec envelope's descriptor (SER-2 concrete schema
+// descriptor), which `codec.encode` produced and so is well formed.
+fn envelope(data: Bytes) -> unique Envelope uses {} {
+  let descriptor_start: u64 = 16
+  let descriptor_end = descriptor_start + u64_at(data, 8)
+  let count = u32_at(data, descriptor_start + 8)
+  let mut at = descriptor_start + 12
+  let mut nodes: List[Node] = []
+  let mut n: u64 = 0
+  while n < count {
+    let tag = data[at]
+    at += 1
+    if tag == 0 {
+      core@1/list.push(mut nodes, Scalar(data[at]))
+      at += 1
+    } else if tag == 1 || tag == 2 {
+      let fields = u32_at(data, at)
+      at += 4
+      let mut children: List[u64] = []
+      let mut i: u64 = 0
+      while i < fields {
+        if tag == 2 {
+          at = skip_text(data, at)
+        }
+        core@1/list.push(mut children, u32_at(data, at))
+        at += 4
+        i += 1
+      }
+      core@1/list.push(mut nodes, Fields(take children))
+    } else if tag == 3 {
+      let arm_count = u32_at(data, at)
+      at += 4
+      let mut arms: List[List[u64]] = []
+      let mut a: u64 = 0
+      while a < arm_count {
+        at = skip_text(data, at)
+        let fields = u32_at(data, at)
+        at += 4
+        let mut children: List[u64] = []
+        let mut i: u64 = 0
+        while i < fields {
+          let labelled = data[at] == 1
+          at += 1
+          if labelled {
+            at = skip_text(data, at)
+          }
+          core@1/list.push(mut children, u32_at(data, at))
+          at += 4
+          i += 1
+        }
+        core@1/list.push(mut arms, take children)
+        a += 1
+      }
+      core@1/list.push(mut nodes, Arms(take arms))
+    } else if tag == 4 {
+      core@1/list.push(mut nodes, Forward(u32_at(data, at)))
+      at += 4
+    } else if tag == 5 {
+      let builtin = data[at]
+      let argument_count = u32_at(data, at + 1)
+      at += 5
+      let mut arguments: List[u64] = []
+      let mut i: u64 = 0
+      while i < argument_count {
+        if data[at] == 0 {
+          core@1/list.push(mut arguments, u32_at(data, at + 1))
+          at += 5
+        } else {
+          core@1/list.push(mut arguments, u64_at(data, at + 1))
+          at += 9
+        }
+        i += 1
+      }
+      // Array, List, Inline, Simd, Packed, Map, Set as 0 through 6. Simd,
+      // Map and Set have no key encoding: a schema holding one fails whatever
+      // the value, so the failure does not depend on which arm is live.
+      core@1/failure.check(builtin <= 2 || builtin == 4, TextInvariant())
+      let node: Node = if builtin <= 1 {
+        Sequence(arguments[0])
+      } else if builtin == 2 {
+        Repeat(arguments[0], arguments[1])
+      } else {
+        Forward(arguments[0])
+      }
+      core@1/list.push(mut nodes, take node)
+    } else {
+      core@1/failure.check(tag == 6, TextInvariant())
+      at = skip_text(data, skip_text(data, at))
+      let modules = u32_at(data, at)
+      at += 4
+      let mut i: u64 = 0
+      while i < modules {
+        at = skip_text(data, at)
+        i += 1
+      }
+      at = skip_text(data, at)
+      core@1/list.push(mut nodes, Forward(u32_at(data, at)))
+      at += 4
+    }
+    n += 1
+  }
+  unique Envelope(nodes: take nodes, payload_start: descriptor_end + 8)
+}
+
+// A scalar kind's width in bytes: `Bool`, `U8` to `U128`, `I8` to `I128`,
+// `F32`, `F64` and `Char` (0 through 12 and 15); 0 for `String` and `Bytes`.
+fn scalar_width(kind: u8) -> u64 uses {} {
+  if kind == 0 || kind == 1 || kind == 6 {
+    1
+  } else if kind == 2 || kind == 7 {
+    2
+  } else if kind == 3 || kind == 8 || kind == 11 || kind == 15 {
+    4
+  } else if kind == 4 || kind == 9 || kind == 12 {
+    8
+  } else if kind == 5 || kind == 10 {
+    16
+  } else {
+    0
+  }
+}
+
+fn signed(kind: u8) -> bool uses {} {
+  kind >= 6 && kind <= 10
+}
+
+fn float(kind: u8) -> bool uses {} {
+  kind == 11 || kind == 12
+}
+
+// Appends the key encoding of the value of schema node `node` whose canonical
+// payload starts at `at`, and returns the offset just past that payload.
+@preserves_unique(out)
+fn emit(nodes: List[Node], node: u64, data: Bytes, at: u64, mut out: List[u8]) -> u64 uses {} {
+  match nodes[node] {
+    Scalar(kind) => emit_scalar(kind, data, at, mut out),
+    Fields(children) => {
+      let mut pos = at
+      for child in children {
+        pos = emit(nodes, child, data, pos, mut out)
+      }
+      pos
+    },
+    Arms(arms) => {
+      let ordinal = u32_at(data, at)
+      let mut shift: u64 = 32
+      while shift > 0 {
+        shift -= 8
+        let byte: u8 = core@1/int.truncate(ordinal >> shift)
+        core@1/list.push(mut out, byte)
+      }
+      let mut pos = at + 4
+      for child in arms[ordinal] {
+        pos = emit(nodes, child, data, pos, mut out)
+      }
+      pos
+    },
+    Forward(child) => emit(nodes, child, data, at, mut out),
+    Sequence(child) => {
+      let count = u64_at(data, at)
+      let mut pos = at + 8
+      let mut i: u64 = 0
+      while i < count {
+        core@1/list.push(mut out, 1u8)
+        pos = emit(nodes, child, data, pos, mut out)
+        i += 1
+      }
+      core@1/list.push(mut out, 0u8)
+      pos
+    },
+    Repeat(child, count) => {
+      let mut pos = at
+      let mut i: u64 = 0
+      while i < count {
+        pos = emit(nodes, child, data, pos, mut out)
+        i += 1
+      }
+      pos
+    },
+  }
+}
+
+@preserves_unique(out)
+fn emit_scalar(kind: u8, data: Bytes, at: u64, mut out: List[u8]) -> u64 uses {} {
+  let n = scalar_width(kind)
+  if n == 0 {
+    let len = u64_at(data, at)
+    let mut i: u64 = 0
+    while i < len {
+      let byte = data[at + 8 + i]
+      core@1/list.push(mut out, byte)
+      if byte == 0 {
+        core@1/list.push(mut out, 255u8)
+      }
+      i += 1
+    }
+    core@1/list.push(mut out, 0u8)
+    core@1/list.push(mut out, 1u8)
+    return at + 8 + len
+  }
+  // Big-endian, so the most significant byte comes first; a signed integer
+  // inverts its sign bit, and a float inverts its sign bit when clear and
+  // every bit when set (FoundationDB's float transform, IEEE total order).
+  let top = data[at + n - 1]
+  let first: u8 = if signed(kind) || float(kind) && top < 128 {
+    128
+  } else if float(kind) {
+    255
+  } else {
+    0
+  }
+  let rest: u8 = if first == 255 {
+    255
+  } else {
+    0
+  }
+  core@1/list.push(mut out, top ^ first)
+  let mut i = n - 1
+  while i > 0 {
+    i -= 1
+    core@1/list.push(mut out, data[at + i] ^ rest)
+  }
+  at + n
+}
+
+// Appends the canonical payload of the key of schema node `node` that starts
+// at `at` in `key`, and returns the offset just past that key.
+@preserves_unique(out)
+fn absorb(nodes: List[Node], node: u64, key: Bytes, at: u64, mut out: List[u8]) -> Result[
+  u64,
+  DecodeError
+] uses {} {
+  match nodes[node] {
+    Scalar(kind) => absorb_scalar(kind, key, at, mut out),
+    Fields(children) => {
+      let mut pos = at
+      for child in children {
+        pos = absorb(nodes, child, key, pos, mut out)?
+      }
+      Ok(pos)
+    },
+    Arms(arms) => {
+      if core@1/bytes.len(key) - at < 4 {
+        return Error(Truncated())
+      }
+      let mut ordinal: u64 = 0
+      let mut i: u64 = 0
+      while i < 4 {
+        let byte: u64 = core@1/int.widen(key[at + i])
+        ordinal = ordinal << 8 | byte
+        i += 1
+      }
+      if ordinal >= core@1/list.len(arms) {
+        return Error(Tag())
+      }
+      put_little(ordinal, 4, mut out)
+      let mut pos = at + 4
+      for child in arms[ordinal] {
+        pos = absorb(nodes, child, key, pos, mut out)?
+      }
+      Ok(pos)
+    },
+    Forward(child) => absorb(nodes, child, key, at, mut out),
+    Sequence(child) => {
+      let mut elements: List[u8] = []
+      let mut count: u64 = 0
+      let mut pos = at
+      while true {
+        if pos == core@1/bytes.len(key) {
+          return Error(Truncated())
+        }
+        let marker = key[pos]
+        pos += 1
+        if marker == 0 {
+          break
+        }
+        if marker != 1 {
+          return Error(Tag())
+        }
+        pos = absorb(nodes, child, key, pos, mut elements)?
+        count += 1
+      }
+      put_little(count, 8, mut out)
+      for byte in elements {
+        core@1/list.push(mut out, byte)
+      }
+      Ok(pos)
+    },
+    Repeat(child, count) => {
+      let mut pos = at
+      let mut i: u64 = 0
+      while i < count {
+        pos = absorb(nodes, child, key, pos, mut out)?
+        i += 1
+      }
+      Ok(pos)
+    },
+  }
+}
+
+@preserves_unique(out)
+fn append(mut out: List[u8], data: Bytes) -> () uses {} {
+  let n = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  while i < n {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+}
+
+@preserves_unique(out)
+fn put_little(value: u64, count: u64, mut out: List[u8]) -> () uses {} {
+  let mut i: u64 = 0
+  while i < count {
+    let byte: u8 = core@1/int.truncate(value >> i * 8)
+    core@1/list.push(mut out, byte)
+    i += 1
+  }
+}
+
+@preserves_unique(out)
+fn absorb_scalar(kind: u8, key: Bytes, at: u64, mut out: List[u8]) -> Result[
+  u64,
+  DecodeError
+] uses {} {
+  let len = core@1/bytes.len(key)
+  let n = scalar_width(kind)
+  if n == 0 {
+    let mut content: List[u8] = []
+    let mut pos = at
+    while true {
+      if pos == len {
+        return Error(Truncated())
+      }
+      let byte = key[pos]
+      pos += 1
+      if byte != 0 {
+        core@1/list.push(mut content, byte)
+      } else if pos == len {
+        return Error(Truncated())
+      } else if key[pos] == 255 {
+        core@1/list.push(mut content, 0u8)
+        pos += 1
+      } else if key[pos] == 1 {
+        pos += 1
+        break
+      } else {
+        return Error(Scalar())
+      }
+    }
+    put_little(core@1/list.len(content), 8, mut out)
+    for byte in content {
+      core@1/list.push(mut out, byte)
+    }
+    return Ok(pos)
+  }
+  if len - at < n {
+    return Error(Truncated())
+  }
+  let top = key[at]
+  let first: u8 = if signed(kind) || float(kind) && top >= 128 {
+    128
+  } else if float(kind) {
+    255
+  } else {
+    0
+  }
+  let rest: u8 = if first == 255 {
+    255
+  } else {
+    0
+  }
+  let mut i = n - 1
+  while i > 0 {
+    core@1/list.push(mut out, key[at + i] ^ rest)
+    i -= 1
+  }
+  core@1/list.push(mut out, top ^ first)
+  Ok(at + n)
+}
+
+// Appends the key encoding of `key` to `out`. A key is any serializable value
+// whose schema holds no `Map`, `Set` or `Simd`; one that does fails SEM-3.
+@preserves_unique(out)
+pub fn encode_into[K: serializable](key: K, mut out: List[u8]) -> () uses {} {
+  let data = core@1/codec.encode(key)
+  let parsed = envelope(data)
+  let _ = emit(parsed.nodes, 0, data, parsed.payload_start, mut out)
+}
+
+// The key encoding of `key`: for keys `a` and `b` of one type, `encode(a) <
+// encode(b)` exactly when `a` precedes `b` in key order.
+pub fn encode[K: serializable](key: K) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  encode_into(key, mut out)
+  core@1/bytes.from_list(take out)
+}
+
+// The key whose encoding is exactly `data`. Truncated input, a bad string
+// escape or sequence marker, an out-of-range arm and trailing bytes are
+// `Truncated`, `Scalar`, `Tag` and `Trailing`; a scalar the codec refuses
+// (a `bool` byte, `char`, NaN or UTF-8) is the codec's error.
+pub fn decode[K: serializable](data: Bytes) -> Result[unique K, DecodeError] uses {} {
+  let none: Option[K] = None
+  let schema = core@1/codec.encode(none)
+  let parsed = envelope(schema)
+  // `Option[K]` is a core nominal node over a variant whose `Some` arm holds K.
+  let some = match parsed.nodes[0] {
+    Forward(variant) => match parsed.nodes[variant] {
+      Arms(arms) => arms[1][0],
+      _ => 0,
+    },
+    _ => 0,
+  }
+  let mut payload: List[u8] = [1, 0, 0, 0]
+  let end = absorb(parsed.nodes, some, data, 0, mut payload)?
+  if end != core@1/bytes.len(data) {
+    return Error(Trailing())
+  }
+  let mut whole: List[u8] = []
+  append(mut whole, core@1/bytes.slice(schema, 0, parsed.payload_start - 8))
+  put_little(core@1/list.len(payload), 8, mut whole)
+  for byte in payload {
+    core@1/list.push(mut whole, byte)
+  }
+  let decoded: Result[Option[K], DecodeError] = core@1/codec.decode(
+    core@1/bytes.from_list(take whole)
+  )
+  match decoded? {
+    Some(key) => Ok(unique key),
+    None() => Error(Tag()),
+  }
+}
+
+// The least byte string greater than every string that starts with `prefix`,
+// for the half-open range `[prefix, end)` of a range scan; `None` when every
+// byte of `prefix` is `FF` (the empty prefix included), where the range has no
+// upper bound. FoundationDB's `strinc`.
+pub fn prefix_end(prefix: Bytes) -> Option[unique Bytes] uses {} {
+  let mut n = core@1/bytes.len(prefix)
+  while n > 0 && prefix[n - 1] == 255 {
+    n -= 1
+  }
+  if n == 0 {
+    return None
+  }
+  let mut out: List[u8] = []
+  append(mut out, core@1/bytes.slice(prefix, 0, n - 1))
+  core@1/list.push(mut out, prefix[n - 1] + 1)
+  Some(core@1/bytes.from_list(take out))
+}

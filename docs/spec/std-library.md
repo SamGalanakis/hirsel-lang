@@ -114,7 +114,7 @@ N fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,
-`fnv`, `derive`, `task` and the `format_into` and NFC functions below) define their contracts by
+`fnv`, `derive`, `keys`, `task` and the `format_into` and NFC functions below) define their contracts by
 their declared signatures and the rules in this part.
 
 ## Conventions
@@ -1918,6 +1918,67 @@ input byte offsets. Decoding checks digits in order; an invalid final byte
 precedes an odd-length error. No partial output is returned. Both functions
 are pure ordinary source and borrow their input; outputs are owned. Encoding
 checks doubled size for overflow before building.
+
+## Ordered keys
+
+`std@1/keys` is the order-preserving key encoding `hirsel.key.v1`, after the
+FoundationDB tuple layer: for keys `a` and `b` of one type, `encode(a) <
+encode(b)` bytewise exactly when `a` precedes `b` in key order.
+
+```text
+@preserves_unique(out) fn keys.encode_into[K: serializable](key: K, mut out: List[u8]) -> () uses {}
+fn keys.encode[K: serializable](key: K) -> unique Bytes uses {}
+fn keys.decode[K: serializable](data: Bytes) -> Result[unique K, DecodeError] uses {}
+fn keys.prefix_end(prefix: Bytes) -> Option[unique Bytes] uses {}
+```
+
+A key is any `serializable` value ([SER-1](serialization.md#ser-1-serializable-schemas))
+whose schema holds no `Map`, `Set` or `Simd`; with one anywhere in `K`'s schema, every
+`encode` and `decode` at `K` fails SEM-3, whatever the value. The encoding is directed by
+the schema, so no element carries a type code:
+
+| Schema constructor | Key bytes |
+|---|---|
+| `bool` | `00` for false, `01` for true |
+| `u8` to `u128` | big-endian, exactly the type's width |
+| `i8` to `i128` | big-endian two's complement with the sign bit inverted, exactly the type's width |
+| `f32`, `f64` | the big-endian IEEE bits with every bit inverted when the sign bit is set, else the sign bit alone |
+| `char` | the scalar value as a big-endian `u32` |
+| `String`, `Bytes` | each byte in order, with `00` written as `00 FF`; then `00 01` |
+| unit | nothing |
+| tuple, record | the fields in declaration order |
+| variant, including core `Option` and `Result` and `Packed[T]` | the arm's declaration ordinal as a big-endian `u32`, then its fields in order |
+| `box T`; an opted-in transparent nominal or distinct type | the payload's bytes |
+| `Array[T]`, `List[T]` | for each element, `01` then the element; then `00` |
+| `Inline[T, n]` | the `n` elements in order |
+
+Every encoding is self-delimiting given the schema, so a tuple's encoding is the
+concatenation of its fields' and `encode_into` appends one key after another. The string
+terminator `00 01` sorts below the escape `00 FF` and above the end of a shorter string,
+so a proper prefix precedes its extensions whatever field follows. **Key order** follows
+the same structure: integers and `char` numerically, `false` before `true`, floats by IEEE
+total order (`-0.0` before `0.0`, the canonical NaN after `inf`), `String` and `Bytes`
+byte-lexicographically with a proper prefix first, tuples and records lexicographically
+by field, variants by arm ordinal and then payload (so `None` precedes every `Some`), and
+sequences lexicographically with a proper prefix first.
+
+`decode` accepts exactly the encodings `encode` produces, validating escapes,
+terminators, sequence markers, arm ordinals and trailing bytes as well as every scalar
+the canonical codec validates. Input that ends early is `Truncated`; a `00` in a string
+followed by anything but `FF` or `01` is `Scalar`; a sequence marker other than `00` or
+`01`, or an arm ordinal past the last arm, is `Tag`; bytes after the key are `Trailing`;
+an invalid `bool`, `char` or NaN is `Scalar` and invalid UTF-8 `Utf8`, as in
+[SER-2](serialization.md#ser-2-canonical-codec). Both functions go through the canonical
+codec: `encode` rewrites `codec.encode(key)`'s payload under its own descriptor, and
+`decode` rewrites a key into a canonical `Option[K]` payload, under the descriptor of
+`codec.encode` of `None`, for `codec.decode`.
+
+For the encoding `e` of a key's leading fields (their `encode_into` calls in order, or
+`encode` of a tuple of them), the keys whose leading fields have those values are exactly
+those in the half-open range `[e, prefix_end(e))`. `prefix_end(prefix)` is the least byte
+string above every extension of `prefix`: `prefix` with its trailing `FF` bytes removed
+and its last remaining byte incremented, or `None` when no byte remains, where the range
+has no upper bound (FoundationDB's `strinc`).
 
 ## Lazy iteration
 

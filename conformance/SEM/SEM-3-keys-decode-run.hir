@@ -1,0 +1,76 @@
+// rule: SEM-3
+// expect: run
+// Key decoding validates completely: truncation, bad escapes, sequence
+// markers and arm ordinals, trailing bytes and the scalars the canonical codec
+// refuses. Keys whose leading fields equal a prefix are exactly those in
+// [prefix, prefix_end(prefix)), FoundationDB's strinc range.
+@serializable
+type Shape = Dot | Line(u8) | Area(u16, u16)
+
+fn line(x: u8) -> Shape uses {} {
+  Line(x)
+}
+
+fn refused[K: serializable](t: Test, sample: K, data: Bytes, expected: DecodeError) -> () {
+  let back: Result[K, DecodeError] = std@1/keys.decode(data)
+  match back {
+    Ok(_) => test.check(t, false),
+    Error(e) => test.check(t, e == expected),
+  }
+}
+
+fn ends(prefix: Bytes, expected: Option[Bytes]) -> bool uses {} {
+  std@1/keys.prefix_end(prefix) == expected
+}
+
+fn in_range(key: Bytes, start: Bytes, end: Option[Bytes]) -> bool uses {} {
+  !(key < start) && match end {
+    Some(e) => key < e,
+    None => true,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let dot: Shape = Dot()
+  let empty: List[u8] = []
+  // Decoding validates completely.
+  refused(t, "", b"a", Truncated())
+  refused(t, "", b"a\x00", Truncated())
+  refused(t, "", b"a\x00\x02", Scalar())
+  refused(t, "", b"\xff\x00\x01", Utf8())
+  refused(t, "", b"a\x00\x01b", Trailing())
+  refused(t, false, b"\x02", Scalar())
+  refused(t, false, b"", Truncated())
+  refused(t, 0u16, b"\x01", Truncated())
+  refused(t, 'a', b"\x00\x00\xd8\x00", Scalar())
+  refused(t, 0.0f64, b"\xff\xf8\x00\x00\x00\x00\x00\x01", Scalar())
+  refused(t, dot, b"\x00\x00\x00\x03", Tag())
+  refused(t, dot, b"\x00\x00\x00", Truncated())
+  refused(t, empty, b"\x02", Tag())
+  refused(t, empty, b"\x01\x05", Truncated())
+  // Prefix ranges: the keys whose leading fields equal a prefix are exactly
+  // those in [encode(prefix), prefix_end(encode(prefix))).
+  test.check(t, ends(b"", None))
+  test.check(t, ends(b"\xff\xff", None))
+  test.check(t, ends(b"a", Some(b"b")))
+  test.check(t, ends(b"a\xff\xff", Some(b"b")))
+  test.check(t, ends(b"a\xfe\xff", Some(b"a\xff")))
+  let start = std@1/keys.encode("ab")
+  let end = std@1/keys.prefix_end(start)
+  test.check(t, in_range(std@1/keys.encode(("ab", 0u8)), start, end))
+  test.check(t, in_range(std@1/keys.encode(("ab", 255u8)), start, end))
+  test.check(t, !in_range(std@1/keys.encode(("a", 255u8)), start, end))
+  test.check(t, !in_range(std@1/keys.encode(("ab\u{0}", 0u8)), start, end))
+  test.check(t, !in_range(std@1/keys.encode(("abc", 0u8)), start, end))
+  test.check(t, !in_range(std@1/keys.encode(("b", 0u8)), start, end))
+  let mut prefix: List[u8] = []
+  std@1/keys.encode_into(7u8, mut prefix)
+  std@1/keys.encode_into(line(1), mut prefix)
+  let low = bytes.from_list(take prefix)
+  let high = std@1/keys.prefix_end(low)
+  test.check(t, in_range(std@1/keys.encode((7u8, line(1), "")), low, high))
+  test.check(t, in_range(std@1/keys.encode((7u8, line(1), "\u{10ffff}")), low, high))
+  test.check(t, !in_range(std@1/keys.encode((7u8, line(2), "")), low, high))
+  test.check(t, !in_range(std@1/keys.encode((8u8, dot, "")), low, high))
+  Ok(())
+}

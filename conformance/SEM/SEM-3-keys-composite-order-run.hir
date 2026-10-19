@@ -1,0 +1,356 @@
+// rule: SEM-3
+// expect: run
+// Key order law for options, results, records, user variants, inline
+// arrays, nested options, boxed and recursive variants, after FoundationDB's
+// tuple-layer nested-tuple tests (bindings/python/tests/tuple_tests.py):
+// variants order by arm and then payload, so `None` precedes every `Some`,
+// records and tuples by field, and sequences with a proper prefix first.
+// Each encoding decodes back.
+@serializable
+type Row {
+  name: String,
+  id: i32,
+}
+
+@serializable
+type Shade = Dim | Lit(u8)
+
+@serializable
+type Tree = Leaf(u8) | Branch(List[Tree])
+
+@serializable
+type Chain = End | Link(u8, box Chain)
+
+type Case {
+  which: u64,
+  x: List[u64],
+  y: List[u64],
+}
+
+fn bytes_order(a: Bytes, b: Bytes) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+fn number_order(a: i64, b: i64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn count_order(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn then(first: i32, second: i32) -> i32 uses {} {
+  if first != 0 {
+    first
+  } else {
+    second
+  }
+}
+
+const SIGNED: List[i64] = [-32768, -1, 0, 1, 2, 32767]
+
+const PIECES: List[String] = ["\u{0}", "\u{1}", "a", "b", "\u{ff}", "\u{10ffff}"]
+
+fn text(codes: List[u64], from: u64) -> String uses {} {
+  let mut out: List[u8] = []
+  let mut i = from
+  while i < list.len(codes) {
+    std@1/text.append(mut out, PIECES[codes[i]])
+    i += 1
+  }
+  std@1/text.finish_valid(take out)
+}
+
+fn text_order(a: String, b: String) -> i32 uses {} {
+  bytes_order(string.as_bytes(a), string.as_bytes(b))
+}
+
+fn small(code: u64) -> u8 uses {} {
+  int.truncate(code)
+}
+
+fn option_of(codes: List[u64]) -> Option[i16] uses {} {
+  if list.len(codes) == 0 {
+    None
+  } else {
+    Some(int.narrow(SIGNED[codes[0]]))
+  }
+}
+
+fn option_order(a: Option[i16], b: Option[i16]) -> i32 uses {} {
+  match (a, b) {
+    (None, None) => 0,
+    (None, Some(_)) => -1,
+    (Some(_), None) => 1,
+    (Some(p), Some(q)) => number_order(int.widen(p), int.widen(q)),
+  }
+}
+
+fn result_of(codes: List[u64]) -> Result[u8, String] uses {} {
+  if list.len(codes) > 0 && codes[0] % 2 == 0 {
+    Ok(small(codes[0]))
+  } else {
+    Error(text(codes, 1))
+  }
+}
+
+fn result_order(a: Result[u8, String], b: Result[u8, String]) -> i32 uses {} {
+  match (a, b) {
+    (Ok(p), Ok(q)) => number_order(int.widen(p), int.widen(q)),
+    (Ok(_), Error(_)) => -1,
+    (Error(_), Ok(_)) => 1,
+    (Error(p), Error(q)) => text_order(p, q),
+  }
+}
+
+fn row_of(codes: List[u64]) -> Row uses {} {
+  let id: i32 = if list.len(codes) == 0 {
+    0
+  } else {
+    int.narrow(SIGNED[codes[list.len(codes) - 1]])
+  }
+  Row(name: text(codes, 1), id: id)
+}
+
+fn row_order(a: Row, b: Row) -> i32 uses {} {
+  then(text_order(a.name, b.name), number_order(int.widen(a.id), int.widen(b.id)))
+}
+
+fn shade_of(codes: List[u64]) -> Option[Shade] uses {} {
+  if list.len(codes) == 0 {
+    None
+  } else if codes[0] == 0 {
+    Some(Dim())
+  } else {
+    Some(Lit(small(codes[0])))
+  }
+}
+
+fn shade_order(a: Option[Shade], b: Option[Shade]) -> i32 uses {} {
+  match (a, b) {
+    (None, None) => 0,
+    (None, Some(_)) => -1,
+    (Some(_), None) => 1,
+    (Some(Dim()), Some(Dim())) => 0,
+    (Some(Dim()), Some(Lit(_))) => -1,
+    (Some(Lit(_)), Some(Dim())) => 1,
+    (Some(Lit(p)), Some(Lit(q))) => number_order(int.widen(p), int.widen(q)),
+  }
+}
+
+fn pair_of(codes: List[u64]) -> Inline[i8, 2] uses {} {
+  let first: i8 = if list.len(codes) > 0 {
+    int.truncate(SIGNED[codes[0]])
+  } else {
+    0
+  }
+  let second: i8 = if list.len(codes) > 1 {
+    int.truncate(SIGNED[codes[1]])
+  } else {
+    0
+  }
+  [first, second]
+}
+
+fn pair_order(a: Inline[i8, 2], b: Inline[i8, 2]) -> i32 uses {} {
+  then(
+    number_order(int.widen(a[0]), int.widen(b[0])),
+    number_order(int.widen(a[1]), int.widen(b[1]))
+  )
+}
+
+fn nested_of(codes: List[u64]) -> Option[Option[u8]] uses {} {
+  if list.len(codes) == 0 {
+    None
+  } else if codes[0] == 0 {
+    Some(None)
+  } else {
+    Some(Some(small(codes[0])))
+  }
+}
+
+fn nested_order(a: Option[Option[u8]], b: Option[Option[u8]]) -> i32 uses {} {
+  match (a, b) {
+    (None, None) => 0,
+    (None, Some(_)) => -1,
+    (Some(_), None) => 1,
+    (Some(None), Some(None)) => 0,
+    (Some(None), Some(Some(_))) => -1,
+    (Some(Some(_)), Some(None)) => 1,
+    (Some(Some(p)), Some(Some(q))) => number_order(int.widen(p), int.widen(q)),
+  }
+}
+
+// A branch of leaves, code 5 standing for an empty branch.
+fn tree_of(codes: List[u64]) -> Tree uses {} {
+  let mut children: List[Tree] = []
+  for code in codes {
+    if code == 5 {
+      list.push(mut children, Branch([]))
+    } else {
+      list.push(mut children, Leaf(small(code)))
+    }
+  }
+  Branch(take children)
+}
+
+fn tree_order(a: Tree, b: Tree) -> i32 uses {} {
+  match (a, b) {
+    (Leaf(p), Leaf(q)) => number_order(int.widen(p), int.widen(q)),
+    (Leaf(_), Branch(_)) => -1,
+    (Branch(p), Branch(q)) => {
+      let mut i: u64 = 0
+      while i < list.len(p) && i < list.len(q) {
+        let c = tree_order(p[i], q[i])
+        if c != 0 {
+          return c
+        }
+        i += 1
+      }
+      count_order(list.len(p), list.len(q))
+    },
+    _ => 1,
+  }
+}
+
+fn chain_of(codes: List[u64]) -> Chain uses {} {
+  let mut chain: Chain = End()
+  let mut i = list.len(codes)
+  while i > 0 {
+    i -= 1
+    chain = Link(small(codes[i]), box chain)
+  }
+  take chain
+}
+
+// A chain orders as the list of its links: `End` first, then by link.
+fn codes_order(a: List[u64], b: List[u64]) -> i32 uses {} {
+  let mut i: u64 = 0
+  while i < list.len(a) && i < list.len(b) {
+    let c = count_order(a[i], b[i])
+    if c != 0 {
+      return c
+    }
+    i += 1
+  }
+  count_order(list.len(a), list.len(b))
+}
+
+fn agrees[K: serializable](a: K, b: K, expected: i32, trip: bool) -> bool uses {} {
+  let ea = std@1/keys.encode(a)
+  if bytes_order(ea, std@1/keys.encode(b)) != expected {
+    return false
+  }
+  if !trip {
+    return true
+  }
+  let back: Result[K, DecodeError] = std@1/keys.decode(ea)
+  match back {
+    Ok(v) => std@1/keys.encode(v) == ea,
+    Error(_) => false,
+  }
+}
+
+fn check(c: Case, trip: bool) -> bool uses {} {
+  match c.which {
+    0 => {
+      let a = option_of(c.x)
+      let b = option_of(c.y)
+      agrees(a, b, option_order(a, b), trip)
+    },
+    1 => {
+      let a = result_of(c.x)
+      let b = result_of(c.y)
+      agrees(a, b, result_order(a, b), trip)
+    },
+    2 => {
+      let a = row_of(c.x)
+      let b = row_of(c.y)
+      agrees(a, b, row_order(a, b), trip)
+    },
+    3 => {
+      let a = shade_of(c.x)
+      let b = shade_of(c.y)
+      agrees(a, b, shade_order(a, b), trip)
+    },
+    4 => {
+      let a = pair_of(c.x)
+      let b = pair_of(c.y)
+      agrees(a, b, pair_order(a, b), trip)
+    },
+    5 => {
+      let a = nested_of(c.x)
+      let b = nested_of(c.y)
+      agrees(a, b, nested_order(a, b), trip)
+    },
+    6 => {
+      let a = tree_of(c.x)
+      let b = tree_of(c.y)
+      agrees(a, b, tree_order(a, b), trip)
+    },
+    _ => {
+      let a = chain_of(c.x)
+      let b = chain_of(c.y)
+      agrees(a, b, codes_order(c.x, c.y), trip)
+    },
+  }
+}
+
+fn ordered(c: Case) -> bool uses {} {
+  check(c, false)
+}
+
+fn round_trips(c: Case) -> bool uses {} {
+  check(c, true)
+}
+
+fn draw_code(mut s: test.Source) -> u64 uses {} {
+  test.choice(mut s, 5)
+}
+
+fn draw_case(mut s: test.Source) -> Case uses {} {
+  let which = test.choice(mut s, 7)
+  let x = test.list_of(mut s, 3, draw_code)
+  // The second key is often the first, or the first extended.
+  let y = match test.choice(mut s, 3) {
+    0 => copy x,
+    1 => {
+      let mut longer = copy x
+      list.push(mut longer, draw_code(mut s))
+      take longer
+    },
+    _ => test.list_of(mut s, 3, draw_code),
+  }
+  Case(which: which, x: x, y: y)
+}
+
+fn show(c: Case) -> String uses {} {
+  f"which {c.which}: {test.show_list(c.x, u64.to_string)} {test.show_list(
+    c.y,
+    u64.to_string
+  )}"
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 24, draw_case, ordered, show)
+  test.property_cases(t, 4, draw_case, round_trips, show)
+  Ok(())
+}
