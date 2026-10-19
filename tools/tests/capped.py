@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""tools/capped runs one command in a capped systemd scope, a run at a time."""
+"""tools/capped leases slots while keeping each command in its own capped scope."""
 import contextlib
-import fcntl
 import importlib.machinery
 import importlib.util
 import io
@@ -12,9 +11,13 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 CAPPED = ROOT / 'tools/capped'
+loader = importlib.machinery.SourceFileLoader('capped', str(CAPPED))
+capped = importlib.util.module_from_spec(importlib.util.spec_from_loader('capped', loader))
+loader.exec_module(capped)
 # Records the scope's properties, then runs the command as systemd-run would.
 FAKE_SYSTEMD_RUN = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -38,10 +41,10 @@ class Capped(unittest.TestCase):
         fake.chmod(0o755)
         self.calls = root / 'calls.jsonl'
         self.env = {key: value for key, value in os.environ.items()
-                    if key not in ('HIRSEL_MEMORY_LIMIT', 'HIRSEL_JOBS')}
+                    if key not in ('HIRSEL_MEMORY_LIMIT', 'HIRSEL_JOBS', 'HIRSEL_CAPPED_SLOTS')}
         self.env |= {'PATH': f'{root}/bin:{os.environ["PATH"]}', 'CAPPED_CALLS': str(self.calls),
-                     'XDG_RUNTIME_DIR': str(root)}
-        self.lock = root / f'hirsel-capped-{os.getuid()}.lock'
+                     'XDG_RUNTIME_DIR': str(root), 'HIRSEL_CAPPED_SLOTS': '2'}
+        self.root = root
 
     def tearDown(self):
         self.directory.cleanup()
@@ -105,30 +108,128 @@ class Capped(unittest.TestCase):
         cgroup.mkdir()
         events = cgroup / 'memory.events'
         (cgroup / 'memory.peak').write_text(str(5 << 20))
-        loader = importlib.machinery.SourceFileLoader('capped', str(CAPPED))
-        capped = importlib.util.module_from_spec(importlib.util.spec_from_loader('capped', loader))
-        loader.exec_module(capped)
-        capped.own_cgroup = lambda: cgroup
         # The session's cgroup already saw two kills; the first run adds none.
         for command, note in ((['true'], False),
                               (['sh', '-c', f'printf "oom 3\\noom_kill 3\\n" > {events}'], True)):
             events.write_text('oom 2\noom_kill 2\n')
             stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            with contextlib.redirect_stderr(stderr), patch.object(capped, 'own_cgroup', return_value=cgroup):
                 self.assertEqual(capped.inside(60, '4G', command), 0)
             self.assertRegex(stderr.getvalue(), r'^capped: peak 5 MiB of 4G \(systemd scope\), [0-9.]+ s, exit 0')
             self.assertEqual('memory limit 4G reached' in stderr.getvalue(), note, stderr.getvalue())
 
-    def test_a_second_run_waits_for_the_first(self):
-        with open(self.lock, 'a') as held:
-            fcntl.flock(held, fcntl.LOCK_EX)
-            waiting = subprocess.Popen([str(CAPPED), 'true'], env=self.env, stderr=subprocess.PIPE, text=True)
-            line = waiting.stderr.readline()
-            self.assertIn('capped: waiting for the run holding', line)
-            self.assertFalse(self.calls.exists())
-        self.assertEqual(waiting.wait(60), 0)
-        waiting.stderr.close()
-        self.assertEqual(len(self.properties()), 4)
+    def test_two_runs_acquire_distinct_slots_and_a_third_waits(self):
+        with capped.slot(self.root, 2, ['first', 'two words']):
+            second = capped.slot(self.root, 2, ['second'])
+            second.__enter__()
+            self.addCleanup(second.__exit__, None, None, None)
+            stderr = io.StringIO()
+            # A simulated scheduler releases slot two on the first wait tick.
+            with contextlib.redirect_stderr(stderr), patch.object(capped.time, 'sleep') as sleep:
+                sleep.side_effect = lambda _: second.__exit__(None, None, None)
+                with capped.slot(self.root, 2, ['third']):
+                    self.assertEqual(sleep.call_count, 1)
+            report = stderr.getvalue()
+            self.assertRegex(report, r'waiting [0-9.]+ s for a short slot')
+            self.assertIn(f'pid={os.getpid()}', report)
+            self.assertIn(f'cwd={os.getcwd()!r}', report)
+            self.assertIn("command=first 'two words'", report)
+            self.assertIn('command=second age=', report)
+            self.assertIn('.slot-2.lock after waiting', report)
+
+    def test_short_and_long_slots_are_independent_and_long_is_serial(self):
+        with capped.slot(self.root, 2, ['short one']), capped.slot(self.root, 2, ['short two']):
+            long = capped.slot(self.root, 2, ['long one'], long=True)
+            long.__enter__()
+            self.addCleanup(long.__exit__, None, None, None)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), patch.object(capped.time, 'sleep') as sleep:
+                sleep.side_effect = lambda _: long.__exit__(None, None, None)
+                with capped.slot(self.root, 8, ['long two'], long=True):
+                    self.assertEqual(sleep.call_count, 1)
+            self.assertIn('for a long slot', stderr.getvalue())
+            self.assertIn("command='long one'", stderr.getvalue())
+        with capped.slot(self.root, 2, ['long'], long=True):
+            with capped.slot(self.root, 2, ['short']), patch.object(capped.time, 'sleep') as sleep:
+                with capped.slot(self.root, 2, ['another short']):
+                    sleep.assert_not_called()
+
+    def test_a_crash_releases_the_slot_despite_stale_pid_metadata(self):
+        script = '''
+import runpy, sys
+from pathlib import Path
+slot = runpy.run_path(sys.argv[1])['slot']
+with slot(Path(sys.argv[2]), 1, ['crashed']):
+    print('locked', flush=True)
+    sys.stdin.read()
+'''
+        with subprocess.Popen(['python3', '-c', script, str(CAPPED), str(self.root)],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as child:
+            self.assertEqual(child.stdout.readline(), 'locked\n')
+            child.kill()
+            child.wait(5)
+            path = self.root / f'hirsel-capped-{os.getuid()}.slot-1.lock'
+            self.assertEqual(json.loads(path.read_text())['pid'], child.pid)
+            with patch.object(capped.time, 'sleep') as sleep, capped.slot(self.root, 1, ['replacement']):
+                sleep.assert_not_called()
+                self.assertEqual(json.loads(path.read_text())['pid'], os.getpid())
+
+    def test_exception_releases_slot_without_unlinking_it(self):
+        with self.assertRaisesRegex(RuntimeError, 'failed'):
+            with capped.slot(self.root, 1, ['fails']):
+                raise RuntimeError('failed')
+        [path] = self.root.glob('*.lock')
+        inode = path.stat().st_ino
+        with patch.object(capped.time, 'sleep') as sleep, capped.slot(self.root, 1, ['next']):
+            sleep.assert_not_called()
+            self.assertEqual(path.stat().st_ino, inode)
+
+    def test_timeout_above_900_refuses_without_long_before_running(self):
+        result = self.capped('--timeout', '901', 'true')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('--timeout above 900 s requires --long', result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(list(self.root.glob('*.lock')), [])
+
+    def test_900_seconds_is_allowed_without_long(self):
+        result = self.capped('--timeout', '900', 'true')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / f'hirsel-capped-{os.getuid()}.slot-1.lock').exists())
+
+    def test_long_jobs_forward_long_to_the_scoped_runner(self):
+        result = self.capped('--long', '--timeout', '901', 'true')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.properties(),
+                         ['MemoryMax=4G', 'MemorySwapMax=0', 'OOMPolicy=continue', 'CPUQuota=200%'])
+        self.assertEqual([p.name for p in self.root.glob('*.lock')],
+                         [f'hirsel-capped-{os.getuid()}.long.lock'])
+
+    def test_long_uses_its_own_slot_even_with_the_default_timeout(self):
+        result = self.capped('--long', 'true')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p.name for p in self.root.glob('*.lock')],
+                         [f'hirsel-capped-{os.getuid()}.long.lock'])
+
+    def test_slot_count_uses_available_memory_at_start_and_clamps_default(self):
+        for available, expected in ((0, 2), (1, 2), (3.75, 3), (20, 8)):
+            with self.subTest(available=available), patch.object(Path, 'read_text') as read:
+                read.return_value = f'MemTotal: 999999999 kB\nMemAvailable: {int(available * 1024 * 1024)} kB\n'
+                self.assertEqual(capped.slot_count(1 << 30, {}), expected)
+        with patch.object(Path, 'read_text', side_effect=OSError):
+            self.assertEqual(capped.slot_count(1 << 30, {}), 2)
+
+    def test_slot_override_is_not_clamped_or_dependent_on_meminfo(self):
+        with patch.object(Path, 'read_text', side_effect=AssertionError('must not read meminfo')):
+            for count in ('1', '12'):
+                self.assertEqual(capped.slot_count(1 << 30, {'HIRSEL_CAPPED_SLOTS': count}), int(count))
+
+    def test_invalid_slot_override_refuses_before_running(self):
+        for count in ('0', '-1', '1.5', '', 'two'):
+            with self.subTest(count=count):
+                result = self.capped('true', env={'HIRSEL_CAPPED_SLOTS': count})
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('expected a positive slot count', result.stderr)
+                self.assertFalse(self.calls.exists())
 
 
 def alive(pid: int) -> bool:

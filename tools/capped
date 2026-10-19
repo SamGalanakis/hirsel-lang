@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run one local command under a hard memory cap, a CPU quota and a timeout.
 
-    tools/capped [--timeout SECONDS] <command> [arguments...]
+    tools/capped [--long] [--timeout SECONDS] <command> [arguments...]
 
 The sanctioned way to run anything outside Buck2 on a shared host (a built
 `hirsel`, `hirsel-conformance`, a probe): the command runs in a systemd user
@@ -12,18 +12,23 @@ falls back to process limits: RLIMIT_DATA at the cap, RLIMIT_NPROC near the
 user's current process count, and CPU affinity to $HIRSEL_JOBS CPUs; the
 report names the mechanism that applied. The command sees the same HIRSEL_MEMORY_LIMIT and HIRSEL_JOBS, so a
 hirsel binary's own guard (crates/hirsel-guard) caps itself identically.
-Runs take turns: a second one waits for the first. At exit it prints the
+Runs share numbered slots: MemAvailable / MemoryMax at startup, clamped to
+2..8, or HIRSEL_CAPPED_SLOTS. --long uses a separate single slot and is required
+for timeouts over 900 s. Queued runs report holders and their wait. At exit it prints the
 scope's peak memory, wall time and exit status to stderr. A run that reaches
 the cap or the timeout is a finding: report the program and its peak, never
 raise the cap to make it pass. Many-program runs go through tools/gate.
 """
 
 import argparse
+from contextlib import contextmanager
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
 import resource
+import shlex
 import signal
 import subprocess
 import sys
@@ -32,6 +37,7 @@ import time
 DEFAULT_LIMIT = '4G'
 DEFAULT_JOBS = '2'
 DEFAULT_TIMEOUT = 300
+SHORT_TIMEOUT = 900
 # The scope's processes get this long to exit after the timeout's SIGTERM.
 GRACE = 10
 LIMIT = re.compile(r'[1-9][0-9]*[KMGT]?')
@@ -48,6 +54,81 @@ def limit_bytes(text: str) -> int:
 
 def mib(count: int) -> str:
     return f'{count / (1 << 20):.0f} MiB'
+
+
+def slot_count(limit: int, environ) -> int:
+    """Host-selected concurrency, or the available-memory default at startup."""
+    if 'HIRSEL_CAPPED_SLOTS' in environ:
+        value = environ['HIRSEL_CAPPED_SLOTS']
+        if not value.isascii() or not value.isdigit() or int(value) < 1:
+            raise ValueError(f'HIRSEL_CAPPED_SLOTS={value!r}: expected a positive slot count')
+        return int(value)
+    try:
+        available = next(int(line.split()[1]) * 1024
+                         for line in Path('/proc/meminfo').read_text().splitlines()
+                         if line.startswith('MemAvailable:'))
+    except (OSError, ValueError, IndexError, StopIteration):
+        return 2
+    return max(2, min(8, available // limit))
+
+
+def holder(lock) -> str:
+    """Best-effort diagnostics; only the kernel lock decides slot ownership."""
+    try:
+        lock.seek(0)
+        record = json.load(lock)
+        age = max(0, time.monotonic() - record['started'])
+        return (f'pid={record["pid"]} cwd={record["cwd"]!r} '
+                f'command={shlex.join(record["command"])} age={age:.1f} s')
+    except (OSError, ValueError, KeyError, TypeError):
+        return 'holder metadata unavailable'
+
+
+@contextmanager
+def slot(directory: Path, count: int, command: list[str], long: bool = False):
+    """Lease one flock slot, automatically released even if its process dies.
+
+    Never unlink slot files: a waiter may already have the inode open. Stale
+    metadata is overwritten after acquisition, without trusting a reused pid.
+    """
+    prefix = f'hirsel-capped-{os.getuid()}'
+    names = [f'{prefix}.long.lock'] if long else [f'{prefix}.slot-{i + 1}.lock' for i in range(count)]
+    started = time.monotonic()
+    report_at = started
+    queued = False
+    while True:
+        holders = []
+        for name in names:
+            lock = open(directory / name, 'a+')
+            try:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    holders.append(f'{name}: {holder(lock)}')
+                    continue
+                lock.seek(0)
+                lock.truncate()
+                json.dump(dict(pid=os.getpid(), cwd=os.getcwd(), command=command,
+                               started=time.monotonic()), lock)
+                lock.flush()
+                if queued:
+                    print(f'capped: acquired {name} after waiting {time.monotonic() - started:.1f} s',
+                          file=sys.stderr)
+                try:
+                    yield
+                finally:
+                    lock.seek(0)
+                    lock.truncate()
+                return
+            finally:
+                lock.close()
+        now = time.monotonic()
+        if now >= report_at:
+            print(f'capped: waiting {now - started:.1f} s for a {"long" if long else "short"} slot; '
+                  f'holders:\n  ' + '\n  '.join(holders), file=sys.stderr, flush=True)
+            report_at = now + 5
+        queued = True
+        time.sleep(0.1)
 
 
 def own_cgroup() -> Path | None:
@@ -123,6 +204,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description='Run one command under the HIRSEL_MEMORY_LIMIT cap, a HIRSEL_JOBS CPU quota and a timeout.')
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='seconds (default 300)')
+    parser.add_argument('--long', action='store_true',
+                        help='use the separate single long-job slot; required for timeouts over 900 s')
     parser.add_argument('--inside', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -131,6 +214,8 @@ def main() -> int:
         parser.error('a command to run is required')
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
+    if args.timeout > SHORT_TIMEOUT and not args.long:
+        parser.error('--timeout above 900 s requires --long (the separate long-job slot)')
     limit = os.environ.get('HIRSEL_MEMORY_LIMIT') or DEFAULT_LIMIT
     if not LIMIT.fullmatch(limit):
         parser.error(f'HIRSEL_MEMORY_LIMIT={limit!r}: expected bytes or a K, M, G or T count, for example 4G')
@@ -139,16 +224,15 @@ def main() -> int:
     jobs = os.environ.get('HIRSEL_JOBS') or DEFAULT_JOBS
     if not jobs.isdigit() or int(jobs) < 1:
         parser.error(f'HIRSEL_JOBS={jobs!r}: expected a positive count of CPUs')
+    try:
+        slots = slot_count(limit_bytes(limit), os.environ)
+    except ValueError as error:
+        parser.error(str(error))
     env = dict(os.environ, HIRSEL_MEMORY_LIMIT=limit, HIRSEL_JOBS=jobs)
     # systemd-run --user reaches the user manager through XDG_RUNTIME_DIR.
     runtime = env.setdefault('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
-    lock_path = Path(runtime if os.path.isdir(runtime) else '/tmp') / f'hirsel-capped-{os.getuid()}.lock'
-    with open(lock_path, 'a') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f'capped: waiting for the run holding {lock_path}', file=sys.stderr)
-            fcntl.flock(lock, fcntl.LOCK_EX)
+    lock_directory = Path(runtime if os.path.isdir(runtime) else '/tmp')
+    with slot(lock_directory, slots, command, args.long):
         if not scope_available(env):
             print('capped: no systemd user manager is reachable; using process limits', file=sys.stderr)
             os.environ.update(HIRSEL_MEMORY_LIMIT=limit, HIRSEL_JOBS=jobs)
@@ -157,7 +241,7 @@ def main() -> int:
                  '-p', f'MemoryMax={limit}', '-p', 'MemorySwapMax=0', '-p', 'OOMPolicy=continue',
                  '-p', f'CPUQuota={int(jobs) * 100}%',
                  '--', sys.executable, os.path.abspath(__file__), '--inside', '--timeout', str(args.timeout),
-                 '--', *command]
+                 *(['--long'] if args.long else []), '--', *command]
         try:
             return subprocess.run(scope, env=env).returncode
         except KeyboardInterrupt:

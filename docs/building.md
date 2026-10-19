@@ -372,7 +372,7 @@ Cargo needs no build service. What it builds runs locally, so it runs under
 
 ```sh
 cargo build --workspace
-tools/capped --timeout 1800 cargo test -j 2 -p hirsel-lir
+tools/capped --long --timeout 1800 cargo test -j 2 -p hirsel-lir
 tools/capped target/debug/hirsel-conformance --verbose --shard 1/1 \
   --path conformance/SEM/SEM-1-format-into-appends-run.hir
 ```
@@ -402,9 +402,16 @@ It runs the command in a systemd user scope with `MemoryMax` of
 swap, a `CPUQuota` of `$HIRSEL_JOBS` CPUs (default 2) and a timeout (`--timeout`,
 default 300 s), and passes both variables on to the command. Without a reachable
 systemd user manager it falls back to process limits (`RLIMIT_DATA` at the cap, a
-thread limit and CPU affinity to `$HIRSEL_JOBS` CPUs) and says so. A second run waits
-for the first. At exit it prints the scope's peak memory, wall time and exit
-status. A run that reaches the cap or the timeout is a finding: report the program
+thread limit and CPU affinity to `$HIRSEL_JOBS` CPUs) and says so. Concurrent runs
+take numbered slots in the existing lock directory (`$XDG_RUNTIME_DIR`, or `/tmp`
+when unavailable). The default slot count is `floor(MemAvailable / MemoryMax)`
+at startup, clamped to 2 through 8; `HIRSEL_CAPPED_SLOTS` overrides it with any
+positive count. A queued run prints each holder's pid, cwd, command and age,
+the elapsed wait every five seconds, and its total wait on acquisition.
+`--timeout` above 900 s requires `--long`, which takes a separate single slot
+even with a shorter timeout, leaving the ordinary slots available to short jobs.
+Slots are released on exit or crash. At exit it prints the scope's peak memory,
+wall time and exit status. A run that reaches the cap or the timeout is a finding: report the program
 and its peak rather than raising the cap. Runs over many programs (a directory, a
 shard, a campaign) go through `tools/gate` or their Buck2 targets, which run on
 the pool within their measured reservations.
