@@ -1,0 +1,50 @@
+// rule: OWN-1
+// expect: run
+// stdout: ok
+// A literal pattern tests a borrowed String chosen by `if` on several paths in place: the
+// scrutinee is one view of whichever parameter it reads, under that parameter's loan, on
+// a two-way and a nested join alike.
+fn joined(a: String, b: String, select: bool) -> i32 {
+  match if select {
+    a
+  } else {
+    b
+  } {
+    "outer" => 1,
+    _ => 0,
+  }
+}
+
+fn nested(a: String, b: String, c: String, k: u64) -> i32 {
+  match if k == 0 {
+    a
+  } else if k == 1 {
+    b
+  } else {
+    c
+  } {
+    "bb" => 10,
+    "cccc" => 1000,
+    _ => 1,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let j = joined("outer", "inner", true) + joined("outer", "inner", false) * 10
+  let n = nested("a", "bb", "cccc", 0) + nested("a", "bb", "cccc", 1) + nested(
+    "a",
+    "bb",
+    "cccc",
+    2
+  )
+  let _ = out.print(
+    stdout,
+    if j == 1 && n == 1011 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

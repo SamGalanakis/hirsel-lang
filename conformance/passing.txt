@@ -3559,6 +3559,7 @@ conformance/OWN/OWN-1-caller-keeps-on-error.hir
 conformance/OWN/OWN-1-cursor-borrowed-item-take.hir
 conformance/OWN/OWN-1-if-let-take-bad.hir
 conformance/OWN/OWN-1-if-let-take-ok.hir
+conformance/OWN/OWN-1-joined-borrow-literal-pattern-run.hir
 conformance/OWN/OWN-1-joined-borrow-scrutinee-run.hir
 conformance/OWN/OWN-1-let-else-take-bad.hir
 conformance/OWN/OWN-1-let-else-take-ok.hir
