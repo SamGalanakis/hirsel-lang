@@ -2,13 +2,17 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
+mod measure;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
-    hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
+    let start = std::time::Instant::now();
+    hirsel_engine::with_compiler_stack(|| {
+        ExitCode::from(execute(env::args_os().skip(1).collect(), start))
+    })
 }
 enum Command {
     Help,
@@ -533,8 +537,28 @@ fn take_verbose(args: &mut Vec<OsString>) -> bool {
     args.len() != before
 }
 
-fn execute(mut args: Vec<OsString>) -> u8 {
+/// Run the command, then report what `--timings` and `--mem-usage` measured.
+fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
     hirsel_engine::report_prechecks(take_verbose(&mut args));
+    let measure = match measure::Measure::take(&mut args) {
+        Ok(measure) => measure,
+        Err(error) => {
+            eprintln!("{error}");
+            return usage();
+        }
+    };
+    measure.start();
+    let command = args
+        .first()
+        .and_then(|a| a.to_str())
+        .unwrap_or_default()
+        .to_owned();
+    let code = execute_command(args);
+    measure.finish(&command, start.elapsed());
+    code
+}
+
+fn execute_command(args: Vec<OsString>) -> u8 {
     let command = match parse_command(args) {
         Ok(command) => command,
         Err(error) => {

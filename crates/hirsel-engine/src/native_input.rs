@@ -78,6 +78,8 @@ impl QueryEngine {
     /// that reaches in its dependencies. Missing implementations and failed
     /// stages are operational/unavailable outcomes, never source acceptance.
     pub fn export_native_input(&mut self) -> Result<NativeInput, QueryError> {
+        let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Plan);
+        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Plan);
         let paths = self.native_paths()?;
         self.prepare_staged_instances()?;
         let mut signatures = self.native_builtin_signatures();
@@ -199,6 +201,8 @@ impl QueryEngine {
         &mut self,
         input: NativeInput,
     ) -> Result<ValidatedNativeInput, QueryError> {
+        let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Plan);
+        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Plan);
         if input.environment != self.environment
             || input.registry_revision != registry::BuiltinRegistry::new().revision()
             || input.completed_source_stages != NativeStatus::Complete
@@ -341,11 +345,13 @@ impl QueryEngine {
         if input.instance_bodies != current.instance_bodies {
             return Err(invalid("forged or incomplete instance bodies"));
         }
+        let timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
         let violations = hirsel_validate::validate_instance_bodies(
             &input.instance_bodies,
             &input.signatures,
             &input.definitions,
         );
+        drop(timing);
         if !violations.is_empty() {
             return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }

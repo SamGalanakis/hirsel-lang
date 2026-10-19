@@ -130,6 +130,9 @@ pub struct LoadedProgram {
 }
 impl LoadedProgram {
     pub fn check(&mut self) -> Result<CheckOutput, QueryError> {
+        // The program check's own steps; per-definition checking and
+        // lowering, GEN-5 and publication below are their own intervals.
+        let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
         let mut diagnostics = Vec::new();
         let mut completion = CheckCompletion::Complete;
         let unchanged = self.indexed_revision == self.engine.package_cache_revision();
@@ -213,12 +216,15 @@ impl LoadedProgram {
                 self.engine.last_phase = artifact.last_phase;
                 continue;
             }
+            let parallel =
+                hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Parallel);
             let output = crate::tools::check_file_lowering(
                 &mut self.engine,
                 *file,
                 context,
                 policy(&context.package),
             )?;
+            drop(parallel);
             outputs.insert(*file, output.clone());
             diagnostics.extend(output.diagnostics);
             if output.completion != CheckCompletion::Complete {
@@ -257,6 +263,8 @@ impl LoadedProgram {
                 Err(error) => return Err(error),
             }
         }
+        let _publication =
+            hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Merge);
         for package in self.packages.iter().filter(|p| {
             unchanged
                 && self.cache.enabled()
@@ -501,6 +509,7 @@ pub(crate) fn load_program_source_with_cache(
     cache: &PackageCache,
     package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
     let manifest = if path.extension().is_some_and(|e| e == "json") {
         Some(path.to_path_buf())
     } else {

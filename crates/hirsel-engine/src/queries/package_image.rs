@@ -134,6 +134,7 @@ impl PackageImage {
         input: &ImageInput,
         adapters: impl Fn() -> PhaseAdapters,
     ) -> Arc<PackageImage> {
+        let _timing = timings::interval(Interval::S0);
         let key = input.key();
         let lowerings = input.lowerings();
         let current = cache.image(key);
@@ -363,6 +364,7 @@ impl QueryEngine {
     /// Start this engine's caches and source revision from `image`.
     /// The engine's sources must hold the image's files at the same FileIds.
     pub(crate) fn install_image(&mut self, image: &PackageImage) {
+        let _timing = timings::interval(Interval::S0);
         self.source_revision = image.source_revision;
         self.cache_sequence = image.cache_sequence;
         self.items = Layered::shared(image.items.clone());

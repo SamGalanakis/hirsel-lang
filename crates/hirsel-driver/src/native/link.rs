@@ -205,6 +205,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
     ) -> Result<Self, NativeError> {
+        let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         let [runtime_build, ..] = *runtime_builds else {
             return Err(NativeError::new(
                 StageName::Link,
@@ -534,6 +535,7 @@ pub fn partition_backend_objects(
     sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
+    let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
     let assignment = partition.assign(program.units.len());
     let mut groups: Vec<usize> = assignment.clone();
     groups.sort_unstable();
@@ -698,6 +700,8 @@ pub fn emit_backend_objects(
     measurement: bool,
     sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
+    let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Units);
+    let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
     check_runtime_calls(program)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -876,6 +880,7 @@ fn link_objects_impl(
     requested: Option<&hirsel_run_config::ValidatedRun>,
     standalone: bool,
 ) -> Result<PathBuf, NativeError> {
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
     let output = if standalone {
         Output::Standalone

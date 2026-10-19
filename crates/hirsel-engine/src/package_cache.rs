@@ -21,6 +21,20 @@ pub(crate) struct ToolchainPrechecks {
 }
 static REPORT_PRECHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Write each later load's precheck notes (`LoadedProgram::precheck_notes`) to stderr.
+static SHARED: OnceLock<PackageCache> = OnceLock::new();
+/// With a heap meter (`--mem-usage`), drop the process's shared package
+/// cache and retained signature inputs, recording the bytes each held. Call
+/// it once compiling is over: later programs check their packages afresh.
+pub fn release_shared_caches() {
+    if !hirsel_intern::memory::metered() {
+        return;
+    }
+    if let Some(entries) = SHARED.get().and_then(|cache| cache.entries.as_ref()) {
+        let storage = std::mem::take(&mut *entries.lock().unwrap_or_else(|e| e.into_inner()));
+        hirsel_intern::memory::released("package cache", storage);
+    }
+    crate::queries::release_signature_inputs();
+}
 pub fn report_prechecks(on: bool) {
     REPORT_PRECHECKS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
@@ -34,6 +48,7 @@ fn toolchain_prechecks() -> Arc<ToolchainPrechecks> {
         .clone()
 }
 fn read_toolchain_prechecks() -> ToolchainPrechecks {
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::ImageOpen);
     let path = match std::env::var_os("HIRSEL_PRECHECK") {
         Some(path) => std::path::PathBuf::from(path),
         None => match std::env::current_exe() {
@@ -48,7 +63,7 @@ fn read_toolchain_prechecks() -> ToolchainPrechecks {
             }
         },
     };
-    match crate::Precheck::read(&path) {
+    match hirsel_intern::memory::retained("precheck", || crate::Precheck::read(&path)) {
         Ok(precheck) => ToolchainPrechecks {
             prechecks: vec![Arc::new(precheck)],
             missing: None,
@@ -117,8 +132,7 @@ impl PackageCache {
         if std::env::var_os("HIRSEL_PACKAGE_CACHE").is_some_and(|value| value == "off") {
             return Self::disabled();
         }
-        static CACHE: OnceLock<PackageCache> = OnceLock::new();
-        CACHE
+        SHARED
             .get_or_init(|| Self {
                 prechecks: Some(toolchain_prechecks()),
                 ..Self::new()

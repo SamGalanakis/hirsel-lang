@@ -128,7 +128,9 @@ pub fn build_path_native_backend(
         )?;
         let executable =
             super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
+        let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         std::fs::copy(executable, output).map_err(io)?;
+        drop(timing);
         Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
     })())
 }

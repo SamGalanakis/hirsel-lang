@@ -153,6 +153,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-run-config",
           "path": "crates/hirsel-run-config",
           "req": "*",
@@ -467,6 +474,13 @@
           "kind": null,
           "name": "hirsel-heapcheck",
           "path": "crates/hirsel-heapcheck",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
           "req": "*",
           "uses_default_features": true
         },

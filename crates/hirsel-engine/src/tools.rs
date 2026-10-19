@@ -199,6 +199,7 @@ pub(crate) fn association_diagnostics(
     file: FileId,
     context: &FileContext,
 ) -> Result<Vec<Diagnostic>, QueryError> {
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
     let parsed = engine.parse_file(file, context)?;
     let mut diagnostics = parsed.diagnostics;
     if crate::queries::has_errors(&diagnostics) {

@@ -5,6 +5,7 @@
 use super::adapt;
 use hirsel_core_contract::Manifest;
 use hirsel_engine::ValidatedNativeInput;
+use hirsel_intern::timings::{self, Count, Interval, Phase};
 use hirsel_lir::discharge::Discharge;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, TargetSpec};
@@ -233,13 +234,19 @@ impl ReadyProgram {
     }
 }
 
-/// A unit sealed at its stage by lir's non-generic per-stage validator, or every
-/// violation it reported.
+/// Run `work` as `phase`.
+fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
+    let _timing = timings::phase(phase);
+    work()
+}
+
+/// A unit sealed at its stage by lir's non-generic per-stage validator, or
+/// every violation it reported.
 fn seal<S: Stage>(
     stage: StageName,
-    validated: Result<ValidatedUnit<S>, Box<Rejected<S>>>,
+    validate: impl FnOnce() -> Result<ValidatedUnit<S>, Box<Rejected<S>>>,
 ) -> Result<ValidatedUnit<S>, NativeError> {
-    validated.map_err(|rejected| {
+    timed(Phase::LirValidate, validate).map_err(|rejected| {
         let mut kinds: Vec<String> = rejected
             .violations
             .iter()
@@ -280,10 +287,19 @@ pub fn build(
     validated: &ValidatedNativeInput,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
+    let plan = (
+        timings::interval(Interval::Plan),
+        timings::phase(Phase::Plan),
+    );
     let manifest = adapt::manifest(validated.snapshot())
         .map_err(|e| NativeError::new(StageName::Manifest, e))?;
     let program = adapt::program(validated);
+    drop(plan);
     let mut ready = build_program(&program, manifest, options)?;
+    let _plan = (
+        timings::interval(Interval::Plan),
+        timings::phase(Phase::Plan),
+    );
     ready.bind_revisions(validated)?;
     Ok(ready)
 }
@@ -294,7 +310,9 @@ pub fn build_program(
     manifest: Manifest,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
+    let _interval = timings::interval(Interval::Units);
     let target = &options.target;
+    let import = timings::phase(Phase::Import);
     let mut lowered = hirsel_rc::import::lower_discharging(
         program,
         target,
@@ -304,11 +322,16 @@ pub fn build_program(
         &options.discharge,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
-    let discharged = discharged(&mut lowered, &options.discharge)?;
-    hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
-        .map_err(|e| NativeError::new(StageName::Import, e))?;
+    let discharged = timed(Phase::LirValidate, || {
+        discharged(&mut lowered, &options.discharge)
+    })?;
+    timed(Phase::LirValidate, || {
+        hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
+    })
+    .map_err(|e| NativeError::new(StageName::Import, e))?;
     let table = &lowered.table;
     let operations = program.operation_registry();
+    drop(import);
     let inputs = Inputs {
         discharge: Some(&lowered.native_discharge),
         operations: &operations,
@@ -323,24 +346,29 @@ pub fn build_program(
         let id = lowered.unit_origins[index];
         let definition = unit.header.definition.clone();
         let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-        let value = seal(StageName::Import, validate_value(unit, &inputs))?.into_raw();
+        timings::count(Count::Units);
+        let value = seal(StageName::Import, || validate_value(unit, &inputs))?.into_raw();
         let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
-        let placed = hirsel_rc::placement::place(value, table, &placement)
-            .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-        let placed = seal(StageName::Placement, validate_placed(placed, &inputs))?.into_raw();
+        let placed = timed(Phase::Place, || {
+            hirsel_rc::placement::place(value, table, &placement)
+        })
+        .map_err(|e| fail(StageName::Placement, e.to_string()))?;
+        let placed = seal(StageName::Placement, || validate_placed(placed, &inputs))?.into_raw();
         let proofs = Proofs::for_instance(instances, id);
-        let mut unit = hirsel_rc::insert::insert(placed, table, &proofs)
-            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+        let mut unit = timed(Phase::Rc, || {
+            hirsel_rc::insert::insert(placed, table, &proofs)
+        })
+        .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         if options.elide {
             // Elision rewrites a validated unit, so insertion's output is
             // sealed first and elision's again below.
-            unit = seal(StageName::Perceus, validate_rc(unit, &inputs))?.into_raw();
-            unit = hirsel_rc::elide::elide(unit, table)
+            unit = seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw();
+            unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
                 .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         }
-        rc.push(seal(StageName::Perceus, validate_rc(unit, &inputs))?.into_raw());
+        rc.push(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw());
     }
-    let finalizers = Finalizers::new(instances, &rc);
+    let finalizers = timed(Phase::Rc, || Finalizers::new(instances, &rc));
     let mut units = Vec::with_capacity(rc.len());
     for unit in rc {
         let definition = unit.header.definition.clone();
@@ -348,12 +376,16 @@ pub fn build_program(
         let reuse = hirsel_rc::reuse::Options {
             reuse: options.reuse,
         };
-        let reused = hirsel_rc::reuse::reuse(unit, table, &reuse)
-            .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-        let reused = seal(StageName::Reuse, validate_reuse(reused, &inputs))?.into_raw();
-        let ready = hirsel_rc::ready::ready(reused, table, &finalizers)
-            .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-        units.push(seal(StageName::Ready, validate_ready(ready, &inputs))?);
+        let reused = timed(Phase::Reuse, || {
+            hirsel_rc::reuse::reuse(unit, table, &reuse)
+        })
+        .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
+        let reused = seal(StageName::Reuse, || validate_reuse(reused, &inputs))?.into_raw();
+        let ready = timed(Phase::Ready, || {
+            hirsel_rc::ready::ready(reused, table, &finalizers)
+        })
+        .map_err(|e| fail(StageName::Ready, e.to_string()))?;
+        units.push(seal(StageName::Ready, || validate_ready(ready, &inputs))?);
     }
     let functions = instances
         .ids()

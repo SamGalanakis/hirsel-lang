@@ -126,6 +126,7 @@ impl QueryEngine {
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<(), QueryError> {
+        let _timing = timings::interval(Interval::Parallel);
         self.semantic_program(roots)?;
         self.prepare_staged_instances()
     }

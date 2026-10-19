@@ -4,7 +4,7 @@ Expose check, run, build, fmt and JSON through the compiler driver.
 
 Every nonzero CLI exit includes a cause on stderr, including JSON checks (whose stdout JSON protocol is retained). Returned Error payloads use the PROG-3 host report, independently of stderr grants.
 
-Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag and shared span/syntax types as needed; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-intern's timings and memory, and shared span/syntax types as needed; no phase internals.
 
 Invariants and boundary:
 
@@ -46,6 +46,10 @@ Commands (arguments use the shared lexopt parser):
 - `hirsel precheck <package manifest.json> -o <file>` checks the package as the only
   dependency of an empty program and writes its precheck (docs/building.md, "The std
   precheck"); a package with any diagnostic is refused.
+- `--timings`, `--timings=json` and `--mem-usage`, anywhere before `--` on
+  check, build, run and test, print the compile timings and heap report on
+  stderr after the command (docs/building.md, "Compile timings"). Heap bytes
+  come from glibc's allocator statistics, read only at measurement points.
 - `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
   dependency checked from source because no precheck matched. Nothing else changes.
 - Invalid arguments exit 2. IO failures exit 1 and have no RuleId. Invalid UTF-8

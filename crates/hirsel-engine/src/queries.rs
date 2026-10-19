@@ -21,11 +21,13 @@ pub use safety::{Escape, UnsafeReach};
 mod signature_input;
 pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
+use hirsel_intern::timings::{self, Count, Interval, Phase};
 use hirsel_span::Span;
 use hirsel_syntax::{ItemKind, ItemPath};
 pub(crate) use package_snapshot::PackageSnapshot;
 pub(crate) use positions::rebase_package_diagnostics;
 pub use signature_input::SignatureInput;
+pub(crate) use signature_input::release_signature_inputs;
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -177,6 +179,55 @@ pub struct QueryEngine {
     /// debug assertions; the conformance runner turns it on in every build.
     pub closure_assertions: bool,
 }
+/// Dropping an engine drops its tables as the teardown phase. With a heap
+/// meter (`--mem-usage`) it records the bytes each table frees; tables still
+/// shared with a package image free nothing here, and the image's bytes are
+/// recorded when the package cache is released (`release_shared_caches`).
+impl Drop for QueryEngine {
+    fn drop(&mut self) {
+        use hirsel_intern::memory::released;
+        use std::mem::take;
+        let _timing = timings::interval(Interval::Merge);
+        released("engine: lowered", take(&mut self.lowered));
+        released("engine: modes", take(&mut self.modes));
+        released("engine: checked", take(&mut self.checked));
+        released("engine: resolutions", take(&mut self.resolutions));
+        released("engine: signatures", take(&mut self.signatures));
+        released("engine: reads", take(&mut self.reads));
+        released("engine: syntax keys", take(&mut self.syntax_keys));
+        released("engine: items", take(&mut self.items));
+        released("engine: parsed", take(&mut self.parsed));
+        released("engine: signature input", take(&mut self.signature_input));
+        released("engine: instance bodies", take(&mut self.instance_bodies));
+        released("engine: staged values", take(&mut self.staged_values));
+        released("engine: generated", take(&mut self.generated));
+        released("engine: recomputes", take(&mut self.recomputes));
+        released("engine: package proofs", take(&mut self.package_proofs));
+        released(
+            "engine: package publications",
+            take(&mut self.package_publications),
+        );
+        released("engine: prechecks", take(&mut self.prechecks));
+        if let Some(state) = self.adapters.compiler_state.take() {
+            if let Ok(mut state) = state.try_borrow_mut() {
+                released(
+                    "engine: resolver outputs",
+                    take(&mut state.resolver_outputs),
+                );
+                released(
+                    "engine: signature resolutions",
+                    take(&mut state.signature_resolutions),
+                );
+                released("engine: representations", take(&mut state.representations));
+                released("engine: constant values", take(&mut state.constant_values));
+            }
+            released("engine: compiler state", state);
+        }
+        released("engine: sources", take(&mut self.sources));
+        released("engine: adapters", take(&mut self.adapters));
+        released("engine: builtins", take(&mut self.builtins));
+    }
+}
 impl QueryEngine {
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
@@ -256,7 +307,10 @@ impl QueryEngine {
         artifact: Signature,
     ) -> Result<(), QueryError> {
         let signatures = self.validated_signature_input(&definition.path.0.package);
+        let timing = timings::phase(Phase::Verify);
+        timings::count(Count::VRuns);
         let report = signatures.validate_with_signature(definition, &artifact);
+        drop(timing);
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
@@ -399,6 +453,7 @@ impl QueryEngine {
                 return Ok(Arc::new(output(signature.clone())));
             }
         }
+        let _timing = timings::phase(Phase::Signatures);
         if let Some(cached) = self.signatures.get(definition).cloned() {
             if self
                 .active
@@ -568,6 +623,7 @@ impl QueryEngine {
             .recomputes
             .entry((definition.clone(), kind))
             .or_default() += 1;
+        timings::count(Count::Recomputes);
         Ok(())
     }
     fn finish<T>(
@@ -943,6 +999,7 @@ impl QueryEngine {
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<Resolution>>, QueryError> {
         self.syntax_views(definition)?;
+        let _timing = timings::phase(Phase::Resolve);
         let key = self.key(definition, QueryKind::Resolve)?;
         if let Some(cached) = self.resolutions.get(definition).cloned() {
             if self.valid(&cached, &key) {
@@ -983,6 +1040,7 @@ impl QueryEngine {
     ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
         let checked = self.check_query(definition)?;
         let signature = self.signature_output(definition)?;
+        let timing = timings::phase(Phase::Modes);
         let key = self.key(definition, QueryKind::Modes)?;
         let cached = self.modes.get(definition).cloned();
         let body = if let Some(cached) = cached.filter(|c| self.valid(c, &key)) {
@@ -1023,6 +1081,7 @@ impl QueryEngine {
             }
             cached.result.clone()?
         };
+        drop(timing);
         // Compile-time users also depend on private shapes used by a body,
         // including when its public signature and source text are unchanged.
         let representations: Vec<_> = self
@@ -1045,12 +1104,14 @@ impl QueryEngine {
         }
         let resolution = self.resolve_query(definition)?;
         let signature = self.signature_output(definition)?;
+        let _timing = timings::phase(Phase::Check);
         let key = self.key(definition, QueryKind::Check)?;
         if let Some(cached) = self.checked.get(definition).cloned() {
             if self.valid(&cached, &key) {
                 return cached.result.clone();
             }
         }
+        timings::count(Count::Definitions);
         let mut initial = self
             .resolutions
             .get(definition)
@@ -1305,6 +1366,7 @@ impl DefinitionQueries for QueryEngine {
                 return result.clone();
             }
         }
+        let _timing = timings::phase(Phase::Parse);
         let Some(lexer) = self.adapters.lexer.clone() else {
             return self.missing(QueryKind::Lex);
         };
@@ -1399,6 +1461,7 @@ impl DefinitionQueries for QueryEngine {
         let modes = self.mode_query(definition)?;
         self.register_staged(&modes.value)?;
         let signature = self.signature_output(definition)?;
+        let _timing = timings::phase(Phase::Lower);
         let key = self.key(definition, QueryKind::Lower)?;
         self.read_execution_signatures(&modes.dependencies);
         if let Some(cached) = self.lowered.get(definition).cloned() {
@@ -1407,6 +1470,7 @@ impl DefinitionQueries for QueryEngine {
                 return cached.output();
             }
         }
+        timings::count(Count::Lowered);
         self.start(definition, QueryKind::Lower)?;
         let mut reads = self
             .modes

@@ -32,6 +32,13 @@ the map. This replaces the per-publication signature assembly and graph scan.
 
 Compose phases through per-definition queries; record dependency fingerprints for later caching.
 
+Queries, V, comptime and the program check carry `hirsel_intern::timings`
+interval and phase guards and counts (docs/building.md, "Compile timings").
+Dropping a `QueryEngine` drops its tables inside the `merge` interval; with a
+heap meter installed (`--mem-usage`) it records the bytes each table frees, and
+`release_shared_caches` records and frees the process's package cache and V
+signature inputs once compiling is over.
+
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
 signature/resolver reads, private representations, implicit finalizers, type fact helpers and

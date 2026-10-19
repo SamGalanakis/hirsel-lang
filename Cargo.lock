@@ -451,6 +451,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-intern",
  "hirsel-run-config",
  "rustls",
  "serde_json",

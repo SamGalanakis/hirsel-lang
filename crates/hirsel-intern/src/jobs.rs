@@ -41,7 +41,9 @@ impl Jobs {
 /// input order. Tasks start longest first by `cost`, ties by input index.
 /// With one worker (or one task) everything runs on the caller's thread; other
 /// workers are fresh threads with `COMPILER_STACK_BYTES` stacks whose work
-/// counters are added to the caller's. After a panic no further task starts,
+/// counters are added to the caller's. Their `timings` phases need no transfer
+/// (the totals are process-wide); the caller's wait for them is `timings`
+/// wait, not work of its own phase. After a panic no further task starts,
 /// and the panic of the earliest-started panicking task is resumed on the caller.
 pub fn map<T: Send, R: Send>(
     jobs: Jobs,
@@ -97,6 +99,7 @@ pub fn map<T: Send, R: Send>(
         }
         (work::Tally::read(), panicked)
     };
+    let wait = crate::timings::wait();
     let outcomes: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
@@ -112,6 +115,7 @@ pub fn map<T: Send, R: Send>(
             .map(|h| h.join().unwrap_or_else(|panic| resume_unwind(panic)))
             .collect()
     });
+    drop(wait);
     let mut first = None;
     for (tally, panicked) in outcomes {
         tally.add();

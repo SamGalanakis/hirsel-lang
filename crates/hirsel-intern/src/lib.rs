@@ -2,8 +2,10 @@
 //! interner, the shared id assignment rule, and deterministic fan-out. Session
 //! ids never reach persisted or printed output; spellings and paths do.
 pub mod jobs;
+pub mod memory;
 mod salt;
 mod table;
+pub mod timings;
 pub mod work;
 
 pub use salt::Scramble;

@@ -153,6 +153,7 @@ impl QueryEngine {
             ));
         }
         let signature = self.signature_output(definition)?;
+        let _timing = timings::phase(Phase::Check);
         let key = self.key(definition, QueryKind::Check)?;
         if let Some(cached) = self.checked.get(definition).cloned()
             && self.valid(&cached, &key)
@@ -160,6 +161,7 @@ impl QueryEngine {
             self.inherit_execution(&cached.executed);
             return cached.result.clone();
         }
+        timings::count(Count::Definitions);
         let mut reads = Reads {
             reads: DependencyReads::default(),
             representations: BTreeMap::new(),
@@ -175,7 +177,9 @@ impl QueryEngine {
         self.start(definition, QueryKind::Check)?;
         self.comptime_stack.push((definition.clone(), site));
         self.execution_stack.push(ExecutionReads::default());
+        let timing = timings::phase(Phase::Comptime);
         let result = self.generate(definition, &snapshot, body, &signature.value, &mut reads);
+        drop(timing);
         let executed = self
             .execution_stack
             .pop()
@@ -701,12 +705,14 @@ impl QueryEngine {
         snapshot: ItemSnapshot,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
         let signature = self.signature_output(definition)?;
+        let _timing = timings::phase(Phase::Check);
         let key = self.key(definition, QueryKind::Check)?;
         if let Some(cached) = self.checked.get(definition).cloned()
             && self.valid(&cached, &key)
         {
             return cached.result.clone();
         }
+        timings::count(Count::Definitions);
         let (Some(resolver), Some(checker)) = (
             self.adapters.resolver.clone(),
             self.adapters.checker.clone(),

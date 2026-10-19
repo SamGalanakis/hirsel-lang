@@ -30,7 +30,10 @@ impl SignatureInput {
         if seen(&self.passed.lock().unwrap()) {
             return Validation::default();
         }
+        let timing = timings::phase(Phase::Verify);
+        timings::count(Count::VRuns);
         let report = self.validated.validate(definition);
+        drop(timing);
         if report.violations.is_empty() {
             let mut passed = self.passed.lock().unwrap();
             if !seen(&passed) {
@@ -46,10 +49,17 @@ impl SignatureInput {
 }
 const PASSED_PER_DEFINITION: usize = 4;
 const SHARED_INPUTS: usize = 8;
+static INPUTS: OnceLock<Mutex<VecDeque<(ContentHash, Arc<SignatureInput>)>>> = OnceLock::new();
+/// Drop the process's retained signature inputs, recording what they held.
+pub(crate) fn release_signature_inputs() {
+    if let Some(inputs) = INPUTS.get() {
+        let inputs = std::mem::take(&mut *inputs.lock().unwrap_or_else(|e| e.into_inner()));
+        hirsel_intern::memory::released("V signature inputs", inputs);
+    }
+}
 /// The process's input for exactly `signatures`, created (and its signatures
 /// checked) only when no retained input has that content.
 fn shared_input(fingerprint: ContentHash, signatures: Signatures) -> Arc<SignatureInput> {
-    static INPUTS: OnceLock<Mutex<VecDeque<(ContentHash, Arc<SignatureInput>)>>> = OnceLock::new();
     let inputs = INPUTS.get_or_init(Default::default);
     let found = inputs
         .lock()
@@ -60,8 +70,11 @@ fn shared_input(fingerprint: ContentHash, signatures: Signatures) -> Arc<Signatu
     if let Some(input) = found {
         return input;
     }
+    let timing = timings::phase(Phase::Verify);
+    let validated = ValidatedSignatures::new(signatures);
+    drop(timing);
     let input = Arc::new(SignatureInput {
-        validated: ValidatedSignatures::new(signatures),
+        validated,
         passed: Mutex::default(),
     });
     let mut inputs = inputs.lock().unwrap();

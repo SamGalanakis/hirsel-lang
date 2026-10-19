@@ -42,3 +42,10 @@ They are instrumentation only; counter ordinals are not semantic encodings.
 
 `RcCleanupVersionRows` counts instruction and terminator rows transferred while
 solving and replaying cleanup version inputs, for the driver's native scaling probes.
+
+`timings` holds the compile timing points of docs/building.md, "Compile timings":
+`interval` guards for the driver's additive wall intervals, `phase` guards for
+per-phase work and CPU summed over threads, `wait` and `count`. Totals are
+process-wide atomics; when timings are off each guard is one relaxed load.
+`memory` records the heap bytes a binary's installed heap meter attributes to a
+load (`retained`) or to a dropped table (`released`) for `--mem-usage`.

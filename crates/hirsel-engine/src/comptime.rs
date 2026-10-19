@@ -359,6 +359,7 @@ impl QueryEngine {
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
     ) -> Result<(hirsel_interp::Value, hirsel_types::TypeStore, TypeId), QueryError> {
+        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Comptime);
         self.adapters
             .compiler_state
             .as_ref()

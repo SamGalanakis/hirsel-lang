@@ -332,6 +332,77 @@ test targets that run std programs get `HIRSEL_PRECHECK` from
 Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
 debug assertions and integer overflow checks enabled.
 
+## Compile timings
+
+`check`, `build`, `run` and `test` take `--timings`, `--timings=json` and
+`--mem-usage` anywhere before `--`. Both reports go to stderr after the command
+finishes; other commands refuse the options (exit 2). Off, each timing point
+costs one relaxed atomic load and reads no clock.
+
+```sh
+hirsel check --timings app/hirsel.json
+hirsel build --timings=json --backend cranelift app/hirsel.json -o app 2> timings.txt
+hirsel check --mem-usage app/hirsel.json
+```
+
+The report keeps three measures apart (`hirsel_intern::timings`):
+
+- **Intervals** are the wall time of the driver's non-overlapping steps. An
+  interval entered inside another pauses it, so intervals add up to the wall
+  time they cover; `(untimed)` is the rest of the command's wall time (CLI
+  startup, and the program's own execution under `run` and `test`). Only
+  intervals add up. Today's driver maps onto them as follows:
+  - `image open`: reading and decoding the std precheck;
+  - `S0`: loading the package graph and sources, parsing, publishing std's
+    declarations into the session, and the program check's own steps;
+  - `parallel`: checking each source file's definitions and lowering the
+    program's reachable closure, which drive each definition's resolve,
+    check, modes, lowering and V;
+  - `merge`: GEN-5, publishing checked packages and dropping the session;
+  - `plan`: exporting, importing and adapting the native input;
+  - `units`: each unit's LIR import, placement, RC, reuse, cleanup lowering,
+    LIR validation and code generation;
+  - `link`: the toolchain, the link and the output copy;
+  - `S1` and `parallel2` stay 0 until their driver steps exist.
+- **Phases** are work time (wall) and CPU time inside each phase, excluding
+  the phases nested in it, summed over every thread, with their entry counts.
+  Engine bookkeeping for a query (cache validation, read recording) counts as
+  that query's phase. `verify in comptime` is the part of `verify` run inside
+  compile-time evaluation. Phases overlap the intervals and are not added up.
+- **Wait** is time threads spend waiting for each other; 0 while compiling is
+  single-threaded.
+
+Counts: `definitions` (bodies checked), `units` (native units built), `V runs`
+(full V runs; a definition V already passed is skipped), `lowered` (bodies
+lowered; under `check`, the bodies lowered at check time), `recomputes`
+(per-definition queries computed rather than reused) and store and object
+hits and misses (0 until those caches exist).
+
+`--timings=json` prints the same report as one JSON line, the last on stderr,
+which compiler-bench reads:
+
+```json
+{"schema":1,"command":"build","wall_ns":712000000,"untimed_ns":9000000,
+ "intervals":[{"interval":"image open","wall_ns":101000000}, ...],
+ "phases":[{"phase":"parse","work_ns":3000000,"cpu_ns":2900000,"calls":128}, ...],
+ "comptime_verify":{"work_ns":0,"cpu_ns":0,"calls":0},"wait_ns":0,
+ "counts":{"definitions":2,"units":168, ...}}
+```
+
+Every interval, phase and count appears, in that order, including those still
+0. `crates/hirsel-cli/tests/cli/timings.rs` checks the schema.
+
+`--mem-usage` prints the process's peak RSS and the heap bytes held at the end
+of the command, largest first: the decoded std precheck (`precheck`), each
+table of the session's query engine as it is dropped (`engine: ...`), then the
+shared package cache (std's image) and V's retained signature inputs. A table
+still shared with the package cache frees nothing when the engine drops, so
+std's share appears under `package cache`. With `--timings=json` the same
+figures go into the JSON's `memory` object instead. Heap bytes are glibc's
+chunks in use plus mmapped blocks (`mallinfo2`), read before and after each
+measured load or drop; reading them walks the allocator's free lists, so time
+a run without `--mem-usage`.
+
 ## Layout
 
 - `docs/spec/` is the specification, starting at `docs/spec/index.md`. Rule IDs
