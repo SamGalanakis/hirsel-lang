@@ -3,8 +3,3 @@
 # id: a test target (hirsel-rt-test-it-shard-2), a binary and case (hirsel-rt-test-it::replay::kill_order)
 # or a corpus case (conformance/MEM/MEM-7-x-run.hir). Rows are added to main directly, never through
 # tools/land (it refuses a change that adds one); tools/land removes a lane's rows when that lane lands.
-conformance/PROG/PROG-1-datastar-sdk-golden.hir	http-stream changed http.parse_server_request(buf, config); datastar callers not updated (LANG-12)	http-fixes	2026-10-20
-hirsel-cli-test-examples::datastar_package_tests	same: datastar@1/tests.hir calls parse_server_request(bytes, 65536, 65536)	http-fixes	2026-10-20
-hirsel-cli-test-examples::tasks_package_tests	same datastar caller break	http-fixes	2026-10-20
-hirsel-cli-test-examples::tasks_end_to_end_interpreted	same datastar caller break	http-fixes	2026-10-20
-hirsel-cli-test-examples::tasks_end_to_end_llvm	same datastar caller break	http-fixes	2026-10-20
