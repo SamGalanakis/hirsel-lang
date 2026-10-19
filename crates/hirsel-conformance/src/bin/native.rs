@@ -78,6 +78,7 @@ fn listed(root: &Path, list: &str) -> Result<Vec<Case>, String> {
 
 /// Exact generated IDs stay replayable after the rotating window moves.
 fn generated_cases(seed: u64, count: u64, filter: &Filter) -> Vec<Case> {
+    eprintln!("native: generator seed {seed}; reproduce with --seed {seed}");
     let mut cases = native::generate::cases(seed, count);
     for case in filter
         .0
@@ -232,7 +233,6 @@ fn run() -> Result<bool, String> {
     if filter.1.is_some() && mode != "--full" && mode != "--cranelift" {
         return Err("--shard requires --full or --cranelift".into());
     }
-    eprintln!("native: generator seed {seed}; reproduce with --seed {seed}");
     match mode.as_str() {
         "--smoke" => {
             let matrix = seeded(smoke_matrix(), hash_seed);
