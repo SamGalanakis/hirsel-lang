@@ -1,0 +1,882 @@
+// An embedded, transactional, ordered key-value store over one Dir: a
+// log-structured engine whose every object is immutable and created with
+// file.put_new, after SlateDB's object-storage protocol (manifest, write-ahead
+// objects and writer fencing by create-if-absent; mechanisms only). The Dir
+// grant is the store's whole authority and its whole storage seam.
+//
+// Layout under the Dir, every name a 20-digit decimal id:
+//   manifest/N  the writer epoch, the current snapshot and the first log id
+//               to replay; written when a writer claims the store and at
+//               compaction, never replaced (the newest valid one is current)
+//   log/N       one commit group: the write sets of consecutive commits; the
+//               commit point of every commit in it
+//   snap/N      every entry as of one commit, written by compaction
+// A writer claims the store by creating a fence log at the next log id and
+// then the next manifest with the next epoch. A stale writer's next create
+// finds its id taken and the store reports Fenced().
+/// How the store makes commits survive a crash, and where it may stop for a
+/// test. `durability` is the mode of every log object: `Durable()` returns a
+/// commit's ticket from `durable` only once its group is synced, `Volatile()`
+/// writes groups without syncing, so a crash may lose any suffix of commits
+/// (never part of one). `group_limit` commits share one log object: a commit
+/// that fills the group writes it, and `durable` writes a partial group; 1
+/// writes every commit on its own. `faults` injects a stop for crash tests.
+pub type StoreConfig {
+  durability: Durability,
+  group_limit: u64,
+  faults: StoreFaults,
+}
+
+/// A test seam: `StopAfterWrites(n)` refuses the store's storage mutation after
+/// its first `n` (creates, removals and directory creations, from `open` on),
+/// with no effect, as a crash at that point would; the store then closes.
+pub type StoreFaults = NoFaults | StopAfterWrites(u64)
+
+/// Why a store operation failed. `Storage` is the Dir's own error; `Corrupt`
+/// names an object that fails its checksum or the layout's rules before the
+/// log's tail; `Fenced` means another writer claimed the store; `Conflict` means
+/// another commit landed after the transaction began; `Injected` is a
+/// `StopAfterWrites` stop. After `Storage`, `Corrupt`, `Fenced` or `Injected`
+/// the store is closed and every later call returns `Closed`.
+pub type StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed
+
+// One write of a commit's write set.
+type Write = Put(key: Bytes, value: Bytes) | Delete(key: Bytes)
+
+/// A commit's place in the store's commit order, awaited with `durable`.
+pub opaque type Ticket: copyable + plain + data uses {} {
+  seq: u64,
+}
+
+/// A stable view of the store as of one commit: later commits never change it.
+pub opaque type Snapshot: copyable uses {} {
+  seq: u64,
+  index: ordered_map.OrderedMap[Bytes, Bytes],
+}
+
+/// A transaction: reads see the snapshot it began at plus its own writes.
+/// Dropping it aborts it.
+pub opaque type Txn: copyable uses {} {
+  base: u64,
+  state: ordered_map.OrderedMap[Bytes, Bytes],
+  writes: ordered_map.OrderedMap[Bytes, Option[Bytes]],
+}
+
+/// The writer of one store directory.
+pub opaque resource type Store: () uses {Dir} {
+  dir: Dir,
+  config: StoreConfig,
+  epoch: u64,
+  index: ordered_map.OrderedMap[Bytes, Bytes],
+  // The last commit applied (V) and the last one in a written log object (D).
+  visible: u64,
+  durable: u64,
+  pending: List[List[Write]],
+  next_log: u64,
+  next_manifest: u64,
+  next_snap: u64,
+  // The current snapshot object's id and commit, if any, and the first log id
+  // recovery replays.
+  snap: Option[(u64, u64)],
+  log_start: u64,
+  writes: u64,
+  closed: bool,
+}
+drop(self) {}
+
+const MAGIC: u32 = 0x52545348
+
+const VERSION: u8 = 1
+
+const KIND_LOG: u8 = 1
+
+const KIND_SNAP: u8 = 2
+
+const KIND_MANIFEST: u8 = 3
+
+const OP_PUT: u8 = 1
+
+const OP_DELETE: u8 = 2
+
+/// Durable log objects, 64 commits per group and no injected faults.
+pub fn default_config() -> StoreConfig uses {} {
+  StoreConfig(durability: Durable(), group_limit: 64, faults: NoFaults())
+}
+
+/// The commit order position of a ticket: the n-th commit since the store
+/// was created has sequence n.
+@noalloc
+pub fn sequence(t: Ticket) -> u64 uses {} {
+  t.seq
+}
+
+/// Byte-lexicographic order, a proper prefix first: the order of every key.
+@noalloc
+pub fn compare_keys(a: Bytes, b: Bytes) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+/// The bounds that select exactly the keys starting with `prefix`.
+pub fn prefix_bounds(prefix: Bytes) -> (
+  ordered_map.Bound[Bytes],
+  ordered_map.Bound[Bytes]
+) uses {} {
+  let low: ordered_map.Bound[Bytes] = Included(unique prefix)
+  // The least key above every extension of the prefix: drop trailing 0xff
+  // bytes and increment the last remaining one; none left means no bound.
+  let mut end: List[u8] = []
+  for b in prefix {
+    list.push(mut end, b)
+  }
+  while list.len(end) > 0 {
+    let last = list.len(end) - 1
+    if end[last] == 255 {
+      let _ = list.pop(mut end)
+    } else {
+      end[last] = end[last] + 1
+      let high: ordered_map.Bound[Bytes] = Excluded(bytes.from_list(take end))
+      return (take low, take high)
+    }
+  }
+  (take low, Unbounded())
+}
+
+/// Opens the store in `d`, creating its layout when `d` is empty, recovers the
+/// newest valid state and claims the store as its writer at the next epoch.
+pub fn open(d: Dir, config: StoreConfig) -> Result[Store, StoreError] {
+  let mut s = Store(
+    dir: d,
+    config: config,
+    epoch: 0,
+    index: ordered_map.empty(compare_keys),
+    visible: 0,
+    durable: 0,
+    pending: [],
+    next_log: 0,
+    next_manifest: 0,
+    next_snap: 0,
+    snap: None(),
+    log_start: 0,
+    writes: 0,
+    closed: false
+  )
+  match recover(mut s) {
+    Ok(()) => Ok(take s),
+    Error(e) => Error(e),
+  }
+}
+
+/// A stable view of every commit so far, durable or not. Later commits never
+/// change it, and holding it never holds up the writer.
+pub fn snapshot(mut s: Store) -> Snapshot uses {} {
+  Snapshot(seq: s.visible, index: current(mut s))
+}
+
+/// The commit a snapshot reflects: every commit up to it, no later one.
+@noalloc
+pub fn snapshot_sequence(snap: Snapshot) -> u64 uses {} {
+  snap.seq
+}
+
+/// The value stored under `key` in the snapshot.
+pub fn get(snap: Snapshot, key: Bytes) -> Option[Bytes] in snap uses {} {
+  ordered_map.get(snap.index, key)
+}
+
+/// At most `limit` entries of the snapshot with keys between `from` and `to`,
+/// in `direction` order, as fresh copies. Page by passing `Excluded` of the
+/// last key received.
+pub fn range(
+  snap: Snapshot,
+  from: ordered_map.Bound[Bytes],
+  to: ordered_map.Bound[Bytes],
+  direction: ordered_map.Direction,
+  limit: u64
+) -> List[(Bytes, Bytes)] uses {} {
+  entries_in(snap.index, from, to, direction, limit)
+}
+
+/// Starts a transaction at the latest commit.
+pub fn begin(mut s: Store) -> Txn uses {} {
+  Txn(base: s.visible, state: current(mut s), writes: ordered_map.empty(compare_keys))
+}
+
+// A share of the index that outlives this call: the index moves out of the
+// store, which only holds owned values, so a copy of it is owned too.
+fn current(mut s: Store) -> ordered_map.OrderedMap[Bytes, Bytes] uses {} {
+  let index = replace(mut s.index, ordered_map.empty(compare_keys))
+  let share = copy index
+  s.index = take index
+  share
+}
+
+/// Commits `t`'s writes as the next commit, visible at once to later
+/// snapshots and transactions, and returns its ticket. `Conflict()` when another
+/// commit landed since `t` began. A commit that fills its group writes the
+/// group's log object; await its durability with `durable`.
+pub fn commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError] {
+  if s.closed {
+    return Error(Closed())
+  }
+  if t.base != s.visible {
+    return Error(Conflict())
+  }
+  let Txn(base: _, state: state, writes: writes) = take t
+  let start: List[Write] = []
+  let set = ordered_map.fold_range(
+    writes,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    take start,
+    fn(take acc: List[Write], k: Bytes, v: Option[Bytes]) -> (List[Write], bool) {
+      let mut out = take acc
+      match v {
+        Some(value) => list.push(mut out, Put(key: unique k, value: unique value)),
+        None() => list.push(mut out, Delete(key: unique k)),
+      }
+      (take out, true)
+    }
+  )
+  s.index = take state
+  s.visible += 1
+  list.push(mut s.pending, take set)
+  if list.len(s.pending) >= s.config.group_limit {
+    flush(mut s)?
+  }
+  Ok(Ticket(seq: s.visible))
+}
+
+/// The output gate: returns once the commit `t` names is in a written log
+/// object, synced when the store is `Durable()`, together with every earlier
+/// commit. Writes the pending group if `t` is in it.
+pub fn durable(mut s: Store, t: Ticket) -> Result[(), StoreError] {
+  if s.closed {
+    return Error(Closed())
+  }
+  if t.seq <= s.durable {
+    return Ok(())
+  }
+  flush(mut s)
+}
+
+/// Writes every commit into a new snapshot object, publishes it with a new
+/// manifest and removes the objects it supersedes. A crash at any point
+/// recovers: until the manifest exists the old state is current, and after it
+/// the superseded objects are garbage that the next open removes.
+pub fn compact(mut s: Store) -> Result[(), StoreError] {
+  if s.closed {
+    return Error(Closed())
+  }
+  flush(mut s)?
+  let snap_id = s.next_snap
+  let data = encode_snapshot(snap_id, s.epoch, s.durable, s.index)
+  create(mut s, snap_name(snap_id), take data, Durable())?
+  s.next_snap += 1
+  s.snap = Some((snap_id, s.durable))
+  s.log_start = s.next_log
+  publish_manifest(mut s)?
+  collect(mut s)
+}
+
+/// Writes any pending commits and closes the store.
+pub fn close(take store: Store) -> Result[(), StoreError] {
+  let mut s = take store
+  if s.closed {
+    return Error(Closed())
+  }
+  flush(mut s)
+}
+
+// Effective entries of `m` in a range, copied out.
+fn entries_in(
+  m: ordered_map.OrderedMap[Bytes, Bytes],
+  from: ordered_map.Bound[Bytes],
+  to: ordered_map.Bound[Bytes],
+  direction: ordered_map.Direction,
+  limit: u64
+) -> List[(Bytes, Bytes)] uses {} {
+  let start: List[(Bytes, Bytes)] = []
+  if limit == 0 {
+    return start
+  }
+  ordered_map.fold_range(
+    m,
+    from,
+    to,
+    direction,
+    take start,
+    fn(take acc: List[(Bytes, Bytes)], k: Bytes, v: Bytes) -> (
+      List[(Bytes, Bytes)],
+      bool
+    ) {
+      let mut out = take acc
+      list.push(mut out, (unique k, unique v))
+      let more = list.len(out) < limit
+      (take out, more)
+    }
+  )
+}
+
+// Closes the store on an error that ends it. Every storage mutation goes
+// through `create`, `remove` or `make_dir`, which count it for the fault seam.
+fn stop(mut s: Store, take e: StoreError) -> StoreError uses {} {
+  s.closed = true
+  e
+}
+
+// Counts one storage mutation, refusing it when the fault seam says so.
+fn mutation(mut s: Store) -> Result[(), StoreError] uses {} {
+  if let StopAfterWrites(n) = s.config.faults {
+    if s.writes >= n {
+      return Error(stop(mut s, Injected()))
+    }
+  }
+  s.writes += 1
+  Ok(())
+}
+
+fn create(mut s: Store, name: String, take data: Bytes, mode: Durability) -> Result[
+  (),
+  StoreError
+] {
+  mutation(mut s)?
+  match file.put_new(s.dir, path.of(name), take data, mode) {
+    Ok(()) => Ok(()),
+    Error(AlreadyExists()) => Error(stop(mut s, Fenced())),
+    Error(e) => Error(stop(mut s, Storage(e))),
+  }
+}
+
+fn remove(mut s: Store, name: String) -> Result[(), StoreError] {
+  mutation(mut s)?
+  match file.remove(s.dir, path.of(name)) {
+    Ok(()) | Error(NotFound()) => Ok(()),
+    Error(e) => Error(stop(mut s, Storage(e))),
+  }
+}
+
+fn make_dir(mut s: Store, name: String) -> Result[(), StoreError] {
+  mutation(mut s)?
+  match file.mkdir(s.dir, path.of(name)) {
+    Ok(()) | Error(AlreadyExists()) => Ok(()),
+    Error(e) => Error(stop(mut s, Storage(e))),
+  }
+}
+
+fn read(mut s: Store, name: String) -> Result[Bytes, StoreError] {
+  match file.read_bytes(s.dir, path.of(name)) {
+    Ok(data) => Ok(unique data),
+    Error(e) => Error(stop(mut s, Storage(e))),
+  }
+}
+
+// The ids of the objects under `kind`, ascending; other names (a crashed
+// put_new's temporary) are ignored.
+fn list_ids(mut s: Store, kind: String) -> Result[List[u64], StoreError] {
+  let entries = match file.read_dir(s.dir, path.of(kind)) {
+    Ok(entries) => entries,
+    Error(e) => return Error(stop(mut s, Storage(e))),
+  }
+  let prefix_len = string.byte_len(kind) + 1
+  let mut ids: List[u64] = []
+  for entry in entries {
+    let name = string.as_bytes(path.text(entry.path))
+    if bytes.len(name) != prefix_len + 20 {
+      continue
+    }
+    let mut id: u64 = 0
+    let mut digits = true
+    for i in prefix_len..bytes.len(name) {
+      let c = name[i]
+      if c < b'0' || c > b'9' {
+        digits = false
+        break
+      }
+      let digit: u64 = int.widen(c - b'0')
+      let Some(next) = int.checked_add(id * 10, digit) else {
+        digits = false
+        break
+      }
+      id = next
+    }
+    if digits {
+      list.push(mut ids, id)
+    }
+  }
+  Ok(ids)
+}
+
+fn object_name(kind: String, id: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, kind)
+  list.push(mut out, b'/')
+  // Twenty decimal digits, most significant first, so names sort as ids do.
+  let mut place: u64 = 10000000000000000000
+  while place > 0 {
+    list.push(mut out, b'0' + int.truncate(id / place % 10))
+    place = place / 10
+  }
+  text.finish_valid(take out)
+}
+
+fn log_name(id: u64) -> unique String uses {} {
+  object_name("log", id)
+}
+
+fn snap_name(id: u64) -> unique String uses {} {
+  object_name("snap", id)
+}
+
+fn manifest_name(id: u64) -> unique String uses {} {
+  object_name("manifest", id)
+}
+
+// Writes the pending commits as one log object, the commit point of each.
+fn flush(mut s: Store) -> Result[(), StoreError] {
+  if list.len(s.pending) == 0 {
+    return Ok(())
+  }
+  let id = s.next_log
+  let data = encode_log(id, s.epoch, s.durable + 1, s.pending)
+  let mode = s.config.durability
+  create(mut s, log_name(id), take data, mode)?
+  s.next_log += 1
+  s.durable = s.visible
+  s.pending = []
+  Ok(())
+}
+
+fn publish_manifest(mut s: Store) -> Result[(), StoreError] {
+  let id = s.next_manifest
+  let data = encode_manifest(id, s.epoch, s.snap, s.log_start)
+  create(mut s, manifest_name(id), take data, Durable())?
+  s.next_manifest += 1
+  Ok(())
+}
+
+// Removes every object the current manifest no longer reaches: older
+// manifests and snapshots, and logs before its first log id.
+fn collect(mut s: Store) -> Result[(), StoreError] {
+  let manifests = list_ids(mut s, "manifest")?
+  let snaps = list_ids(mut s, "snap")?
+  let logs = list_ids(mut s, "log")?
+  remove_garbage(mut s, manifests, snaps, logs)
+}
+
+// Removes, among the listed objects, every one the current manifest does not
+// reach: older manifests, other snapshots and logs before its first log id.
+fn remove_garbage(mut s: Store, manifests: List[u64], snaps: List[u64], logs: List[u64]) -> Result[
+  (),
+  StoreError
+] {
+  for id in manifests {
+    if id + 1 < s.next_manifest {
+      remove(mut s, manifest_name(id))?
+    }
+  }
+  for id in snaps {
+    let reached = match s.snap {
+      Some((snap_id, _)) => snap_id == id,
+      None() => false,
+    }
+    if !reached {
+      remove(mut s, snap_name(id))?
+    }
+  }
+  for id in logs {
+    if id < s.log_start {
+      remove(mut s, log_name(id))?
+    }
+  }
+  Ok(())
+}
+
+// Loads the newest valid state, then claims the store at the next epoch.
+fn recover(mut s: Store) -> Result[(), StoreError] {
+  make_dir(mut s, "manifest")?
+  make_dir(mut s, "log")?
+  make_dir(mut s, "snap")?
+  let mut max_epoch: u64 = 0
+  let manifests = list_ids(mut s, "manifest")?
+  if list.len(manifests) > 0 {
+    let id = manifests[list.len(manifests) - 1]
+    let name = manifest_name(id)
+    let data = read(mut s, copy name)?
+    let Ok(m) = decode_manifest(data, id) else {
+      return Error(stop(mut s, Corrupt(name)))
+    }
+    max_epoch = m.epoch
+    s.next_manifest = id + 1
+    s.snap = m.snap
+    s.log_start = m.log_start
+  }
+  s.next_log = s.log_start
+  if let Some((snap_id, snap_seq)) = s.snap {
+    let name = snap_name(snap_id)
+    let data = read(mut s, copy name)?
+    let Ok(index) = decode_snapshot(data, snap_id, snap_seq) else {
+      return Error(stop(mut s, Corrupt(name)))
+    }
+    s.index = take index
+    s.visible = snap_seq
+    s.next_snap = snap_id + 1
+  }
+  let snaps = list_ids(mut s, "snap")?
+  if list.len(snaps) > 0 && snaps[list.len(snaps) - 1] >= s.next_snap {
+    // A snapshot an interrupted compaction wrote without its manifest.
+    s.next_snap = snaps[list.len(snaps) - 1] + 1
+  }
+  let logs = list_ids(mut s, "log")?
+  let mut log_epoch: u64 = 0
+  let mut tail = false
+  for id in logs {
+    if id < s.log_start {
+      continue
+    }
+    let name = log_name(id)
+    if tail {
+      // Past a lost or torn volatile log: the rest of the suffix is lost too.
+      remove(mut s, take name)?
+      continue
+    }
+    let durable_mode = match s.config.durability {
+      Durable() => true,
+      Volatile() => false,
+    }
+    let data = read(mut s, copy name)?
+    let decoded = if id == s.next_log {
+      decode_log(data, id)
+    } else {
+      Error(())
+    }
+    let Ok(batch) = decoded else {
+      // A gap or a bad object. Only the last log may be torn: it was never
+      // acknowledged. Volatile logs lose any suffix, so the first bad one
+      // truncates the log there.
+      if id == logs[list.len(logs) - 1] && id == s.next_log || !durable_mode {
+        remove(mut s, take name)?
+        tail = true
+        continue
+      }
+      return Error(stop(mut s, Corrupt(name)))
+    }
+    // Epochs never decrease along the log: a stale writer's object cannot
+    // follow a newer writer's fence.
+    if batch.epoch < log_epoch {
+      return Error(stop(mut s, Corrupt(name)))
+    }
+    log_epoch = batch.epoch
+    let mut seq = batch.first_seq
+    for set in batch.commits {
+      if seq > s.visible + 1 {
+        return Error(stop(mut s, Corrupt(copy name)))
+      }
+      if seq == s.visible + 1 {
+        apply(mut s.index, set)
+        s.visible = seq
+      }
+      seq += 1
+    }
+    s.next_log = id + 1
+  }
+  s.durable = s.visible
+  let newest = if log_epoch > max_epoch {
+    log_epoch
+  } else {
+    max_epoch
+  }
+  claim(mut s, newest + 1)?
+  remove_garbage(mut s, manifests, snaps, logs)
+}
+
+fn apply(mut index: ordered_map.OrderedMap[Bytes, Bytes], set: List[Write]) -> () uses {} {
+  for w in set {
+    match w {
+      Put(key: k, value: v) => ordered_map.insert(mut index, unique k, unique v),
+      Delete(key: k) => {
+        let _ = ordered_map.remove(mut index, k)
+      },
+    }
+  }
+}
+
+// Fences every older writer, then records the new epoch in a manifest.
+fn claim(mut s: Store, epoch: u64) -> Result[(), StoreError] {
+  s.epoch = epoch
+  let id = s.next_log
+  let empty: List[List[Write]] = []
+  let fence = encode_log(id, epoch, s.visible + 1, empty)
+  create(mut s, log_name(id), take fence, Durable())?
+  s.next_log += 1
+  publish_manifest(mut s)
+}
+
+// Objects are a header (magic, version, kind, id, epoch), a body and a
+// CRC-32C of everything before it, all integers little-endian.
+type Manifest {
+  epoch: u64,
+  snap: Option[(u64, u64)],
+  log_start: u64,
+}
+
+type Group {
+  epoch: u64,
+  first_seq: u64,
+  commits: List[List[Write]],
+}
+
+fn put_u8(mut out: List[u8], value: u8) -> () uses {} {
+  list.push(mut out, value)
+}
+
+fn put_u32(mut out: List[u8], value: u32) -> () uses {} {
+  for i in 0u32..4 {
+    list.push(mut out, int.truncate(value >> i * 8))
+  }
+}
+
+fn put_u64(mut out: List[u8], value: u64) -> () uses {} {
+  for i in 0u64..8 {
+    list.push(mut out, int.truncate(value >> i * 8))
+  }
+}
+
+fn put_bytes(mut out: List[u8], data: Bytes) -> () uses {} {
+  put_u64(mut out, bytes.len(data))
+  for b in data {
+    list.push(mut out, b)
+  }
+}
+
+fn header(kind: u8, id: u64, epoch: u64) -> List[u8] uses {} {
+  let mut out: List[u8] = []
+  put_u32(mut out, MAGIC)
+  put_u8(mut out, VERSION)
+  put_u8(mut out, kind)
+  put_u64(mut out, id)
+  put_u64(mut out, epoch)
+  out
+}
+
+fn seal(take out: List[u8]) -> Bytes uses {} {
+  let mut sealed = take out
+  let body = bytes.from_list(copy sealed)
+  put_u32(mut sealed, crc32c.digest(body))
+  bytes.from_list(take sealed)
+}
+
+fn encode_log(id: u64, epoch: u64, first_seq: u64, commits: List[List[Write]]) -> Bytes uses {} {
+  let mut out = header(KIND_LOG, id, epoch)
+  put_u64(mut out, first_seq)
+  put_u64(mut out, list.len(commits))
+  for set in commits {
+    put_u64(mut out, list.len(set))
+    for w in set {
+      match w {
+        Put(key: k, value: v) => {
+          put_u8(mut out, OP_PUT)
+          put_bytes(mut out, k)
+          put_bytes(mut out, v)
+        },
+        Delete(key: k) => {
+          put_u8(mut out, OP_DELETE)
+          put_bytes(mut out, k)
+        },
+      }
+    }
+  }
+  seal(take out)
+}
+
+fn encode_snapshot(
+  id: u64,
+  epoch: u64,
+  seq: u64,
+  index: ordered_map.OrderedMap[Bytes, Bytes]
+) -> Bytes uses {} {
+  let mut start = header(KIND_SNAP, id, epoch)
+  put_u64(mut start, seq)
+  put_u64(mut start, ordered_map.len(index))
+  let out = ordered_map.fold_range(
+    index,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    take start,
+    fn(take acc: List[u8], k: Bytes, v: Bytes) -> (List[u8], bool) {
+      let mut buffer = take acc
+      put_bytes(mut buffer, k)
+      put_bytes(mut buffer, v)
+      (take buffer, true)
+    }
+  )
+  seal(take out)
+}
+
+fn encode_manifest(id: u64, epoch: u64, snap: Option[(u64, u64)], log_start: u64) -> Bytes uses {} {
+  let mut out = header(KIND_MANIFEST, id, epoch)
+  match snap {
+    Some((snap_id, snap_seq)) => {
+      put_u8(mut out, 1)
+      put_u64(mut out, snap_id)
+      put_u64(mut out, snap_seq)
+    },
+    None() => put_u8(mut out, 0),
+  }
+  put_u64(mut out, log_start)
+  seal(take out)
+}
+
+// A cursor over an object's bytes. Every read checks the bounds first.
+type Cursor {
+  at: u64,
+  end: u64,
+}
+
+fn get_u8(data: Bytes, mut c: Cursor) -> Result[u8, ()] uses {} {
+  if c.at >= c.end {
+    return Error(())
+  }
+  let b = data[c.at]
+  c.at += 1
+  Ok(b)
+}
+
+fn get_u32(data: Bytes, mut c: Cursor) -> Result[u32, ()] uses {} {
+  if c.end - c.at < 4 {
+    return Error(())
+  }
+  let mut value: u32 = 0
+  for i in 0u64..4 {
+    let b: u32 = int.widen(data[c.at + i])
+    value = value | b << int.truncate(i * 8)
+  }
+  c.at += 4
+  Ok(value)
+}
+
+fn get_u64(data: Bytes, mut c: Cursor) -> Result[u64, ()] uses {} {
+  if c.end - c.at < 8 {
+    return Error(())
+  }
+  let mut value: u64 = 0
+  for i in 0u64..8 {
+    let b: u64 = int.widen(data[c.at + i])
+    value = value | b << i * 8
+  }
+  c.at += 8
+  Ok(value)
+}
+
+fn get_bytes(data: Bytes, mut c: Cursor) -> Result[Bytes, ()] uses {} {
+  let n = get_u64(data, mut c)?
+  if c.end - c.at < n {
+    return Error(())
+  }
+  let part = unique bytes.slice(data, c.at, c.at + n)
+  c.at += n
+  Ok(take part)
+}
+
+// Checks the trailer and header and returns a cursor over the body and the
+// object's epoch.
+fn open_object(data: Bytes, kind: u8, id: u64) -> Result[(Cursor, u64), ()] uses {} {
+  let total = bytes.len(data)
+  if total < 26 {
+    return Error(())
+  }
+  let mut trailer = Cursor(at: total - 4, end: total)
+  let stored = get_u32(data, mut trailer)?
+  if crc32c.digest(bytes.slice(data, 0, total - 4)) != stored {
+    return Error(())
+  }
+  let mut c = Cursor(at: 0, end: total - 4)
+  if get_u32(data, mut c)? != MAGIC || get_u8(data, mut c)? != VERSION || get_u8(
+    data,
+    mut c
+  )? != kind {
+    return Error(())
+  }
+  if get_u64(data, mut c)? != id {
+    return Error(())
+  }
+  let epoch = get_u64(data, mut c)?
+  Ok((c, epoch))
+}
+
+fn decode_manifest(data: Bytes, id: u64) -> Result[Manifest, ()] uses {} {
+  let (c0, epoch) = open_object(data, KIND_MANIFEST, id)?
+  let mut c = c0
+  let snap: Option[(u64, u64)] = match get_u8(data, mut c)? {
+    0 => None(),
+    1 => {
+      let snap_id = get_u64(data, mut c)?
+      let snap_seq = get_u64(data, mut c)?
+      Some((snap_id, snap_seq))
+    },
+    _ => return Error(()),
+  }
+  let log_start = get_u64(data, mut c)?
+  if c.at != c.end {
+    return Error(())
+  }
+  Ok(Manifest(epoch: epoch, snap: snap, log_start: log_start))
+}
+
+fn decode_log(data: Bytes, id: u64) -> Result[Group, ()] uses {} {
+  let (c0, epoch) = open_object(data, KIND_LOG, id)?
+  let mut c = c0
+  let first_seq = get_u64(data, mut c)?
+  let count = get_u64(data, mut c)?
+  let mut commits: List[List[Write]] = []
+  for _ in 0u64..count {
+    let writes = get_u64(data, mut c)?
+    let mut set: List[Write] = []
+    for _ in 0u64..writes {
+      let op = get_u8(data, mut c)?
+      let k = get_bytes(data, mut c)?
+      if op == OP_PUT {
+        let v = get_bytes(data, mut c)?
+        list.push(mut set, Put(key: take k, value: take v))
+      } else if op == OP_DELETE {
+        list.push(mut set, Delete(key: take k))
+      } else {
+        return Error(())
+      }
+    }
+    list.push(mut commits, take set)
+  }
+  if c.at != c.end {
+    return Error(())
+  }
+  Ok(Group(epoch: epoch, first_seq: first_seq, commits: take commits))
+}
+
+fn decode_snapshot(data: Bytes, id: u64, seq: u64) -> Result[
+  ordered_map.OrderedMap[Bytes, Bytes],
+  ()
+] uses {} {
+  let (c0, _) = open_object(data, KIND_SNAP, id)?
+  let mut c = c0
+  if get_u64(data, mut c)? != seq {
+    return Error(())
+  }
+  let count = get_u64(data, mut c)?
+  let mut index: ordered_map.OrderedMap[Bytes, Bytes] = ordered_map.empty(compare_keys)
+  for _ in 0u64..count {
+    let k = get_bytes(data, mut c)?
+    let v = get_bytes(data, mut c)?
+    ordered_map.insert(mut index, take k, take v)
+  }
+  if c.at != c.end || ordered_map.len(index) != count {
+    return Error(())
+  }
+  Ok(take index)
+}

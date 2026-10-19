@@ -88,6 +88,8 @@ conformance/CAP/CAP-1-random-draws-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
 conformance/CAP/CAP-1-std-iter-file-pipeline-run.hir
+conformance/CAP/CAP-1-std-store-dir-authority-bad.hir
+conformance/CAP/CAP-1-std-store-dir-authority-ok.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir
 conformance/CAP/CAP-1-stderr-parameter-ok.hir
 conformance/CAP/CAP-1-stderr-projection-bad.hir
@@ -824,6 +826,11 @@ conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
+conformance/DET/DET-1-std-store-crash-boundaries-run.hir
+conformance/DET/DET-1-std-store-crash-compaction-run.hir
+conformance/DET/DET-1-std-store-crash-model-run.hir
+conformance/DET/DET-1-std-store-fence-run.hir
+conformance/DET/DET-1-std-store-recover-run.hir
 conformance/DET/DET-1-tls-connect-as-replay-run.hir
 conformance/DET/DET-1-tls-mtls-replay-run.hir
 conformance/DET/DET-1-udp-replay-run.hir
@@ -3746,6 +3753,8 @@ conformance/OWN/OWN-2-pathtime-time-parse-accept.hir
 conformance/OWN/OWN-2-pathtime-time-parse-reject.hir
 conformance/OWN/OWN-2-scope-body-taken-let-mut-read-bad.hir
 conformance/OWN/OWN-2-spec-save.hir
+conformance/OWN/OWN-2-std-store-txn-after-commit-bad.hir
+conformance/OWN/OWN-2-std-store-txn-after-commit-ok.hir
 conformance/OWN/OWN-2-taken-block-capture-run.hir
 conformance/OWN/OWN-2-taken-direct-capture-run.hir
 conformance/OWN/OWN-2-testhelpers-equal-accept.hir
@@ -5996,12 +6005,16 @@ conformance/SEM/SEM-5-std-deque-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-deque-run.hir
 conformance/SEM/SEM-5-std-map-lifecycle-run.hir
 conformance/SEM/SEM-5-std-map-owned-cycle-run.hir
+conformance/SEM/SEM-5-std-ordered-map-model-run.hir
+conformance/SEM/SEM-5-std-ordered-map-run.hir
 conformance/SEM/SEM-5-std-priority-queue-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-priority-queue-run.hir
 conformance/SEM/SEM-5-std-set-string-remove-run.hir
 conformance/SEM/SEM-5-std-sorted-map-access-run.hir
 conformance/SEM/SEM-5-std-sorted-map-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-sorted-map-string-get-run.hir
+conformance/SEM/SEM-5-std-store-group-commit-run.hir
+conformance/SEM/SEM-5-std-store-run.hir
 conformance/SEM/SEM-5-tour-04-collections-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-counted-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-empty-run.hir

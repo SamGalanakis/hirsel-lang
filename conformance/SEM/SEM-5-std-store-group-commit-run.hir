@@ -1,0 +1,62 @@
+// rule: SEM-5
+// expect: run
+// std@1/store's output gate and group commit: commits queue in memory, visible
+// to later transactions and snapshots, until durable() writes their group as
+// one log object, or a commit fills the group; durable() of a commit already
+// written writes nothing; a group limit of 1 writes every commit; a Volatile
+// store writes the same objects.
+fn logs(d: Dir) -> u64 uses {d} {
+  match file.read_dir(d, path.of("log")) {
+    Ok(entries) => list.len(entries),
+    Error(_) => 0,
+  }
+}
+
+fn put(mut s: store.Store, k: Bytes, v: Bytes) -> Result[store.Ticket, store.StoreError] {
+  let mut x = store.begin(mut s)
+  txn.put(mut x, unique k, unique v)
+  store.commit(mut s, take x)
+}
+
+fn config(limit: u64, mode: Durability) -> store.StoreConfig {
+  let mut c = store.default_config()
+  c.group_limit = limit
+  c.durability = mode
+  c
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, config(3, Durable()))?
+  // Opening wrote the writer's fence log.
+  test.check(t, logs(d) == 1)
+  let first = put(mut s, b"k1", b"v1")?
+  let second = put(mut s, b"k2", b"v2")?
+  test.check(t, logs(d) == 1)
+  // A later transaction reads committed, not yet durable state.
+  let x = store.begin(mut s)
+  test.check(t, txn.get(x, b"k1") == Some(b"v1"))
+  store.durable(mut s, first)?
+  test.check(t, logs(d) == 2)
+  store.durable(mut s, second)?
+  test.check(t, logs(d) == 2)
+  // The third commit of a group writes it.
+  let _ = put(mut s, b"k3", b"v3")?
+  let _ = put(mut s, b"k4", b"v4")?
+  test.check(t, logs(d) == 2)
+  let fifth = put(mut s, b"k5", b"v5")?
+  test.check(t, logs(d) == 3)
+  store.durable(mut s, fifth)?
+  test.check(t, logs(d) == 3)
+  store.close(take s)?
+  let single = test.dir(t, [])
+  let mut one = store.open(single, config(1, Volatile()))?
+  let _ = put(mut one, b"a", b"1")?
+  let _ = put(mut one, b"b", b"2")?
+  test.check(t, logs(single) == 3)
+  store.close(take one)?
+  let mut reopened = store.open(single, config(1, Volatile()))?
+  test.check(t, store.get(store.snapshot(mut reopened), b"b") == Some(b"2"))
+  store.close(take reopened)?
+  Ok(())
+}

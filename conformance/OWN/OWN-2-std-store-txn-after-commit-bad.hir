@@ -1,0 +1,11 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 9
+// store.commit takes the transaction; writing to it afterwards is a use after move.
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  let mut x = store.begin(mut s)
+  let _ = store.commit(mut s, take x)?
+  txn.put(mut x, b"k", b"v")
+  Ok(())
+}

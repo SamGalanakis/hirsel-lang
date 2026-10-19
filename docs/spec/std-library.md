@@ -1012,6 +1012,42 @@ the heapsort fallback of List sort use sift kernels; reversing the priority-queu
 comparator never negates an i32.
 A fresh empty heap is unique. This surface provides no peek or indexed update.
 
+## Ordered maps
+
+```text
+Bound[K] = Unbounded | Included(K) | Excluded(K)
+Direction = Ascending | Descending
+fn ordered_map.empty[K: copyable, V: copyable](take by: fn(K, K) -> i32 uses {}) -> ordered_map.OrderedMap[K, V] uses {}
+fn ordered_map.len[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V]) -> u64 uses {}
+fn ordered_map.get[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V], key: K) -> Option[V] in m uses {}
+fn ordered_map.contains[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V], key: K) -> bool uses {}
+fn ordered_map.insert[K: copyable, V: copyable](mut m: ordered_map.OrderedMap[K, V], take key: K, take value: V) -> () uses {}
+fn ordered_map.remove[K: copyable, V: copyable](mut m: ordered_map.OrderedMap[K, V], key: K) -> Option[V] uses {}
+fn ordered_map.first[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V]) -> Option[(K, V)] in m uses {}
+fn ordered_map.last[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V]) -> Option[(K, V)] in m uses {}
+fn ordered_map.fold_range[K: copyable, V: copyable, A](m: ordered_map.OrderedMap[K, V], from: Bound[K], to: Bound[K], direction: Direction, take initial: A, step: fn(take A, K, V) -> (A, bool)) -> A uses {initial, step}
+fn ordered_map.valid[K: copyable, V: copyable](m: ordered_map.OrderedMap[K, V]) -> bool uses {}
+```
+
+`OrderedMap[K, V]` is a persistent ordered map: an opaque, copyable B-tree of degree 16
+(every node but the root holds 15 to 31 entries) whose nodes are ordinary values, holding
+the comparator `by` it was made with. Copying a map is O(1) and the copy is a snapshot:
+a later `insert` or `remove` on either copy detaches only the O(log n) nodes on its path,
+so the other copy never changes, and without a live copy writes update nodes in place.
+This is the core `SortedMap`'s sorted sequence with sharing: lookup, insert and remove
+take O(log n) comparisons, and insert and remove move O(log n) node entries instead of
+O(n). `insert` replaces the value of an equal key; `remove` returns the removed value or
+`None()` and leaves every node, and so every copy's sharing, untouched when the key is
+absent. `first` and `last` return the least and greatest entries.
+
+`fold_range` visits, in `direction` order, every entry whose key lies between `from` and
+`to` (each bound included, excluded or open), passing the accumulator through `step`,
+which also returns whether to continue; the walk ends at the first key past the far bound.
+Entries are read in place: copying them out is the step's choice, at the step's concrete
+types. A caller pages a range by passing `Excluded` of the last key it received.
+`valid` checks the tree's invariants (key order across the tree, node sizes, leaves at one
+depth and the count) for tests.
+
 ## Testing helpers
 
 `test.equal` checks structural equality of `data` values. `test.approx` requires
@@ -2542,6 +2578,92 @@ symlinks, and rejects a starting symlink or non-directory with `NotDirectory`.
 The first listing error is returned without a partial result. Listings are not a
 filesystem snapshot: concurrent changes can cause lookup errors or different
 entries, and all subsequent lookups retain the existing Dir confinement.
+
+## Stores
+
+```text
+StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults }
+StoreFaults = NoFaults | StopAfterWrites(u64)
+StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed
+fn store.default_config() -> store.StoreConfig uses {}
+fn store.open(d: Dir, config: store.StoreConfig) -> Result[store.Store, store.StoreError]
+fn store.snapshot(mut s: store.Store) -> store.Snapshot uses {}
+fn store.snapshot_sequence(snap: store.Snapshot) -> u64 uses {}
+fn store.get(snap: store.Snapshot, key: Bytes) -> Option[Bytes] in snap uses {}
+fn store.range(snap: store.Snapshot, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
+fn store.prefix_bounds(prefix: Bytes) -> (ordered_map.Bound[Bytes], ordered_map.Bound[Bytes]) uses {}
+fn store.compare_keys(a: Bytes, b: Bytes) -> i32 uses {}
+fn store.begin(mut s: store.Store) -> store.Txn uses {}
+fn txn.put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {}
+fn txn.delete(mut t: store.Txn, take key: Bytes) -> () uses {}
+fn txn.get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}
+fn txn.range(t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
+fn store.commit(mut s: store.Store, take t: store.Txn) -> Result[store.Ticket, store.StoreError]
+fn store.sequence(t: store.Ticket) -> u64 uses {}
+fn store.durable(mut s: store.Store, t: store.Ticket) -> Result[(), store.StoreError]
+fn store.compact(mut s: store.Store) -> Result[(), store.StoreError]
+fn store.close(take store: store.Store) -> Result[(), store.StoreError]
+```
+
+`std@1/store` is an embedded, transactional, ordered key-value store written in Hirsel
+over one `Dir`, which is its whole authority and its whole storage seam: real files, a
+`test.dir` world and recordings work unchanged. Keys and values are `Bytes`, ordered
+byte-lexicographically (`compare_keys`). A `Store` is the single writer of its directory;
+`Snapshot` and `Txn` are copyable values that hold no authority.
+
+**Transactions.** `begin` starts a `Txn` at the latest commit. `txn.get` and `txn.range`
+see that commit's state with the transaction's own earlier `put`s and `delete`s applied;
+nothing is visible elsewhere until `commit`. Dropping a `Txn` aborts it. `commit` makes
+the writes the next commit, numbered by consecutive sequences from 1, visible at once to
+later `snapshot`s and `begin`s, and returns its `Ticket`; it returns `Conflict()` with no
+effect when another commit landed after the transaction began. `range` and `txn.range`
+return at most `limit` entries between the bounds in `direction` order as fresh copies;
+`prefix_bounds(p)` gives the bounds of exactly the keys starting with `p`. A `Snapshot`
+reflects every commit up to `snapshot_sequence`, durable or not, and later commits never
+change it: holding one never holds up the writer.
+
+**Output gate and group commit.** Commits queue in memory until `durable` is awaited or
+`group_limit` of them are pending; the group is then written as one log object, the
+commit point of every commit in it. `durable(t)` returns once `t`'s commit and every
+earlier one are in a written log object, writing the pending group when `t` is in it;
+for a ticket already written it writes nothing. With `durability` `Durable()` (the
+default) a log object is created with `file.put_new(.., Durable())` and so is synced
+before `durable` returns; with `Volatile()` it is created unsynced, and a crash may lose
+any suffix of the commits, never part of one. Groups are deterministic: no timers.
+
+**Layout.** Under the `Dir`, every object is immutable and created only by `put_new`,
+named by a kind directory and a 20-digit decimal id: `manifest/N` names the writer epoch,
+the current snapshot object and the first log id to replay; `log/N` holds one commit
+group, the first commit's sequence and each commit's ordered write set; `snap/N` holds
+every entry as of one commit. Every object is a header (magic `HSTR`, format version 1,
+kind, its own id, the writer epoch), a body and a CRC-32C of everything before it,
+integers little-endian, so a misdirected or torn object fails its check.
+
+**Open, recovery and fencing.** `open` creates the three directories when absent, reads
+the newest manifest, loads its snapshot and replays the log objects from its first log id
+in id order, applying each commit after the snapshot's. A bad last log object is a torn
+tail, never acknowledged: it is removed. A bad or missing log object before the last, a
+bad manifest or snapshot, or a commit sequence or writer epoch out of order refuses the
+open with `Corrupt(name)`; in a `Volatile()` store the first bad or missing log object
+ends the log instead, and the objects after it are removed. The opener then claims the
+store: it creates an empty fence log at the next log id and then the next manifest with
+the next epoch. A writer that finds the id of its next object taken has been fenced by
+another writer and returns `Fenced()`. `Storage`, `Corrupt`, `Fenced` and `Injected`
+close the store; every later call returns `Closed()`.
+
+**Compaction.** `compact` writes any pending group, writes every entry into the next
+snapshot object, publishes it with the next manifest (whose first log id is the next log
+id), then removes older manifests and snapshots and the logs before it. Until the
+manifest exists the old state is current; after it, the superseded objects are garbage
+that the next `open` removes, so a crash at any point recovers.
+
+**Storage contract.** The engine needs exactly these operations of its storage, which an
+object-storage provider must offer: create an object whole if its name is absent
+(`put_new`, reporting `AlreadyExists` otherwise; `Durable()` makes it survive a crash),
+read a whole object, list a kind directory's names in byte order, and remove an object.
+It never appends, renames, overwrites or reads at an offset. `StopAfterWrites(n)` is the
+fault seam for crash tests: the store's storage mutation after its first `n` (creates,
+removals and directory creations, from `open` on) returns `Injected()` with no effect.
 
 ## Compressed data
 

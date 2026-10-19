@@ -941,6 +941,24 @@
       "module": [
         "html"
       ]
+    },
+    {
+      "path": "ordered_map.hir",
+      "module": [
+        "ordered_map"
+      ]
+    },
+    {
+      "path": "store.hir",
+      "module": [
+        "store"
+      ]
+    },
+    {
+      "path": "txn.hir",
+      "module": [
+        "txn"
+      ]
     }
   ],
   "dependencies": []

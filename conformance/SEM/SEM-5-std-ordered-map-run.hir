@@ -1,0 +1,92 @@
+// rule: SEM-5
+// expect: run
+// std@1/ordered_map keeps entries in comparator order: insert replaces, remove
+// returns the value, first and last are the ends, fold_range walks a bounded
+// range either way and stops when the step says so, and a copy is a snapshot
+// that later writes to the original never change.
+fn by_value(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn keys(
+  m: ordered_map.OrderedMap[u64, u64],
+  from: ordered_map.Bound[u64],
+  to: ordered_map.Bound[u64],
+  direction: ordered_map.Direction,
+  limit: u64
+) -> List[u64] {
+  let start: List[u64] = []
+  ordered_map.fold_range(
+    m,
+    from,
+    to,
+    direction,
+    take start,
+    fn(take acc: List[u64], k: u64, v: u64) -> (List[u64], bool) {
+      let mut out = take acc
+      list.push(mut out, k)
+      let more = list.len(out) < limit
+      (take out, more)
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut m: ordered_map.OrderedMap[u64, u64] = ordered_map.empty(by_value)
+  test.check(t, ordered_map.first(m) == None() && ordered_map.len(m) == 0)
+  // 37 generates the integers modulo 101 in a scrambled order.
+  for i in 0u64..101 {
+    ordered_map.insert(mut m, i * 37 % 101, i)
+  }
+  ordered_map.insert(mut m, 5, 500)
+  test.check(t, ordered_map.len(m) == 101 && ordered_map.valid(m))
+  test.check(
+    t,
+    ordered_map.get(m, 5) == Some(500u64) && ordered_map.get(m, 101) == None()
+  )
+  test.check(
+    t,
+    ordered_map.first(m) == Some((0u64, 0u64)) && ordered_map.last(m) == Some(
+      (100u64, 30u64)
+    )
+  )
+  let snap = copy m
+  for i in 0u64..60 {
+    test.check(
+      t,
+      ordered_map.remove(mut m, i * 37 % 101) == Some(
+        if i * 37 % 101 == 5 {
+          500u64
+        } else {
+          i
+        }
+      )
+    )
+  }
+  test.check(t, ordered_map.remove(mut m, 37) == None())
+  test.check(
+    t,
+    ordered_map.len(m) == 41 && ordered_map.valid(m) && !ordered_map.contains(m, 37)
+  )
+  test.check(
+    t,
+    ordered_map.len(snap) == 101 && ordered_map.valid(snap) && ordered_map.get(snap, 37) == Some(
+      1u64
+    )
+  )
+  let up: ordered_map.Direction = Ascending()
+  let down: ordered_map.Direction = Descending()
+  test.check(t, keys(snap, Included(10), Excluded(15), up, 100) == [10, 11, 12, 13, 14])
+  test.check(t, keys(snap, Excluded(10), Included(15), down, 3) == [15, 14, 13])
+  test.check(t, keys(snap, Unbounded(), Excluded(3), up, 100) == [0, 1, 2])
+  test.check(t, keys(snap, Included(98), Unbounded(), down, 100) == [100, 99, 98])
+  test.check(t, keys(snap, Included(15), Excluded(15), up, 100) == [])
+  test.check(t, list.len(keys(m, Unbounded(), Unbounded(), up, 1000)) == 41)
+  Ok(())
+}

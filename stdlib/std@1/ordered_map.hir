@@ -1,0 +1,643 @@
+// A persistent ordered map: a B-tree (the top-down insert and delete of CLRS
+// chapter 18) whose nodes are ordinary values. Copying a map shares its root in O(1), and Hirsel's value
+// semantics detach only the nodes a later write passes through, so a copy is a
+// stable snapshot and a write after one copies O(log n) nodes of at most
+// 2 * DEGREE - 1 entries each; without a live copy, writes update nodes in place.
+pub opaque type OrderedMap[K: copyable, V: copyable]: copyable uses {K, V} {
+  by: fn(K, K) -> i32 uses {},
+  root: Node[K, V],
+  count: u64,
+}
+
+// Nodes recurse through List, not box: a variant and record recursive through
+// box stop the checker ("signature normalization is not implemented yet",
+// routed to checker-fixes-2), and a B-tree suits copy-on-write nodes anyway.
+// A leaf has no kids; an inner node has one more kid than keys. Every node but
+// the root holds between DEGREE - 1 and 2 * DEGREE - 1 keys.
+type Node[K, V] {
+  keys: List[K],
+  values: List[V],
+  kids: List[Node[K, V]],
+}
+
+const DEGREE: u64 = 16
+
+/// One end of a key range: no limit, the key itself included, or excluded.
+pub type Bound[K] = Unbounded | Included(K) | Excluded(K)
+
+/// The order a range is returned in.
+pub type Direction = Ascending | Descending
+
+/// An empty map ordered by `by`, which returns a negative, zero or positive
+/// result as its first argument sorts before, equal to or after its second.
+pub fn empty[K: copyable, V: copyable](take by: fn(K, K) -> i32 uses {}) -> OrderedMap[
+  K,
+  V
+] uses {} {
+  OrderedMap(by: by, root: Node(keys: [], values: [], kids: []), count: 0)
+}
+
+@noalloc
+pub fn len[K: copyable, V: copyable](m: OrderedMap[K, V]) -> u64 uses {} {
+  m.count
+}
+
+/// The value stored under `key`, or `None()`.
+pub fn get[K: copyable, V: copyable](m: OrderedMap[K, V], key: K) -> Option[V] in m uses {} {
+  find(m.by, m.root, key)
+}
+
+pub fn contains[K: copyable, V: copyable](m: OrderedMap[K, V], key: K) -> bool uses {} {
+  match get(m, key) {
+    Some(_) => true,
+    None() => false,
+  }
+}
+
+/// Stores `value` under `key`, replacing any value already there.
+pub fn insert[K: copyable, V: copyable](
+  mut m: OrderedMap[K, V],
+  take key: K,
+  take value: V
+) -> () uses {} {
+  let mut root = replace(mut m.root, Node(keys: [], values: [], kids: []))
+  if list.len(root.keys) == 2 * DEGREE - 1 {
+    let mut top: Node[K, V] = Node(keys: [], values: [], kids: [take root])
+    split_kid(mut top, 0)
+    root = take top
+  }
+  let (grown, added) = insert_below(m.by, take root, take key, take value)
+  m.root = take grown
+  if added {
+    m.count += 1
+  }
+}
+
+/// Removes `key` and returns its value, or `None()` when the map lacks it.
+pub fn remove[K: copyable, V: copyable](mut m: OrderedMap[K, V], key: K) -> Option[V] uses {} {
+  // A missing key leaves every node, and every snapshot's sharing, untouched.
+  if !contains(m, key) {
+    return None()
+  }
+  let root = replace(mut m.root, Node(keys: [], values: [], kids: []))
+  let (rest, gone) = remove_below(m.by, take root, key)
+  m.root = if list.len(rest.keys) == 0 && list.len(rest.kids) == 1 {
+    copy rest.kids[0]
+  } else {
+    take rest
+  }
+  m.count -= 1
+  match take gone {
+    Some((_, value)) => Some(take value),
+    None() => None(),
+  }
+}
+
+/// The least entry, or `None()` for an empty map.
+pub fn first[K: copyable, V: copyable](m: OrderedMap[K, V]) -> Option[(K, V)] in m uses {} {
+  edge(m.root, true)
+}
+
+/// The greatest entry, or `None()` for an empty map.
+pub fn last[K: copyable, V: copyable](m: OrderedMap[K, V]) -> Option[(K, V)] in m uses {} {
+  edge(m.root, false)
+}
+
+// Workaround (checker bug, routed to checker-fixes-2): a generic `unique` of a
+// borrowed part fails TIR validation, so no generic `range` returns copied
+// entries; callers copy them out in `step` at a concrete type (store.range).
+/// Folds `step` over the entries whose keys lie between `from` and `to`, in
+/// `direction` order, starting from `initial`. `step` returns the next
+/// accumulator and whether to continue; the walk also ends at the far bound.
+/// It reads entries in place, so collecting them is the caller's choice.
+pub fn fold_range[K: copyable, V: copyable, A](
+  m: OrderedMap[K, V],
+  from: Bound[K],
+  to: Bound[K],
+  direction: Direction,
+  take initial: A,
+  step: fn(take A, K, V) -> (A, bool)
+) -> A uses {initial, step} {
+  let ascending = match direction {
+    Ascending() => true,
+    Descending() => false,
+  }
+  let (folded, _) = walk(m.by, m.root, from, to, ascending, take initial, step)
+  folded
+}
+
+/// Whether the tree's invariants hold: keys strictly ordered across the whole
+/// tree, every node within its key bounds, every leaf at one depth and the
+/// count equal to the number of entries. For tests of this module.
+pub fn valid[K: copyable, V: copyable](m: OrderedMap[K, V]) -> bool uses {} {
+  let (ok, _, size) = check(m.by, m.root, true, None(), None())
+  ok && size == m.count
+}
+
+fn check[K: copyable, V: copyable](
+  by: fn(K, K) -> i32 uses {},
+  n: Node[K, V],
+  root: bool,
+  low: Option[K],
+  high: Option[K]
+) -> (bool, u64, u64) uses {} {
+  let count = list.len(n.keys)
+  let is_leaf = list.len(n.kids) == 0
+  let mut ok = count < 2 * DEGREE && list.len(n.values) == count
+  if !root {
+    ok = ok && count >= DEGREE - 1
+  }
+  if !is_leaf {
+    ok = ok && list.len(n.kids) == count + 1
+  }
+  for i in 0u64..count {
+    if i > 0 {
+      ok = ok && by(n.keys[i - 1], n.keys[i]) < 0
+    }
+    if let Some(l) = low {
+      ok = ok && by(l, n.keys[i]) < 0
+    }
+    if let Some(h) = high {
+      ok = ok && by(n.keys[i], h) < 0
+    }
+  }
+  if !ok || is_leaf {
+    return (ok, 1, count)
+  }
+  let mut size = count
+  let mut depth: u64 = 0
+  for i in 0u64..count + 1 {
+    let below = if i == 0 {
+      copy low
+    } else {
+      Some(copy n.keys[i - 1])
+    }
+    let above = if i == count {
+      copy high
+    } else {
+      Some(copy n.keys[i])
+    }
+    let (kid_ok, kid_depth, kid_size) = check(by, n.kids[i], false, below, above)
+    if !kid_ok || i > 0 && kid_depth != depth {
+      return (false, 0, 0)
+    }
+    depth = kid_depth
+    size += kid_size
+  }
+  (true, depth + 1, size)
+}
+
+// The position of `key` among `keys`: whether it is there, and its index if so,
+// else the index of the first greater key.
+fn search[K](by: fn(K, K) -> i32 uses {}, keys: List[K], key: K) -> (bool, u64) uses {} {
+  let mut low: u64 = 0
+  let mut high = list.len(keys)
+  while low < high {
+    let mid = low + (high - low) / 2
+    let c = by(keys[mid], key)
+    if c == 0 {
+      return (true, mid)
+    }
+    if c < 0 {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  (false, low)
+}
+
+// The number of keys of `keys` before `bound` when walking up (a lower bound) or
+// not after it when walking down (an upper bound).
+fn position[K](
+  by: fn(K, K) -> i32 uses {},
+  keys: List[K],
+  bound: Bound[K],
+  ascending: bool
+) -> u64 uses {} {
+  let (found, i) = match bound {
+    Unbounded() => {
+      if ascending {
+        return 0
+      }
+      return list.len(keys)
+    },
+    Included(b) => search(by, keys, b),
+    Excluded(b) => search(by, keys, b),
+  }
+  let included = match bound {
+    Included(_) => true,
+    _ => false,
+  }
+  if ascending {
+    if found && !included {
+      i + 1
+    } else {
+      i
+    }
+  } else if found && included {
+    i + 1
+  } else {
+    i
+  }
+}
+
+fn find[K: copyable, V: copyable](by: fn(K, K) -> i32 uses {}, n: Node[K, V], key: K) -> Option[
+  V
+] in n uses {} {
+  let (found, i) = search(by, n.keys, key)
+  if found {
+    return Some(copy n.values[i])
+  }
+  if list.len(n.kids) == 0 {
+    return None()
+  }
+  find(by, n.kids[i], key)
+}
+
+// Folds `step` over the entries of `n` inside the range in walk order. Returns
+// the accumulator and false once the walk is over: a key past the far bound,
+// or `step` declined to continue.
+fn walk[K: copyable, V: copyable, A](
+  by: fn(K, K) -> i32 uses {},
+  n: Node[K, V],
+  from: Bound[K],
+  to: Bound[K],
+  ascending: bool,
+  take initial: A,
+  step: fn(take A, K, V) -> (A, bool)
+) -> (A, bool) uses {initial, step} {
+  let mut acc = take initial
+  let count = list.len(n.keys)
+  let inner = list.len(n.kids) > 0
+  let mut i = if ascending {
+    position(by, n.keys, from, true)
+  } else {
+    position(by, n.keys, to, false)
+  }
+  if inner {
+    let (next, more) = walk(by, n.kids[i], from, to, ascending, take acc, step)
+    if !more {
+      return (take next, false)
+    }
+    acc = take next
+  }
+  while ascending && i < count || !ascending && i > 0 {
+    let at = if ascending {
+      i
+    } else {
+      i - 1
+    }
+    if !inside(by, n.keys[at], from, to) {
+      return (take acc, false)
+    }
+    let (stepped, more) = step(take acc, n.keys[at], n.values[at])
+    if !more {
+      return (take stepped, false)
+    }
+    acc = take stepped
+    if inner {
+      let kid = if ascending {
+        at + 1
+      } else {
+        at
+      }
+      let (next, more_below) = walk(
+        by,
+        n.kids[kid],
+        from,
+        to,
+        ascending,
+        take acc,
+        step
+      )
+      if !more_below {
+        return (take next, false)
+      }
+      acc = take next
+    }
+    i = if ascending {
+      i + 1
+    } else {
+      i - 1
+    }
+  }
+  (take acc, true)
+}
+
+fn inside[K](by: fn(K, K) -> i32 uses {}, key: K, from: Bound[K], to: Bound[K]) -> bool uses {} {
+  let above = match from {
+    Unbounded() => true,
+    Included(b) => by(key, b) >= 0,
+    Excluded(b) => by(key, b) > 0,
+  }
+  let below = match to {
+    Unbounded() => true,
+    Included(b) => by(key, b) <= 0,
+    Excluded(b) => by(key, b) < 0,
+  }
+  above && below
+}
+
+// `xs` with `value` with_at before index `at`.
+fn with_at[T: copyable](take xs: List[T], at: u64, take value: T) -> List[T] uses {} {
+  let mut out: List[T] = []
+  list.reserve(mut out, list.len(xs) + 1)
+  for i in 0u64..at {
+    list.push(mut out, copy xs[i])
+  }
+  list.push(mut out, take value)
+  for i in at..list.len(xs) {
+    list.push(mut out, copy xs[i])
+  }
+  out
+}
+
+// `xs` without the element at index `at`.
+fn without[T: copyable](take xs: List[T], at: u64) -> List[T] uses {} {
+  let mut out: List[T] = []
+  for i in 0u64..list.len(xs) {
+    if i != at {
+      list.push(mut out, copy xs[i])
+    }
+  }
+  out
+}
+
+// `xs` without the element at index `at`, and that element.
+fn take_at[T: copyable](take xs: List[T], at: u64) -> (List[T], T) uses {} {
+  let element = copy xs[at]
+  (without(take xs, at), take element)
+}
+
+// The elements of `xs` from index `from` up to, not including, `to`.
+fn slice_of[T: copyable](take xs: List[T], from: u64, to: u64) -> List[T] uses {} {
+  let mut out: List[T] = []
+  for i in from..to {
+    list.push(mut out, copy xs[i])
+  }
+  out
+}
+
+// Splits the full kid `i` of `n` around its median, which moves up into `n`.
+fn split_kid[K: copyable, V: copyable](mut n: Node[K, V], i: u64) -> () uses {} {
+  let kid = replace(mut n.kids[i], Node(keys: [], values: [], kids: []))
+  let full = list.len(kid.keys)
+  let inner = list.len(kid.kids) > 0
+  let left = Node(
+    keys: slice_of(copy kid.keys, 0, DEGREE - 1),
+    values: slice_of(copy kid.values, 0, DEGREE - 1),
+    kids: if inner {
+      slice_of(copy kid.kids, 0, DEGREE)
+    } else {
+      []
+    }
+  )
+  let right = Node(
+    keys: slice_of(copy kid.keys, DEGREE, full),
+    values: slice_of(copy kid.values, DEGREE, full),
+    kids: if inner {
+      slice_of(copy kid.kids, DEGREE, full + 1)
+    } else {
+      []
+    }
+  )
+  n.keys = with_at(replace(mut n.keys, []), i, copy kid.keys[DEGREE - 1])
+  n.values = with_at(replace(mut n.values, []), i, copy kid.values[DEGREE - 1])
+  n.kids[i] = take left
+  n.kids = with_at(replace(mut n.kids, []), i + 1, take right)
+}
+
+// Inserts into the subtree `n`, which is not full. Returns the new subtree and
+// whether a key was added.
+fn insert_below[K: copyable, V: copyable](
+  by: fn(K, K) -> i32 uses {},
+  take node: Node[K, V],
+  take key: K,
+  take value: V
+) -> (Node[K, V], bool) uses {} {
+  let mut n = take node
+  let (found, i) = search(by, n.keys, key)
+  if found {
+    n.values[i] = take value
+    return (take n, false)
+  }
+  if list.len(n.kids) == 0 {
+    n.keys = with_at(replace(mut n.keys, []), i, take key)
+    n.values = with_at(replace(mut n.values, []), i, take value)
+    return (take n, true)
+  }
+  let mut at = i
+  if list.len(n.kids[at].keys) == 2 * DEGREE - 1 {
+    split_kid(mut n, at)
+    let c = by(key, n.keys[at])
+    if c == 0 {
+      n.values[at] = take value
+      return (take n, false)
+    }
+    if c > 0 {
+      at += 1
+    }
+  }
+  let kid = replace(mut n.kids[at], Node(keys: [], values: [], kids: []))
+  let (grown, added) = insert_below(by, take kid, take key, take value)
+  n.kids[at] = take grown
+  (take n, added)
+}
+
+// Removes `key` from the subtree `n` and returns the new subtree and the without
+// entry, first raising every kid it descends into above the minimum so the
+// removal never underflows a node.
+fn remove_below[K: copyable, V: copyable](
+  by: fn(K, K) -> i32 uses {},
+  take node: Node[K, V],
+  key: K
+) -> (Node[K, V], Option[(K, V)]) uses {} {
+  let mut n = take node
+  let (found, i) = search(by, n.keys, key)
+  if list.len(n.kids) == 0 {
+    if !found {
+      return (take n, None())
+    }
+    let entry = (copy n.keys[i], copy n.values[i])
+    n.keys = without(replace(mut n.keys, []), i)
+    n.values = without(replace(mut n.values, []), i)
+    return (take n, Some(take entry))
+  }
+  if found {
+    // An inner key is replaced by its neighbour from a kid that can spare one.
+    let side: Option[(u64, bool)] = if list.len(n.kids[i].keys) >= DEGREE {
+      Some((i, false))
+    } else if list.len(n.kids[i + 1].keys) >= DEGREE {
+      Some((i + 1, true))
+    } else {
+      None()
+    }
+    if let Some((k, least)) = side {
+      let kid = replace(mut n.kids[k], Node(keys: [], values: [], kids: []))
+      let (rest, neighbour) = remove_edge(take kid, least)
+      n.kids[k] = take rest
+      let Some((nk, nv)) = take neighbour else {
+        return (take n, None())
+      }
+      let entry = (copy n.keys[i], copy n.values[i])
+      n.keys[i] = take nk
+      n.values[i] = take nv
+      return (take n, Some(take entry))
+    }
+    merge(mut n, i)
+    let kid = replace(mut n.kids[i], Node(keys: [], values: [], kids: []))
+    let (rest, entry) = remove_below(by, take kid, key)
+    n.kids[i] = take rest
+    return (take n, take entry)
+  }
+  let at = fill(mut n, i)
+  let kid = replace(mut n.kids[at], Node(keys: [], values: [], kids: []))
+  let (rest, entry) = remove_below(by, take kid, key)
+  n.kids[at] = take rest
+  (take n, take entry)
+}
+
+// The least (or greatest) entry of the subtree `n`.
+fn edge[K: copyable, V: copyable](n: Node[K, V], least: bool) -> Option[(K, V)] in n uses {} {
+  let count = list.len(n.keys)
+  if list.len(n.kids) > 0 {
+    let k: u64 = if least {
+      0
+    } else {
+      count
+    }
+    return edge(n.kids[k], least)
+  }
+  if count == 0 {
+    return None()
+  }
+  let i: u64 = if least {
+    0
+  } else {
+    count - 1
+  }
+  Some((copy n.keys[i], copy n.values[i]))
+}
+
+// Removes the least (or greatest) entry of the nonempty subtree `n`.
+fn remove_edge[K: copyable, V: copyable](take node: Node[K, V], least: bool) -> (
+  Node[K, V],
+  Option[(K, V)]
+) uses {} {
+  let mut n = take node
+  if list.len(n.kids) == 0 {
+    if list.len(n.keys) == 0 {
+      return (take n, None())
+    }
+    let i: u64 = if least {
+      0
+    } else {
+      list.len(n.keys) - 1
+    }
+    let entry = (copy n.keys[i], copy n.values[i])
+    n.keys = without(replace(mut n.keys, []), i)
+    n.values = without(replace(mut n.values, []), i)
+    return (take n, Some(take entry))
+  }
+  let edge_kid: u64 = if least {
+    0
+  } else {
+    list.len(n.kids) - 1
+  }
+  let at = fill(mut n, edge_kid)
+  let kid = replace(mut n.kids[at], Node(keys: [], values: [], kids: []))
+  let (rest, entry) = remove_edge(take kid, least)
+  n.kids[at] = take rest
+  (take n, take entry)
+}
+
+// Raises kid `i` of `n` above the minimum by borrowing from a sibling or merging
+// with one, and returns the kid's index afterwards.
+fn fill[K: copyable, V: copyable](mut n: Node[K, V], i: u64) -> u64 uses {} {
+  if list.len(n.kids[i].keys) >= DEGREE {
+    return i
+  }
+  if i > 0 && list.len(n.kids[i - 1].keys) >= DEGREE {
+    rotate_right(mut n, i)
+    return i
+  }
+  if i + 1 < list.len(n.kids) && list.len(n.kids[i + 1].keys) >= DEGREE {
+    rotate_left(mut n, i)
+    return i
+  }
+  if i + 1 < list.len(n.kids) {
+    merge(mut n, i)
+    return i
+  }
+  merge(mut n, i - 1)
+  i - 1
+}
+
+// Joins kid `i + 1` and the separating key into kid `i`.
+fn merge[K: copyable, V: copyable](mut n: Node[K, V], i: u64) -> () uses {} {
+  let (keys, separator_key) = take_at(replace(mut n.keys, []), i)
+  let (values, separator_value) = take_at(replace(mut n.values, []), i)
+  let (kids, right) = take_at(replace(mut n.kids, []), i + 1)
+  n.keys = take keys
+  n.values = take values
+  n.kids = take kids
+  let mut left = replace(mut n.kids[i], Node(keys: [], values: [], kids: []))
+  list.push(mut left.keys, take separator_key)
+  list.push(mut left.values, take separator_value)
+  for x in right.keys {
+    list.push(mut left.keys, copy x)
+  }
+  for x in right.values {
+    list.push(mut left.values, copy x)
+  }
+  for x in right.kids {
+    list.push(mut left.kids, copy x)
+  }
+  n.kids[i] = take left
+}
+
+// Moves the separator before kid `i` down into it and the left sibling's last
+// entry up in its place.
+fn rotate_right[K: copyable, V: copyable](mut n: Node[K, V], i: u64) -> () uses {} {
+  let mut left = replace(mut n.kids[i - 1], Node(keys: [], values: [], kids: []))
+  let mut kid = replace(mut n.kids[i], Node(keys: [], values: [], kids: []))
+  let final = list.len(left.keys) - 1
+  let up_key = copy left.keys[final]
+  let up_value = copy left.values[final]
+  let down_key = replace(mut n.keys[i - 1], take up_key)
+  let down_value = replace(mut n.values[i - 1], take up_value)
+  kid.keys = with_at(replace(mut kid.keys, []), 0, take down_key)
+  kid.values = with_at(replace(mut kid.values, []), 0, take down_value)
+  left.keys = slice_of(replace(mut left.keys, []), 0, final)
+  left.values = slice_of(replace(mut left.values, []), 0, final)
+  if list.len(left.kids) > 0 {
+    let moved = copy left.kids[final + 1]
+    kid.kids = with_at(replace(mut kid.kids, []), 0, take moved)
+    left.kids = slice_of(replace(mut left.kids, []), 0, final + 1)
+  }
+  n.kids[i - 1] = take left
+  n.kids[i] = take kid
+}
+
+// Moves the separator after kid `i` down into it and the right sibling's first
+// entry up in its place.
+fn rotate_left[K: copyable, V: copyable](mut n: Node[K, V], i: u64) -> () uses {} {
+  let mut right = replace(mut n.kids[i + 1], Node(keys: [], values: [], kids: []))
+  let mut kid = replace(mut n.kids[i], Node(keys: [], values: [], kids: []))
+  let (right_keys, up_key) = take_at(replace(mut right.keys, []), 0)
+  let (right_values, up_value) = take_at(replace(mut right.values, []), 0)
+  right.keys = take right_keys
+  right.values = take right_values
+  let down_key = replace(mut n.keys[i], take up_key)
+  let down_value = replace(mut n.values[i], take up_value)
+  list.push(mut kid.keys, take down_key)
+  list.push(mut kid.values, take down_value)
+  if list.len(right.kids) > 0 {
+    let (right_kids, moved) = take_at(replace(mut right.kids, []), 0)
+    right.kids = take right_kids
+    list.push(mut kid.kids, take moved)
+  }
+  n.kids[i + 1] = take right
+  n.kids[i] = take kid
+}

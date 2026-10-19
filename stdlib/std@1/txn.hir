@@ -1,0 +1,31 @@
+// Reads and writes inside a std@1/store transaction. Reads see the snapshot
+// the transaction began at with its own earlier writes applied; nothing is
+// visible to anyone else until store.commit.
+/// Stores `value` under `key` when the transaction commits.
+pub fn put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {} {
+  ordered_map.insert(mut t.state, copy key, copy value)
+  ordered_map.insert(mut t.writes, take key, Some(take value))
+}
+
+/// Removes `key` when the transaction commits.
+pub fn delete(mut t: store.Txn, take key: Bytes) -> () uses {} {
+  let _ = ordered_map.remove(mut t.state, key)
+  ordered_map.insert(mut t.writes, take key, None())
+}
+
+/// The value under `key` as this transaction sees it.
+pub fn get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {} {
+  ordered_map.get(t.state, key)
+}
+
+/// At most `limit` entries with keys between `from` and `to` as this
+/// transaction sees them, in `direction` order, as fresh copies.
+pub fn range(
+  t: store.Txn,
+  from: ordered_map.Bound[Bytes],
+  to: ordered_map.Bound[Bytes],
+  direction: ordered_map.Direction,
+  limit: u64
+) -> List[(Bytes, Bytes)] uses {} {
+  store.entries_in(t.state, from, to, direction, limit)
+}

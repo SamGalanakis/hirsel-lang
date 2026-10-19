@@ -1,0 +1,102 @@
+// rule: DET-1
+// expect: run
+// std@1/store recovery: compaction leaves one manifest, one snapshot and only
+// the logs after it, and a reopen restores the same state; a bad last log
+// object is a torn tail, dropped as never acknowledged; a bad or missing log
+// object before the tail refuses the open with Corrupt() naming it; a
+// Volatile store crashed after its log names became durable without their
+// bytes keeps a prefix of its commits.
+fn put(mut s: store.Store, k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+  let mut x = store.begin(mut s)
+  txn.put(mut x, unique k, unique v)
+  let ticket = store.commit(mut s, take x)?
+  store.durable(mut s, ticket)
+}
+
+fn count(d: Dir, kind: String) -> u64 uses {d} {
+  match file.read_dir(d, path.of(kind)) {
+    Ok(entries) => list.len(entries),
+    Error(_) => 0,
+  }
+}
+
+fn name(kind: String, id: u64) -> String {
+  f"{kind}/{id:020}"
+}
+
+fn corrupt(d: Dir, p: String) -> Result[(), FileError] uses {d} {
+  file.remove(d, path.of(p))?
+  file.put_new(d, path.of(p), b"not a log object", Durable())
+}
+
+fn size(mut s: store.Store) -> u64 {
+  let all: ordered_map.Bound[Bytes] = Unbounded()
+  list.len(store.range(store.snapshot(mut s), all, Unbounded(), Ascending(), 100))
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  put(mut s, b"a", b"1")?
+  put(mut s, b"b", b"2")?
+  store.compact(mut s)?
+  test.check(
+    t,
+    count(d, "manifest") == 1 && count(d, "snap") == 1 && count(d, "log") == 0
+  )
+  put(mut s, b"c", b"3")?
+  put(mut s, b"d", b"4")?
+  put(mut s, b"e", b"5")?
+  store.close(take s)?
+  // Logs 3, 4 and 5 hold c, d and e. A bad last log is a torn tail.
+  test.check(t, count(d, "log") == 3)
+  let _ = corrupt(d, name("log", 5))
+  let mut torn = store.open(d, store.default_config())?
+  test.check(
+    t,
+    size(mut torn) == 4 && store.get(store.snapshot(mut torn), b"e") == None()
+  )
+  store.close(take torn)?
+  // The reopen claimed log 5 for its fence; a bad log before it is corruption.
+  let _ = corrupt(d, name("log", 4))
+  let refused = match store.open(d, store.default_config()) {
+    Error(Corrupt(object)) => object == name("log", 4),
+    _ => false,
+  }
+  test.check(t, refused)
+  let _ = file.remove(d, path.of(name("log", 4)))
+  let gap = match store.open(d, store.default_config()) {
+    Error(Corrupt(object)) => object == name("log", 5),
+    _ => false,
+  }
+  test.check(t, gap)
+  // Volatile logs whose names a later fence made durable lose their bytes.
+  let v = test.dir(t, [])
+  let mut c = store.default_config()
+  c.durability = Volatile()
+  c.group_limit = 1
+  let mut w = store.open(v, c)?
+  put(mut w, b"x", b"1")?
+  put(mut w, b"y", b"2")?
+  store.close(take w)?
+  let mut w2 = store.open(v, c)?
+  test.check(t, size(mut w2) == 2)
+  store.close(take w2)?
+  test.crash(t, v, 3)
+  let mut w3 = store.open(v, c)?
+  let kept = store.snapshot(mut w3)
+  let x = store.get(kept, b"x")
+  let y = store.get(kept, b"y")
+  test.check(
+    t,
+    x == None() && y == None() || x == Some(b"1") && y == None() || x == Some(b"1") && y == Some(
+      b"2"
+    )
+  )
+  put(mut w3, b"z", b"3")?
+  store.close(take w3)?
+  let mut w4 = store.open(v, c)?
+  test.check(t, store.get(store.snapshot(mut w4), b"z") == Some(b"3"))
+  store.close(take w4)?
+  Ok(())
+}
