@@ -100,8 +100,9 @@ resolves `LLVM_SYS_211_PREFIX` and each variable of
 `native-toolchain/environment.tsv` (`HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`,
 `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`, `VALGRIND_LIB`,
 `HIRSEL_VALGRIND_RUNTIME`: a path inside one toolchain) to absolute input paths
-before changing directory; `bench/native/suite.py` sets the same table. The driver's
-clang launcher selects the input lld. Native launches preserve the selected
+before changing directory; `bench/native/suite.py` sets the same table. The driver
+links with the input `ld.lld`, using the link command the clang launcher (or the
+AArch64 compiler) prints for `-###`. Native launches preserve the selected
 Valgrind support directory when clearing the child's environment.
 
 The full gate's runtime C harness, library C probes and LLVM pin check are

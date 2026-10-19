@@ -12,6 +12,7 @@ mod executable;
 mod exit_report;
 mod heap;
 mod link;
+mod link_line;
 mod observe;
 mod pairwise;
 mod proofs;

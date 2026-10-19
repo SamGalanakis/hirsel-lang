@@ -19,10 +19,15 @@ pub struct Toolchain {
     /// The archive variant `link` links; measurement also selects emitted
     /// inline-edge hooks. `with_runtime` selects another built variant.
     pub runtime_build: RuntimeBuild,
-    /// The pinned clang, which drives the x86-64 link.
+    /// The pinned clang. Its `-###` x86-64 link command is the one `lld` runs.
     pub clang: PathBuf,
-    /// The AArch64 cross compiler driver.
+    /// The AArch64 cross compiler driver. Its `-###` link command is the one
+    /// `lld` runs for AArch64.
     pub aarch64_cc: PathBuf,
+    /// The pinned `ld.lld`, which links every executable directly.
+    pub lld: PathBuf,
+    /// The private runtime cache, which keeps each driver's link command.
+    pub cache: PathBuf,
     /// The user-mode emulator AArch64 executables run under, and its sysroot.
     pub qemu_aarch64: PathBuf,
     pub aarch64_sysroot: PathBuf,
@@ -277,6 +282,8 @@ impl Toolchain {
             runtime_build,
             clang: prefix.join("bin/hirsel-clang"),
             aarch64_cc,
+            lld: prefix.join("bin/ld.lld"),
+            cache: build_dir.to_path_buf(),
             qemu_aarch64: environment_path("HIRSEL_QEMU_AARCH64")?,
             aarch64_sysroot: environment_path("HIRSEL_AARCH64_SYSROOT")?,
             valgrind: environment_path("HIRSEL_VALGRIND")?,
@@ -772,6 +779,7 @@ pub fn link_library(
     run: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<Library, NativeError> {
     let main = launcher_object(program, entry, objects, dir, run, false, LIBRARY_RUN)?;
+    let main = write(dir, "main.o", &main)?;
     let path = link_launcher(
         program,
         entry,
@@ -779,7 +787,7 @@ pub fn link_library(
         toolchain,
         dir,
         Output::Library,
-        &main,
+        &[main],
     )?;
     let mut imports: std::collections::BTreeSet<String> = objects
         .iter()
@@ -882,12 +890,20 @@ fn link_objects_impl(
 ) -> Result<PathBuf, NativeError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
+    let main = write(dir, "main.o", &main)?;
     let output = if standalone {
         Output::Standalone
     } else {
         Output::Launched
     };
-    link_launcher(program, entry, objects, toolchain, dir, output, &main)
+    link_launcher(program, entry, objects, toolchain, dir, output, &[main])
+}
+
+fn write(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, NativeError> {
+    let path = dir.join(name);
+    std::fs::write(&path, bytes)
+        .map(|()| path)
+        .map_err(|e| NativeError::new(StageName::Link, format!("{name}: {e}")))
 }
 
 fn launcher_object(
@@ -1125,7 +1141,7 @@ fn link_launcher(
     toolchain: &Toolchain,
     dir: &Path,
     output: Output,
-    main: &[u8],
+    launchers: &[PathBuf],
 ) -> Result<PathBuf, NativeError> {
     let standalone = output == Output::Standalone;
     let (symbol, _, _) = entry_result(program, entry)?;
@@ -1186,70 +1202,70 @@ fn link_launcher(
             ),
         )
     })?;
-    let write = |name: &str, bytes: &[u8]| {
-        let path = dir.join(name);
-        std::fs::write(&path, bytes)
-            .map(|()| path)
-            .map_err(|e| NativeError::new(StageName::Link, format!("{name}: {e}")))
-    };
     let executable = dir.join(if output == Output::Library {
         "program.so"
     } else {
         "program"
     });
-    let mut command = Command::new(if aarch64(target) {
-        &toolchain.aarch64_cc
-    } else {
-        &toolchain.clang
-    });
+    let mut before = Vec::new();
+    let mut inputs: Vec<std::ffi::OsString> = Vec::new();
     if output == Output::Library {
         // Runtime entries stay undefined: the host process supplies its one runtime.
         let script = write(
+            dir,
             "exports.map",
             format!("{{ global: {LIBRARY_RUN}; local: *; }};\n").as_bytes(),
         )?;
-        command
-            .arg("-shared")
-            .arg(format!("-Wl,--version-script={}", script.display()));
+        before.push("-shared".into());
+        // The driver passes `-Wl,` options through in place, so the per-link
+        // script leads the inputs rather than keying the driver's command.
+        let mut option = std::ffi::OsString::from("--version-script=");
+        option.push(&script);
+        inputs.push(option);
     } else if !standalone {
-        command.args(toolchain.loader_flags(target));
+        before = toolchain.loader_flags(target);
     }
-    command.arg(write("main.o", main)?);
+    inputs.extend(launchers.iter().map(Into::into));
     for (index, object) in objects.iter().enumerate() {
-        command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
+        inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?.into());
     }
     if output != Output::Library {
-        command.arg(archive);
+        inputs.push(archive.into());
     }
     // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
     for link in &program.foreign_links {
-        match link {
-            hirsel_engine::LinkInput::Library(name) => command.arg(format!("-l{name}")),
-            hirsel_engine::LinkInput::File(path) => command.arg(path),
-        };
+        inputs.push(match link {
+            hirsel_engine::LinkInput::Library(name) => format!("-l{name}").into(),
+            hirsel_engine::LinkInput::File(path) => path.into(),
+        });
     }
-    match output {
+    let after: &[&str] = match output {
         // The host process links the system libraries.
-        Output::Library => {}
+        Output::Library => &[],
         // Bundle compiler support and math objects as well as the Rust runtime.
         // On glibc Linux the remaining system interfaces are supplied by libc.
-        Output::Standalone => {
-            command.args([
-                "-static-libgcc",
-                "-Wl,--as-needed",
-                "-Wl,-Bstatic",
-                "-lm",
-                "-Wl,-Bdynamic",
-                "-ldl",
-                "-lpthread",
-            ]);
-        }
-        Output::Launched => {
-            command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
-        }
-    }
-    command.arg("-o").arg(&executable);
-    checked(StageName::Link, &mut command)?;
+        Output::Standalone => &[
+            "-static-libgcc",
+            "-Wl,--as-needed",
+            "-Wl,-Bstatic",
+            "-lm",
+            "-Wl,-Bdynamic",
+            "-ldl",
+            "-lpthread",
+        ],
+        Output::Launched => &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"],
+    };
+    let driver = if aarch64(target) {
+        &toolchain.aarch64_cc
+    } else {
+        &toolchain.clang
+    };
+    let after: Vec<std::ffi::OsString> = after.iter().map(Into::into).collect();
+    let line = super::link_line::LinkLine::of(&toolchain.cache, driver, &before, &after)?;
+    checked(
+        StageName::Link,
+        &mut line.command(&toolchain.lld, &inputs, &executable),
+    )?;
     Ok(executable)
 }
 
@@ -1264,47 +1280,43 @@ pub(crate) fn link_tests(
 ) -> Result<PathBuf, NativeError> {
     let mut declarations = String::new();
     let mut cases = String::new();
-    let mut adapters = Vec::new();
+    let mut launchers = vec![dir.join("tests.o")];
     for (index, test) in tests.iter().enumerate() {
         program.launch.test_seed = test.seed;
         let name = format!("hirsel_test_{index}");
         let bytes = launcher_object(program, &test.entry, objects, dir, None, false, &name)?;
-        let path = dir.join(format!("test-{index}.o"));
-        std::fs::write(&path, bytes)
-            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
-        adapters.push(path);
-        declarations.push_str(&format!("extern int {name}(int, char **);\n"));
+        launchers.push(write(dir, &format!("test-{index}.o"), &bytes)?);
+        declarations.push_str(&format!("declare i32 @{name}(i32, ptr)\n"));
         // The test entry sees no process argument but its own name.
-        cases.push_str(&format!("case {index}: return {name}(1, argv + 1);\n"));
+        cases.push_str(&format!(
+            "case{index}:\n %r{index} = call i32 @{name}(i32 1, ptr %slot)\n ret i32 %r{index}\n"
+        ));
     }
-    let source = format!(
-        "#include <stdlib.h>\n{declarations}int main(int argc, char **argv) {{ if (argc != 2) return 3; char *end; unsigned long n = strtoul(argv[1], &end, 10); if (*end || !*argv[1]) return 3; switch(n) {{ {cases} default: return 3; }} }}\n"
+    // `main <index>` runs adapter `index`; any other argument list exits 3. The
+    // index is decimal digits only, and parsing stops once it names no adapter.
+    let switch: String = (0..tests.len())
+        .map(|index| format!(" i64 {index}, label %case{index}"))
+        .collect();
+    let dispatch = format!(
+        "target triple = \"{triple}\"\n{declarations}\
+define i32 @main(i32 %argc, ptr %argv) {{\n\
+entry:\n %two = icmp eq i32 %argc, 2\n br i1 %two, label %argument, label %refuse\n\
+argument:\n %slot = getelementptr ptr, ptr %argv, i64 1\n %text = load ptr, ptr %slot\n\
+ %first = load i8, ptr %text\n %empty = icmp eq i8 %first, 0\n br i1 %empty, label %refuse, label %digit\n\
+digit:\n %at = phi i64 [0, %argument], [%next, %accumulate]\n %n = phi i64 [0, %argument], [%value, %accumulate]\n\
+ %place = getelementptr i8, ptr %text, i64 %at\n %byte = load i8, ptr %place\n %end = icmp eq i8 %byte, 0\n\
+ br i1 %end, label %dispatch, label %parse\n\
+parse:\n %d = sub i8 %byte, 48\n %decimal = icmp ult i8 %d, 10\n br i1 %decimal, label %accumulate, label %refuse\n\
+accumulate:\n %wide = zext i8 %d to i64\n %tens = mul i64 %n, 10\n %value = add i64 %tens, %wide\n\
+ %next = add i64 %at, 1\n %named = icmp ult i64 %value, {count}\n br i1 %named, label %digit, label %refuse\n\
+dispatch:\n switch i64 %n, label %refuse [{switch} ]\n{cases}\
+refuse:\n ret i32 3\n}}\n",
+        triple = program.target.triple,
+        count = tests.len(),
     );
-    let source_path = dir.join("tests.c");
-    let main_path = dir.join("tests.o");
-    std::fs::write(&source_path, source)
+    let dispatcher = hirsel_llvm::compile_ir(&dispatch, &program.target, OptLevel::None)
         .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
-    checked(
-        StageName::Link,
-        Command::new(&toolchain.clang)
-            .arg("-c")
-            .arg(&source_path)
-            .arg("-o")
-            .arg(&main_path),
-    )?;
-    // A relocatable link collects the dispatch and entry adapters into the
-    // single launcher object consumed by the ordinary checked linker.
-    let launcher = dir.join("tests-launcher.o");
-    let mut command = Command::new(&toolchain.clang);
-    command
-        .arg("-r")
-        .arg(&main_path)
-        .args(&adapters)
-        .arg("-o")
-        .arg(&launcher);
-    checked(StageName::Link, &mut command)?;
-    let bytes =
-        std::fs::read(launcher).map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    write(dir, "tests.o", &dispatcher.bytes)?;
     link_launcher(
         program,
         &tests[0].entry,
@@ -1312,7 +1324,7 @@ pub(crate) fn link_tests(
         toolchain,
         dir,
         Output::Launched,
-        &bytes,
+        &launchers,
     )
 }
 
@@ -1951,6 +1963,8 @@ mod tests {
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: "/unused/gcc".into(),
+            lld: "/unused/ld.lld".into(),
+            cache: "/unused/cache".into(),
             qemu_aarch64: "/unused/qemu".into(),
             aarch64_sysroot: "/unused/sysroot".into(),
             valgrind: "/bin/sh".into(),

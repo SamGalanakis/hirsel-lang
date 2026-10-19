@@ -78,9 +78,20 @@ Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
 `HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME`. The Buck2 test
 launcher supplies them
 from the pinned toolchains. Missing or relative paths refuse construction;
-there is no PATH search or system LLVM fallback. The input clang launcher
-selects the input lld, and memcheck launches retain their input library path
-when the child's environment is cleared.
+there is no PATH search or system LLVM fallback. Memcheck launches retain their
+input library path when the child's environment is cleared.
+
+Executables link with the input `ld.lld` directly, with no compiler driver
+process (`native/link_line.rs`). Its arguments are the ones the target's driver
+(the input clang launcher for x86-64, `HIRSEL_AARCH64_CC` for AArch64) passes
+its linker: the driver's `-###` command for placeholder inputs, printed once and
+kept in the runtime cache with the identity (or absence) of every absolute path
+it names and of each one's parent directory, and with the driver's executable and
+the environment variables drivers read. A link reuses the command while all of
+them hold and asks the driver again otherwise. A GCC driver's LTO plugin options
+are dropped, so AArch64 links with lld rather than GNU ld. `native::test_path`'s
+dispatching `main` is LLVM IR compiled in process, and its adapters are ordinary
+link inputs.
 
 Memcheck executables select the input libc loader and library directory at
 link time; matching debug symbols sit in each object's adjacent `.debug/`
