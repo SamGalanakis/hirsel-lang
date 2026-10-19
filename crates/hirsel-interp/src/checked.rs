@@ -26,6 +26,9 @@ pub struct CheckedRuntime {
     pub noalloc_drop: BTreeSet<DefPath>,
     /// `arena.with`, executed by the checker with a fresh poisonable arena (MEM-4).
     pub arena_with: Option<DefPath>,
+    /// `flat type` declarations: a copy of one owns independent bytes and
+    /// leaves its source's blocks unshared (MEM-12).
+    pub flat: BTreeSet<DefPath>,
 }
 
 /// The memory-model rule a checked execution found broken.
@@ -37,7 +40,7 @@ pub enum TrapRule {
     FinalizerOrder,
     AllocationInNoalloc,
     AllocatingCallInNoalloc,
-    FreezeShared,
+    UniqueShared,
 }
 impl TrapRule {
     pub fn as_str(self) -> &'static str {
@@ -48,7 +51,7 @@ impl TrapRule {
             Self::FinalizerOrder => "finaliser order not reverse declaration",
             Self::AllocationInNoalloc => "allocation inside @noalloc",
             Self::AllocatingCallInNoalloc => "allocating call inside @noalloc",
-            Self::FreezeShared => "freeze of a value another holder shares",
+            Self::UniqueShared => "unique value another holder shares",
         }
     }
     /// The spec rules whose run-time consequence this trap witnesses.
@@ -58,7 +61,7 @@ impl TrapRule {
             Self::ArenaUseAfterEnd => "PROV-4/MEM-4",
             Self::FinalizerCount | Self::FinalizerOrder => "DROP-2",
             Self::AllocationInNoalloc | Self::AllocatingCallInNoalloc => "MEM-5",
-            Self::FreezeShared => "MEM-11/MODE-2",
+            Self::UniqueShared => "MODE-2/MEM-11",
         }
     }
 }
@@ -429,6 +432,36 @@ impl Shadow {
             Self::Uniform(_) => true,
         }
     }
+    /// The shadow a semantic copy of `value` holds, after marking what it
+    /// shares: a new holder of each block the witness tracks, except that a
+    /// `flat type` part is copied into fresh blocks (MEM-12).
+    pub(crate) fn copy_out(&self, value: &Value, state: &State) -> Self {
+        if let Value::Record { definition, .. } = value
+            && state.config.flat.contains(definition.path())
+        {
+            return self.fresh_copy(state);
+        }
+        match (self, value.fields()) {
+            (Self::Parts(parts), Some(fields)) if inline_fields(value).is_some() => Self::Parts(
+                parts
+                    .iter()
+                    .zip(fields)
+                    .map(|(part, field)| match field {
+                        Some(field) => part.copy_out(field, state),
+                        None => part.clone(),
+                    })
+                    .collect(),
+            ),
+            (Self::View { content, home }, _) => Self::View {
+                content: Box::new(content.copy_out(value, state)),
+                home: home.clone(),
+            },
+            _ => {
+                self.share();
+                self.copied()
+            }
+        }
+    }
     /// The shadow a semantic copy of this value holds: a new holder of each
     /// block the witness tracks.
     pub fn copied(&self) -> Self {
@@ -445,7 +478,7 @@ impl Shadow {
             Self::Uniform(bound) => Self::Uniform(bound.clone()),
         }
     }
-    /// MEM-11: freezing needs the sole owner of every tracked block.
+    /// MODE-2: a value proved unique is the sole owner of every tracked block.
     pub fn sole_owner(&self) -> bool {
         match self {
             Self::Ownership { content, holder } => {
@@ -965,6 +998,34 @@ pub(crate) struct Callee {
 }
 
 impl FrameCheck {
+    /// MODE-2: a parameter declared `unique` receives, at entry, a value no
+    /// other live holder shares, whatever either checker proved.
+    pub fn unique_parameters(
+        &self,
+        body: &Body,
+        types: &hirsel_types::TypeStore,
+    ) -> Result<(), Error> {
+        for local in &body.parameters {
+            let declared = types
+                .get(body.locals[local.0 as usize].ty)
+                .is_some_and(|r| r.modes.uniqueness == hirsel_types::Uniqueness::Unique);
+            if declared
+                && !self
+                    .shadows
+                    .get(local.0 as usize)
+                    .is_none_or(Shadow::sole_owner)
+            {
+                return Err(self.state.borrow().trap(
+                    TrapRule::UniqueShared,
+                    format!(
+                        "parameter {} is declared unique, but its block has another live holder",
+                        local.0
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
     /// Bind a new frame: local parameters and borrowed captures are bounded by
     /// their own instances, which a declared local result maps back at return.
     pub fn enter(

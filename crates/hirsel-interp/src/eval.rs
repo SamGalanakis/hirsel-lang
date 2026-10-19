@@ -369,7 +369,7 @@ pub(crate) fn execute_frames(
                                 lifetime: shadow.lifetime(),
                             })
                         });
-                child.check = Some(enter_checked(&parent.state, &child, vec![], callee));
+                child.check = Some(enter_checked(&parent.state, &child, vec![], callee)?);
             }
             start.callee.begin_call();
             start.callee.discard();
@@ -794,7 +794,7 @@ pub(crate) fn execute_frames(
                             &callback,
                             callback_inputs,
                             callback_callee,
-                        ));
+                        )?);
                     }
                     callback.callback = Some(Box::new(crate::resources::Callback {
                         failure_start: execution.failures.len(),
@@ -1230,7 +1230,7 @@ pub(crate) fn execute_frames(
                                 Frame::new_body(definition, body, vec![value], vec![], sizes)?;
                             if let Some(check) = &frame.check {
                                 callee.check =
-                                    Some(enter_checked(&check.state, &callee, vec![], None));
+                                    Some(enter_checked(&check.state, &callee, vec![], None)?);
                             }
                             let local = *callee
                                 .body()
@@ -1969,7 +1969,7 @@ pub(crate) fn execute_frames(
                             );
                             frame.restart_tail(arguments)?;
                             if let Some(old) = frame.check.take() {
-                                let mut entered = enter_checked(&old.state, frame, checks, None);
+                                let mut entered = enter_checked(&old.state, frame, checks, None)?;
                                 entered.inherit(old)?;
                                 frame.check = Some(entered);
                             }
@@ -2023,19 +2023,6 @@ pub(crate) fn execute_frames(
                             }),
                         };
                         let types = never.as_ref().unwrap_or(call_types);
-                        // MEM-11: freezing needs the sole owner, which checked
-                        // execution counts by holders, independently of the
-                        // static uniqueness proof.
-                        if target.core
-                            && path.is_core("shared.freeze")
-                            && let Some(check) = &frame.check
-                            && !checks.first().is_none_or(|input| input.shadow.sole_owner())
-                        {
-                            return Err(check.state.borrow().trap(
-                                crate::checked::TrapRule::FreezeShared,
-                                "the frozen value's block has another live holder",
-                            ));
-                        }
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
                         let exhausted = if !target.core {
@@ -2083,6 +2070,27 @@ pub(crate) fn execute_frames(
                             )?
                         };
                         if let Some(result) = result {
+                            // MODE-2: a native operation's parameter declared
+                            // `unique`, such as `shared.freeze`'s sole-owner
+                            // precondition (MEM-11), received no value another
+                            // live holder shares; checked execution counts
+                            // holders, independently of the proofs. A callee
+                            // with a frame is checked at its entry instead.
+                            if let Some(check) = &frame.check
+                                && let Some(ordinal) = shared_unique_input(
+                                    &check.state.borrow().config,
+                                    &path,
+                                    &checks,
+                                )
+                            {
+                                return Err(check.state.borrow().trap(
+                                    crate::checked::TrapRule::UniqueShared,
+                                    format!(
+                                        "{} parameter {ordinal} is declared unique, but its block has another live holder",
+                                        path.0.name
+                                    ),
+                                ));
+                            }
                             let bounds = frame.check.as_ref().map(|check| {
                                 operation_bounds(
                                     &check.state.borrow(),
@@ -2186,7 +2194,7 @@ pub(crate) fn execute_frames(
                     .collect::<Result<Vec<_>, _>>()?;
                 callee.mut_parameters = writebacks.iter().map(|(_, l)| *l).collect();
                 if let Some(check) = &frame.check {
-                    let mut entered = enter_checked(&check.state, &callee, checks, closure_check);
+                    let mut entered = enter_checked(&check.state, &callee, checks, closure_check)?;
                     entered.closes_arena = closes_arena;
                     callee.check = Some(entered);
                 }
@@ -3290,7 +3298,7 @@ pub(crate) fn enter_checked(
     frame: &Frame,
     mut arguments: Vec<crate::checked::Argument>,
     callee: Option<crate::checked::Callee>,
-) -> crate::checked::FrameCheck {
+) -> Result<crate::checked::FrameCheck, Error> {
     for (argument, parameter) in arguments.iter_mut().zip(&frame.body().parameters) {
         argument.mutable = frame.mut_parameters.contains(parameter);
     }
@@ -3300,7 +3308,7 @@ pub(crate) fn enter_checked(
             .config
             .noalloc
             .contains(&frame.definition.path);
-    crate::checked::FrameCheck::enter(
+    let entered = crate::checked::FrameCheck::enter(
         state.clone(),
         frame.body(),
         &frame.definition.types,
@@ -3308,7 +3316,9 @@ pub(crate) fn enter_checked(
         arguments,
         callee,
         noalloc,
-    )
+    );
+    entered.unique_parameters(frame.body(), &frame.definition.types)?;
+    Ok(entered)
 }
 /// The home instance of a place's root slot, under checked execution.
 /// MODE-1: relations compose. A borrowed local that is not a semantic copy and
@@ -4090,6 +4100,23 @@ fn restore_operation(
         frame.put(*place, Some(value), shadow)?;
     }
     Ok(())
+}
+/// The first argument whose operation parameter is declared `unique` but
+/// whose value shares a block with another live holder.
+fn shared_unique_input(
+    config: &crate::checked::CheckedRuntime,
+    path: &hirsel_syntax::DefPath,
+    checks: &[crate::checked::Argument],
+) -> Option<usize> {
+    let signature = config.operations.get(path)?;
+    let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
+        return None;
+    };
+    function.parameters.iter().enumerate().find_map(|(i, p)| {
+        (signature.types.get(p.ty)?.modes.uniqueness == hirsel_types::Uniqueness::Unique
+            && !checks.get(i)?.shadow.sole_owner())
+        .then_some(i)
+    })
 }
 /// Section 22 declarations select result sources; ownership transport supplies
 /// the values retained by native state. Declared local results include the home

@@ -1261,6 +1261,9 @@ impl QueryEngine {
         }
         for signature in signatures {
             if let hirsel_types::SignatureKind::Type(t) = &signature.kind {
+                if t.layout.flat {
+                    checked.flat.insert(signature.definition.clone());
+                }
                 if t.loop_source.is_some() {
                     checked
                         .operations

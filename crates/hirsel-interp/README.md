@@ -350,9 +350,12 @@ view before selecting the fields, preserving the returned content's provenance.
 deep unique copies and implicit destruction, using shadow ownership witnesses
 preserved by takes and invalidated by copies. A witness also counts the block's
 holders (`checked::Holder`): a copy is a new holder that lives while some shadow
-keeps it, and a native `mut` write-back keeps the holders its operation took, so
-`shared.freeze` traps (`FreezeShared`, MEM-11) when its argument's block has another
-live holder, independently of both checkers' uniqueness proofs. Traps transport as the internal `Error::Trapped` and never leave the run
+keeps it (a copy of a `flat type` value owns fresh blocks, MEM-12), and a native `mut`
+write-back keeps the holders its operation took. Wherever the IR claims a value unique
+it must have no other live holder, or execution traps (`UniqueShared`, MODE-2): a whole
+local declared `unique` when assigned, a parameter declared `unique` at frame entry, and
+a native operation's `unique` parameter, such as `shared.freeze`'s (MEM-11). This is
+independent of both checkers' uniqueness proofs. Traps transport as the internal `Error::Trapped` and never leave the run
 entry points. With `checked: None` nothing is tracked and execution is unchanged.
 
 Normal execution runs `arena.with` by calling its callback with an opaque

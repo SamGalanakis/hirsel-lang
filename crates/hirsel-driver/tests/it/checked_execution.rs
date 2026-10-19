@@ -123,6 +123,13 @@ fn trapped(outcome: Option<(Outcome, String)>) -> TrapRule {
         other => panic!("expected a trap, got {other:?}"),
     }
 }
+/// The trap's detail, which names the site that found the violation.
+fn trap_detail(outcome: Option<(Outcome, String)>) -> String {
+    match outcome {
+        Some((Outcome::Trapped(trap), _)) => trap.detail,
+        other => panic!("expected a trap, got {other:?}"),
+    }
+}
 fn printed(outcome: Option<(Outcome, String)>) -> String {
     match outcome {
         Some((Outcome::Returned { exit_code: 0, .. }, stdout)) => stdout,
@@ -140,6 +147,27 @@ fn validator_rejects(engine: &mut QueryEngine, definition: &Definition) -> bool 
     !hirsel_validate::validate(definition, &signatures)
         .violations
         .is_empty()
+}
+/// Declare every `unique` local of `definition` aliased, so an edit that
+/// turns a fresh value into a share no longer also claims it unique.
+fn without_unique_locals(definition: &mut Definition) {
+    let types = &mut definition.types;
+    let mut aliased = |ty: &mut hirsel_types::TypeId| {
+        let mut row = types.get(*ty).unwrap().clone();
+        if row.modes.uniqueness == hirsel_types::Uniqueness::Unique {
+            row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+            *ty = types.push(row);
+        }
+    };
+    for body in &mut definition.bodies {
+        body.locals
+            .iter_mut()
+            .for_each(|local| aliased(&mut local.ty));
+        body.places
+            .iter_mut()
+            .filter(|place| place.projection.is_empty())
+            .for_each(|place| aliased(&mut place.ty));
+    }
 }
 fn named_locals(body: &hirsel_tir::Body) -> Vec<usize> {
     body.locals
@@ -487,6 +515,12 @@ fn native_callbacks_cannot_return_their_ended_parameter_storage() {
             usage: hirsel_types::UseKind::Copy,
         });
         assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "one\n");
+        // The literal's temporary is declared unique; the copy shares it.
+        assert_eq!(
+            trapped(run(&mut engine, &[main.clone()], true)),
+            TrapRule::UniqueShared
+        );
+        without_unique_locals(&mut main);
         assert_eq!(
             trapped(run(&mut engine, &[main], true)),
             TrapRule::RegionUseAfterScopeExit
@@ -885,17 +919,28 @@ fn a_borrowed_string_copied_into_a_constructor_still_cannot_escape() {
         }
         assert_eq!(replaced, 1);
         assert_eq!(printed(run(&mut engine, &[wrap.clone()], false)), "x");
+        // `unique text`'s temporary is still declared unique.
+        assert_eq!(
+            trapped(run(&mut engine, &[wrap.clone()], true)),
+            TrapRule::UniqueShared
+        );
+        assert!(validator_rejects(&mut engine, &wrap));
+        without_unique_locals(&mut wrap);
         assert_eq!(
             trapped(run(&mut engine, &[wrap.clone()], true)),
             TrapRule::RegionUseAfterScopeExit
         );
-        assert!(validator_rejects(&mut engine, &wrap));
     });
 }
 
 /// `keep` holds a copy of `a`, so `unique a` deep-copies before the freeze.
 const FREEZE_COPY: &str = "fn freeze(take x: unique List[List[u64]]) -> u64 {\n  let s = shared.freeze(take x)\n  1u64\n}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let a: unique List[List[u64]] = [[1u64]]\n  let mut keep: List[List[List[u64]]] = []\n  list.push(mut keep, copy a)\n  if freeze(unique a) + list.len(keep) == 2u64 { let _ = out.print(io.stdout(rt)?, \"two\\n\") }\n  Ok(())\n}";
 
+/// The ownership review's m7 with V bypassed: a false uniqueness proof
+/// elides `unique a`'s deep copy, so the value claimed unique is the block
+/// `keep` still holds. Checked execution traps at each place the IR claims
+/// it unique, independently of both checkers: the `unique` temporary in
+/// `main`, `freeze`'s `take x: unique` parameter, then `shared.freeze`'s.
 #[test]
 fn freezing_a_value_another_live_holder_shares_traps() {
     with_compiler_stack(|| {
@@ -919,8 +964,23 @@ fn freezing_a_value_another_live_holder_shares_traps() {
         assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "two\n");
         assert_eq!(
             trapped(run(&mut engine, &[main.clone()], true)),
-            TrapRule::FreezeShared
+            TrapRule::UniqueShared
         );
         assert!(validator_rejects(&mut engine, &main));
+        let site = |engine: &mut QueryEngine, edits: &[Definition]| {
+            let detail = trap_detail(run(engine, edits, true));
+            detail
+                .split(" is declared unique")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        let local = site(&mut engine, &[main.clone()]);
+        assert!(local.starts_with("local "), "{local}");
+        without_unique_locals(&mut main);
+        assert_eq!(site(&mut engine, &[main.clone()]), "parameter 0");
+        let mut freeze = lowered(&mut engine, "freeze");
+        without_unique_locals(&mut freeze);
+        assert_eq!(site(&mut engine, &[main, freeze]), "freeze parameter 0");
     });
 }

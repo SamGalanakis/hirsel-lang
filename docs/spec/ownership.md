@@ -258,11 +258,13 @@ Which engine checks what: the source checker and the IR checker both take a call
 parametric shape from one table (`hirsel_types::parametric_inputs`) and a function
 argument's result proof from one row test (`unique_rows`), so a fault there is common to
 both; each derives an argument's uniqueness at callee entry from its own flow. Checked
-execution judges neither: it counts each block's live holders, so `shared.freeze` of a
-value another live holder shares traps whatever was proved
-([implementation](implementation.md#checked-execution)), and the checked heap executor
-traps a write into a frozen graph whose counts exceed one. A false `unique` that changes
-no code, and so reaches no freeze, has no run-time witness.
+execution judges neither: it counts each block's live holders, so a value reaching a
+place the IR declares `unique` (a local, a parameter at entry, or a native operation's
+parameter such as `shared.freeze`'s) traps when another live holder shares one of its
+blocks, whatever was proved ([implementation](implementation.md#checked-execution)), and
+the checked heap executor traps a write into a frozen graph whose counts exceed one. A
+false `unique` claim the IR never declares, such as an elided deep copy whose result only
+an aliased place receives, has no run-time witness.
 
 Two kinds of argument name such a parameter and supply nothing. A borrowed argument whose
 type names one only in data: a checked body cannot move a value out of a borrow

@@ -582,8 +582,9 @@ impl Frame {
         let mut shadow = self.access(operand.place, "operand")?;
         let value = self.extract(operand)?;
         if operand.usage == UseKind::Copy {
-            shadow.share();
-            shadow = shadow.copied();
+            if let Some(check) = &self.check {
+                shadow = shadow.copy_out(&value, &check.state.borrow());
+            }
             value.share_arena_storage();
         }
         let shadow = shadow.for_value(&value);
@@ -860,14 +861,34 @@ impl Frame {
             return Ok(());
         }
         let place = self.place(id)?.clone();
-        if let Some(arena) = self.placed_arena(place.ty) {
-            let holds = self
-                .observe(id)
-                .map(crate::checked::holds_storage)
-                .unwrap_or(false);
-            if holds {
-                shadow.add_all(arena);
-            }
+        let holds = self
+            .observe(id)
+            .map(crate::checked::holds_storage)
+            .unwrap_or(false);
+        if let Some(arena) = self.placed_arena(place.ty)
+            && holds
+        {
+            shadow.add_all(arena);
+        }
+        // MODE-2: a whole local declared `unique` holds only values no other
+        // live holder shares, whatever either checker proved.
+        if holds
+            && place.projection.is_empty()
+            && self
+                .definition
+                .types
+                .get(place.ty)
+                .is_some_and(|r| r.modes.uniqueness == hirsel_types::Uniqueness::Unique)
+            && !shadow.sole_owner()
+        {
+            let check = self.check.as_ref().unwrap();
+            return Err(check.state.borrow().trap(
+                crate::checked::TrapRule::UniqueShared,
+                format!(
+                    "local {} is declared unique, but its block has another live holder",
+                    place.root.0
+                ),
+            ));
         }
         let indices = self.indices(&place)?;
         let Frame { check, slots, .. } = self;

@@ -1,0 +1,30 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// A flat copy owns independent bytes (MEM-12), so checked execution gives it
+// fresh blocks: neither the copy received as `unique` nor its source, moved
+// later into a `unique` binding, shares a block with the other. Counting the
+// copy as a second holder of the source's blocks traps here.
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+fn need(take x: unique Item) -> u64 {
+  x.n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let item: unique Item = Item(text: "a", n: 2)
+  let first = need(copy item)
+  let kept: unique Item = take item
+  let _ = out.print(
+    io.stdout(rt)?,
+    if first + kept.n + string.byte_len(kept.text) == 5 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

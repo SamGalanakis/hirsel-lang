@@ -33,7 +33,7 @@ impl Run {
             .map_err(Error::Query)?;
         let mut frame = Frame::new(definition, arguments)?;
         if let Some(state) = checker {
-            frame.check = Some(enter_checked(state, &frame, vec![], None));
+            frame.check = Some(enter_checked(state, &frame, vec![], None)?);
         }
         frame.depth_failure = limits.call_depth == 0;
         let execution = Execution {
