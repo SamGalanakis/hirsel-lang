@@ -529,9 +529,11 @@ class Local:
 
 
 def tool_tests():
-    """The gate tooling's own tests, each its own command."""
+    """The gate tooling's own tests and the native benchmark harness's, each its own command."""
     tests = [(f'tools/tests/{p.name}', [sys.executable, str(p)]) for p in sorted((ROOT / 'tools/tests').glob('*.py'))]
-    return tests + [('conformance.py --self-test', [sys.executable, str(ROOT / 'tools/buck2/conformance.py'), '--self-test'])]
+    return tests + [('conformance.py --self-test', [sys.executable, str(ROOT / 'tools/buck2/conformance.py'), '--self-test']),
+                    ('bench/native/tests', [sys.executable, '-m', 'unittest', 'discover', '-s',
+                                            str(ROOT / 'bench/native/tests')])]
 
 
 def clippy_report(targets) -> tuple[bool, str]:

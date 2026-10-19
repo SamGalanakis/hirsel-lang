@@ -246,10 +246,12 @@ class GateCommands(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for directory in ('.buck2/bin', 'tools/tests', 'tools/buck2'):
+        for directory in ('.buck2/bin', 'tools/tests', 'tools/buck2', 'bench/native/tests'):
             (self.root / directory).mkdir(parents=True)
         for test in ('main_full_run', 'buck2_sync', 'gate'):
             (self.root / f'tools/tests/{test}.py').write_text('# fixture gate tests\n')
+        (self.root / 'bench/native/tests/test_fixture.py').write_text(
+            'import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        pass\n')
         for helper in ('gating', 'impact', 'event_logs'):
             (self.root / f'tools/buck2/{helper}.py').write_text((RUNNER.parent / f'buck2/{helper}.py').read_text())
         for helper in ('prepare', 'sync', 'clippy', 'fmt', 'conformance', 'agree'):

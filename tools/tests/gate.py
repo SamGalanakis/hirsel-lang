@@ -87,6 +87,15 @@ class Classification(unittest.TestCase):
         self.assertEqual(len(c.tools), 5)
         self.assertFalse(c.needs_buck2)
 
+    def test_the_native_benchmark_harness_is_tooling_and_its_programs_are_inputs(self):
+        harness = ['bench/native/analysis.py', 'bench/native/run', 'bench/native/tests/test_analysis.py',
+                   'bench/native/c/arena.h', 'bench/native/manifest.json']
+        c = impact.classify([*harness, 'bench/native/programs/sum/main.hir'], MEMBERS,
+                            BUCK + '\ndata = glob(["bench/native/programs/**"])')
+        self.assertEqual(c.tools, sorted(harness))
+        self.assertEqual(c.owned, ['bench/native/programs/sum/main.hir'])
+        self.assertIn('bench/native/tests', [name for name, _ in gating.tool_tests()])
+
     def test_sizing_evidence_and_generator_do_not_select_every_test(self):
         c = self.classify('tools/buck2/test_sizes_from_usage.py', 'tools/buck2/test-sizes.json',
                           'tools/buck2/test_sizes.bzl')

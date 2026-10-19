@@ -5,7 +5,8 @@ A changed path is one of:
 
 - documentation (`*.md`, `LICENSE`, `docs/`) that no build or test reads: a
   fast consistency check of its links and whitespace, nothing else;
-- the gate's own Python tooling (TOOL_PATHS): its tests, and `sync.py --check`;
+- the gate's own Python tooling and the native benchmark harness (TOOL_PATHS):
+  the tooling tests, bench/native/tests among them, and `sync.py --check`;
 - a build-wide input (BUILD_WIDE): every test and every campaign;
 - anything else: the Buck2 tests that read it, directly or through any
   dependency (`rdeps(//..., owner(<paths>))`). A file a campaign reads as data
@@ -124,9 +125,11 @@ def native_programs(paths, crates, root):
 # their edits select only the tests that read them.
 CRATE_TEST_DIRS = ('tests', 'benches', 'examples', 'proptest-regressions')
 
-# The gate's own tooling. Each is a script with tests in tools/tests; none is
-# a build or test input (sync.py --check proves that the generated build files
-# do not change).
+# The gate's own tooling, with tests in tools/tests, and the native benchmark
+# harness, with tests in bench/native/tests. None is a build or test input
+# (sync.py --check proves that the generated build files do not change),
+# except what the generated BUCK reads (bench/native/programs/**): that is
+# selected through its owners.
 TOOL_PATHS = (
     'tools/gate', 'tools/land', 'tools/capped', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
@@ -134,6 +137,7 @@ TOOL_PATHS = (
         'event_logs', 'gating', 'impact', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',
+    'bench/native/**',
 )
 
 # Inputs of every action or of the toolchains: the Cargo workspace and lock,
@@ -212,7 +216,7 @@ def classify(paths, members, buck_text: str) -> Classified:
             continue  # by target, from the BUCK diff (buck_targets)
         if matches(path, DOCS) and not code_read(path, buck_text):
             result.docs.append(path)
-        elif matches(path, TOOL_PATHS):
+        elif matches(path, TOOL_PATHS) and not code_read(path, buck_text):
             result.tools.append(path)
         elif matches(path, TOOL_INPUTS):
             result.owned.append(path)
