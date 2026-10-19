@@ -209,7 +209,8 @@ the definition or anything it uses is called:
   refined by the hashes of the members it references, in encoding order, until no member
   splits from another, and its hash binds the group's sorted member hashes and its own.
 
-Renaming a definition, a local or a module therefore keeps every hash. A body or signature
+Renaming a definition, local or module keeps every hash except those of the name-bound
+definitions listed above and their dependents. A body or signature
 edit changes the edited definition's hash and the hash of every definition that reaches it,
 and two identical definitions in different modules share a hash. A definition hash is not
 a type identity for checking or serialization: nominal identity stays with paths and
