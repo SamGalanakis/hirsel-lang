@@ -449,3 +449,129 @@ fn checked_nested_payloads_and_sequence_roots_preserve_overlap_owners() {
         assert_eq!(map.location(diagnostics[0].primary).unwrap().line, line);
     }
 }
+
+/// The site of a diagnostic: the pass that emitted it (J, the authority walk,
+/// or I, the ownership flow) and its message without the explanation.
+fn site(pass: &'static str, diagnostic: &Diagnostic) -> (&'static str, String) {
+    let message = diagnostic.message.as_str();
+    let head = message.split_once(": ").map_or(message, |(head, _)| head);
+    (pass, head.to_string())
+}
+
+/// Sites that, in every corpus file reaching them, report their rule at the
+/// same line as another site. The conformance runner checks only rule and
+/// line, so one of them could stop firing unseen; each is pinned here by a
+/// witness file on which it must still report.
+const WITNESSED_SITES: [(&str, &str, &str); 5] = [
+    (
+        "MODE/MODE-1-arena-only-closure-call-taken-capture-bad.hir",
+        "I",
+        "a local result retains a temporary that ends with the function",
+    ),
+    (
+        "MODE/MODE-6-escaping-capture-bad.hir",
+        "J",
+        "a scoped capability cannot enter an escaping capture",
+    ),
+    (
+        "MODE/MODE-4-written-local-getter-bad.hir",
+        "J",
+        "an owned result retains a pre-existing local source bound",
+    ),
+    (
+        "CONC/CONC-5-result-sendable-bad.hir",
+        "J",
+        "the callback result must be sendable",
+    ),
+    (
+        "CONC/CONC-6-destructured-sender-bad.hir",
+        "J",
+        "channel payload must be sendable; Receivers cross only by task capture",
+    ),
+];
+
+#[test]
+fn every_duplicated_checker_site_has_its_own_witness() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance");
+    let (empty, _, _) = support::parse("", &[]);
+    let base = support::registry(&empty);
+    // Per reject file, the sites reporting its expected rule at its line.
+    let mut reporting = BTreeMap::<String, BTreeSet<(&str, String)>>::new();
+    for prefix in ["OWN", "MODE", "DROP", "CLO", "MEM", "CONC", "CAP", "PROV"] {
+        let mut files: Vec<_> = std::fs::read_dir(root.join(prefix))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "hir"))
+            .collect();
+        files.sort();
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let Some((rule, line)) = source
+                .lines()
+                .find_map(|l| l.strip_prefix("// expect: reject "))
+                .and_then(|r| r.split_once(" at line "))
+            else {
+                continue;
+            };
+            let line = line.parse::<u32>().unwrap();
+            let Ok((ownership, authority, map)) = run_with_authority(&source, &base) else {
+                continue;
+            };
+            let sites = ownership
+                .iter()
+                .map(|d| ("I", d))
+                .chain(authority.iter().map(|d| ("J", d)))
+                .filter(|(_, d)| {
+                    d.severity == Severity::Error
+                        && d.rule.as_str() == rule
+                        && map.location(d.primary).unwrap().line == line
+                })
+                .map(|(pass, d)| site(pass, d))
+                .collect();
+            let name = path.strip_prefix(&root).unwrap().to_str().unwrap();
+            reporting.insert(name.to_string(), sites);
+        }
+    }
+    let sole: BTreeSet<_> = reporting
+        .values()
+        .filter(|sites| sites.len() == 1)
+        .flatten()
+        .collect();
+    let mut problems = vec![];
+    let witnessed: BTreeSet<_> = WITNESSED_SITES
+        .iter()
+        .map(|(file, pass, message)| {
+            let site = (*pass, message.to_string());
+            if !reporting
+                .get(*file)
+                .is_some_and(|sites| sites.contains(&site))
+            {
+                problems.push(format!(
+                    "{pass} site `{message}` no longer reports on its witness {file}: \
+                     it stopped firing, or the witness changed"
+                ));
+            }
+            if sole.contains(&site) {
+                problems.push(format!(
+                    "{pass} site `{message}` now reports alone in some corpus file, which \
+                     pins it: remove its WITNESSED_SITES row"
+                ));
+            }
+            site
+        })
+        .collect();
+    for (file, sites) in &reporting {
+        for site in sites.iter().filter(|_| sites.len() > 1) {
+            if !sole.contains(site) && !witnessed.contains(site) {
+                problems.push(format!(
+                    "{} site `{}` reports only beside another site (e.g. {file}): delete \
+                     the redundant site, or add a WITNESSED_SITES row naming a witness",
+                    site.0, site.1
+                ));
+            }
+        }
+    }
+    problems.sort();
+    problems.dedup();
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

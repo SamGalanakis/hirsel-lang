@@ -119,7 +119,11 @@ holding such a part is local in J, and I's Forward rule bounds it by the frame;
 `unique` and a deep copy of such content stay there (MEM-5).
 
 Tests manufacture revision-1 tables and also run the real body checker over
-the ownership, mode, destruction and closure source corpus.
+the ownership, mode, destruction and closure source corpus. The conformance runner
+checks only a reject's rule and line, so a site that only ever reports beside
+another site (J beside I, or two I sites) could stop firing unseen:
+`every_duplicated_checker_site_has_its_own_witness` finds such sites in the corpus
+and requires each to report on a named witness file (`WITNESSED_SITES`).
 `OwnershipFacts.unique` has one `UniqueDecision` per unary `unique` expression:
 `AlreadyUnique` transfers/reuses the proven unique value; `DeepCopy` copies the
 complete owned graph with Shared roots as boundaries. `Detach` is the third
