@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// cespare/xxhash TestAll vectors, fed as list suffixes and mixed byte/list updates.
+fn check(t: Test, data: Bytes, seed: u64, expected: u64) -> () {
+  let cuts: List[u64] = [0, 1, 31, 32, 33, bytes.len(data)]
+  for split in cuts {
+    if split > bytes.len(data) {
+      continue
+    }
+    let mut state = xxhash64.new_with_seed(seed)
+    xxhash64.update(mut state, bytes.slice(data, 0, split))
+    let mut suffix: List[u8] = [0xffu8, 0xffu8, 0xffu8]
+    let mut i = split
+    while i < bytes.len(data) {
+      list.push(mut suffix, data[i])
+      i += 1
+    }
+    xxhash64.update_list(mut state, suffix, 3)
+    xxhash64.update_list(mut state, suffix, list.len(suffix))
+    xxhash64.update_list(mut state, suffix, list.len(suffix) + 1)
+    test.equal(t, xxhash64.finish(take state), expected)
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  check(t, b"", 0, 0xef46db3751d8e999)
+  check(t, b"a", 0, 0xd24ec4f1a98c6e5b)
+  check(t, b"asdf", 0, 0x415872f599cea71e)
+  check(
+    t,
+    b"Call me Ishmael. Some years ago--never mind how long precisely-",
+    0,
+    0x02a2e85470d6fd96
+  )
+  check(t, b"", 123, 0xe0db84de91f3e198)
+  check(t, b"asdf", 18446744073709551615, 0x9a2fd8473be539b6)
+  check(
+    t,
+    b"Call me Ishmael. Some years ago--never mind how long precisely-",
+    54321,
+    0x1736d186daf5d1cd
+  )
+  Ok(())
+}

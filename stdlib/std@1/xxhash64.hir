@@ -104,22 +104,45 @@ fn word(mem: Inline[u8, 32], at: u64, count: u64) -> u64 uses {} {
   value
 }
 
+// Shared byte absorption for byte slices and list suffixes. The caller counts
+// its input length once; this helper only fills and compresses complete stripes.
+@noalloc
+fn absorb(mut state: State, byte: u8) -> () uses {} {
+  state.mem[state.used] = byte
+  state.used += 1
+  if state.used == 32 {
+    let mut lane: u64 = 0
+    while lane < 4 {
+      state.lanes[lane] = round(state.lanes[lane], word(state.mem, lane * 8, 8))
+      lane += 1
+    }
+    state.used = 0
+  }
+}
+
 @noalloc
 pub fn update(mut state: State, data: Bytes) -> () uses {} {
   let len = core@1/bytes.len(data)
   state.total = core@1/int.wrapping_add(state.total, len)
   let mut i: u64 = 0
   while i < len {
-    state.mem[state.used] = data[i]
-    state.used += 1
-    if state.used == 32 {
-      let mut lane: u64 = 0
-      while lane < 4 {
-        state.lanes[lane] = round(state.lanes[lane], word(state.mem, lane * 8, 8))
-        lane += 1
-      }
-      state.used = 0
-    }
+    absorb(mut state, data[i])
+    i += 1
+  }
+}
+
+/// Absorb the byte-list suffix starting at start, without copying its storage.
+/// A start at or beyond the end is an empty update, as crc32.update_list.
+@noalloc
+pub fn update_list(mut state: State, data: List[u8], start: u64) -> () uses {} {
+  let end = core@1/list.len(data)
+  if start >= end {
+    return
+  }
+  state.total = core@1/int.wrapping_add(state.total, end - start)
+  let mut i = start
+  while i < end {
+    absorb(mut state, data[i])
     i += 1
   }
 }
