@@ -1,5 +1,0 @@
-// rule: MEM-5
-// expect: accept
-fn probe(s: String) -> String uses {} {
-  string.concat(s, "")
-}

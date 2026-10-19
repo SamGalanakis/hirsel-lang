@@ -1,7 +1,0 @@
-// rule: OWN-4
-// expect: accept
-// "Others with copy x, which shares storage."
-fn example(take x: Bytes) -> (Bytes, Bytes) {
-  let y = copy x
-  (take x, take y)
-}

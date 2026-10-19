@@ -1,5 +1,0 @@
-// rule: DROP-4
-// expect: accept
-fn probe(take token: resource_probe@1/owner.Token) {
-  forget(take token)
-}

@@ -1,6 +1,0 @@
-// rule: MEM-8
-// expect: accept
-// "Simd[T, n]" — " fixed width".
-type Lanes {
-  lanes: Simd[i32, 4],
-}

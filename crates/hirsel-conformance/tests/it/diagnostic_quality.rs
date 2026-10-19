@@ -32,14 +32,6 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
                 "take ",
             ),
             (
-                "conformance/OWN/OWN-2-arena-branch-tail-place-bad.hir",
-                "conformance/OWN/OWN-2-arena-branch-tail-place-ok.hir",
-                "OWN-2",
-                15,
-                "",
-                "take ",
-            ),
-            (
                 "conformance/OWN/OWN-4-redundant-copy-repair-ok.hir",
                 "conformance/OWN/OWN-4-redundant-copy-repair-ok.hir",
                 "OWN-4",

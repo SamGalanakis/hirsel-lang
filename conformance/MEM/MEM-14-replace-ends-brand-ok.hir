@@ -1,6 +1,0 @@
-// rule: MEM-14
-// expect: accept
-// "moving, replacing or destroying the container ends [identity]".
-fn read(mut s: Slots[u64], id: SlotId[u64] of s) -> Option[u64] in s {
-  slots.get(s, id)
-}

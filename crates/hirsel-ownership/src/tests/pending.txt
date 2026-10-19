@@ -61,7 +61,6 @@ DROP/DROP-2-destructure-opaque-run.hir # dependency-owned body checker: LANG-7 l
 DROP/DROP-2-expect-ok-error-drop-fail.hir # dependency-owned resolver: LANG-4 line 13
 DROP/DROP-2-expect-ok-error-fail.hir # dependency-owned resolver: LANG-4 line 13
 DROP/DROP-2-nfc-cleanup-fail.hir # dependency-owned resolver: LANG-4 line 10
-DROP/DROP-2-nfc-cleanup-run.hir # dependency-owned resolver: LANG-4 line 10
 DROP/DROP-2-replace-resource-run.hir # dependency-owned resolver: LANG-4 line 30
 DROP/DROP-2-std-deque-run.hir # dependency-owned resolver: LANG-4 line 16
 DROP/DROP-2-std-iter-fold-run.hir # dependency-owned resolver: LANG-4 line 63
@@ -85,7 +84,6 @@ DROP/DROP-3-unit-result-bad.hir # outside ownership operative-rule scope
 DROP/DROP-4-external-forget-bad.hir # outside ownership operative-rule scope
 DROP/DROP-4-external-forget-ok.hir # dependency-owned signature: NotImplemented
 DROP/DROP-4-package-module-forget-bad.hir # outside ownership operative-rule scope
-DROP/DROP-4-package-module-forget-ok.hir # dependency-owned signature: NotImplemented
 MODE/MODE-1-borrow-global-annotation-bad.hir # outside ownership operative-rule scope
 MODE/MODE-1-environment-closure-result-non-plain-parameter-bad.hir # dependency-owned body checker: MODE-1 line 6: `in env` alone cannot cover the non-Plain parameter x: write `in {env, x}` or `in x`
 MODE/MODE-1-environment-relation-on-binding-bad.hir # dependency-owned body checker: MODE-1 line 6: `env` is a closure or function type's environment: a binding is not related to it
@@ -243,43 +241,3 @@ MODE/MODE-6-scope-return-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-store-scoped-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-test-return-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-tx-return-bad.hir # outside ownership operative-rule scope
-OWN/OWN-2-json-parse-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-json-parse-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-json-stringify-accept.hir # dependency-owned signature: NotImplemented
-OWN/OWN-2-json-stringify-reject.hir # dependency-owned signature: NotImplemented
-OWN/OWN-2-json-write-accept.hir # dependency-owned signature: NotImplemented
-OWN/OWN-2-json-write-reject.hir # dependency-owned signature: NotImplemented
-OWN/OWN-2-nfc-take-bad.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-nfc-take-ok.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-pathtime-duration-parse-accept.hir # dependency-owned resolver: LANG-4 line 5
-OWN/OWN-2-pathtime-duration-parse-reject.hir # dependency-owned resolver: LANG-4 line 5
-OWN/OWN-2-pathtime-time-parse-accept.hir # dependency-owned resolver: LANG-4 line 5
-OWN/OWN-2-pathtime-time-parse-reject.hir # dependency-owned resolver: LANG-4 line 5
-OWN/OWN-2-wave1-concat-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-concat-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-filter-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-filter-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-finish-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-finish-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-fold-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-fold-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-partition-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-partition-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-split-bad.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave1-split-ok.hir # dependency-owned resolver: LANG-4 line 13
-OWN/OWN-2-wave2-ascii_lower-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-ascii_lower-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-ascii_upper-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-ascii_upper-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-concat-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-concat-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-ends_with-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-ends_with-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-join-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-join-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-starts_with-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-starts_with-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-trim-accept.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-2-wave2-trim-reject.hir # dependency-owned resolver: LANG-4 line 4
-OWN/OWN-3-option-remove-run.hir # dependency-owned resolver: LANG-4 line 15
-OWN/OWN-6-counted-child-borrow-bad.hir # outside ownership operative-rule scope

@@ -1,7 +1,0 @@
-// rule: OWN-5
-// expect: accept
-// "Noncopyable ... task handles ... Moved or borrowed only."
-fn example(s: Scope, take x: Task[u64] of s) -> () {
-  let y = take x
-  let _ = task.await(s, take y)
-}

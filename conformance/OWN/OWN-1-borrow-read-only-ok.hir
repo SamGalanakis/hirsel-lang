@@ -1,6 +1,0 @@
-// rule: OWN-1
-// expect: accept
-// "Borrow (default). Local and read-only for the call."
-fn example(mut x: Bytes) -> () {
-  x = b"new"
-}

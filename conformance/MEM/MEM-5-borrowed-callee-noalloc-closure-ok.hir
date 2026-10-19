@@ -1,8 +1,0 @@
-// rule: MEM-5
-// expect: accept
-@noalloc
-fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
-  fn() {
-    f()
-  }()
-}

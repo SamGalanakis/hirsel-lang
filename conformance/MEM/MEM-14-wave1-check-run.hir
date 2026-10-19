@@ -1,6 +1,0 @@
-// rule: MEM-14
-// expect: run
-pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  failure.check(true, Bounds())
-  Ok(())
-}

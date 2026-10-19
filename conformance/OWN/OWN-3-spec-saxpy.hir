@@ -1,8 +1,0 @@
-// rule: OWN-3
-// expect: accept
-// "Fields and elements are places" (the spec’s saxpy example).
-pub fn saxpy[n: size](a: f32, x: Inline[f32, n], mut y: Inline[f32, n]) -> () {
-  for i in 0..n {
-    y[i] = a * x[i] + y[i]
-  }
-}

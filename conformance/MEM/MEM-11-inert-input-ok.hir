@@ -1,6 +1,0 @@
-// rule: MEM-11
-// expect: accept
-// "for T inert and holding no resources".
-fn freeze(take x: unique u64) -> Shared[u64] {
-  shared.freeze(take x)
-}

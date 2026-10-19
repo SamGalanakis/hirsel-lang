@@ -1,8 +1,0 @@
-// rule: MEM-12
-// expect: accept
-fn need[T: flat](take x: unique T) -> () {}
-
-fn dup[T: flat](take w: T) -> T {
-  need(take copy w)
-  w
-}

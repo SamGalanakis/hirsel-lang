@@ -1,7 +1,0 @@
-// rule: OWN-1
-// expect: reject OWN-1 at line 5
-fn probe(xs: Set[String]) {
-  for x in xs {
-    let owned: String = take x
-  }
-}

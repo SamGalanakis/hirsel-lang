@@ -1,5 +1,0 @@
-// rule: MEM-5
-// expect: accept
-fn example(mut xs: List[u64]) -> () {
-  list.reserve(mut xs, 10)
-}

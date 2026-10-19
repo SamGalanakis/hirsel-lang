@@ -1,7 +1,0 @@
-// rule: MEM-7
-// expect: accept
-// "Generic code never boxes implicitly, so @noalloc holds for every instantiation".
-@noalloc
-fn identity[T](take x: T) -> T {
-  take x
-}

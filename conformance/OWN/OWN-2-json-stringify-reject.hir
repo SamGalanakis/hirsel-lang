@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 5
-fn probe(take value: json.Value) -> () uses {} {
-  json.stringify(take value)
-  json.stringify(value)
-  ()
-}

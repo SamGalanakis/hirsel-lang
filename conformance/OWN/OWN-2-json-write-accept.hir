@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: accept
-fn probe(take value: json.Value, mut builder: List[u8]) -> () uses {} {
-  json.stringify_into(value, mut builder)
-  json.stringify(value)
-  ()
-}

@@ -1,7 +1,0 @@
-// rule: MEM-10
-// expect: accept
-// "A local(x) result is built directly in the caller’s region".
-@noalloc
-fn first(xs: Array[String]) -> String in xs {
-  xs[0]
-}

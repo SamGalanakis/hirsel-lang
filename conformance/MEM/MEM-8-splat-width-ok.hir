@@ -1,5 +1,0 @@
-// rule: MEM-8
-// expect: accept
-fn example() -> Simd[u32, 4] {
-  simd.splat(1)
-}

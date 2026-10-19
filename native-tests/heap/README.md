@@ -22,6 +22,6 @@ these files, decodes the files and runs the decoded programs. Regenerate with
 | view-after-detach | a view of `p.a` is used after a sibling write detached `p` | ViewDetached |
 
 The moved String/Bytes variant source regression lives in
-[MEM-1-moved-variant-payload-run.hir](../../conformance/MEM/MEM-1-moved-variant-payload-run.hir).
+[DROP-2-variant-payloads-joined-cleanup-run.hir](../../conformance/DROP/DROP-2-variant-payloads-joined-cleanup-run.hir).
 It is compiled fresh by conformance and the native matrix; the hand-built
 partial-move controls remain in `hirsel-heapcheck/tests/it/moved_variant.rs`.

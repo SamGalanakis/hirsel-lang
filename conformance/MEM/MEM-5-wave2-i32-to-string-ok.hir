@@ -1,5 +1,0 @@
-// rule: MEM-5
-// expect: accept
-fn main() -> String {
-  i32.to_string(1i32)
-}

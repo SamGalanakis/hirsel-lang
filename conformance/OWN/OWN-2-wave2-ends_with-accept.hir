@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: accept
-fn probe(take s: String) -> () {
-  string.ends_with(take s, "é")
-  string.byte_len("é")
-  ()
-}

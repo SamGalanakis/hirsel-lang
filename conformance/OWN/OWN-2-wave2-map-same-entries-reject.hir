@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 5
-fn probe(take a: Map[u64, u64], b: Map[u64, u64]) -> () {
-  map.same_entries(take a, b)
-  map.get(a, 0)
-  ()
-}

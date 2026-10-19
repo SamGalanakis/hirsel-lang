@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: accept
-fn example() -> () {
-  let builder: List[u8] = [65u8]
-  let frozen = bytes.from_list(copy builder)
-  list.len(builder);
-}

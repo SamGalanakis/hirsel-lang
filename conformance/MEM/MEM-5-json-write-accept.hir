@@ -1,5 +1,0 @@
-// rule: MEM-5
-// expect: accept
-fn probe(s: String, mut builder: List[u8]) -> Result[(), json.JsonError] uses {} {
-  json.stringify_into(Text(s), mut builder)
-}

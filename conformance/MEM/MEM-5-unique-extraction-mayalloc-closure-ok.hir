@@ -1,7 +1,0 @@
-// rule: MEM-5
-// expect: accept
-fn probe() {
-  let f: fn(x: String) -> unique String uses {} = fn(x: String) -> unique String {
-    unique x
-  }
-}

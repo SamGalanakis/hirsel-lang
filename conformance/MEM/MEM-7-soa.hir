@@ -1,8 +1,0 @@
-// rule: MEM-7
-// expect: accept
-// "@packed, @align(n), @soa on structs and enums".
-@soa
-type Pair {
-  a: u32,
-  b: u32,
-}

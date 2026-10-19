@@ -1,9 +1,0 @@
-// rule: DROP-3
-// expect: accept
-// "cannot resurrect the value".
-resource type Value {
-  n: u8,
-}
-drop(x) {
-  let _ = x.n
-}

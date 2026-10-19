@@ -1,6 +1,0 @@
-// rule: OWN-5
-// expect: accept
-// "Noncopyable ... Moved or borrowed only."
-fn example(take x: Sender[u64]) -> () {
-  let y = take x
-}

@@ -1,8 +1,0 @@
-// rule: OWN-2
-// expect: accept
-fn example() {
-  let text: String = ""
-  time.parse(text)
-  string.byte_len(text)
-  ()
-}

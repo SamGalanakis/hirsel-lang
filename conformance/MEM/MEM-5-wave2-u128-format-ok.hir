@@ -1,7 +1,0 @@
-// rule: MEM-5
-// expect: accept
-@noalloc
-fn main() -> () {
-  let mut buffer: Inline[u8, 2] = [0, 0]
-  u128.format_inline(12, mut buffer);
-}

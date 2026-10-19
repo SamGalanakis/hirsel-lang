@@ -36,7 +36,7 @@ conformance/SEM/SEM-4-wave1-counted-run.hir
 conformance/CONC/CONC-2-await.hir
 conformance/CONC/CONC-2-detach.hir
 conformance/FAIL/FAIL-2-child-propagates.hir
-conformance/OWN/OWN-6-unique-child-value.hir
+conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-roundtrip-run.hir
 conformance/SER/SER-2-vectors-run.hir
@@ -51,7 +51,6 @@ conformance/FAIL/FAIL-3-drop-failure-fields.hir
 conformance/MEM/MEM-7-soa-construct-refs-run.hir
 conformance/MEM/MEM-7-soa-index-refs-run.hir
 conformance/MEM/MEM-7-soa-iterate-refs-run.hir
-conformance/MEM/MEM-7-soa-len-refs-run.hir
 conformance/MEM/MEM-7-soa-pop-refs-run.hir
 conformance/MEM/MEM-7-soa-push-refs-run.hir
 conformance/MEM/MEM-7-soa-remove-refs-run.hir

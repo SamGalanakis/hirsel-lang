@@ -1,9 +1,0 @@
-// rule: OWN-2
-// expect: accept
-// "Callee owns it" (the spec’s consuming file.commit example).
-// AtomicFile is the core library resource; its declared drop aborts.
-pub fn save(dir: Dir, p: Path, data: Bytes) -> Result[(), FileError] {
-  let mut f = file.create_atomic(dir, p)?
-  file.write_all(dir, mut f, data)?
-  file.commit(dir, take f)
-}

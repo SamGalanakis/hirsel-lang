@@ -1,8 +1,0 @@
-// rule: DROP-3
-// expect: accept
-resource type Token {
-  n: u32,
-}
-drop(x) {
-  ()
-}

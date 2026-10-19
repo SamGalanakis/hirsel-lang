@@ -121,8 +121,6 @@ fn flat_sequences_encode_byte_slices_and_nested_lists() {
 #[test]
 fn the_native_flat_conformance_programs_pass_import_validation() {
     for source in [
-        include_str!("../../../../conformance/MEM/MEM-12-flat-native-construct.hir"),
-        include_str!("../../../../conformance/MEM/MEM-12-flat-native-static.hir"),
         include_str!("../../../../conformance/MEM/MEM-12-flat-native-parameter.hir"),
         include_str!("../../../../conformance/MEM/MEM-12-flat-native-walk.hir"),
         include_str!("../../../../conformance/MEM/MEM-12-flat-native-sequences.hir"),

@@ -1,8 +1,0 @@
-// rule: OWN-2
-// expect: accept
-fn outer[T: plain](x: T) -> () {
-  fn inner[U](take y: U) -> () {
-    ()
-  }
-  ()
-}

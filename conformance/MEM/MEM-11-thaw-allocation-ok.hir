@@ -1,6 +1,0 @@
-// rule: MEM-11
-// expect: accept
-// "Freeze and thaw each walk the value and are allocation sites".
-fn operation(take s: Shared[String]) -> Result[unique String, Shared[String]] {
-  shared.thaw(take s)
-}

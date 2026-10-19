@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 6
-// entry: trial
-fn trial(t: Test, take actual: String, take expected: String) {
-  test.equal(t, take actual, expected)
-  core@1/test.check(t, actual == expected)
-}

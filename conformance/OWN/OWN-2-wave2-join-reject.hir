@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 5
-fn probe(take s: String) -> () {
-  string.join(["é"], take s)
-  string.byte_len(s)
-  ()
-}

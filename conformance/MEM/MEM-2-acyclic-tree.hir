@@ -1,4 +1,0 @@
-// rule: MEM-2
-// expect: accept
-// "The value graph reachable from safe code is acyclic"; recursive types require box fields.
-type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)

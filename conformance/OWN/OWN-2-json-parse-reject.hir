@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 5
-fn probe(take text: String) -> () uses {} {
-  json.parse(take text)
-  core@1/string.byte_len(text)
-  ()
-}

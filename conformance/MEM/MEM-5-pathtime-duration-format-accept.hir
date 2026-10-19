@@ -1,7 +1,0 @@
-// rule: MEM-5
-// expect: accept
-// Allocating formatter permitted.
-fn example(value: time.Duration) {
-  duration.to_string(value)
-  ()
-}

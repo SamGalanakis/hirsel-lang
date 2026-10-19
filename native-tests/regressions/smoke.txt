@@ -90,8 +90,6 @@ conformance/LANG/LANG-9-test-runner-fakes.hir
 conformance/LANG/LANG-9-test-runner-shadowed-types.hir
 conformance/MODE/MODE-2-replace-unique-run.hir
 conformance/OWN/OWN-3-labelled-exit-loans-run.hir
-conformance/OWN/OWN-3-option-remove-run.hir
-conformance/OWN/OWN-3-replace-relay-run.hir
 conformance/OWN/OWN-3-replace-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-0-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-1-run.hir

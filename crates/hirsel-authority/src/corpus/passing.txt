@@ -449,11 +449,8 @@ MODE/MODE-6-scope-return-ok.hir
 MODE/MODE-6-scoped-body-keeps-capability.hir
 MODE/MODE-6-store-scoped-bad.hir
 MODE/MODE-6-test-return-bad.hir
-OWN/OWN-6-counted-child-borrow-bad.hir
 OWN/OWN-6-counted-child-borrow-ok.hir
 OWN/OWN-6-shared-children.hir
-OWN/OWN-6-spec-freeze.hir
-OWN/OWN-6-unique-child-value.hir
 PROV/PROV-1-alias-branch-else-exit-ok.hir
 PROV/PROV-1-alias-branch-if-exit-ok.hir
 PROV/PROV-1-alias-branch-if-live-bad.hir

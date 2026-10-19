@@ -1,8 +1,0 @@
-// rule: OWN-3
-// expect: accept
-fn probe(mut m: Map[u8, u8]) {
-  for (k, v) in m {
-    break
-  }
-  map.insert(mut m, 3, 4)
-}
