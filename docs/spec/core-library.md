@@ -1058,7 +1058,10 @@ then `OutputLimit()`. A stage that cannot start (`NotFound()`, `PermissionDenied
   consumes the group on every outcome; a cancelled wait returns `Canceled(cause)` and drops
   the group it took.
 - `group.kill(p, mut g, signal)` sends `signal` to every stage, as `child.kill` does to a
-  child.
+  child, the last stage first: every stage has its signal before an earlier stage can end,
+  so a stage that would exit on end of input is still reported `Signaled(n)` unless it
+  handles or ignores the signal. Every signal the provider sends a group's stages (the
+  `max_stderr` bound, a deadline, a drop) goes in the same order.
 
 Dropping a `ChildGroup` closes its standard input, sends every stage SIGKILL, reaps them all,
 then closes its pipes, discarding unread output and captured standard error. The finalizer

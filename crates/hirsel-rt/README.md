@@ -291,7 +291,9 @@ standard error per stage. A scripted world plays the entries with
 `HostChild` of several stages: the program holds the first stage's input and the last
 stage's output, and a `Capture` thread drains every stage's standard error into its own
 buffer from the spawn, SIGKILLing every stage once one passes the bound; no stage is reaped
-before that thread ends, so every pid it signals still names its stage. The wait discards
+before that thread ends, so every pid it signals still names its stage. Every per-stage
+signal (a kill, the bound, a deadline's SIGTERM, a drop) goes to the last stage first, so no
+stage can read an earlier stage's death as end of input before its own signal arrives. The wait discards
 the last stage's output, waits for the capture, reaps every stage and returns
 `GroupOutput`, its stderr a runtime `List[Bytes]`. Tape forms are `process_spawn_pipeline`
 (`max_stderr`, the stage count, then each command) and `group_wait` requests and

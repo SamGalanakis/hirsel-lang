@@ -1398,25 +1398,35 @@ fn each_stage_keeps_its_own_stderr_and_the_bound_kills_every_stage() {
     assert!(begun.elapsed() < std::time::Duration::from_secs(10));
 }
 
+/// A group kill signals the last stage first, so every stage has its signal before its
+/// input stage can die: none reads that death as end of input, which would make a `cat`
+/// exit 0, however the host schedules the stages.
 #[test]
 fn a_group_kill_and_a_wait_deadline_stop_every_stage() {
     let (temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
-    let g = spawned(
-        &mut io,
-        spawn_pipeline(p, &[("/bin/cat", &[]), ("/bin/cat", &[])], 64),
-    );
-    assert_eq!(
-        io.call(Request::ChildKill {
-            process: p,
-            child: g,
-            signal: Signal::Kill,
-        }),
-        Ok(UNIT)
-    );
-    assert_eq!(
-        io.call(wait_group(p, g, None)),
-        Ok(grouped(&[ExitStatus::Signaled(9); 2], &[b"", b""]))
-    );
+    for signal in [Signal::Kill, Signal::Terminate, Signal::Interrupt] {
+        for _ in 0..8 {
+            let g = spawned(
+                &mut io,
+                spawn_pipeline(p, &[("/bin/cat", &[] as &[&str]); 8], 64),
+            );
+            assert_eq!(
+                io.call(Request::ChildKill {
+                    process: p,
+                    child: g,
+                    signal,
+                }),
+                Ok(UNIT)
+            );
+            assert_eq!(
+                io.call(wait_group(p, g, None)),
+                Ok(grouped(
+                    &[ExitStatus::Signaled(signal.number()); 8],
+                    &[b"" as &[u8]; 8]
+                ))
+            );
+        }
+    }
     // At the deadline every stage gets SIGTERM, and one that ignores it SIGKILL once the
     // grace passes: neither lives to touch its file.
     let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {

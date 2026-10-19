@@ -29,17 +29,15 @@ enum Errors {
     Captured(Capture),
 }
 /// Dropping a Child or ChildGroup closes its input, stops its capture, sends every stage
-/// SIGKILL, reaps them, then closes its outputs (the fields drop after this body).
+/// SIGKILL, the last first, reaps them, then closes its outputs (the fields drop after
+/// this body).
 impl Drop for HostChild {
     fn drop(&mut self) {
         self.stdin = None;
         if let Errors::Captured(capture) = &mut self.stderr {
             capture.stop();
         }
-        for child in &mut self.children {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        crate::process::kill(&mut self.children);
     }
 }
 
@@ -93,8 +91,8 @@ impl Capture {
 }
 
 /// Read every pipe to end of file, or until `stop` is readable, each into its own buffer;
-/// once one passes `max` bytes every stage gets SIGKILL and draining stops, since a process
-/// a stage started may hold its pipe open.
+/// once one passes `max` bytes every stage gets SIGKILL, the last first, and draining
+/// stops, since a process a stage started may hold its pipe open.
 fn drain_stages(
     mut pipes: Vec<std::process::ChildStderr>,
     pids: &[libc::pid_t],
@@ -138,7 +136,7 @@ fn drain_stages(
                 Ok(n) => {
                     buffers[i].extend_from_slice(&chunk[..n]);
                     if buffers[i].len() as u64 > max {
-                        for &pid in pids {
+                        for &pid in pids.iter().rev() {
                             // SAFETY: no stage is reaped before this thread ends.
                             unsafe { libc::kill(pid, libc::SIGKILL) };
                         }
@@ -269,8 +267,10 @@ impl HostChildren {
                 })
             }
             // Every stage is unreaped until its wait or drop, so its pid still names it.
+            // The last stage is signalled first, so no stage outlives its signal to read
+            // an earlier stage's death as end of input.
             HostCall::Kill { child, signal } => {
-                for stage in &self.child(child)?.children {
+                for stage in self.child(child)?.children.iter().rev() {
                     // SAFETY: kill(2) on a live child's pid with a valid signal number.
                     unsafe { libc::kill(stage.id() as libc::pid_t, signal.number()) };
                 }
@@ -356,10 +356,7 @@ impl HostChildren {
         let mut pipes = vec![];
         let mut previous: Option<std::process::ChildStdout> = None;
         let killed = |children: &mut Vec<std::process::Child>, failure| {
-            for child in children {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            crate::process::kill(children);
             Err(failure)
         };
         for (spec, cwd) in stages.iter().zip(cwds) {

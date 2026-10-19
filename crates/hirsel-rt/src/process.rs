@@ -1022,18 +1022,23 @@ pub(crate) fn wait_child(
     }
 }
 
-/// Kill and reap children that are not trusted to stop.
-fn kill(children: &mut [std::process::Child]) {
-    for child in children {
+/// Kill and reap children that are not trusted to stop: every one gets SIGKILL, the last
+/// stage first, before any is reaped.
+pub(crate) fn kill(children: &mut [std::process::Child]) {
+    for child in children.iter_mut().rev() {
         let _ = child.kill();
+    }
+    for child in children {
         let _ = child.wait();
     }
 }
 
-/// Timed-out children: SIGTERM to each, then SIGKILL to any still running once
-/// [`TERMINATION_GRACE`] passes, then reap them all.
+/// Timed-out children: SIGTERM to each, the last stage first, then SIGKILL to any still
+/// running once [`TERMINATION_GRACE`] passes, then reap them all. Signalling downstream
+/// first means no stage can read an earlier stage's death as end of input before its own
+/// signal arrives.
 pub(crate) fn terminate(children: &mut [std::process::Child], cancel: Option<RawFd>) {
-    for child in children.iter_mut() {
+    for child in children.iter_mut().rev() {
         // A stage already reaped keeps its status, and its pid may name another process.
         if matches!(child.try_wait(), Ok(None)) {
             // SAFETY: the child is unreaped, so its pid still names it.
