@@ -1,0 +1,38 @@
+// rule: LANG-13
+// expect: run
+// stdout: 0 1 1 2
+// After a guarded arm fails, the facts its tag tests established prove every tag of the
+// next arm's first alternative, so that alternative is entered without a test and the
+// later arms are reached only from values the guard's tests rejected.
+fn pick(x: Option[Option[u8]], k: u8) -> u8 uses {} {
+  match x {
+    Some(Some(v)) if v == k => 0,
+    Some(Some(_)) | None() => 1,
+    Some(None()) => 2,
+  }
+}
+
+fn digit(n: u8) -> String {
+  if n == 0 {
+    "0"
+  } else if n == 1 {
+    "1"
+  } else if n == 2 {
+    "2"
+  } else {
+    "wrong"
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, digit(pick(Some(Some(3)), 3)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(pick(Some(Some(4)), 3)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(pick(None(), 3)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(pick(Some(None()), 3)))
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

@@ -11,19 +11,7 @@ impl Importer<'_, '_> {
             return malformed("a match continuation with no arms");
         };
         for arm in tested {
-            let proven = if irrefutable(m, arm.pattern) {
-                true
-            } else if let tir::MatchPatternKind::Variant {
-                variant, fields, ..
-            } = &m.patterns[arm.pattern.0 as usize].kind
-                && fields.iter().all(|(_, sub)| irrefutable(m, *sub))
-            {
-                let p = self.place(m.patterns[arm.pattern.0 as usize].place)?;
-                self.proven_variant(&p) == Some(*variant)
-            } else {
-                false
-            };
-            if proven {
+            if self.proven_pattern(m, arm.pattern)? {
                 // A failed guard resumes through its own TIR continuation.
                 // No pattern-failure block is reachable from this arm.
                 let edge = self.enter(arm.guard.unwrap_or(arm.target));
@@ -61,6 +49,41 @@ impl Importer<'_, '_> {
         let e = self.enter(last.guard.unwrap_or(last.target));
         self.terminate(Terminator::Jump(e));
         Ok(())
+    }
+
+    /// Whether the facts here prove every test of a pattern, so `pattern`
+    /// would emit no edge to its failure block: each variant tag it tests is
+    /// proven at its place's current version (as `tag` elides it) and it has
+    /// no literal or range.
+    fn proven_pattern(&mut self, m: &tir::MatchTable, id: tir::MatchPatternId) -> R<bool> {
+        use tir::MatchPatternKind as P;
+        let pattern = &m.patterns[id.0 as usize];
+        Ok(match &pattern.kind {
+            P::Wildcard | P::Binding { .. } | P::Literal(tir::Constant::Unit) => true,
+            P::Literal(_) | P::Range { .. } => false,
+            P::Tuple(fields) | P::Record { fields, .. } => {
+                for (_, sub) in fields {
+                    if !self.proven_pattern(m, *sub)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            P::Variant {
+                variant, fields, ..
+            } => {
+                let p = self.place(pattern.place)?;
+                if self.proven_variant(&p) != Some(*variant) {
+                    return Ok(false);
+                }
+                for (_, sub) in fields {
+                    if !self.proven_pattern(m, *sub)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+        })
     }
 
     /// Test one pattern; success continues in the current block, failure
