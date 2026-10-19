@@ -605,14 +605,25 @@ are the only routine net, so choose what the change can break, and say in
 `--why` what you skipped and why that is safe. The full suite (`tools/gate
 --full`, below) runs on demand at milestone cuts.
 
-`tools/land` lands the committed change: fetch, rebase onto `origin/main`,
-then the workspace build, Clippy, formatting and the build-file check on the
-rebased tree, and push, repeating when main moved. It never runs tests: it
+`tools/land` validates the lane's green receipt and prepares its toolchain
+before joining an exclusive FIFO queue. The lock defaults to
+`/workspace/code/hirsel-briefs/locks/land`; `HIRSEL_LAND_LOCK_DIR` selects
+another shared directory (all lanes landing to the same main must agree).
+Its `count` file is seeded to 1 and re-read each poll; any other count refuses
+landing. A dead holder's kernel lock is released automatically, and waiter
+tickets carry process start times so PID reuse cannot strand the queue.
+
+While holding that lock, land fetches, rebases onto `origin/main`, runs the
+workspace build, Clippy, formatting and the build-file check on the rebased
+tree, regenerates the API index, and pushes. An out-of-band push that moves
+main still retries under the same lock. It never runs tests: it
 refuses a change `tools/gate` has not passed, and stops on a rebase conflict
 (resolve it, run `tools/gate --extend` on the result, land again). It prints
 the gate's recorded floor, selection and `--why`, and appends each push with
 them to `hirsel-landings.jsonl` in the clone's common git directory, so a red
-main maps back to the push and to what it chose to skip.
+main maps back to the push and to what it chose to skip. It reports lock wait
+and held times and records them as `land_wait_seconds` and `land_held_seconds`
+in each landing's log entry.
 
 After those checks, land runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
 changed `docs/api.md` separately as `Regenerate the API index.` before pushing.

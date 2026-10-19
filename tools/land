@@ -3,12 +3,13 @@
 
     tools/land
 
-Fetch, rebase onto origin/main, then build the workspace, run Clippy, check
-formatting and the build files on the rebased tree, regenerate docs/api.md
-with the built CLI, and push. Index changes get their own generated-only
+Validate the lane and prepare before joining the exclusive FIFO land queue.
+Hold the lock while fetching, rebasing onto origin/main, building the workspace,
+running Clippy, checking formatting and the build files, regenerating docs/api.md
+with the built CLI, and pushing. Index changes get their own generated-only
 commit, 'Regenerate the API index.', without another gate. A rejected push
-(main moved) repeats the loop. A rebase conflict stops it: resolve it, run
-tools/gate on the result, and land again.
+(an out-of-band push moved main) repeats the loop while holding the lock.
+A rebase conflict stops it: resolve it, run tools/gate on the result, and land again.
 
 Land prints what the gate ran for the change and why (its green record), and
 appends the push with that record to `hirsel-landings.jsonl` in the clone's
@@ -42,6 +43,7 @@ ATTEMPTS = 20
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 CLI = 'root//:hirsel-cli-bin-hirsel'
 LANDINGS = 'hirsel-landings.jsonl'
+LAND_LOCK_DIR = Path('/workspace/code/hirsel-briefs/locks/land')
 
 
 def run(*command, **kwargs):
@@ -150,7 +152,7 @@ def describe(record):
     return lines
 
 
-def log_landing(pushed, base, identity, record):
+def log_landing(pushed, base, identity, record, timing):
     """Append the push and its gate record to the landings log every worktree
     of this clone shares (`<git common dir>/hirsel-landings.jsonl`), so a red
     main maps back to the push and to what its gate chose to skip."""
@@ -158,6 +160,7 @@ def log_landing(pushed, base, identity, record):
     entry = dict(pushed=pushed, base=base, identity=identity, branch=run('git', 'branch', '--show-current').stdout.strip(),
                  at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                  gated=record.get('at'),
+                 land_wait_seconds=timing.wait_seconds, land_held_seconds=timing.held_seconds,
                  **{key: record.get(key) for key in ('why', 'tokens', 'floor', 'selection', 'extends', 'pool')})
     with open(common / LANDINGS, 'a') as log:
         log.write(json.dumps(entry, sort_keys=True) + '\n')
@@ -173,53 +176,74 @@ def main():
     if run('git', 'status', '--porcelain').stdout.strip():
         say('land: the worktree has uncommitted changes; commit them (and gate the result) first')
         return 1
+    # Reject an ungated lane before waiting; check again after every rebase.
+    gated_change()
+    if run(PY, 'tools/buck2/prepare.py').returncode:
+        say('land: tools/buck2/prepare.py failed')
+        return 1
+    directory = Path(os.environ.get('HIRSEL_LAND_LOCK_DIR', str(LAND_LOCK_DIR)))
+    with gating.fifo_slot(directory, 1, label='land', exclusive=True) as timing:
+        status, landing = land_rounds()
+    if landing is not None:
+        log_landing(*landing, timing)
+    return status
+
+
+def gated_change():
+    """Validate the green receipt without running any lane-local tests again."""
+    base = gating.merge_base('origin/main')
+    identity = gating.change_identity(base)
+    if not identity:
+        return base, identity, None
+    crates = gating.Selection(base).crates
+    if not gating.is_green(identity, crates):
+        say(f'land: tools/gate has not passed this change (identity {identity[:12]}); '
+            'run tools/gate, then tools/land')
+        raise SystemExit(1)
+    return base, identity, gating.green_records()[identity]
+
+
+def land_rounds():
+    """Only the lock holder fetches, rebases, checks the aggregate tree and pushes."""
     for attempt in range(1, ATTEMPTS + 1):
         if (fetch := run('git', 'fetch', 'origin')).returncode:
             say('land: git fetch failed\n' + fetch.stderr)
-            return 1
+            return 1, None
         rebase = run('git', 'rebase', 'origin/main')
         if rebase.returncode:
             conflicts = run('git', 'diff', '--name-only', '--diff-filter=U').stdout.split()
             run('git', 'rebase', '--abort')
             say('land: the rebase onto origin/main conflicts in: ' + (', '.join(conflicts) or rebase.stderr.strip()))
             say('land: rebase by hand, resolve, run tools/gate on the result, then tools/land')
-            return 1
-        base = gating.merge_base('origin/main')
-        identity = gating.change_identity(base)
+            return 1, None
+        base, identity, record = gated_change()
         if not identity:
             say('land: nothing to land; HEAD is on origin/main')
-            return 0
-        crates = gating.Selection(base).crates
-        if not gating.is_green(identity, crates):
-            say(f'land: tools/gate has not passed this change (identity {identity[:12]}); '
-                'run tools/gate, then tools/land')
-            return 1
+            return 0, None
         say(f'land: attempt {attempt}: {run("git", "rev-list", "--count", f"{base}..HEAD").stdout.strip()} '
             f'commits on {base[:12]}, change {identity[:12]} passed tools/gate')
-        record = gating.green_records()[identity]
         for line in describe(record):
             say('land: ' + line)
         checked_head = run('git', 'rev-parse', 'HEAD').stdout.strip()
         if not checks():
             say('land: refusing to push a red tree')
-            return 1
+            return 1, None
         ok, generated = regenerate_index(checked_head)
         if not ok:
-            return 1
+            return 1, None
         push = run('git', 'push', 'origin', 'HEAD:main')
         if push.returncode == 0:
             pushed = run('git', 'rev-parse', 'HEAD').stdout.strip()
             say(f'land: pushed {pushed[:12]} to main')
-            log_landing(pushed, base, identity, record)
-            return 0
+            return 0, (pushed, base, identity, record)
         if not undo_index_commit(generated):
-            return 1
+            return 1, None
         if not any(marker in push.stderr for marker in REJECTED):
             say('land: git push failed\n' + push.stderr)
-            return 1
+            return 1, None
         say('land: main moved during the checks; rebasing again')
     say(f'land: main moved under {ATTEMPTS} attempts in a row; try again')
-    return 1
+    return 1, None
 
 
 if __name__ == '__main__':

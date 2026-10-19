@@ -1004,10 +1004,19 @@ class Slots(unittest.TestCase):
     def test_the_express_fifo_keeps_earlier_waiters_ahead_of_later_retries(self):
         self.fifo_order(gating.EXPRESS_POOL)
 
-    def fifo_order(self, pool):
+    def test_the_land_fifo_keeps_earlier_waiters_ahead_of_later_retries(self):
+        self.fifo_order(gating.NORMAL_POOL, land=True)
+
+    def fifo_order(self, pool, *, land=False):
         with tempfile.TemporaryDirectory() as scratch:
             environ = {gating.GATE_SLOTS: f'{scratch}/slots:1'}
             gating.write_gate_slot_count(Path(scratch) / 'slots', 1, pool=pool)
+
+            def slot():
+                if land:
+                    return gating.fifo_slot(Path(scratch) / 'slots', 1, label='land', exclusive=True)
+                return gating.gate_slot(environ, pool=pool)
+
             early_waiting, late_waiting = threading.Event(), threading.Event()
             early_retry, late_retry = threading.Event(), threading.Event()
             late_attempted, early_entered = threading.Event(), threading.Event()
@@ -1033,7 +1042,7 @@ class Slots(unittest.TestCase):
 
             def wait(name):
                 try:
-                    with gating.gate_slot(environ, pool=pool):
+                    with slot():
                         order.append(name)
                         if name == 'early':
                             early_entered.set()
@@ -1046,7 +1055,7 @@ class Slots(unittest.TestCase):
             late = threading.Thread(target=wait, args=('late',), name='late')
             with patch.object(gating.time, 'sleep', poll), contextlib.redirect_stdout(io.StringIO()):
                 try:
-                    with gating.gate_slot(environ, pool=pool):
+                    with slot():
                         early.start()
                         self.assertTrue(early_waiting.wait(5))
                         late.start()
@@ -1065,6 +1074,65 @@ class Slots(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual(order, ['early', 'late'])
                 self.assertEqual(list((Path(scratch) / 'slots' / (gating.POOL_PREFIX[pool] + 'queue')).iterdir()), [])
+
+    def test_land_reclaims_a_dead_holder_without_replacing_its_lock_file(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            source = ('import fcntl, os, sys, time; '
+                      'handle = open(sys.argv[1], "w"); '
+                      'fcntl.flock(handle, fcntl.LOCK_EX); '
+                      'handle.write(str(os.getpid())); handle.flush(); '
+                      'print("held", flush=True); time.sleep(30)')
+            holder = subprocess.Popen([sys.executable, '-c', source, str(directory / 'slot-0')],
+                                      stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), 'held')
+                inode = (directory / 'slot-0').stat().st_ino
+                queue = directory / 'queue'
+                queue.mkdir()
+                dead = queue / f'0-{holder.pid}'
+                dead.write_text(f'{gating.process_start(holder.pid)}\n')
+                holder.kill()
+                holder.wait(5)
+                with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+                    self.assertFalse(dead.exists())
+                    self.assertEqual((directory / 'slot-0').stat().st_ino, inode)
+            finally:
+                if holder.poll() is None:
+                    holder.kill()
+                    holder.wait(5)
+                holder.stdout.close()
+
+    def test_land_discards_a_ticket_from_a_reused_pid_but_keeps_a_live_identity(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            queue = directory / 'queue'
+            queue.mkdir()
+            stale = queue / f'0-{os.getpid()}'
+            stale.write_text(f'{gating.process_start(os.getpid()) + 1}\n')
+            with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+                self.assertFalse(stale.exists())
+            live = queue / f'0-{os.getpid()}'
+            live.write_text(f'{gating.process_start(os.getpid())}\n')
+            with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+                        self.fail('overtook a live waiter')
+            self.assertEqual(list(queue.iterdir()), [live])
+
+    def test_land_rereads_the_count_each_poll_and_refuses_concurrent_lands(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+
+            def change_count(_):
+                gating.write_gate_slot_count(directory, 2)
+
+            with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+                with patch.object(gating.time, 'sleep', change_count):
+                    with self.assertRaisesRegex(SystemExit, 'must be 1'):
+                        with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+                            self.fail('concurrent lands admitted')
+                self.assertEqual(list((directory / 'queue').iterdir()), [])
 
     def test_a_dead_ticket_is_removed_before_a_live_waiter_acquires(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -1187,16 +1255,36 @@ CONFORMANCE_SLICE_PROGRAMS = 20
 AGREE_SLICE_PROGRAMS = 260
 SELECTED_SLICES = 16
 if __name__ == "__main__":
+    if os.environ.get("LOCK_TRACE"):
+        import fcntl
+        from pathlib import Path
+        with open(Path(os.environ["HIRSEL_LAND_LOCK_DIR"]) / "slot-0", "a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = False
+            except BlockingIOError:
+                held = True
+        with open(os.environ["LOCK_TRACE"], "a") as log:
+            print("{name}", held, file=log)
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{name}", *sys.argv[1:]]), file=log)
     sys.exit(int(os.environ.get("FAIL_{upper}", "0")))
 '''
 
 FAKE_HIRSEL = '''#!/usr/bin/env python3
+import fcntl
 import os
 from pathlib import Path
 import subprocess
 import sys
+if os.environ.get("ASSERT_LAND_LOCK"):
+    with open(Path(os.environ["HIRSEL_LAND_LOCK_DIR"]) / "slot-0", "a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            sys.exit("index generation ran outside the land lock")
 with open(os.environ["COMMANDS"], "a") as log:
     print("hirsel " + " ".join(sys.argv[1:]), file=log)
 if os.environ.get("FAIL_INDEX"):
@@ -1253,6 +1341,7 @@ class Scripts(unittest.TestCase):
         git(self.root, 'branch', '-q', '--set-upstream-to=origin/main')
         self.commands = top / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands),
+                                 'HIRSEL_LAND_LOCK_DIR': str(top / 'land-lock'),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not acquire a slot held by the gate running this test.
         self.env.pop('HIRSEL_GATE_SLOTS', None)
@@ -1349,6 +1438,7 @@ class Scripts(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('tools/gate has not passed this change', result.stdout)
         self.assertFalse(any(c.startswith('build') for c in logged))
+        self.assertFalse(Path(self.env['HIRSEL_LAND_LOCK_DIR']).exists())
         self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.sibling_pushes({'LICENSE': 'MIT\n'})
         result, logged = self.run_tool('land')
@@ -1364,6 +1454,51 @@ class Scripts(unittest.TestCase):
         self.assertFalse(any(c.startswith('test') for c in logged))
         self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
         self.assertGreaterEqual(len(list((self.root / '.buck2/event-logs').glob('*.pb.zst'))), 2)
+        [landing] = (self.root / '.git/hirsel-landings.jsonl').read_text().splitlines()
+        timing = json.loads(landing)
+        self.assertGreaterEqual(timing['land_wait_seconds'], 0)
+        self.assertGreater(timing['land_held_seconds'], 0)
+        self.assertIn('after waiting', result.stdout)
+        self.assertIn('held land lock for', result.stdout)
+
+    def test_land_prepares_before_the_lock_and_fetches_checks_and_pushes_inside(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
+        real_git = shutil.which('git')
+        wrapper = self.root / '.buck2/bin/git'
+        trace = self.root.parent / 'lock-trace'
+        wrapper.write_text('''#!/usr/bin/env python3
+import fcntl, os, sys
+from pathlib import Path
+with open(Path(os.environ['HIRSEL_LAND_LOCK_DIR']) / 'slot-0', 'a+') as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held = False
+    except BlockingIOError:
+        held = True
+with open(os.environ['LOCK_TRACE'], 'a') as log:
+    print(sys.argv[1], held, file=log)
+os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
+''')
+        wrapper.chmod(0o755)
+        directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
+        directory.mkdir()
+        result, logged = self.run_tool('land', env={
+            'PATH': str(wrapper.parent) + os.pathsep + os.environ['PATH'],
+            'REAL_GIT': real_git, 'LOCK_TRACE': str(trace), 'ASSERT_LAND_LOCK': '1',
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = trace.read_text().splitlines()
+        for command in ('fetch', 'rebase', 'push'):
+            self.assertIn(command + ' True', rows)
+            self.assertNotIn(command + ' False', rows)
+        self.assertIn('status False', rows)
+        self.assertEqual([row for row in rows if row.startswith('prepare.py')],
+                         ['prepare.py False', 'prepare.py True'])
+        self.assertIn('fmt.py True', rows)
+        self.assertIn('sync.py True', rows)
+        self.assertEqual(logged[0], 'prepare.py')
+        self.assertEqual(logged.count('prepare.py'), 2)
 
     def test_land_commits_the_index_generated_from_the_rebased_sources(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
@@ -1398,6 +1533,7 @@ class Scripts(unittest.TestCase):
         result, logged = self.run_tool('land', env={
             'INDEX_TEXT': 'a new export\n', 'INDEX_PUSH_ONCE': str(self.sibling),
             'INDEX_PUSH_MARKER': str(self.sibling.parent / 'pushed'),
+            'ASSERT_LAND_LOCK': '1',
         })
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('main moved during the checks', result.stdout)
@@ -1406,6 +1542,8 @@ class Scripts(unittest.TestCase):
         self.assertEqual(git(self.root, 'log', '--format=%s').splitlines().count('Regenerate the API index.'), 1)
         self.assertEqual(gating.green_records(self.root), records)
         self.assertEqual(logged.count('hirsel doc stdlib/std@1/hirsel.json'), 2)
+        self.assertEqual(result.stdout.count('took land lock'), 1)
+        self.assertEqual(result.stdout.count('held land lock for'), 1)
         self.assertFalse(any(c.startswith('test') for c in logged))
 
     def test_an_expired_clippy_output_is_fetched_again(self):

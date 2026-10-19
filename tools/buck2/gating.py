@@ -126,6 +126,15 @@ def read_gate_slot_count(directory, fallback, *, pool=NORMAL_POOL):
     return int(text)
 
 
+def process_start(pid):
+    """Linux process identity survives PID reuse; zombies cannot keep a ticket."""
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return None if fields[0] == 'Z' else int(fields[19])
+
+
 def oldest_gate_ticket(queue):
     """Find the earliest live waiter, discarding tickets left by exited gates."""
     live = []
@@ -137,6 +146,15 @@ def oldest_gate_ticket(queue):
         if pid <= 0:
             continue
         try:
+            start = ticket.read_text().strip()
+        except FileNotFoundError:
+            continue
+        if start:
+            current = process_start(pid)
+            if current is None or str(current) != start:
+                ticket.unlink(missing_ok=True)
+                continue
+        try:
             os.kill(pid, 0)
         except ProcessLookupError:
             ticket.unlink(missing_ok=True)
@@ -147,6 +165,12 @@ def oldest_gate_ticket(queue):
     return min(live)[2] if live else None
 
 
+@dataclass
+class SlotTiming:
+    wait_seconds: float
+    held_seconds: float = 0
+
+
 @contextlib.contextmanager
 def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
     """Hold one slot in the selected host pool, in its own FIFO waiter order."""
@@ -155,24 +179,44 @@ def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
         yield
         return
     directory, fallback = config
-    prefix = POOL_PREFIX[pool]
     if pool == EXPRESS_POOL:
         fallback = EXPRESS_SLOTS
+    with fifo_slot(directory, fallback, pool=pool) as timing:
+        yield timing
+
+
+@contextlib.contextmanager
+def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=False):
+    """Share the file-lock FIFO between gates and the exclusive land queue.
+
+    flock releases a crashed holder's slot without unlinking its inode. Tickets
+    include the process start time so a reused PID cannot strand the queue.
+    Legacy gate tickets remain readable while already-loaded gates finish.
+    """
+    prefix = POOL_PREFIX[pool]
     if not (directory / (prefix + 'count')).exists():
         write_gate_slot_count(directory, fallback, pool=pool, seed=True)
     queue = directory / (prefix + 'queue')
     queue.mkdir(exist_ok=True)
-    while True:
-        ticket = queue / f'{time.time_ns()}-{os.getpid()}'
-        try:
-            ticket.touch(exist_ok=False)
-            break
-        except FileExistsError:
-            continue
-    waiting = None
+    # Publish identity and ticket together, retaining names old gates understand.
+    with tempfile.NamedTemporaryFile('w', dir=directory, prefix='.ticket-') as pending:
+        pending.write(f'{process_start(os.getpid())}\n')
+        pending.flush()
+        while True:
+            ticket = queue / f'{time.time_ns()}-{os.getpid()}'
+            try:
+                os.link(pending.name, ticket)
+                break
+            except FileExistsError:
+                continue
+    started = time.monotonic()
+    waiting = False
+    description = 'land lock' if exclusive else f'{pool} gate slot'
     try:
         while True:
             count = read_gate_slot_count(directory, fallback, pool=pool)
+            if exclusive and count != 1:
+                raise SystemExit(f'{label}: {directory / "count"} must be 1 for exclusive landing')
             if oldest_gate_ticket(queue) == ticket:
                 for slot in range(count):
                     # Python opens files non-inheritable, so Buck2 never holds the lock.
@@ -184,19 +228,25 @@ def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
                         continue
                     with handle:
                         handle.truncate(0)
-                        handle.write(f'{os.getpid()} {ROOT}\n')
+                        handle.write(f'{os.getpid()} {process_start(os.getpid())} {ROOT}\n')
                         handle.flush()
                         ticket.unlink(missing_ok=True)
-                        seconds = time.monotonic() - waiting if waiting is not None else 0
-                        say(f'gate: took {pool} gate slot {slot} after waiting {seconds:.0f} s')
-                        yield
+                        acquired = time.monotonic()
+                        timing = SlotTiming(acquired - started)
+                        say(f'{label}: took {description} {slot} after waiting {timing.wait_seconds:.3f} s')
+                        try:
+                            yield timing
+                        finally:
+                            timing.held_seconds = time.monotonic() - acquired
+                            if exclusive:
+                                say(f'{label}: held {description} for {timing.held_seconds:.3f} s')
                     return
-            if waiting is None:
+            if not waiting:
                 holders = [path.read_text().strip() if path.exists() else ''
                            for slot in range(count)
                            for path in [directory / f'{prefix}slot-{slot}']]
-                say(f'gate: waiting for one of {count} {pool} gate slots in {directory}; held by: ' + '; '.join(holders))
-                waiting = time.monotonic()
+                say(f'{label}: waiting for one of {count} {description}s in {directory}; held by: ' + '; '.join(holders))
+                waiting = True
             time.sleep(SLOT_POLL_SECONDS)
     finally:
         ticket.unlink(missing_ok=True)
