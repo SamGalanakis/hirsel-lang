@@ -152,6 +152,17 @@ impl<C> Writer<C> {
     }
 }
 
+/// The kind of the next value a [`Reader`] would read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Next {
+    Open,
+    Close,
+    Text,
+    Bytes,
+    Integer,
+    End,
+}
+
 pub struct Reader<'a, C = ()> {
     text: &'a str,
     pos: usize,
@@ -211,6 +222,18 @@ impl<'a, C> Reader<'a, C> {
             .unwrap_or(rest.len());
         self.pos += end;
         &rest[..end]
+    }
+    /// What the next value is, without consuming it, for readers that walk
+    /// a text without knowing its schema.
+    pub fn next_kind(&mut self) -> Next {
+        match self.peek() {
+            None => Next::End,
+            Some(b'(') => Next::Open,
+            Some(b')') => Next::Close,
+            Some(b'"') => Next::Text,
+            Some(b'#') => Next::Bytes,
+            Some(_) => Next::Integer,
+        }
     }
     /// Open a node and return its tag.
     pub fn open_any(&mut self) -> Result<&'a str, DecodeError> {
@@ -597,6 +620,22 @@ mod tests {
         assert!(!from_text::<bool>(&to_text(&false)).unwrap());
         assert_eq!(to_text(&7u32), "7");
         assert_eq!(to_text(&-7i64), "-7");
+    }
+
+    #[test]
+    fn next_names_each_value_kind_without_consuming_it() {
+        let mut r = Reader::new("(Tag -3 \"s\" #ff) ");
+        assert_eq!(r.next_kind(), Next::Open);
+        assert_eq!(r.open_any().unwrap(), "Tag");
+        assert_eq!(r.next_kind(), Next::Integer);
+        assert_eq!(r.int().unwrap(), -3);
+        assert_eq!(r.next_kind(), Next::Text);
+        assert_eq!(r.text().unwrap(), "s");
+        assert_eq!(r.next_kind(), Next::Bytes);
+        assert_eq!(r.bytes().unwrap(), vec![0xff]);
+        assert_eq!(r.next_kind(), Next::Close);
+        r.close().unwrap();
+        assert_eq!(r.next_kind(), Next::End);
     }
 
     #[test]
