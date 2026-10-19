@@ -680,7 +680,10 @@ impl Checker<'_, '_> {
     /// and no row. Nested products and variants split by constructor, rather
     /// than treating any occurrence of a variant tag as complete payload
     /// coverage; integer and char columns split their domain at the bounds
-    /// their literal and range patterns name.
+    /// their literal and range patterns name. As in Maranget's algorithm (and
+    /// rustc's pattern analysis), a wildcard query splits a column only when
+    /// its rows name every constructor; otherwise only the default matrix is
+    /// searched, so the work is bounded by the patterns, never by the type.
     /// Each row, and the query, takes the alternatives its choice names and
     /// every alternative elsewhere.
     fn useful_choosing(
@@ -691,6 +694,7 @@ impl Checker<'_, '_> {
     ) -> Result<bool, QueryError> {
         let mut todo = vec![(vec![root], rows, query)];
         while let Some((types, rows, (query, asked_choice))) = todo.pop() {
+            work::count(Counter::BodyUsefulnessMatrices);
             let rows: Vec<Row> = if types.is_empty() {
                 rows
             } else {
@@ -773,6 +777,19 @@ impl Checker<'_, '_> {
                     );
                 }
             }
+            let missing = |choices: &[(Tag, Vec<TypeId>)]| {
+                choices.iter().any(|(tag, fields)| {
+                    !rows.iter().any(|(r, _)| {
+                        !self.wild(r[0]) && self.specialize(r, tag, fields.len(), scalar).is_some()
+                    })
+                })
+            };
+            // A wildcard query over a column that names only some constructors
+            // is useful exactly where it is useful among the wildcard rows: a
+            // missing constructor keeps those rows alone. Constructors no row
+            // names are never unfolded, so a recursive type is explored only
+            // as deep as its patterns go.
+            let choices = choices.filter(|c| !(self.wild(query[0]) && missing(c)));
             let Some(choices) = choices else {
                 // An open domain always has a value no literal names.
                 if !self.wild(query[0]) {

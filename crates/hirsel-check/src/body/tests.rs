@@ -285,3 +285,71 @@ fn generic_function_value_ambiguity_names_the_missing_parameter() {
         assert!(diagnostic.message.contains(missing), "{diagnostic:?}");
     }
 }
+/// Usefulness splits a column only on constructors its rows name (Maranget), so
+/// a box-recursive type is explored no deeper than its patterns: matrices grow
+/// linearly with nesting depth and tuple width instead of unfolding the type.
+#[test]
+fn usefulness_work_grows_with_patterns_not_recursive_types() {
+    let chain = "type Chain = End | Link(u8, box Chain)\n";
+    let links =
+        |n: usize, inner: &str| (0..n).fold(inner.to_owned(), |p, _| format!("Link(_, {p})"));
+    let measure = |arms: &[String], parameters: &str, scrutinee: &str| {
+        let source = format!(
+            "{chain}fn order({parameters}) -> u8 {{ match {scrutinee} {{ {} }} }}",
+            arms.join(" ")
+        );
+        let before = work::read(Counter::BodyUsefulnessMatrices);
+        let (ds, _, _) = support::check_source(&source);
+        let rules = ds
+            .iter()
+            .map(|d| d.rule.as_str().to_owned())
+            .collect::<Vec<_>>();
+        (rules, work::read(Counter::BodyUsefulnessMatrices) - before)
+    };
+    for n in [1, 2, 4, 8, 16, 32] {
+        // Depth: End(), Link(_, End()), ... and n links over a wildcard.
+        let mut arms: Vec<_> = (0..n)
+            .map(|k| format!("{} => 0,", links(k, "End()")))
+            .collect();
+        arms.push(format!("{} => 1,", links(n, "_")));
+        let (rules, work) = measure(&arms, "c: Chain", "c");
+        eprintln!("depth {n}: {work} matrices");
+        assert!(rules.is_empty(), "depth {n}: {rules:?}");
+        assert!(work <= 4 * n as u64 + 4, "depth {n}: {work} matrices");
+        arms.remove(n / 2);
+        assert_eq!(measure(&arms, "c: Chain", "c").0, ["LANG-7"], "depth {n}");
+        // Width: a tuple of n chains, End() in each position, then all links.
+        if n == 1 {
+            continue;
+        }
+        let wild = |i: usize, p: &str| {
+            let cells: Vec<_> = (0..n).map(|j| if i == j { p } else { "_" }).collect();
+            format!("({})", cells.join(", "))
+        };
+        let mut arms: Vec<_> = (0..n)
+            .map(|i| format!("{} => 0,", wild(i, "End()")))
+            .collect();
+        arms.push(format!("({}) => 1,", vec!["Link(_, _)"; n].join(", ")));
+        let parameters = (0..n)
+            .map(|i| format!("c{i}: Chain"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let scrutinee = format!(
+            "({})",
+            (0..n)
+                .map(|i| format!("c{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let (rules, work) = measure(&arms, &parameters, &scrutinee);
+        eprintln!("width {n}: {work} matrices");
+        assert!(rules.is_empty(), "width {n}: {rules:?}");
+        assert!(work <= 4 * n as u64 + 4, "width {n}: {work} matrices");
+        arms.remove(n / 2);
+        assert_eq!(
+            measure(&arms, &parameters, &scrutinee).0,
+            ["LANG-7"],
+            "width {n}"
+        );
+    }
+}

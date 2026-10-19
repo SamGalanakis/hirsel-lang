@@ -1,0 +1,18 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 8
+// A product match over a box-recursive variant that omits one pair of
+// constructors does not cover every value.
+type Chain = End | Link(u8, box Chain)
+
+fn order(a: Chain, b: Chain) -> i32 {
+  match (a, b) {
+    (End(), End()) => 0,
+    (End(), Link(_, _)) => -1,
+    (Link(_, _), End()) => 1,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, order(End(), End()) == 0)
+  Ok(())
+}

@@ -1,0 +1,34 @@
+// rule: LANG-7
+// expect: run
+// An exhaustive product match over a box-recursive variant is checked without
+// unfolding the recursive type past its patterns.
+type Chain = End | Link(u8, box Chain)
+
+fn order(a: Chain, b: Chain) -> i32 {
+  match (a, b) {
+    (End(), End()) => 0,
+    (End(), Link(_, _)) => -1,
+    (Link(_, _), End()) => 1,
+    (Link(_, _), Link(_, _)) => 2,
+  }
+}
+
+fn depth(c: Chain) -> u8 {
+  match c {
+    End() => 0,
+    Link(_, End()) => 1,
+    Link(_, Link(_, End())) => 2,
+    Link(_, Link(_, Link(_, _))) => 3,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let two: Chain = Link(2, box Link(1, box End()))
+  test.check(t, order(End(), End()) == 0)
+  test.check(t, order(End(), Link(1, box End())) == -1)
+  test.check(t, order(Link(1, box End()), End()) == 1)
+  test.check(t, order(Link(1, box End()), two) == 2)
+  test.check(t, depth(Link(3, box Link(2, box Link(1, box End())))) == 3)
+  test.check(t, depth(Link(1, box End())) == 1)
+  Ok(())
+}
