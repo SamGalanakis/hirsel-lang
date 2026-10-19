@@ -858,9 +858,9 @@ class Selection:
         return self.classified.crates
 
     def owner_tests(self, paths) -> set[str]:
-        """The test targets that read these files themselves."""
+        """The tests reading these files, including through their harnesses."""
         files = owned_paths(paths, self.root)
-        return labels(name for name in self.graph.owners(files) if self.graph.targets[name].test)
+        return labels(self.graph.tests(self.graph.rdeps(self.graph.owners(files))))
 
     def ratchet(self) -> set[str]:
         if impact.PASSING not in self.paths:
@@ -891,12 +891,27 @@ class Selection:
         if dependents := self.std_dependents():
             # std is source too: its tests are the cases that import the changed modules.
             plan.conformance |= set(dependents)
-            plan.reasons.append((CONFORMANCE_PREFIX + '<std>', self.std_why))
+            plan.reasons.append((CONFORMANCE_PREFIX + '<std>', self.std_why + ': ' + ', '.join(dependents)))
+        if inputs := self.std_test_inputs():
+            plan.tests |= self.owner_tests(inputs)
+            plan.reasons.append(('<std package tests>',
+                                 'package and example import closures reach the changed std modules: '
+                                 + ', '.join(inputs)))
         return plan
+
+    def std_test_inputs(self) -> list[str]:
+        """Package and example inputs whose import closure reaches changed std."""
+        if not hasattr(self, '_std_test_inputs'):
+            self._std_test_inputs = []
+            if any(p.startswith(impact.STD + '/') for p in self.paths):
+                versions, changed = self.std_change()
+                self._std_test_inputs = sorted({path for std in versions
+                                               for path in impact.std_test_inputs(changed, self.root, std)})
+        return self._std_test_inputs
 
     def std_examples(self) -> list[str]:
         """The examples whose import closure includes a changed std module."""
-        if not self.std_dependents():
+        if not any(p.startswith(impact.STD + '/') for p in self.paths):
             return []
         versions, changed = self.std_change()
         examples = set()
@@ -998,9 +1013,6 @@ class Selection:
         if not any(p.startswith(EXAMPLES_INPUTS) for p in self.paths):
             plan.tests = {t for t in plan.tests if not short(t).startswith(EXAMPLES + '-shard-')
                           and short(t) != EXAMPLES}
-            if users := self.std_examples():
-                plan.reasons.append(('(not suggested)', f'{EXAMPLES} runs the examples that reach the changed std '
-                                     f'modules ({", ".join(users)}); add it when the change alters what they print'))
         plan.add(self.floor())
         return plan
 

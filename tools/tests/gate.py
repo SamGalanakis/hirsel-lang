@@ -456,6 +456,19 @@ class Queries(unittest.TestCase):
         self.assertEqual(asked, [])
         self.assertEqual(floor.tests, {'root//:hirsel-lexer-test-it'})
 
+    def test_changed_harness_source_floors_every_owning_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = 'crates/hirsel-lexer/tests/front/net.rs'
+            (root / path).parent.mkdir(parents=True)
+            (root / path).write_text('#[test] fn net() {}')
+            selection = self.selection([path], root=root)
+            selection.graph = graph.Graph(QUERY_BUCK.replace(
+                'name = "hirsel-lexer-test-it",', 'name = "hirsel-lexer-test-it",\n    shards = 2,'), root)
+            expected = {'root//:hirsel-lexer-test-it-shard-1', 'root//:hirsel-lexer-test-it-shard-2'}
+            self.assertEqual(selection.floor().tests, expected)
+            self.assertEqual(selection.suggest().tests, expected)
+
     def test_a_build_wide_edit_suggests_every_test_and_campaign(self):
         plan, asked = self.run_query(gating.Selection.suggest, self.selection(['.buckconfig']))
         self.assertEqual(asked, [])
@@ -762,6 +775,50 @@ class Corpus(unittest.TestCase):
         self.assertEqual(plan.agreement, {'conformance/SEM/toml-run.hir'})
         plan.settle(self.root)
         self.assertEqual(plan.slot_pool(), gating.EXPRESS_POOL)
+
+    def test_std_reaches_package_tests_corpus_and_examples_through_packages(self):
+        self.std()
+        vendor = 'packages/vendor@1/api.hir'
+        bridge = 'packages/bridge@1/api.hir'
+        case = 'conformance/PROG/vendor-run.hir'
+        example = 'examples/tasks/main.hir'
+        self.write({vendor: 'pub fn value() -> u64 { yaml.parse("a") }',
+                    'packages/vendor@1/tests.hir': '@test fn test_value() -> () {}',
+                    'packages/vendor@1/hirsel.json': self.sidecar(vendor, [(impact.STD_MANIFEST, 'std', [])]),
+                    bridge: 'pub fn value() -> u64 { vendor.value() }',
+                    'packages/bridge@1/hirsel.json': self.sidecar(bridge, [('packages/vendor@1/hirsel.json', 'vendor', [])]),
+                    case: 'fn main() -> u64 { bridge.value() }',
+                    case + '.json': self.sidecar(case, [('packages/bridge@1/hirsel.json', 'bridge', [])]),
+                    example: 'fn main() -> u64 { bridge.value() }',
+                    'examples/tasks/hirsel.json': self.sidecar(example, [('packages/bridge@1/hirsel.json', 'bridge', [])])})
+        manifest = json.loads((self.root / 'packages/vendor@1/hirsel.json').read_text())
+        manifest['sources'].append({'path': 'tests.hir', 'module': ['vendor']})
+        self.write({'packages/vendor@1/hirsel.json': json.dumps(manifest)})
+        buck = QUERY_BUCK + '''
+hirsel_test(
+    name = "vendor-tests",
+    data = glob(["packages/vendor@1/**"]),
+)
+hirsel_test(
+    name = "unrelated-tests",
+    data = glob(["packages/unrelated@1/**"]),
+)
+'''
+        selection = Queries.selection(['stdlib/std@1/format.hir'], root=self.root)
+        selection.graph = graph.Graph(buck, self.root)
+        expected = {'root//:vendor-tests', 'root//:hirsel-cli-test-examples-shard-1',
+                    'root//:hirsel-cli-test-examples-shard-2'}
+        for plan in [selection.floor(), selection.suggest()]:
+            self.assertEqual(plan.tests, expected)
+            self.assertIn(case, plan.conformance)
+        self.assertIn(case, selection.suggest().agreement)
+        self.assertTrue(any(case in why for _, why in selection.suggest().reasons))
+        # Package and example selection does not depend on a corpus caller existing.
+        (self.root / (case + '.json')).unlink()
+        selection = Queries.selection(['stdlib/std@1/format.hir'], root=self.root)
+        selection.graph = graph.Graph(buck, self.root)
+        self.assertEqual(selection.floor().tests, expected)
+        self.assertEqual(selection.std_examples(), ['tasks'])
 
     def test_a_package_fixture_selects_the_cases_whose_packages_reach_it(self):
         self.write({'packages/fixtures/vendor@1/hirsel.json': json.dumps(
@@ -1592,6 +1649,7 @@ class Scripts(unittest.TestCase):
         files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'BUCK': SCRIPT_BUCK, 'README.md': 'Hirsel\n',
                  'docs/building.md': 'See [the grammar](grammar.md).\n', 'docs/grammar.md': 'grammar\n',
                  'docs/api.md': 'index\n', 'docs/catalogue.md': 'index\n',
+                 'bench/native/tests/test_fixture.py': 'import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self): pass\n',
                  **{f'crates/{crate}/Cargo.toml': f'[package]\nname = "{crate}"\n' for crate in impact.CRATE_CAMPAIGNS},
                  '.gitignore': (REPO / '.gitignore').read_text()}
         for name in ('gate', 'land'):
@@ -2369,6 +2427,46 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('conformance', record['selection'])
         self.assertIn('corpus and local checks', record['why'])
         self.assertEqual(self.run_tool('land')[0].returncode, 0)
+
+    def test_normal_gate_and_extend_run_changed_test_harness_sources(self):
+        buck = SCRIPT_BUCK + '''
+hirsel_test(
+    name = "front",
+    srcs = glob(["crates/hirsel-lexer/tests/front/**"]),
+    shards = 2,
+)
+'''
+        commit(self.root, {'BUCK': buck}, 'Declare front test')
+        git(self.root, 'push', '-q', 'origin', 'main')
+        path = 'crates/hirsel-lexer/tests/front/net.rs'
+        commit(self.root, {path: '#[test] fn net() {}'}, 'Test source')
+        for extending in [False, True]:
+            if extending:
+                commit(self.root, {path: '#[test] fn edited_net() {}'}, 'Edit test source')
+            result, logged = self.run_tool('gate', *(['--extend'] if extending else []),
+                                           '--why', 'changed front test')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            [tested] = [c for c in logged if c.startswith('test ')]
+            self.assertIn('root//:front-shard-1', tested)
+            self.assertIn('root//:front-shard-2', tested)
+
+    def test_build_graph_changes_run_the_gate_tooling_tests(self):
+        # Rule-only BUCK edits and Buck subpackage files retain their normal
+        # impact as well as running the host tooling checks.
+        helper = self.root / 'tools/tests/gate.py'
+        helper.write_text(FAKE_SCRIPT.replace('{name}', 'gate.py').replace('{upper}', 'GATE_TEST'))
+        git(self.root, 'add', 'tools/tests/gate.py')
+        git(self.root, 'commit', '-qm', 'Tooling test')
+        git(self.root, 'push', '-q', 'origin', 'main')
+        for path, text in [('BUCK', SCRIPT_BUCK.replace('name = "a"', 'name = "b"')),
+                           ('tools/buck2/test-costs/new.tsv', 'case\t1\n'),
+                           ('tools/buck2/defs.bzl', '# macro change\n')]:
+            with self.subTest(path=path):
+                commit(self.root, {path: text}, 'Graph change')
+                result, logged = self.run_tool('gate', '--why', 'graph tooling checks')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('gate.py', logged)
+                git(self.root, 'push', '-q', 'origin', 'main')
 
     def test_extend_reruns_failed_and_missing_targets_and_preserves_campaign_summary(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')

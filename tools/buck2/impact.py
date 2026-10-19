@@ -242,12 +242,18 @@ def classify(paths, members, buck_text: str) -> Classified:
     workspace crates by directory name; `buck_text` is the root BUCK."""
     result = Classified()
     for path in sorted(set(paths)):
+        # Build-graph edits must exercise the static graph reader as well as
+        # retaining their usual build-wide or per-target selection.
+        graph_tooling = path.startswith('tools/buck2/') or path.rsplit('/', 1)[-1] in ('BUCK', 'defs.bzl')
+        if graph_tooling:
+            result.tools.append(path)
         if path == 'BUCK':
             continue  # by target, from the BUCK diff (buck_targets)
         if matches(path, DOCS) and not code_read(path, buck_text):
             result.docs.append(path)
         elif matches(path, TOOL_PATHS) and not code_read(path, buck_text):
-            result.tools.append(path)
+            if not graph_tooling:
+                result.tools.append(path)
         elif matches(path, PROOFS):
             result.proofs.append(path)
         elif matches(path, TOOL_INPUTS):
@@ -513,6 +519,26 @@ def std_dependents(changed, root, std: Std | None = None) -> list[str]:
         if modules and (changed is None or modules & changed):
             programs.append(program.relative_to(root).as_posix())
     return programs
+
+
+def std_test_inputs(changed, root, std: Std) -> list[str]:
+    """Inputs of package and example tests reaching changed std modules.
+
+    Follow manifests even without a corpus caller. Returning their sources
+    too lets the build graph find tests with literal inputs as well as globs.
+    """
+    reach = std.reach()
+    inputs = set()
+    manifests = sorted({manifest for directory in ('packages', 'examples')
+                        for manifest in (root / directory).rglob('hirsel.json')})
+    for manifest in manifests:
+        modules = package_std_reach(manifest, root, std, reach)
+        if modules and (changed is None or modules & changed):
+            data = json.loads(manifest.read_text())
+            inputs.add(manifest.relative_to(root).as_posix())
+            inputs.update((manifest.parent / source['path']).resolve().relative_to(root.resolve()).as_posix()
+                          for source in data.get('sources', []))
+    return sorted(inputs)
 
 
 def package_files(manifest, root, seen=None) -> set:
