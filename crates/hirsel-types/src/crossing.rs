@@ -332,7 +332,9 @@ pub fn owned_crossing_receipts(
     declarations: &GenericDeclarations,
     lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Vec<(Vec<OwnedTypePart>, bool)>, QueryError> {
-    let mut store = source.clone();
+    // Expansions go to scratch: pushing to a clone of a shared body store
+    // would copy every row of the body once per call.
+    let mut store = crate::graph::RootedScratch::new(source);
     let mut pending = vec![(root, Vec::new(), false)];
     let mut nominals = NominalExpansions::default();
     let mut receipts = Vec::new();
@@ -345,7 +347,7 @@ pub fn owned_crossing_receipts(
             continue;
         };
         if row.sendability_requirement == SendabilityRequirement::Sendable {
-            let independent = sendability_after_sharing(&store, id, declarations, lookup)?
+            let independent = sendability_after_sharing(store.store(id), id, declarations, lookup)?
                 == Sendability::Sendable;
             receipts.push((path.clone(), independent));
         }
@@ -394,7 +396,7 @@ pub fn owned_crossing_receipts(
                 definition,
                 arguments,
             } => {
-                if !nominals.enter(id, 0, |_| &store)? {
+                if !nominals.enter(id, 0, |id| store.store(id))? {
                     continue;
                 }
                 pending.push((id, path.clone(), true));
@@ -407,23 +409,19 @@ pub fn owned_crossing_receipts(
                 if let Some(representation) = declaration.representation.filter(|_| {
                     signature.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
                 }) {
-                    let expanded = substitute_type(
-                        &signature.types,
-                        representation,
-                        &mut store,
-                        Substitution {
-                            binder: Some(GenericBinder::Bound(0)),
-                            roles: &signature.metadata.roles,
-                            arguments: &arguments,
-                            authorities: &vec![AuthoritySummary::Unknown; arguments.len()],
-                        },
-                    )
-                    .map_err(|error| {
-                        QueryError::Operational(OperationalFailure {
-                            operation: "owned crossing receipts".into(),
-                            message: format!("{error:?}"),
-                        })
-                    })?;
+                    let expanded = store
+                        .expand(
+                            &signature.types,
+                            representation,
+                            &arguments,
+                            &signature.metadata.roles,
+                        )
+                        .map_err(|error| {
+                            QueryError::Operational(OperationalFailure {
+                                operation: "owned crossing receipts".into(),
+                                message: format!("{error:?}"),
+                            })
+                        })?;
                     pending.push((expanded, path, false));
                 }
             }

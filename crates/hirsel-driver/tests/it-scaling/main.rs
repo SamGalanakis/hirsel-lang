@@ -13,6 +13,7 @@ mod scaling_dependencies;
 mod scaling_failure_states;
 mod scaling_flow_state;
 mod scaling_generic_declarations;
+mod scaling_generic_instances;
 mod scaling_h_places;
 mod scaling_headers;
 mod scaling_lower_bindings;
