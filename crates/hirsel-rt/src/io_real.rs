@@ -23,6 +23,8 @@ pub struct RealIo {
     net: Box<dyn NetProvider>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
     cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
+    /// Test clocks use the same timer heap, with an independent virtual origin.
+    test_clock: Option<crate::readiness::Readiness>,
     /// The host process provider's streaming children.
     children: crate::host_child::HostChildren,
 }
@@ -153,6 +155,7 @@ impl RealIo {
             retain_history: true,
             net: Box::new(crate::net_host::HostNet::new()),
             cooperative: None,
+            test_clock: None,
             children: Default::default(),
         })
     }
@@ -494,18 +497,27 @@ impl Adapter for RealIo {
         }
     }
     fn enter(&mut self, token: u64) {
+        if let Some(clock) = &self.test_clock {
+            clock.enter(token);
+        }
         if let Some((readiness, log)) = &mut self.cooperative {
             readiness.enter(token);
             log.enter(token);
         }
     }
     fn finish(&mut self, token: u64) {
+        if let Some(clock) = &self.test_clock {
+            clock.finish(token);
+        }
         if let Some((readiness, log)) = &mut self.cooperative {
             readiness.finish(token);
             log.finish(token);
         }
     }
     fn parked(&mut self, token: u64) {
+        if let Some(clock) = &self.test_clock {
+            clock.parked(token);
+        }
         if let Some((readiness, log)) = &mut self.cooperative {
             readiness.parked(token);
             log.parked(token);
@@ -531,7 +543,11 @@ impl Adapter for RealIo {
             return Ok(Ready::Tokens(Vec::new()));
         };
         log.point();
-        let tokens = readiness.ready()?;
+        let mut tokens = readiness.ready()?;
+        if let Some(clock) = &self.test_clock {
+            tokens.extend(clock.ready()?);
+            tokens.sort_unstable();
+        }
         let events: Vec<Event> = tokens
             .iter()
             .filter_map(|&token| log.ready(token))
@@ -547,6 +563,11 @@ impl Adapter for RealIo {
         Ok(Ready::Tokens(tokens))
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
+        if let Some(clock) = &self.test_clock
+            && clock.wait()?
+        {
+            return Ok(true);
+        }
         match &self.cooperative {
             Some((readiness, _)) => readiness.wait(),
             None => Ok(false),
@@ -555,8 +576,12 @@ impl Adapter for RealIo {
 }
 impl RealIo {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
-        if matches!(request, Request::TestClock { .. }) && self.cooperative.is_none() {
-            self.set_cooperative(Default::default());
+        if matches!(request, Request::TestClock { .. }) {
+            if self.cooperative.is_none() {
+                self.set_cooperative(Default::default());
+            }
+            self.test_clock
+                .get_or_insert_with(|| crate::readiness::Readiness::virtual_clock(0));
         }
         let fake = self.state.is_fake_request(&request);
         let mut fault = if self.state.preflight(&request)?.is_some()
@@ -626,7 +651,7 @@ impl RealIo {
                 }
             }
             Request::Monotonic { clock } if self.state.test_clocks.contains(clock) => {
-                let ticks = self.cooperative.as_ref().unwrap().0.test_time();
+                let ticks = self.test_clock.as_ref().unwrap().virtual_time().unwrap();
                 self.state
                     .sample(&request, Completion::Monotonic(Ok(ticks)))
             }
@@ -651,7 +676,7 @@ impl RealIo {
                 self.state.sample(&request, Completion::Random(input))
             }
             Request::SleepUntil { clock, deadline } if self.state.test_clocks.contains(clock) => {
-                if !self.cooperative.as_ref().unwrap().0.test_timer(*deadline) {
+                if !self.test_clock.as_ref().unwrap().timer(*deadline)? {
                     return Err(AdapterError::Blocked);
                 }
                 self.state.sample(&request, Completion::Wait(Ok(())))

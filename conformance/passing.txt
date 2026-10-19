@@ -1937,12 +1937,17 @@ conformance/LANG/LANG-9-test-attribute-parameter-ok.hir
 conformance/LANG/LANG-9-test-attribute-parameter-reject.hir
 conformance/LANG/LANG-9-test-attribute-result-ok.hir
 conformance/LANG/LANG-9-test-attribute-result-reject.hir
+conformance/LANG/LANG-9-test-clock.hir
 conformance/LANG/LANG-9-test-passing-mut-run.hir
 conformance/LANG/LANG-9-test-passing-take-run.hir
 conformance/LANG/LANG-9-test-report-run.hir
 conformance/LANG/LANG-9-test-runner-fakes.hir
 conformance/LANG/LANG-9-test-runner-shadowed-types.hir
 conformance/LANG/LANG-9-test-snapshot-name-fail.hir
+conformance/LANG/LANG-9-test-tasks-deadlock.hir
+conformance/LANG/LANG-9-test-tasks-interleaving.hir
+conformance/LANG/LANG-9-test-tasks-mutex.hir
+conformance/LANG/LANG-9-test-tasks-ping-pong.hir
 conformance/LANG/LANG-9-test-tasks-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-boundary-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-infinity-fail.hir

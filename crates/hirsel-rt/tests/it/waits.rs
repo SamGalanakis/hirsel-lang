@@ -253,10 +253,11 @@ fn test_clock_is_independent_of_host_time_and_replays_its_idle_jump() {
     };
     real.enter(7);
     assert_eq!(real.call(sleep.clone()), Err(AdapterError::Blocked));
+    real.parked(7);
     assert_eq!(ticks(&mut real, fake), 0);
-    assert!(!real.ready(7).unwrap());
+    assert_eq!(real.ready().unwrap(), Ready::Tokens(vec![]));
     assert!(real.wait().unwrap());
-    assert!(real.ready(7).unwrap());
+    assert_eq!(real.ready().unwrap(), Ready::Tokens(vec![7]));
     assert_eq!(real.call(sleep.clone()), Ok(Completion::Wait(Ok(()))));
     real.finish(7);
     assert_eq!(ticks(&mut real, fake), u64::MAX);
@@ -273,10 +274,11 @@ fn test_clock_is_independent_of_host_time_and_replays_its_idle_jump() {
     assert_eq!(ticks(&mut sim, fake), 0);
     sim.enter(7);
     assert_eq!(sim.call(sleep.clone()), Err(AdapterError::Blocked));
+    sim.parked(7);
     assert_eq!(ticks(&mut sim, fake), 0);
-    assert!(!sim.ready(7).unwrap());
+    assert_eq!(sim.ready().unwrap(), Ready::Tokens(vec![]));
     assert!(sim.wait().unwrap());
-    assert!(sim.ready(7).unwrap());
+    assert_eq!(sim.ready().unwrap(), Ready::Tokens(vec![7]));
     assert_eq!(sim.call(sleep), Ok(Completion::Wait(Ok(()))));
     Adapter::finish(&mut sim, 7);
     assert_eq!(ticks(&mut sim, fake), u64::MAX);

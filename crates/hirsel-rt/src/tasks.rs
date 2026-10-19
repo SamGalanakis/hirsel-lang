@@ -597,7 +597,7 @@ pub(crate) fn test_waits(ctx: *mut RunCtx) -> String {
     let s = scheduler(ctx);
     let mut waits: Vec<_> = s
         .parked
-        .iter()
+        .values()
         .map(|&task| {
             let row = s.tasks[task as usize].as_ref().unwrap();
             let kind = match row.wait {
