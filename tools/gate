@@ -13,10 +13,20 @@
 
 The floor runs on every gate: documentation links and whitespace, the gate
 tooling's tests when it changed (the Lean model's checks when it or its
-vectors changed), the build-file check, then formatting, Clippy and the
-workspace build, which stop the gate before any test when they fail; then the
-test targets of every crate whose source changed and of every changed test
-file, and every changed or added corpus case with its twins.
+vectors changed), formatting, Clippy, the workspace build and the build-file
+check. They run before the gate queues for a slot, and a failure stops it
+there: a red floor never waits in the queue. Then, holding a slot, the test
+targets of every crate whose source changed and of every changed test file,
+and every changed or added corpus case with its twins. The chosen corpus
+cases run first, in their own invocation; when one fails, the gate stops
+before the long targets (`--extend` after the fix reuses what passed).
+
+A gate restarted on the same change identity, or extended, keeps the queue
+place of this worktree's unfinished gate (the time it first queued). Failures
+listed in origin/main's tools/known-failures.tsv (test id, reason, owner lane,
+date) are excluded, and each exclusion is printed with its row. Every gate
+appends its floor time, queue wait, time to its first failure and total to
+`hirsel-gates.jsonl` in the clone's common git directory.
 
 `--tests` adds what the lane chooses, in one Buck2 invocation with the floor:
 
@@ -70,6 +80,7 @@ and fails after the last (tools/main-full-run.sh).
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -88,6 +99,10 @@ from gating import say  # noqa: E402
 import impact  # noqa: E402
 
 PY = sys.executable
+# This worktree's queue place (queue_stamp) and the clone's gate timings.
+QUEUE_STAMP = 'hirsel-gate-queue.json'
+STAMP_LIFETIME = 12 * 3600 * 10**9
+GATES_LOG = 'hirsel-gates.jsonl'
 for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
     os.environ.setdefault(name, value)
 
@@ -142,11 +157,28 @@ def docs_check(base, documents, paths):
 # ---------------------------------------------------------------- per push
 
 class Report:
-    def __init__(self):
+    def __init__(self, known=None):
         self.rows = []      # (passed, label, detail lines)
+        self.started = time.monotonic()
+        self.first_failure = None   # seconds from the start to the first failed row
+        self.known = known or {}    # gating.known_failures()
+        self.excluded = []          # (target, KnownFailure) a failure matched
+        self.skipped = set()        # targets the gate stopped before
 
     def add(self, passed, label, details=()):
+        if not passed and self.first_failure is None:
+            self.first_failure = time.monotonic() - self.started
         self.rows.append((passed, label, [d for d in details if d]))
+
+    def known_failure(self, target, result):
+        """Whether a failed target failed only in known failures: then it
+        passes, with each exclusion named in its row."""
+        found = gating.known_only(target, result['details'], self.known) if result else None
+        if found:
+            self.excluded += [(target, failure) for failure in found]
+            self.add(True, f'{target} ({gating.STATUS.get(result["status"], result["status"])}, known failures only)',
+                     [failure.describe() for failure in found])
+        return bool(found)
 
     @property
     def passed(self):
@@ -172,9 +204,13 @@ def local_rows(report, results):
 def campaign_row(report, name, results, targets, summarize):
     shards = [results.get(gating.short(t)) for t in targets]
     seconds = max((r['seconds'] for r in shards if r), default=0)
+    if any(gating.short(t) in report.skipped for t in targets):
+        return
     failed = [(gating.short(t), r) for t, r in zip(targets, shards) if not r or r['status'] != gating.PASS]
     if failed:
         for target, result in failed:
+            if report.known_failure(target, result):
+                continue
             if result is None:
                 report.add(False, f'{target}: no result (see the build failures and the log)')
             else:
@@ -211,11 +247,13 @@ def test_rows(report, results, tests):
     for target in tests:
         name = gating.short(target)
         result = results.get(name)
+        if name in report.skipped:
+            continue
         if result is None:
             report.add(False, f'{name}: no result (see the build failures and the log)')
         elif result['status'] in (gating.PASS, gating.SKIP, gating.OMITTED):
             report.add(True, f'{name} ({result["seconds"]:.0f} s)')
-        else:
+        elif not report.known_failure(name, result):
             report.add(False, f'{name} ({gating.STATUS.get(result["status"], result["status"])}, '
                        f'{result["seconds"]:.0f} s)', gating.rerun(name, result['details']))
 
@@ -345,24 +383,22 @@ def run_plan(report, plan, log, previous=None):
     pending = [t for t in targets if gating.short(t) not in results]
     if results:
         say(f'gate: reusing {len(results)} passed targets for this change')
+    # The chosen corpus cases first: they are quick, and a failure among them
+    # stops the gate before the long targets.
+    first = [t for t in pending if gating.short(t).startswith('gate-conformance-selected-')]
+    stages = [first, [t for t in pending if t not in first]] if first else [pending]
     status = 0
-    if pending:
-        say(f'gate: one Buck2 invocation: {len(pending)} pending targets')
-        say(f'gate: Buck2 output: {log}')
-        with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
-            build_report = Path(scratch) / 'build.json'
-            with open(log, 'a') as out:
-                invoked = time.monotonic()
-                status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
-                                      *pending, '--', '--timeout', str(gating.TIMEOUT),
-                                      stdout=out, stderr=subprocess.STDOUT).returncode
-            wall = time.monotonic() - invoked
-            results.update(gating.test_results(event_log) if event_log.exists() else {})
-            failures = gating.build_failures(build_report)
-        for target, error in sorted(failures.items()):
-            report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
-                                                             f'.buck2/bin/buck2 build //:{target}'])
-        say(f'gate: tests finished ({wall:.0f} s)')
+    for number, stage in enumerate(stages, 1):
+        if not stage:
+            continue
+        if number == 2:
+            failed = [gating.short(t) for t in first if results.get(gating.short(t), {}).get('status') != gating.PASS
+                      and not gating.known_only(gating.short(t), results.get(gating.short(t), {}).get('details', ''),
+                                                report.known)]
+            if failed:
+                report.skipped = {gating.short(t) for t in stage}
+                break
+        status = invoke(report, stage, log, results, first=number == 1 and len(stages) > 1) or status
     for campaign, name, summarize in ((impact.CONFORMANCE, 'conformance', conformance_summary),
                                       (impact.AGREEMENT, f'agreement ({agree.AGREE_LIMIT} variants)', agreement_summary),
                                       (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
@@ -379,9 +415,34 @@ def run_plan(report, plan, log, previous=None):
         campaign_row(report, f'LLVM smoke matrix and Cranelift parity of {len(plan.native)} programs', results,
                      gating.NATIVE_TARGETS, smoke_summary)
     test_rows(report, results, tests)
-    if status and report.passed:
+    if report.skipped:
+        report.add(False, f'{len(report.skipped)} targets not run: the chosen corpus cases failed first',
+                   ['fix them, then tools/gate --extend: the passed targets are reused'])
+    if status and report.passed and not report.excluded:
         report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
     return results
+
+
+def invoke(report, targets, log, results, *, first=False):
+    """One Buck2 test invocation of these targets, its results added to `results`."""
+    say(f'gate: one Buck2 invocation: {len(targets)} pending targets'
+        + (' (the chosen corpus cases, first)' if first else ''))
+    say(f'gate: Buck2 output: {log}')
+    with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
+        build_report = Path(scratch) / 'build.json'
+        with open(log, 'a') as out:
+            invoked = time.monotonic()
+            status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
+                                  *targets, '--', '--timeout', str(gating.TIMEOUT),
+                                  stdout=out, stderr=subprocess.STDOUT).returncode
+        wall = time.monotonic() - invoked
+        results.update(gating.test_results(event_log) if event_log.exists() else {})
+        failures = gating.build_failures(build_report)
+    for target, error in sorted(failures.items()):
+        report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
+                                                         f'.buck2/bin/buck2 build //:{target}'])
+    say(f'gate: tests finished ({wall:.0f} s)')
+    return status
 
 
 def push_gate(base_ref, tokens, why, extend):
@@ -394,7 +455,7 @@ def push_gate(base_ref, tokens, why, extend):
     selection = gating.Selection(base)
     say(f'gate: {len(selection.paths)} changed paths from {base[:12]} (change {identity[:12]})')
     errors = gating.policy_errors()
-    report = Report()
+    report = Report(known=gating.known_failures())
     for error in errors:
         report.add(False, error)
     if errors:
@@ -404,12 +465,9 @@ def push_gate(base_ref, tokens, why, extend):
     if gating.is_green(identity, selection.crates) and not tokens:
         say('gate: this change already passed; main moved under it and it rebased cleanly, '
             'so only the workspace build and formatting run')
+        # The cheap floor alone, which takes no slot.
         if prepare(report):
-            pool = gating.Plan().slot_pool()
-            say(f'gate: pool: {pool}')
-            gating.stop_daemons()
-            with gating.gate_slot(pool=pool):
-                build_only(report, log)
+            build_only(report, log)
         report.print(time.monotonic() - started)
         return 0 if report.passed else 1
     digests = gating.path_digests(base)
@@ -449,6 +507,7 @@ def push_gate(base_ref, tokens, why, extend):
     plan = floor = None
     pool = 'none'
     target_results = {}
+    floor_seconds = slot_wait = None
     if needs_buck2:
         if not prepare(report):
             local_rows(report, local.finish())
@@ -473,22 +532,34 @@ def push_gate(base_ref, tokens, why, extend):
             say(f'gate: chosen ({" ".join(tokens)}):')
             show_plan(chosen)
         gating.SESSION_CONFIG[:] = plan.config()
-        # One slot for the build and the tests, so a gate never queues twice.
-        pool = plan.slot_pool()
-        say(f'gate: pool: {pool}')
-        gating.stop_daemons()
-        with gating.gate_slot(pool=pool):
-            if resumed is not None and resumed.get('config', []) == plan.config():
-                target_results = resumed.get('target_results', {})
-            if build_first(report, log):
-                # --check lists compiled cases on the pool. Preparation and
-                # the prequeue daemon stop must finish before it starts.
-                if c.tools or c.needs_buck2:
-                    local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+        if resumed is not None and resumed.get('config', []) == plan.config():
+            target_results = resumed.get('target_results', {})
+        # The cheap floor runs before the queue, so a red floor never waits
+        # for a slot: formatting, the build-file check, the workspace build
+        # and Clippy, and the local checks.
+        floor_passed = build_first(report, log)
+        if floor_passed and (c.tools or c.needs_buck2):
+            # --check lists compiled cases on the pool, after preparation.
+            local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+        local_rows(report, local.finish())
+        local = None
+        floor_seconds = time.monotonic() - started
+        if not report.passed:
+            say('gate: the floor failed (formatting, the build files, the build, Clippy or a local check); '
+                'no slot taken and no test ran')
+        else:
+            pool = plan.slot_pool()
+            say(f'gate: pool: {pool}; the floor passed in {floor_seconds:.0f} s')
+            gating.stop_daemons()
+            with gating.gate_slot(pool=pool, stamp=queue_stamp(identity, extend)) as timing:
+                slot_wait = timing.wait_seconds if timing else 0
                 target_results = run_plan(report, plan, log, target_results)
-            else:
-                say('gate: formatting, Clippy or the workspace build failed; no test ran')
-    local_rows(report, local.finish())
+    if local is not None:
+        local_rows(report, local.finish())
+    if report.excluded:
+        say('gate: known failures excluded (tools/known-failures.tsv on origin/main):')
+        for target, failure in report.excluded:
+            say(f'  {target}: {failure.describe()}')
     report.print(time.monotonic() - started)
     if gating.change_identity(base) == identity:
         ran = plan.summary() if plan else []
@@ -508,7 +579,45 @@ def push_gate(base_ref, tokens, why, extend):
                            paths=scope.paths, target_results=target_results, config=plan.config() if plan else [])
     else:
         say('gate: the worktree changed while the gate ran; not recording its results')
+    forget_queue_stamp()
+    log_gate(identity, pool, report, floor_seconds, slot_wait, time.monotonic() - started)
     return 0 if report.passed else 1
+
+
+def queue_stamp(identity, extend):
+    """The queue place of this worktree's unfinished gate, kept when it is
+    restarted with the same change identity or extended: the time it first
+    queued. A gate that finishes forgets it."""
+    path = gating.green_path().with_name(QUEUE_STAMP)
+    try:
+        saved = json.loads(path.read_text())
+    except (OSError, ValueError):
+        saved = None
+    now = time.time_ns()
+    if saved and (saved.get('identity') == identity or extend) and now - saved.get('stamp', 0) < STAMP_LIFETIME:
+        say(f'gate: keeping this worktree\'s place in the queue from {time.strftime("%H:%M:%S", time.localtime(saved["stamp"] / 1e9))}')
+        stamp = saved['stamp']
+    else:
+        stamp = now
+    path.write_text(json.dumps(dict(identity=identity, stamp=stamp)) + '\n')
+    return stamp
+
+
+def forget_queue_stamp():
+    gating.green_path().with_name(QUEUE_STAMP).unlink(missing_ok=True)
+
+
+def log_gate(identity, pool, report, floor_seconds, slot_wait, seconds):
+    """Append the gate's timings to `hirsel-gates.jsonl` in the clone's common
+    git directory: floor, queue wait, time to the first failure, total."""
+    common = Path(gating.git('rev-parse', '--path-format=absolute', '--git-common-dir').strip())
+    entry = dict(at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), identity=identity, pool=pool,
+                 branch=gating.git('branch', '--show-current').strip(), passed=report.passed,
+                 floor_seconds=floor_seconds, slot_wait_seconds=slot_wait, first_failure_seconds=report.first_failure,
+                 seconds=seconds, known_failures=[failure.id for _, failure in report.excluded],
+                 skipped_targets=len(report.skipped))
+    with open(common / GATES_LOG, 'a') as log:
+        log.write(json.dumps(entry, sort_keys=True) + '\n')
 
 
 # ---------------------------------------------------------------- full

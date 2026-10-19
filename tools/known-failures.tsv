@@ -1,0 +1,5 @@
+# Failures main is known to have, excluded by tools/gate and printed in every gate that meets them.
+# One row each, tab-separated: id, reason, owner lane (the step fixing it), date (UTC).
+# id: a test target (hirsel-rt-test-it-shard-2), a binary and case (hirsel-rt-test-it::replay::kill_order)
+# or a corpus case (conformance/MEM/MEM-7-x-run.hir). Rows are added to main directly, never through
+# tools/land (it refuses a change that adds one); tools/land removes a lane's rows when that lane lands.

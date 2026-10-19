@@ -644,8 +644,9 @@ The floor:
   `proofs/` (and its vectors in `native-tests/model/`): its audit and vector
   replay on this host;
 - the build-file check, formatting, Clippy and the workspace build, which
-  includes checking std once (the std precheck). They run first, and when one
-  fails the gate stops before any test;
+  includes checking std once (the std precheck). They run first, with the
+  local checks, before the gate queues for a slot; when one fails the gate
+  stops there, so a red floor never waits in the queue;
 - every test target of a crate whose source changed (unit, integration in
   all shards, binary unit tests and doctests), and of every changed test file;
 - every changed or added corpus case with its twins (the cases with the same
@@ -694,8 +695,26 @@ campaign.
 - a build-wide input (`Cargo.toml`, `.buckconfig`, `tools/buck2/`,
   `third-party/`): every test and campaign.
 
-The floor and the chosen tests run as one Buck2 invocation after the build. The
-summary lists every target; a failure names its failing cases and the command
+Holding a slot, the chosen corpus cases (`gate-conformance-selected-shard-<i>`)
+run first, in their own invocation: when one fails the gate stops before the
+other targets, which `--extend` runs after the fix while reusing what passed.
+The rest run as one Buck2 invocation. A gate restarted on the same change
+identity, or extended, keeps the queue place of this worktree's unfinished
+gate (`hirsel-gate-queue.json` holds the time it first queued); a gate that
+finishes gives it up. Each gate appends `floor_seconds`, `slot_wait_seconds`,
+`first_failure_seconds` and `seconds` to `hirsel-gates.jsonl` in the clone's
+common git directory.
+
+Failures main is known to have are listed in `tools/known-failures.tsv` (one
+tab-separated row each: test id, reason, owner lane, date). An id is a test
+target, a binary and case (`hirsel-rt-test-it::replay::kill_order`) or a
+corpus case path. The gate reads origin/main's list, passes a target whose
+only failures are listed, and prints every exclusion with its row. Rows are
+added to main directly: `tools/land` refuses a change that adds one, and when
+a lane lands it removes the rows that lane owns in a generated-only commit
+(`Expire the known failures of <lane>.`).
+
+The summary lists every target; a failure names its failing cases and the command
 that reruns each alone (for agreement, `agree --seed 1 --limit 5000
 --sample-path <case>`, the gate's own variants of that case). A passing change
 is recorded with its identity (the patch-id of the lane's own diff without

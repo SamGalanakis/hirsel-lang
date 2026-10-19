@@ -157,6 +157,7 @@ TOOL_PATHS = (
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
         'event_logs', 'gating', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
+    'tools/known-failures.tsv',
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',
     'bench/native/**',

@@ -16,6 +16,7 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+from time import time_ns
 
 sys.dont_write_bytecode = True
 TOOLS = Path(__file__).resolve().parents[1]
@@ -1562,7 +1563,8 @@ Local.start = traced_local_check
         build = next(i for i, row in enumerate(rows) if row.startswith('build '))
         stop = next(i for i, row in enumerate(rows) if row.startswith('kill v2 '))
         self.assertGreater(sync, build, 'inventory started before the prepared workspace build')
-        self.assertGreater(sync, stop, 'inventory was live when the gate stopped its daemon')
+        # The inventory is in the floor: it finishes before the gate stops its daemon to queue.
+        self.assertLess(sync, stop, 'inventory was live when the gate stopped its daemon')
 
     def sibling_pushes(self, files):
         commit(self.sibling, files, 'Sibling change')
@@ -1709,7 +1711,9 @@ Local.start = traced_local_check
                             self.assertEqual(process.returncode, 143 if interrupt else 0, out + err)
                             self.assert_daemons_stopped()
                             if not interrupt:
-                                self.assertTrue(any(row.startswith('build ') for row in self.daemon_trace()[before:]))
+                                # A gate built before it queued; after the slot it only tests.
+                                first = 'test ' if tool == 'gate' else 'build '
+                                self.assertTrue(any(row.startswith(first) for row in self.daemon_trace()[before:]))
                     self.assertEqual(list((directory / (gating.POOL_PREFIX[pool] + 'queue')).iterdir()), [])
 
     def test_set_slots_updates_each_host_count_without_checks_or_a_slot(self):
@@ -2083,6 +2087,105 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(git(self.origin, 'log', '-1', '--format=%s', 'main'), 'Regenerate the API index.')
         self.assertEqual(git(clash, 'status', '--porcelain'), '')
 
+    def test_the_chosen_corpus_cases_run_first_and_their_failure_stops_the_gate(self):
+        # Enough other cases that one changed case is a slice, not the whole campaign.
+        self.sibling_pushes({f'conformance/LANG/LANG-{n}-y-run.hir': '// expect: run\n' for n in (2, 3, 4)})
+        git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
+        commit(self.root, {'conformance/LANG/LANG-1-x-run.hir': '// expect: run\n',
+                           'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Case')
+        result, logged = self.run_tool('gate', '--why', 'a case and a test',
+                                       env={'FAIL_TARGET': 'root//:gate-conformance-selected-shard-1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        [tested] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:gate-conformance-selected-shard-1 ', tested)
+        self.assertNotIn('root//:a ', tested)
+        self.assertIn('1 targets not run: the chosen corpus cases failed first', result.stdout)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'the case fixed')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([c.split(' -- ')[0].split()[-1] for c in logged if c.startswith('test ')],
+                         ['root//:gate-conformance-selected-shard-1', 'root//:a'])
+
+    def test_known_failures_on_main_are_excluded_and_printed_and_others_fail(self):
+        self.sibling_pushes({'tools/known-failures.tsv': '# id\treason\towner\tdate\n'
+                             'a\tthe replay kill-order flake\tnative-bugs-4\t2026-10-19\n'})
+        git(self.root, 'fetch', '-q', 'origin')
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--why', 'one test target', env={'FAIL_TARGET': 'root//:a'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('pass  a (FAIL, known failures only)', result.stdout)
+        self.assertIn('a: known failure a: the replay kill-order flake (owner native-bugs-4, since 2026-10-19)',
+                      result.stdout)
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn u() {}\n'}, 'Other')
+        result, _ = self.run_tool('gate', '--why', 'one test target', env={'FAIL_TESTS': '1'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.sibling_pushes({'tools/known-failures.tsv': '# id\treason\towner\tdate\n'})
+        git(self.root, 'fetch', '-q', 'origin')
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn v() {}\n'}, 'Another')
+        result, _ = self.run_tool('gate', '--why', 'the row expired', env={'FAIL_TARGET': 'root//:a'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('FAIL  a (FAIL', result.stdout)
+
+    def test_land_refuses_added_known_failures_and_expires_the_landing_lanes_rows(self):
+        rows = '# id\treason\towner\tdate\nx\tflaky\tmain\t2026-10-19\ny\tred\tother\t2026-10-19\n'
+        self.sibling_pushes({'tools/known-failures.tsv': rows})
+        git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
+        commit(self.root, {'tools/known-failures.tsv': rows + 'z\tmine\tmain\t2026-10-20\n',
+                           'bench/native/tests/test_fixture.py':
+                               'import unittest\nclass Fixture(unittest.TestCase):\n    def test_available(self): pass\n'},
+               'Add a row')
+        gate = self.run_tool('gate', '--why', 'tooling')[0]
+        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('the change adds rows to tools/known-failures.tsv: z', result.stdout)
+        git(self.root, 'reset', '-q', '--hard', 'origin/main')
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('expired known failures owned by the landing lanes: x', result.stdout)
+        self.assertEqual(git(self.origin, 'show', 'main:tools/known-failures.tsv'),
+                         '# id\treason\towner\tdate\ny\tred\tother\t2026-10-19')
+        self.assertIn('Expire the known failures of main.', git(self.origin, 'log', '--format=%s', '-3', 'main'))
+
+    def test_a_restarted_gate_keeps_its_place_in_the_queue(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        directory = self.root.parent / 'slots'
+        env = {gating.GATE_SLOTS: str(directory)}
+        queue = directory / 'express-queue'
+        with contextlib.ExitStack() as held:
+            for _ in range(2):
+                held.enter_context(gating.fifo_slot(directory, 2, pool=gating.EXPRESS_POOL))
+            with self.daemon_process(['gate', '--why', 'one test target'], env) as process:
+                self.wait_for_ticket(queue, 1)
+                [first] = list(queue.iterdir())
+                process.terminate()
+                process.communicate(timeout=20)
+            # A later waiter queues; the restarted gate goes back ahead of it.
+            later = queue / f'{time_ns()}-{os.getpid()}'
+            later.write_text(f'{gating.process_start(os.getpid())}\n')
+            with self.daemon_process(['gate', '--why', 'one test target'], env) as process:
+                self.wait_for_ticket(queue, 2)
+                [restarted] = [ticket for ticket in queue.iterdir() if ticket != later]
+                self.assertEqual(restarted.name.split('-')[0], first.name.split('-')[0])
+                self.assertEqual(gating.oldest_gate_ticket(queue), restarted)
+                later.unlink()
+                held.close()
+                out, err = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, 0, out + err)
+                self.assertIn("keeping this worktree's place in the queue", out)
+        self.assertFalse((self.root / '.git/hirsel-gate-queue.json').exists())
+        [entry] = [json.loads(line) for line in (self.root / '.git/hirsel-gates.jsonl').read_text().splitlines()][-1:]
+        self.assertTrue(entry['passed'])
+        self.assertIsNotNone(entry['floor_seconds'])
+
+    def wait_for_ticket(self, queue, count):
+        for _ in range(400):
+            if queue.is_dir() and len(list(queue.iterdir())) == count:
+                return
+            gating.time.sleep(0.05)
+        self.fail(f'{count} tickets never queued')
+
     def test_a_crate_edit_checks_that_every_ignored_test_runs_in_a_gate(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\n#[ignore]\nfn tool() {}\n'}, 'Test')
         result, logged = self.run_tool('gate', '--why', 'scratch change', env={'FAIL_IGNORED': '1'})
@@ -2137,20 +2240,24 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('agreement: the whole campaign', result.stdout)
         self.assertFalse(any(c.startswith(('build', 'test')) for c in logged), logged)
 
-    def test_extend_reuses_targets_after_a_local_failure_but_land_refuses_red(self):
+    def test_a_local_failure_stops_the_gate_before_the_queue_and_land_refuses_red(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus and local checks',
-                                  env={'FAIL_IGNORED': '1'})
+        directory = self.root.parent / 'slots'
+        result, logged = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus and local checks',
+                                       env={'FAIL_IGNORED': '1', gating.GATE_SLOTS: str(directory)})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('no slot taken and no test ran', result.stdout)
+        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        self.assertFalse((directory / 'queue').exists())
         identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
         record = gating.green_records(self.root)[identity]
         self.assertFalse(gating.is_green(identity, set(), self.root))
-        self.assertEqual(record['target_results']['gate-conformance-shard-16']['status'], gating.PASS)
+        self.assertEqual(record['target_results'], {})
         self.assertEqual(gating.latest_green(self.root), (None, None))
         self.assertEqual(self.run_tool('land')[0].returncode, 1)
         result, logged = self.run_tool('gate', '--extend', '--why', 'local check fixed')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        self.assertTrue(any(c.startswith('test ') for c in logged), logged)
         self.assertIn('ignored_tests.py', logged)
         record = gating.green_records(self.root)[identity]
         self.assertTrue(gating.is_green(identity, set(), self.root))
@@ -2200,13 +2307,16 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
     def test_a_build_failure_during_resume_keeps_passed_target_results(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
         result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus',
-                                  env={'FAIL_IGNORED': '1'})
+                                  env={'FAIL_TARGET': 'root//:gate-conformance-shard-3'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, _ = self.run_tool('gate', '--extend', '--why', 'build failed', env={'FAIL_BUILD': '1'})
+        result, logged = self.run_tool('gate', '--extend', '--why', 'build failed', env={'FAIL_BUILD': '1'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'local fixed')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'build fixed')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [tested] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:gate-conformance-shard-3 ', tested)
+        self.assertNotIn('root//:gate-conformance-shard-4 ', tested)
 
     def test_resuming_a_failed_extension_keeps_its_scope_and_inherited_selection(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
@@ -2218,7 +2328,8 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         result, logged = self.run_tool('gate', '--extend', '--why', 'local fixed')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        # The failed extension stopped in its floor; its resumption runs its tests.
+        self.assertTrue(any(c.startswith('test ') for c in logged), logged)
         _, record = gating.latest_green(self.root)
         self.assertEqual(record['paths'], [changed])
         self.assertIn('conformance', record['selection'])

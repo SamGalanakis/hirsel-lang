@@ -370,23 +370,26 @@ class SlotTiming:
 
 
 @contextlib.contextmanager
-def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
-    """Hold one slot in the selected host pool, in its own FIFO waiter order."""
+def gate_slot(environ=os.environ, *, pool=NORMAL_POOL, stamp=None):
+    """Hold one slot in the selected host pool, in its own FIFO waiter order;
+    `stamp` (nanoseconds) is the place a restarted gate keeps."""
     directory = gate_slot_dir(environ)
     if directory is None:
-        yield
+        yield None
         return
-    with fifo_slot(directory, DEFAULT_SLOTS[pool], pool=pool) as timing:
+    with fifo_slot(directory, DEFAULT_SLOTS[pool], pool=pool, stamp=stamp) as timing:
         yield timing
 
 
 @contextlib.contextmanager
-def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=False):
+def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=False, stamp=None):
     """Share the file-lock FIFO between gates and the exclusive land queue.
 
     flock releases a crashed holder's slot without unlinking its inode. Tickets
     include the process start time so a reused PID cannot strand the queue.
     Legacy gate tickets remain readable while already-loaded gates finish.
+    The queue orders tickets by `stamp`, the time of the first queueing, so
+    a waiter given an earlier stamp keeps that place.
     """
     prefix = POOL_PREFIX[pool]
     if not (directory / (prefix + 'count')).exists():
@@ -397,13 +400,14 @@ def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=
     with tempfile.NamedTemporaryFile('w', dir=directory, prefix='.ticket-') as pending:
         pending.write(f'{process_start(os.getpid())}\n')
         pending.flush()
+        stamp = time.time_ns() if stamp is None else stamp
         while True:
-            ticket = queue / f'{time.time_ns()}-{os.getpid()}'
+            ticket = queue / f'{stamp}-{os.getpid()}'
             try:
                 os.link(pending.name, ticket)
                 break
             except FileExistsError:
-                continue
+                stamp += 1
     started = time.monotonic()
     waiting = False
     description = 'land lock' if exclusive else f'{pool} gate slot'
@@ -1095,6 +1099,85 @@ def failed_cases(details):
     cases = re.findall(r'^test (\S+)(?: - should panic)? \.\.\. FAILED$', details, re.M)
     cases += re.findall(r'^---- (\S+) stdout ----$', details, re.M)
     return list(dict.fromkeys(cases))
+
+
+# ---------------------------------------------------------------- known failures
+
+# Failures main is known to have, each owned by the lane fixing it: a gate
+# excludes them and prints every exclusion. Rows are added to main directly
+# (tools/land refuses a change that adds one) and expire when their owner lane
+# lands (tools/land removes them).
+KNOWN_FAILURES = 'tools/known-failures.tsv'
+KNOWN_COLUMNS = ('id', 'reason', 'owner', 'date')
+
+
+@dataclass(frozen=True)
+class KnownFailure:
+    """`id` is a test target (`hirsel-rt-test-it-shard-2`), a binary and case
+    (`hirsel-rt-test-it::replay::kill_order`) or a corpus case
+    (`conformance/MEM/MEM-7-x-run.hir`, in conformance or agreement)."""
+    id: str
+    reason: str
+    owner: str
+    date: str
+
+    def describe(self):
+        return f'known failure {self.id}: {self.reason} (owner {self.owner}, since {self.date})'
+
+
+def parse_known_failures(text, name=KNOWN_FAILURES) -> dict[str, KnownFailure]:
+    rows = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.startswith('#'):
+            continue
+        fields = [field.strip() for field in line.split('\t')]
+        if len(fields) != len(KNOWN_COLUMNS) or not all(fields):
+            raise SystemExit(f'gate: {name}:{number}: a row is {", ".join(KNOWN_COLUMNS)}, separated by tabs')
+        rows[fields[0]] = KnownFailure(*fields)
+    return rows
+
+
+def known_failures(root=ROOT) -> dict[str, KnownFailure]:
+    """origin/main's list: a lane can only remove rows, so main's is in effect."""
+    shown = subprocess.run(['git', 'show', f'origin/main:{KNOWN_FAILURES}'], cwd=root, capture_output=True, text=True)
+    return parse_known_failures(shown.stdout) if shown.returncode == 0 else {}
+
+
+def failing_ids(target, details) -> list[str]:
+    """The ids of what failed in a target: libtest cases as `binary::case`,
+    corpus cases by path (conformance lines and agreement clusters)."""
+    binary = SHARD.sub(r'\1', target)
+    ids = [f'{binary}::{case}' for case in failed_cases(details)]
+    ids += re.findall(r'^(conformance/\S+\.hir): ', details, re.M)
+    ids += re.findall(r'"path"\s*:\s*"(conformance/[^"]+\.hir)"', details)
+    return list(dict.fromkeys(ids))
+
+
+def known_only(target, details, known) -> list[KnownFailure] | None:
+    """The known failures that explain a failed target, or None when something
+    else failed (or nothing names what did)."""
+    for name in (target, SHARD.sub(r'\1', target)):
+        if name in known:
+            return [known[name]]
+    ids = failing_ids(target, details)
+    if ids and all(i in known for i in ids):
+        return [known[i] for i in ids]
+    return None
+
+
+def added_known_failures(diff) -> list[str]:
+    """Rows a `git diff` of the known-failures list adds."""
+    return [line[1:] for line in diff.splitlines()
+            if line.startswith('+') and not line.startswith('+++') and line[1:].strip()
+            and not line.startswith('+#')]
+
+
+def without_owners(text, owners) -> str:
+    """The list without the rows these lanes own."""
+    def kept(line):
+        fields = line.split('\t')
+        return line.startswith('#') or len(fields) < 3 or fields[2].strip() not in owners
+    return ''.join(line for line in text.splitlines(keepends=True) if kept(line))
 
 
 def pool_error(details):
