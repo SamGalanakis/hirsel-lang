@@ -19,7 +19,7 @@ Layout:
 - Two binaries, each a third to two thirds of the former single harness, so a
   check or modes edit relinks them in parallel:
   `tests/rc/main.rs` links hirsel-rc's suites and `tests/front/main.rs` those of
-  check, modes, lir and rt. A module named `<crate>_<file>` holds what was
+  check, modes, lir, rt and code-store. A module named `<crate>_<file>` holds what was
   `crates/hirsel-<crate>/tests/it/<file>.rs`, so `rc::cleanup::x` became
   `rc_cleanup::x` (`.buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 --
   --test-arg=rc_cleanup::x --test-arg=--exact`). A crate prefix such as `modes_` selects one crate's tests.

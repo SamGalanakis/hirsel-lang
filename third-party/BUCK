@@ -3758,6 +3758,12 @@ third_party_rust_library(
     visibility = [],
 )
 
+alias(
+    name = "ring",
+    actual = ":ring-0.17",
+    visibility = ["PUBLIC"],
+)
+
 third_party_http_archive(
     name = "ring-0.17.14.crate",
     sha256 = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7",
@@ -5202,6 +5208,12 @@ third_party_buildscript_run(
         "linux-x86_64": dict(),
     },
     version = "0.13.5",
+)
+
+alias(
+    name = "tempfile",
+    actual = ":tempfile-3",
+    visibility = ["PUBLIC"],
 )
 
 third_party_http_archive(

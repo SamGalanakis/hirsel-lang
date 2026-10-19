@@ -1,6 +1,6 @@
 //! Name-independent definition hashes (LANG-6), a query over checked TIR.
 use super::*;
-use hirsel_proof_export::{CallSite, DefinitionContent};
+use hirsel_proof_export::{CallSite, DefinitionContent, DefinitionGroup};
 use hirsel_syntax::ContentHash;
 use hirsel_types::SignatureKind;
 
@@ -38,6 +38,35 @@ impl QueryEngine {
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<DefinitionHashes, QueryError> {
+        let contents = self.closure_contents(roots)?;
+        let hashes = hirsel_proof_export::definition_hashes(&contents).map_err(operational)?;
+        let mut call_sites = BTreeMap::new();
+        for (path, content) in &contents {
+            if let DefinitionContent::Body { tir: Some(tir), .. } = content {
+                let sites = hirsel_proof_export::call_sites(tir, &hashes).map_err(|callee| {
+                    operational(format!("{path} calls {callee} outside its closure"))
+                })?;
+                call_sites.insert(path.clone(), sites);
+            }
+        }
+        Ok(DefinitionHashes { hashes, call_sites })
+    }
+
+    /// The recursive groups of the closure of `roots`, dependencies first,
+    /// with each member's hash preimage: what a code store holds.
+    pub fn definition_groups(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<Vec<DefinitionGroup>, QueryError> {
+        let contents = self.closure_contents(roots)?;
+        hirsel_proof_export::definition_groups(&contents).map_err(operational)
+    }
+
+    /// The content of every definition `roots` reach.
+    fn closure_contents(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<BTreeMap<DefPath, DefinitionContent>, QueryError> {
         let mut contents = BTreeMap::new();
         let mut pending: Vec<DefPath> = roots.into_iter().collect();
         while let Some(path) = pending.pop() {
@@ -52,17 +81,7 @@ impl QueryEngine {
             );
             contents.insert(path, content);
         }
-        let hashes = hirsel_proof_export::definition_hashes(&contents).map_err(operational)?;
-        let mut call_sites = BTreeMap::new();
-        for (path, content) in &contents {
-            if let DefinitionContent::Body { tir: Some(tir), .. } = content {
-                let sites = hirsel_proof_export::call_sites(tir, &hashes).map_err(|callee| {
-                    operational(format!("{path} calls {callee} outside its closure"))
-                })?;
-                call_sites.insert(path.clone(), sites);
-            }
-        }
-        Ok(DefinitionHashes { hashes, call_sites })
+        Ok(contents)
     }
 
     /// The hashes of `package`'s source definitions and their closure.

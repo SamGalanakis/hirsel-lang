@@ -330,6 +330,72 @@ hirsel_test(
 )
 
 hirsel_library(
+    name = "hirsel-code-store",
+    deps = [
+        "//:hirsel-codec",
+        "//:hirsel-object-storage",
+        "//:hirsel-proof-export",
+        "//:hirsel-syntax",
+        "//third-party:ring",
+        "//third-party:serde_json",
+    ],
+    crate = "hirsel_code_store",
+    crate_root = "crates/hirsel-code-store/src/lib.rs",
+    srcs = glob(["crates/hirsel-code-store/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-code-store",
+    package_name = "hirsel-code-store",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-code-store-unittest",
+    deps = [
+        "//:hirsel-codec",
+        "//:hirsel-object-storage",
+        "//:hirsel-proof-export",
+        "//:hirsel-syntax",
+        "//third-party:ring",
+        "//third-party:serde_json",
+        "//third-party:tempfile",
+    ],
+    data = glob(["crates/hirsel-code-store/Cargo.toml"]) + glob(["crates/hirsel-code-store/src/**"], exclude = ["crates/hirsel-code-store/src/**/*.rs"]),
+    crate = "hirsel_code_store",
+    crate_root = "crates/hirsel-code-store/src/lib.rs",
+    srcs = glob(["crates/hirsel-code-store/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-code-store",
+    package_name = "hirsel-code-store",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-code-store-test-it",
+    deps = [
+        "//:hirsel-code-store",
+        "//:hirsel-codec",
+        "//:hirsel-object-storage",
+        "//:hirsel-proof-export",
+        "//:hirsel-syntax",
+        "//third-party:ring",
+        "//third-party:serde_json",
+        "//third-party:tempfile",
+    ],
+    bin_exes = {},
+    data = glob(["crates/hirsel-code-store/Cargo.toml"]) + glob(["crates/hirsel-code-store/tests/it/**"], exclude = ["crates/hirsel-code-store/tests/it/**/*.rs"]),
+    crate = "it",
+    crate_root = "crates/hirsel-code-store/tests/it/main.rs",
+    srcs = glob(["crates/hirsel-code-store/tests/it/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-code-store",
+    package_name = "hirsel-code-store",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
     name = "hirsel-codec",
     deps = ["//:hirsel-syntax"],
     crate = "hirsel_codec",
@@ -2515,6 +2581,55 @@ hirsel_test(
 )
 
 hirsel_library(
+    name = "hirsel-object-storage",
+    deps = ["//third-party:serde_json"],
+    crate = "hirsel_object_storage",
+    crate_root = "crates/hirsel-object-storage/src/lib.rs",
+    srcs = glob(["crates/hirsel-object-storage/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-object-storage",
+    package_name = "hirsel-object-storage",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-object-storage-unittest",
+    deps = [
+        "//third-party:serde_json",
+        "//third-party:tempfile",
+    ],
+    data = glob(["crates/hirsel-object-storage/Cargo.toml"]) + glob(["crates/hirsel-object-storage/src/**"], exclude = ["crates/hirsel-object-storage/src/**/*.rs"]),
+    crate = "hirsel_object_storage",
+    crate_root = "crates/hirsel-object-storage/src/lib.rs",
+    srcs = glob(["crates/hirsel-object-storage/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-object-storage",
+    package_name = "hirsel-object-storage",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-object-storage-test-it",
+    deps = [
+        "//:hirsel-object-storage",
+        "//third-party:serde_json",
+        "//third-party:tempfile",
+    ],
+    bin_exes = {},
+    data = glob(["crates/hirsel-object-storage/Cargo.toml"]) + glob(["crates/hirsel-object-storage/tests/it/**"], exclude = ["crates/hirsel-object-storage/tests/it/**/*.rs"]),
+    crate = "it",
+    crate_root = "crates/hirsel-object-storage/tests/it/main.rs",
+    srcs = glob(["crates/hirsel-object-storage/tests/it/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-object-storage",
+    package_name = "hirsel-object-storage",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
     name = "hirsel-parser",
     deps = [
         "//:hirsel-diag",
@@ -2603,6 +2718,7 @@ hirsel_test(
     name = "hirsel-pipeline-tests-test-front",
     deps = [
         "//:hirsel-pipeline-tests",
+        "//:hirsel-code-store",
         "//:hirsel-codec",
         "//:hirsel-core-contract",
         "//:hirsel-diag",
@@ -2613,6 +2729,8 @@ hirsel_test(
         "//:hirsel-interp",
         "//:hirsel-layout",
         "//:hirsel-lir",
+        "//:hirsel-object-storage",
+        "//:hirsel-proof-export",
         "//:hirsel-rc",
         "//:hirsel-rt",
         "//:hirsel-run-config",
@@ -2624,7 +2742,9 @@ hirsel_test(
         "//third-party:insta",
         "//third-party:proptest",
         "//third-party:rustls",
+        "//third-party:serde_json",
         "//third-party:sha2",
+        "//third-party:tempfile",
     ],
     bin_exes = {},
     costs = "//tools/buck2:test-costs/hirsel-pipeline-tests-test-front.tsv",
@@ -2677,6 +2797,7 @@ hirsel_test(
     name = "hirsel-pipeline-tests-test-rc",
     deps = [
         "//:hirsel-pipeline-tests",
+        "//:hirsel-code-store",
         "//:hirsel-codec",
         "//:hirsel-core-contract",
         "//:hirsel-diag",
@@ -2687,6 +2808,8 @@ hirsel_test(
         "//:hirsel-interp",
         "//:hirsel-layout",
         "//:hirsel-lir",
+        "//:hirsel-object-storage",
+        "//:hirsel-proof-export",
         "//:hirsel-rc",
         "//:hirsel-rt",
         "//:hirsel-run-config",
@@ -2698,7 +2821,9 @@ hirsel_test(
         "//third-party:insta",
         "//third-party:proptest",
         "//third-party:rustls",
+        "//third-party:serde_json",
         "//third-party:sha2",
+        "//third-party:tempfile",
     ],
     bin_exes = {},
     shards = 4,

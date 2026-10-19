@@ -48,7 +48,9 @@ their callees' hashes (`definition_hash`, `package_definition_hashes` and
 source or prechecked type its owner view, and a registry operation, extern,
 signature fragment or generic generated declaration its path, signature,
 semantic tokens and reads. It is a query over existing TIR; nothing is cached
-across calls.
+across calls. `definition_groups(roots)` returns the same closure's recursive
+groups with each member's hash preimage, which `hirsel-code-store` stores as
+code objects.
 
 `QueryEngine::unsafe_reach(root)` walks that same closure breadth-first from any
 root definition and returns the shortest path to the first extern or

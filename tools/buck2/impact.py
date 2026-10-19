@@ -83,6 +83,9 @@ CRATE_CAMPAIGNS = {
     'hirsel-cli': frozenset(),
     'hirsel-native-build': frozenset(),
     'hirsel-pipeline-tests': frozenset(),
+    # Host providers no corpus program runs through: only their own tests.
+    'hirsel-object-storage': frozenset(),
+    'hirsel-code-store': frozenset(),
 }
 
 # A command's implementation cannot change another command's campaign.

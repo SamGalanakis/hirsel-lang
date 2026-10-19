@@ -464,6 +464,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-code-store"
+version = "0.1.0"
+dependencies = [
+ "hirsel-codec",
+ "hirsel-object-storage",
+ "hirsel-proof-export",
+ "hirsel-syntax",
+ "ring",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hirsel-codec"
 version = "0.1.0"
 dependencies = [
@@ -727,6 +740,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-object-storage"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hirsel-parser"
 version = "0.1.0"
 dependencies = [
@@ -742,6 +763,7 @@ dependencies = [
 name = "hirsel-pipeline-tests"
 version = "0.1.0"
 dependencies = [
+ "hirsel-code-store",
  "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-diag",
@@ -752,6 +774,8 @@ dependencies = [
  "hirsel-interp",
  "hirsel-layout",
  "hirsel-lir",
+ "hirsel-object-storage",
+ "hirsel-proof-export",
  "hirsel-rc",
  "hirsel-rt",
  "hirsel-run-config",
@@ -763,7 +787,9 @@ dependencies = [
  "insta",
  "proptest",
  "rustls",
+ "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

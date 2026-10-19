@@ -10,8 +10,9 @@ pub mod sidecar;
 pub mod wire;
 
 pub use content::{
-    CallSite, CallSiteKind, DEFINITION_HASH_DOMAIN, DefinitionContent, call_sites,
-    definition_hashes, references,
+    CallSite, CallSiteKind, ContentReference, DEFINITION_HASH_DOMAIN, DefinitionContent,
+    DefinitionGroup, call_sites, content_references, definition_groups, definition_hashes,
+    group_hashes, references,
 };
 pub use obligations::{
     Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition, projected_places,

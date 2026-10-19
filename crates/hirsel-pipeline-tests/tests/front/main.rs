@@ -1,4 +1,5 @@
-//! Pipeline tests of the front phases and runtime (check, modes, lir, rt), linked
+//! Pipeline tests of the front phases, runtime and code store (check, modes, lir,
+//! rt, code_store), linked
 //! as one binary. A module named `<crate>_<file>` holds what was
 //! `crates/hirsel-<crate>/tests/it/<file>.rs`, and `<crate>_<module>` the
 //! driver-using unit tests of `src/<module>`; hirsel-rc's suites link separately
@@ -11,6 +12,7 @@ mod check_lower_tests;
 mod check_serializable;
 mod check_signature_tests;
 mod check_support;
+mod code_store_programs;
 mod lir_schema;
 mod modes_authority_corpus;
 mod modes_authority_tests;

@@ -188,6 +188,57 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-object-storage",
+          "path": "crates/hirsel-object-storage",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-proof-export",
+          "path": "crates/hirsel-proof-export",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "ring",
+          "req": "^0.17",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "tempfile",
+          "req": "^3",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-code-store"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
           "name": "hirsel-syntax",
           "path": "crates/hirsel-syntax",
           "req": "*",
@@ -1327,6 +1378,23 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "tempfile",
+          "req": "^3",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-object-storage"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
           "name": "hirsel-diag",
           "path": "crates/hirsel-diag",
           "req": "*",
@@ -1370,6 +1438,13 @@
     },
     {
       "dependencies": [
+        {
+          "kind": "dev",
+          "name": "hirsel-code-store",
+          "path": "crates/hirsel-code-store",
+          "req": "*",
+          "uses_default_features": true
+        },
         {
           "kind": "dev",
           "name": "hirsel-codec",
@@ -1437,6 +1512,20 @@
           "kind": "dev",
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-object-storage",
+          "path": "crates/hirsel-object-storage",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-proof-export",
+          "path": "crates/hirsel-proof-export",
           "req": "*",
           "uses_default_features": true
         },
@@ -1516,8 +1605,20 @@
         },
         {
           "kind": "dev",
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
           "name": "sha2",
           "req": "^0.10",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "tempfile",
+          "req": "^3",
           "uses_default_features": true
         }
       ],

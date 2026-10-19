@@ -20,10 +20,15 @@ group being hashed as a group marker, and spans, local, parameter and
 generic-parameter names and name-derived fingerprints are erased. A
 signature's nominal roles are written by role name, so an edit to a core role
 type moves only the definitions whose TIR or types name it.
-`definition_hashes` hashes Tarjan components dependencies first and refines
-each group's members until their partition is stable; `call_sites` lists a
-TIR's calls and function references with each callee's hash. The driver-layer
-engine chooses each definition's `DefinitionContent`.
+`definition_groups` hashes Tarjan components dependencies first and returns
+each group's members (ordered by hash, then text) with their content texts,
+group references and hashes; `definition_hashes` flattens them.
+`group_hashes` is the one hash computation, from texts and group references
+alone: it refines each member until the group's partition is stable, so a code
+store recomputes a stored group's hashes with it. `content_references` reads
+the `(Ref ...)` nodes of a content text (definition hashes and group markers).
+`call_sites` lists a TIR's calls and function references with each callee's
+hash. The driver-layer engine chooses each definition's `DefinitionContent`.
 
 `sidecar.rs` is the PS-12 evidence consumer: the
 `hirsel.proof.sidecar.v1` record shape and `assess`, which decides for every

@@ -14,6 +14,7 @@ doctest = false
 [dev-dependencies]
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-codec = { path = "../hirsel-codec" }
+hirsel-code-store = { path = "../hirsel-code-store" }
 sha2 = "0.10"
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-diag = { path = "../hirsel-diag" }
@@ -23,6 +24,8 @@ hirsel-heapcheck = { path = "../hirsel-heapcheck" }
 hirsel-interp = { path = "../hirsel-interp" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-lir = { path = "../hirsel-lir" }
+hirsel-object-storage = { path = "../hirsel-object-storage" }
+hirsel-proof-export = { path = "../hirsel-proof-export" }
 hirsel-rc = { path = "../hirsel-rc" }
 hirsel-rt = { path = "../hirsel-rt" }
 hirsel-run-config = { path = "../hirsel-run-config" }
@@ -33,4 +36,6 @@ hirsel-types = { path = "../hirsel-types" }
 hirsel-validate = { path = "../hirsel-validate" }
 insta = "1"
 proptest = "1"
+serde_json = "1"
+tempfile = "3"
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

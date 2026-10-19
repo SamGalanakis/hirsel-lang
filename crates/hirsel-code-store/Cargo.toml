@@ -1,0 +1,17 @@
+[package]
+name = "hirsel-code-store"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-codec = { path = "../hirsel-codec" }
+hirsel-object-storage = { path = "../hirsel-object-storage" }
+hirsel-proof-export = { path = "../hirsel-proof-export" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+ring = "0.17"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

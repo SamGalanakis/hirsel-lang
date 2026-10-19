@@ -1,0 +1,12 @@
+[package]
+name = "hirsel-object-storage"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

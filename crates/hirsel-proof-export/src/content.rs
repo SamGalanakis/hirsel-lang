@@ -6,7 +6,7 @@
 //! fingerprints are erased.
 use crate::wire::Cx;
 use crate::{Location, collect};
-use hirsel_codec::{Snapshot, Writer};
+use hirsel_codec::{DecodeError, Next, Reader, Snapshot, Writer};
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::TIR_VERSION;
 use hirsel_tir::{
@@ -131,15 +131,90 @@ pub fn references(content: &DefinitionContent) -> Vec<DefPath> {
     encode(content, Naming::default()).1.named
 }
 
-/// The hash of every definition in `contents`, which must hold every
-/// definition they name. Recursive groups (strongly connected components)
-/// are hashed together: each member's content writes references into its
-/// group as a marker, members are refined by the colors of the members they
-/// reference until the partition is stable, and each member's hash binds the
-/// group's sorted colors and its own. No name or iteration order enters.
-pub fn definition_hashes(
+/// One recursive group's hash preimage (LANG-6): what a code store keeps
+/// for each member, from which every member's hash is recomputed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefinitionGroup {
+    /// The members, ordered by hash and then text, so the order depends on
+    /// no name.
+    pub members: Vec<DefPath>,
+    /// Each member's content text.
+    pub texts: Vec<String>,
+    /// For each member, the member each group marker of its text names, in
+    /// text order.
+    pub uses: Vec<Vec<usize>>,
+    /// Each member's definition hash.
+    pub hashes: Vec<ContentHash>,
+}
+
+/// The definition hashes of a recursive group's members from their content
+/// texts and group references. Each member's color is its text's hash; a
+/// round rehashes each color with the colors of the members it references
+/// until the partition into equal colors is stable, and each member's hash
+/// binds the group's sorted colors and its own. An error names a reference
+/// outside the group.
+pub fn group_hashes(texts: &[String], uses: &[Vec<usize>]) -> Result<Vec<ContentHash>, String> {
+    if texts.len() != uses.len() {
+        return Err(format!(
+            "{} texts with {} reference lists",
+            texts.len(),
+            uses.len()
+        ));
+    }
+    if let Some(&outside) = uses.iter().flatten().find(|&&j| j >= texts.len()) {
+        return Err(format!(
+            "group reference {outside} outside a group of {}",
+            texts.len()
+        ));
+    }
+    let mut colors: Vec<ContentHash> = texts
+        .iter()
+        .map(|text| {
+            ContentHash::of_parts(
+                CONTENT_DOMAIN,
+                [TIR_VERSION.to_le_bytes().as_slice(), text.as_bytes()],
+            )
+        })
+        .collect();
+    let distinct = |colors: &[ContentHash]| colors.iter().collect::<BTreeSet<_>>().len();
+    loop {
+        let refined: Vec<ContentHash> = uses
+            .iter()
+            .enumerate()
+            .map(|(i, used)| {
+                let parts = std::iter::once(colors[i].0.as_slice())
+                    .chain(used.iter().map(|&j| colors[j].0.as_slice()));
+                ContentHash::of_parts(ROUND_DOMAIN, parts)
+            })
+            .collect();
+        let stable = distinct(&refined) == distinct(&colors);
+        colors = refined;
+        if stable {
+            break;
+        }
+    }
+    let mut sorted = colors.clone();
+    sorted.sort();
+    let group_hash = ContentHash::of_parts(GROUP_DOMAIN, sorted.iter().map(|c| c.0.as_slice()));
+    Ok(colors
+        .iter()
+        .map(|color| {
+            ContentHash::of_parts(
+                DEFINITION_HASH_DOMAIN,
+                [group_hash.0.as_slice(), color.0.as_slice()],
+            )
+        })
+        .collect())
+}
+
+/// The recursive groups (strongly connected components) of `contents`,
+/// dependencies first, with each member's content text, group references
+/// and hash. `contents` must hold every definition they name. A reference
+/// into the member's own group is written as a group marker; no name or
+/// iteration order enters a hash.
+pub fn definition_groups(
     contents: &BTreeMap<DefPath, DefinitionContent>,
-) -> Result<BTreeMap<DefPath, ContentHash>, String> {
+) -> Result<Vec<DefinitionGroup>, String> {
     let paths: Vec<&DefPath> = contents.keys().collect();
     let index: BTreeMap<&DefPath, usize> = paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
     let mut edges = Vec::with_capacity(paths.len());
@@ -154,62 +229,134 @@ pub fn definition_hashes(
         edges.push(targets);
     }
     let mut hashes = BTreeMap::new();
-    for group in components(&edges) {
-        let members: BTreeMap<DefPath, usize> = group
+    let mut groups = vec![];
+    for component in components(&edges) {
+        let members: BTreeMap<DefPath, usize> = component
             .iter()
             .enumerate()
             .map(|(i, &node)| (paths[node].clone(), i))
             .collect();
-        let mut colors = Vec::with_capacity(group.len());
-        let mut uses = Vec::with_capacity(group.len());
-        for &node in &group {
+        let mut texts = Vec::with_capacity(component.len());
+        let mut uses = Vec::with_capacity(component.len());
+        let group_paths: Vec<DefPath> = component.iter().map(|&node| paths[node].clone()).collect();
+        for path in &group_paths {
             let naming = Naming {
                 hashes: std::mem::take(&mut hashes),
                 group: members.clone(),
                 ..Naming::default()
             };
-            let (text, naming) = encode(&contents[paths[node]], naming);
+            let (text, naming) = encode(&contents[path], naming);
             if let Some(missing) = naming.missing {
-                return Err(format!("{} names {missing} before its hash", paths[node]));
+                return Err(format!("{path} names {missing} before its hash"));
             }
             hashes = naming.hashes;
-            colors.push(ContentHash::of_parts(
-                CONTENT_DOMAIN,
-                [TIR_VERSION.to_le_bytes().as_slice(), text.as_bytes()],
-            ));
+            texts.push(text);
             uses.push(naming.members);
         }
-        let distinct = |colors: &[ContentHash]| colors.iter().collect::<BTreeSet<_>>().len();
-        loop {
-            let refined: Vec<ContentHash> = uses
-                .iter()
-                .enumerate()
-                .map(|(i, used)| {
-                    let parts = std::iter::once(colors[i].0.as_slice())
-                        .chain(used.iter().map(|&j| colors[j].0.as_slice()));
-                    ContentHash::of_parts(ROUND_DOMAIN, parts)
-                })
-                .collect();
-            let stable = distinct(&refined) == distinct(&colors);
-            colors = refined;
-            if stable {
-                break;
-            }
+        let member_hashes = group_hashes(&texts, &uses)?;
+        // Canonical member order: by hash, then text.
+        let mut order: Vec<usize> = (0..texts.len()).collect();
+        order.sort_by(|&a, &b| (member_hashes[a], &texts[a]).cmp(&(member_hashes[b], &texts[b])));
+        let mut rank = vec![0; order.len()];
+        for (position, &member) in order.iter().enumerate() {
+            rank[member] = position;
         }
-        let mut sorted = colors.clone();
-        sorted.sort();
-        let group_hash = ContentHash::of_parts(GROUP_DOMAIN, sorted.iter().map(|c| c.0.as_slice()));
-        for (path, member) in members {
-            hashes.insert(
-                path,
-                ContentHash::of_parts(
-                    DEFINITION_HASH_DOMAIN,
-                    [group_hash.0.as_slice(), colors[member].0.as_slice()],
-                ),
-            );
+        for (path, hash) in group_paths.iter().zip(&member_hashes) {
+            hashes.insert(path.clone(), *hash);
+        }
+        groups.push(DefinitionGroup {
+            members: order.iter().map(|&m| group_paths[m].clone()).collect(),
+            texts: order
+                .iter()
+                .map(|&m| std::mem::take(&mut texts[m]))
+                .collect(),
+            uses: order
+                .iter()
+                .map(|&m| uses[m].iter().map(|&j| rank[j]).collect())
+                .collect(),
+            hashes: order.iter().map(|&m| member_hashes[m]).collect(),
+        });
+    }
+    Ok(groups)
+}
+
+/// The hash of every definition in `contents`, which must hold every
+/// definition they name ([`definition_groups`]).
+pub fn definition_hashes(
+    contents: &BTreeMap<DefPath, DefinitionContent>,
+) -> Result<BTreeMap<DefPath, ContentHash>, String> {
+    Ok(definition_groups(contents)?
+        .into_iter()
+        .flat_map(|group| group.members.into_iter().zip(group.hashes))
+        .collect())
+}
+
+/// A reference written in a content text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentReference {
+    /// A definition outside the group, by its hash.
+    Definition(ContentHash),
+    /// A member of the text's own recursive group.
+    Group,
+}
+
+/// Every reference in a content text, in text order. The text must be one
+/// well-formed value whose references are definition hashes or group
+/// markers.
+pub fn content_references(text: &str) -> Result<Vec<ContentReference>, DecodeError> {
+    let mut r = Reader::new(text);
+    let mut references = vec![];
+    let mut depth = 0usize;
+    loop {
+        match r.next_kind() {
+            Next::Open => {
+                if r.open_any()? == "Ref" {
+                    let reference = r.text()?;
+                    references.push(if reference == "group" {
+                        ContentReference::Group
+                    } else {
+                        ContentReference::Definition(
+                            parse_hex(&reference)
+                                .ok_or_else(|| r.error(format!("bad reference {reference:?}")))?,
+                        )
+                    });
+                    r.close()?;
+                } else {
+                    depth += 1;
+                }
+            }
+            Next::Close if depth > 0 => {
+                r.close()?;
+                depth -= 1;
+            }
+            Next::Close => return Err(r.error("unbalanced ')'")),
+            Next::Text => drop(r.text()?),
+            Next::Bytes => drop(r.bytes()?),
+            Next::Integer => drop(r.int()?),
+            Next::End => return Err(r.error("unexpected end of text")),
+        }
+        if depth == 0 {
+            break;
         }
     }
-    Ok(hashes)
+    r.finish()?;
+    Ok(references)
+}
+
+fn parse_hex(text: &str) -> Option<ContentHash> {
+    if text.len() != 64 {
+        return None;
+    }
+    let digit = |b: u8| match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    };
+    let mut hash = [0u8; 32];
+    for (byte, pair) in hash.iter_mut().zip(text.as_bytes().chunks(2)) {
+        *byte = digit(pair[0])? << 4 | digit(pair[1])?;
+    }
+    Some(ContentHash(hash))
 }
 
 /// Tarjan's strongly connected components, dependencies before dependents.
@@ -322,4 +469,49 @@ pub fn call_sites(
         }
     }
     Ok(sites)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_references_read_ref_nodes_only_and_refuse_malformed_text() {
+        let a = ContentHash([0xab; 32]);
+        let text = format!(
+            "(Body (Ref \"{}\") \"(Ref \\\"group\\\")\" #00 -1 (Ref \"group\"))",
+            hex(&a)
+        );
+        assert_eq!(
+            content_references(&text).unwrap(),
+            [ContentReference::Definition(a), ContentReference::Group]
+        );
+        for bad in [
+            format!("(Body (Ref \"{}\"))", hex(&a).to_uppercase()),
+            format!("(Body (Ref \"+{}\"))", &hex(&a)[1..]),
+            "(Body (Ref \"?\"))".into(),
+            "(Body".into(),
+            String::new(),
+            "(Body))".into(),
+            "(A) (B)".into(),
+        ] {
+            assert!(content_references(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn group_hashes_refuse_references_outside_the_group() {
+        let texts = vec!["(A)".to_string(), "(B)".to_string()];
+        assert!(group_hashes(&texts, &[vec![1], vec![0]]).is_ok());
+        assert!(group_hashes(&texts, &[vec![2], vec![]]).is_err());
+        assert!(group_hashes(&texts, &[vec![]]).is_err());
+        // A member's hash depends on whom it references, not on positions.
+        let swapped = vec!["(B)".to_string(), "(A)".to_string()];
+        let mut forward = group_hashes(&texts, &[vec![1], vec![]]).unwrap();
+        let mut backward = group_hashes(&swapped, &[vec![], vec![0]]).unwrap();
+        backward.reverse();
+        assert_eq!(forward, backward);
+        forward.dedup();
+        assert_eq!(forward.len(), 2);
+    }
 }
