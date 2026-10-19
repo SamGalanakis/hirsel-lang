@@ -46,6 +46,7 @@ conformance/CAP/CAP-1-net-projection-bad.hir
 conformance/CAP/CAP-1-net-projection-ok.hir
 conformance/CAP/CAP-1-net-read-chunks-run.hir
 conformance/CAP/CAP-1-net-refused-run.hir
+conformance/CAP/CAP-1-net-reuseaddr-run.hir
 conformance/CAP/CAP-1-net-script-roundtrip-run.hir
 conformance/CAP/CAP-1-net-scripted-listen-granted-run.hir
 conformance/CAP/CAP-1-net-scripted-listen-ungranted-run.hir

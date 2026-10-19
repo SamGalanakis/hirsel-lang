@@ -737,8 +737,11 @@ streams, streams upgraded by `tls.connect`, and `tls.accept` streams whose clien
 certificate. It reads handshake state only: it never blocks, is never a cancellation point,
 and answers the same after the stream's peer closes or resets.
 
-`net.listen` binds and listens with a backlog of 128 and no address reuse; `net.accept`
-returns a connected stream and its peer address.
+`net.listen` binds and listens with a backlog of 128. Host TCP listeners set
+`SO_REUSEADDR` before binding, so a stopped server can immediately listen on its port
+again while its closed connections remain in `TIME_WAIT`. They do not set
+`SO_REUSEPORT`: a second live listener on the same address and port still fails with
+`AddrInUse()`. `net.accept` returns a connected stream and its peer address.
 
 The blocking network operations are `resolve`, `connect`, `connect_addr`, `unix_connect`,
 `read`, `read_into`, `write`, `write_all`, `accept`, `tls.connect`, `tls.connect_as`,

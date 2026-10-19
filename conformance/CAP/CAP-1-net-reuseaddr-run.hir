@@ -1,0 +1,24 @@
+// rule: CAP-1
+// expect: run
+// entry: trial
+// A listener keeps its address exclusive until it closes; closing releases it
+// for a fresh listener. Real TCP TIME_WAIT is covered by the host pipeline test.
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: 8080u16, clients: [])]
+  )
+  {
+    let listener = net.listen(n, address)?
+    test.check(t, net.local_addr(n, listener)? == address)
+    match net.listen(n, address) {
+      Error(AddrInUse()) => (),
+      _ => test.check(t, false),
+    }
+  }
+  let rebound = net.listen(n, address)?
+  test.check(t, net.local_addr(n, rebound)? == address)
+  Ok(())
+}

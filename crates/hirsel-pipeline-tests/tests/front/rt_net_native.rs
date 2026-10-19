@@ -17,6 +17,80 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
 
+/// TIME_WAIT is kernel state, which a simulated corpus run cannot exercise. Run
+/// the same source against real sockets in each backend and the host interpreter.
+fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
+    with_compiler_stack(move || {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../native-tests/library/net-reuseaddr.hir");
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let grants = format!(
+            r#"{{"io":{{"stdout":"stdout.bytes@1","dirs":[],"net":{{"provider":"net.stream@1","rules":[{{"address":"127.0.0.1","service":"{port}","operation":"listen"}},{{"address":"127.0.0.1","service":"{port}","operation":"connect"}}]}}}},"args":["{port}"]}}"#
+        );
+        if let Some(backend) = backend {
+            let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join(format!("net-reuseaddr-{}", backend.name()));
+            std::fs::create_dir_all(&scratch).unwrap();
+            let executable = scratch.join("server");
+            hirsel_driver::native::build_path_native_backend(
+                &source,
+                &executable,
+                TargetSpec::x86_64_unknown_linux_gnu(),
+                hirsel_driver::native::BuildProfile::Debug,
+                backend,
+                None,
+                false,
+            )
+            .unwrap()
+            .unwrap();
+            drop(reservation);
+            let output = Command::new(executable)
+                .arg("--hirsel-grants")
+                .arg(&grants)
+                .arg(port.to_string())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{backend:?}: {output:?}");
+            assert_eq!(output.stdout, b"live listen refused\nrebound\n");
+        } else {
+            drop(reservation);
+            let outcome = hirsel_driver::run_path_on_host(
+                &source,
+                hirsel_driver::HostLaunch::Live {
+                    config: hirsel_driver::LaunchConfig::Grants {
+                        input: std::ffi::OsStr::new(&grants),
+                        arguments: None,
+                    },
+                    record: None,
+                    revocations: None,
+                },
+                None,
+            )
+            .unwrap();
+            assert!(
+                matches!(outcome, hirsel_engine::RunOutcome::Exit(0)),
+                "{outcome:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn tcp_listener_restarts_after_server_close_on_llvm() {
+    reuseaddr(Some(hirsel_driver::native::Backend::Llvm));
+}
+
+#[test]
+fn tcp_listener_restarts_after_server_close_on_cranelift() {
+    reuseaddr(Some(hirsel_driver::native::Backend::Cranelift));
+}
+
+#[test]
+fn tcp_listener_restarts_after_server_close_on_host_interpreter() {
+    reuseaddr(None);
+}
+
 /// The lines `net-stream.hir` prints before the server's reply.
 const PREFIX: &str = "narrow beyond refused\nname not granted\nzero timeout invalid\n\
     resolved one address\ncopied resolved list\n";

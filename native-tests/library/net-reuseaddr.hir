@@ -1,0 +1,41 @@
+// Real-host regression: the accepted server stream closes first, so its local
+// port enters TIME_WAIT. The pipeline test supplies an unused loopback port.
+pub type ServerError = Grant(GrantError) | Network(NetError) | Output(OutputError) | Argument(
+  ArgError
+) | Unexpected
+
+pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let out = io.stdout(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let port = match std@1/u16.parse(path.text(arg.path(args, 0u64) ? Argument)) {
+    Ok(port) => port,
+    Error(_) => return Error(Unexpected()),
+  }
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+  {
+    let mut listener = net.listen(n, address) ? Network
+    match net.listen(n, address) {
+      Error(AddrInUse()) => out.print(out, "live listen refused\n") ? Output,
+      _ => return Error(Unexpected()),
+    }
+    let mut client = net.connect_addr(n, address, Nanos(5000000000u64)) ? Network
+    let (server, _) = net.accept(n, mut listener) ? Network
+    net.close(n, take server)
+    // Observe the server's FIN before closing the client: the server is the
+    // active closer, rather than leaving TIME_WAIT on the client's port.
+    net.set_read_timeout(n, mut client, Nanos(5000000000u64)) ? Network
+    let mut bytes: List[u8] = []
+    if net.read(n, mut client, mut bytes, 1u64) ? Network != 0u64 {
+      return Error(Unexpected())
+    }
+    net.close(n, take client)
+  }
+  let mut rebound = net.listen(n, address) ? Network
+  let client = net.connect_addr(n, address, Nanos(5000000000u64)) ? Network
+  let (server, _) = net.accept(n, mut rebound) ? Network
+  // The replacement listener works; close its client first this time.
+  net.close(n, take client)
+  net.close(n, take server)
+  out.print(out, "rebound\n") ? Output
+  Ok(())
+}

@@ -742,8 +742,24 @@ impl NetProvider for HostNet {
     }
     fn listen(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
         Ok((|| {
-            // Zig `ListenOptions` defaults: no SO_REUSEADDR, backlog 128.
             let socket = new_socket(addr.ip)?;
+            // Rust TcpListener::bind on Unix: allow a server to restart while
+            // its closed connections remain in TIME_WAIT. SO_REUSEPORT stays off
+            // so two live listeners on the same address still conflict.
+            let on: libc::c_int = 1;
+            // SAFETY: SO_REUSEADDR reads one int from on.
+            if unsafe {
+                libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEADDR,
+                    (&raw const on).cast(),
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                )
+            } == -1
+            {
+                return Err(error(errno()));
+            }
             let (storage, len) = to_c(addr);
             // SAFETY: storage holds a sockaddr of len bytes.
             if unsafe { libc::bind(socket.as_raw_fd(), (&raw const storage).cast(), len) } == -1
