@@ -340,7 +340,10 @@ fn httpget() {
         )
     })
     .unwrap();
-    assert_eq!(result, hirsel_engine::RunOutcome::Exit(0));
+    assert_eq!(
+        result,
+        hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+    );
     assert_eq!(output, b"sheep\n");
     let executable = fixture.native_executable();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -510,10 +513,10 @@ fn cli_interpreter_step_limits() {
         assert_eq!(String::from_utf8_lossy(&output.stderr), message);
     };
     invoke(&[], 0, "");
-    invoke(&["--max-steps", "1"], 2, "evaluator tooling limit: Steps\n");
+    invoke(&["--max-steps", "1"], 3, "evaluator tooling limit: Steps\n");
     invoke(&["--max-steps=10000"], 0, "");
     invoke(&["--max-steps", "unbounded"], 0, "");
-    invoke(&["--max-steps=0"], 2, "evaluator tooling limit: Steps\n");
+    invoke(&["--max-steps=0"], 3, "evaluator tooling limit: Steps\n");
     let simulation = fixture.0.join("simulation.json");
     std::fs::write(&simulation, "{}").unwrap();
     invoke(
@@ -523,7 +526,7 @@ fn cli_interpreter_step_limits() {
             "--max-steps",
             "1",
         ],
-        2,
+        3,
         "evaluator tooling limit: Steps\n",
     );
     for values in [
@@ -571,7 +574,7 @@ fn cli_interpreter_step_limits() {
     );
     invoke(
         &["--run", record.to_str().unwrap(), "--max-steps=1"],
-        2,
+        3,
         "evaluator tooling limit: Steps\n",
     );
     invoke(&["--run", record.to_str().unwrap()], 0, "");
@@ -579,7 +582,7 @@ fn cli_interpreter_step_limits() {
     std::fs::write(&grants, "{}").unwrap();
     invoke(
         &["--grants", grants.to_str().unwrap(), "--max-steps=1"],
-        2,
+        3,
         "evaluator tooling limit: Steps\n",
     );
     invoke(&["--grants", grants.to_str().unwrap()], 0, "");
@@ -616,7 +619,7 @@ fn cli_default_budget_exceeds_the_conformance_budget() {
         .args(["--max-steps", "1000000"])
         .output()
         .unwrap();
-    assert_eq!(bounded.status.code(), Some(2));
+    assert_eq!(bounded.status.code(), Some(3));
     assert_eq!(bounded.stderr, b"evaluator tooling limit: Steps\n");
     let ordinary = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
@@ -1149,11 +1152,11 @@ impl Example {
             )
         })
         .unwrap();
-        let hirsel_engine::RunOutcome::Exit(code) = result else {
+        let hirsel_engine::RunOutcome::Returned(_) = result else {
             panic!("{args:?}: {result:?}");
         };
         (
-            code,
+            result.exit_code(),
             String::from_utf8_lossy(&stdout).into(),
             String::from_utf8_lossy(&stderr).into(),
         )

@@ -137,7 +137,10 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                 SimulationConfig::default(),
             )
             .unwrap();
-            assert_eq!(observed.outcome.unwrap(), RunOutcome::Exit(0));
+            assert_eq!(
+                observed.outcome.unwrap(),
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            );
             assert!(observed.observation.unwrap().failures.is_empty());
         }
     });
@@ -187,9 +190,12 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             let outcome = observed.outcome.unwrap();
             let observation = observed.observation.unwrap();
             if failures == 0 {
-                assert_eq!(outcome, RunOutcome::Exit(0))
+                assert_eq!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                )
             } else {
-                assert!(matches!(outcome, RunOutcome::Failure { .. }))
+                assert!(matches!(outcome, RunOutcome::Failed { .. }))
             }
             assert_eq!(observation.output, b"one\nthree\ntwo\n");
             assert_eq!(observation.failures.len(), failures);
@@ -381,7 +387,10 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
             SimulationConfig::default(),
         )
         .unwrap();
-        assert_eq!(observed.outcome.unwrap(), RunOutcome::Exit(0));
+        assert_eq!(
+            observed.outcome.unwrap(),
+            RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        );
         let observation = observed.observation.unwrap();
         assert!(observation.failures.is_empty());
         assert_eq!(observation.output, b"new\nold\n");

@@ -5,7 +5,7 @@ $intrinsic.ArrayConsume_open	73acb2ab1a75405ddb92dac4011585181ad7ece797b7fa237da
 $intrinsic.AtomicCreate	bd7ed7853c89f9e07cb50d77e20fd35c26be00b988a419eae4728367ed8c2582	0:b:[0];1:b:n->n
 $intrinsic.AtomicLoad	6a120d25547728667e75c3b2cc94a817afdfd105e2945fd7c71a68f403d813ae	0:b:n;1:m:[0];2:b:n->n
 $intrinsic.AtomicStore	bb15481d97b9caf0ebcffb286fe4a994b394f8c814098ec953acb658e2877f2a	0:b:n;1:b:[0];2:b:n->n
-$intrinsic.ChannelReceive	db1aa7c4b3ef5f0e2850b1e10eb065015750a5d102723fd11b51e4fe23fedbde	0:m:[0];1:m:[0]->n
+$intrinsic.ChannelReceive	808c4a918a12d362c8c71ad5bd399dd8288c72a4d10a684b28d5d5b5d98fb49b	0:m:[0];1:m:[0]->n
 $intrinsic.ChannelSend	a470f761bf85c7cf6a8a29133a84685b40f116d51c7481943089d8cd61113083	0:m:[0];1:m:[0]->n
 $intrinsic.InlineConsume_next	818c6f014083b7697b20feef4925f79fab1a5e1044104f737453aa99796835ec	0:m:[0]->[0]
 $intrinsic.InlineConsume_open	6d08847f8e7fda04bc98065790155271f845a89154f77f673ebf2b1bcda3c9c1	0:t:[0]->[0]
@@ -48,11 +48,11 @@ $intrinsic.SortedMapOrder_next	30cfdafed9fb8324abf74b560da255493f1b62e36f363242c
 $intrinsic.SortedMapOrder_open	138fff871dc789d330c40865c4a3faab254f7ca158b10bdf5b91860e77e8c013	0:t:a->[0,1]
 $intrinsic.TaskCanceled	64c0eab02d5541b7550980be759b07ec6472d745b62faad47702a042927a11db	0:b:n->n
 $intrinsic.TaskFinish	c9f82ca70ba822ed1248d0aa8d77b658d886244a8ea4f8d8914452105db9d528	0:m:[0];1:b:[0];2:b:n->n
-$intrinsic.TaskJoin	b3c7d28cc33679390aa08e1696a0ccb5944be6381f6bb33eb3c931f9f0bd7ec2	0:b:n;1:t:[0];2:m:[0];3:b:n->n
+$intrinsic.TaskJoin	50a5b04edf0a7b3224c750b97e921facf01af5f3c8debe3eef61a3328adc1cad	0:b:n;1:t:[0];2:m:[0];3:b:n->n
 $intrinsic.TaskScopeEnter	bc3371103b33b6955bb5ef7be3b36eb7b4dc78dbbfe2b3b57cca3fda603c9a6b	0:b:n->n
 $intrinsic.TaskScopeEnterUntil	dca8cb5e5ef8d971f2e1a8f122a1785b917231827c44209abb5a5a89e1da14e8	0:b:n;1:b:n->n
-$intrinsic.TaskScopeExit	1c961020beb51547e4067f7f8c77beb1ef54d2331179154ad710399676bc2bea	0:b:n;1:b:n->n
-$intrinsic.TaskScopeExitUntil	1b082a8ef72b8f353131950c924e7254a6609da1f79c4aff6311a6475b7339b8	0:b:n;1:b:n->n
+$intrinsic.TaskScopeExit	c284222de340709a91478572bc4028a518c9c254eca9f3a21aa551c6ad741d99	0:b:n;1:b:n->n
+$intrinsic.TaskScopeExitUntil	ca068d967e2895ec1b4271aa3ec176df8f69261a89387462f95b80f5d09d6f5f	0:b:n;1:b:n->n
 $intrinsic.TaskSetHas	e8813d79a8be063d9f4fcf04d471d618b9d708a850b6dfbfde0715d52eff436e	0:b:n;1:b:n;2:b:n->n
 $intrinsic.TaskSetTake	3c7878acd21265be77379e3e830d8b049d8b0cf9cb66bb967fd0883acb0cceb6	0:b:n;1:m:n;2:b:n->[0]
 $intrinsic.TaskSpawn	768cf7ee215a60cfe048e74d5b5c02d146020948baa02ef8d287ff4b83bf9a76	0:b:n;1:t:a->[0]
@@ -250,10 +250,10 @@ string.slice	bb49c3f6ca41776c9888119e0834c6fc67187dfdec45558feb03f1d966f28be3	0:
 task.add	1de8cf5dc18a19be8a85d858c9112e1e09762347347b57d9b2b9fbfecac5cd9c	0:b:n;1:m:n;2:t:[0]->n
 task.async	1b9cfb439a3bf393d3295612fc4f4e796de62533b0216d26d45d963153959b09	0:b:n;1:t:a->[0]
 task.await	0d2c4f2bc47a590cd0fac264be580aa54da34b6273aae638d77eda3df10c720e	0:b:n;1:t:[0]->[0]
-task.await_any	8041b052205dd755803121288d12b727f540a3cf292ac52de092e28c073de904	0:b:n;1:b:n->n
+task.await_any	00bf5b46cc27de1bf2037a7a0703dae8ecaa47f1d75aa11adaf879ed895d12a0	0:b:n;1:b:n->n
 task.await_at	21bc03a1d5f6c2eb19e0308a94d003484ffab441a4dae44cc77a8c8a84734d76	0:b:n;1:m:n;2:b:n->[0]
 task.cancel	1410c8ebcf97014bcd85ec1cc85ea9956c3f113008756005312a9630738d8f50	0:b:n;1:b:[0]->n
-task.cancel_all	8d3d731f7cd834874397b752da08a520b131941263afead59249404282a647f0	0:b:n;1:t:n->n
+task.cancel_all	deb82abc3c2e27f806cd687bf71833f6809b2cf2e309e8a544b522790aa76a82	0:b:n;1:t:n->n
 task.check_canceled	8c88a0d7e0cbde5005bee3915928868680e6a779227e5d8df9b33e082dd8d748	0:b:n->n
 task.detach	8a680a3b72f6d5cc34447cf8e6cac2799dcc872eb83b6f82fc66deaf3725ed32	0:b:n;1:t:[0]->n
 task.detach_all	6b5c6a94b456eab4a01e49b2b410b1f647a47767f769e899382a8988ee621987	0:b:n;1:t:n->n

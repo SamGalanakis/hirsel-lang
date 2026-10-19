@@ -69,7 +69,10 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
             )
             .unwrap();
             assert!(
-                matches!(outcome, hirsel_engine::RunOutcome::Exit(0)),
+                matches!(
+                    outcome,
+                    hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                ),
                 "{outcome:?}"
             );
         }

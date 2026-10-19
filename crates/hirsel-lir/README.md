@@ -691,3 +691,8 @@ the frozen layout table and reused by the descriptor registry and H. Charges
 count live key/value pairs and exclude tags, buckets and hash-cache storage.
 Codec program version 3 derives the same private entry offsets without changing
 `CodecNode::Map` or the wire format. Runtime ABI 21 adds the streaming hash entries.
+
+Runtime ABI 22 enables the existing hidden caller-site pair on blocking
+task/channel exports, so native Blocked outcomes can name their parked waits.
+The LIR vocabulary and physical ABI encoding are unchanged; LLVM and Cranelift
+consume the same existing caller-site mechanism.

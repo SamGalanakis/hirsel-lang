@@ -345,6 +345,14 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
             .map_or_else(|| "-".into(), |s| format!("+ {}", site(s)));
         format!("{} {} {operation}", hex(f.rule.as_bytes()), site(&f.site))
     }
+    fn diagnostic(d: &hirsel_run_config::ExecutionDiagnostic) -> String {
+        format!(
+            "{} {} {}",
+            hex(d.rule.as_bytes()),
+            site(&d.site),
+            hex(d.message.as_bytes())
+        )
+    }
     match outcome {
         RunOutcome::Returned(Returned::Ok) => "returned ok".into(),
         RunOutcome::Returned(Returned::Error) => "returned error".into(),
@@ -356,7 +364,10 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
             }
             text
         }
-        RunOutcome::Blocked => "blocked".into(),
+        RunOutcome::Blocked(waits) => format!(
+            "blocked {}",
+            hex(hirsel_run_config::Wait::encode(waits).as_bytes())
+        ),
         RunOutcome::BudgetExceeded(BudgetKind::Fuel) => "budget fuel".into(),
         RunOutcome::BudgetExceeded(BudgetKind::Memory) => "budget memory".into(),
         RunOutcome::Refused(why) => format!("refused {}", hex(why.as_bytes())),
@@ -369,11 +380,30 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
             format!("environmental output {}", hex(why.as_bytes()))
         }
         RunOutcome::Tooling(why) => format!("tooling {}", hex(why.as_bytes())),
+        RunOutcome::ToolingLimit(limit) => format!(
+            "tooling_limit {} {} {}",
+            hex(limit.kind.as_bytes()),
+            limit.limit,
+            limit
+                .site
+                .as_ref()
+                .map_or_else(|| "-".into(), |s| format!("+ {}", site(s)))
+        ),
+        RunOutcome::UndefinedBehavior(d) => format!("undefined_behavior {}", diagnostic(d)),
+        RunOutcome::Trapped(d) => format!("trapped {}", diagnostic(d)),
     }
 }
 /// Strict inverse of [`render_outcome`].
 pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
     use hirsel_run_config::{BudgetKind, Environmental, Failure, Returned, Site};
+    fn site(next: &mut dyn FnMut() -> Result<String, String>) -> Result<Site, String> {
+        Ok(Site {
+            definition: unhex(&next()?)?,
+            file: unhex(&next()?)?,
+            line: canonical_number(&next()?)?,
+            column: canonical_number(&next()?)?,
+        })
+    }
     let words: Vec<&str> = text.split(' ').collect();
     let mut at = 0;
     let mut next = || -> Result<&str, String> {
@@ -391,15 +421,6 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
             let count = canonical_number(next()?)?;
             let mut failures = vec![];
             for _ in 0..=count {
-                let site =
-                    |next: &mut dyn FnMut() -> Result<String, String>| -> Result<Site, String> {
-                        Ok(Site {
-                            definition: unhex(&next()?)?,
-                            file: unhex(&next()?)?,
-                            line: canonical_number(&next()?)?,
-                            column: canonical_number(&next()?)?,
-                        })
-                    };
                 let mut take = || next().map(str::to_owned);
                 let rule = unhex(&take()?)?;
                 let primary = site(&mut take)?;
@@ -420,7 +441,7 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
                 causes: failures,
             }
         }
-        "blocked" => RunOutcome::Blocked,
+        "blocked" => RunOutcome::Blocked(hirsel_run_config::Wait::decode(&unhex(next()?)?)?),
         "budget" => match next()? {
             "fuel" => RunOutcome::BudgetExceeded(BudgetKind::Fuel),
             "memory" => RunOutcome::BudgetExceeded(BudgetKind::Memory),
@@ -435,10 +456,38 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
             _ => return Err("bad journal environment".into()),
         },
         "tooling" => RunOutcome::Tooling(unhex(next()?)?),
+        "tooling_limit" => {
+            let kind = unhex(next()?)?;
+            let limit = canonical_number(next()?)?;
+            let site = match next()? {
+                "-" => None,
+                "+" => Some(site(&mut || next().map(str::to_owned))?),
+                _ => return Err("bad journal tooling limit".into()),
+            };
+            RunOutcome::ToolingLimit(hirsel_run_config::ToolingLimit { kind, limit, site })
+        }
+        kind @ ("undefined_behavior" | "trapped") => {
+            let rule = unhex(next()?)?;
+            let site = site(&mut || next().map(str::to_owned))?;
+            let message = unhex(next()?)?;
+            let diagnostic = hirsel_run_config::ExecutionDiagnostic {
+                rule,
+                site,
+                message,
+            };
+            if kind == "trapped" {
+                RunOutcome::Trapped(diagnostic)
+            } else {
+                RunOutcome::UndefinedBehavior(diagnostic)
+            }
+        }
         _ => return Err("bad journal outcome".into()),
     };
     if at != words.len() {
         return Err("trailing journal outcome words".into());
+    }
+    if render_outcome(&outcome) != text {
+        return Err("noncanonical journal outcome".into());
     }
     Ok(outcome)
 }
@@ -1026,11 +1075,30 @@ mod tests {
 
     #[test]
     fn outcomes_round_trip() {
-        use hirsel_run_config::{BudgetKind, Environmental};
+        use hirsel_run_config::{
+            BudgetKind, Environmental, ExecutionDiagnostic, ToolingLimit, Wait,
+        };
+        let site = Site {
+            definition: "main.worker".into(),
+            file: "é.hir".into(),
+            line: 3,
+            column: 4,
+        };
+        let diagnostic = ExecutionDiagnostic {
+            rule: "MEM-1".into(),
+            site: site.clone(),
+            message: "invalid memory access".into(),
+        };
         for outcome in [
             RunOutcome::Returned(Returned::Ok),
             RunOutcome::Returned(Returned::Error),
-            RunOutcome::Blocked,
+            RunOutcome::Blocked(vec![]),
+            RunOutcome::Blocked(vec![Wait {
+                spawn_path: vec![0, 2],
+                site: site.clone(),
+                kind: "channel.receive".into(),
+                targets: vec![3],
+            }]),
             RunOutcome::BudgetExceeded(BudgetKind::Memory),
             RunOutcome::Refused("".into()),
             RunOutcome::Diverged("x y".into()),
@@ -1038,6 +1106,18 @@ mod tests {
             RunOutcome::Environmental(Environmental::Recording("disk".into())),
             RunOutcome::Environmental(Environmental::Output("o".into())),
             RunOutcome::Tooling("t".into()),
+            RunOutcome::ToolingLimit(ToolingLimit {
+                kind: "steps".into(),
+                limit: 123,
+                site: Some(site),
+            }),
+            RunOutcome::ToolingLimit(ToolingLimit {
+                kind: "calls".into(),
+                limit: 456,
+                site: None,
+            }),
+            RunOutcome::UndefinedBehavior(diagnostic.clone()),
+            RunOutcome::Trapped(diagnostic),
         ] {
             assert_eq!(parse_outcome(&render_outcome(&outcome)), Ok(outcome));
         }

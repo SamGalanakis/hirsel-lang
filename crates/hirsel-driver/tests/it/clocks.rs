@@ -48,7 +48,10 @@ fn ordinary_source_time_operations_execute_with_extreme_ticks_and_replay() {
         };
         config.grants.insert("MonotonicClock".into());
         let execution = run_observed_snapshot(&mut engine, &run, config.clone()).unwrap();
-        assert!(matches!(execution.outcome, Ok(RunOutcome::Exit(0))));
+        assert!(matches!(
+            execution.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ));
         let events: Vec<_> = execution
             .observation
             .as_ref()

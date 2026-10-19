@@ -109,6 +109,32 @@ A **call entry** (planned) is the callee of a runner call: any top-level definit
 the place's grants and admission at the place ([RUN-10](runners.md#run-10-callee-runs)).
 Its outcome is reported to its caller, not as an exit status or launch report.
 
+Both interpreted and native launchers use the same run outcome and exit policy:
+
+| Run outcome | Exit code |
+| --- | --- |
+| Returned `Ok(())` | 0 |
+| Returned `Error(e)` | 1 |
+| Language failure (FAIL-1), including cleanup causes | 2 |
+| Refused launch or request, replay divergence, or tooling failure | 3 |
+| Blocked (CONC-8), with its parked waits | 4 |
+| Host run budget exceeded | 5 |
+| Environmental stop, including codec or recording limits | 6 |
+
+Artificial interpreter limits, detected undefined behavior and checked-execution
+traps are tooling stops (3), outside language failure semantics. A run stopped as
+Blocked or by a host budget performs no further cleanup. Hosts receive
+`hirsel_run_config::RunOutcome`; standalone launchers, including `hirsel run`,
+obtain their process status only from `RunOutcome::exit_code()`. Source rejection
+remains a compiler-command error (1); invalid command arguments remain usage
+errors (2).
+
+`hirsel test` and `hirsel test --native` run every selected test independently,
+then apply the same exit policy to the suite's aggregate result: `Ok(())` when
+all tests pass and `Error` when any test fails. A test's failure report retains
+its individual run's cause, including an individual test's tooling stop. Suite
+setup or reporting errors use code 3.
+
 When `main` returns `Error(e)`, the host writes `error: <e>` followed by a newline
 to standard error before exiting 1. String error values render as text; other error
 values render in debug/value form. This launch report requires no stderr grant and

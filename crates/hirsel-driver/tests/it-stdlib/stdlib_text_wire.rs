@@ -34,7 +34,13 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
             assert_eq!(unit.unit().header.origin, UnitOrigin::Source);
         }
         let outcome = run_path(&path, &mut Vec::new()).unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
     });
 }
 
@@ -92,7 +98,10 @@ fn full_gate_large_hash_native_references_on_both_backends() {
             .unwrap()
             .unwrap();
             assert!(
-                matches!(outcome, RunOutcome::Exit(0)),
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                ),
                 "{backend:?}: {outcome:?}"
             );
             assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
@@ -124,7 +133,13 @@ fn flate_large_vectors_execute_std_source() {
             &mut Vec::new(),
         )
         .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
     });
 }
 
@@ -141,7 +156,13 @@ fn zip_large_vectors_execute_std_source() {
             &mut Vec::new(),
         )
         .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
     });
 }
 
@@ -158,7 +179,13 @@ fn full_gate_deflate_matches_zlib_native() {
         let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
             .unwrap()
             .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
         assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     });
 }
@@ -275,7 +302,10 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 simulation,
             )
             .unwrap();
-            assert!(matches!(observed.outcome, Ok(RunOutcome::Exit(0))));
+            assert!(matches!(
+                observed.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            ));
             let observation = observed.observation.unwrap();
             let writes = observation.effects.iter().filter(|effect| matches!(&effect.effect, hirsel_interp::observation::Effect::CapabilityConsumed(event) if event.operation == "err.print")).count();
             assert_eq!(writes, 1);
@@ -325,10 +355,13 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
             )
             .unwrap();
             if passes {
-                assert!(matches!(observed.outcome, Ok(RunOutcome::Exit(0))));
+                assert!(matches!(
+                    observed.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                ));
             } else {
                 assert!(
-                    matches!(observed.outcome, Ok(RunOutcome::Failure { ref rule, .. }) if rule.as_str() == "LANG-9")
+                    matches!(observed.outcome, Ok(RunOutcome::Failed { primary: hirsel_run_config::Failure { ref rule, .. }, .. }) if rule.as_str() == "LANG-9")
                 );
             }
             let observation = observed.observation.unwrap();
@@ -376,7 +409,13 @@ fn yaml_large_fixture(fixture: &str) {
             &mut Vec::new(),
         )
         .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
     });
 }
 

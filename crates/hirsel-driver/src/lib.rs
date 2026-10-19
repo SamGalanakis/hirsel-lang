@@ -538,85 +538,15 @@ pub fn run_path_on_host(
         io.finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
     }
-    let failure_site = execution
-        .failures
-        .first()
-        .and_then(|f| hirsel_engine::FailureSite::from_anchor(&f.anchor, &sources));
-    let operation_site = execution
-        .failures
-        .first()
-        .and_then(|f| f.operation.as_ref())
-        .map(|a| {
-            hirsel_engine::FailureSite::from_anchor(a, &sources)
-                .ok_or_else(|| ToolError::Runtime("failure operation has no source site".into()))
-        })
-        .transpose()?;
-    let outcome = match execution.outcome {
-        Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
-        Outcome::Failed(f) => RunOutcome::Failure {
-            operation: operation_site,
-            rule: f.rule,
-            site: failure_site
-                .ok_or_else(|| ToolError::Runtime("failure has no source site".into()))?,
-        },
-        Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),
-        Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
-        Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),
-        Outcome::Trapped(t) => RunOutcome::Trapped(t),
-        Outcome::Environmental(cause) => RunOutcome::Environmental(cause),
-        Outcome::Blocked(_) => RunOutcome::Blocked(
-            execution
-                .observable(&sources)
-                .and_then(|o| o.blocked)
-                .ok_or_else(|| {
-                    ToolError::Runtime("Blocked observation has no stable source sites".into())
-                })?,
-        ),
-    };
+    let outcome = hirsel_engine::project_outcome(&execution, &sources)
+        .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
     if let network::HostIo::Live(io) = &mut operations.io {
-        io.finish_recording(&host_outcome(&outcome, &execution.failures, &sources))
+        io.finish_recording(&outcome)
             .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?;
     }
     Ok(outcome)
 }
 
-/// The host's view of an interpreted run's ending, for the recording's trailer.
-fn host_outcome(
-    outcome: &RunOutcome,
-    failures: &[hirsel_interp::observation::FailureRecord],
-    sources: &hirsel_span::SourceMap,
-) -> hirsel_run_config::RunOutcome {
-    use hirsel_run_config::{Failure, Returned, RunOutcome as Host, Site};
-    let site = |site: &hirsel_engine::FailureSite| Site {
-        definition: site.definition.clone(),
-        file: site.file.to_string_lossy().into_owned(),
-        line: site.line as u64,
-        column: u64::from(site.column),
-    };
-    let failure = |record: &hirsel_interp::observation::FailureRecord| Failure {
-        rule: record.failure.rule.to_string(),
-        site: hirsel_engine::FailureSite::from_anchor(&record.anchor, sources)
-            .as_ref()
-            .map(site)
-            .unwrap_or_default(),
-        operation: record
-            .operation
-            .as_ref()
-            .and_then(|a| hirsel_engine::FailureSite::from_anchor(a, sources))
-            .as_ref()
-            .map(site),
-    };
-    match outcome {
-        RunOutcome::Exit(0) => Host::Returned(Returned::Ok),
-        RunOutcome::Exit(_) => Host::Returned(Returned::Error),
-        RunOutcome::Failure { .. } if !failures.is_empty() => Host::Failed {
-            primary: failure(&failures[0]),
-            causes: failures[1..].iter().map(failure).collect(),
-        },
-        RunOutcome::Blocked(_) => Host::Blocked,
-        other => Host::Tooling(format!("{other:?}")),
-    }
-}
 pub(crate) fn admission_time() -> Result<i64, ToolError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

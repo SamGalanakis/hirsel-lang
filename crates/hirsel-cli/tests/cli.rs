@@ -323,7 +323,7 @@ fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
         .arg(&path)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(3));
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("expected a public, complete, monomorphic Hirsel function")
@@ -336,7 +336,7 @@ fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
         .arg(&path)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("declares no entry `pub fn main`"),
@@ -461,7 +461,7 @@ fn simulation_input_errors_are_tool_errors() {
         .arg(&source)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("expected string values"));
     for path in [source, config] {
         std::fs::remove_file(path).unwrap();
@@ -486,7 +486,7 @@ fn unavailable_execution_preserves_stdout_before_the_tool_error() {
         .unwrap();
     assert_eq!(
         result.status.code(),
-        Some(2),
+        Some(3),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
@@ -508,7 +508,7 @@ fn violated_unchecked_contract_is_detected_with_prior_stdout() {
         .arg(&source)
         .output()
         .unwrap();
-    assert_eq!(result.status.code(), Some(2));
+    assert_eq!(result.status.code(), Some(3));
     assert_eq!(result.stdout, b"printed before the call\n");
     let message = String::from_utf8(result.stderr).unwrap();
     assert!(
@@ -617,7 +617,7 @@ fn proofs_remove_their_checks_from_native_builds_only() {
         let mut args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_ref()).collect();
         args.push(src);
         let output = hirsel(&args);
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("FACT-1"),
             "{output:?}"
@@ -656,7 +656,7 @@ fn proofs_remove_their_checks_from_native_builds_only() {
         proofs,
         src,
     ]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("kept (unreplayable: this build trusts no checker liar@1)"),
@@ -723,7 +723,7 @@ fn native_run_matches_the_reference_run() {
         );
     }
     assert_eq!(run(true, &prints).stdout, b"hi\n");
-    assert_eq!(run(true, &fails).status.code(), Some(1));
+    assert_eq!(run(true, &fails).status.code(), Some(2));
     assert_eq!(run(true, &decimal).stdout, b"ok\n");
     // Acquiring Net is supported independently of M2 network operations.
     let network = file(
@@ -802,7 +802,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
             .arg(&source)
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{flags:?}: {output:?}");
+        assert_eq!(output.status.code(), Some(3), "{flags:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{flags:?}");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
@@ -1270,7 +1270,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
             let output = command.output().unwrap();
             assert_eq!(
                 output.status.code(),
-                Some(1),
+                Some(3),
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
@@ -1781,7 +1781,7 @@ fn admit_safe_refuses_an_entry_reaching_an_escape_in_every_launcher() {
     };
     let escaping = program("int.unchecked_add(u, a, 1)");
     let refused = interpreted(&escaping, &safe);
-    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
     assert!(
         String::from_utf8_lossy(&refused.stderr).contains(r#""kind":"unsafe_code","path":["standalone@0/main","standalone@0/relay","core@1/int/unchecked_add"]"#),
         "{refused:?}"
@@ -1889,7 +1889,7 @@ fn grants_templates_launch_current_source_without_export_and_refuse_bad_inputs()
             .arg(&grants)
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{bad}: {output:?}");
+        assert_eq!(output.status.code(), Some(3), "{bad}: {output:?}");
         assert!(output.stdout.is_empty());
     }
     for flags in [
@@ -2485,7 +2485,7 @@ fn source_sidecars_and_explicit_manifests_select_the_same_dependency_graph() {
         (
             "FACT/FACT-2-external-constructor-bad",
             0,
-            Some(1),
+            Some(2),
             Some("FACT-2"),
         ),
         (
@@ -2959,7 +2959,7 @@ fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
                 let output = command.output().unwrap();
                 assert_eq!(
                     output.status.code(),
-                    Some(if blocked { 2 } else { 0 }),
+                    Some(if blocked { 4 } else { 0 }),
                     "{name} blocked={blocked} host={host}: {output:?}"
                 );
                 assert_eq!(
@@ -2974,7 +2974,7 @@ fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
                 if blocked {
                     let report = String::from_utf8_lossy(&output.stderr);
                     assert!(
-                        report.starts_with("Blocked: [ObservedWait { spawn_path: []"),
+                        report.starts_with("Blocked: [Wait { spawn_path: []"),
                         "{report}"
                     );
                     assert!(report.contains("channel.receive"), "{report}");
@@ -3137,7 +3137,7 @@ fn runtime_failure_reports_a_complete_site_in_human_and_json() {
             command.arg("--json");
         }
         let output = command.arg(&path).output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
         let text = String::from_utf8(output.stderr).unwrap();
         if json {
@@ -3169,7 +3169,7 @@ fn runtime_failure_reports_a_complete_site_in_human_and_json() {
         .arg(&non_utf8)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
     let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(
         report["runtime_failure"]["site"]["file"],
@@ -3195,7 +3195,7 @@ fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
                 command.arg("--json");
             }
             let output = command.arg(&path).output().unwrap();
-            assert_eq!(output.status.code(), Some(1), "{backend}: {output:?}");
+            assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
             let text = String::from_utf8(output.stderr).unwrap();
             if json {
                 let report: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -3251,7 +3251,7 @@ fn runtime_failure_reports_the_dependency_file_and_identity() {
         .arg(&source)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
     let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     let site = &report["runtime_failure"]["site"];
     assert_eq!(site["definition"], "dep@2/helper/fail");
@@ -3394,7 +3394,7 @@ fn tracked_runtime_reports_keep_application_and_dependency_operation_sites() {
                 command.arg("--json");
             }
             let output = command.arg(&source).output().unwrap();
-            assert_eq!(output.status.code(), Some(1), "{backend:?}: {output:?}");
+            assert_eq!(output.status.code(), Some(2), "{backend:?}: {output:?}");
             if json {
                 let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
                 let failure = &report["runtime_failure"];
@@ -3475,9 +3475,19 @@ fn run_outcomes_are_reported_alike_by_both_engines() {
             (output.status.code(), output.stdout, stderr)
         };
         let (code, stdout, stderr) = run(&blocks, &plain);
-        assert_eq!(code, Some(2), "native {native}: {stderr}");
+        assert_eq!(code, Some(4), "native {native}: {stderr}");
         assert_eq!(stdout, b"blocks waits\n", "native {native}");
         assert!(stderr.starts_with("Blocked: "), "native {native}: {stderr}");
+        assert!(
+            stderr.contains("channel.receive"),
+            "native {native}: {stderr}"
+        );
+        assert!(
+            stderr.contains("spawn_path: []"),
+            "native {native}: {stderr}"
+        );
+        assert!(stderr.contains("line: 7"), "native {native}: {stderr}");
+        assert!(stderr.contains("targets: ["), "native {native}: {stderr}");
         let (code, stdout, stderr) = run(&encodes, &plain);
         assert_eq!(code, Some(6), "native {native}: {stderr}");
         assert_eq!(stdout, b"encodes\n", "native {native}");
@@ -3486,7 +3496,7 @@ fn run_outcomes_are_reported_alike_by_both_engines() {
             "native {native}"
         );
         let (code, stdout, stderr) = run(&prints, &refused_grants);
-        assert_eq!(code, Some(1), "native {native}: {stderr}");
+        assert_eq!(code, Some(3), "native {native}: {stderr}");
         assert!(stdout.is_empty(), "native {native}");
         assert!(
             stderr

@@ -23,7 +23,7 @@ use crate::io::AdapterError;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Stop {
     /// Every task waits on another and nothing outside the run can wake one (CONC-8).
-    Blocked,
+    Blocked(Vec<hirsel_run_config::Wait>),
     BudgetExceeded(BudgetKind),
     /// The adapter refused a request.
     Refused(String),
@@ -49,7 +49,7 @@ impl Stop {
     pub fn outcome(self) -> hirsel_run_config::RunOutcome {
         use hirsel_run_config::RunOutcome;
         match self {
-            Stop::Blocked => RunOutcome::Blocked,
+            Stop::Blocked(waits) => RunOutcome::Blocked(waits),
             Stop::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),
             Stop::Refused(reason) => RunOutcome::Refused(reason),
             Stop::Diverged(reason) => RunOutcome::Diverged(reason),

@@ -26,7 +26,10 @@ fn execute_source(source: &str) {
             }
             .unwrap();
             assert!(
-                matches!(result.outcome, Ok(RunOutcome::Exit(0))),
+                matches!(
+                    result.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                ),
                 "{:?}",
                 result.outcome
             );
@@ -592,7 +595,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
                 )
                 .unwrap();
                 assert!(
-                    matches!(replay.outcome, Ok(RunOutcome::Exit(0))),
+                    matches!(
+                        replay.outcome,
+                        Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                    ),
                     "{:?}",
                     replay.outcome
                 );
@@ -659,7 +665,10 @@ fn assert_http_script_replay(relative: &str) {
     }
     let recorded = run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
     assert!(
-        matches!(recorded.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            recorded.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         recorded.outcome
     );
@@ -693,7 +702,10 @@ fn assert_http_script_replay(relative: &str) {
     .unwrap();
     assert_eq!(replayed.observation.as_ref(), Some(&observation));
     assert!(
-        matches!(replayed.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            replayed.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         replayed.outcome
     );

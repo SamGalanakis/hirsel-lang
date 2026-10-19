@@ -517,7 +517,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_task_scope_exit",
         destination: false,
         result: None,
@@ -531,7 +531,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_task_scope_exit_until",
         destination: false,
         result: Some((1, 1)),
@@ -552,7 +552,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_task_join",
         destination: false,
         result: None,
@@ -592,7 +592,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_task_await_any",
         destination: true,
         result: Some((16, 8)),
@@ -613,7 +613,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_task_cancel_all",
         destination: false,
         result: None,
@@ -767,7 +767,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::I64],
     },
     AbiExport {
-        caller_site: false,
+        caller_site: true,
         symbol: "hirsel_rt_v2_channel_receive",
         destination: false,
         result: Some((4, 4)),

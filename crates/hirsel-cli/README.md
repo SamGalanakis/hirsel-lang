@@ -24,10 +24,10 @@ Commands (arguments use the shared lexopt parser):
   <escape>: <entry> -> ... -> <escape>` (exit 1), the shortest dependency path
   from the entry to an extern or `Unsafe` operation (CAP-6).
 - `hirsel run <file>` requires complete checking/lowering and writes exact stdout
-  bytes. Exit 0 is success; any runtime failure/nonzero program exit becomes 1.
+  bytes. Both engines use the shared [PROG-3 exit policy](../../docs/spec/programs.md#prog-3-entry).
   Without `--run`, `--grants`, `--simulation` or `--replay` it admits the empty-grant
   record in either engine: an entry taking a root capability is refused at launch
-  (`hirsel: launch: {"kind":"not_granted","root":"Io"}`, exit 1), followed by a line
+  (`hirsel: launch: {"kind":"not_granted","root":"Io"}`, exit 3), followed by a line
   naming `--grants` and `--simulation`.
   A sole `Test` parameter selects test admission, including exported records and
   explicit grants; the empty record supplies only the deterministic Test context.
@@ -54,12 +54,13 @@ Commands (arguments use the shared lexopt parser):
   come from glibc's allocator statistics, read only at measurement points.
 - `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
   dependency checked from source because no precheck matched. Nothing else changes.
-- Invalid arguments exit 2. IO failures exit 1 and have no RuleId. Invalid UTF-8
+- Invalid arguments exit 2. Non-executing source commands report IO failures as
+  exit 1, without a RuleId; run and test setup failures use the shared exit policy. Invalid UTF-8
   is a SEM-3 language diagnostic at the first invalid byte boundary, before parsing.
   Paths beginning with `-` must be written with a directory prefix (`./-name.hir`).
 
-Unavailable phases always exit 2, including clean source in an incomplete
-pipeline. Tests exercise the binary's human/JSON lexer diagnostics and IO/usage
+Unavailable checking phases exit 2, including clean source in an incomplete
+pipeline; unavailable execution is a tooling outcome (3). Tests exercise the binary's human/JSON lexer diagnostics and IO/usage
 codes, plus injected tool operations for clean checking, run and formatting codes.
 
 `hirsel run --simulation config.json program.hir` supplies a deterministic fake
@@ -86,19 +87,19 @@ Execution API errors retain prior stdout in ExecutionError. Launch carries the
 original categorized cause plus output; ObservedExecution.outcome is an inner
 Result, with tooling_output when no semantic observation exists. Pre-execution
 launch errors stay outer errors. Ordinary run adapters write captured output
-before returning the cause; unavailable execution remains exit 2.
+before returning the cause; unavailable execution exits 3.
 
 Violated executable unchecked preconditions stop with UndefinedBehavior carrying
 `undefined behaviour detected`, operation, source site and contract. Prior stdout
 is retained, but DET-1, semantic parity and cleanup guarantees do not apply (#49).
-No language failure is synthesized; observable returns None and CLI exits 2.
+No language failure is synthesized; observable returns None and CLI exits 3.
 Malformed operation schemas remain API errors.
 
 `hirsel run --native <file>` checks the program as `run` does (the same first
 diagnostics), then builds it as an optimized x86-64 Linux executable, links it
 against the runtime built from this checkout and runs it. Output, exit status
 and the `runtime failure[RULE] at PACKAGE@VERSION/module/definition (FILE:LINE:COLUMN)` line match `run`. A program a native
-stage cannot build yet prints `hirsel: native <stage>: ...` and exits 2; that is
+stage cannot build yet prints `hirsel: native <stage>: ...` and exits 3; that is
 a tool outcome and says nothing about the source. `--backend cranelift` builds
 the same LIR with Cranelift, unoptimized, for a fast debug loop
 (`crates/hirsel-cranelift`); `--backend llvm` (the default) is LLVM O3.
@@ -134,8 +135,7 @@ and AArch64. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args. `--fuel` compiles fuel checks at function entries and loop heads, so the executable
 can enforce a fuel budget (`budgets.limits@1`); without it a fuel budget is refused, and
 `hirsel run --native` adds the checks only when its run has a fuel budget. A run that
-spends a budget prints `budget exceeded: <kind>` and exits 2 under `hirsel run`, 5 as a
-standalone executable.
+spends a budget prints `budget exceeded: <kind>` and exits 5 in every launcher.
 
 `build` and `run --native` accept `--proofs <sidecar>` with any number of
 `--trust <tool@version>`: current `proved` records from a trusted checker
@@ -154,12 +154,12 @@ fields and deny omitted roots. Standalone executables accept the corresponding
 `--record <tape>` beside `--run` or `--grants` streams the run's Io tape;
 `hirsel run <source|manifest> --replay <tape>` replays one, in either engine, with no
 grants and no host effect. Replay refuses a tape bound to another semantic revision,
-entry or root set before entry (exit 1), and a divergence, missing or unconsumed event
-after the output it confirmed (`hirsel: replay refused: ...`, exit 1), in either engine.
+entry or root set before entry (exit 3), and a divergence, missing or unconsumed event
+after the output it confirmed (`hirsel: replay refused: ...`, exit 3), in either engine.
 With `--native` the driver only binds the run; the executable admits it once and reports
 an admission refusal, a Blocked run, a stop and a codec limit to the driver, so `hirsel run`
-reports them as the interpreter's run does: a refusal `hirsel: launch: <refusal>` (exit 1),
-Blocked (exit 2), and `hirsel: environmental failure: ...` (exit 6) for a run past the
+reports them as the interpreter's run does: a refusal `hirsel: launch: <refusal>` (exit 3),
+Blocked with its parked waits (exit 4), and `hirsel: environmental failure: ...` (exit 6) for a run past the
 codec's operational budget. `--replay` takes no `--run`,
 `--grants` or `--record`, and neither option combines with `--simulation`. Executables
 spell them `--hirsel-record <tape>` (before their launch input) and `--hirsel-replay <tape>`.
@@ -171,7 +171,7 @@ Env names in the run record are readable, with null distinct from a denied name.
 Interpreted host runs (`--run` or `--grants`) have no default step budget.
 Simulated runs and replays default to 1,000,000,000 execution steps. `--max-steps <n>`
 selects an explicit nonnegative u64 budget, including zero; `--max-steps unbounded`
-removes the step bound. `--native` rejects this interpreter option. Exhaustion deterministically exits 2 and reports
+removes the step bound. `--native` rejects this interpreter option. Exhaustion deterministically exits 3 and reports
 `evaluator tooling limit: Steps`. Driver/conformance adapter defaults and
 compile-time evaluation budgets are independent.
 

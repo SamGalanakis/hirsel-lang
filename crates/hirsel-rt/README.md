@@ -671,13 +671,15 @@ the linked program's immutable descriptor registry and runs one compiled
 `fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
 granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and
 returns the exit status of the run's outcome
-(`hirsel_run_config::RunOutcome::exit_code`): 0 for `Ok`, 1 for `Error`, 2 for a
-language failure, 3 for a refused launch or replay divergence, 4 for a Blocked run (CONC-8: every
-task waits and none can proceed; the run stops there without cleanup, and its record says
-`blocked` and `audit unavailable`), 5 for a run that spent a budget (`budgets.limits@1`; it
-stops the same way, recording `budget_exceeded fuel` or `budget_exceeded memory`) and 6 for an
-environmental stop such as the codec's operational budget. The caller (generated `main`, or a
-host running several programs) decides what to do with it; no outcome exits the process.
+(`hirsel_run_config::RunOutcome::exit_code`), using the
+[PROG-3 policy](../../docs/spec/programs.md#prog-3-entry) shared with interpreted
+launches. Blocked reports retain parked tasks' spawn paths, source sites, wait
+kinds and target ordinals, before abandoning their contexts. Observation version
+4 carries those records in a `waits` JSON line beside `blocked` and
+`audit unavailable`. Runtime ABI 22 carries existing caller-site arguments into
+the blocking task/channel primitives; only the parked path stores the site.
+The caller (generated `main`, or a host running several programs) decides what
+to do with the outcome; no outcome exits the process.
 `src/budget.rs` enforces both budgets. The memory meter (`budget::Meter`, shared by the heap
 and the region pool) charges backing storage before it is taken: slabs, large and bare blocks
 and region segments. It credits that storage when released, and returns idle slabs before
@@ -687,7 +689,7 @@ compiled with fuel checks decrements it at each fuel point and calls
 `Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
 an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
 `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
-writes the observation record (`hirsel-observation 3`, the status, the result
+writes the observation record (`hirsel-observation 4`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
 (`hirsel-io-tape 7`, which also reads version 6: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
@@ -1183,3 +1185,5 @@ uncommitted `blocked` park) until `wait` or a batch bound closes the batch, and 
 withdraws a held request that was cancelled. `recover` reads a journal back for replay and
 names the requests in doubt. The issuer of each request comes from `Adapter::issuer`, which
 `host_waits::issue` and the interpreter's host library call only for a durable journal.
+The trailer preserves the shared run outcome, including parked waits, complete failure
+chains and interpreter diagnostics.

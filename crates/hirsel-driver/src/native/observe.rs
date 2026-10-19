@@ -61,6 +61,46 @@ impl Observation {
         }
     }
 
+    /// Resolve this engine's observation into the one host outcome type.
+    pub fn outcome(
+        &self,
+        sites: &Sites<'_>,
+        waits: Vec<hirsel_run_config::Wait>,
+    ) -> Result<hirsel_run_config::RunOutcome, NativeError> {
+        use hirsel_run_config::{Returned, RunOutcome};
+        if let Some(kind) = self.budget {
+            return Ok(RunOutcome::BudgetExceeded(kind));
+        }
+        if self.blocked {
+            return Ok(RunOutcome::Blocked(waits));
+        }
+        if let Some(code) = self.exit_code {
+            return Ok(RunOutcome::Returned(if code == 0 {
+                Returned::Ok
+            } else {
+                Returned::Error
+            }));
+        }
+        let mut failures = self.failures.iter().map(|failure| {
+            let missing = || NativeError::new(StageName::Launch, "failure has no source site");
+            Ok(hirsel_run_config::Failure {
+                rule: failure.rule.clone(),
+                site: sites.failure_site(failure).ok_or_else(missing)?,
+                operation: failure
+                    .operation
+                    .as_ref()
+                    .map(|site| sites.operation_site(site).ok_or_else(missing))
+                    .transpose()?,
+            })
+        });
+        Ok(RunOutcome::Failed {
+            primary: failures.next().ok_or_else(|| {
+                NativeError::new(StageName::Launch, "neither a return nor a failure")
+            })??,
+            causes: failures.collect::<Result<_, NativeError>>()?,
+        })
+    }
+
     /// A stable text form, for mismatch artifacts and reports.
     pub fn render(&self) -> String {
         let mut out = format!("observation {OBSERVATION_SCHEMA}\n");
@@ -133,16 +173,16 @@ impl<'a> Sites<'a> {
         })
     }
 
-    pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_engine::FailureSite> {
+    pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_config::Site> {
         let file = self
             .input
             .sources
             .file(*self.files.get(&failure.definition)?)?;
-        Some(hirsel_engine::FailureSite {
+        Some(hirsel_run_config::Site {
             definition: failure.definition.to_string(),
-            file: file.path.clone(),
-            line: failure.line as usize,
-            column: failure.column,
+            file: file.path.to_string_lossy().into_owned(),
+            line: failure.line.into(),
+            column: failure.column.into(),
         })
     }
 
@@ -160,16 +200,16 @@ impl<'a> Sites<'a> {
     pub fn operation_site(
         &self,
         source: &hirsel_interp::observation::SourceSite,
-    ) -> Option<hirsel_engine::FailureSite> {
+    ) -> Option<hirsel_run_config::Site> {
         let file = self
             .input
             .sources
             .file(*self.files.get(&source.definition)?)?;
-        Some(hirsel_engine::FailureSite {
+        Some(hirsel_run_config::Site {
             definition: source.definition.to_string(),
-            file: file.path.clone(),
-            line: source.line as usize,
-            column: source.column,
+            file: file.path.to_string_lossy().into_owned(),
+            line: source.line.into(),
+            column: source.column.into(),
         })
     }
     /// The one-based line and column a failure site starts at.

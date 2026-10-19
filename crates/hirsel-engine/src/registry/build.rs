@@ -619,10 +619,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         } else {
             assert!(unretained.is_none(), "{name}: @unretained needs a promise");
         }
-        publish(
-            b.signature(name, SignatureKind::Function(f), false),
-            &mut out,
-        );
+        let mut signature = b.signature(name, SignatureKind::Function(f), false);
+        signature.metadata.track_caller = matches!(name, "task.await_any" | "task.cancel_all");
+        publish(signature, &mut out);
     }
     // `net.read_into`'s compiled body passes its buffer's size to one fixed runtime
     // entry, which no size generic can name.
@@ -800,7 +799,14 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);
         let mut signature = b.signature(name, SignatureKind::Function(f), false);
-        signature.metadata.track_caller = name == "$intrinsic.TaskSpawn";
+        signature.metadata.track_caller = matches!(
+            name,
+            "$intrinsic.TaskSpawn"
+                | "$intrinsic.TaskScopeExit"
+                | "$intrinsic.TaskScopeExitUntil"
+                | "$intrinsic.TaskJoin"
+                | "$intrinsic.ChannelReceive"
+        );
         publish(signature, &mut out);
     }
     // All declaration snapshots exist before deriving structural properties.

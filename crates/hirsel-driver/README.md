@@ -212,3 +212,9 @@ Conformance `native::Fixture` supplies a virtual monotonic start and validated s
 network/process grants to `differential_in` and `real_io_replay_in`. H receives its
 model world; LLVM and Cranelift use the same harness adapter. Production launch
 records and capability seeds remain independent of semantic fixtures.
+
+Simulation and host interpretation use the same `project_outcome` projection as
+the engine; native launches return that same hirsel-run-config outcome, retaining
+all failure causes and source-linked parked waits. Native observation admission
+checks the actual process status against `RunOutcome::exit_code()` before an
+observation may enter differential/agreement comparison.

@@ -124,7 +124,7 @@ are authoritative and trailing arguments are an error. Without either option,
 including an explicitly empty snapshot. No other authority is implied. A bare
 `hirsel run program.hir`, in either engine, admits the empty-grant record: a root-free
 `main()` runs, and an entry taking `Io`, `Args` or `Env` is refused at launch
-(`{"kind":"not_granted","root":"Io"}`, exit 1), with a line naming `--grants` and
+(`{"kind":"not_granted","root":"Io"}`, exit 3), with a line naming `--grants` and
 `--simulation <json>`. A simulated world requires that explicit option and is available
 only in the interpreter; ordinary runs follow [entry admission](spec/programs.md#prog-3-entry).
 
@@ -170,8 +170,8 @@ grants only Args. `./program` grants no external roots: a root-free entry can
 run, and an entry requiring Io, Args, Env or Unsafe refuses before entry. Invalid
 UTF-8 arguments refuse launch. These snapshots contribute to run identity.
 
-A directly run executable exits 0 for `Ok(())`, 1 for a returned `Error`, 2 for a
-language failure and 3 for a refused launch. On an x86-64 host, test an AArch64
+Interpreted runs, native runs and directly run executables share the
+[PROG-3 exit policy](spec/programs.md#prog-3-entry). On an x86-64 host, test an AArch64
 artifact with the pinned qemu and a glibc for AArch64 (the cross sysroot here):
 
 ```sh

@@ -95,7 +95,11 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
         };
         let completes = |label: &str| {
             let (outcome, stdout) = run("completes", COMPLETES);
-            assert_eq!(outcome.unwrap(), RunOutcome::Exit(0), "{label}");
+            assert_eq!(
+                outcome.unwrap(),
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+                "{label}"
+            );
             assert_eq!(stdout, "completes ok\n", "{label}");
         };
         let (outcome, stdout) = run("blocks", BLOCKS);
@@ -116,14 +120,18 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
         completes("after the codec limit");
         for (name, source, line) in [("fails", FAILS, 4), ("fails-later", FAILS_LATER, 5)] {
             let (outcome, stdout) = run(name, source);
-            let Ok(RunOutcome::Failure { rule, site, .. }) = outcome else {
+            let Ok(RunOutcome::Failed {
+                primary: hirsel_run_config::Failure { rule, site, .. },
+                ..
+            }) = outcome
+            else {
                 panic!("{name}: {outcome:?}")
             };
             assert_eq!(
                 (rule.as_str(), site.line, site.column),
                 ("MEM-14", line, 11)
             );
-            assert!(site.file.ends_with(format!("{name}.hir")), "{site:?}");
+            assert!(site.file.ends_with(&format!("{name}.hir")), "{site:?}");
             assert!(stdout.is_empty());
         }
         completes("after the failures");

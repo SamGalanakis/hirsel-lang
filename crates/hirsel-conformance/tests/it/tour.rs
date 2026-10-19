@@ -136,7 +136,10 @@ fn input_program_uses_supplied_snapshots_and_stream() {
             &mut stderr,
         )
         .unwrap();
-        assert_eq!(outcome, hirsel_engine::RunOutcome::Exit(0));
+        assert_eq!(
+            outcome,
+            hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        );
         assert_eq!(stdout, b"agent\nhello\none\ntwo");
         assert!(stderr.is_empty());
     });

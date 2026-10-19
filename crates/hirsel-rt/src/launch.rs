@@ -48,7 +48,7 @@ use std::io::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 3;
+pub const OBSERVATION_VERSION: u32 = 4;
 
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -1944,7 +1944,7 @@ pub(crate) unsafe fn execute(
         record.push_str("audit unavailable\n");
     } else {
         // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
-        if entry.is_test() && matches!(outcome, hirsel_run_config::RunOutcome::Blocked) {
+        if entry.is_test() && matches!(outcome, hirsel_run_config::RunOutcome::Blocked(_)) {
             let waits = crate::tasks::test_waits(ctx);
             sinks
                 .report
@@ -1954,7 +1954,10 @@ pub(crate) unsafe fn execute(
         }
         unsafe { (*ctx).abandon() };
         match &outcome {
-            hirsel_run_config::RunOutcome::Blocked => record.push_str("blocked\n"),
+            hirsel_run_config::RunOutcome::Blocked(waits) => {
+                record.push_str("blocked\n");
+                let _ = writeln!(record, "waits {}", hirsel_run_config::Wait::encode(waits));
+            }
             hirsel_run_config::RunOutcome::BudgetExceeded(kind) => {
                 let _ = writeln!(record, "budget_exceeded {}", kind.name());
             }
@@ -2013,8 +2016,13 @@ pub(crate) unsafe fn execute(
     };
     match &outcome {
         hirsel_run_config::RunOutcome::Returned(_)
-        | hirsel_run_config::RunOutcome::Blocked
         | hirsel_run_config::RunOutcome::BudgetExceeded(_) => finish()?,
+        hirsel_run_config::RunOutcome::Blocked(waits) => {
+            if report_failures {
+                let _ = writeln!(sinks.report.clone(), "Blocked: {waits:?}");
+            }
+            finish()?;
+        }
         hirsel_run_config::RunOutcome::Failed { primary, causes } => {
             if report_failures {
                 for failure in std::iter::once(primary).chain(causes) {
@@ -2050,6 +2058,11 @@ pub(crate) unsafe fn execute(
             write_observation(&record)?;
         }
         hirsel_run_config::RunOutcome::Tooling(reason) => return Err(reason.clone()),
+        hirsel_run_config::RunOutcome::ToolingLimit(_)
+        | hirsel_run_config::RunOutcome::UndefinedBehavior(_)
+        | hirsel_run_config::RunOutcome::Trapped(_) => {
+            crate::fault("an interpreter-only outcome in native execution")
+        }
     }
     if let Some(error) = report_refusal {
         return Err(error);

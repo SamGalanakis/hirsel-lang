@@ -23,7 +23,10 @@ fn execute_source(source: &str) {
     )
     .unwrap();
     assert!(
-        matches!(run.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            run.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         run.outcome
     );

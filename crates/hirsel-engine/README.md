@@ -109,11 +109,13 @@ formatter, resolver and interpreter traits to those it may depend on, and
 hirsel-driver implements `Phases` for the rest. Neither depends on a phase crate
 through the other, so the graph stays acyclic. Lexer,
 parser and formatter may return `(value, Vec<Diagnostic>)` instead of importing
-QueryOutput from types; the adapter adds the empty dependency list. RunOutcome and
-CheckOutput are tool-facing adapters, not dependencies of the interpreter.
+QueryOutput from types; the adapter adds the empty dependency list. CheckOutput
+is the engine's tool-facing adapter. RunOutcome is re-exported from
+hirsel-run-config, the single host outcome type shared with native execution.
 
-The interpreter returns its own result using TIR Failure and an exit code; the
-driver resolves its site to RunOutcome's line. GEN-5 graph assembly belongs to the
+The interpreter returns evaluator values and TIR failure anchors;
+`project_outcome` resolves them into the shared outcome, including every cleanup
+cause, parked wait and interpreter-only tooling diagnostic. GEN-5 graph assembly belongs to the
 driver: `gen5_source_graph` reads each definition's checked instantiations (type and
 size arguments) for the source verdict, and `InstanceGraph::native` adds the
 finalizer, representation and materialized instances the selected TIR needs

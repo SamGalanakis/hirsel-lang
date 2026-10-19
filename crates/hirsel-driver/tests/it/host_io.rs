@@ -15,7 +15,10 @@ fn execute(source: &str, simulation: SimulationConfig) -> hirsel_engine::Observe
     };
     let result = run_observed_snapshot(&mut engine, &run, simulation.clone()).unwrap();
     assert!(
-        matches!(result.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            result.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         result.outcome
     );
@@ -42,7 +45,10 @@ fn execute(source: &str, simulation: SimulationConfig) -> hirsel_engine::Observe
     )
     .unwrap();
     assert!(
-        matches!(replay.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            replay.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         replay.outcome
     );

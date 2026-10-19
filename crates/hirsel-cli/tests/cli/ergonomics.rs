@@ -290,7 +290,7 @@ fn trailing_arguments_alone_grant_only_the_exact_args_snapshot() {
         .args(["--max-steps", "0", "--"])
         .output()
         .unwrap();
-    assert_eq!(limited.status.code(), Some(2), "{limited:?}");
+    assert_eq!(limited.status.code(), Some(3), "{limited:?}");
     assert!(String::from_utf8_lossy(&limited.stderr).contains("Steps"));
     for root in ["rt: Io", "env: Env", "permit: Unsafe"] {
         let denied = file(&format!(

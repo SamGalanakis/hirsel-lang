@@ -34,7 +34,10 @@ fn glob_exports_have_source_owners_and_no_builtin_operations() {
                 );
             }
             let run = run_path(&path, &mut Vec::new()).unwrap();
-            assert!(matches!(run, RunOutcome::Exit(0)), "{name}: {run:?}");
+            assert!(
+                matches!(run, RunOutcome::Returned(hirsel_run_config::Returned::Ok)),
+                "{name}: {run:?}"
+            );
         }
     });
 }

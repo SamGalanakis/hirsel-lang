@@ -417,34 +417,45 @@ fn observe(body: &str) -> Observed {
     normal
 }
 fn failure(rule: &str, line: usize) -> RunOutcome {
-    RunOutcome::Failure {
-        operation: None,
-        rule: hirsel_diag::RuleId::new(rule).unwrap(),
-        site: hirsel_engine::FailureSite {
-            line,
-            ..Default::default()
+    RunOutcome::Failed {
+        primary: hirsel_run_config::Failure {
+            operation: None,
+            rule: rule.to_string(),
+            site: hirsel_run_config::Site {
+                line: line as u64,
+                ..Default::default()
+            },
         },
+        causes: vec![],
     }
 }
 fn assert_run(observed: &Observed, outcome: RunOutcome, stdout: &str) {
     match (&observed.outcome, &outcome) {
         (
-            RunOutcome::Failure {
-                rule,
-                site,
-                operation,
+            RunOutcome::Failed {
+                primary:
+                    hirsel_run_config::Failure {
+                        rule,
+                        site,
+                        operation,
+                    },
+                ..
             },
-            RunOutcome::Failure {
-                operation: expected_operation,
-                rule: expected,
-                site: expected_site,
+            RunOutcome::Failed {
+                primary:
+                    hirsel_run_config::Failure {
+                        operation: expected_operation,
+                        rule: expected,
+                        site: expected_site,
+                    },
+                ..
             },
         ) => {
             assert_eq!(rule, expected);
             assert_eq!(operation, expected_operation);
             assert_eq!(site.line, expected_site.line);
             assert!(!site.definition.is_empty());
-            assert!(!site.file.as_os_str().is_empty());
+            assert!(!site.file.is_empty());
             assert!(site.column > 0);
         }
         _ => assert_eq!(observed.outcome, outcome),
@@ -467,7 +478,11 @@ fn mem14_through_a_nested_projection_fails_before_extraction_or_write_on_compile
     // The resource right-hand side is released, and the old element was neither
     // extracted nor overwritten.
     assert_run(&observe(&replace(7)), failure("MEM-14", 8), "new\nold\n");
-    assert_run(&observe(&replace(0)), RunOutcome::Exit(0), "old\nnew\n");
+    assert_run(
+        &observe(&replace(0)),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+        "old\nnew\n",
+    );
     let read = |i| {
         format!(
             "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {{\n  let stdout = io.stdout(rt)?\n  let xs: List[List[Trace]] = [[Trace(stdout: stdout, text: \"kept\\n\")]]\n  let i: u64 = {i}\n  let n = copy xs[0][i].text\n  Ok(())\n}}\n"
@@ -476,7 +491,11 @@ fn mem14_through_a_nested_projection_fails_before_extraction_or_write_on_compile
     let failed = observe(&read(3));
     assert_run(&failed, failure("MEM-14", 7), "kept\n");
     assert_eq!(failed.observation.failures.len(), 1);
-    assert_run(&observe(&read(0)), RunOutcome::Exit(0), "kept\n");
+    assert_run(
+        &observe(&read(0)),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+        "kept\n",
+    );
 }
 
 #[test]
@@ -492,7 +511,11 @@ fn mem14_through_a_callback_mut_argument_fails_before_the_callback_runs_on_compi
         )
     };
     assert_run(&observe(&closure(7)), failure("MEM-14", 8), "old\n");
-    assert_run(&observe(&closure(0)), RunOutcome::Exit(0), "new\n");
+    assert_run(
+        &observe(&closure(0)),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+        "new\n",
+    );
     let parameter = |i| {
         format!(
             "fn apply(f: fn(mut t: Trace) -> () uses {{}}, mut xs: List[Trace], i: u64) {{\n  f(mut xs[i])\n}}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {{\n  let stdout = io.stdout(rt)?\n  let mut xs: List[Trace] = [Trace(stdout: stdout, text: \"old\\n\")]\n  apply(fn(mut t: Trace) {{ t.text = \"new\\n\" }}, mut xs, {i})\n  Ok(())\n}}\n"
@@ -504,7 +527,11 @@ fn mem14_through_a_callback_mut_argument_fails_before_the_callback_runs_on_compi
         failed.observation.failures[0].stable_site.definition.0.name,
         "apply"
     );
-    assert_run(&observe(&parameter(0)), RunOutcome::Exit(0), "new\n");
+    assert_run(
+        &observe(&parameter(0)),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+        "new\n",
+    );
 }
 
 const FAILS: &str = "let z: u8 = 0\n  let q = 1u8 / z\n";
@@ -562,7 +589,7 @@ fn a_return_value_cleanup_failure_releases_the_prepared_result_once_on_compiler_
     assert_eq!(finalizers, [9, 9, 16]);
     assert_run(
         &observe_stably(&program("")),
-        RunOutcome::Exit(0),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
         "boom\nreturned\nouter\n",
     );
 }
@@ -590,7 +617,7 @@ fn two_finalizer_failures_are_both_observed_in_unwinding_order_on_compiler_threa
     }
     assert_run(
         &observe_stably(&program("")),
-        RunOutcome::Exit(0),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok),
         "b\na\nouter\n",
     );
 }
@@ -605,7 +632,7 @@ fn an_iterator_callback_returns_its_updated_state() {
     hirsel_engine::with_compiler_stack(|| {
         assert_run(
             &observe_stably(&iterator("")),
-            RunOutcome::Exit(0),
+            RunOutcome::Returned(hirsel_run_config::Returned::Ok),
             "updated\n",
         );
     });

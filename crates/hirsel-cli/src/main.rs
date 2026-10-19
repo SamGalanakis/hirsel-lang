@@ -674,9 +674,14 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                             results.len()
                         );
                     }
-                    u8::from(failed != 0)
+                    RunOutcome::Returned(if failed == 0 {
+                        hirsel_run_config::Returned::Ok
+                    } else {
+                        hirsel_run_config::Returned::Error
+                    })
+                    .exit_code() as u8
                 }
-                Err(error) => tool_error(error, json),
+                Err(error) => run_error(error, json),
             };
         }
         Command::Test {
@@ -791,9 +796,14 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                             results.len()
                         );
                     }
-                    u8::from(failed != 0)
+                    RunOutcome::Returned(if failed == 0 {
+                        hirsel_run_config::Returned::Ok
+                    } else {
+                        hirsel_run_config::Returned::Error
+                    })
+                    .exit_code() as u8
                 }
-                Err(error) => tool_error(error, json),
+                Err(error) => run_error(error, json),
             };
         }
         Command::Doc {
@@ -905,7 +915,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("hirsel: simulation: {error}");
-                    return 2;
+                    return RunOutcome::Tooling(error).exit_code() as u8;
                 }
             };
             return run_result(
@@ -931,11 +941,11 @@ fn execute_command(args: Vec<OsString>) -> u8 {
         } => {
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
-                Err(error) => return tool_error(error, false),
+                Err(error) => return run_error(error, false),
             };
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
-            // program yet is a tool outcome (exit 2).
+            // program yet is a tool outcome (exit 3).
             return match hirsel_driver::native::run_path_native_backend(
                 Path::new(&file),
                 launch.host(arguments.as_deref()),
@@ -944,13 +954,13 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                 hirsel_driver::native::Output::Inherit { json },
             ) {
                 // The native driver already wrote the complete failure chain.
-                Ok(Ok(RunOutcome::Failure { .. })) => 1,
+                Ok(Ok(outcome @ RunOutcome::Failed { .. })) => outcome.exit_code() as u8,
                 Ok(Ok(outcome)) => run_result(Ok(outcome), json),
                 Ok(Err(error)) => {
                     eprintln!("hirsel: {error}");
-                    2
+                    RunOutcome::Tooling(error.to_string()).exit_code() as u8
                 }
-                Err(error) => tool_error(error, false),
+                Err(error) => run_error(error, false),
             };
         }
         Command::Run {
@@ -1283,42 +1293,57 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
 }
 
 fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
-    match result {
-        // The launch boundary has already written the PROG-3 payload report.
-        Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
-        Ok(RunOutcome::Failure {
-            rule,
-            site,
-            operation,
-        }) => {
-            eprintln!("{}", site.report(rule.as_str(), json, operation.as_ref()));
-            1
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return run_error(error, json);
         }
-        Ok(RunOutcome::UndefinedBehavior(u)) => {
-            eprintln!("{u}");
-            2
+    };
+    match &outcome {
+        RunOutcome::Returned(_) => {}
+        RunOutcome::Failed { primary, causes } => {
+            for failure in std::iter::once(primary).chain(causes) {
+                eprintln!(
+                    "{}",
+                    failure
+                        .site
+                        .report(&failure.rule, json, failure.operation.as_ref())
+                );
+            }
         }
-        Ok(RunOutcome::Trapped(t)) => {
-            eprintln!("{t}");
-            2
+        RunOutcome::UndefinedBehavior(diagnostic) | RunOutcome::Trapped(diagnostic) => {
+            eprintln!("{diagnostic}")
         }
-        Ok(RunOutcome::Blocked(w)) => {
-            eprintln!("Blocked: {w:?}");
-            2
+        RunOutcome::Blocked(waits) => eprintln!("Blocked: {waits:?}"),
+        RunOutcome::BudgetExceeded(kind) => eprintln!("budget exceeded: {}", kind.name()),
+        RunOutcome::ToolingLimit(limit) => eprintln!("evaluator tooling limit: {}", limit.kind),
+        RunOutcome::Environmental(cause) => eprintln!("hirsel: environmental failure: {cause}"),
+        RunOutcome::Refused(reason) => eprintln!("hirsel: launch: {reason}"),
+        RunOutcome::Diverged(reason) => eprintln!("hirsel: replay refused: {reason}"),
+        RunOutcome::Tooling(reason) => eprintln!("hirsel: {reason}"),
+    }
+    outcome.exit_code() as u8
+}
+
+fn run_error(error: ToolError, json: bool) -> u8 {
+    let rejected = matches!(
+        &error,
+        ToolError::Query {
+            error: QueryError::Diagnostics(_),
+            ..
         }
-        Ok(RunOutcome::BudgetExceeded(kind)) => {
-            eprintln!("budget exceeded: {}", kind.name());
-            2
+    );
+    let outcome = match &error {
+        ToolError::Launch(reason) => RunOutcome::Refused(reason.to_string()),
+        ToolError::Runtime(reason) if reason.starts_with("replay refused:") => {
+            RunOutcome::Diverged(reason.clone())
         }
-        Ok(RunOutcome::ToolingLimit(l)) => {
-            eprintln!("evaluator tooling limit: {:?}", l.kind);
-            2
-        }
-        // A host resource stopped the run, in either engine (design: exit 6).
-        Ok(RunOutcome::Environmental(cause)) => {
-            eprintln!("hirsel: environmental failure: {cause}");
-            hirsel_run_config::exit::ENVIRONMENTAL as u8
-        }
-        Err(e) => tool_error(e, json),
+        _ => RunOutcome::Tooling(error.to_string()),
+    };
+    let code = tool_error(error, json);
+    if rejected {
+        code
+    } else {
+        outcome.exit_code() as u8
     }
 }

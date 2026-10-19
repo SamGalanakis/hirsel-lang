@@ -30,7 +30,10 @@ fn copied_values(count: u64) -> u64 {
         &mut vec![],
     )
     .unwrap();
-    assert_eq!(outcome, RunOutcome::Exit(0));
+    assert_eq!(
+        outcome,
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+    );
     std::fs::remove_dir_all(&dir).unwrap();
     hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues) - before
 }

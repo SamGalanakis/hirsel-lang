@@ -243,7 +243,7 @@ fn nonzero_cli_exits_report_missing_and_denied_grants_and_json_causes() {
         .arg(&grants)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains(grants.file_name().unwrap().to_str().unwrap()),

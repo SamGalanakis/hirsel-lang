@@ -33,10 +33,13 @@ fn callback_failure_releases_current_remaining_and_retained_resources_in_order()
             assert_eq!(output, expected, "{name}");
             if failure {
                 assert!(
-                    matches!(outcome, RunOutcome::Failure { ref rule, .. } if rule.as_str() == "MEM-14")
+                    matches!(outcome, RunOutcome::Failed { primary: hirsel_run_config::Failure { ref rule, .. }, .. } if rule.as_str() == "MEM-14")
                 );
             } else {
-                assert!(matches!(outcome, RunOutcome::Exit(0)));
+                assert!(matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                ));
             }
         }
     });

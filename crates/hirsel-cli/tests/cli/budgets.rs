@@ -102,7 +102,7 @@ fn run(source: &str, budgets: &str, engine: &[&str], extra: &[&str]) -> std::pro
 }
 
 fn assert_exceeded(output: &std::process::Output, kind: &str) {
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
     assert_eq!(output.stdout, b"start\n", "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),

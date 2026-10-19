@@ -1070,3 +1070,70 @@ fn root_free_native_entry_ignores_ambient_directory_and_argument_inputs() {
         assert!(output.stderr.is_empty());
     });
 }
+
+/// A corpus program cannot forge the launcher's record or process status. Agreement
+/// must reject a mismatched status before accepting the record's semantic observation.
+#[test]
+fn agreement_rejects_exit_codes_that_disagree_with_the_run_outcome() {
+    use hirsel_driver::native::{Launched, Options, Sites, build, observe};
+    use hirsel_run_config::{BudgetKind, Returned, RunOutcome, Site, Wait};
+    with_compiler_stack(|| {
+        let input = checked("pub fn main() -> Result[(), ()] { Ok(()) }");
+        let program = build(
+            &input.validated,
+            &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let sites = Sites::new(input.validated.snapshot());
+        let waits = vec![Wait {
+            spawn_path: vec![0],
+            site: Site {
+                definition: "standalone@0/main".into(),
+                file: "native.hir".into(),
+                line: 1,
+                column: 1,
+            },
+            kind: "channel.receive".into(),
+            targets: vec![0],
+        }];
+        for (record, outcome) in [
+            (
+                "status 0\nresult 00000000\naudit 0 0 0 0 0\n".into(),
+                RunOutcome::Returned(Returned::Ok),
+            ),
+            (
+                "status 0\nresult 01000000\naudit 0 0 0 0 0\n".into(),
+                RunOutcome::Returned(Returned::Error),
+            ),
+            (
+                format!(
+                    "blocked\nwaits {}\naudit unavailable\n",
+                    Wait::encode(&waits)
+                ),
+                RunOutcome::Blocked(waits),
+            ),
+            (
+                "budget_exceeded fuel\naudit unavailable\n".into(),
+                RunOutcome::BudgetExceeded(BudgetKind::Fuel),
+            ),
+        ] {
+            let mut launched = Launched {
+                audit_required: false,
+                exit: Some(outcome.exit_code()),
+                stdout: vec![],
+                stderr: vec![],
+                record: format!(
+                    "hirsel-observation {}\n{record}",
+                    hirsel_rt::launch::OBSERVATION_VERSION
+                ),
+            };
+            assert!(observe(&launched, &program, &sites).is_ok(), "{outcome:?}");
+            launched.exit = Some((outcome.exit_code() + 1) % 7);
+            let error = observe(&launched, &program, &sites).unwrap_err();
+            assert!(
+                error.message.contains("the process did not exit"),
+                "{error:?}"
+            );
+        }
+    });
+}

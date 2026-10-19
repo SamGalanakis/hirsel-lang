@@ -92,8 +92,12 @@ fn evaluate_on_compiler_thread(
             match (ordinary, checked) {
                 (Ok(ordinary), Ok(checked)) => {
                     observation.checked = checked_divergence(&ordinary, &checked);
-                    if !matches!(ordinary.outcome, Ok(hirsel_engine::RunOutcome::Exit(0)))
-                        || observation.checked.is_some()
+                    if !matches!(
+                        ordinary.outcome,
+                        Ok(hirsel_engine::RunOutcome::Returned(
+                            hirsel_run_config::Returned::Ok
+                        ))
+                    ) || observation.checked.is_some()
                     {
                         return (
                             Status::Fail(format!(

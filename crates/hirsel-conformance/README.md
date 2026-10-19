@@ -351,7 +351,10 @@ selected engine; it never claims agreement for an engine it did not run.
 interpreter runs is also run on the heap executor with fault injection (and as
 optimized x86-64 executables under `full`), except under a configuration its
 program has an exclusion row for. A mismatch, a heap violation and a stage
-validator's refusal are discrepancies; their kinds must be exactly those of
+validator's refusal are discrepancies. The native observation reader also
+requires the actual process exit status to equal the shared RunOutcome policy
+for its reported ending before comparison, including failure, Blocked and budget
+stops; an exit disagreement is a launch discrepancy. Their kinds must be exactly those of
 `native-tests/regressions/agree-known.txt`. The default campaign in
 `tools/gate` is unchanged and still requires zero flagged variants. Every
 campaign prints each cluster's first variant to stderr as it finds it

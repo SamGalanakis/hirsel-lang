@@ -166,6 +166,7 @@ struct Task {
     slot: Option<Slot>,
     /// What the task waits for while parked.
     wait: Option<Wait>,
+    wait_site: u64,
     /// The status a receive's poll produced.
     status: u32,
     /// The task to resume directly when this one completes (a join or a discard ran it).
@@ -544,6 +545,7 @@ impl Task {
             code: None,
             slot: None,
             wait: None,
+            wait_site: 0,
             status: 0,
             handoff: None,
             detached: false,
@@ -832,7 +834,69 @@ unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
         unsafe { poll_parked(ctx) }?;
     }
     // CONC-8: no task can run and nothing outside the run can wake one.
-    unsafe { pick(ctx) }?.ok_or(Stop::Blocked)
+    match unsafe { pick(ctx) }? {
+        Some(next) => Ok(next),
+        None => Err(Stop::Blocked(unsafe { blocked_waits(ctx) })),
+    }
+}
+
+/// Capture parked waits only when the run is Blocked, before its context is abandoned.
+///
+/// # Safety
+/// `ctx` is live and no task can run.
+unsafe fn blocked_waits(ctx: *mut RunCtx) -> Vec<hirsel_run_config::Wait> {
+    let table = unsafe { (*ctx).failure_table.as_deref() };
+    let s = scheduler(ctx);
+    let mut waits = Vec::new();
+    for index in s.parked.clone().into_values() {
+        let row = s.task(index);
+        let Some(wait) = row.wait else { continue };
+        let spawn_path = row.path.clone();
+        let site = table
+            .filter(|_| row.wait_site != 0)
+            .map(|table| table.located(row.wait_site))
+            .unwrap_or_default();
+        let (kind, targets) = match wait {
+            Wait::Join { child, .. } => ("task.await", vec![u64::from(child)]),
+            Wait::Exit { scope } => (
+                "task.scope",
+                s.scope(scope)
+                    .children
+                    .iter()
+                    .copied()
+                    .map(u64::from)
+                    .collect(),
+            ),
+            Wait::Receive { channel, .. } => ("channel.receive", vec![u64::from(channel)]),
+            Wait::Any { set } => (
+                "task.await_any",
+                s.set(set)
+                    .members
+                    .iter()
+                    .flatten()
+                    .map(|word| u64::from(*word as u32))
+                    .collect(),
+            ),
+            Wait::Drain { set } => (
+                "task.cancel_all",
+                s.set(set)
+                    .members
+                    .iter()
+                    .flatten()
+                    .map(|word| u64::from(*word as u32))
+                    .collect(),
+            ),
+            Wait::Host { token } => ("host request", vec![token]),
+        };
+        waits.push(hirsel_run_config::Wait {
+            spawn_path,
+            site,
+            kind: kind.into(),
+            targets,
+        });
+    }
+    waits.sort_by(|a, b| a.spawn_path.cmp(&b.spawn_path));
+    waits
 }
 
 /// The yield after a capability operation: the parked tasks are polled and, when another task
@@ -874,16 +938,16 @@ pub(crate) unsafe fn try_yield(ctx: *mut RunCtx) -> Stopped<()> {
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait; the caller holds nothing a stop
 /// must drop.
-unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
+unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) {
     // SAFETY: caller contract.
-    unsafe { crate::stop::check(ctx, try_block(ctx, wait, yielded)) }
+    unsafe { crate::stop::check(ctx, try_block(ctx, wait, yielded, site)) }
 }
 
 /// [`block`], returning a stop to its caller.
 ///
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait.
-unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> {
+unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
@@ -897,9 +961,10 @@ unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> 
         }
     }
     let s = scheduler(ctx);
+    let current = s.current;
+    s.task(current).wait_site = site;
     s.park(wait);
     if let Wait::Host { token } = wait {
-        let current = s.current;
         // SAFETY: the context is live, its Binding bound, and `token` blocked.
         unsafe { crate::host_waits::park(ctx, token, current) };
     }
@@ -914,7 +979,7 @@ unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> 
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
 pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) -> Stopped<()> {
     // SAFETY: the context is live; the request outlives the wait.
-    unsafe { try_block(ctx, Wait::Host { token }, yielded) }
+    unsafe { try_block(ctx, Wait::Host { token }, yielded, 0) }
 }
 
 /// Resume `child` directly (a join delivered its result, or its result is discarded) and
@@ -1131,11 +1196,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     scope: *const u64,
     error: u8,
 ) -> u8 {
     // SAFETY: caller contract.
-    unsafe { exit_scope(ctx, scope, error) }.0
+    unsafe { exit_scope(ctx, scope, error, caller_site) }.0
 }
 
 /// `$intrinsic.TaskScopeExitUntil(s, error) -> bool`: the exit of a `task.scope_until` scope,
@@ -1147,12 +1214,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     out: *mut u8,
     scope: *const u64,
     error: u8,
 ) -> u8 {
     // SAFETY: caller contract.
-    let (status, expired) = unsafe { exit_scope(ctx, scope, error) };
+    let (status, expired) = unsafe { exit_scope(ctx, scope, error, caller_site) };
     // SAFETY: caller contract.
     unsafe { out.write(u8::from(expired)) };
     status
@@ -1162,7 +1231,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
 ///
 /// # Safety
 /// As for [`hirsel_rt_v2_task_scope_exit`].
-unsafe fn exit_scope(ctx: *mut RunCtx, scope: *const u64, error: u8) -> (u8, bool) {
+unsafe fn exit_scope(
+    ctx: *mut RunCtx,
+    scope: *const u64,
+    error: u8,
+    caller_site: u64,
+) -> (u8, bool) {
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let index = s.scope_handle(unsafe { scope.read() });
@@ -1179,7 +1253,7 @@ unsafe fn exit_scope(ctx: *mut RunCtx, scope: *const u64, error: u8) -> (u8, boo
     }
     if !s.settled(index) {
         // SAFETY: the context is live; the exit is not a yield.
-        unsafe { block(ctx, Wait::Exit { scope: index }, false) };
+        unsafe { block(ctx, Wait::Exit { scope: index }, false, caller_site) };
     }
     let s = scheduler(ctx);
     let children = s.scope(index).children.clone();
@@ -1321,6 +1395,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     scope: *const u64,
     task: *mut u64,
     slot: *mut u8,
@@ -1331,14 +1407,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
     // SAFETY: caller contract.
-    unsafe { join(ctx, scope, child, slot, size) }
+    unsafe { join(ctx, scope, child, slot, size, caller_site) }
 }
 
 /// Join `child` of `scope`, as [`hirsel_rt_v2_task_join`] does.
 ///
 /// # Safety
 /// As for [`hirsel_rt_v2_task_join`].
-unsafe fn join(ctx: *mut RunCtx, scope: u32, child: u32, slot: *mut u8, size: u64) -> u8 {
+unsafe fn join(
+    ctx: *mut RunCtx,
+    scope: u32,
+    child: u32,
+    slot: *mut u8,
+    size: u64,
+    caller_site: u64,
+) -> u8 {
     let s = scheduler(ctx);
     match s.task(child).state {
         State::Holding => {
@@ -1353,7 +1436,7 @@ unsafe fn join(ctx: *mut RunCtx, scope: u32, child: u32, slot: *mut u8, size: u6
         State::Done => unsafe { yield_now(ctx) },
         State::Ready | State::Parked => {
             // SAFETY: the slot is in this task's frame, parked with it.
-            unsafe { block(ctx, Wait::Join { child, slot, size }, true) };
+            unsafe { block(ctx, Wait::Join { child, slot, size }, true, caller_site) };
             // The poll moved a holding child's result; its frame finishes now.
             if scheduler(ctx).task(child).state == State::Holding {
                 unsafe { hand_off(ctx, child) };
@@ -1519,6 +1602,8 @@ pub struct IndexOption {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     _destination: *mut u8,
     out: *mut IndexOption,
     scope: *const u64,
@@ -1531,7 +1616,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     let waiting = s.set(set).members.iter().any(Option::is_some);
     if waiting && s.first_completed(set).is_none() {
         // SAFETY: the set outlives the wait: the caller borrows it.
-        unsafe { block(ctx, Wait::Any { set }, true) };
+        unsafe { block(ctx, Wait::Any { set }, true, caller_site) };
     } else {
         // SAFETY: the context is live.
         unsafe { yield_now(ctx) };
@@ -1616,6 +1701,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
@@ -1626,7 +1713,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     if unsafe { poll_drained(s, set) } {
         unsafe { yield_now(ctx) };
     } else {
-        unsafe { block(ctx, Wait::Drain { set }, true) };
+        unsafe { block(ctx, Wait::Drain { set }, true, caller_site) };
     }
     scheduler(ctx).close_set(set);
     STATUS_OK
@@ -1828,6 +1915,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     ctx: *mut RunCtx,
+    caller_site: u64,
+    _operation_site: u64,
     out: *mut u32,
     receiver: *mut u64,
     message: *mut *mut Header,
@@ -1854,6 +1943,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
                         slot: message,
                     },
                     true,
+                    caller_site,
                 )
             };
             scheduler(ctx).task(current).status

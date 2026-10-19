@@ -92,8 +92,9 @@ fn spawn(ctx: *mut RunCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64
 
 fn join(ctx: *mut RunCtx, scope: u64, mut task: u64) -> (u8, [u64; 2]) {
     let mut slot = NONE;
-    let status =
-        unsafe { hirsel_rt_v2_task_join(ctx, &scope, &mut task, slot.as_mut_ptr().cast(), 16) };
+    let status = unsafe {
+        hirsel_rt_v2_task_join(ctx, 0, 0, &scope, &mut task, slot.as_mut_ptr().cast(), 16)
+    };
     (status, slot)
 }
 
@@ -107,7 +108,7 @@ fn enter(ctx: *mut RunCtx) -> u64 {
 }
 
 fn exit(ctx: *mut RunCtx, scope: u64) -> u8 {
-    unsafe { hirsel_rt_v2_task_scope_exit(ctx, &scope, 0) }
+    unsafe { hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0) }
 }
 
 fn primary(ctx: *mut RunCtx) -> Option<FailureRecord> {

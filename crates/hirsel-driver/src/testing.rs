@@ -538,8 +538,8 @@ pub fn execute(
 
 pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
     match outcome {
-        RunOutcome::Exit(0) => None,
-        RunOutcome::Exit(1) => Some("returned Error".into()),
+        RunOutcome::Returned(hirsel_run_config::Returned::Ok) => None,
+        RunOutcome::Returned(hirsel_run_config::Returned::Error) => Some("returned Error".into()),
         RunOutcome::Blocked(waits) => {
             let mut report = String::from("runtime failure: blocked");
             for wait in waits {
@@ -547,10 +547,14 @@ pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
             }
             Some(report)
         }
-        RunOutcome::Failure {
-            rule,
-            site,
-            operation,
+        RunOutcome::Failed {
+            primary:
+                hirsel_run_config::Failure {
+                    rule,
+                    site,
+                    operation,
+                },
+            ..
         } => Some(site.report(rule.as_str(), false, operation.as_ref())),
         outcome => Some(format!("runtime failure: {outcome:?}")),
     }

@@ -180,3 +180,11 @@ versioned paths) are authority, spelled null when absent. `inputs.fault_seed` se
 `sim@1` fault decisions and is omitted when absent. `validate_runners` validates one
 list on its own, as a corpus fixture names it. `ValidatedRun::bind` refuses a record that
 names runners (`Unsupported` at `io.runners`): host launches do not yet run callees.
+
+`RunOutcome` is the host result of either engine. It retains the returned Result
+tag, the complete FAIL-1 chain, Blocked waits, budget/environmental stops,
+refusal/replay causes and interpreter tooling diagnostics without depending on
+compiler types. `RunOutcome::exit_code()` is the only standalone exit policy;
+see the [PROG-3 table](../../docs/spec/programs.md#prog-3-entry). `Site::report`
+formats complete human/JSON failures, and `Wait::encode`/`decode` carry native
+parked-wait reports. A multi-run host keeps outcomes and never exits for a run.

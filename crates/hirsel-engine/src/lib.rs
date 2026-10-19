@@ -61,78 +61,7 @@ impl fmt::Display for NotImplemented {
     }
 }
 impl std::error::Error for NotImplemented {}
-/// Interpreter result; failure sites remain source-linked (FAIL-1/2).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RunOutcome {
-    Blocked(Vec<hirsel_interp::observation::ObservedWait>),
-    /// The run spent a host budget (`budgets.limits@1`) and stopped without cleanup.
-    BudgetExceeded(hirsel_interp::BudgetKind),
-    ToolingLimit(hirsel_tir::ToolingLimit),
-    UndefinedBehavior(hirsel_interp::UndefinedBehavior),
-    /// Checked execution found the memory model broken.
-    Trapped(hirsel_interp::checked::Trap),
-    /// A host resource stopped the run (`hirsel_run_config::RunOutcome::Environmental`).
-    Environmental(hirsel_run_config::Environmental),
-    Exit(i32),
-    Failure {
-        rule: RuleId,
-        site: FailureSite,
-        operation: Option<FailureSite>,
-    },
-}
-/// A complete runtime diagnostic location, independent of session-local FileIds.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct FailureSite {
-    pub definition: String,
-    pub file: std::path::PathBuf,
-    pub line: usize,
-    pub column: u32,
-}
-impl FailureSite {
-    fn json(&self) -> serde_json::Value {
-        serde_json::json!({ "definition": self.definition, "file": self.file.to_string_lossy(), "line": self.line, "column": self.column })
-    }
-    pub fn report(&self, rule: &str, json: bool, operation: Option<&Self>) -> String {
-        if json {
-            let mut report = serde_json::json!({ "schema_version": 1, "runtime_failure": { "rule": rule, "site": self.json() } });
-            if let Some(operation) = operation {
-                report["runtime_failure"]["operation"] = operation.json();
-            }
-            report.to_string()
-        } else {
-            let mut text = format!("runtime failure[{rule}] at {self}");
-            if let Some(operation) = operation {
-                text.push_str(&format!("\n  in {operation}"));
-            }
-            text
-        }
-    }
-
-    pub fn from_anchor(
-        anchor: &hirsel_interp::observation::Anchor,
-        sources: &SourceMap,
-    ) -> Option<Self> {
-        let location = sources.location(anchor.site)?;
-        Some(Self {
-            definition: anchor.definition.to_string(),
-            file: sources.file(anchor.site.file)?.path.clone(),
-            line: location.line as usize,
-            column: location.column,
-        })
-    }
-}
-impl fmt::Display for FailureSite {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} ({}:{}:{})",
-            self.definition,
-            self.file.display(),
-            self.line,
-            self.column
-        )
-    }
-}
+pub use hirsel_run_config::RunOutcome;
 /// Rich execution export. Execution API errors retain output beside their cause.
 #[derive(Debug)]
 pub struct ObservedExecution {

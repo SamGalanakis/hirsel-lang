@@ -22,7 +22,10 @@ pub use runners::{
     sim_model_sites, validate_runners,
 };
 mod outcome;
-pub use outcome::{BudgetKind, Environmental, Failure, Returned, RunOutcome, Site, exit};
+pub use outcome::{
+    BudgetKind, Environmental, ExecutionDiagnostic, Failure, Returned, RunOutcome, Site,
+    ToolingLimit, Wait, exit,
+};
 mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
 mod net;

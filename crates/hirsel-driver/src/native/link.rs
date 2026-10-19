@@ -2065,7 +2065,7 @@ fn run_live(
 #[derive(Debug)]
 pub enum Observed {
     /// The run returned, failed or was Blocked.
-    Ran(Observation),
+    Ran(Observation, Vec<hirsel_run_config::Wait>),
     /// The launch was refused before entry: a `RunRefusal`'s JSON, or the launcher's reason.
     Refused(String),
     /// The run stopped: `Refused`, `Diverged` or `Environmental`.
@@ -2080,7 +2080,7 @@ pub fn observe(
     sites: &Sites<'_>,
 ) -> Result<Observation, NativeError> {
     match observe_run(launched, program, sites)? {
-        Observed::Ran(observation) => Ok(observation),
+        Observed::Ran(observation, _) => Ok(observation),
         Observed::Refused(reason) => Err(NativeError::new(
             StageName::Launch,
             format!("launch refused: {reason}"),
@@ -2123,6 +2123,7 @@ pub fn observe_run(
     let mut failures = Vec::new();
     let mut audit = None;
     let mut blocked = false;
+    let mut waits = None;
     let mut budget = None;
     let mut stopped = None;
     for line in lines {
@@ -2158,6 +2159,12 @@ pub fn observe_run(
             }
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,
+            ["waits", ..] => {
+                if waits.is_some() {
+                    return Err(bad("duplicate wait report".into()));
+                }
+                waits = Some(hirsel_run_config::Wait::decode(&rest(1)).map_err(bad)?);
+            }
             ["budget_exceeded", kind] => {
                 budget = Some(
                     hirsel_run_config::BudgetKind::parse(kind)
@@ -2208,6 +2215,9 @@ pub fn observe_run(
     }
     // A Blocked or stopped run ends without cleanup, so it has no exit audit.
     let unaudited = audit == Some(("unavailable", "unavailable", "unavailable"));
+    if waits.is_some() && !blocked {
+        return Err(bad("wait report on a run that is not Blocked".into()));
+    }
     if let Some(outcome) = stopped {
         if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent stopped observation record".into()));
@@ -2224,31 +2234,35 @@ pub fn observe_run(
         if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent budget observation record".into()));
         }
-        if launched.exit != Some(hirsel_run_config::exit::BUDGET_EXCEEDED) {
-            return Err(bad("a budget-stopped process did not exit as one".into()));
-        }
-        return Ok(Observed::Ran(Observation {
-            exit_code: None,
-            blocked: false,
-            budget: Some(kind),
-            output: launched.stdout.clone(),
-            failures,
-        }));
+        return verify_exit(
+            launched,
+            sites,
+            Observation {
+                exit_code: None,
+                blocked: false,
+                budget: Some(kind),
+                output: launched.stdout.clone(),
+                failures,
+            },
+            vec![],
+        );
     }
     if blocked {
         if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent Blocked observation record".into()));
         }
-        if launched.exit != Some(hirsel_run_config::exit::BLOCKED) {
-            return Err(bad("a Blocked process did not exit as Blocked".into()));
-        }
-        return Ok(Observed::Ran(Observation {
-            exit_code: None,
-            blocked: true,
-            budget: None,
-            output: launched.stdout.clone(),
-            failures,
-        }));
+        return verify_exit(
+            launched,
+            sites,
+            Observation {
+                exit_code: None,
+                blocked: true,
+                budget: None,
+                output: launched.stdout.clone(),
+                failures,
+            },
+            waits.ok_or_else(|| bad("Blocked run has no wait report".into()))?,
+        );
     }
     if audit != Some(("0", "0", "0")) && (launched.audit_required || !unaudited) {
         return Err(bad(format!(
@@ -2260,17 +2274,34 @@ pub fn observe_run(
         (Some(1), None, false) => None,
         _ => return Err(bad("an inconsistent observation record".into())),
     };
-    let expected = exit_code.unwrap_or(hirsel_run_config::exit::FAILED);
+    verify_exit(
+        launched,
+        sites,
+        Observation {
+            exit_code,
+            blocked: false,
+            budget: None,
+            output: launched.stdout.clone(),
+            failures,
+        },
+        vec![],
+    )
+}
+
+fn verify_exit(
+    launched: &Launched,
+    sites: &Sites<'_>,
+    observation: Observation,
+    waits: Vec<hirsel_run_config::Wait>,
+) -> Result<Observed, NativeError> {
+    let expected = observation.outcome(sites, waits.clone())?.exit_code();
     if launched.exit != Some(expected) {
-        return Err(bad(format!("the process did not exit {expected}")));
+        return Err(NativeError::new(
+            StageName::Launch,
+            format!("the process did not exit {expected}: {:?}", launched.exit),
+        ));
     }
-    Ok(Observed::Ran(Observation {
-        exit_code,
-        blocked: false,
-        budget: None,
-        output: launched.stdout.clone(),
-        failures,
-    }))
+    Ok(Observed::Ran(observation, waits))
 }
 
 impl Toolchain {

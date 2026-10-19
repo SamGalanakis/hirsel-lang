@@ -196,42 +196,7 @@ impl InterpreterPhase for InterpreterAdapter {
                 }
             }
         }
-        let failure_site = execution
-            .failures
-            .first()
-            .and_then(|f| FailureSite::from_anchor(&f.anchor, sources));
-        let operation_site = execution
-            .failures
-            .first()
-            .and_then(|f| f.operation.as_ref())
-            .map(|a| {
-                FailureSite::from_anchor(a, sources).ok_or_else(|| {
-                    RuntimeError::Tool("failure operation has no source site".into())
-                })
-            })
-            .transpose()?;
-        let outcome = match execution.outcome {
-            hirsel_interp::Outcome::Blocked(_) => RunOutcome::Blocked(
-                observation
-                    .as_ref()
-                    .and_then(|o| o.blocked.clone())
-                    .unwrap_or_default(),
-            ),
-            hirsel_interp::Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),
-            hirsel_interp::Outcome::ToolingLimit(limit) => RunOutcome::ToolingLimit(limit),
-            hirsel_interp::Outcome::UndefinedBehavior(detected) => {
-                RunOutcome::UndefinedBehavior(detected)
-            }
-            hirsel_interp::Outcome::Trapped(trap) => RunOutcome::Trapped(trap),
-            hirsel_interp::Outcome::Environmental(cause) => RunOutcome::Environmental(cause),
-            hirsel_interp::Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
-            hirsel_interp::Outcome::Failed(failure) => RunOutcome::Failure {
-                operation: operation_site,
-                rule: failure.rule,
-                site: failure_site
-                    .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
-            },
-        };
+        let outcome = project_outcome(&execution, sources)?;
         Ok(ObservedExecution {
             exit_report,
             tooling_stderr: final_state.map(|s| s.stderr).unwrap_or_default(),
@@ -309,4 +274,100 @@ fn launch_error(error: hirsel_interp::library::LaunchError) -> RuntimeError {
         }
         error => RuntimeError::Tool(format!("launch: {error:?}")),
     }
+}
+
+/// Resolve an evaluator ending into the shared host outcome. Both simulation and live
+/// interpretation use this projection, retaining the complete failure chain and waits.
+pub fn project_outcome(
+    execution: &hirsel_interp::Execution,
+    sources: &hirsel_span::SourceMap,
+) -> Result<RunOutcome, RuntimeError> {
+    use hirsel_run_config::{ExecutionDiagnostic, Failure, Returned, Site, ToolingLimit, Wait};
+    let locate = |definition: &hirsel_syntax::DefPath, span: hirsel_span::Span| {
+        sources.location(span).and_then(|location| {
+            Some(Site {
+                definition: definition.to_string(),
+                file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
+                line: location.line.into(),
+                column: location.column.into(),
+            })
+        })
+    };
+    Ok(match &execution.outcome {
+        hirsel_interp::Outcome::Returned { exit_code, .. } => {
+            RunOutcome::Returned(if *exit_code == 0 {
+                Returned::Ok
+            } else {
+                Returned::Error
+            })
+        }
+        hirsel_interp::Outcome::Failed(_) => {
+            let mut failures = execution.failures.iter().map(|failure| {
+                Ok(Failure {
+                    rule: failure.failure.rule.to_string(),
+                    site: locate(&failure.anchor.definition, failure.anchor.site)
+                        .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
+                    operation: failure
+                        .operation
+                        .as_ref()
+                        .map(|anchor| {
+                            locate(&anchor.definition, anchor.site).ok_or_else(|| {
+                                RuntimeError::Tool("failure operation has no source site".into())
+                            })
+                        })
+                        .transpose()?,
+                })
+            });
+            RunOutcome::Failed {
+                primary: failures
+                    .next()
+                    .ok_or_else(|| RuntimeError::Tool("failure has no primary record".into()))??,
+                causes: failures.collect::<Result<_, RuntimeError>>()?,
+            }
+        }
+        hirsel_interp::Outcome::Blocked(waits) => {
+            let mut waits = waits
+                .iter()
+                .map(|wait| {
+                    Ok(Wait {
+                        spawn_path: wait.spawn_path.clone(),
+                        site: locate(&wait.anchor.definition, wait.anchor.site).ok_or_else(
+                            || RuntimeError::Tool("Blocked wait has no source site".into()),
+                        )?,
+                        kind: wait.kind.clone(),
+                        targets: wait.targets.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, RuntimeError>>()?;
+            waits.sort_by(|a, b| a.spawn_path.cmp(&b.spawn_path));
+            RunOutcome::Blocked(waits)
+        }
+        hirsel_interp::Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(*kind),
+        hirsel_interp::Outcome::Environmental(cause) => RunOutcome::Environmental(cause.clone()),
+        hirsel_interp::Outcome::ToolingLimit(limit) => RunOutcome::ToolingLimit(ToolingLimit {
+            kind: format!("{:?}", limit.kind),
+            limit: limit.limit,
+            site: limit.site.and_then(|span| {
+                let location = sources.location(span)?;
+                Some(Site {
+                    file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
+                    line: location.line.into(),
+                    column: location.column.into(),
+                    ..Default::default()
+                })
+            }),
+        }),
+        hirsel_interp::Outcome::UndefinedBehavior(diagnostic) => {
+            RunOutcome::UndefinedBehavior(ExecutionDiagnostic {
+                rule: diagnostic.kind.clone(),
+                message: diagnostic.to_string(),
+                site: locate(&diagnostic.operation, diagnostic.site).unwrap_or_default(),
+            })
+        }
+        hirsel_interp::Outcome::Trapped(diagnostic) => RunOutcome::Trapped(ExecutionDiagnostic {
+            rule: diagnostic.rule.to_string(),
+            message: diagnostic.to_string(),
+            site: locate(&diagnostic.definition, diagnostic.site).unwrap_or_default(),
+        }),
+    })
 }

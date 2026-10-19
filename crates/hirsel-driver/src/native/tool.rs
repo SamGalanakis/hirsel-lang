@@ -142,7 +142,6 @@ pub fn run_path_native_backend(
         Ok(proofs) => proofs,
         Err(error) => return Ok(Err(error)),
     };
-    let replay = matches!(host.1, super::link::Tape::Replay(_));
     let observation = match run(
         &validated,
         &entry,
@@ -153,7 +152,7 @@ pub fn run_path_native_backend(
         stdout,
         stderr,
     ) {
-        Ok(super::link::Observed::Ran(observation)) => Ok(observation),
+        Ok(super::link::Observed::Ran(observation, waits)) => Ok((observation, waits)),
         // The executable admitted the run and refused it: the same refusal the interpreter's
         // admission reports.
         Ok(super::link::Observed::Refused(reason)) => {
@@ -162,68 +161,17 @@ pub fn run_path_native_backend(
                 None => ToolError::Runtime(format!("launch: {reason}")),
             });
         }
-        Ok(super::link::Observed::Stopped(outcome)) => {
-            return match outcome {
-                hirsel_run_config::RunOutcome::Environmental(cause) => {
-                    Ok(Ok(RunOutcome::Environmental(cause)))
-                }
-                hirsel_run_config::RunOutcome::Refused(reason)
-                | hirsel_run_config::RunOutcome::Diverged(reason) => {
-                    Err(ToolError::Runtime(if replay {
-                        format!("replay refused: {reason}")
-                    } else {
-                        format!("host Io: {reason}")
-                    }))
-                }
-                outcome => Err(ToolError::Runtime(format!("launch: {outcome:?}"))),
-            };
-        }
+        Ok(super::link::Observed::Stopped(outcome)) => return Ok(Ok(outcome)),
         Err(error) => Err(error),
     };
-    Ok(observation.and_then(|observation| {
+    Ok(observation.and_then(|(observation, waits)| {
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
 
         let sites = Sites::new(validated.snapshot());
-        let operation_site = |failure: &super::observe::Failure| {
-            failure
-                .operation
-                .as_ref()
-                .map(|s| {
-                    sites.operation_site(s).ok_or_else(|| {
-                        NativeError::new(StageName::Launch, "failure operation has no source site")
-                    })
-                })
-                .transpose()
-        };
         for failure in &observation.failures {
             writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
         }
-        if let Some(kind) = observation.budget {
-            return Ok(RunOutcome::BudgetExceeded(kind));
-        }
-        if observation.blocked {
-            // The executable reports no waits (CONC-8).
-            return Ok(RunOutcome::Blocked(vec![]));
-        }
-        Ok(
-            match (observation.exit_code, observation.failures.first()) {
-                (Some(code), _) => RunOutcome::Exit(code),
-                (None, Some(failure)) => RunOutcome::Failure {
-                    operation: operation_site(failure)?,
-                    rule: hirsel_diag::RuleId::new(&failure.rule)
-                        .map_err(|_| NativeError::new(StageName::Launch, "a failure of no rule"))?,
-                    site: sites.failure_site(failure).ok_or_else(|| {
-                        NativeError::new(StageName::Launch, "failure has no source site")
-                    })?,
-                },
-                (None, None) => {
-                    return Err(NativeError::new(
-                        StageName::Launch,
-                        "neither an exit code nor a failure",
-                    ));
-                }
-            },
-        )
+        observation.outcome(&sites, waits)
     }))
 }
 

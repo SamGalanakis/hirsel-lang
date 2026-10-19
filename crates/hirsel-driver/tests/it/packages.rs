@@ -34,7 +34,7 @@ fn explicit_launch_selects_source_std_without_registry_status() {
         );
         assert!(matches!(
             run_path(&manifest, &mut Vec::new()).unwrap(),
-            RunOutcome::Exit(0)
+            RunOutcome::Returned(hirsel_run_config::Returned::Ok)
         ));
     });
 }
@@ -89,7 +89,7 @@ fn packaged_replay_moves_without_original_manifest_paths() {
         std::fs::rename(&dir, &moved).unwrap();
         assert!(matches!(
             run_path(&moved.join("source.hir"), &mut Vec::new()).unwrap(),
-            RunOutcome::Exit(0)
+            RunOutcome::Returned(hirsel_run_config::Returned::Ok)
         ));
         std::fs::remove_dir_all(moved).unwrap();
     });
