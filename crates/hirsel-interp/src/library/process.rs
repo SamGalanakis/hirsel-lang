@@ -335,7 +335,7 @@ fn strings(v: &Value) -> Result<Vec<String>, Error> {
 }
 /// `ProcessRule` values, normalized: sorted by program, one rule per program with the
 /// union of its sorted names.
-fn process_rules(v: &Value) -> Result<Vec<ProcessRule>, Error> {
+pub(super) fn process_rules(v: &Value) -> Result<Vec<ProcessRule>, Error> {
     let mut rules = BTreeMap::<String, Vec<String>>::new();
     for rule in &collection::elements(v, BuiltinType::List)? {
         let f = record_fields(rule, "ProcessRule", 2)?;

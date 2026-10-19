@@ -527,6 +527,8 @@ impl Checker<'_, '_> {
         row.drop_allocation = DropAllocation::NoAlloc;
         self.body.types.push(row)
     }
+    /// RUN-3's diagnostic where an entry is expected and none forms.
+    const ENTRY_FORMATION: &str = "an entry names a top-level, non-generic, non-extern, complete function definition of the entry's type";
     fn kind(&self, ty: TypeId) -> TypeKind {
         self.body.types.get(ty).unwrap().kind.clone()
     }
@@ -730,6 +732,18 @@ impl Checker<'_, '_> {
                     .get(&id)
                     .cloned()
                     .unwrap_or((self.span(id), const { RuleId::of("LANG-7") }));
+                // RUN-3: only naming a matching top-level definition forms an entry.
+                let entry =
+                    self.entry_signature(expected).is_some() && self.entry_signature(ty).is_none();
+                let (span, rule, message) = if entry {
+                    (
+                        self.span(id),
+                        const { RuleId::of("RUN-3") },
+                        Self::ENTRY_FORMATION,
+                    )
+                } else {
+                    (span, rule, "expression does not have the expected type")
+                };
                 // A `?` context fixes the success contract; the fresh error
                 // variable is inference machinery, not part of that mismatch.
                 let (actual, required) = match (self.partial_result(expected), self.kind(ty)) {
@@ -745,13 +759,7 @@ impl Checker<'_, '_> {
                     },
                     _ => (ty, expected),
                 };
-                self.type_mismatch(
-                    rule,
-                    span,
-                    "expression does not have the expected type",
-                    actual,
-                    required,
-                );
+                self.type_mismatch(rule, span, message, actual, required);
                 ty = self.error();
             }
         }

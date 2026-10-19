@@ -1,11 +1,16 @@
 # Runners
 
-**Status: planned.** Nothing in this part is declared yet: `core@1` does not list these
-operations or types, a program that names them does not resolve, and no conformance
-program cites a RUN rule. The part is recorded so that implementations build to one
-contract; a rule's operations join the [core library ledger](core-library.md#the-ledger)
-when they ship. Items marked **Reserved** are designed here but have no implementation
-owner yet.
+**Status: partly shipped.** `core@1` declares `Runner`, `Entry`, the outcome and grant
+types and every operation of the [ledger](#ledger), and the checker forms entries
+(RUN-3). The interpreter runs `local.threads@1` and `sim@1` places as callee runs of the
+caller's execution (RUN-1 to RUN-7, RUN-9, RUN-10's isolation and derived seeds, RUN-12)
+when a simulation fixture names the runners; a host launch of a record that names runners
+is refused at bind (`Unsupported` at `io.runners`), and the native engines report the
+operations unavailable. Linked tapes (RUN-11), recording levels (RUN-14), the arrival
+checks a place in this process does not pass by construction (RUN-8: the requested grant
+set's claim, `admit.safe@1`), code stores, and the `local.process@1` and `remote.tls@1`
+providers are planned. Items marked **Reserved** are designed here but have no
+implementation owner yet.
 
 A **runner** is a place functions can run. The run configuration decides what each place
 is (threads in this process, a child process, another host, a node of a deterministic
@@ -138,10 +143,10 @@ call through it runs the revision the receiving place selects for that definitio
 receiver checks that it is the caller's ([RUN-8](#run-8-identity-and-arrival)).
 
 ```text
-fn entry.path[F](f: Entry[F]) -> String
+fn runner.entry_path[F](f: Entry[F]) -> String
 ```
 
-`entry.path` returns the definition's full versioned path, the spelling `runner.only`
+`runner.entry_path` returns the definition's full versioned path, the spelling `runner.only`
 takes.
 
 ### RUN-4: Calls
@@ -151,8 +156,8 @@ through a capability parameter, which comes first; a callee with none is pure. I
 form, `A`, `R` and `E` are `serializable` ([RUN-5](#run-5-placement-independence)).
 
 ```text
-fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> Result[R, RunError[E]]
-fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Result[R, RunError[E]]
+fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
+fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
 fn runner.spawn[A: serializable, R: serializable, E: serializable](s: Scope, r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Task[Result[R, RunError[E]]] of s
 ```
 
@@ -654,9 +659,9 @@ N fn io.runner(rt: Io, name: String) -> Result[Runner, GrantError]
 fn runner.grants(r: Runner) -> GrantSet
 fn runner.narrow(r: Runner, keep: GrantSet) -> Result[Runner, GrantError]
 fn runner.only(r: Runner, definitions: List[String]) -> Result[Runner, GrantError]
-fn entry.path[F](f: Entry[F]) -> String
-fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> Result[R, RunError[E]]
-fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Result[R, RunError[E]]
+fn runner.entry_path[F](f: Entry[F]) -> String
+fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
+fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
 fn runner.spawn[A: serializable, R: serializable, E: serializable](s: Scope, r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Task[Result[R, RunError[E]]] of s
 fn test.runner(t: Test) -> Runner
 ```

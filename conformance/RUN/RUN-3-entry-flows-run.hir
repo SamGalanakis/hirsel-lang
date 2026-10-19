@@ -1,0 +1,27 @@
+// rule: RUN-3
+// expect: run
+// stdout: standalone@0/double
+// An entry already of type Entry[F] passes as any value does and keeps its identity.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":null,"definitions":null}]
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn double(n: u64) -> Result[u64, String] {
+  Ok(n * 2u64)
+}
+
+fn twice(r: Runner, f: Entry[fn(a: u64) -> Result[u64, String]], n: u64) -> Result[
+  u64,
+  RunError[String]
+] {
+  let first = runner.compute(r, f, n)?
+  runner.compute(r, f, first)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let r = io.runner(rt, "pool") ? Grant
+  let f: Entry[fn(a: u64) -> Result[u64, String]] = double
+  failure.check(twice(r, f, 3u64) == Ok(12u64), Arithmetic())
+  out.print(io.stdout(rt) ? Grant, runner.entry_path(f)) ? Output
+  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  Ok(())
+}

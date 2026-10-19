@@ -1,0 +1,95 @@
+// rule: RUN-6
+// expect: run
+// stdout: lost reply ran
+// Every RunError variant, each from a sim@1 node's fault site, the callee's own
+// outcome, the caller's allowlist or its cancellation.
+// fault_seed: 7
+// runners: [{"name":"crashing","provider":"sim@1","node":"c","models":"remote.tls@1","faults":{"crash":{"enable":1000000,"fire":1000000}},"grants":null,"definitions":null},{"name":"healthy","provider":"sim@1","node":"h","models":"remote.tls@1","grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null},{"name":"losing","provider":"sim@1","node":"l","models":"remote.tls@1","faults":{"lose_request":{"enable":1000000,"fire":1000000}},"grants":null,"definitions":null},{"name":"overloaded","provider":"sim@1","node":"o","models":"remote.tls@1","faults":{"overload":{"enable":1000000,"fire":1000000}},"grants":null,"definitions":null},{"name":"refusing","provider":"sim@1","node":"r","models":"remote.tls@1","faults":{"refuse":{"enable":1000000,"fire":1000000}},"grants":null,"definitions":null},{"name":"replying","provider":"sim@1","node":"p","models":"remote.tls@1","faults":{"lose_reply":{"enable":1000000,"fire":1000000}},"grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]
+fn checked(n: u64) -> Result[u64, String] {
+  failure.check(n < 100u64, Arithmetic())
+  if n == 0u64 {
+    return Error("zero")
+  }
+  Ok(n)
+}
+
+fn noted(rt: Io, line: String) -> Result[u64, String] {
+  let o = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("no stdout"),
+  }
+  let _ = out.print(o, line)
+  Ok(1u64)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let healthy = io.runner(rt, "healthy")?
+  failure.check(runner.compute(healthy, checked, 5u64) == Ok(5u64), Arithmetic())
+  failure.check(
+    runner.compute(healthy, checked, 0u64) == Error(Failed("zero")),
+    Arithmetic()
+  )
+  let faulted = match runner.compute(healthy, checked, 100u64) {
+    Error(Faulted(f)) => f.kind == Check(),
+    _ => false,
+  }
+  failure.check(faulted, Arithmetic())
+  let none = runner.only(healthy, [])?
+  failure.check(
+    runner.compute(none, checked, 5u64) == Error(NotRun(Denied())),
+    Arithmetic()
+  )
+  let refusing = io.runner(rt, "refusing")?
+  failure.check(
+    runner.compute(refusing, checked, 5u64) == Error(NotRun(Unreachable())),
+    Arithmetic()
+  )
+  let overloaded = io.runner(rt, "overloaded")?
+  failure.check(
+    runner.compute(overloaded, checked, 5u64) == Error(NotRun(Overloaded())),
+    Arithmetic()
+  )
+  let losing = io.runner(rt, "losing")?
+  failure.check(
+    runner.compute(losing, checked, 5u64) == Error(InDoubt(Lost())),
+    Arithmetic()
+  )
+  // The callee ran and printed; its reply was lost.
+  let replying = io.runner(rt, "replying")?
+  failure.check(
+    runner.call(replying, noted, "lost reply ran\n") == Error(InDoubt(Lost())),
+    Arithmetic()
+  )
+  let crashing = io.runner(rt, "crashing")?
+  failure.check(
+    runner.compute(crashing, checked, 5u64) == Error(InDoubt(Abandoned())),
+    Arithmetic()
+  )
+  // Cancelled before the request is sent: no request, no effect.
+  let canceled = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          runner.compute(healthy, checked, 5u64)
+        }
+      )
+      task.cancel(s, h)
+      task.await(s, take h)
+    }
+  )
+  failure.check(canceled == Error(Canceled(Requested())), Arithmetic())
+  // Sent, then cancelled before the callee started: the provider acknowledges.
+  let unstarted = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = runner.spawn(s, healthy, noted, "never printed\n")
+      task.cancel(s, h)
+      task.await(s, take h)
+    }
+  )
+  failure.check(unstarted == Error(Canceled(Requested())), Arithmetic())
+  Ok(())
+}

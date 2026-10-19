@@ -46,6 +46,42 @@ pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
     }
 }
 
+/// The checked serializable schema of `ty` at `call`.
+pub(super) fn schema(call: &OperationCall<'_>, ty: hirsel_types::TypeId) -> R<SerializableSchema> {
+    serializable_schema(
+        call.types,
+        ty,
+        &GenericDeclarations::default(),
+        &mut |path| Ok(call.runtime.serialization.get(path).cloned()),
+    )
+    .map_err(Error::Query)?
+    .ok_or_else(|| invalid("a runner call requires checked concrete serializable schemas"))
+}
+/// `value` in canonical codec bytes, or `Limit` when the codec's budgets refuse it.
+pub(super) fn encode(
+    schema: &SerializableSchema,
+    value: &Value,
+) -> R<Result<Vec<u8>, wire::Error>> {
+    let codec = Codec::new(schema).map_err(|e| invalid(format!("codec schema: {e:?}")))?;
+    match codec.encode(&to_wire(schema, value)?, wire::Limits::default()) {
+        Ok(bytes) => Ok(Ok(bytes)),
+        Err(wire::Error::Limit) => Ok(Err(wire::Error::Limit)),
+        Err(error) => Err(codec_error(error)),
+    }
+}
+/// The fresh value canonical bytes of `schema` hold.
+pub(super) fn decode(
+    schema: &SerializableSchema,
+    bytes: &[u8],
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> R<Value> {
+    let codec = Codec::new(schema).map_err(|e| invalid(format!("codec schema: {e:?}")))?;
+    let value = codec
+        .decode(bytes, wire::Limits::default())
+        .map_err(codec_error)?;
+    from_wire(schema, value, runtime)
+}
+
 fn codec_error(error: wire::Error) -> Error {
     if error == wire::Error::Limit {
         Error::Environmental(hirsel_run_config::Environmental::CodecLimit)

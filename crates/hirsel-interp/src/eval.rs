@@ -52,47 +52,19 @@ pub fn run_with_runtime(
     operations: &mut impl Operations,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<Execution, ExecutionError> {
-    let constants = crate::constants::Constants::initialize(provider, runtime)?;
-    let definition = provider
-        .definition(&configuration.entry)
-        .map_err(Error::Query)?;
-    let mut frame = Frame::new(definition, arguments)?;
     let checker = runtime.checked.clone().map(crate::checked::state);
-    if let Some(state) = &checker {
-        frame.check = Some(enter_checked(state, &frame, vec![], None));
-    }
-    frame.depth_failure = limits.call_depth == 0;
-    let frames = vec![frame];
-    let mut execution = Execution {
-        failures: vec![],
-        outcome: Outcome::Returned {
-            value: Value::Unit,
-            exit_code: 0,
-        },
-        stdout: vec![],
-        trace: if runtime.trace_mode == TraceMode::Full {
-            vec![TraceEvent::Enter {
-                path: configuration.entry.clone(),
-                depth: 1,
-            }]
-        } else {
-            vec![]
-        },
-        steps: 0,
-    };
-    let mut entry_consumed = false;
-    let result = execute_frames(
+    let root = crate::runs::Run::new(
         provider,
-        sources,
-        configuration,
+        configuration.clone(),
+        arguments,
         limits,
-        operations,
         runtime,
-        frames,
-        constants,
-        &mut execution,
-        &mut entry_consumed,
-    );
+        runtime.budgets,
+        checker.as_ref(),
+    )?;
+    let (mut root, result) =
+        crate::runs::execute(provider, sources, limits, operations, runtime, root);
+    let execution = &mut root.execution;
     let result = match (result, &checker) {
         (Err(Error::Blocked(waits)), _) => {
             execution.outcome = Outcome::Blocked(waits);
@@ -112,8 +84,8 @@ pub fn run_with_runtime(
         }
         (Ok(()), Some(state)) => {
             execution.outcome =
-                audit_resources(&state.borrow(), &execution.outcome, entry_consumed)
-                    .map_or(execution.outcome, |trap| Outcome::Trapped(*trap));
+                audit_resources(&state.borrow(), &execution.outcome, root.entry_consumed)
+                    .map_or(execution.outcome.clone(), |trap| Outcome::Trapped(*trap));
             Ok(())
         }
         (result, _) => result,
@@ -125,7 +97,7 @@ pub fn run_with_runtime(
         error,
         stdout: std::mem::take(&mut execution.stdout),
     })?;
-    Ok(execution)
+    Ok(root.execution)
 }
 /// DROP-2 exactly once: every constructed resource was released or forgotten,
 /// or is still owned by the returned value. Tooling limits stop early.
@@ -225,25 +197,77 @@ impl<P: TirProvider + ?Sized> TirProvider for Resolved<'_, P> {
         Ok(instance)
     }
 }
-fn execute_frames(
+/// What one run's scheduler holds between steps: its task stacks, budgets and
+/// constants, and what its entry returned so far.
+pub(crate) struct Scheduler {
+    returned_snapshot: Option<Value>,
+    tooling: Option<hirsel_tir::ToolingLimit>,
+    budgets: crate::bounded::Budgets,
+    task: u64,
+    runnable: std::collections::VecDeque<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)>,
+    parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)>,
+    frames: Vec<Frame>,
+    constants: crate::constants::Constants,
+}
+impl Scheduler {
+    pub(crate) fn new(
+        frame: Frame,
+        constants: crate::constants::Constants,
+        budgets: crate::RunBudgets,
+    ) -> Self {
+        Self {
+            returned_snapshot: None,
+            tooling: None,
+            budgets: crate::bounded::Budgets::new(budgets),
+            task: 0,
+            runnable: Default::default(),
+            parked: vec![],
+            frames: vec![frame],
+            constants,
+        }
+    }
+    /// The waits of its parked tasks, in suspension order (CONC-8).
+    pub(crate) fn waits(&self) -> Vec<BlockedWait> {
+        self.parked
+            .iter()
+            .filter_map(|(_, stack, _)| match &stack.last()?.operation.as_ref()?.0 {
+                OperationResult::Park { wait, .. } => Some(wait.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+/// Where a run's step stopped.
+pub(crate) enum Step {
+    /// Its entry ended; the run's `Execution` holds the outcome.
+    Finished,
+    /// None of its tasks can proceed until a wait is ready.
+    Idle,
+}
+pub(crate) fn execute_frames(
     provider: &mut (impl TirProvider + ?Sized),
     sources: &SourceMap,
     configuration: &RunConfiguration,
     limits: Limits,
-    operations: &mut impl Operations,
+    operations: &mut (impl Operations + ?Sized),
     runtime: &crate::aggregate::RuntimeTypes,
-    mut frames: Vec<Frame>,
-    mut constants: crate::constants::Constants,
+    state: &mut Option<Scheduler>,
     execution: &mut Execution,
     entry_consumed: &mut bool,
-) -> Result<(), Error> {
+) -> Result<Step, Error> {
     let provider = &mut Resolved::new(provider);
-    let mut returned_snapshot = None;
-    let mut tooling = None;
-    let mut budgets = crate::bounded::Budgets::new(runtime.budgets);
-    let mut task = 0;
-    let mut runnable = std::collections::VecDeque::new();
-    let mut parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)> = Vec::new();
+    let Scheduler {
+        mut returned_snapshot,
+        mut tooling,
+        mut budgets,
+        mut task,
+        mut runnable,
+        mut parked,
+        mut frames,
+        mut constants,
+    } = state
+        .take()
+        .ok_or_else(|| invalid("a finished run resumed"))?;
     operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
     loop {
         for start in operations.take_tasks() {
@@ -435,17 +459,19 @@ fn execute_frames(
                     },
                 )?;
             } else {
-                if operations.wait()? {
-                    continue;
-                }
-                let waits = parked
-                    .iter()
-                    .filter_map(|(_, stack, _)| match &stack.last()?.operation.as_ref()?.0 {
-                        OperationResult::Park { wait, .. } => Some(wait.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                return Err(Error::Blocked(waits));
+                // Nothing of this run can proceed: its execution decides what next
+                // (external readiness, another run, or CONC-8 Blocked).
+                *state = Some(Scheduler {
+                    returned_snapshot,
+                    tooling,
+                    budgets,
+                    task,
+                    runnable,
+                    parked,
+                    frames,
+                    constants,
+                });
+                return Ok(Step::Idle);
             }
         }
 
@@ -499,7 +525,7 @@ fn execute_frames(
                 }
                 OperationResult::UndefinedBehavior(detected) => {
                     execution.outcome = Outcome::UndefinedBehavior(detected);
-                    return Ok(());
+                    return Ok(Step::Finished);
                 }
                 OperationResult::Call {
                     callee,
@@ -1522,7 +1548,7 @@ fn execute_frames(
                         _ => return Err(invalid("failed without failure")),
                     }
                 };
-                return Ok(());
+                return Ok(Step::Finished);
             }
             continue;
         }
@@ -2946,7 +2972,7 @@ fn checked_release_order(frame: &Frame, place: PlaceId, value: &Value) -> Result
     Ok(())
 }
 /// Bind a new frame's lifetimes; `@noalloc` applies to a definition's entry body.
-fn enter_checked(
+pub(crate) fn enter_checked(
     state: &crate::checked::Shared,
     frame: &Frame,
     mut arguments: Vec<crate::checked::Argument>,

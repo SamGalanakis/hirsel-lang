@@ -69,7 +69,7 @@ Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 | [Memory](memory.md): counting, arenas, regions, layout, flat and packed data, slots | MEM-1 to MEM-14 |
 | [Capabilities and authority](capabilities.md) | CAP-1 to CAP-6 |
 | [Concurrency](concurrency.md) | CONC-1 to CONC-8 |
-| [Runners](runners.md) (planned): places functions run, entries, calls, outcomes, linked tapes, recording levels, provider seams | RUN-1 to RUN-14 |
+| [Runners](runners.md) (partly shipped): places functions run, entries, calls, outcomes, linked tapes, recording levels, provider seams | RUN-1 to RUN-14 |
 | [Storage](storage.md) (planned): stores over a directory, transactions, the output gate, typed tables, key encoding, schema history, the engine and its storage seam | STORE-1 to STORE-13 |
 | [Failure and destruction](failure.md) | FAIL-1 to FAIL-4, DROP-1 to DROP-4 |
 | [Determinism and replay](determinism.md): run configuration, recording, Blocked | DET-1 to DET-4 |

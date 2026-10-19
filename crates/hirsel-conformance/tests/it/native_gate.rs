@@ -398,6 +398,7 @@ fn stored_configuration_retains_independent_seeds_and_baseline_names() {
                 random_seed: 3,
                 test_seed: 5,
                 scheduler: None,
+                fault_seed: None,
             },
         ] {
             let mut seeded = config.clone();

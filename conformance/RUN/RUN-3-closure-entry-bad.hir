@@ -1,0 +1,19 @@
+// rule: RUN-3
+// expect: reject RUN-3 at line 13
+// A closure is not an entry: only a top-level definition's name forms one.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":null,"definitions":null}]
+fn price(o: u64) -> Result[u64, String] {
+  Ok(o)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = io.runner(rt, "pool")?
+  let _ = runner.compute(
+    r,
+    fn(o: u64) -> Result[u64, String] {
+      Ok(o)
+    },
+    1u64
+  )
+  Ok(())
+}

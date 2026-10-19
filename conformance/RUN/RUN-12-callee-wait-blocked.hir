@@ -1,0 +1,25 @@
+// rule: RUN-12
+// expect: blocked
+// An in-process callee that waits on a channel nothing will send on blocks the
+// execution: its caller waits on the call, and no run can make progress.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":{"tasks":"tasks.cooperative@1","dirs":[]},"definitions":null}]
+fn stuck(rt: Io, n: u64) -> Result[u64, String] {
+  let tasks = match io.tasks(rt) {
+    Ok(t) => t,
+    Error(_) => return Error("no tasks"),
+  }
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let mut rx = take receiver
+  let received = channel.receive(tasks, mut rx)
+  let _ = sender
+  match received {
+    Ok(v) => Ok(v),
+    Error(_) => Error("closed"),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = io.runner(rt, "pool")?
+  let _ = runner.call(r, stuck, 1u64)
+  Ok(())
+}

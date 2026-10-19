@@ -1,0 +1,74 @@
+// rule: RUN-2
+// expect: run
+// stdout: standalone@0/shown
+// A runner narrows to a covered grant set or allowlist and never widens.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"definitions":["standalone@0/hidden","standalone@0/shown"]}]
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn shown(rt: Io, n: u64) -> Result[bool, String] {
+  match io.stdout(rt) {
+    Ok(_) => Ok(true),
+    Error(_) => Ok(false),
+  }
+}
+
+fn hidden(n: u64) -> Result[u64, String] {
+  Ok(n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let r = io.runner(rt, "pool") ? Grant
+  let all = runner.grants(r)
+  failure.check(all.stdout && all.tasks && !all.random, Arithmetic())
+  failure.check(runner.call(r, shown, 1u64) == Ok(true), Arithmetic())
+  let quiet = runner.narrow(
+    r,
+    GrantSet(
+      stdout: false,
+      stderr: false,
+      tasks: true,
+      monotonic_clock: false,
+      wall_clock: false,
+      random: false,
+      dirs: [],
+      net: [],
+      process: []
+    )
+  ) ? Grant
+  failure.check(!runner.grants(quiet).stdout, Arithmetic())
+  failure.check(runner.call(quiet, shown, 1u64) == Ok(false), Arithmetic())
+  let wider = runner.narrow(
+    quiet,
+    GrantSet(
+      stdout: true,
+      stderr: false,
+      tasks: true,
+      monotonic_clock: false,
+      wall_clock: false,
+      random: false,
+      dirs: [],
+      net: [],
+      process: []
+    )
+  )
+  let widened = match wider {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+  failure.check(!widened, Arithmetic())
+  failure.check(runner.compute(r, hidden, 2u64) == Ok(2u64), Arithmetic())
+  let shown_entry: Entry[fn(root: Io, a: u64) -> Result[bool, String]] = shown
+  let allowed = runner.only(r, [runner.entry_path(shown_entry)]) ? Grant
+  failure.check(
+    runner.compute(allowed, hidden, 2u64) == Error(NotRun(Denied())),
+    Arithmetic()
+  )
+  let readded = match runner.only(allowed, ["standalone@0/hidden"]) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+  failure.check(!readded, Arithmetic())
+  out.print(io.stdout(rt) ? Grant, runner.entry_path(shown_entry)) ? Output
+  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  Ok(())
+}

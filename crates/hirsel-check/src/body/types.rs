@@ -354,6 +354,60 @@ impl Checker<'_, '_> {
         Ok(None)
     }
     /// The value type of a named function definition.
+    /// `F` when `ty` is the core entry type `Entry[F]` (RUN-3).
+    pub(super) fn entry_signature(&self, ty: TypeId) -> Option<TypeId> {
+        match self.kind(ty) {
+            TypeKind::Named {
+                definition,
+                arguments,
+            } if definition == ast::DefPath::core("Entry") => match arguments[..] {
+                [GenericArgument::Type(signature)] => Some(signature),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    /// RUN-3: a definition fits the entry type `Entry[F]` when it has F's shape (its
+    /// parameters, their passing modes and relations, and its result) and keeps within F's
+    /// allocation contract and `uses`. The entry's type is F with the definition's
+    /// parameter and result types, so a generic call infers them, and F's own effect
+    /// contract: a written F spells the default effects, which a definition's derived
+    /// evidence never equals.
+    fn entry_fits(&mut self, f: &FunctionType, named: TypeId, signature: TypeId) -> Option<TypeId> {
+        let (TypeKind::Function(mut expected), TypeKind::Function(actual)) =
+            (self.kind(signature), self.kind(named))
+        else {
+            return None;
+        };
+        let held = match &f.uses {
+            Uses::Only(allowed) => allowed,
+            Uses::Unrestricted => &f.authority,
+        };
+        let fits = self.compatible(named, signature)
+            && expected.parameters.len() == actual.parameters.len()
+            && (expected.allocation != Allocation::NoAlloc || f.allocation == Allocation::NoAlloc)
+            && match &expected.uses {
+                Uses::Unrestricted => true,
+                Uses::Only(allowed) => held.is_subset_of(allowed),
+            };
+        if !fits {
+            return None;
+        }
+        expected.parameters = expected
+            .parameters
+            .iter()
+            .zip(actual.parameters.iter())
+            .map(|(want, have)| Parameter {
+                ty: have.ty,
+                ..want.clone()
+            })
+            .collect();
+        expected.result = actual.result;
+        expected.error = actual.error;
+        let mut row = self.body.types.get(signature).unwrap().clone();
+        row.kind = TypeKind::Function(expected);
+        Some(self.body.types.push(row))
+    }
     pub(super) fn named_function(&mut self, mut f: FunctionType) -> TypeId {
         // Spec #58: a known definition carries signature-derived
         // value evidence; written function types keep defaults.
@@ -514,7 +568,20 @@ impl Checker<'_, '_> {
                     SignatureKind::Function(f) => {
                         let f = self.import_function(f, &s.types)?;
                         let callable = f.generics.is_empty() && f.foreign.is_none();
-                        let named = self.named_function(f);
+                        let complete = !f.incomplete;
+                        let named = self.named_function(f.clone());
+                        // RUN-3: a non-generic, non-extern, complete definition named
+                        // where an entry `Entry[F]` is expected forms that entry when it
+                        // fits F. Anything else there is RUN-3 (`put`).
+                        if let Some(entry) = expected.filter(|_| callable && complete)
+                            && let Some(signature) = self.entry_signature(entry)
+                            && let Some(fitted) = self.entry_fits(&f, named, signature)
+                        {
+                            return Ok(self.ty(TypeKind::Named {
+                                definition: ast::DefPath::core("Entry"),
+                                arguments: vec![GenericArgument::Type(fitted)].into(),
+                            }));
+                        }
                         // PROG-4: a non-generic definition named where a callback
                         // `FnPtr[F]` of its shape is expected is that callback.
                         if let Some(pointer) = expected.filter(|_| callable)

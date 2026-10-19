@@ -510,7 +510,9 @@ constant type/identity from the signature and construct nothing in the reading
 frame. Shared Materialized/ValueNode/ValueKind rows belong here; TirProvider must
 serve constant snapshots and dependency-first/source-ordered definitions (#63).
 FunctionReference names a callable and its generic arguments; V checks its
-signature-derived value promises directly. Capture-free forwarding bodies and
+signature-derived value promises directly. Typed `Entry[F]` (RUN-3), it must name a
+non-generic, non-extern, complete definition whose type has F's shape (parameters,
+passing modes, labels and result). Capture-free forwarding bodies and
 structural recognition of them are removed; literal/capturing closures stay Closure.
 
 Closure invocation allocation is independently checked for String/Bytes, boxed,

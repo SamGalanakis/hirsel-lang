@@ -1,0 +1,12 @@
+// rule: RUN-3
+// expect: run
+// runners: [{"name":"pool","provider":"local.threads@1","grants":null,"definitions":null}]
+fn same(o: u64) -> Result[u64, String] {
+  Ok(o)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = io.runner(rt, "pool")?
+  failure.check(runner.compute(r, same, 7u64) == Ok(7u64), Arithmetic())
+  Ok(())
+}

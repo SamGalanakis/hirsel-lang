@@ -1,0 +1,26 @@
+// rule: RUN-4
+// expect: run
+// entry: exercise
+// test.runner is a sim@1 runner modeling local.threads@1 with empty grants.
+fn halve(n: u64) -> Result[u64, String] {
+  if n % 2u64 == 1u64 {
+    return Error("odd")
+  }
+  Ok(n / 2u64)
+}
+
+fn granted(rt: Io, n: u64) -> Result[bool, String] {
+  match io.stdout(rt) {
+    Ok(_) => Ok(true),
+    Error(_) => Ok(false),
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), ()] {
+  let r = test.runner(t)
+  failure.check(runner.compute(r, halve, 8u64) == Ok(4u64), Arithmetic())
+  failure.check(runner.compute(r, halve, 3u64) == Error(Failed("odd")), Arithmetic())
+  failure.check(runner.call(r, granted, 0u64) == Ok(false), Arithmetic())
+  failure.check(!runner.grants(r).stdout, Arithmetic())
+  Ok(())
+}

@@ -2819,12 +2819,31 @@ impl<'a> Checker<'a> {
                     }
                     _ => None,
                 };
-                let matches = match callback {
-                    Some(signature) => {
+                // RUN-3: an entry `Entry[F]` names a non-generic, non-extern, complete
+                // definition of F's shape: parameters, passing modes, labels and result.
+                let entry = match &store.get(ty).map(|t| &t.kind) {
+                    Some(TypeKind::Named {
+                        definition: named,
+                        arguments,
+                    }) if *named == DefPath::core("Entry") => match arguments[..] {
+                        [GenericArgument::Type(signature)] => Some(signature),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let matches = match (callback, entry) {
+                    (Some(signature), _) => {
                         hirsel_types::shape_equal(&store, signature, &store, derived)
                             .unwrap_or(false)
                     }
-                    None => self.compatible(&mut store, ty, derived, TypeRelation::Value),
+                    (None, Some(signature)) => {
+                        declared.foreign.is_none()
+                            && declared.generics.is_empty()
+                            && !declared.incomplete
+                            && hirsel_types::shape_equal(&store, signature, &store, derived)
+                                .unwrap_or(false)
+                    }
+                    (None, None) => self.compatible(&mut store, ty, derived, TypeRelation::Value),
                 };
                 if !matches {
                     self.error(ViolationKind::TypeMismatch {

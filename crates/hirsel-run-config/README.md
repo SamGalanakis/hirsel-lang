@@ -164,3 +164,19 @@ records without budgets keep their pre-budget identity), or `budgets.limits@1` w
 returns it; budgets are host policy, part of run identity, and grant nothing. Templates may
 choose them. An adapter that cannot enforce one refuses the launch (`BudgetKind` names the
 budget a stopped run exceeded).
+
+`io.runners` (docs/spec/runners.md "Providers") lists the run's runners, sorted and
+unique by lowercase `name`; the canonical bytes omit the member when the list is empty,
+so records without runners keep their identity. `local.threads@1` takes `threads`
+(default 1, nonzero) and `queue` (default 64); `sim@1` takes a `node`, the contract it
+`models` (`local.threads@1`, `local.process@1` or `remote.tls@1`) and `faults`, rates in
+parts per million at the sites that contract can produce (`sim_model_sites`). The seam
+members `recording` (`none` or `record`; `durable` is unsupported), `retry` (`attempts`),
+`cache` (only null) and `code` (a `hirsel-code-store` entry: `code.none@1`, `code.dir@1`,
+`code.object@1` or `code.sim@1`) are run policy: each normalizes to absence at its
+default. `grants` is the callee's grant set, the `io` schema without `stdin` or
+`runners`, validated like `io`; `grants` and `definitions` (sorted, unique full
+versioned paths) are authority, spelled null when absent. `inputs.fault_seed` seeds
+`sim@1` fault decisions and is omitted when absent. `validate_runners` validates one
+list on its own, as a corpus fixture names it. `ValidatedRun::bind` refuses a record that
+names runners (`Unsupported` at `io.runners`): host launches do not yet run callees.

@@ -32,6 +32,8 @@ pub(super) struct Tasks {
     /// The run's scheduler policy (`inputs.scheduler`) and the root task's priority.
     pub schedule: hirsel_kernels::schedule::Schedule,
     pub root_priority: u64,
+    /// A callee run's root scope, cancelled by its caller (RUN-9): the cause.
+    root_canceled: Option<u32>,
 }
 struct TaskSet {
     scope: u64,
@@ -125,16 +127,59 @@ impl Tasks {
         if self.shielded {
             return None;
         }
+        self.canceled_task(self.current)
+    }
+    /// Whether `task` is cancelled: itself, a scope it runs, or, for the root task, the
+    /// run's root scope.
+    pub fn canceled_task(&self, task: u64) -> Option<u32> {
         self.tasks
-            .get(&self.current)
+            .get(&task)
             .and_then(|t| t.canceled)
             .or_else(|| {
                 self.active_scopes
-                    .get(&self.current)?
+                    .get(&task)?
                     .iter()
                     .rev()
                     .find_map(|id| self.scope_canceled.get(id).copied())
             })
+            .or(if task == 0 { self.root_canceled } else { None })
+    }
+    /// Cancel the run's root scope with `cause`: its root task and every task under it.
+    pub fn cancel_root(&mut self, cause: u32) {
+        self.root_canceled.get_or_insert(cause);
+        for child in self.tasks.values_mut() {
+            child.canceled.get_or_insert(1);
+        }
+    }
+    /// A child of `scope` that runs no frames: the library finishes it (`finished`), as
+    /// `runner.spawn`'s call does.
+    pub(super) fn native_child(&mut self, scope: u64) -> Result<u64, Error> {
+        let task = self.fresh();
+        let mut path = self.path();
+        let children = self
+            .scopes
+            .get_mut(&scope)
+            .ok_or_else(|| invalid("expired task scope"))?;
+        let ordinal = self.spawn_counts.entry(self.current).or_default();
+        path.push(*ordinal);
+        *ordinal += 1;
+        children.children.push(task);
+        let canceled = self.canceled().map(|_| 1);
+        self.tasks.insert(
+            task,
+            Child {
+                scope,
+                path,
+                canceled,
+                finished: false,
+                detached: false,
+                completed: 0,
+                result: None,
+                // It runs no frames, so the scheduler never picks it.
+                priority: 0,
+            },
+        );
+        Ok(task)
     }
     pub fn path(&self) -> Vec<u32> {
         self.tasks
@@ -1010,7 +1055,10 @@ fn record(name: &str, fields: Vec<Value>) -> Value {
         fields: fields.into_iter().map(Some).collect(),
     }
 }
-fn failure_value(chain: &[FailureRecord], context: &OperationContext<'_>) -> Result<Value, Error> {
+pub(super) fn failure_value(
+    chain: &[FailureRecord],
+    context: &OperationContext<'_>,
+) -> Result<Value, Error> {
     let mut cause = none();
     for failure in chain.iter().rev() {
         let f = &failure.failure;

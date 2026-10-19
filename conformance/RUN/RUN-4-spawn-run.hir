@@ -1,0 +1,25 @@
+// rule: RUN-4
+// expect: run
+// runner.spawn encodes its argument and starts a child task of the scope that
+// performs the call; its handle is awaited like any task.async handle.
+// runners: [{"name":"pool","provider":"local.threads@1","threads":2,"grants":null,"definitions":null}]
+fn square(rt: Io, n: u64) -> Result[u64, String] {
+  Ok(n * n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let r = io.runner(rt, "pool")?
+  let both = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let ha = runner.spawn(s, r, square, 3u64)
+      let hb = runner.spawn(s, r, square, 4u64)
+      let a = task.await(s, take ha)
+      let b = task.await(s, take hb)
+      a == Ok(9u64) && b == Ok(16u64)
+    }
+  )
+  failure.check(both, Arithmetic())
+  Ok(())
+}

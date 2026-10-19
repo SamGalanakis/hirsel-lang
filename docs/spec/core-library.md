@@ -273,6 +273,17 @@ fn sorted_map.get[K, V: copyable](by: Order[K], m: SortedMap[K, V] of by, key: K
 fn sorted_map.remove[K, V](by: Order[K], mut m: unique SortedMap[K, V] of by, key: K) -> unique Option[V]
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]
+
+// RUN-1..14, CAP-1/2, CONC-2/3/8, DET-1
+N fn io.runner(rt: Io, name: String) -> Result[Runner, GrantError]
+fn runner.grants(r: Runner) -> GrantSet
+fn runner.narrow(r: Runner, keep: GrantSet) -> Result[Runner, GrantError]
+fn runner.only(r: Runner, definitions: List[String]) -> Result[Runner, GrantError]
+fn runner.entry_path[F](f: Entry[F]) -> String
+fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
+fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
+fn runner.spawn[A: serializable, R: serializable, E: serializable](s: Scope, r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Task[Result[R, RunError[E]]] of s
+fn test.runner(t: Test) -> Runner
 ```
 
 A core operation that only advances an erased state it takes `mut` (`iter.next`) is
@@ -282,7 +293,7 @@ holds its written unknown captures.
 
 ## Authority and errors
 
-`Io`, `Args`, `Env`, `Unsafe` and the global projections, the planned `Runner`
+`Io`, `Args`, `Env`, `Unsafe` and the global projections, `Runner`
 ([runners](runners.md)) included, are plain capabilities; `Path` is
 an inert, plain, immutable path value. `File` and `AtomicFile` carry `Dir` authority, task
 handles `Scope`, and `Mutex`, `Atomic` and channel handles `Tasks`. The latter use run-time

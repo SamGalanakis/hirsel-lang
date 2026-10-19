@@ -468,7 +468,28 @@ const OPERATIONS: [&str; 9] = [
     "unix_listen",
     "unix_listen_remove_stale",
 ];
-fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
+/// A `NetRule` value of a run-config rule.
+pub(super) fn rule_value(rule: &NetRule) -> Result<Value, Error> {
+    let operation = OPERATIONS
+        .iter()
+        .position(|o| *o == rule.operation)
+        .ok_or_else(|| invalid("NetOperation representation"))?;
+    let port: u16 = rule
+        .service
+        .parse()
+        .map_err(|_| invalid("NetRule service"))?;
+    Ok(Value::Record {
+        definition: hirsel_syntax::DefPath::core("NetRule"),
+        fields: vec![
+            Some(Value::String(rule.address.clone())),
+            Some(Value::Integer(
+                crate::Integer::new(Primitive::U16, port.into()).unwrap(),
+            )),
+            Some(variant(operation as u32, vec![])),
+        ],
+    })
+}
+pub(super) fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
     collection::elements(v, BuiltinType::List)?
         .iter()
         .map(|v| {

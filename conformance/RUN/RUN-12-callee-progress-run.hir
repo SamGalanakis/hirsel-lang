@@ -1,0 +1,51 @@
+// rule: RUN-12
+// expect: run
+// The caller's tasks all wait, one on a channel and one on its call, while the
+// in-process callee sleeps on its own clock: the execution is not Blocked.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]
+fn nap(rt: Io, n: u64) -> Result[u64, String] {
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(_) => return Error("no clock"),
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Error("clock"),
+  }
+  let later = match instant.checked_add(c, now, 5u64) {
+    Some(later) => later,
+    None() => return Error("overflow"),
+  }
+  match clock.sleep_until(c, later) {
+    Ok(_) => Ok(n + 1u64),
+    Error(_) => Error("woken"),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let r = io.runner(rt, "pool")?
+  let got = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() {
+          let mut tx = take sender
+          let v = match runner.call(r, nap, 1u64) {
+            Ok(v) => v,
+            Error(_) => 0u64,
+          }
+          let _ = channel.send(tasks, mut tx, v)
+        }
+      )
+      let mut rx = take receiver
+      let v = channel.receive(tasks, mut rx)
+      task.await(s, take h)
+      v == Ok(2u64)
+    }
+  )
+  failure.check(got, Arithmetic())
+  Ok(())
+}

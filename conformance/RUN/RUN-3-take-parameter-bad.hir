@@ -1,0 +1,12 @@
+// rule: RUN-3
+// expect: reject RUN-3 at line 10
+// `fn(take o: u64)` is not the entry type `fn(a: u64)`: passing modes are part of it.
+fn price(take o: u64) -> Result[u64, String] {
+  Ok(o)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = io.runner(rt, "pool")?
+  let _ = runner.compute(r, price, 1u64)
+  Ok(())
+}

@@ -25,6 +25,15 @@ impl Checker<'_, '_> {
         mut function: FunctionType,
         expected: Option<TypeId>,
     ) -> Result<TypeId, QueryError> {
+        // RUN-3: a generic definition forms no entry.
+        if expected.and_then(|ty| self.entry_signature(ty)).is_some() {
+            self.report(
+                const { RuleId::of("RUN-3") },
+                self.span(id),
+                Self::ENTRY_FORMATION,
+            );
+            return Ok(self.error());
+        }
         let mut inferred = vec![None; function.generics.len()];
         if let Some(TypeKind::Function(wanted)) = expected.map(|ty| self.kind(ty))
             && wanted.generics.is_empty()
@@ -529,6 +538,33 @@ impl Checker<'_, '_> {
         };
         if let Some(slot) = self.creation_callback_slot(call, index) {
             expected = expected.map(|t| self.preserving_callback(t, slot));
+        }
+        // RUN-3: an entry parameter is expected as an entry even before its
+        // type arguments are known, so a named definition forms an entry
+        // whose callable type then supplies them. Unknown ones are holes.
+        if expected.is_none()
+            && let Some(template) = template
+            && self.entry_signature(template).is_some()
+        {
+            let holes: Vec<_> = inferred
+                .iter()
+                .enumerate()
+                .map(|(i, a)| match (a, generics.get(i)) {
+                    (Some(a), _) => a.clone(),
+                    (None, Some(GenericParameter::Size { .. })) => GenericArgument::Size(
+                        Size::Parameter(SizeParameterRef::bound(SizeParamId(i as u32))),
+                    ),
+                    (None, _) => {
+                        let variable = TypeParameterRef::body(
+                            NameSite::Expression(arg),
+                            TypeParamId(i as u32),
+                        );
+                        self.inference_variables.insert(variable);
+                        GenericArgument::Type(self.ty(TypeKind::Parameter(variable)))
+                    }
+                })
+                .collect();
+            expected = Some(self.substitute(template, &holes)?);
         }
         self.work
             .push(Work::AfterChild(After::CallArgument(call, index)));

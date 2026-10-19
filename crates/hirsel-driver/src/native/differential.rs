@@ -316,6 +316,10 @@ pub struct Fixture {
     /// A corpus program's raised interpreter step budget (`// steps:`); H's
     /// instruction limit rises by the same factor. None keeps both defaults.
     pub steps: Option<u64>,
+    /// The run's runners (`// runners:`) and the seed `sim@1` draws faults from
+    /// (`// fault_seed:`).
+    pub runners: Vec<hirsel_run_config::RunnerEntry>,
+    pub fault_seed: Option<u64>,
 }
 
 /// Run `entry` under each configuration and compare with `reference`.

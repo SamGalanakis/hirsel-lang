@@ -196,7 +196,7 @@ pub struct Header {
 }
 
 /// Header directive names; other colon-bearing comments are prose.
-const DIRECTIVES: [&str; 13] = [
+const DIRECTIVES: [&str; 15] = [
     "rule",
     "expect",
     "stdout",
@@ -210,6 +210,8 @@ const DIRECTIVES: [&str; 13] = [
     "steps",
     "oracle",
     "oracle-reason",
+    "runners",
+    "fault_seed",
 ];
 
 /// The most ordinary-interpretation steps a `// steps:` header may grant.
@@ -312,6 +314,27 @@ pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
                 }
                 fixture.process = Some(grant);
             }
+            "runners" => {
+                if !fixture.runners.is_empty() {
+                    return Err("duplicate runners directive".into());
+                }
+                fixture.runners = hirsel_run_config::validate_runners(value.trim().as_bytes())
+                    .map_err(|e| e.to_string())?;
+                if fixture.runners.is_empty() {
+                    return Err("a runners directive names a runner".into());
+                }
+            }
+            "fault_seed" => {
+                if fixture.fault_seed.is_some() {
+                    return Err("duplicate fault_seed directive".into());
+                }
+                fixture.fault_seed = Some(
+                    value
+                        .trim()
+                        .parse()
+                        .map_err(|_| "fault_seed must be a whole number")?,
+                );
+            }
             _ => {}
         }
     }
@@ -324,6 +347,8 @@ pub(crate) fn simulation(source: &str) -> Result<hirsel_engine::SimulationConfig
         net: fixture.net,
         process: fixture.process,
         env: fixture.env.unwrap_or_default(),
+        runners: fixture.runners,
+        fault_seed: fixture.fault_seed.unwrap_or(0),
         ..Default::default()
     };
     if let Some(ticks) = fixture.monotonic {
@@ -469,7 +494,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                             .map_err(|_| "exit must be an integer")?,
                     );
                 }
-                "grant" | "env" | "net" | "process" => {}
+                "grant" | "env" | "net" | "process" | "runners" | "fault_seed" => {}
                 // The value is checked by `fixture`; the next line must say why.
                 "steps" => {
                     let reason = source.lines().nth(index + 1).and_then(|next| {

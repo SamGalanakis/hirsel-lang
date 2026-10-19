@@ -27,6 +27,7 @@ pub struct Library {
     pub(super) next_shared: u64,
     /// A scripted client's unmet Expect at the last handle drop (LANG-9).
     pub(super) drop_failure: Option<(String, String)>,
+    pub(super) runners: super::runners::Runners,
 }
 impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
@@ -52,6 +53,7 @@ impl Library {
             next_callback: 0,
             next_shared: 0,
             drop_failure: None,
+            runners: Default::default(),
         })
     }
     /// Whether the last choice among `count` runnable tasks is a scheduling input a recording
@@ -1283,6 +1285,24 @@ impl Operations for Library {
     fn wait(&mut self) -> Result<bool, Error> {
         Ok(self.advance_virtual_time())
     }
+    fn take_calls(&mut self) -> Vec<crate::CalleeStart> {
+        self.take_runner_starts()
+    }
+    fn take_cancels(&mut self) -> Vec<u64> {
+        self.take_runner_cancels()
+    }
+    fn call_ended(
+        &mut self,
+        token: u64,
+        end: crate::CalleeEnd,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.runner_ended(token, end, context)
+    }
+    fn cancel_run(&mut self) {
+        // The provider cancels the callee run's root scope with cause `Parent` (RUN-9).
+        self.tasks.cancel_root(1);
+    }
     fn handles_failure(&self, token: u64) -> bool {
         self.tasks.pending.contains_key(&token) || self.synchronizers.pending.contains_key(&token)
     }
@@ -1293,6 +1313,9 @@ impl Operations for Library {
     ) -> Result<Option<OperationResult>, Error> {
         if self.network_waits.contains_key(&token) {
             return self.poll_network(token, context);
+        }
+        if self.runners.waits_on(token) {
+            return self.poll_runner(token, context);
         }
         if self.timers.contains(token) {
             let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
@@ -1556,6 +1579,13 @@ primary_operations! { self, call, context, name, a, value;
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),
+    Primitive: "runner.entry_path" => match arg(a, 0)? {
+        Value::FunctionReference(entry) => Value::String(entry.definition.to_string()),
+        _ => return Err(invalid("runner.entry_path expects an Entry")),
+    },
+    Capability: "io.runner" | "runner.grants" | "runner.narrow" | "runner.only" | "runner.compute" | "runner.call" | "runner.spawn" | "test.runner" => {
+        return self.runner_call(name, &call, context).map(Some);
+    },
     Capability: "clock.sleep_until" => {
         // A rejected replay never publishes effects, consumes faults or keeps a timer.
         let saved = (!context.configuration.inputs.is_empty()).then(|| (self.simulation.clone(), self.timers.clone()));

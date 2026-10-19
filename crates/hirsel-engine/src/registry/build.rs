@@ -26,6 +26,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Tasks",
         "Net",
         "Proc",
+        "Runner",
         "Scope",
         "Arena",
         "Test",
@@ -91,6 +92,18 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     let mut t = type_definition(b.generics.clone(), None);
     t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
     publish(b.signature("Body", SignatureKind::Type(t), true), &mut out);
+    // RUN-3: a reference to one top-level definition of callable type `F`. It names the
+    // definition, never an implementation, so it holds no authority and is not data.
+    let b = Builder::new("F").with_declarations(&out);
+    let mut t = type_definition(b.generics.clone(), None);
+    t.bounds = vec![
+        Bound::Plain,
+        Bound::Copyable,
+        Bound::Inert,
+        Bound::Sendable,
+        Bound::NoallocDrop,
+    ];
+    publish(b.signature("Entry", SignatureKind::Type(t), true), &mut out);
     for (name, generic, variants) in [
         ("Result", "T,E", "Ok(T)|Error(E)"),
         (
@@ -155,6 +168,13 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "Send(Bytes)|Expect(Bytes)|Stall()|Close()|Reset()|Truncate()",
         ),
         ("GrantError", "", "NotGranted()"),
+        ("GrantAccess", "", "Read()|ReadWrite()"),
+        (
+            "NotRunReason",
+            "",
+            "Denied()|VersionMismatch()|Unreachable()|Overloaded()|Rejected()",
+        ),
+        ("InDoubtReason", "", "Lost()|TimedOut()|Abandoned()"),
         ("ExitStatus", "", "Exited(i32)|Signaled(i32)"),
         ("Signal", "", "Interrupt()|Terminate()|Kill()"),
         (
@@ -198,66 +218,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "Record(List[FieldShape])|Choice(List[VariantShape])",
         ),
     ] {
-        let mut b = Builder::new(generic)
-            .with_declarations(&out)
-            .with_schema(super::schema(name));
-        let variants = variants
-            .split('|')
-            .map(|v| {
-                let (name, payload) = v.split_once('(').unwrap();
-                let fields = split(payload.strip_suffix(')').unwrap(), ',')
-                    .iter()
-                    .map(|s| (None, b.ty(s, PassingMode::Take)))
-                    .collect();
-                Variant {
-                    name: name.into(),
-                    fields,
-                }
-            })
-            .collect();
-        let repr = b.push(TypeKind::Variant(variants));
-        let mut t = type_definition(b.generics.clone(), Some(repr));
-        t.authority = AuthoritySummary::Known(
-            b.generics
-                .iter()
-                .enumerate()
-                .filter_map(|(i, g)| {
-                    matches!(g, GenericParameter::Type { .. }).then_some(
-                        AuthorityTerm::TypeParameter(TypeParameterRef::Bound {
-                            depth: 0,
-                            parameter: TypeParamId(i as u32),
-                        }),
-                    )
-                })
-                .collect(),
-        );
-        if b.generics.is_empty()
-            && !matches!(
-                name,
-                "TlsRoots"
-                    | "TlsClientAuth"
-                    | "PeerTls"
-                    | "NetConnection"
-                    | "NetStep"
-                    | "ChildStep"
-                    | "ShapeBody"
-            )
-        {
-            t.bounds = vec![
-                Bound::Plain,
-                Bound::Copyable,
-                Bound::Data,
-                Bound::Key,
-                Bound::Sendable,
-                Bound::Inert,
-                Bound::NoallocDrop,
-            ];
-        }
-        if name == "ShapeBody" {
-            t.bounds = shape_data_bounds();
-        }
-        serializable_core(name, &mut t);
-        publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
+        variant(name, generic, variants, &mut out);
     }
     for (name, generic, fields) in [
         ("Order", "T", "compare: fn(T,T) -> i32 uses {}"),
@@ -313,6 +274,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
         ),
         ("ProcessRule", "", "program: String,env: List[String]"),
+        ("DirGrant", "", "path: String,access: GrantAccess"),
+        (
+            "GrantSet",
+            "",
+            "stdout: bool,stderr: bool,tasks: bool,monotonic_clock: bool,wall_clock: bool,random: bool,dirs: List[DirGrant],net: List[NetRule],process: List[ProcessRule]",
+        ),
         (
             "ChildScript",
             "",
@@ -394,6 +361,13 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         serializable_core(name, &mut t);
         publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
     }
+    // RUN-6: a runner call's outcome carries the callee's Failure.
+    variant(
+        "RunError",
+        "E",
+        "NotRun(NotRunReason)|InDoubt(InDoubtReason)|Failed(E)|Faulted(Failure)|Canceled(CancelCause)",
+        &mut out,
+    );
     for (name, fields) in [("File", ""), ("AtomicFile", "dir: Dir,tmp: Path,dst: Path")] {
         let mut b = Builder::new("").with_declarations(&out);
         let repr = (!fields.is_empty()).then(|| b.record(fields));
@@ -897,6 +871,69 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     }
     out
 }
+/// Declare a core variant type `name[generic] = variants`.
+fn variant(name: &str, generic: &str, variants: &str, out: &mut BTreeMap<DefPath, SignatureRef>) {
+    let mut b = Builder::new(generic)
+        .with_declarations(out)
+        .with_schema(super::schema(name));
+    let variants = variants
+        .split('|')
+        .map(|v| {
+            let (name, payload) = v.split_once('(').unwrap();
+            let fields = split(payload.strip_suffix(')').unwrap(), ',')
+                .iter()
+                .map(|s| (None, b.ty(s, PassingMode::Take)))
+                .collect();
+            Variant {
+                name: name.into(),
+                fields,
+            }
+        })
+        .collect();
+    let repr = b.push(TypeKind::Variant(variants));
+    let mut t = type_definition(b.generics.clone(), Some(repr));
+    t.authority = AuthoritySummary::Known(
+        b.generics
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| {
+                matches!(g, GenericParameter::Type { .. }).then_some(AuthorityTerm::TypeParameter(
+                    TypeParameterRef::Bound {
+                        depth: 0,
+                        parameter: TypeParamId(i as u32),
+                    },
+                ))
+            })
+            .collect(),
+    );
+    if b.generics.is_empty()
+        && !matches!(
+            name,
+            "TlsRoots"
+                | "TlsClientAuth"
+                | "PeerTls"
+                | "NetConnection"
+                | "NetStep"
+                | "ChildStep"
+                | "ShapeBody"
+        )
+    {
+        t.bounds = vec![
+            Bound::Plain,
+            Bound::Copyable,
+            Bound::Data,
+            Bound::Key,
+            Bound::Sendable,
+            Bound::Inert,
+            Bound::NoallocDrop,
+        ];
+    }
+    if name == "ShapeBody" {
+        t.bounds = shape_data_bounds();
+    }
+    serializable_core(name, &mut t);
+    publish(b.signature(name, SignatureKind::Type(t), false), out);
+}
 /// CT-3 shape data holds only strings and lists of them: structurally
 /// copyable, data, key, inert and noalloc_drop, but neither plain nor sendable.
 fn shape_data_bounds() -> Vec<Bound> {
@@ -955,6 +992,15 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "FailureKind"
             | "SourceSite"
             | "Failure"
+            | "NetOperation"
+            | "NetRule"
+            | "ProcessRule"
+            | "GrantAccess"
+            | "DirGrant"
+            | "GrantSet"
+            | "NotRunReason"
+            | "InDoubtReason"
+            | "RunError"
     ) {
         t.serializable = true;
         if t.generics.is_empty() {
@@ -1208,6 +1254,7 @@ impl Builder {
                                 | "Tasks"
                                 | "Net"
                                 | "Proc"
+                                | "Runner"
                                 | "Scope"
                                 | "Arena"
                                 | "Test"

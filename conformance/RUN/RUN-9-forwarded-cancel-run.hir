@@ -1,0 +1,56 @@
+// rule: RUN-9
+// expect: run
+// stdout: callee waiting
+// grant: clock
+// A sent call is not a cancellation point: the scope's deadline forwards a cancel to
+// the started callee and waits for its outcome, which the callee makes Failed.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"definitions":null}]
+fn wait(rt: Io, n: u64) -> Result[u64, String] {
+  let tasks = match io.tasks(rt) {
+    Ok(t) => t,
+    Error(_) => return Error("no tasks"),
+  }
+  match io.stdout(rt) {
+    Ok(o) => {
+      let _ = out.print(o, "callee waiting\n")
+    },
+    Error(_) => return Error("no stdout"),
+  }
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let mut rx = take receiver
+  let received = channel.receive(tasks, mut rx)
+  let _ = sender
+  match received {
+    Ok(v) => Ok(v),
+    Error(Canceled(Parent())) => Error("canceled"),
+    Error(_) => Error("other"),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let r = io.runner(rt, "pool")?
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let later = match instant.checked_add(c, now, 1u64) {
+    Some(later) => later,
+    None() => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: later),
+    fn(s: Scope) {
+      let h = runner.spawn(s, r, wait, 1u64)
+      task.await(s, take h)
+    }
+  )
+  let failed = match bounded {
+    Finished(outcome) => outcome == Error(Failed("canceled")),
+    Expired(outcome) => outcome == Error(Failed("canceled")),
+  }
+  failure.check(failed, Arithmetic())
+  Ok(())
+}

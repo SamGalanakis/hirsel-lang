@@ -14,7 +14,7 @@ Invariants and boundary:
 - Header validation applies even while the compiler is unimplemented.
 - Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
 
-Only rule, expect, stdout, exit, entry, spec, grant, env, net, process and steps are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
+Only rule, expect, stdout, exit, entry, spec, grant, env, net, process, steps, oracle, oracle-reason, runners and fault_seed are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
 
 The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and
@@ -63,6 +63,12 @@ rules and peer/run/child scripts; script data does not widen those rules. Host
 providers, malformed grants, duplicates and directives after source code are errors.
 These headers select test inputs, not production launch authority. A corpus file
 can combine either script with `// grant: clock` to exercise deadline cancellation.
+
+`// runners: <JSON>` names the run's runners, a RunConfig `io.runners` list validated by
+`hirsel_run_config::validate_runners`, and `// fault_seed: N` seeds their `sim@1` fault
+decisions (0 when absent). Interpretation and checked execution run every callee in
+the simulated world its runner's grants describe; the native engines report the runner
+operations unavailable.
 
 `// env: <JSON>` selects the root Env's snapshot, a RunConfig `env` object of granted
 names to a string or null (granted but unset); without it the root Env grants no name.

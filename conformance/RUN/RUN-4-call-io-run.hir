@@ -1,0 +1,35 @@
+// rule: RUN-4
+// expect: run
+// stdout: before
+// stdout: callee
+// stdout: after
+// The callee's only authority is the Io projected from the runner's grant set: stdout,
+// but not the network the caller's own Io lacks too.
+// runners: [{"name":"pool","provider":"local.threads@1","grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+@serializable
+pub type GreetError = NoOutput | Network | Printing
+
+fn greet(rt: Io, line: String) -> Result[u64, GreetError] {
+  let o = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error(NoOutput()),
+  }
+  match io.net(rt) {
+    Ok(_) => return Error(Network()),
+    Error(_) => (),
+  }
+  match out.print(o, line) {
+    Ok(_) => Ok(1u64),
+    Error(_) => Error(Printing()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let r = io.runner(rt, "pool") ? Grant
+  out.print(io.stdout(rt) ? Grant, "before\n") ? Output
+  failure.check(runner.call(r, greet, "callee\n") == Ok(1u64), Arithmetic())
+  out.print(io.stdout(rt) ? Grant, "after\n") ? Output
+  Ok(())
+}

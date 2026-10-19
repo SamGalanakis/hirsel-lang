@@ -69,6 +69,12 @@ pub struct SimulationConfig {
     pub invalid_path_code: u32,
     /// Fault queues are consumed by operation name, in order, never host errno.
     pub faults: BTreeMap<String, VecDeque<Fault>>,
+    /// The runners the run's Io projects (RUN-1), sorted by name.
+    pub runners: Vec<hirsel_run_config::RunnerEntry>,
+    /// The seed `sim@1` runners draw their faults from (`inputs.fault_seed`).
+    pub fault_seed: u64,
+    /// This run's instance (RUN-11): call keys and callee seeds derive from it.
+    pub instance: [u8; 16],
 }
 impl Default for SimulationConfig {
     fn default() -> Self {
@@ -101,6 +107,9 @@ impl Default for SimulationConfig {
             wall: 0,
             invalid_path_code: 1,
             faults: BTreeMap::new(),
+            runners: vec![],
+            fault_seed: 0,
+            instance: [0; 16],
         }
     }
 }
@@ -153,6 +162,8 @@ pub(crate) enum Grant {
         dir: u64,
         identity: u64,
     },
+    /// A runner: its place and the authority its callees run under (RUN-1, RUN-2).
+    Runner(Box<super::runners::RunnerGrant>),
 }
 #[derive(Clone, Debug)]
 pub struct Simulation {
@@ -200,6 +211,11 @@ pub struct ObservedSimulation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ObservedGrant {
+    /// A runner: the entry's name and the definitions it runs.
+    Runner {
+        name: String,
+        definitions: Option<Vec<String>>,
+    },
     Net {
         world: u64,
         rules: Vec<hirsel_run_config::NetRule>,
@@ -304,6 +320,10 @@ impl Simulation {
                             temporary: temp.clone(),
                             destination: dst.clone(),
                             directory: *dir,
+                        },
+                        Grant::Runner(runner) => ObservedGrant::Runner {
+                            name: runner.entry.name.clone(),
+                            definitions: runner.definitions.clone(),
                         },
                     },
                 )
@@ -817,6 +837,7 @@ impl Simulation {
                 Some(Grant::Dir { .. }) => kind == "Dir",
                 Some(Grant::File { .. }) => kind == "File",
                 Some(Grant::Atomic { .. }) => kind == "AtomicFile",
+                Some(Grant::Runner(_)) => kind == "Runner",
                 None => false,
             }
         {

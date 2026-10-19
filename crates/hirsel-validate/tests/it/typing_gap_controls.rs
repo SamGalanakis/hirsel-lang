@@ -1114,3 +1114,53 @@ fn only_contract_function_values_forward_the_caller() {
     build(true, true).valid();
     build(true, false).broken(mismatch("caller forwarding"));
 }
+
+/// RUN-3: `let e: Entry[fn() -> <result>] = callee` for `fn callee() -> ()`.
+/// An entry names a non-generic, non-extern, complete definition of the
+/// entry's callable shape.
+fn entry_of(result: Primitive, edit: fn(&mut FunctionType)) -> Fixture {
+    let mut f = Fixture::unit();
+    let result = f.definition.types.push(ty(TypeKind::Primitive(result)));
+    let signature = f
+        .definition
+        .types
+        .push(ty(TypeKind::Function(fn_type(vec![], result))));
+    let e = f.slot(
+        TypeKind::Named {
+            definition: DefPath::core("Entry"),
+            arguments: vec![GenericArgument::Type(signature)].into(),
+        },
+        Storage::Local,
+    );
+    let mut callee = function_signature("callee", vec![], TypeKind::Primitive(Primitive::Bool));
+    if let SignatureKind::Function(function) = &mut callee.kind {
+        edit(function);
+    }
+    f.signatures.insert(path("callee"), callee);
+    f.assign(
+        e,
+        Rvalue::FunctionReference {
+            definition: path("callee"),
+            arguments: vec![],
+        },
+        0,
+    );
+    let exit = f.cleanup(vec![drop(e)]);
+    f.body().blocks[0].terminator = ret(0, exit);
+    f
+}
+
+#[test]
+fn an_entry_names_a_definition_of_exactly_its_type() {
+    entry_of(Primitive::Bool, |_| ()).valid();
+    entry_of(Primitive::U8, |_| ()).broken(mismatch("function reference"));
+    entry_of(Primitive::Bool, |f| f.incomplete = true).broken(mismatch("function reference"));
+    entry_of(Primitive::Bool, |f| {
+        f.foreign = Some(ForeignContract {
+            abi: "c".into(),
+            blocking: false,
+            aliasing_contract: String::new(),
+        });
+    })
+    .broken(mismatch("function reference"));
+}

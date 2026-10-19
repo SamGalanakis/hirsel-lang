@@ -15,6 +15,7 @@ mod frame;
 pub mod library;
 pub mod observation;
 mod resources;
+mod runs;
 pub mod scalar;
 pub mod structural;
 pub mod type_arguments;
@@ -197,6 +198,32 @@ pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidTir(message.into())
 }
 
+/// A callee run a runner call started in this process (RUN-10). The caller's provider
+/// built its world; the execution runs it beside its caller (RUN-12).
+pub struct CalleeStart {
+    /// The caller's wait for the call's outcome.
+    pub token: u64,
+    pub configuration: RunConfiguration,
+    pub arguments: Vec<Value>,
+    pub operations: Box<dyn Operations>,
+    pub budgets: RunBudgets,
+    /// `sim@1`'s `crash` fault: the callee's place stops it after this many suspensions.
+    pub crash_after: Option<u32>,
+}
+/// How a callee run ended, as its caller's provider learns it.
+#[derive(Debug)]
+pub enum CalleeEnd {
+    /// Its entry returned this `Result`.
+    Returned(Value),
+    /// It ended in a language failure: the chain, primary first.
+    Failed(Vec<observation::FailureRecord>),
+    BudgetExceeded(BudgetKind),
+    /// Its call's cancellation arrived before it started.
+    Canceled,
+    /// Its place stopped it without an outcome (`sim@1`'s `crash`).
+    Abandoned,
+}
+
 /// A transferred task environment, entered on its own evaluator stack.
 pub struct TaskStart {
     /// Actual spawn invocation, independent of inherited failure attribution.
@@ -332,6 +359,24 @@ operation_boundary! {
     /// Wait for external readiness only after runnable work is exhausted.
     /// False means no external source can make progress (CONC-8).
     fn wait(&mut self) -> Result<bool, Error> { Ok(false) }
+    /// The callee runs this run's runner calls sent since the last take (RUN-10).
+    fn take_calls(&mut self) -> Vec<CalleeStart> {
+        vec![]
+    }
+    /// The waits of sent calls whose scope was cancelled since the last take: each
+    /// call's cancellation is forwarded to its callee (RUN-9).
+    fn take_cancels(&mut self) -> Vec<u64> {
+        vec![]
+    }
+    /// The callee run of the call parked at `token` ended.
+    fn call_ended(&mut self,
+        _token: u64,
+        _end: CalleeEnd,
+        _context: &mut OperationContext<'_>) -> Result<(), Error> {
+        Err(invalid("unexpected callee outcome"))
+    }
+    /// A forwarded cancellation: cancel this callee run's root scope with cause `Parent`.
+    fn cancel_run(&mut self) {}
     }
     required {
     fn call(&mut self,

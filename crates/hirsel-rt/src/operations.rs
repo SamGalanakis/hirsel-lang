@@ -2075,6 +2075,16 @@ pub const NATIVE_PATHS: &[&str] = &[
     // CT-3: compile-time only; no run-time code holds a TypeShape or Body.
     "type_shape.info",
     "codegen.body",
+    // RUN-1..14: callee runs need separate native run contexts; unavailable natively.
+    "io.runner",
+    "runner.grants",
+    "runner.narrow",
+    "runner.only",
+    "runner.entry_path",
+    "runner.compute",
+    "runner.call",
+    "runner.spawn",
+    "test.runner",
 ];
 
 /// Stable declaration ownership transport, used by the independently retained inventory.

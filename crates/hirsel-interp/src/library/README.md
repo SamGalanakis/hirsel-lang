@@ -7,6 +7,21 @@ explicitly supplies root grants, args/env, fake files/directories, clock and que
 faults. RunConfiguration supplies entry, random/hash seed and optional strict
 ordered event replay. No host file, network, clock or entropy access occurs.
 
+`library::runners` implements the runner operations. `io.runner` projects a runner
+`SimulationConfig.runners` names (`NotGranted()` otherwise); `test.runner` mints a
+`sim@1` runner modeling `local.threads@1` with empty grants; `runner.narrow` and
+`runner.only` mint narrower runners over the same place (RUN-2 coverage; an unsorted
+list refuses). A call encodes its argument through the canonical codec (a budget
+refusal is `NotRun(Rejected())`), checks the allowlist (`NotRun(Denied())`), then
+cancellation (`Canceled(cause)`, nothing sent), then the place: capacity (`threads`
+plus `queue`, `NotRun(Overloaded())`) and a `sim@1` node's fault sites, each enabled
+once per run and fired per call from `SimulationConfig.fault_seed` by domain-separated
+hashes, re-sending a `NotRun` attempt up to the runner's `retry`. A sent call's callee
+world is the runner's grant set as root grants, with seeds and run instance derived
+from the call key (RUN-10), and its arguments are decoded fresh from the request bytes;
+the outcome crosses back the same way. `runner.entry_path` spells a FunctionReference's
+definition.
+
 `launch` validates a pub monomorphic complete root-capability function returning
 the nominal core Result[(),E], validates every grant before entry, and returns
 LaunchedExecution. Ok exits 0; Error exits 1 regardless of E tags and emits no

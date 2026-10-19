@@ -13,8 +13,13 @@ mod path;
 pub use path::confined_relative;
 
 mod grants;
+mod runners;
 pub use grants::{
     grants_within, mount_within, net_operation_within, net_rule_within, process_rule_within,
+};
+pub use runners::{
+    DEFAULT_QUEUE, DEFAULT_THREADS, FaultRate, Retry, RunnerEntry, SIM_FAULT_SITES,
+    sim_model_sites, validate_runners,
 };
 mod outcome;
 pub use outcome::{BudgetKind, Environmental, Failure, Returned, RunOutcome, Site, exit};
@@ -108,6 +113,8 @@ pub enum ProviderContract {
     AdmitSafe,
     BudgetsNone,
     BudgetsLimits,
+    RunnerLocalThreads,
+    RunnerSim,
 }
 impl ProviderContract {
     pub const ALL: &[Self] = &[
@@ -117,12 +124,14 @@ impl ProviderContract {
         Self::BudgetsNone,
         Self::MonotonicNanoseconds,
         Self::WallUnixNanoseconds,
+        Self::RunnerLocalThreads,
         Self::NetScript,
         Self::NetStream,
         Self::ProcessScript,
         Self::ProcessSpawn,
         Self::RandomSplitMix64,
         Self::RandomSystem,
+        Self::RunnerSim,
         Self::StderrBytes,
         Self::StdinBytes,
         Self::StdoutBytes,
@@ -146,6 +155,8 @@ impl ProviderContract {
             Self::AdmitSafe => "admit.safe@1",
             Self::BudgetsNone => "budgets.none@1",
             Self::BudgetsLimits => "budgets.limits@1",
+            Self::RunnerLocalThreads => "local.threads@1",
+            Self::RunnerSim => "sim@1",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -170,6 +181,10 @@ pub struct Inputs {
     pub random_seed: u64,
     pub test_seed: u64,
     pub scheduler: Option<Scheduler>,
+    /// The seed `sim@1` runners draw their faults from; absent from canonical bytes when
+    /// absent, so records without one keep their identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault_seed: Option<u64>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -245,6 +260,10 @@ pub struct IoGrants {
     pub dirs: Vec<Mount>,
     pub net: Option<NetGrant>,
     pub process: Option<ProcessGrant>,
+    /// The runners this run calls through (RUN-1), sorted and unique by name; absent from
+    /// canonical bytes when there are none, so records without runners keep their identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runners: Vec<RunnerEntry>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -581,57 +600,8 @@ impl RunConfig {
             }
         }
         if let Some(io) = &mut record.io {
-            for (field, value) in [
-                ("io.stdin", &io.stdin),
-                ("io.stderr", &io.stderr),
-                ("io.stdout", &io.stdout),
-                ("io.tasks", &io.tasks),
-                ("io.monotonic_clock", &io.monotonic_clock),
-                ("io.wall_clock", &io.wall_clock),
-                ("io.random", &io.random),
-            ] {
-                if let Some(value) = value {
-                    provider(field, value)?;
-                }
-            }
-            io.dirs.sort_by(|a, b| a.path.cmp(&b.path));
-            for mount in &io.dirs {
-                if !portable_path(&mount.path, true) {
-                    return Err(invalid("io.dirs.path", "noncanonical virtual mount"));
-                }
-                if !absolute_path(&mount.host) {
-                    return Err(invalid(
-                        "io.dirs.host",
-                        "expected a canonical absolute host root",
-                    ));
-                }
-            }
-            let mut paths = BTreeSet::new();
-            for mount in &io.dirs {
-                if !paths.insert(mount.path.as_str()) {
-                    return Err(invalid("io.dirs", "duplicate virtual mount"));
-                }
-            }
-            for mount in &io.dirs {
-                if !mount.path.is_empty() && paths.contains("") {
-                    return Err(invalid("io.dirs", "overlapping virtual mounts"));
-                }
-                let mut path = mount.path.as_str();
-                while let Some((parent, _)) = path.rsplit_once('/') {
-                    if paths.contains(parent) {
-                        return Err(invalid("io.dirs", "overlapping virtual mounts"));
-                    }
-                    path = parent;
-                }
-            }
-            if let Some(net) = &mut io.net {
-                provider("io.net.provider", &net.provider)?;
-                net.validate()?;
-            }
-            if let Some(process) = &mut io.process {
-                provider("io.process.provider", &process.provider)?;
-                process.validate()?;
-            }
+            validate_io(io, "io")?;
+            runners::validate(&mut io.runners, validate_io)?;
         }
         if let Some(env) = &record.env {
             env_keys(env)?;
@@ -825,6 +795,18 @@ impl ValidatedRun {
         if self.budgets().is_some_and(|b| b.fuel.is_some()) && !facts.fueled {
             return Err(RunRefusal::Unsupported {
                 field: "budgets.fuel".into(),
+            });
+        }
+        // Host launches give callee runs neither host worlds nor linked tapes yet; a
+        // record naming runners runs only under a simulation fixture.
+        if self
+            .record
+            .io
+            .as_ref()
+            .is_some_and(|io| !io.runners.is_empty())
+        {
+            return Err(RunRefusal::Unsupported {
+                field: "io.runners".into(),
             });
         }
         Ok(BoundRun { run: self })
@@ -1095,6 +1077,128 @@ fn provider(field: &str, name: &str) -> Result<(), RunRefusal> {
 }
 // The closed provider names describe observable contracts,
 // not Linux/simulator implementations. Unsupported policy cannot be widened.
+/// Validate and normalize one `io` grant set: the record's own, or a runner's at `field`.
+fn validate_io(io: &mut IoGrants, field: &str) -> Result<(), RunRefusal> {
+    let at = |member: &str| format!("{field}.{member}");
+    for (field, value) in [
+        (at("stdin"), &io.stdin),
+        (at("stderr"), &io.stderr),
+        (at("stdout"), &io.stdout),
+        (at("tasks"), &io.tasks),
+        (at("monotonic_clock"), &io.monotonic_clock),
+        (at("wall_clock"), &io.wall_clock),
+        (at("random"), &io.random),
+    ] {
+        if let Some(value) = value {
+            provider(&field, value)?;
+        }
+    }
+    io.dirs.sort_by(|a, b| a.path.cmp(&b.path));
+    for mount in &io.dirs {
+        if !portable_path(&mount.path, true) {
+            return Err(invalid(&at("dirs.path"), "noncanonical virtual mount"));
+        }
+        if !absolute_path(&mount.host) {
+            return Err(invalid(
+                &at("dirs.host"),
+                "expected a canonical absolute host root",
+            ));
+        }
+    }
+    let mut paths = BTreeSet::new();
+    for mount in &io.dirs {
+        if !paths.insert(mount.path.as_str()) {
+            return Err(invalid(&at("dirs"), "duplicate virtual mount"));
+        }
+    }
+    for mount in &io.dirs {
+        if !mount.path.is_empty() && paths.contains("") {
+            return Err(invalid(&at("dirs"), "overlapping virtual mounts"));
+        }
+        let mut path = mount.path.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            if paths.contains(parent) {
+                return Err(invalid(&at("dirs"), "overlapping virtual mounts"));
+            }
+            path = parent;
+        }
+    }
+    if let Some(net) = &mut io.net {
+        provider(&at("net.provider"), &net.provider)?;
+        net.validate()?;
+    }
+    if let Some(process) = &mut io.process {
+        provider(&at("process.provider"), &process.provider)?;
+        process.validate()?;
+    }
+    Ok(())
+}
+/// Whether every provider of one `io` grant set, at `field`, is supported.
+fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
+    let unsupported = |field: &str| RunRefusal::Unsupported {
+        field: field.into(),
+    };
+    let at = |member: &str| format!("{field}.{member}");
+    for (field, value, expected) in [
+        (at("stdin"), &io.stdin, Some(ProviderContract::StdinBytes)),
+        (
+            at("stderr"),
+            &io.stderr,
+            Some(ProviderContract::StderrBytes),
+        ),
+        (
+            at("stdout"),
+            &io.stdout,
+            Some(ProviderContract::StdoutBytes),
+        ),
+        (
+            at("tasks"),
+            &io.tasks,
+            Some(ProviderContract::TasksCooperative),
+        ),
+        (
+            at("monotonic_clock"),
+            &io.monotonic_clock,
+            Some(ProviderContract::MonotonicNanoseconds),
+        ),
+        (
+            at("wall_clock"),
+            &io.wall_clock,
+            Some(ProviderContract::WallUnixNanoseconds),
+        ),
+    ] {
+        if let Some(name) = value
+            && (expected.is_none() || ProviderContract::parse(name) != expected)
+        {
+            return Err(unsupported(&field));
+        }
+    }
+    if let Some(random) = &io.random
+        && !matches!(
+            ProviderContract::parse(random),
+            Some(ProviderContract::RandomSplitMix64 | ProviderContract::RandomSystem)
+        )
+    {
+        return Err(unsupported(&at("random")));
+    }
+    if let Some(net) = &io.net
+        && !matches!(
+            ProviderContract::parse(&net.provider),
+            Some(ProviderContract::NetStream | ProviderContract::NetScript)
+        )
+    {
+        return Err(unsupported(&at("net.provider")));
+    }
+    if let Some(process) = &io.process
+        && !matches!(
+            ProviderContract::parse(&process.provider),
+            Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
+        )
+    {
+        return Err(unsupported(&at("process.provider")));
+    }
+    Ok(())
+}
 fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
     let unsupported = |field: &str| RunRefusal::Unsupported {
         field: field.into(),
@@ -1108,55 +1212,17 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
         return Err(unsupported("inputs.scheduler.algorithm"));
     }
     if let Some(io) = &record.io {
-        for (field, value, expected) in [
-            ("io.stdin", &io.stdin, Some(ProviderContract::StdinBytes)),
-            ("io.stderr", &io.stderr, Some(ProviderContract::StderrBytes)),
-            ("io.stdout", &io.stdout, Some(ProviderContract::StdoutBytes)),
-            (
-                "io.tasks",
-                &io.tasks,
-                Some(ProviderContract::TasksCooperative),
-            ),
-            (
-                "io.monotonic_clock",
-                &io.monotonic_clock,
-                Some(ProviderContract::MonotonicNanoseconds),
-            ),
-            (
-                "io.wall_clock",
-                &io.wall_clock,
-                Some(ProviderContract::WallUnixNanoseconds),
-            ),
-        ] {
-            if let Some(name) = value
-                && (expected.is_none() || ProviderContract::parse(name) != expected)
-            {
-                return Err(unsupported(field));
+        supported_io(io, "io")?;
+        for runner in &io.runners {
+            if !matches!(
+                ProviderContract::parse(&runner.provider),
+                Some(ProviderContract::RunnerLocalThreads | ProviderContract::RunnerSim)
+            ) {
+                return Err(unsupported("io.runners.provider"));
             }
-        }
-        if let Some(random) = &io.random
-            && !matches!(
-                ProviderContract::parse(random),
-                Some(ProviderContract::RandomSplitMix64 | ProviderContract::RandomSystem)
-            )
-        {
-            return Err(unsupported("io.random"));
-        }
-        if let Some(net) = &io.net
-            && !matches!(
-                ProviderContract::parse(&net.provider),
-                Some(ProviderContract::NetStream | ProviderContract::NetScript)
-            )
-        {
-            return Err(unsupported("io.net.provider"));
-        }
-        if let Some(process) = &io.process
-            && !matches!(
-                ProviderContract::parse(&process.provider),
-                Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
-            )
-        {
-            return Err(unsupported("io.process.provider"));
+            if let Some(grants) = &runner.grants {
+                supported_io(grants, "io.runners.grants")?;
+            }
         }
     }
     if let Some(code) = record.admission.as_ref().and_then(|a| a.code.as_ref())

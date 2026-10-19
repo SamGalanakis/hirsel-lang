@@ -1,0 +1,40 @@
+// rule: RUN-5
+// expect: run
+// stdout: left 1
+// stdout: right 2
+// stdout: left 3
+// stdout: right 4
+// stdout: total 10
+// The same program under sim@1 without faults; RUN-5-two-runners-threads-run.hir is its twin.
+// runners: [{"name":"left","provider":"sim@1","node":"l","models":"local.threads@1","grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null},{"name":"right","provider":"sim@1","node":"r","models":"remote.tls@1","grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn report(rt: Io, line: String) -> Result[u64, String] {
+  match io.stdout(rt) {
+    Ok(o) => {
+      let _ = out.print(o, line)
+      Ok(1u64)
+    },
+    Error(_) => Error("no stdout"),
+  }
+}
+
+fn count(left: Runner, right: Runner) -> Result[u64, RunError[String]] {
+  let a = runner.call(left, report, "left 1\n")?
+  let b = runner.call(right, report, "right 2\n")?
+  let c = runner.call(left, report, "left 3\n")?
+  let d = runner.call(right, report, "right 4\n")?
+  Ok(a + 2u64 * b + 3u64 * c + 4u64 * d)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let left = io.runner(rt, "left") ? Grant
+  let right = io.runner(rt, "right") ? Grant
+  let total = match count(left, right) {
+    Ok(total) => total,
+    Error(_) => 0u64,
+  }
+  failure.check(total == 10u64, Arithmetic())
+  out.print(io.stdout(rt) ? Grant, "total 10\n") ? Output
+  Ok(())
+}

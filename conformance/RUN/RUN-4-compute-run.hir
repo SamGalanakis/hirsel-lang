@@ -1,0 +1,28 @@
+// rule: RUN-4
+// expect: run
+// runners: [{"name":"pool","provider":"local.threads@1","grants":null,"definitions":null}]
+@serializable
+type Order {
+  id: u64,
+  cents: u64,
+}
+
+fn price(o: Order) -> Result[u64, String] {
+  if o.cents == 0 {
+    return Error("free")
+  }
+  Ok(o.cents + o.id)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = io.runner(rt, "pool")?
+  failure.check(
+    runner.compute(r, price, Order(id: 1, cents: 41)) == Ok(42),
+    Arithmetic()
+  )
+  failure.check(
+    runner.compute(r, price, Order(id: 1, cents: 0)) == Error(Failed("free")),
+    Arithmetic()
+  )
+  Ok(())
+}
