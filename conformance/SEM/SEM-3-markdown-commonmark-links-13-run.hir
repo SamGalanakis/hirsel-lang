@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Links/539",
+    "[foo][BaR]\n\n[bar]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/540",
+    "[ẞ]\n\n[SS]: /url\n",
+    "<p><a href=\"/url\">ẞ</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/541",
+    "[Foo\n  bar]: /url\n\n[Baz][Foo bar]\n",
+    "<p><a href=\"/url\">Baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/542",
+    "[foo] [bar]\n\n[bar]: /url \"title\"\n",
+    "<p>[foo] <a href=\"/url\" title=\"title\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

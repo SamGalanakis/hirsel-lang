@@ -1,0 +1,18 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/252/malformed",
+    ">     code\n\n>\u{0}[&unterminated",
+    "<blockquote>\n<pre><code>code\n</code></pre>\n</blockquote>\n<blockquote>\n<p>�[&amp;unterminated</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

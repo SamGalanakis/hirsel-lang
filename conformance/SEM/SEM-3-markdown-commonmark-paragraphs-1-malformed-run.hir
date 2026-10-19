@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/219/malformed",
+    "aaa\n\u{0}[&unterminated",
+    "<p>aaa\n�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/220/malformed",
+    "aaa\nbbb\n\u{0}[&unterminated",
+    "<p>aaa\nbbb\n�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/221/malformed",
+    "aaa\n\n\u{0}[&unterminated",
+    "<p>aaa</p>\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/222/malformed",
+    "  aaa\u{0}[&unterminated",
+    "<p>aaa�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/223/malformed",
+    "aaa\n             bbb\n           \u{0}[&unterminated",
+    "<p>aaa\nbbb\n�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/172/malformed",
+    "<style\n  type=\"text/css\">\nh1 {color:\u{0}[&unterminated",
+    "<style\n  type=\"text/css\">\nh1 {color:�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/173/malformed",
+    "<style\n  type=\"\u{0}[&unterminated",
+    "<style\n  type=\"�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/174/malformed",
+    "> <div>\n>\u{0}[&unterminated",
+    "<blockquote>\n<div>\n�[&unterminated\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/175/malformed",
+    "- <div>\u{0}[&unterminated",
+    "<ul>\n<li>\n<div>�[&unterminated\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

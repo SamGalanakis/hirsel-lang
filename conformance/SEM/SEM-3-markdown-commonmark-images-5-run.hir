@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Images/588",
+    "![foo]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/589",
+    "![*foo* bar]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo bar\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/590",
+    "![[foo]]\n\n[[foo]]: /url \"title\"\n",
+    "<p>![[foo]]</p>\n<p>[[foo]]: /url &quot;title&quot;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/591",
+    "![Foo]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"Foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

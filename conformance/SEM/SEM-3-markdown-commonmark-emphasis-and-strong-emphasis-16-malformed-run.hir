@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/437/malformed",
+    "foo \u{0}[&unterminated",
+    "<p>foo �[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/438/malformed",
+    "foo \u{0}[&unterminated",
+    "<p>foo �[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/439/malformed",
+    "foo *\u{0}[&unterminated",
+    "<p>foo *�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/440/malformed",
+    "foo *\u{0}[&unterminated",
+    "<p>foo *�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/441/malformed",
+    "foo *\u{0}[&unterminated",
+    "<p>foo *�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/442/malformed",
+    "**f\u{0}[&unterminated",
+    "<p>**f�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/443/malformed",
+    "*fo\u{0}[&unterminated",
+    "<p>*fo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

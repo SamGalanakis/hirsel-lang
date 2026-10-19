@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/465",
+    "____foo____\n",
+    "<p><strong><strong>foo</strong></strong></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/466",
+    "******foo******\n",
+    "<p><strong><strong><strong>foo</strong></strong></strong></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/467",
+    "***foo***\n",
+    "<p><em><strong>foo</strong></em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/468",
+    "_____foo_____\n",
+    "<p><em><strong><strong>foo</strong></strong></em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/469",
+    "*foo _bar* baz_\n",
+    "<p><em>foo _bar</em> baz_</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/470",
+    "*foo __bar *baz bim__ bam*\n",
+    "<p><em>foo <strong>bar *baz bim</strong> bam</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

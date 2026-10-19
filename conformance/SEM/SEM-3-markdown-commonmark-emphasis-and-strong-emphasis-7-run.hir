@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/388",
+    "пристаням__стремятся__\n",
+    "<p>пристаням__стремятся__</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/389",
+    "__foo, __bar__, baz__\n",
+    "<p><strong>foo, <strong>bar</strong>, baz</strong></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/390",
+    "foo-__(bar)__\n",
+    "<p>foo-<strong>(bar)</strong></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/391",
+    "**foo bar **\n",
+    "<p>**foo bar **</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/392",
+    "**(**foo)\n",
+    "<p>**(**foo)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

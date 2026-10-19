@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/204/malformed",
+    "| abc | def |\n| --- | --- |\n\u{0}[&unterminated",
+    "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>�[&amp;unterminated</td>\n<td></td>\n</tr>\n</tbody>\n</table>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/205/malformed",
+    "| abc | def |\n\u{0}[&unterminated",
+    "<p>| abc | def |\n�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

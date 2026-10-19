@@ -1,0 +1,32 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/610/malformed",
+    "<foo.ba\u{0}[&unterminated",
+    "<p>&lt;foo.ba�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/611/malformed",
+    "https://ex\u{0}[&unterminated",
+    "<p>https://ex�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/612/malformed",
+    "foo@bar.ex\u{0}[&unterminated",
+    "<p>foo@bar.ex�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

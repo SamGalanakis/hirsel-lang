@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/246/malformed",
+    "> aaa\n**\u{0}[&unterminated",
+    "<blockquote>\n<p>aaa\n**�[&amp;unterminated</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/247/malformed",
+    "> bar\u{0}[&unterminated",
+    "<blockquote>\n<p>bar�[&amp;unterminated</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/248/malformed",
+    "> bar\u{0}[&unterminated",
+    "<blockquote>\n<p>bar�[&amp;unterminated</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/249/malformed",
+    "> bar\n\u{0}[&unterminated",
+    "<blockquote>\n<p>bar\n�[&amp;unterminated</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/250/malformed",
+    "> > > f\u{0}[&unterminated",
+    "<blockquote>\n<blockquote>\n<blockquote>\n<p>f�[&amp;unterminated</p>\n</blockquote>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/251/malformed",
+    ">>> foo\n> \u{0}[&unterminated",
+    "<blockquote>\n<blockquote>\n<blockquote>\n<p>foo\n�[&amp;unterminated</p>\n</blockquote>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

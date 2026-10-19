@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/36",
+    "    f&ouml;f&ouml;\n",
+    "<pre><code>f&amp;ouml;f&amp;ouml;\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/37",
+    "&#42;foo&#42;\n*foo*\n",
+    "<p>*foo*\n<em>foo</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/38",
+    "&#42; foo\n\n* foo\n",
+    "<p>* foo</p>\n<ul>\n<li>foo</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/39",
+    "foo&#10;&#10;bar\n",
+    "<p>foo\n\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/40",
+    "&#9;foo\n",
+    "<p>\tfoo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/41",
+    "[a](url &quot;tit&quot;)\n",
+    "<p>[a](url &quot;tit&quot;)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

@@ -35,6 +35,38 @@ conversion preserves every nonletter, including those bytes.
 `digit_value` returns `Some(0)` through `Some(9)` for decimal digits and `None()`
 otherwise. These are pure, nonallocating algorithms adapted from Zig's ASCII module.
 
+## Markdown
+
+`markdown` parses CommonMark 0.31.2 into an editable owned tree. It adapts
+commonmark.js's container, bracket and emphasis passes. `Node` contains a
+`kind: Kind` and `children: List[Node]`; `Kind` carries block/inline payloads
+(text, heading level, list start/tightness, destinations/titles, code info,
+optional task state and table alignment). Rendering reads only that tree.
+
+```text
+fn markdown.default_options() -> Options uses {}
+fn markdown.gfm_options() -> Options uses {}
+fn markdown.parse(take source: String, options: Options) -> Node uses {}
+fn markdown.render_html(document: Node) -> String uses {}
+fn markdown.to_html(take source: String, options: Options) -> String uses {}
+```
+
+`Options` has four independent booleans: `tables`, `strikethrough`, `autolinks`
+and `task_lists`. All default to false; `gfm_options` enables all four. Markdown
+is a total grammar: incomplete delimiters are ordinary text, CRLF/bare CR
+normalize to LF, and NUL becomes U+FFFD. Named entities use a generated table
+from cmark-gfm. `render_html` escapes text and attributes and emits raw HTML
+nodes verbatim. List payloads hold `(ordered, start, tight)`; table cells hold
+alignment `0` (none), `1` (left), `2` (center) or `3` (right). Task items hold
+`None()` for an ordinary item and `Some(checked)` for a checkbox.
+
+The generated conformance programs compare the exact published HTML for all
+652 CommonMark examples and the GFM table, strikethrough, autolink and task-list
+examples. Each has an independently reference-rendered truncated-input twin
+with NUL and unterminated bracket/entity syntax, using the same extension
+options as its published example. `tools/generate-markdown.py`
+pins both upstream checkouts and regenerates entity data and vectors.
+
 ## The catalogue
 
 These declarations are normative: the source package must declare exactly these

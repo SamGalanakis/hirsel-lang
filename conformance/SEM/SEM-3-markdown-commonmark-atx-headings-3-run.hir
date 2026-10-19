@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/72",
+    "# foo ##################################\n##### foo ##\n",
+    "<h1>foo</h1>\n<h5>foo</h5>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/73",
+    "### foo ###     \n",
+    "<h3>foo</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/74",
+    "### foo ### b\n",
+    "<h3>foo ### b</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/75",
+    "# foo#\n",
+    "<h1>foo#</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/76",
+    "### foo \\###\n## foo #\\##\n# foo \\#\n",
+    "<h3>foo ###</h3>\n<h2>foo ###</h2>\n<h1>foo #</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

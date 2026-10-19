@@ -1,0 +1,50 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let options = markdown.gfm_options()
+  failure.check(
+    markdown.to_html("~~unfinished", options) == "<p>~~unfinished</p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("http://", options) == "<p>http://</p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("- [y] no", options) == "<ul>\n<li>[y] no</li>\n</ul>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("| a | b |\n| - |\n", options) == "<p>| a | b |\n| - |</p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("![x <b>y</b>](a)", options) == "<p><img src=\"a\" alt=\"x y\" /></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("` \t `", options) == "<p><code>\t</code></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("- [\t] todo", options) == "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> todo</li>\n</ul>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("[foo@bar.baz", options) == "<p>[<a href=\"mailto:foo@bar.baz\">foo@bar.baz</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("[foo@bar.baz]", options) == "<p>[<a href=\"mailto:foo@bar.baz\">foo@bar.baz</a>]</p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("foo\\+bar@baz.org", options) == "<p><a href=\"mailto:foo+bar@baz.org\">foo+bar@baz.org</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("[foo@bar.baz](url)", options) == "<p><a href=\"url\">foo@bar.baz</a></p>\n",
+    TextInvariant()
+  )
+  Ok(())
+}

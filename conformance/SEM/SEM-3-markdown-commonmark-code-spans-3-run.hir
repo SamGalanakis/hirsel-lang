@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/341",
+    "*foo`*`\n",
+    "<p>*foo<code>*</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/342",
+    "[not a `link](/foo`)\n",
+    "<p>[not a <code>link](/foo</code>)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/343",
+    "`<a href=\"`\">`\n",
+    "<p><code>&lt;a href=&quot;</code>&quot;&gt;`</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/344",
+    "<a href=\"`\">`\n",
+    "<p><a href=\"`\">`</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/345",
+    "`<https://foo.bar.`baz>`\n",
+    "<p><code>&lt;https://foo.bar.</code>baz&gt;`</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Code spans/346",
+    "<https://foo.bar.`baz>`\n",
+    "<p><a href=\"https://foo.bar.%60baz\">https://foo.bar.`baz</a>`</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

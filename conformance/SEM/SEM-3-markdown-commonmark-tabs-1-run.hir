@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/1",
+    "\tfoo\tbaz\t\tbim\n",
+    "<pre><code>foo\tbaz\t\tbim\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/2",
+    "  \tfoo\tbaz\t\tbim\n",
+    "<pre><code>foo\tbaz\t\tbim\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/3",
+    "    a\ta\n    ὐ\ta\n",
+    "<pre><code>a\ta\nὐ\ta\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/4",
+    "  - foo\n\n\tbar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<p>bar</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/5",
+    "- foo\n\n\t\tbar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<pre><code>  bar\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/6",
+    ">\t\tfoo\n",
+    "<blockquote>\n<pre><code>  foo\n</code></pre>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

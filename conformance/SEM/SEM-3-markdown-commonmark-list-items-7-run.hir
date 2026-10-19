@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/List items/281",
+    "- foo\n-\n- bar\n",
+    "<ul>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/282",
+    "- foo\n-   \n- bar\n",
+    "<ul>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/283",
+    "1. foo\n2.\n3. bar\n",
+    "<ol>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/284",
+    "*\n",
+    "<ul>\n<li></li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/285",
+    "foo\n*\n\nfoo\n1.\n",
+    "<p>foo\n*</p>\n<p>foo\n1.</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

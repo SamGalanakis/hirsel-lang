@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/55",
+    "_ _ _ _ a\n\na------\n\n---a---\n",
+    "<p>_ _ _ _ a</p>\n<p>a------</p>\n<p>---a---</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/56",
+    " *-*\n",
+    "<p><em>-</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/57",
+    "- foo\n***\n- bar\n",
+    "<ul>\n<li>foo</li>\n</ul>\n<hr />\n<ul>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/58",
+    "Foo\n***\nbar\n",
+    "<p>Foo</p>\n<hr />\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/59",
+    "Foo\n---\nbar\n",
+    "<h2>Foo</h2>\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/60",
+    "* Foo\n* * *\n* Bar\n",
+    "<ul>\n<li>Foo</li>\n</ul>\n<hr />\n<ul>\n<li>Bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

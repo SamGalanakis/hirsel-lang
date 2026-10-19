@@ -1,0 +1,32 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/188",
+    "<div>\n\n*Emphasized* text.\n\n</div>\n",
+    "<div>\n<p><em>Emphasized</em> text.</p>\n</div>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/189",
+    "<div>\n*Emphasized* text.\n</div>\n",
+    "<div>\n*Emphasized* text.\n</div>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/190",
+    "<table>\n\n<tr>\n\n<td>\nHi\n</td>\n\n</tr>\n\n</table>\n",
+    "<table>\n<tr>\n<td>\nHi\n</td>\n</tr>\n</table>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

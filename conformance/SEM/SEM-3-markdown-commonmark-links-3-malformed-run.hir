@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Links/494/malformed",
+    "[a](<b)c\n[a](<\u{0}[&unterminated",
+    "<p>[a](&lt;b)c\n[a](&lt;�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/495/malformed",
+    "[link](\\\u{0}[&unterminated",
+    "<p>[link](\\�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/496/malformed",
+    "[link](foo(\u{0}[&unterminated",
+    "<p>[link](foo(�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/497/malformed",
+    "[link](foo\u{0}[&unterminated",
+    "<p>[link](foo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/498/malformed",
+    "[link](foo\\(\u{0}[&unterminated",
+    "<p>[link](foo(�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

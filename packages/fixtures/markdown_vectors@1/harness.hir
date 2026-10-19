@@ -1,0 +1,17 @@
+pub fn check(
+  s: Stdout,
+  label: String,
+  source: String,
+  expected: String,
+  options: std@1/markdown.Options
+) -> u64 {
+  let actual = std@1/markdown.to_html(unique source, options)
+  if actual == expected {
+    return 0
+  }
+  let _ = out.print(
+    s,
+    f"{label}\nsource: {source}\nexpected: {expected}\nactual: {actual}\n"
+  )
+  1
+}

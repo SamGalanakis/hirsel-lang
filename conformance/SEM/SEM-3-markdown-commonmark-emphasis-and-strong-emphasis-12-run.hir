@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/416",
+    "foo***bar***baz\n",
+    "<p>foo<em><strong>bar</strong></em>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/417",
+    "foo******bar*********baz\n",
+    "<p>foo<strong><strong><strong>bar</strong></strong></strong>***baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/418",
+    "*foo **bar *baz* bim** bop*\n",
+    "<p><em>foo <strong>bar <em>baz</em> bim</strong> bop</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/419",
+    "*foo [*bar*](/url)*\n",
+    "<p><em>foo <a href=\"/url\"><em>bar</em></a></em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Emphasis and strong emphasis/420",
+    "** is not an empty emphasis\n",
+    "<p>** is not an empty emphasis</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

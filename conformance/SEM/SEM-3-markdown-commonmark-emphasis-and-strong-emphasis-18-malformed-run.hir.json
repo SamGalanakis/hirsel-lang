@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-3-markdown-commonmark-emphasis-and-strong-emphasis-18-malformed-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/markdown_vectors@1/harness.hir",
+      "module": [
+        "harness"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

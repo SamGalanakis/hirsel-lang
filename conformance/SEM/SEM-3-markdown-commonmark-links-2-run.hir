@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Links/488",
+    "[link](/my uri)\n",
+    "<p>[link](/my uri)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/489",
+    "[link](</my uri>)\n",
+    "<p><a href=\"/my%20uri\">link</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/490",
+    "[link](foo\nbar)\n",
+    "<p>[link](foo\nbar)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/491",
+    "[link](<foo\nbar>)\n",
+    "<p>[link](<foo\nbar>)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/492",
+    "[a](<b)c>)\n",
+    "<p><a href=\"b)c\">a</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/493",
+    "[link](<foo\\>)\n",
+    "<p>[link](&lt;foo&gt;)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

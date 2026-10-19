@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/633",
+    "foo  \nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/634",
+    "foo\\\nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/635",
+    "foo       \nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/636",
+    "foo  \n     bar\n",
+    "<p>foo<br />\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/637",
+    "foo\\\n     bar\n",
+    "<p>foo<br />\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/638",
+    "*foo  \nbar*\n",
+    "<p><em>foo<br />\nbar</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/639",
+    "*foo\\\nbar*\n",
+    "<p><em>foo<br />\nbar</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

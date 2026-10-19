@@ -843,6 +843,18 @@
       "module": [
         "zstd"
       ]
+    },
+    {
+      "path": "markdown.hir",
+      "module": [
+        "markdown"
+      ]
+    },
+    {
+      "path": "markdown_tables.hir",
+      "module": [
+        "markdown"
+      ]
     }
   ],
   "dependencies": []

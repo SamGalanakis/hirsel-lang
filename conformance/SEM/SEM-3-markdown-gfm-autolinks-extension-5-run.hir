@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/630",
+    "hello@mail+xyz.example isn't valid, but hello+xyz@mail.example is.\n",
+    "<p>hello@mail+xyz.example isn't valid, but <a href=\"mailto:hello+xyz@mail.example\">hello+xyz@mail.example</a> is.</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/631",
+    "a.b-c_d@a.b\n\na.b-c_d@a.b.\n\na.b-c_d@a.b-\n\na.b-c_d@a.b_\n",
+    "<p><a href=\"mailto:a.b-c_d@a.b\">a.b-c_d@a.b</a></p>\n<p><a href=\"mailto:a.b-c_d@a.b\">a.b-c_d@a.b</a>.</p>\n<p>a.b-c_d@a.b-</p>\n<p>a.b-c_d@a.b_</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

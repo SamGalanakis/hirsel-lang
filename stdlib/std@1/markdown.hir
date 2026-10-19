@@ -1,0 +1,2544 @@
+// CommonMark 0.31.2 block/inline passes adapted from commonmark.js.
+// Copyright (c) 2014 John MacFarlane. BSD-2-Clause third-party/NOTICES.md.
+/// Extensions are opt-in; default_options implements CommonMark 0.31.2.
+pub type Options {
+  tables: bool,
+  strikethrough: bool,
+  autolinks: bool,
+  task_lists: bool,
+}
+
+/// Block and inline payloads. Table alignment: 0 none, 1 left, 2 center, 3 right.
+pub type Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock(
+  bool,
+  u64,
+  bool
+) | Item(Option[bool]) | CodeBlock(String, String) | HtmlBlock(String) | ThematicBreak | Text(
+  String
+) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link(
+  String,
+  String
+) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8)
+
+/// An owned, editable tree. HTML rendering depends only on this AST.
+pub type Node {
+  kind: Kind,
+  children: List[Node],
+}
+
+pub fn default_options() -> Options uses {} {
+  Options(tables: false, strikethrough: false, autolinks: false, task_lists: false)
+}
+
+pub fn gfm_options() -> Options uses {} {
+  Options(tables: true, strikethrough: true, autolinks: true, task_lists: true)
+}
+
+// Arena links use zero as null. The document itself is slot zero.
+type Entry {
+  kind: u8,
+  value: String,
+  info: String,
+  title: String,
+  number: u64,
+  flag: bool,
+  tight: bool,
+  checked: Option[bool],
+  parent: u64,
+  first: u64,
+  last: u64,
+  next: u64,
+  prev: u64,
+  open: bool,
+  indent: u64,
+  padding: u64,
+  marker: u8,
+  fence: u64,
+  html: u8,
+  start_line: u64,
+  end_line: u64,
+}
+
+type Reference {
+  destination: String,
+  title: String,
+}
+
+type Parser {
+  nodes: List[Entry],
+  tip: u64,
+  line: String,
+  offset: u64,
+  column: u64,
+  nonspace: u64,
+  nonspace_column: u64,
+  indent: u64,
+  blank: bool,
+  partial: bool,
+  matched: u64,
+  oldtip: u64,
+  closed: bool,
+  line_number: u64,
+  refs: Map[String, Reference],
+  options: Options,
+}
+
+fn entry(kind: u8) -> Entry uses {} {
+  Entry(
+    kind: kind,
+    value: "",
+    info: "",
+    title: "",
+    number: 0,
+    flag: false,
+    tight: true,
+    checked: None(),
+    parent: 0,
+    first: 0,
+    last: 0,
+    next: 0,
+    prev: 0,
+    open: true,
+    indent: 0,
+    padding: 0,
+    marker: 0,
+    fence: 0,
+    html: 0,
+    start_line: 0,
+    end_line: 0
+  )
+}
+
+@noalloc
+fn byte(s: String, at: u64) -> u8 uses {} {
+  let data = core@1/string.as_bytes(s)
+  if at < core@1/bytes.len(data) {
+    data[at]
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn size(s: String) -> u64 uses {} {
+  core@1/string.byte_len(s)
+}
+
+fn piece(s: String, a: u64, b: u64) -> unique String uses {} {
+  let Some(start) = core@1/string.position(s, a) else {
+    return ""
+  }
+  let Some(end) = core@1/string.position(s, b) else {
+    return ""
+  }
+  unique core@1/string.slice(s, start, end)
+}
+
+@noalloc
+fn space(c: u8) -> bool uses {} {
+  c == 32 || c == 9
+}
+
+@noalloc
+fn whitespace(c: u8) -> bool uses {} {
+  c == 32 || c >= 9 && c <= 13
+}
+
+@noalloc
+fn member(set: String, value: u8) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < size(set) {
+    if byte(set, i) == value {
+      return true
+    }
+    i += 1
+  }
+  false
+}
+
+@noalloc
+fn punctuation(c: u8) -> bool uses {} {
+  c >= 33 && c <= 126 && !ascii.is_alnum(c)
+}
+
+fn trim(s: String) -> unique String uses {} {
+  let mut a: u64 = 0
+  let mut b = size(s)
+  while a < b && (space(byte(s, a)) || byte(s, a) == 10 || byte(s, a) == 13) {
+    a += 1
+  }
+  while b > a && (space(byte(s, b - 1)) || byte(s, b - 1) == 10 || byte(s, b - 1) == 13) {
+    b -= 1
+  }
+  piece(s, a, b)
+}
+
+fn starts(s: String, at: u64, prefix: String) -> bool uses {} {
+  at <= size(s) && size(prefix) <= size(s) - at && piece(s, at, at + size(prefix)) == prefix
+}
+
+@noalloc
+fn run(s: String, at: u64, c: u8) -> u64 uses {} {
+  let mut end = at
+  while end < size(s) && byte(s, end) == c {
+    end += 1
+  }
+  end - at
+}
+
+fn new_child(mut nodes: List[Entry], parent: u64, kind: u8) -> u64 uses {} {
+  let id = core@1/list.len(nodes)
+  let mut node = entry(kind)
+  node.parent = parent
+  node.prev = nodes[parent].last
+  core@1/list.push(mut nodes, take node)
+  let last = nodes[parent].last
+  if last != 0 {
+    nodes[last].next = id
+  } else {
+    nodes[parent].first = id
+  }
+  nodes[parent].last = id
+  id
+}
+
+fn unlink(mut nodes: List[Entry], id: u64) -> () uses {} {
+  let parent = nodes[id].parent
+  let prev = nodes[id].prev
+  let next = nodes[id].next
+  if prev != 0 {
+    nodes[prev].next = next
+  } else {
+    nodes[parent].first = next
+  }
+  if next != 0 {
+    nodes[next].prev = prev
+  } else {
+    nodes[parent].last = prev
+  }
+  nodes[id].prev = 0
+  nodes[id].next = 0
+}
+
+fn move_child(mut nodes: List[Entry], id: u64, parent: u64) -> () uses {} {
+  unlink(mut nodes, id)
+  let last = nodes[parent].last
+  nodes[id].parent = parent
+  nodes[id].prev = last
+  if last != 0 {
+    nodes[last].next = id
+  } else {
+    nodes[parent].first = id
+  }
+  nodes[parent].last = id
+}
+
+fn find_nonspace(mut p: Parser) -> () uses {} {
+  let mut at = p.offset
+  let mut col = p.column
+  while at < size(p.line) && space(byte(p.line, at)) {
+    col += if byte(p.line, at) == 9 {
+      4 - col % 4
+    } else {
+      1
+    }
+    at += 1
+  }
+  p.nonspace = at
+  p.nonspace_column = col
+  p.indent = col - p.column
+  p.blank = at == size(p.line)
+}
+
+fn advance(mut p: Parser, count: u64, columns: bool) -> () uses {} {
+  let mut left = count
+  while left > 0 && p.offset < size(p.line) {
+    if byte(p.line, p.offset) == 9 {
+      let width: u64 = 4 - p.column % 4
+      let used = if columns && width > left {
+        left
+      } else {
+        width
+      }
+      p.partial = columns && width > left
+      p.column += used
+      if !p.partial {
+        p.offset += 1
+      }
+      left -= if columns {
+        used
+      } else {
+        1
+      }
+    } else {
+      p.partial = false
+      p.offset += 1
+      p.column += 1
+      left -= 1
+    }
+  }
+}
+
+fn advance_nonspace(mut p: Parser) -> () uses {} {
+  p.offset = p.nonspace
+  p.column = p.nonspace_column
+  p.partial = false
+}
+
+fn add_line(mut p: Parser) -> () uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, p.nodes[p.tip].value)
+  if p.partial {
+    let mut n: u64 = 4 - p.column % 4
+    while n > 0 {
+      core@1/list.push(mut out, 32u8)
+      n -= 1
+    }
+    p.offset += 1
+  }
+  text.append(mut out, piece(p.line, p.offset, size(p.line)))
+  core@1/list.push(mut out, 10u8)
+  let value = text.finish_valid(take out)
+  p.nodes[p.tip].value = value
+}
+
+fn can_contain(kind: u8, child: u8) -> bool uses {} {
+  if kind == 4 {
+    child == 5
+  } else {
+    (kind == 0 || kind == 3 || kind == 5) && child != 5
+  }
+}
+
+fn finish_at(id: u64, line: u64, mut p: Parser) -> () uses {} {
+  if p.nodes[id].kind == 1 {
+    if !remove_references(mut p, id) {
+      unlink(mut p.nodes, id)
+    }
+  }
+  p.nodes[id].open = false
+  p.nodes[id].end_line = line
+  if p.nodes[id].kind == 6 {
+    if p.nodes[id].fence != 0 {
+      if let Some((info, rest)) = string.split_once(p.nodes[id].value, "\n") {
+        let decoded = unescape(trim(info), true)
+        let literal = unique rest
+        p.nodes[id].info = decoded
+        p.nodes[id].value = literal
+      }
+    } else {
+      let value = unique p.nodes[id].value
+      let mut end = size(value)
+      let mut blank_lines: u64 = 0
+      while end > 0 {
+        let mut start = end - 1
+        while start > 0 && byte(value, start - 1) != 10 {
+          start -= 1
+        }
+        if size(trim(piece(value, start, end))) != 0 {
+          break
+        }
+        end = start
+        blank_lines += 1
+      }
+      let literal = piece(value, 0, end)
+      p.nodes[id].value = literal
+      p.nodes[id].end_line -= blank_lines
+    }
+  }
+  if p.nodes[id].kind == 4 {
+    let mut item = p.nodes[id].first
+    let mut tight = true
+    while item != 0 {
+      let next = p.nodes[item].next
+      if next != 0 && p.nodes[item].end_line + 1 < p.nodes[next].start_line {
+        tight = false
+      }
+      let mut child = p.nodes[item].first
+      while child != 0 {
+        let following = p.nodes[child].next
+        if following != 0 && p.nodes[child].end_line + 1 < p.nodes[following].start_line {
+          tight = false
+        }
+        child = following
+      }
+      item = next
+    }
+    p.nodes[id].tight = tight
+    let last = p.nodes[id].last
+    if last != 0 {
+      p.nodes[id].end_line = p.nodes[last].end_line
+    }
+  }
+  if p.nodes[id].kind == 5 {
+    let last = p.nodes[id].last
+    p.nodes[id].end_line = if last == 0 {
+      p.nodes[id].start_line
+    } else {
+      p.nodes[last].end_line
+    }
+  }
+  p.tip = p.nodes[id].parent
+}
+
+fn close_unmatched(mut p: Parser) -> () uses {} {
+  if !p.closed {
+    while p.oldtip != p.matched {
+      let parent = p.nodes[p.oldtip].parent
+      let close_id = p.oldtip
+      let close_line = p.line_number - 1
+      finish_at(close_id, close_line, mut p)
+      p.oldtip = parent
+    }
+    p.closed = true
+  }
+}
+
+fn add_block(mut p: Parser, kind: u8) -> u64 uses {} {
+  while !can_contain(p.nodes[p.tip].kind, kind) {
+    let close_id = p.tip
+    let close_line = p.line_number - 1
+    finish_at(close_id, close_line, mut p)
+  }
+  let tip = p.tip
+  let id = new_child(mut p.nodes, tip, kind)
+  p.nodes[id].start_line = p.line_number
+  p.tip = id
+  id
+}
+
+// HTML tag scanner implements commonmark.js common.js tag/attribute grammar.
+fn html_tag_end(s: String, at: u64) -> u64 uses {} {
+  if byte(s, at) != 60 {
+    return at
+  }
+  let mut i = at + 1
+  if starts(s, at, "<!-->") {
+    return at + 5
+  }
+  if starts(s, at, "<!--->") {
+    return at + 6
+  }
+  let close = if starts(s, at, "<!--") {
+    "-->"
+  } else if starts(s, at, "<?") {
+    "?>"
+  } else if starts(s, at, "<![CDATA[") {
+    "]]>"
+  } else {
+    ""
+  }
+  if close != "" {
+    let suffix = piece(s, i, size(s))
+    if let Some(pos) = string.find(suffix, close) {
+      return i + core@1/string.byte_offset(suffix, pos) + size(close)
+    }
+    return at
+  }
+  if byte(s, i) == 33 && ascii.is_alpha(byte(s, i + 1)) {
+    while i < size(s) && byte(s, i) != 62 {
+      i += 1
+    }
+    return if i < size(s) {
+      i + 1
+    } else {
+      at
+    }
+  }
+  let closing = byte(s, i) == 47
+  if closing {
+    i += 1
+  }
+  if !ascii.is_alpha(byte(s, i)) {
+    return at
+  }
+  i += 1
+  while ascii.is_alnum(byte(s, i)) || byte(s, i) == 45 {
+    i += 1
+  }
+  while i < size(s) {
+    let prior_offset = i
+    while whitespace(byte(s, i)) {
+      i += 1
+    }
+    if byte(s, i) == 62 {
+      return i + 1
+    }
+    if !closing && starts(s, i, "/>") {
+      return i + 2
+    }
+    if closing || prior_offset == i {
+      return at
+    }
+    let c = byte(s, i)
+    if !ascii.is_alpha(c) && c != 95 && c != 58 {
+      return at
+    }
+    i += 1
+    while ascii.is_alnum(byte(s, i)) || member("_:.-", byte(s, i)) && i < size(s) {
+      i += 1
+    }
+    let after_name = i
+    while whitespace(byte(s, i)) {
+      i += 1
+    }
+    if byte(s, i) == 61 {
+      i += 1
+      while whitespace(byte(s, i)) {
+        i += 1
+      }
+      let quote = byte(s, i)
+      if quote == 34 || quote == 39 {
+        i += 1
+        while i < size(s) && byte(s, i) != quote {
+          i += 1
+        }
+        if i == size(s) {
+          return at
+        }
+        i += 1
+      } else {
+        let start = i
+        while i < size(s) && !whitespace(byte(s, i)) && !member("\"'=<>`", byte(s, i)) {
+          i += 1
+        }
+        if i == start {
+          return at
+        }
+      }
+    } else {
+      i = after_name
+    }
+  }
+  at
+}
+
+fn html_block_type(s: String, paragraph: bool) -> u8 uses {} {
+  if byte(s, 0) != 60 {
+    return 0
+  }
+  let lower = string.ascii_lower(s)
+  let mut end: u64 = if byte(s, 1) == 47 {
+    2
+  } else {
+    1
+  }
+  let begin = end
+  while ascii.is_alnum(byte(s, end)) {
+    end += 1
+  }
+  let tag = piece(lower, begin, end)
+  let delim = byte(s, end)
+  if begin == 1 && (delim == 0 || delim == 62 || whitespace(delim)) && (tag == "script" || tag == "pre" || tag == "style" || tag == "textarea") {
+    return 1
+  }
+  if starts(s, 0, "<!--") {
+    return 2
+  }
+  if starts(s, 0, "<?") {
+    return 3
+  }
+  if starts(s, 0, "<!") && ascii.is_alpha(byte(s, 2)) {
+    return 4
+  }
+  if starts(s, 0, "<![CDATA[") {
+    return 5
+  }
+  if (delim == 0 || delim == 62 || whitespace(delim) || starts(s, end, "/>")) && tag != "" && string.contains(
+    "|address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|search|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul|",
+    string.concat(string.concat("|", tag), "|")
+  ) {
+    return 6
+  }
+  if !paragraph {
+    let n = html_tag_end(s, 0)
+    if n > 0 && size(trim(piece(s, n, size(s)))) == 0 {
+      return 7
+    }
+  }
+  0
+}
+
+fn html_closed(s: String, kind: u8) -> bool uses {} {
+  if kind == 1 {
+    let lower = string.ascii_lower(s)
+    string.contains(lower, "</script>") || string.contains(lower, "</pre>") || string.contains(
+      lower,
+      "</style>"
+    ) || string.contains(lower, "</textarea>")
+  } else if kind == 2 {
+    string.contains(s, "-->")
+  } else if kind == 3 {
+    string.contains(s, "?>")
+  } else if kind == 4 {
+    string.contains(s, ">")
+  } else if kind == 5 {
+    string.contains(s, "]]>")
+  } else {
+    false
+  }
+}
+
+fn thematic(s: String) -> bool uses {} {
+  let c = byte(s, 0)
+  if c != 42 && c != 95 && c != 45 {
+    return false
+  }
+  let mut count: u64 = 0
+  let mut i: u64 = 0
+  while i < size(s) {
+    let b = byte(s, i)
+    if b == c {
+      count += 1
+    } else if !space(b) {
+      return false
+    }
+    i += 1
+  }
+  count >= 3
+}
+
+// Returns (marker length, marker byte, start, ordered).
+fn list_marker(s: String, paragraph: bool) -> Option[(u64, u8, u64, bool)] uses {} {
+  let c = byte(s, 0)
+  let mut n: u64 = 1
+  let mut start: u64 = 0
+  let mut ordered = false
+  if c != 42 && c != 43 && c != 45 {
+    n = 0
+    while n < 9 && ascii.is_digit(byte(s, n)) {
+      start = start * 10 + core@1/int.widen(byte(s, n) - 48u8)
+      n += 1
+    }
+    if n == 0 || byte(s, n) != 46 && byte(s, n) != 41 || paragraph && start != 1 {
+      return None()
+    }
+    n += 1
+    ordered = true
+  }
+  if byte(s, n) != 0 && !space(byte(s, n)) {
+    return None()
+  }
+  if paragraph && size(trim(piece(s, n, size(s)))) == 0 {
+    return None()
+  }
+  Some((n, byte(s, n - 1), start, ordered))
+}
+
+fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
+  let kind = p.nodes[id].kind
+  if kind == 0 || kind == 4 {
+    return 0
+  }
+  if kind == 3 {
+    if p.indent < 4 && byte(p.line, p.nonspace) == 62 {
+      advance_nonspace(mut p)
+      advance(mut p, 1, false)
+      if space(byte(p.line, p.offset)) {
+        advance(mut p, 1, true)
+      }
+      return 0
+    }
+    return 1
+  }
+  if kind == 5 {
+    let padding = p.nodes[id].indent + p.nodes[id].padding
+    if p.indent >= padding {
+      advance(mut p, padding, true)
+    } else if p.blank && p.nodes[id].first != 0 {
+      advance_nonspace(mut p)
+    } else {
+      return 1
+    }
+    return 0
+  }
+  if kind == 19 {
+    let s = piece(p.line, p.nonspace, size(p.line))
+    if p.blank || p.indent < 4 && (thematic(s) || byte(s, 0) == 62 || byte(s, 0) == 35 || byte(
+      s,
+      0
+    ) == 96 || byte(s, 0) == 126 || html_block_type(s, true) != 0 || list_marker(
+      s,
+      true
+    ) != None()) {
+      return 1
+    }
+    return 0
+  }
+  if kind == 2 || kind == 8 {
+    return 1
+  }
+  if kind == 6 {
+    if p.nodes[id].fence != 0 {
+      let n = run(p.line, p.nonspace, p.nodes[id].marker)
+      if p.indent <= 3 && n >= p.nodes[id].fence && size(
+        trim(piece(p.line, p.nonspace + n, size(p.line)))
+      ) == 0 {
+        let close_id = id
+        let close_line = p.line_number
+        finish_at(close_id, close_line, mut p)
+        return 2
+      }
+      let mut remaining = p.nodes[id].indent
+      while remaining > 0 && space(byte(p.line, p.offset)) {
+        advance(mut p, 1, true)
+        remaining -= 1
+      }
+    } else if p.indent >= 4 {
+      advance(mut p, 4, true)
+    } else if p.blank {
+      advance_nonspace(mut p)
+    } else {
+      return 1
+    }
+    return 0
+  }
+  if kind == 7 {
+    return if p.blank && p.nodes[id].html >= 6 {
+      1
+    } else {
+      0
+    }
+  }
+  if kind == 1 {
+    return if p.blank {
+      1
+    } else {
+      0
+    }
+  }
+  1
+}
+
+fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
+  let s = piece(p.line, p.nonspace, size(p.line))
+  let c = byte(s, 0)
+  if p.indent < 4 {
+    if c == 62 {
+      advance_nonspace(mut p)
+      advance(mut p, 1, false)
+      if space(byte(p.line, p.offset)) {
+        advance(mut p, 1, true)
+      }
+      close_unmatched(mut p)
+      add_block(mut p, 3)
+      return 1
+    }
+    let hashes = run(s, 0, 35)
+    if hashes >= 1 && hashes <= 6 && (byte(s, hashes) == 0 || space(byte(s, hashes))) {
+      advance_nonspace(mut p)
+      advance(mut p, hashes, false)
+      close_unmatched(mut p)
+      let id = add_block(mut p, 2)
+      p.nodes[id].number = hashes
+      let raw = trim(piece(p.line, p.offset, size(p.line)))
+      let mut end = size(raw)
+      while end > 0 && byte(raw, end - 1) == 35 {
+        end -= 1
+      }
+      let value = if end == 0 || end < size(raw) && space(byte(raw, end - 1)) {
+        copy trim(piece(raw, 0, end))
+      } else {
+        copy raw
+      }
+      p.nodes[id].value = unique value
+      p.offset = size(p.line)
+      return 2
+    }
+    if c == 96 || c == 126 {
+      let n = run(s, 0, c)
+      if n >= 3 && (c != 96 || !string.contains(piece(s, n, size(s)), "`")) {
+        close_unmatched(mut p)
+        let id = add_block(mut p, 6)
+        p.nodes[id].fence = n
+        p.nodes[id].marker = c
+        p.nodes[id].indent = p.indent
+        advance_nonspace(mut p)
+        advance(mut p, n, false)
+        return 2
+      }
+    }
+    let ht = html_block_type(
+      s,
+      p.nodes[container].kind == 1 || !p.closed && !p.blank && p.nodes[p.tip].kind == 1
+    )
+    if ht != 0 {
+      close_unmatched(mut p)
+      let id = add_block(mut p, 7)
+      p.nodes[id].html = ht
+      return 2
+    }
+    if start_table(mut p, container) {
+      return 2
+    }
+    if p.nodes[container].kind == 1 && (c == 61 || c == 45) {
+      let n = run(s, 0, c)
+      if n != 0 && size(trim(piece(s, n, size(s)))) == 0 {
+        // Definitions at the start do not become heading content.
+        let remaining = remove_references(mut p, container)
+        if remaining {
+          close_unmatched(mut p)
+          p.nodes[container].kind = 2
+          p.nodes[container].number = if c == 61 {
+            1
+          } else {
+            2
+          }
+          p.offset = size(p.line)
+          return 2
+        }
+      }
+    }
+    if thematic(s) {
+      close_unmatched(mut p)
+      add_block(mut p, 8)
+      p.offset = size(p.line)
+      return 2
+    }
+    if let Some((length, marker, start, ordered)) = list_marker(
+      s,
+      p.nodes[container].kind == 1
+    ) {
+      let indent = p.indent
+      advance_nonspace(mut p)
+      advance(mut p, length, true)
+      let column = p.column
+      let offset = p.offset
+      while space(byte(p.line, p.offset)) && p.column - column < 5 {
+        advance(mut p, 1, true)
+      }
+      let spaces = p.column - column
+      let padding = if spaces < 1 || spaces >= 5 || p.offset == size(p.line) {
+        length + 1
+      } else {
+        length + spaces
+      }
+      if padding == length + 1 {
+        p.column = column
+        p.offset = offset
+        p.partial = false
+        if space(byte(p.line, p.offset)) {
+          advance(mut p, 1, true)
+        }
+      }
+      close_unmatched(mut p)
+      let mut list = p.tip
+      if p.nodes[list].kind != 4 || p.nodes[list].marker != marker || p.nodes[list].flag != ordered {
+        list = add_block(mut p, 4)
+        p.nodes[list].marker = marker
+        p.nodes[list].flag = ordered
+        p.nodes[list].number = start
+      }
+      let id = add_block(mut p, 5)
+      p.nodes[id].indent = indent
+      p.nodes[id].padding = padding
+      return 1
+    }
+  }
+  if p.indent >= 4 && p.nodes[p.tip].kind != 1 && !p.blank {
+    advance(mut p, 4, true)
+    close_unmatched(mut p)
+    add_block(mut p, 6)
+    return 2
+  }
+  0
+}
+
+fn incorporate(mut p: Parser, take line: String) -> () uses {} {
+  p.line = line
+  p.line_number += 1
+  p.oldtip = p.tip
+  p.offset = 0
+  p.column = 0
+  p.partial = false
+  let mut container: u64 = 0
+  while p.nodes[container].last != 0 && p.nodes[p.nodes[container].last].open {
+    let child = p.nodes[container].last
+    find_nonspace(mut p)
+    let status = continue_block(mut p, child)
+    if status == 2 {
+      return
+    }
+    if status == 1 {
+      break
+    }
+    container = child
+  }
+  p.closed = container == p.oldtip
+  p.matched = container
+  let mut leaf = p.nodes[container].kind == 6 || p.nodes[container].kind == 7 || p.nodes[container].kind == 19
+  while !leaf {
+    find_nonspace(mut p)
+    let res = start_block(mut p, container)
+    if res == 0 {
+      advance_nonspace(mut p)
+      break
+    }
+    container = p.tip
+    leaf = res == 2
+  }
+  if !p.closed && !p.blank && p.nodes[p.tip].kind == 1 {
+    add_line(mut p)
+  } else {
+    close_unmatched(mut p)
+    let kind = p.nodes[container].kind
+    if kind == 19 {
+      if p.offset < size(p.line) {
+        let row_source = piece(p.line, p.offset, size(p.line))
+        add_table_row(container, row_source, false, mut p)
+      }
+    } else if kind == 1 || kind == 6 || kind == 7 {
+      add_line(mut p)
+      if kind == 7 && html_closed(
+        piece(p.line, p.offset, size(p.line)),
+        p.nodes[container].html
+      ) {
+        let close_id = container
+        let close_line = p.line_number
+        finish_at(close_id, close_line, mut p)
+      }
+    } else if p.offset < size(p.line) && !p.blank {
+      add_block(mut p, 1)
+      advance_nonspace(mut p)
+      add_line(mut p)
+    }
+  }
+}
+
+@noalloc
+fn packed3(data: Bytes, at: u64) -> u32 uses {} {
+  let a: u32 = core@1/int.widen(data[at])
+  let b: u32 = core@1/int.widen(data[at + 1])
+  let c: u32 = core@1/int.widen(data[at + 2])
+  a | b << 8 | c << 16
+}
+
+fn entity_lookup(name: String) -> Option[String] uses {} {
+  let mut low: u64 = 0
+  let mut high = core@1/bytes.len(ENTITY_INDEX) / 3
+  while low < high {
+    let middle = low + (high - low) / 2
+    let at: u64 = core@1/int.widen(packed3(ENTITY_INDEX, middle * 3))
+    let mut end = at
+    while byte(ENTITY_DATA, end) != 0 {
+      end += 1
+    }
+    let key = piece(ENTITY_DATA, at, end)
+    if name < key {
+      high = middle
+    } else if name > key {
+      low = middle + 1
+    } else {
+      let start = end + 1
+      end = start
+      while byte(ENTITY_DATA, end) != 0 {
+        end += 1
+      }
+      return Some(piece(ENTITY_DATA, start, end))
+    }
+  }
+  None()
+}
+
+fn unicode_punctuation(c: char) -> bool uses {} {
+  let cp = core@1/char.to_u32(c)
+  let mut low: u64 = 0
+  let mut high = core@1/bytes.len(PUNCTUATION) / 6
+  while low < high {
+    let middle = low + (high - low) / 2
+    if cp < packed3(PUNCTUATION, middle * 6) {
+      high = middle
+    } else if cp > packed3(PUNCTUATION, middle * 6 + 3) {
+      low = middle + 1
+    } else {
+      return true
+    }
+  }
+  false
+}
+
+fn entity(s: String, at: u64) -> Option[(String, u64)] uses {} {
+  if byte(s, at) != 38 {
+    return None()
+  }
+  let mut end = at + 1
+  if byte(s, end) == 35 {
+    end += 1
+    let hex = byte(s, end) == 120 || byte(s, end) == 88
+    if hex {
+      end += 1
+    }
+    let begin = end
+    let mut value: u32 = 0
+    let base: u32 = if hex {
+      16
+    } else {
+      10
+    }
+    let max: u64 = if hex {
+      6
+    } else {
+      7
+    }
+    while end - begin < max {
+      let Some(digit) = ascii.digit_value_radix(byte(s, end), core@1/int.narrow(base)) else {
+        break
+      }
+      value = value * base + core@1/int.widen(digit)
+      end += 1
+    }
+    if end == begin || byte(s, end) != 59 {
+      return None()
+    }
+    // CommonMark numeric references replace invalid scalars with U+FFFD.
+    let c = if value == 0 || value > 1114111 || value >= 55296 && value <= 57343 {
+      '\u{fffd}'
+    } else {
+      match core@1/char.from_u32(value) {
+        Some(c) => c,
+        None() => '\u{fffd}',
+      }
+    }
+    let mut out: List[u8] = []
+    char.format_into(c, mut out)
+    return Some((text.finish_valid(take out), end + 1))
+  }
+  while end - at <= 32 && ascii.is_alnum(byte(s, end)) {
+    end += 1
+  }
+  if end - at < 3 || byte(s, end) != 59 {
+    return None()
+  }
+  match entity_lookup(piece(s, at + 1, end)) {
+    Some(value) => Some((value, end + 1)),
+    None() => None(),
+  }
+}
+
+fn unescape(s: String, escapes: bool) -> String uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < size(s) {
+    if escapes && byte(s, i) == 92 && punctuation(byte(s, i + 1)) {
+      core@1/list.push(mut out, byte(s, i + 1))
+      i += 2
+    } else if let Some((value, end)) = entity(s, i) {
+      text.append(mut out, value)
+      i = end
+    } else {
+      core@1/list.push(mut out, byte(s, i))
+      i += 1
+    }
+  }
+  text.finish_valid(take out)
+}
+
+fn normalize_uri(s: String) -> String uses {} {
+  let mut out: List[u8] = []
+  let hex = "0123456789ABCDEF"
+  let mut i: u64 = 0
+  while i < size(s) {
+    let b = byte(s, i)
+    if ascii.is_alnum(b) || member(";/?:@&=+$,-_.!~*'()#", byte(s, i)) || b == 37 && i + 2 < size(
+      s
+    ) && ascii.digit_value_radix(byte(s, i + 1), 16) != None() && ascii.digit_value_radix(
+      byte(s, i + 2),
+      16
+    ) != None() {
+      core@1/list.push(mut out, b)
+      if b == 37 {
+        core@1/list.push(mut out, byte(s, i + 1))
+        core@1/list.push(mut out, byte(s, i + 2))
+        i += 2
+      }
+    } else {
+      core@1/list.push(mut out, 37u8)
+      core@1/list.push(mut out, byte(hex, core@1/int.widen(b / 16u8)))
+      core@1/list.push(mut out, byte(hex, core@1/int.widen(b % 16u8)))
+    }
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn skip_space(s: String, at: u64) -> u64 uses {} {
+  let mut i = at
+  while space(byte(s, i)) {
+    i += 1
+  }
+  if byte(s, i) == 10 {
+    i += 1
+    while space(byte(s, i)) {
+      i += 1
+    }
+  }
+  i
+}
+
+fn destination(s: String, at: u64) -> Option[(String, u64)] uses {} {
+  let angle = byte(s, at) == 60
+  let begin = if angle {
+    at + 1
+  } else {
+    at
+  }
+  let mut i = begin
+  let mut depth: u64 = 0
+  while i < size(s) {
+    let c = byte(s, i)
+    if c == 92 && punctuation(byte(s, i + 1)) {
+      i += 2
+      continue
+    }
+    if angle {
+      if c == 62 {
+        return Some((normalize_uri(unescape(piece(s, begin, i), true)), i + 1))
+      }
+      if c == 60 || c == 10 {
+        return None()
+      }
+    } else {
+      if c <= 32 {
+        break
+      }
+      if c == 40 {
+        depth += 1
+      }
+      if c == 41 {
+        if depth == 0 {
+          break
+        }
+        depth -= 1
+      }
+    }
+    i += 1
+  }
+  if angle || depth != 0 || i == begin && byte(s, i) != 41 {
+    return None()
+  }
+  Some((normalize_uri(unescape(piece(s, begin, i), true)), i))
+}
+
+fn link_title(s: String, at: u64) -> Option[(String, u64)] uses {} {
+  let c = byte(s, at)
+  if c != 34 && c != 39 && c != 40 {
+    return None()
+  }
+  let close: u8 = if c == 40 {
+    41
+  } else {
+    c
+  }
+  let mut i = at + 1
+  while i < size(s) {
+    if byte(s, i) == close {
+      return Some((unescape(piece(s, at + 1, i), true), i + 1))
+    }
+    if c == 40 && byte(s, i) == 40 {
+      return None()
+    }
+    if byte(s, i) == 92 && punctuation(byte(s, i + 1)) {
+      i += 1
+    }
+    i += 1
+  }
+  None()
+}
+
+fn label_end(s: String, at: u64) -> u64 uses {} {
+  if byte(s, at) != 91 {
+    return at
+  }
+  let mut i = at + 1
+  let mut count: u64 = 0
+  while i < size(s) && count <= 999 {
+    if byte(s, i) == 93 {
+      return i + 1
+    }
+    if byte(s, i) == 91 {
+      return at
+    }
+    if byte(s, i) == 92 && i + 1 < size(s) {
+      i += 1
+    }
+    i += 1
+    count += 1
+  }
+  at
+}
+
+fn normalize_label(s: String) -> String uses {} {
+  let folded = string.casefold(s)
+  let mut out: List[u8] = []
+  let mut pending = false
+  let mut any = false
+  for c in core@1/string.scalars(folded) {
+    if unicode.is_whitespace(c) {
+      pending = any
+    } else {
+      if pending {
+        core@1/list.push(mut out, 32u8)
+      }
+      char.format_into(c, mut out)
+      pending = false
+      any = true
+    }
+  }
+  text.finish_valid(take out)
+}
+
+fn line_end(s: String, at: u64) -> Option[u64] uses {} {
+  let mut i = at
+  while space(byte(s, i)) {
+    i += 1
+  }
+  if i == size(s) {
+    Some(i)
+  } else if byte(s, i) == 10 {
+    Some(i + 1)
+  } else {
+    None()
+  }
+}
+
+fn reference(s: String, mut refs: Map[String, Reference]) -> u64 uses {} {
+  let n = label_end(s, 0)
+  if n == 0 || byte(s, n) != 58 {
+    return 0
+  }
+  let label = normalize_label(piece(s, 1, n - 1))
+  if label == "" {
+    return 0
+  }
+  let Some((dest, end)) = destination(s, skip_space(s, n + 1)) else {
+    return 0
+  }
+  let after_space = skip_space(s, end)
+  let mut title = ""
+  let mut consumed = line_end(s, end)
+  if after_space > end {
+    if let Some((value, after)) = link_title(s, after_space) {
+      if let Some(final) = line_end(s, after) {
+        consumed = Some(final)
+        title = value
+      }
+    }
+  }
+  let Some(final) = consumed else {
+    return 0
+  }
+  if core@1/map.get(refs, label) == None() {
+    core@1/map.insert(mut refs, take label, Reference(destination: dest, title: title))
+  }
+  final
+}
+
+fn remove_references(mut p: Parser, id: u64) -> bool uses {} {
+  let mut value = unique p.nodes[id].value
+  while byte(value, 0) == 91 {
+    let n = reference(value, mut p.refs)
+    if n == 0 {
+      break
+    }
+    value = piece(value, n, size(value))
+  }
+  let remains = size(trim(value)) != 0
+  p.nodes[id].value = unique value
+  remains
+}
+
+type Delimiter {
+  node: u64,
+  marker: u8,
+  count: u64,
+  original: u64,
+  opens: bool,
+  closes: bool,
+  prev: u64,
+  next: u64,
+}
+
+type Bracket {
+  node: u64,
+  index: u64,
+  image: bool,
+  active: bool,
+  bracket_after: bool,
+  delimiter: u64,
+}
+
+type InlineParser {
+  source: String,
+  at: u64,
+  delimiters: List[Delimiter],
+  top: u64,
+  brackets: unique List[Bracket],
+}
+
+fn text_node(mut nodes: List[Entry], parent: u64, value: String, kind: u8) -> u64 uses {} {
+  let id = new_child(mut nodes, parent, kind)
+  nodes[id].value = unique value
+  id
+}
+
+fn remove_delimiter(mut ip: unique InlineParser, id: u64) -> () uses {} {
+  let prev = ip.delimiters[id].prev
+  let next = ip.delimiters[id].next
+  if prev != 0 {
+    ip.delimiters[prev].next = next
+  }
+  if next != 0 {
+    ip.delimiters[next].prev = prev
+  } else {
+    ip.top = prev
+  }
+}
+
+fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom: u64) -> () uses {} {
+  let mut closer = ip.top
+  while closer != 0 && ip.delimiters[closer].prev != bottom {
+    closer = ip.delimiters[closer].prev
+  }
+  // One lower bound per marker, flanking class and length modulo three.
+  let mut bounds: List[u64] = []
+  let mut k: u64 = 0
+  while k < 18 {
+    core@1/list.push(mut bounds, bottom)
+    k += 1
+  }
+  while closer != 0 {
+    if !ip.delimiters[closer].closes {
+      closer = ip.delimiters[closer].next
+      continue
+    }
+    let marker = ip.delimiters[closer].marker
+    let marker_base: u64 = if marker == 42 {
+      0
+    } else if marker == 95 {
+      6
+    } else {
+      12
+    }
+    let flanking_class: u64 = if ip.delimiters[closer].opens {
+      3
+    } else {
+      0
+    }
+    let index = marker_base + flanking_class + ip.delimiters[closer].original % 3
+    let mut opener = ip.delimiters[closer].prev
+    while opener != 0 && opener != bottom && opener != bounds[index] {
+      let odd = marker != 126 && (ip.delimiters[closer].opens || ip.delimiters[opener].closes) && ip.delimiters[closer].original % 3 != 0 && (ip.delimiters[closer].original + ip.delimiters[opener].original) % 3 == 0
+      if ip.delimiters[opener].marker == marker && ip.delimiters[opener].opens && !odd && (marker != 126 || ip.delimiters[opener].count == ip.delimiters[closer].count) {
+        break
+      }
+      opener = ip.delimiters[opener].prev
+    }
+    if opener == 0 || opener == bottom || opener == bounds[index] {
+      bounds[index] = ip.delimiters[closer].prev
+      let old = closer
+      closer = ip.delimiters[closer].next
+      if !ip.delimiters[old].opens {
+        remove_delimiter(mut ip, old)
+      }
+      continue
+    }
+    let used: u64 = if ip.delimiters[opener].count >= 2 && ip.delimiters[closer].count >= 2 {
+      2
+    } else {
+      1
+    }
+    let left = ip.delimiters[opener].node
+    let right = ip.delimiters[closer].node
+    ip.delimiters[opener].count -= used
+    ip.delimiters[closer].count -= used
+    let left_text = copy piece(nodes[left].value, 0, size(nodes[left].value) - used)
+    let right_text = copy piece(nodes[right].value, 0, size(nodes[right].value) - used)
+    nodes[left].value = left_text
+    nodes[right].value = right_text
+    let parent = nodes[left].parent
+    let emph = new_child(
+      mut nodes,
+      parent,
+      if marker == 126 {
+        18
+      } else if used == 1 {
+        14
+      } else {
+        15
+      }
+    )
+    let mut current = nodes[left].next
+    while current != right && current != 0 && current != emph {
+      let next = nodes[current].next
+      move_child(mut nodes, current, emph)
+      current = next
+    }
+    // Insert the new emphasis immediately after the opener.
+    unlink(mut nodes, emph)
+    let next = nodes[left].next
+    nodes[emph].prev = left
+    nodes[emph].next = next
+    nodes[left].next = emph
+    if next != 0 {
+      nodes[next].prev = emph
+    } else {
+      nodes[parent].last = emph
+    }
+    ip.delimiters[opener].next = closer
+    ip.delimiters[closer].prev = opener
+    if ip.delimiters[opener].count == 0 {
+      unlink(mut nodes, left)
+      remove_delimiter(mut ip, opener)
+    }
+    if ip.delimiters[closer].count == 0 {
+      unlink(mut nodes, right)
+      let next_closer = ip.delimiters[closer].next
+      remove_delimiter(mut ip, closer)
+      closer = next_closer
+    }
+  }
+  while ip.top != bottom && ip.top != 0 {
+    let top = ip.top
+    remove_delimiter(mut ip, top)
+  }
+}
+
+fn adjacent_class(s: String, at: u64, previous: bool) -> (bool, bool) uses {} {
+  if previous && at == 0 || !previous && at == size(s) {
+    return (true, false)
+  }
+  let mut pos = if previous {
+    at - 1
+  } else {
+    at
+  }
+  if previous {
+    while pos > 0 && byte(s, pos) >= 128 && byte(s, pos) < 192 {
+      pos -= 1
+    }
+  }
+  let mut end = pos + 1
+  while end < size(s) && byte(s, end) >= 128 && byte(s, end) < 192 {
+    end += 1
+  }
+  for c in core@1/string.scalars(piece(s, pos, end)) {
+    return (
+      unicode.is_whitespace(c),
+      unicode_punctuation(c) || punctuation(byte(s, pos))
+    )
+  }
+  (false, false)
+}
+
+fn handle_delimiter(mut nodes: List[Entry], parent: u64, mut ip: unique InlineParser) -> () uses {} {
+  let c = byte(ip.source, ip.at)
+  let n = run(ip.source, ip.at, c)
+  let (before_ws, before_punct) = adjacent_class(ip.source, ip.at, true)
+  let (after_ws, after_punct) = adjacent_class(ip.source, ip.at + n, false)
+  let left = !after_ws && (!after_punct || before_ws || before_punct)
+  let right = !before_ws && (!before_punct || after_ws || after_punct)
+  let opens = left && (c != 95 || !right || before_punct)
+  let closes = right && (c != 95 || !left || after_punct)
+  let id = text_node(mut nodes, parent, piece(ip.source, ip.at, ip.at + n), 9)
+  if (opens || closes) && (c != 126 || n <= 2) {
+    let d = core@1/list.len(ip.delimiters)
+    if ip.top != 0 {
+      ip.delimiters[ip.top].next = d
+    }
+    core@1/list.push(
+      mut ip.delimiters,
+      Delimiter(
+        node: id,
+        marker: c,
+        count: n,
+        original: n,
+        opens: opens,
+        closes: closes,
+        prev: ip.top,
+        next: 0
+      )
+    )
+    ip.top = d
+  }
+  ip.at += n
+}
+
+fn email_address(s: String) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < size(s) && (ascii.is_alnum(byte(s, i)) || member(
+    ".!#$%&'*+/=?^_`{|}~-",
+    byte(s, i)
+  )) {
+    i += 1
+  }
+  if i == 0 || byte(s, i) != 64 {
+    return false
+  }
+  i += 1
+  while i < size(s) {
+    let start = i
+    if !ascii.is_alnum(byte(s, i)) {
+      return false
+    }
+    while i < size(s) && (ascii.is_alnum(byte(s, i)) || byte(s, i) == 45) {
+      i += 1
+    }
+    if i - start > 63 || !ascii.is_alnum(byte(s, i - 1)) {
+      return false
+    }
+    if i == size(s) {
+      return true
+    }
+    if byte(s, i) != 46 {
+      return false
+    }
+    i += 1
+  }
+  false
+}
+
+fn uri_scheme(s: String) -> bool uses {} {
+  if !ascii.is_alpha(byte(s, 0)) {
+    return false
+  }
+  let mut i: u64 = 1
+  while i < 32 && (ascii.is_alnum(byte(s, i)) || byte(s, i) == 43 || byte(s, i) == 46 || byte(
+    s,
+    i
+  ) == 45) {
+    i += 1
+  }
+  if i < 2 || byte(s, i) != 58 {
+    return false
+  }
+  while i < size(s) {
+    if byte(s, i) <= 32 || byte(s, i) == 60 || byte(s, i) == 62 {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () uses {} {
+  ip.at += 1
+  let after = ip.at
+  let Some(bracket) = core@1/list.pop(mut ip.brackets) else {
+    let _ = text_node(mut p.nodes, parent, "]", 9)
+    return
+  }
+  if !bracket.active {
+    let _ = text_node(mut p.nodes, parent, "]", 9)
+    return
+  }
+  let mut dest = ""
+  let mut title = ""
+  let mut matched = false
+  if byte(ip.source, after) == 40 {
+    let begin = skip_space(ip.source, after + 1)
+    if let Some((value, end)) = destination(ip.source, begin) {
+      let mut next = skip_space(ip.source, end)
+      if next > end {
+        if let Some((title_value, end_title)) = link_title(ip.source, next) {
+          title = title_value
+          next = skip_space(ip.source, end_title)
+        }
+      }
+      if byte(ip.source, next) == 41 {
+        matched = true
+        dest = value
+        ip.at = next + 1
+      }
+    }
+  }
+  if !matched {
+    let end = label_end(ip.source, after)
+    let mut label = ""
+    if end > after + 2 {
+      label = normalize_label(piece(ip.source, after + 1, end - 1))
+    } else if !bracket.bracket_after {
+      label = normalize_label(piece(ip.source, bracket.index + 1, after - 1))
+    }
+    if label != "" {
+      if let Some(ref) = core@1/map.get(p.refs, label) {
+        dest = unique ref.destination
+        title = unique ref.title
+        matched = true
+        ip.at = if end > after {
+          end
+        } else {
+          after
+        }
+      }
+    }
+  }
+  if !matched {
+    ip.at = after
+    let _ = text_node(mut p.nodes, parent, "]", 9)
+    return
+  }
+  let id = new_child(
+    mut p.nodes,
+    parent,
+    if bracket.image {
+      17
+    } else {
+      16
+    }
+  )
+  p.nodes[id].info = dest
+  p.nodes[id].title = title
+  let mut current = p.nodes[bracket.node].next
+  while current != 0 && current != id {
+    let next = p.nodes[current].next
+    move_child(mut p.nodes, current, id)
+    current = next
+  }
+  process_emphasis(mut p.nodes, mut ip, bracket.delimiter)
+  unlink(mut p.nodes, bracket.node)
+  if !bracket.image {
+    let mut i: u64 = 0
+    while i < core@1/list.len(ip.brackets) {
+      if !ip.brackets[i].image {
+        ip.brackets[i].active = false
+      }
+      i += 1
+    }
+  }
+}
+
+fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
+  let source = trim(p.nodes[parent].value)
+  let sentinel = Delimiter(
+    node: 0,
+    marker: 0,
+    count: 0,
+    original: 0,
+    opens: false,
+    closes: false,
+    prev: 0,
+    next: 0
+  )
+  let mut ip: unique InlineParser = unique InlineParser(
+    source: source,
+    at: 0,
+    delimiters: [sentinel],
+    top: 0,
+    brackets: []
+  )
+  while ip.at < size(ip.source) {
+    let start = ip.at
+    let c = byte(ip.source, start)
+    if p.options.autolinks && core@1/list.len(ip.brackets) == 0 {
+      if let Some((dest, end)) = extended_autolink(ip.source, start) {
+        let link = new_child(mut p.nodes, parent, 16)
+        p.nodes[link].info = dest
+        let _ = text_node(
+          mut p.nodes,
+          link,
+          unescape(piece(ip.source, start, end), false),
+          9
+        )
+        ip.at = end
+        continue
+      }
+    }
+    if c == 96 {
+      let n = run(ip.source, start, c)
+      ip.at += n
+      let mut end = ip.at
+      let mut found = false
+      while end < size(ip.source) {
+        if byte(ip.source, end) == 96 {
+          let m = run(ip.source, end, 96)
+          if m == n {
+            found = true
+            break
+          }
+          end += m
+        } else {
+          end += 1
+        }
+      }
+      if found {
+        let mut value = string.replace(piece(ip.source, ip.at, end), "\n", " ")
+        if size(value) >= 2 && byte(value, 0) == 32 && byte(value, size(value) - 1) == 32 && run(
+          value,
+          0,
+          32
+        ) < size(value) {
+          value = piece(value, 1, size(value) - 1)
+        }
+        let _ = text_node(mut p.nodes, parent, value, 12)
+        ip.at = end + n
+      } else {
+        let _ = text_node(mut p.nodes, parent, piece(ip.source, start, ip.at), 9)
+      }
+      continue
+    }
+    if c == 92 {
+      let next = byte(ip.source, start + 1)
+      if next == 10 {
+        new_child(mut p.nodes, parent, 11)
+        ip.at = start + 2
+        while space(byte(ip.source, ip.at)) {
+          ip.at += 1
+        }
+      } else if punctuation(next) {
+        let _ = text_node(
+          mut p.nodes,
+          parent,
+          piece(ip.source, start + 1, start + 2),
+          9
+        )
+        ip.at += 2
+      } else {
+        let _ = text_node(mut p.nodes, parent, "\\", 9)
+        ip.at += 1
+      }
+      continue
+    }
+    if c == 10 {
+      let mut hard = false
+      let last = p.nodes[parent].last
+      if last != 0 && p.nodes[last].kind == 9 {
+        let value = unique p.nodes[last].value
+        let mut end = size(value)
+        while end > 0 && byte(value, end - 1) == 32 {
+          end -= 1
+        }
+        hard = size(value) - end >= 2
+        let value_trimmed = copy piece(value, 0, end)
+        p.nodes[last].value = value_trimmed
+      }
+      new_child(
+        mut p.nodes,
+        parent,
+        if hard {
+          11
+        } else {
+          10
+        }
+      )
+      ip.at += 1
+      while space(byte(ip.source, ip.at)) {
+        ip.at += 1
+      }
+      continue
+    }
+    if c == 42 || c == 95 || c == 126 && p.options.strikethrough {
+      handle_delimiter(mut p.nodes, parent, mut ip)
+      continue
+    }
+    if c == 91 || c == 33 && byte(ip.source, start + 1) == 91 {
+      let image = c == 33
+      ip.at += if image {
+        2
+      } else {
+        1
+      }
+      let id = text_node(mut p.nodes, parent, piece(ip.source, start, ip.at), 9)
+      let len = core@1/list.len(ip.brackets)
+      if len != 0 {
+        ip.brackets[len - 1].bracket_after = true
+      }
+      core@1/list.push(
+        mut ip.brackets,
+        Bracket(
+          node: id,
+          index: if image {
+            start + 1
+          } else {
+            start
+          },
+          image: image,
+          active: true,
+          bracket_after: false,
+          delimiter: ip.top
+        )
+      )
+      continue
+    }
+    if c == 93 {
+      close_bracket(mut p, parent, mut ip)
+      continue
+    }
+    if c == 60 {
+      let mut end = start + 1
+      while end < size(ip.source) && byte(ip.source, end) != 62 && byte(ip.source, end) != 10 {
+        end += 1
+      }
+      if byte(ip.source, end) == 62 {
+        let content = piece(ip.source, start + 1, end)
+        let email = email_address(content)
+        if email || uri_scheme(content) {
+          let value = unescape(content, false)
+          let id = new_child(mut p.nodes, parent, 16)
+          p.nodes[id].info = normalize_uri(
+            if email {
+              string.concat("mailto:", value)
+            } else {
+              value
+            }
+          )
+          let _ = text_node(mut p.nodes, id, value, 9)
+          ip.at = end + 1
+          continue
+        }
+      }
+      let html_end = html_tag_end(ip.source, start)
+      if html_end > start {
+        let _ = text_node(mut p.nodes, parent, piece(ip.source, start, html_end), 13)
+        ip.at = html_end
+        continue
+      }
+    }
+    if c == 38 {
+      if let Some((value, end)) = entity(ip.source, start) {
+        let _ = text_node(mut p.nodes, parent, value, 9)
+        ip.at = end
+        continue
+      }
+    }
+    // Aggregate ordinary text so trailing-space processing sees a complete run.
+    let mut end = start + 1
+    while end < size(ip.source) {
+      let b = byte(ip.source, end)
+      if p.options.autolinks && core@1/list.len(ip.brackets) == 0 && extended_autolink(
+        ip.source,
+        end
+      ) != None() {
+        break
+      }
+      if b == 10 || b == 96 || b == 92 || b == 42 || b == 95 || b == 91 || b == 93 || b == 33 || b == 60 || b == 38 || b == 126 && p.options.strikethrough {
+        break
+      }
+      end += 1
+    }
+    let _ = text_node(mut p.nodes, parent, piece(ip.source, start, end), 9)
+    ip.at = end
+  }
+  process_emphasis(mut p.nodes, mut ip, 0)
+  p.nodes[parent].value = ""
+}
+
+fn build_node(nodes: List[Entry], id: u64) -> Node uses {} {
+  let n = unique nodes[id]
+  let kind: Kind = match n.kind {
+    0 => Document(),
+    1 => Paragraph(),
+    2 => Heading(n.number),
+    3 => BlockQuote(),
+    4 => ListBlock(n.flag, n.number, n.tight),
+    5 => Item(n.checked),
+    6 => CodeBlock(n.value, n.info),
+    7 => HtmlBlock(n.value),
+    8 => ThematicBreak(),
+    9 => Text(n.value),
+    10 => SoftBreak(),
+    11 => HardBreak(),
+    12 => Code(n.value),
+    13 => HtmlInline(n.value),
+    14 => Emphasis(),
+    15 => Strong(),
+    16 => Link(n.info, n.title),
+    17 => Image(n.info, n.title),
+    18 => Strikethrough(),
+    19 => Table(),
+    20 => TableRow(n.flag),
+    _ => TableCell(n.html),
+  }
+  let mut children: List[Node] = []
+  let mut child = n.first
+  while child != 0 {
+    core@1/list.push(mut children, build_node(nodes, child))
+    child = nodes[child].next
+  }
+  Node(kind: kind, children: take children)
+}
+
+/// Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
+/// CRLF and bare CR become LF, as required by CommonMark preprocessing.
+pub fn parse(take source: String, options: Options) -> Node uses {} {
+  let normalized = string.replace(
+    string.replace(string.replace(source, "\u{0}", "\u{fffd}"), "\r\n", "\n"),
+    "\r",
+    "\n"
+  )
+  let mut p = Parser(
+    nodes: [entry(0)],
+    tip: 0,
+    line: "",
+    offset: 0,
+    column: 0,
+    nonspace: 0,
+    nonspace_column: 0,
+    indent: 0,
+    blank: false,
+    partial: false,
+    matched: 0,
+    oldtip: 0,
+    closed: true,
+    line_number: 0,
+    refs: core@1/map.empty(),
+    options: options
+  )
+  for line in string.lines(take normalized) {
+    incorporate(mut p, unique line)
+  }
+  while p.tip != 0 {
+    let close_id = p.tip
+    let close_line = p.line_number
+    finish_at(close_id, close_line, mut p)
+  }
+  let count = core@1/list.len(p.nodes)
+  let mut id: u64 = 1
+  while id < count {
+    if p.nodes[id].kind == 1 || p.nodes[id].kind == 2 || p.nodes[id].kind == 21 {
+      if options.task_lists && p.nodes[id].kind == 1 {
+        let parent = p.nodes[id].parent
+        let value = unique p.nodes[id].value
+        if p.nodes[parent].kind == 5 && p.nodes[parent].first == id && byte(value, 0) == 91 && (space(
+          byte(value, 1)
+        ) || byte(value, 1) == 120 || byte(value, 1) == 88) && byte(value, 2) == 93 && whitespace(
+          byte(value, 3)
+        ) {
+          let checked = byte(value, 1) == 120 || byte(value, 1) == 88
+          let rest = copy trim(piece(value, 3, size(value)))
+          p.nodes[parent].checked = Some(checked)
+          p.nodes[id].value = rest
+        }
+      }
+      parse_inlines(mut p, id)
+    }
+    id += 1
+  }
+  if options.autolinks {
+    autolink_emails(mut p.nodes)
+  }
+  build_node(p.nodes, 0)
+}
+
+fn escape_html(mut out: List[u8], s: String) -> () uses {} {
+  let mut i: u64 = 0
+  while i < size(s) {
+    let b = byte(s, i)
+    if b == 38 {
+      text.append(mut out, "&amp;")
+    } else if b == 60 {
+      text.append(mut out, "&lt;")
+    } else if b == 62 {
+      text.append(mut out, "&gt;")
+    } else if b == 34 {
+      text.append(mut out, "&quot;")
+    } else {
+      core@1/list.push(mut out, b)
+    }
+    i += 1
+  }
+}
+
+fn newline(mut out: List[u8]) -> () uses {} {
+  let len = core@1/list.len(out)
+  if len > 0 && out[len - 1] != 10 {
+    core@1/list.push(mut out, 10u8)
+  }
+}
+
+fn image_alt(node: Node, mut out: List[u8]) -> () uses {} {
+  match node.kind {
+    Text(s) => escape_html(mut out, s),
+    Code(s) => escape_html(mut out, s),
+    HtmlInline(_) => (),
+    SoftBreak() => core@1/list.push(mut out, 10u8),
+    HardBreak() => core@1/list.push(mut out, 10u8),
+    _ => {
+      for child in node.children {
+        image_alt(child, mut out)
+      }
+    },
+  }
+}
+
+fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) -> () uses {} {
+  match node.kind {
+    Document() => {
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+    },
+    Text(s) => escape_html(mut out, s),
+    SoftBreak() => core@1/list.push(mut out, 10u8),
+    HardBreak() => text.append(mut out, "<br />\n"),
+    Code(s) => {
+      text.append(mut out, "<code>")
+      escape_html(mut out, s)
+      text.append(mut out, "</code>")
+    },
+    HtmlInline(s) => text.append(mut out, s),
+    HtmlBlock(s) => {
+      newline(mut out)
+      text.append(mut out, s)
+      newline(mut out)
+    },
+    CodeBlock(s, info) => {
+      newline(mut out)
+      text.append(mut out, "<pre><code")
+      let words = string.split_ascii_whitespace(unique info)
+      if core@1/list.len(words) != 0 {
+        text.append(mut out, " class=\"language-")
+        escape_html(mut out, words[0])
+        core@1/list.push(mut out, 34u8)
+      }
+      core@1/list.push(mut out, 62u8)
+      escape_html(mut out, s)
+      text.append(mut out, "</code></pre>\n")
+    },
+    ThematicBreak() => {
+      newline(mut out)
+      text.append(mut out, "<hr />\n")
+    },
+    Paragraph() => {
+      if !tight {
+        newline(mut out)
+        text.append(mut out, "<p>")
+      }
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      if !tight {
+        text.append(mut out, "</p>\n")
+      }
+    },
+    Heading(level) => {
+      newline(mut out)
+      text.append(mut out, f"<h{level}>")
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(mut out, f"</h{level}>\n")
+    },
+    BlockQuote() => {
+      newline(mut out)
+      text.append(mut out, "<blockquote>\n")
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      newline(mut out)
+      text.append(mut out, "</blockquote>\n")
+    },
+    ListBlock(ordered, start, list_tight) => {
+      newline(mut out)
+      if ordered {
+        text.append(
+          mut out,
+          if start == 1 {
+            "<ol>\n"
+          } else {
+            f"<ol start=\"{start}\">\n"
+          }
+        )
+      } else {
+        text.append(mut out, "<ul>\n")
+      }
+      for child in node.children {
+        render_node(child, mut out, list_tight, false)
+      }
+      newline(mut out)
+      text.append(
+        mut out,
+        if ordered {
+          "</ol>\n"
+        } else {
+          "</ul>\n"
+        }
+      )
+    },
+    Item(checked) => {
+      text.append(mut out, "<li>")
+      if let Some(value) = checked {
+        text.append(
+          mut out,
+          if value {
+            "<input checked=\"\" disabled=\"\" type=\"checkbox\"> "
+          } else {
+            "<input disabled=\"\" type=\"checkbox\"> "
+          }
+        )
+      }
+      for child in node.children {
+        render_node(child, mut out, tight, false)
+      }
+      text.append(mut out, "</li>\n")
+    },
+    Link(dest, title) => {
+      text.append(mut out, "<a href=\"")
+      escape_html(mut out, dest)
+      core@1/list.push(mut out, 34u8)
+      if title != "" {
+        text.append(mut out, " title=\"")
+        escape_html(mut out, title)
+        core@1/list.push(mut out, 34u8)
+      }
+      core@1/list.push(mut out, 62u8)
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(mut out, "</a>")
+    },
+    Image(dest, title) => {
+      text.append(mut out, "<img src=\"")
+      escape_html(mut out, dest)
+      text.append(mut out, "\" alt=\"")
+      for child in node.children {
+        image_alt(child, mut out)
+      }
+      core@1/list.push(mut out, 34u8)
+      if title != "" {
+        text.append(mut out, " title=\"")
+        escape_html(mut out, title)
+        core@1/list.push(mut out, 34u8)
+      }
+      text.append(mut out, " />")
+    },
+    Emphasis() => {
+      text.append(mut out, "<em>")
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(mut out, "</em>")
+    },
+    Strong() => {
+      text.append(mut out, "<strong>")
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(mut out, "</strong>")
+    },
+    Strikethrough() => {
+      text.append(mut out, "<del>")
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(mut out, "</del>")
+    },
+    Table() => {
+      newline(mut out)
+      text.append(mut out, "<table>\n")
+      let mut first = true
+      let mut body = false
+      for row in node.children {
+        if first {
+          text.append(mut out, "<thead>\n")
+          render_node(row, mut out, false, true)
+          text.append(mut out, "</thead>\n")
+          first = false
+        } else {
+          if !body {
+            text.append(mut out, "<tbody>\n")
+            body = true
+          }
+          render_node(row, mut out, false, false)
+        }
+      }
+      if body {
+        text.append(mut out, "</tbody>\n")
+      }
+      text.append(mut out, "</table>\n")
+    },
+    TableRow(header) => {
+      text.append(mut out, "<tr>\n")
+      for cell in node.children {
+        render_node(cell, mut out, false, header)
+      }
+      text.append(mut out, "</tr>\n")
+    },
+    TableCell(align) => {
+      text.append(
+        mut out,
+        if cell_header {
+          "<th"
+        } else {
+          "<td"
+        }
+      )
+      if align != 0 {
+        text.append(
+          mut out,
+          if align == 1 {
+            " align=\"left\""
+          } else if align == 2 {
+            " align=\"center\""
+          } else {
+            " align=\"right\""
+          }
+        )
+      }
+      core@1/list.push(mut out, 62u8)
+      for child in node.children {
+        render_node(child, mut out, false, false)
+      }
+      text.append(
+        mut out,
+        if cell_header {
+          "</th>\n"
+        } else {
+          "</td>\n"
+        }
+      )
+    },
+  }
+}
+
+/// CommonMark HTML. Raw HTML nodes are emitted verbatim.
+pub fn render_html(document: Node) -> String uses {} {
+  let mut out: List[u8] = []
+  render_node(document, mut out, false, false)
+  text.finish_valid(take out)
+}
+
+pub fn to_html(take source: String, options: Options) -> String uses {} {
+  render_html(parse(take source, options))
+}
+
+fn table_cells(s: String) -> List[String] uses {} {
+  let source = trim(s)
+  let mut out: List[String] = []
+  let mut cell: List[u8] = []
+  let mut i: u64 = if byte(source, 0) == 124 {
+    1
+  } else {
+    0
+  }
+  while i < size(source) {
+    if byte(source, i) == 92 && byte(source, i + 1) == 124 {
+      core@1/list.push(mut cell, 124u8)
+      i += 2
+    } else if byte(source, i) == 124 {
+      core@1/list.push(mut out, trim(text.finish_valid(take cell)))
+      cell = []
+      i += 1
+      if i == size(source) {
+        return take out
+      }
+    } else {
+      core@1/list.push(mut cell, byte(source, i))
+      i += 1
+    }
+  }
+  core@1/list.push(mut out, trim(text.finish_valid(take cell)))
+  take out
+}
+
+fn table_alignments(s: String) -> Option[String] uses {} {
+  let cells = table_cells(s)
+  if core@1/list.len(cells) == 0 {
+    return None()
+  }
+  let mut out: List[u8] = []
+  for cell in cells {
+    let left = byte(cell, 0) == 58
+    let right = size(cell) > 1 && byte(cell, size(cell) - 1) == 58
+    let mut i: u64 = if left {
+      1
+    } else {
+      0
+    }
+    let end = size(cell) - if right {
+      1u64
+    } else {
+      0u64
+    }
+    if i == end {
+      return None()
+    }
+    while i < end {
+      if byte(cell, i) != 45 {
+        return None()
+      }
+      i += 1
+    }
+    core@1/list.push(
+      mut out,
+      if left && right {
+        50u8
+      } else if left {
+        49u8
+      } else if right {
+        51u8
+      } else {
+        48u8
+      }
+    )
+  }
+  Some(text.finish_valid(take out))
+}
+
+fn add_table_row(table: u64, source: String, header: bool, mut p: Parser) -> () uses {} {
+  let cells = table_cells(source)
+  let row = new_child(mut p.nodes, table, 20)
+  p.nodes[row].flag = header
+  let columns = size(p.nodes[table].info)
+  let mut i: u64 = 0
+  while i < columns {
+    let id = new_child(mut p.nodes, row, 21)
+    p.nodes[id].html = byte(p.nodes[table].info, i) - 48u8
+    p.nodes[id].value = if i < core@1/list.len(cells) {
+      unique cells[i]
+    } else {
+      ""
+    }
+    i += 1
+  }
+}
+
+fn start_table(mut p: Parser, container: u64) -> bool uses {} {
+  if !p.options.tables || p.nodes[container].kind != 1 || p.indent >= 4 {
+    return false
+  }
+  let delimiter = piece(p.line, p.nonspace, size(p.line))
+  let Some(align) = table_alignments(delimiter) else {
+    return false
+  }
+  let lines = string.lines(unique p.nodes[container].value)
+  let len = core@1/list.len(lines)
+  if len == 0 {
+    return false
+  }
+  let header = unique lines[len - 1]
+  if !string.contains(header, "|") && !string.contains(delimiter, "|") {
+    return false
+  }
+  if core@1/list.len(table_cells(header)) != size(align) {
+    return false
+  }
+  close_unmatched(mut p)
+  let mut table = container
+  if len > 1 {
+    let mut previous: List[u8] = []
+    let mut i: u64 = 0
+    while i + 1 < len {
+      text.append(mut previous, lines[i])
+      core@1/list.push(mut previous, 10u8)
+      i += 1
+    }
+    p.nodes[container].value = text.finish_valid(take previous)
+    let close_id = container
+    let close_line = p.line_number - 2
+    finish_at(close_id, close_line, mut p)
+    table = add_block(mut p, 19)
+  } else {
+    p.nodes[container].kind = 19
+    p.nodes[container].value = ""
+  }
+  p.nodes[table].info = align
+  add_table_row(table, header, true, mut p)
+  p.offset = size(p.line)
+  true
+}
+
+// cmark-gfm extensions/autolink.c: domain check and trailing delimiter trim.
+fn extended_autolink(s: String, at: u64) -> Option[(String, u64)] uses {} {
+  let boundary = at == 0 || whitespace(byte(s, at - 1)) || byte(s, at - 1) == 42 || byte(
+    s,
+    at - 1
+  ) == 95 || byte(s, at - 1) == 126 || byte(s, at - 1) == 40
+  let www = starts(s, at, "www.")
+  let scheme: u64 = if starts(s, at, "https://") {
+    8
+  } else if starts(s, at, "http://") {
+    7
+  } else if starts(s, at, "ftp://") {
+    6
+  } else {
+    0
+  }
+  if boundary && (www || scheme != 0) {
+    let mut host_end = at + scheme
+    let mut dots: u64 = 0
+    let mut last_dot = host_end
+    let mut previous_dot = host_end
+    let mut underscore: u64 = 0
+    while host_end < size(s) {
+      let c = byte(s, host_end)
+      if !ascii.is_alnum(c) && c != 45 && c != 95 && c != 46 {
+        break
+      }
+      if c == 46 {
+        dots += 1
+        previous_dot = last_dot
+        last_dot = host_end
+      }
+      if c == 95 {
+        underscore = host_end
+      }
+      host_end += 1
+    }
+    if host_end > at + scheme && dots > 0 && (underscore == 0 || underscore < previous_dot) {
+      let mut end = host_end
+      while end < size(s) && !whitespace(byte(s, end)) && byte(s, end) != 60 {
+        end += 1
+      }
+      let mut opens: u64 = 0
+      let mut closes: u64 = 0
+      let mut i = at
+      while i < end {
+        if byte(s, i) == 40 {
+          opens += 1
+        }
+        if byte(s, i) == 41 {
+          closes += 1
+        }
+        i += 1
+      }
+      while end > at {
+        let c = byte(s, end - 1)
+        if member("?!.,:*_~", byte(s, end - 1)) {
+          end -= 1
+        } else if c == 41 && closes > opens {
+          end -= 1
+          closes -= 1
+        } else if c == 59 {
+          let mut amp = end - 1
+          while amp > at && ascii.is_alnum(byte(s, amp - 1)) {
+            amp -= 1
+          }
+          if amp > at && byte(s, amp - 1) == 38 {
+            end = amp - 1
+          } else {
+            break
+          }
+        } else {
+          break
+        }
+      }
+      if end > at {
+        let value = unescape(piece(s, at, end), false)
+        return Some(
+          (
+            normalize_uri(
+              if www {
+                string.concat("http://", value)
+              } else {
+                value
+              }
+            ),
+            end
+          )
+        )
+      }
+    }
+  }
+  None()
+}
+
+// Emails are recognized in consolidated text after brackets and emphasis resolve.
+fn extended_email(s: String, at: u64) -> Option[(String, u64)] uses {} {
+  // Email locals and domains have different permitted alphabets.
+  if at > 0 && (ascii.is_alnum(byte(s, at - 1)) || byte(s, at - 1) == 46 || byte(
+    s,
+    at - 1
+  ) == 95 || byte(s, at - 1) == 45 || byte(s, at - 1) == 43) {
+    return None()
+  }
+  let mut i = at
+  while i < size(s) && (ascii.is_alnum(byte(s, i)) || byte(s, i) == 46 || byte(s, i) == 95 || byte(
+    s,
+    i
+  ) == 45 || byte(s, i) == 43) {
+    i += 1
+  }
+  if i == at || byte(s, i) != 64 {
+    return None()
+  }
+  i += 1
+  let domain = i
+  let mut dots: u64 = 0
+  while i < size(s) && (ascii.is_alnum(byte(s, i)) || byte(s, i) == 46 || byte(s, i) == 95 || byte(
+    s,
+    i
+  ) == 45) {
+    if byte(s, i) == 46 {
+      dots += 1
+    }
+    i += 1
+  }
+  while i > domain && byte(s, i - 1) == 46 {
+    i -= 1
+  }
+  if i == domain || dots == 0 || byte(s, i - 1) == 95 || byte(s, i - 1) == 45 {
+    return None()
+  }
+  Some((normalize_uri(string.concat("mailto:", piece(s, at, i))), i))
+}
+
+// cmark-gfm's autolink postprocess: consolidate text, then skip link subtrees.
+fn sibling_after(mut nodes: List[Entry], previous: u64, kind: u8) -> u64 uses {} {
+  let parent = nodes[previous].parent
+  let next = nodes[previous].next
+  let id = new_child(mut nodes, parent, kind)
+  unlink(mut nodes, id)
+  nodes[id].prev = previous
+  nodes[id].next = next
+  nodes[previous].next = id
+  if next != 0 {
+    nodes[next].prev = id
+  } else {
+    nodes[parent].last = id
+  }
+  id
+}
+
+fn autolink_emails(mut nodes: List[Entry]) -> () uses {} {
+  let count = core@1/list.len(nodes)
+  let mut id: u64 = 1
+  while id < count {
+    if nodes[id].kind != 9 || nodes[id].value == "" {
+      id += 1
+      continue
+    }
+    let mut ancestor = nodes[id].parent
+    let mut in_link = false
+    while ancestor != 0 {
+      if nodes[ancestor].kind == 16 {
+        in_link = true
+        break
+      }
+      ancestor = nodes[ancestor].parent
+    }
+    if in_link {
+      id += 1
+      continue
+    }
+    let mut value = unique nodes[id].value
+    let mut next = nodes[id].next
+    while next != 0 && nodes[next].kind == 9 {
+      value = string.concat(value, nodes[next].value)
+      let following = nodes[next].next
+      nodes[next].value = ""
+      unlink(mut nodes, next)
+      next = following
+    }
+    nodes[id].value = piece(value, 0, size(value))
+    let mut current = id
+    let mut begin: u64 = 0
+    let mut at: u64 = 0
+    while at < size(value) {
+      if let Some((dest, end)) = extended_email(value, at) {
+        let prefix = piece(value, begin, at)
+        nodes[current].value = prefix
+        let link = sibling_after(mut nodes, current, 16)
+        nodes[link].info = dest
+        let _ = text_node(mut nodes, link, piece(value, at, end), 9)
+        let post = sibling_after(mut nodes, link, 9)
+        nodes[post].value = piece(value, end, size(value))
+        current = post
+        begin = end
+        at = end
+      } else {
+        at += 1
+      }
+    }
+    id += 1
+  }
+}

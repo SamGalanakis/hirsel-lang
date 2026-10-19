@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/119/malformed",
+    "```\n<\n\u{0}[&unterminated",
+    "<pre><code>&lt;\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/120/malformed",
+    "~~~\n<\n\u{0}[&unterminated",
+    "<pre><code>&lt;\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/121/malformed",
+    "``\nfo\u{0}[&unterminated",
+    "<p>``\nfo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/122/malformed",
+    "```\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/123/malformed",
+    "~~~\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/124/malformed",
+    "````\naaa\n`\u{0}[&unterminated",
+    "<pre><code>aaa\n`�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

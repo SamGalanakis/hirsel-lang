@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/115/malformed",
+    "# Heading\n    foo\nHeadi\u{0}[&unterminated",
+    "<h1>Heading</h1>\n<pre><code>foo\n</code></pre>\n<p>Headi�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/116/malformed",
+    "        fo\u{0}[&unterminated",
+    "<pre><code>    fo�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/117/malformed",
+    "\n    \n    \u{0}[&unterminated",
+    "<pre><code>�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/118/malformed",
+    "    f\u{0}[&unterminated",
+    "<pre><code>f�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

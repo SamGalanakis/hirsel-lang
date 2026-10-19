@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let options = markdown.default_options()
+  let mut document = markdown.parse("# title", options)
+  failure.check(list.len(document.children) == 1, TextInvariant())
+  document.children[0].kind = Heading(3)
+  failure.check(markdown.render_html(document) == "<h3>title</h3>\n", TextInvariant())
+  failure.check(
+    markdown.to_html("a\r\nb\rc\u{0}", options) == "<p>a\nb\nc�</p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("~~gone~~", options) == "<p>~~gone~~</p>\n",
+    TextInvariant()
+  )
+  let mut strike = options
+  strike.strikethrough = true
+  failure.check(
+    markdown.to_html("~~gone~~", strike) == "<p><del>gone</del></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("www.example.com", options) == "<p>www.example.com</p>\n",
+    TextInvariant()
+  )
+  let mut autolink = options
+  autolink.autolinks = true
+  failure.check(
+    markdown.to_html("www.example.com", autolink) == "<p><a href=\"http://www.example.com\">www.example.com</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("a | b\n--- | ---", options) == "<p>a | b\n--- | ---</p>\n",
+    TextInvariant()
+  )
+  let mut tables = options
+  tables.tables = true
+  failure.check(
+    markdown.to_html("a | b\n--- | ---", tables) == "<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n</table>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("- [x] done", options) == "<ul>\n<li>[x] done</li>\n</ul>\n",
+    TextInvariant()
+  )
+  let mut tasks = options
+  tasks.task_lists = true
+  failure.check(
+    markdown.to_html("- [x] done", tasks) == "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done</li>\n</ul>\n",
+    TextInvariant()
+  )
+  Ok(())
+}
