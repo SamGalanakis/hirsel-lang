@@ -66,6 +66,7 @@ uint8_t hirsel_rt_v2_test_fail(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_crash(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_test_seed(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_tasks(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_test_clock(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_log(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_test_expect_snapshot(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_test_dir(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
