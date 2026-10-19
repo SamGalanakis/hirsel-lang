@@ -129,7 +129,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 11
+#define HIRSEL_RT_V2_LAYOUT_VERSION 12
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4

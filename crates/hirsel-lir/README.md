@@ -680,7 +680,7 @@ the same route to another place.
 
 Native Map storage retains optional private entries, tagged u64 buckets, cached
 hashes and a live count. Its LayoutKeys change with library revision 22; no
-TIR/LIR instruction changes. Descriptor version 11 adds a live-count program
+TIR/LIR instruction changes. Descriptor version 12 adds a live-count program
 for private Map entry Lists, derived once by `logical_storage::MapStorage` from
 the frozen layout table and reused by the descriptor registry and H. Charges
 count live key/value pairs and exclude tags, buckets and hash-cache storage.

@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 11;
+pub const LAYOUT_VERSION: u32 = 12;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -136,7 +136,7 @@ pub struct Layout {
     /// The MEM-6 charge of a block of this payload layout (version 6; the runtime README's
     /// table), per element with [`LAYOUT_LOGICAL_PER_ELEMENT`].
     pub logical: u64,
-    /// Optional five-word live-entry count program (native descriptor version 11).
+    /// Optional five-word live-entry count program (native descriptor version 12).
     pub logical_count: *const u64,
 }
 
