@@ -1049,17 +1049,29 @@ fn map_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let entry_layout = b.ed.unit.types[b.ed.unit.addresses[entry.index()].ty.index()].layout;
     let moved = b.block(BlockKind::Body, &[]);
     let shared = b.block(BlockKind::Body, &[]);
-    let picked = b.fresh(entry_layout);
-    let joined = b.block(BlockKind::Body, &[picked]);
+    let before = b.reaching(cursor.slot)?;
     b.branch(unique, moved, shared);
     b.at(moved);
     let stored_layout = b.address_layout(stored_entry);
+    let (entry_slot, moved_entry) = temporary(&mut b, stored_layout)?;
     let empty = table::entry_value(&mut b, stored_layout, None)?;
-    let value = b.take(entry)?;
-    // The live payload was moved out; only its tag remains.
+    // Move a whole counted element before projecting its payload. The cursor
+    // owns a finalizer, so a partial take must happen in separate storage.
+    let whole = b.take(stored_entry)?;
+    b.store(moved_entry, whole)?;
+    b.hold(entry_slot, moved_entry);
     b.store(stored_entry, empty)?;
-    b.jump(joined, &[value]);
+    let pair = live_pair(&mut b, moved_entry)?;
+    let value = b.take(pair)?;
+    b.forget_held(moved_entry);
+    b.push(Inst::StorageDead {
+        slot: entry_slot,
+        if_live: false,
+    });
+    let some = option(&mut b, Some(value))?;
+    b.ret(Some(some));
     b.at(shared);
+    b.set_reaching(cursor.slot, before);
     if b.record(entry_layout).copy == CopyRecipe::NotCopyable {
         b.terminate(Terminator::InvariantFault {
             reason: "a noncopyable map has a shared consuming source".into(),
@@ -1067,12 +1079,9 @@ fn map_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     } else {
         let failure = b.failure(None);
         let value = b.copy(entry, failure)?;
-        b.jump(joined, &[value]);
+        let some = option(&mut b, Some(value))?;
+        b.ret(Some(some));
     }
-    b.at(joined);
-    let value = picked;
-    let some = option(&mut b, Some(value))?;
-    b.ret(Some(some));
     Ok(b.finish())
 }
 fn sub(b: &mut Body<'_, '_>, a: ValueId, c: ValueId) -> ValueId {

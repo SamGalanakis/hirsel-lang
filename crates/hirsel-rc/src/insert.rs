@@ -27,9 +27,9 @@ use crate::import::STATE_RELEASE;
 use crate::paths::{PathId, Paths, Tris};
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
-    AddressBase, AddressId, AddressInfo, ArgumentValue, Block, BlockId, BlockKind, CaptureUse,
-    CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, FlatFieldOp, Holding,
-    Inst, LirTypeId, LirUnit, LoanId, MaskRef, PoolRange, ProjectionStep, ReadMode,
+    AddressBase, AddressId, AddressInfo, ArgumentValue, Block, BlockId, BlockKind, CallId,
+    CaptureUse, CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, FlatFieldOp,
+    Holding, Inst, LirTypeId, LirUnit, LoanId, MaskRef, PoolRange, ProjectionStep, ReadMode,
     RegionInstanceId, ScopeId, SlotId, SlotKind, SourceAnchorId, Terminator, ValueId, ValueInfo,
     ValueRepr,
 };
@@ -809,7 +809,7 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
 
 /// A unit under rewrite: each block's instructions as its own vector, so a
 /// pass inserts and deletes freely; `finish` flattens them again and drops
-/// every block, edge and failure edge the rewrite left unreachable or unnamed.
+/// every block, call, edge and failure edge the rewrite left unreachable or unnamed.
 pub struct Editor<S> {
     pub unit: LirUnit<S>,
     pub code: Vec<Vec<Inst>>,
@@ -1004,11 +1004,15 @@ impl<S: Stage> Editor<S> {
         }
         let mut failure_used = vec![false; self.unit.tables.failures.len()];
         let mut edge_used = vec![false; self.unit.tables.edges.len()];
+        let mut call_used = vec![false; self.unit.tables.calls.len()];
         for b in (0..n).filter(|&b| reach[b]) {
             for f in self.code[b].iter().filter_map(Inst::failure) {
                 failure_used[f.index()] = true;
             }
             let term = &self.unit.terminators[b];
+            if let Terminator::Call { call, .. } = term {
+                call_used[call.index()] = true;
+            }
             if let Some(f) = Terminator::failure(term) {
                 failure_used[f.index()] = true;
             }
@@ -1034,6 +1038,7 @@ impl<S: Stage> Editor<S> {
         };
         let failure_map = renumber(&failure_used);
         let edge_map = renumber(&edge_used);
+        let call_map = renumber(&call_used);
         let fm = |f: FailureId| FailureId(failure_map[f.index()].expect("named failure"));
         let em = |e: EdgeId| EdgeId(edge_map[e.index()].expect("named edge"));
         let mut blocks = Vec::new();
@@ -1100,7 +1105,7 @@ impl<S: Stage> Editor<S> {
                     normal,
                     failure,
                 } => Terminator::Call {
-                    call,
+                    call: CallId(call_map[call.index()].expect("named call")),
                     normal: normal.map(em),
                     failure: fm(failure),
                 },
@@ -1126,6 +1131,24 @@ impl<S: Stage> Editor<S> {
             .map(|(_, mut e)| {
                 e.target = block_map[e.target.index()].expect("edge into a kept block");
                 e
+            })
+            .collect();
+        let calls = std::mem::take(&mut self.unit.tables.calls);
+        let arguments = std::mem::take(&mut self.unit.pools.call_arguments);
+        self.unit.tables.calls = calls
+            .into_iter()
+            .enumerate()
+            .filter(|(call, _)| call_used[*call])
+            .map(|(_, mut call)| {
+                call.arguments = PoolRange::push(
+                    &mut self.unit.pools.call_arguments,
+                    call.arguments
+                        .get(&arguments)
+                        .unwrap_or(&[])
+                        .iter()
+                        .copied(),
+                );
+                call
             })
             .collect();
         self.unit.entry = block_map[self.unit.entry.index()].expect("entry is reachable");
@@ -3652,8 +3675,8 @@ pub(crate) fn compact_values<S: Stage>(unit: &mut LirUnit<S>) {
     if defined.iter().all(|d| *d) {
         return;
     }
-    // Rows the rewrite left unreachable (a dead call site, a dead block's
-    // parameter range) may still name a removed value; they name the first
+    // Pool rows the rewrite left unused (such as a dead block's parameter
+    // range) may still name a removed value; they name the first
     // kept value instead, as nothing reads them.
     let mut map = Vec::with_capacity(defined.len());
     let mut next = 0u32;
@@ -4881,6 +4904,58 @@ pub(crate) fn fill_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finishing_prunes_unreferenced_calls_and_remaps_kept_calls_and_arguments() {
+        use hirsel_heapcheck::build::{Layouts, fixture_unit, path};
+        use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
+        use hirsel_lir::testing::UnitBuilder;
+        let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+        let scalar = layouts.scalar(ScalarKind::U64);
+        let (_, table) = layouts.finish();
+        let mut builder = UnitBuilder::<Rc>::new(fixture_unit(path("calls")));
+        builder.unit.header.stage = Rc::KIND;
+        let value = builder.plain(ValueRepr::Scalar(ScalarKind::U64), scalar);
+        builder.parameter(value);
+        let entry = builder.block(BlockKind::Body, &[]);
+        let dead = builder.block(BlockKind::Body, &[]);
+        let done = builder.block(BlockKind::Body, &[]);
+        let failed = builder.block(BlockKind::FailureCleanup, &[]);
+        let arguments = [(Passing::Borrow, ArgumentValue::Value(value))];
+        let dead_callee = builder.direct(path("dead"));
+        let dead_call = builder.call(dead_callee, &arguments, None);
+        let kept_callee = builder.direct(path("kept"));
+        let kept_call = builder.call(kept_callee, &arguments, None);
+        // A detached row need not belong to even an unreachable block.
+        builder.call(dead_callee, &arguments, None);
+        let normal = builder.edge(done, &[]);
+        let cleanup = builder.edge(failed, &[]);
+        let failure = builder.failure(cleanup, None, &[]);
+        for (block, call) in [(entry, kept_call), (dead, dead_call)] {
+            builder.term(
+                block,
+                Terminator::Call {
+                    call,
+                    normal: Some(normal),
+                    failure,
+                },
+            );
+        }
+        builder.term(done, Terminator::Return(None));
+        builder.term(failed, Terminator::Propagate);
+        let unit = Editor::new(builder.finish_with_layouts(&table)).finish();
+        assert_eq!(unit.check_identity(&table), Ok(()));
+        assert_eq!(unit.tables.calls.len(), 1);
+        assert_eq!(unit.tables.calls[0].callee, kept_callee);
+        assert_eq!(unit.pools.call_arguments.len(), 1);
+        assert!(matches!(
+            unit.terminators[0],
+            Terminator::Call {
+                call: CallId(0),
+                ..
+            }
+        ));
+    }
 
     /// `PVec::join` skips dead storage meeting a state that absorbs it: the
     /// predicate must say exactly when the join would change nothing.

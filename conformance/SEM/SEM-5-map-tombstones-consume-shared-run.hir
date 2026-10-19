@@ -1,0 +1,32 @@
+// rule: SEM-5
+// expect: run
+// Consuming a shared map copies live entries and leaves its alias intact.
+fn first(take m: Map[u64, String]) -> String {
+  for (k, v) in take m {
+    return v
+  }
+  "empty"
+}
+
+pub fn main() -> Result[(), String] {
+  let mut m: Map[u64, String] = map.empty()
+  map.insert(mut m, 1, "one")
+  map.insert(mut m, 2, "two")
+  map.insert(mut m, 3, "three")
+  let _ = map.remove(mut m, 1)
+  let retained = copy m
+  if first(take m) != "two" {
+    return Error("wrong first value")
+  }
+  let mut count: u64 = 0
+  for (k, v) in retained {
+    if k == 2 && v != "two" || k == 3 && v != "three" {
+      return Error("changed shared entry")
+    }
+    count += 1
+  }
+  if count != 2 || map.len(retained) != 2 || first(take retained) != "two" {
+    return Error("wrong retained entries")
+  }
+  Ok(())
+}

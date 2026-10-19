@@ -82,7 +82,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
         }
         // A `mut` argument's write-back version names the root slot after the call.
-        for call in &unit.tables.calls {
+        for terminator in &unit.terminators {
+            let Terminator::Call { call, .. } = *terminator else {
+                continue;
+            };
+            let Some(call) = unit.tables.calls.get(call.index()) else {
+                return self.invalid("a call outside the call table");
+            };
             for argument in self.pool(call.arguments, &unit.pools.call_arguments)? {
                 if let ArgumentValue::Address { version, .. } = argument.value {
                     self.versions.insert(version);

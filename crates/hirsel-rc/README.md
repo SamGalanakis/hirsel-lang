@@ -257,7 +257,7 @@ names every program of a group);
   stage once, after elision, and a fault in insertion's output is still one
   in elision's.
 - `insert` also holds the shared machinery: layout queries, place
-  flattening, the unit `Editor` (finish drops unreachable blocks, unnamed edges
+  flattening, the unit `Editor` (finish drops unreachable blocks, unnamed calls and edges
   and failure edges, undefined values and undischarged anchors, and rebuilds
   the switch-arm pool from the switches it keeps, so no arm a rewrite replaced
   keeps a pre-compaction edge id), forward
