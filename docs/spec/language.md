@@ -309,8 +309,10 @@ unbounded generic parameter); constant expressions are also admitted. The
 ordinary copy and cleanup rules apply. For example:
 
 ```hirsel
-let raw: Inline[u8, 64] = [0u8; 64]
-let words: Array[String] = ["hello"; 3]
+fn repeated_values() {
+  let raw: Inline[u8, 64] = [0u8; 64]
+  let words: Array[String] = ["hello"; 3]
+}
 ```
 
 ### LANG-8: Errors
