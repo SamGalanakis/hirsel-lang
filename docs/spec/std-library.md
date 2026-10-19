@@ -3709,6 +3709,47 @@ encoding with `form_type` as an `http.Body`.
 `application/x-www-form-urlencoded` is `uri.query_pairs`, `uri.encode_query` and
 `http.form_body` (see Network addresses and URIs).
 
+## JSON Web Tokens
+
+`std@1/jwt` signs and verifies JSON Web Tokens (RFC 7519) in JWS compact serialization
+(RFC 7515) with HS256, HS384 and HS512 (RFC 7518), adapted from golang-jwt with its
+HMAC and example vectors:
+
+```text
+Key        = HS256(Bytes) | HS384(Bytes) | HS512(Bytes)
+Validation = { audience: Option[String], issuer: Option[String], leeway: u64, require_expiration: bool }
+JwtError   = Malformed | Json(json.JsonError) | UnsupportedAlgorithm(String) | Critical | Signature
+           | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim(String)
+           | Clock(ClockError)
+
+fn default_validation() -> Validation uses {}
+fn sign(key: Key, claims: json.Value) -> Result[unique String, JwtError] uses {}
+fn header(token: String) -> Result[json.Value, JwtError] uses {}
+fn verify_at(token: String, key: Key, validation: Validation, now: i64) -> Result[json.Value, JwtError] uses {}
+fn validate(claims: json.Value, validation: Validation, now: i64) -> Result[(), JwtError] uses {}
+fn verify(token: String, key: Key, validation: Validation, clock: WallClock) -> Result[json.Value, JwtError]
+```
+
+`sign` takes an object of claims (`InvalidClaim("claims")` otherwise) and returns
+`header.claims.signature`, each segment unpadded base64url, with the header
+`{"alg":"HS256","typ":"JWT"}` (or HS384, HS512) and both objects as `json.stringify`
+writes them. `header` decodes a token's header without verifying it, for choosing a key.
+
+`verify_at` checks, in order: three segments of unpadded base64url holding JSON objects
+(`Malformed()`); a header `alg` equal to the key's, so `none` and every other algorithm
+are `UnsupportedAlgorithm(alg)`; no `crit` header (`Critical()`, since no extension is
+understood); the MAC, compared in constant time (`Signature()`). Claims are read only
+after the signature, and then pass through `validate`, which golang-jwt's Validator
+also offers alone. `exp` and `nbf` are JSON numbers of seconds, possibly fractional
+(`InvalidClaim(name)` otherwise): the token is `Expired()` unless `now` is before `exp`
+plus `leeway`, and `NotYetValid()` if `now` plus `leeway` is before `nbf`. A missing
+`exp` is `MissingExpiration()` when `require_expiration`. An `audience` must equal `aud`
+or one of its strings (`Audience()`), and an `issuer` must equal `iss` (`Issuer()`).
+`default_validation()` sets no audience, issuer or leeway and leaves `exp` optional, as
+golang-jwt does. `verify` reads `clock` and floors its nanoseconds to whole seconds
+(`Clock(error)` when the reading fails). EdDSA and the RSA and ECDSA algorithms are not
+provided.
+
 ## Arbitrary-precision integers
 
 `bigint` is exact integer arithmetic of any size, in ordinary std source:

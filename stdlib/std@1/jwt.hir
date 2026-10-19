@@ -1,0 +1,249 @@
+// JSON Web Tokens (RFC 7519) in JWS compact serialization (RFC 7515) with the
+// HS256, HS384 and HS512 MACs of RFC 7518, adapted from golang-jwt/jwt v5
+// parser.go (ParseUnverified, segment decoding), hmac.go (SigningMethodHMAC
+// Sign and Verify) and validator.go (verifyExpiresAt, verifyNotBefore,
+// verifyAudience, verifyIssuer), golang-jwt/jwt
+// d2cffb184933cab5b685db7e9eea56326f0acc0d (MIT; third-party/NOTICES.md). The
+// key fixes the algorithm: a token naming any other `alg`, `none` included, is
+// refused before its signature is checked.
+/// A verification or signing key and the algorithm it is for.
+pub type Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes)
+
+/// Claim checks beyond the signature. `audience` must appear in the `aud` claim (a
+/// string or an array of strings) and `issuer` equal `iss`; `leeway` seconds widen
+/// the `exp` and `nbf` windows; `require_expiration` refuses a token without `exp`.
+pub type Validation {
+  audience: Option[String],
+  issuer: Option[String],
+  leeway: u64,
+  require_expiration: bool,
+}
+
+pub type JwtError = Malformed | Json(json.JsonError) | UnsupportedAlgorithm(String) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim(
+  String
+) | Clock(ClockError)
+
+/// No audience or issuer, no leeway and `exp` optional, as golang-jwt's defaults.
+pub fn default_validation() -> Validation uses {} {
+  Validation(audience: None(), issuer: None(), leeway: 0, require_expiration: false)
+}
+
+fn algorithm(key: Key) -> unique String uses {} {
+  match key {
+    HS256(_) => "HS256",
+    HS384(_) => "HS384",
+    HS512(_) => "HS512",
+  }
+}
+
+fn mac(key: Key, data: Bytes) -> unique Bytes uses {} {
+  match key {
+    HS256(secret) => bytes.from_inline(hmac.mac(sha256.hash(), secret, data)),
+    HS384(secret) => bytes.from_inline(hmac.mac(sha384.hash(), secret, data)),
+    HS512(secret) => bytes.from_inline(hmac.mac(sha512.hash(), secret, data)),
+  }
+}
+
+fn segment(data: Bytes) -> unique String uses {} {
+  base64.encode(data, UrlSafe(), Omitted())
+}
+
+fn json_error(error: json.JsonError) -> JwtError uses {} {
+  Json(error)
+}
+
+/// Signs `claims`, a JSON object, under the header `{"alg":...,"typ":"JWT"}`:
+/// `header.claims.signature`, each segment unpadded base64url. A claims value that is
+/// not an object is `InvalidClaim("claims")`.
+pub fn sign(key: Key, claims: json.Value) -> Result[unique String, JwtError] uses {} {
+  let Object(_) = claims else {
+    return Error(InvalidClaim("claims"))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "alg", Text(algorithm(key)))
+  map.insert(mut fields, "typ", Text("JWT"))
+  let header_text = json.stringify(Object(take fields)) ? json_error
+  let claims_text = json.stringify(claims) ? json_error
+  let signing_input = f"{segment(string.as_bytes(header_text))}.{segment(
+    string.as_bytes(claims_text)
+  )}"
+  let signature = segment(mac(key, string.as_bytes(signing_input)))
+  Ok(f"{signing_input}.{signature}")
+}
+
+fn object(text_segment: String) -> Result[json.Value, JwtError] uses {} {
+  let Ok(data) = base64.decode(text_segment, UrlSafe(), Omitted()) else {
+    return Error(Malformed())
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Malformed())
+  }
+  let value = json.parse(take source) ? json_error
+  match value {
+    Object(_) => Ok(take value),
+    _ => Error(Malformed()),
+  }
+}
+
+// The three dot-separated segments of a compact token.
+fn segments(token: String) -> Result[List[String], JwtError] uses {} {
+  let parts = string.split(unique token, ".")
+  if list.len(parts) != 3 {
+    return Error(Malformed())
+  }
+  Ok(parts)
+}
+
+/// The decoded JOSE header of `token`, unverified: for choosing a key by `kid`
+/// before `verify`. Never trust it otherwise.
+pub fn header(token: String) -> Result[json.Value, JwtError] uses {} {
+  let parts = segments(token)?
+  object(parts[0])
+}
+
+fn member(value: json.Value, name: String) -> Option[json.Value] uses {} {
+  match value {
+    Object(fields) => match map.get(fields, name) {
+      Some(v) => Some(unique v),
+      None() => None(),
+    },
+    _ => None(),
+  }
+}
+
+// A NumericDate: a JSON number of seconds, possibly fractional (Go reads float64).
+// Integral spellings skip the decimal-to-binary conversion.
+fn date(claims: json.Value, name: String) -> Result[Option[f64], JwtError] uses {} {
+  match member(claims, name) {
+    None() => Ok(None()),
+    Some(Number(spelling)) => {
+      if let Ok(whole) = i64.parse(spelling) {
+        return Ok(Some(float.from_int(whole)))
+      }
+      match f64.parse(spelling) {
+        Ok(seconds) => Ok(Some(seconds)),
+        Error(_) => Error(InvalidClaim(unique name)),
+      }
+    },
+    Some(_) => Error(InvalidClaim(unique name)),
+  }
+}
+
+/// Checks the claims of a verified token at `now` (Unix seconds), as golang-jwt's
+/// Validator: `now` must be before `exp` plus the leeway (`Expired()`) and not before
+/// `nbf` minus it (`NotYetValid()`), a missing `exp` is `MissingExpiration()` when
+/// required, and `validation`'s audience and issuer must match (`Audience()`,
+/// `Issuer()`). A claim of the wrong JSON type is `InvalidClaim(name)`.
+pub fn validate(claims: json.Value, validation: Validation, now: i64) -> Result[
+  (),
+  JwtError
+] uses {} {
+  let at: f64 = float.from_int(now)
+  let leeway: f64 = float.from_int(validation.leeway)
+  match date(claims, "exp")? {
+    Some(exp) => {
+      if !(at < exp + leeway) {
+        return Error(Expired())
+      }
+    },
+    None() => {
+      if validation.require_expiration {
+        return Error(MissingExpiration())
+      }
+    },
+  }
+  if let Some(nbf) = date(claims, "nbf")? {
+    if at + leeway < nbf {
+      return Error(NotYetValid())
+    }
+  }
+  if let Some(expected_audience) = validation.audience {
+    let found = match member(claims, "aud") {
+      Some(Text(aud)) => aud == expected_audience,
+      Some(Array(items)) => {
+        let mut any = false
+        for item in items {
+          match item {
+            Text(aud) => {
+              if aud == expected_audience {
+                any = true
+              }
+            },
+            _ => return Error(InvalidClaim("aud")),
+          }
+        }
+        any
+      },
+      None() => false,
+      Some(_) => return Error(InvalidClaim("aud")),
+    }
+    if !found {
+      return Error(Audience())
+    }
+  }
+  if let Some(expected_issuer) = validation.issuer {
+    let issued = match member(claims, "iss") {
+      Some(Text(iss)) => iss == expected_issuer,
+      None() => false,
+      Some(_) => return Error(InvalidClaim("iss")),
+    }
+    if !issued {
+      return Error(Issuer())
+    }
+  }
+  Ok(())
+}
+
+/// Verifies `token` with `key` at `now` (Unix seconds) and returns its claims: the
+/// header's `alg` must be the key's (`UnsupportedAlgorithm(alg)` otherwise), a `crit`
+/// header is `Critical()`, the MAC must match in constant time (`Signature()`), and
+/// then the claims must pass `validate`.
+pub fn verify_at(token: String, key: Key, validation: Validation, now: i64) -> Result[
+  json.Value,
+  JwtError
+] uses {} {
+  let parts = segments(token)?
+  let head = object(parts[0])?
+  match member(head, "alg") {
+    Some(Text(alg)) => {
+      if alg != algorithm(key) {
+        return Error(UnsupportedAlgorithm(unique alg))
+      }
+    },
+    _ => return Error(Malformed()),
+  }
+  if member(head, "crit") != None() {
+    return Error(Critical())
+  }
+  let Ok(signature) = base64.decode(parts[2], UrlSafe(), Omitted()) else {
+    return Error(Malformed())
+  }
+  let mut signing_input: List[u8] = []
+  text.append(mut signing_input, parts[0])
+  list.push(mut signing_input, b'.')
+  text.append(mut signing_input, parts[1])
+  let expected = mac(key, bytes.from_list(take signing_input))
+  if !constant_time.equal(expected, signature) {
+    return Error(Signature())
+  }
+  let claims = object(parts[1])?
+  validate(claims, validation, now)?
+  Ok(take claims)
+}
+
+fn clock_error(error: ClockError) -> JwtError uses {} {
+  Clock(error)
+}
+
+/// `verify_at` at the current second of `clock`.
+pub fn verify(token: String, key: Key, validation: Validation, clock: WallClock) -> Result[
+  json.Value,
+  JwtError
+] {
+  let nanos = core@1/clock.wall(clock) ? clock_error
+  let mut seconds = nanos / 1000000000
+  if nanos % 1000000000 < 0 {
+    seconds -= 1
+  }
+  verify_at(token, key, validation, seconds)
+}

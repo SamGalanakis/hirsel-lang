@@ -1,0 +1,36 @@
+// jwt.verify reads the wall clock and floors it to whole seconds. The driver
+// runs this with a fixed simulated wall time and names the expected outcome in
+// the first argument; each run verifies one MAC.
+fn outcome(rt: Io, token: String) -> Result[(), jwt.JwtError] {
+  let Ok(clock) = io.wall_clock(rt) else {
+    failure.check(false, Arithmetic())
+    return Ok(())
+  }
+  jwt.verify(token, HS256(b"k"), jwt.default_validation(), clock)?
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let Ok(expected) = arg.text(args, 0) else {
+    return Error(())
+  }
+  // {"nbf":1444478400} and {"exp":0}, signed with the key "k".
+  let early = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE0NDQ0Nzg0MDB9.MV2ZVmshGCi4J8XF0h0BPL22lejzEs7wYB26pOVzroU"
+  let epoch = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjB9.Wm1Zfw5MTcdAvDNv3RIuumos3plhHxMsLsd8eaid5rE"
+  let ok = if expected == "valid" {
+    outcome(rt, early) == Ok(())
+  } else if expected == "not-yet-valid" {
+    outcome(rt, early) == Error(NotYetValid())
+  } else if expected == "before-epoch" {
+    // Half a second before the epoch floors to -1, before `exp` 0.
+    outcome(rt, epoch) == Ok(())
+  } else if expected == "epoch" {
+    outcome(rt, epoch) == Error(Expired())
+  } else if expected == "unavailable" {
+    outcome(rt, early) == Error(Clock(Unavailable()))
+  } else {
+    false
+  }
+  failure.check(ok, Arithmetic())
+  Ok(())
+}

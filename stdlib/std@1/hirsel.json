@@ -1131,6 +1131,12 @@
       "module": [
         "multipart"
       ]
+    },
+    {
+      "path": "jwt.hir",
+      "module": [
+        "jwt"
+      ]
     }
   ],
   "dependencies": []

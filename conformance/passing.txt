@@ -5244,6 +5244,13 @@ conformance/SEM/SEM-3-json-nesting-run.hir
 conformance/SEM/SEM-3-json-roundtrip-run.hir
 conformance/SEM/SEM-3-json-slice-run.hir
 conformance/SEM/SEM-3-json-writer-error-run.hir
+conformance/SEM/SEM-3-jwt-audience-run.hir
+conformance/SEM/SEM-3-jwt-hs256-run.hir
+conformance/SEM/SEM-3-jwt-hs384-run.hir
+conformance/SEM/SEM-3-jwt-hs512-run.hir
+conformance/SEM/SEM-3-jwt-run.hir
+conformance/SEM/SEM-3-jwt-sign-run.hir
+conformance/SEM/SEM-3-jwt-tampered-run.hir
 conformance/SEM/SEM-3-keys-composite-order-run.hir
 conformance/SEM/SEM-3-keys-composite-vectors-run.hir
 conformance/SEM/SEM-3-keys-decode-run.hir

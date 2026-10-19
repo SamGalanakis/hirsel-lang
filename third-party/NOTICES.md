@@ -236,6 +236,7 @@ the license named in its row; the license texts follow once each.
 | eventsource-stream | `src/parser.rs` line and field parsing, `src/event_stream.rs` EventBuilder add/dispatch and last-event-id handling; parser test streams | `stdlib/std@1/sse.hir`, Server-Sent Events conformance | jpopesculian/eventsource-stream `3d46f1c758f9ee4681e9da0427556d24c53f9c01` | MIT |
 | WHATWG HTML Standard | "Server-sent events" parsing and interpretation rules and its stock-ticker, multi-line, typed-event and id examples | `conformance/SEM/SEM-3-sse-run.hir`, `conformance/SEM/SEM-3-sse-fields-run.hir` | HTML Living Standard (2026) | CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/) |
 | Go standard library | `src/mime/multipart/{multipart.go,writer.go}` NextPart, scanUntilBoundary, matchAfterPrefix, delimiter and LF-mode rules, CreateFormFile/CreateFormField layout, SetBoundary and escapeQuotes; `src/mime/mediatype.go` ParseMediaType, consumeMediaParam and RFC 2231 decoding; `multipart_test.go`, `writer_test.go` and `mediatype_test.go` vectors including greenbytes tc2231 | `stdlib/std@1/multipart.hir`, `conformance/SEM/SEM-3-multipart-*` | golang/go `d934b909f6a50247e2a2e9b89de02cdcef93a163` | BSD-3-Clause (Go) |
+| golang-jwt | `parser.go` segment decoding, `hmac.go` SigningMethodHMAC, `validator.go` exp/nbf/aud/iss checks with leeway; `hmac_test.go` hmacTestData with `test/hmacTestKey`, `hmac_example_test.go` and `example_test.go` tokens | `stdlib/std@1/jwt.hir`, `conformance/SEM/SEM-3-jwt-*`, `crates/hirsel-driver/tests/fixtures/jwt-clock.hir` | golang-jwt/jwt `d2cffb184933cab5b685db7e9eea56326f0acc0d` | MIT |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -302,6 +303,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - Autobahn testsuite: Copyright (c) typedef int GmbH
 - eventsource-stream: Copyright (c) Julian Popescu
 - WHATWG HTML Standard: Copyright (c) WHATWG (Apple, Google, Mozilla, Microsoft)
+- golang-jwt: Copyright (c) 2012 Dave Grijalva; Copyright (c) 2021 golang-jwt maintainers
 
 ## Zlib License (zlib)
 

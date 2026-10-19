@@ -1,0 +1,127 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// golang-jwt v5 (golang-jwt/jwt d2cffb184933cab5b685db7e9eea56326f0acc0d):
+// signing reproduces example_test.go's token, tokens are refused before their
+// MAC for a foreign or `none` algorithm, a `crit` header or a malformed
+// segment, and validator.go's exp, nbf, leeway, aud and iss rules hold for
+// claims through jwt.validate. Each signature vector runs alone in
+// SEM-3-jwt-*-run.hir.
+fn claims(text: String) -> json.Value uses {} {
+  match json.parse(unique text) {
+    Ok(value) => value,
+    Error(_) => Null(),
+  }
+}
+
+fn check(claims_text: String, validation: jwt.Validation, now: i64) -> Result[
+  (),
+  jwt.JwtError
+] uses {} {
+  jwt.validate(claims(claims_text), validation, now)
+}
+
+pub fn main(t: Test) -> Result[(), jwt.JwtError] {
+  let open = jwt.default_validation()
+  let mut second: Map[String, json.Value] = map.empty()
+  map.insert(mut second, "iss", Text("test"))
+  map.insert(mut second, "exp", Number("1516239022"))
+  let signed = jwt.sign(HS256(b"AllYourBase"), Object(take second))?
+  test.check(
+    t,
+    signed == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ0ZXN0IiwiZXhwIjoxNTE2MjM5MDIyfQ.0XN_1Tpp9FszFOonIBpwha0c_SfnNI22DhTnjMshPg8"
+  )
+  test.check(
+    t,
+    json.stringify(jwt.header(signed)?) == Ok("{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
+  )
+  test.check(t, jwt.sign(HS256(b"k"), Text("x")) == Error(InvalidClaim("claims")))
+  // The key fixes the algorithm: another alg, `none` included, is refused first.
+  test.check(
+    t,
+    jwt.verify_at(signed, HS512(b"AllYourBase"), open, 0) == Error(
+      UnsupportedAlgorithm("HS256")
+    )
+  )
+  test.check(
+    t,
+    jwt.verify_at(signed, HS384(b"AllYourBase"), open, 0) == Error(
+      UnsupportedAlgorithm("HS256")
+    )
+  )
+  test.check(
+    t,
+    jwt.verify_at(
+      "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0.",
+      HS256(b"k"),
+      open,
+      0
+    ) == Error(UnsupportedAlgorithm("none"))
+  )
+  test.check(
+    t,
+    jwt.verify_at(
+      "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsiZXhwIl19.eyJzdWIiOiJ4In0.ZLbS4LA4Q_A5sopYGeYa5j058_5GOco4JmkKTWalKko",
+      HS256(b"AllYourBase"),
+      open,
+      0
+    ) == Error(Critical())
+  )
+  test.check(t, jwt.verify_at("a.b", HS256(b"k"), open, 0) == Error(Malformed()))
+  test.check(t, jwt.verify_at("a.b.c.d", HS256(b"k"), open, 0) == Error(Malformed()))
+  test.check(t, jwt.verify_at("!!.e30.", HS256(b"k"), open, 0) == Error(Malformed()))
+  test.check(t, jwt.verify_at("e30.e30.", HS256(b"k"), open, 0) == Error(Malformed()))
+  // exp: valid strictly before it, widened by the leeway (validator.go verifyExpiresAt).
+  let sample = "{\"iss\":\"joe\",\"exp\":1300819380}"
+  test.check(t, check(sample, open, 1300819379) == Ok(()))
+  test.check(t, check(sample, open, 1300819380) == Error(Expired()))
+  let mut lenient = jwt.default_validation()
+  lenient.leeway = 60
+  test.check(t, check(sample, lenient, 1300819439) == Ok(()))
+  test.check(t, check(sample, lenient, 1300819440) == Error(Expired()))
+  test.check(t, check("{\"exp\":1.30081938e+09}", open, 1300819379) == Ok(()))
+  test.check(t, check("{\"exp\":1.30081938e+09}", open, 1300819380) == Error(Expired()))
+  test.check(
+    t,
+    check("{\"foo\":\"bar\",\"exp\":15000,\"iss\":\"test\"}", open, 1700000000) == Error(
+      Expired()
+    )
+  )
+  test.check(t, check("{\"exp\":\"soon\"}", open, 0) == Error(InvalidClaim("exp")))
+  let mut strict = jwt.default_validation()
+  strict.require_expiration = true
+  test.check(
+    t,
+    check("{\"nbf\":1444478400}", strict, 1444478400) == Error(MissingExpiration())
+  )
+  test.check(t, check(sample, strict, 0) == Ok(()))
+  // nbf: valid from it, widened by the leeway (verifyNotBefore).
+  let early = "{\"foo\":\"bar\",\"nbf\":1444478400}"
+  test.check(t, check(early, open, 1444478399) == Error(NotYetValid()))
+  test.check(t, check(early, open, 1444478400) == Ok(()))
+  test.check(t, check(early, lenient, 1444478340) == Ok(()))
+  test.check(t, check(early, lenient, 1444478339) == Error(NotYetValid()))
+  test.check(t, check("{\"nbf\":[]}", open, 0) == Error(InvalidClaim("nbf")))
+  // aud: a string or an array of strings (verifyAudience).
+  let mut wants = jwt.default_validation()
+  wants.audience = Some("single")
+  test.check(t, check("{\"aud\":\"single\"}", wants, 0) == Ok(()))
+  test.check(t, check("{\"aud\":\"other\"}", wants, 0) == Error(Audience()))
+  test.check(t, check("{}", wants, 0) == Error(Audience()))
+  test.check(t, check("{\"aud\":[\"a\",\"single\"]}", wants, 0) == Ok(()))
+  test.check(t, check("{\"aud\":[\"a\",\"b\"]}", wants, 0) == Error(Audience()))
+  test.check(t, check("{\"aud\":[]}", wants, 0) == Error(Audience()))
+  test.check(t, check("{\"aud\":7}", wants, 0) == Error(InvalidClaim("aud")))
+  test.check(
+    t,
+    check("{\"aud\":[\"single\",7]}", wants, 0) == Error(InvalidClaim("aud"))
+  )
+  // iss: an exact match (verifyIssuer).
+  let mut issuer = jwt.default_validation()
+  issuer.issuer = Some("test")
+  test.check(t, check("{\"iss\":\"test\"}", issuer, 0) == Ok(()))
+  test.check(t, check("{\"iss\":\"Test\"}", issuer, 0) == Error(Issuer()))
+  test.check(t, check("{}", issuer, 0) == Error(Issuer()))
+  test.check(t, check("{\"iss\":true}", issuer, 0) == Error(InvalidClaim("iss")))
+  Ok(())
+}

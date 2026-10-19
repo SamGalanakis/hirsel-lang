@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// golang-jwt hmac_test.go: the HS512 web sample verifies with test/hmacTestKey
+// (golang-jwt/jwt d2cffb184933cab5b685db7e9eea56326f0acc0d); one MAC per
+// program, as the corpus step budget allows.
+fn test_key() -> Bytes uses {} {
+  b"\x03#5K+\x0f\xa5\xbc\x83~\x06ew{\xa6\x8fZ\xb3(\xe6\xf0T\xc9(\xa9\x0f\x84\xb2\xd2P.\xbf\xd3\xfbZ\x92\xd2\x06G\xef\x96\x8a\xb4\xc3wb=\"=.!r\x05.O\x08\xc0\xcd\x9a\xf5g\xd0\x80\xa3"
+}
+
+pub fn main(t: Test) -> Result[(), jwt.JwtError] {
+  let claims = jwt.verify_at(
+    "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJleHAiOjEuMzAwODE5MzhlKzA5LCJodHRwOi8vZXhhbXBsZS5jb20vaXNfcm9vdCI6dHJ1ZSwiaXNzIjoiam9lIn0.CN7YijRX6Aw1n2jyI2Id1w90ja-DEMYiWixhYCyHnrZ1VfJRaFQz1bEbjjA5Fn4CLYaUG432dEYmSbS4Saokmw",
+    HS512(test_key()),
+    jwt.default_validation(),
+    1300819379
+  )?
+  test.check(
+    t,
+    json.stringify(claims) == Ok(
+      "{\"exp\":1.30081938e+09,\"http://example.com/is_root\":true,\"iss\":\"joe\"}"
+    )
+  )
+  Ok(())
+}

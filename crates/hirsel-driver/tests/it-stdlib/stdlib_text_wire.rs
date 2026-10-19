@@ -388,6 +388,58 @@ fn multipart_is_ordinary_source() {
 }
 
 #[test]
+fn jwt_is_ordinary_source() {
+    source_codec("jwt", "jwt", &["sign", "verify_at", "validate"]);
+}
+
+// The corpus grants no wall clock, so jwt.verify's reading of one runs here at
+// fixed simulated times, and once with the clock failing.
+#[test]
+fn jwt_verify_reads_the_wall_clock() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jwt-clock.hir");
+        let cases: [(&str, i64, bool); 5] = [
+            ("valid", 1_444_478_400_000_000_000, false),
+            ("not-yet-valid", 1_444_478_399_999_999_999, false),
+            ("before-epoch", -500_000_000, false),
+            ("epoch", 0, false),
+            ("unavailable", 1_444_478_400_000_000_000, true),
+        ];
+        for (expected, wall, fault) in cases {
+            let mut simulation = SimulationConfig {
+                args: vec![expected.into()],
+                wall,
+                ..Default::default()
+            };
+            simulation.grants.insert("WallClock".into());
+            if fault {
+                simulation.faults.insert(
+                    "clock.wall".into(),
+                    std::collections::VecDeque::from([
+                        hirsel_interp::library::simulation::Fault::Fault {
+                            code: 0,
+                            partial: 0,
+                        },
+                    ]),
+                );
+            }
+            let outcome = run_path_with_step_budget(
+                &path,
+                simulation,
+                Some(5_000_000),
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert!(
+                matches!(outcome, RunOutcome::Exit(0)),
+                "{expected}: {outcome:?}"
+            );
+        }
+    });
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",
