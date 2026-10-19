@@ -34,12 +34,16 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
     } else {
         NetTimeout::Nanos(n)
     };
+    let digest = std::array::from_fn(|i| (n.rotate_right(i as u32) as u8).wrapping_add(i as u8));
     let roots = if n % 2 == 0 {
         RootsDigest::WebPki(text.clone())
     } else {
-        RootsDigest::Pem([n as u8; 32])
+        RootsDigest::Pem(digest)
     };
-    let deadline = (n % 2 != 0).then_some(hirsel_rt::process::Deadline { clock: n, ticks: n });
+    let deadline = (n % 2 != 0).then_some(hirsel_rt::process::Deadline {
+        clock: n.wrapping_add(3),
+        ticks: n.wrapping_add(17),
+    });
     let command = Command {
         program: text.clone(),
         directory: (n % 2 != 0).then_some(n),
@@ -190,8 +194,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Shutdown { net: n.wrapping_add(17), stream: n.wrapping_add(28), how: [ShutdownHow::Read, ShutdownHow::Write, ShutdownHow::Both][n as usize % 3] },
         SetTimeout { net: n.wrapping_add(17), stream: n.wrapping_add(28), which: if n % 2 == 0 { TimeoutKind::Read } else { TimeoutKind::Write }, timeout: timeout },
         PeerAddr { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
-        TlsConnect { net: n.wrapping_add(17), stream: n.wrapping_add(28), server_name: if n == 0 { String::new() } else { format!("{text}#server_name") }, roots: roots.clone(), identity: (n % 2 != 0).then_some([n as u8; 32]) },
-        TlsAccept { net: n.wrapping_add(17), stream: n.wrapping_add(28), server: hirsel_rt::net::TlsServerDigest { identities: vec![[n as u8; 32]], clients: match n % 3 { 0 => hirsel_rt::net::ClientAuth::Anonymous, 1 => hirsel_rt::net::ClientAuth::Request([n as u8; 32]), _ => hirsel_rt::net::ClientAuth::Require([n as u8; 32]) } } },
+        TlsConnect { net: n.wrapping_add(17), stream: n.wrapping_add(28), server_name: if n == 0 { String::new() } else { format!("{text}#server_name") }, roots: roots.clone(), identity: (n % 2 != 0).then_some(digest) },
+        TlsAccept { net: n.wrapping_add(17), stream: n.wrapping_add(28), server: hirsel_rt::net::TlsServerDigest { identities: vec![digest], clients: match n % 3 { 0 => hirsel_rt::net::ClientAuth::Anonymous, 1 => hirsel_rt::net::ClientAuth::Request(digest), _ => hirsel_rt::net::ClientAuth::Require(digest) } } },
         TlsPeer { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         TlsClose { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         Listen { net: n.wrapping_add(17), addr: addr },
