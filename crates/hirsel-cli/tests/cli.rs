@@ -3274,3 +3274,88 @@ fn tracked_runtime_reports_keep_application_and_dependency_operation_sites() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+/// Both engines end a run the same way and `hirsel run` reports it the same way: a Blocked run
+/// (exit 2), a run past the codec's operational budget (environmental, exit 6) and a run whose
+/// grants the host refuses at admission (the refusal, exit 1), each after the output it wrote.
+/// A native run is admitted once, by the executable, which reports to the driver rather than
+/// to the terminal; its twin, granted a directory that exists, runs.
+#[test]
+fn run_outcomes_are_reported_alike_by_both_engines() {
+    let blocks = file(
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let tasks = io.tasks(rt)?\n  let stdout = io.stdout(rt)?\n  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)\n  let mut rx = take receiver\n  let _ = out.print(stdout, \"blocks waits\\n\")\n  let _ = channel.receive(tasks, mut rx)\n  Ok(())\n}\n",
+    );
+    let encodes = file(
+        "@serializable\ntype Tree {\n  kids: List[Tree],\n}\n\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let stdout = io.stdout(rt)?\n  let mut tree = Tree(kids: [])\n  let mut depth: u64 = 0\n  while depth < 19 {\n    let mut kids: List[Tree] = []\n    list.push(mut kids, copy tree)\n    list.push(mut kids, take tree)\n    tree = Tree(kids: kids)\n    depth += 1\n  }\n  let _ = out.print(stdout, \"encodes\\n\")\n  let bytes = codec.encode(tree)\n  let _ = out.print(stdout, \"encoded\\n\")\n  Ok(())\n}\n",
+    );
+    let prints = file(
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let _ = out.print(io.stdout(rt)?, \"prints\\n\")\n  Ok(())\n}\n",
+    );
+    let grants = |dirs: serde_json::Value| {
+        file(
+            &serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":dirs},"args":[]})
+                .to_string(),
+        )
+    };
+    // Its own directory: a grant of the whole temporary directory would hold the native
+    // driver's observation record, which admission refuses (recorder overlap).
+    let present = std::env::temp_dir().join(format!("hirsel-cli-present-{}", std::process::id()));
+    std::fs::create_dir_all(&present).unwrap();
+    let missing = std::env::temp_dir().join(format!("hirsel-cli-absent-{}", std::process::id()));
+    let plain = grants(serde_json::json!([]));
+    let refused_grants =
+        grants(serde_json::json!([{"path":"data","host":missing,"access":"read"}]));
+    let admitted_grants =
+        grants(serde_json::json!([{"path":"data","host":present,"access":"read"}]));
+    for native in [false, true] {
+        let run = |source: &std::path::Path, grants: &std::path::Path| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run");
+            if native {
+                command.args(["--native", "--backend", "cranelift"]);
+            }
+            let output = command
+                .arg(source)
+                .arg("--grants")
+                .arg(grants)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            assert!(!stderr.contains("hirsel-rt:"), "native {native}: {stderr}");
+            (output.status.code(), output.stdout, stderr)
+        };
+        let (code, stdout, stderr) = run(&blocks, &plain);
+        assert_eq!(code, Some(2), "native {native}: {stderr}");
+        assert_eq!(stdout, b"blocks waits\n", "native {native}");
+        assert!(stderr.starts_with("Blocked: "), "native {native}: {stderr}");
+        let (code, stdout, stderr) = run(&encodes, &plain);
+        assert_eq!(code, Some(6), "native {native}: {stderr}");
+        assert_eq!(stdout, b"encodes\n", "native {native}");
+        assert_eq!(
+            stderr, "hirsel: environmental failure: codec operational budget exhausted\n",
+            "native {native}"
+        );
+        let (code, stdout, stderr) = run(&prints, &refused_grants);
+        assert_eq!(code, Some(1), "native {native}: {stderr}");
+        assert!(stdout.is_empty(), "native {native}");
+        assert!(
+            stderr
+                .starts_with("hirsel: launch: {\"kind\":\"unauthorized\",\"field\":\"io.dirs.data"),
+            "native {native}: {stderr}"
+        );
+        let (code, stdout, stderr) = run(&prints, &admitted_grants);
+        assert_eq!(code, Some(0), "native {native}: {stderr}");
+        assert_eq!(stdout, b"prints\n", "native {native}");
+    }
+    for path in [
+        blocks,
+        encodes,
+        prints,
+        plain,
+        refused_grants,
+        admitted_grants,
+    ] {
+        std::fs::remove_file(path).unwrap();
+    }
+    std::fs::remove_dir(present).unwrap();
+}

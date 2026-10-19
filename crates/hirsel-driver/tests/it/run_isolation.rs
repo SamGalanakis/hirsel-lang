@@ -1,6 +1,6 @@
 //! A run, not the process, is the unit of failure: one process runs programs one after another,
-//! and a run that blocks (CONC-8), passes the codec's operational budget or fails ends alone,
-//! with its own outcome, while runs of other programs before and after it complete. Natively the
+//! and a run that blocks (CONC-8), passes the codec's operational budget (environmental, in
+//! both engines) or fails ends alone, with its own outcome, while runs of other programs before and after it complete. Natively the
 //! programs are libraries loaded into one host's runtime, so each failure names its own program's
 //! site from that program's failure table.
 use hirsel_driver::compiler_adapters;
@@ -103,12 +103,14 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
         assert_eq!(stdout, "blocks waits\n");
         completes("after blocked");
         let (outcome, stdout) = run("encodes", ENCODES);
-        let error = outcome.unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("codec operational budget exhausted"),
-            "{error}"
+            matches!(
+                outcome,
+                Ok(RunOutcome::Environmental(
+                    hirsel_run_config::Environmental::CodecLimit
+                ))
+            ),
+            "{outcome:?}"
         );
         assert_eq!(stdout, "encodes\n");
         completes("after the codec limit");

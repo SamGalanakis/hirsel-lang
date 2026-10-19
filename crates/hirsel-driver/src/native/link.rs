@@ -1413,8 +1413,11 @@ fn launch_impl(
 ) -> Result<Launched, NativeError> {
     let root = dir.join("root");
     let record = dir.join("observation");
+    // Where the executable reports a launch it refused, instead of standard error.
+    let refusal = dir.join("refusal");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_file(&record);
+    let _ = std::fs::remove_file(&refusal);
     std::fs::create_dir_all(&root)
         .map_err(|e| NativeError::new(StageName::Launch, format!("granted directory: {e}")))?;
     let mut command = if aarch64(target) {
@@ -1434,7 +1437,8 @@ fn launch_impl(
     command
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
-        .env("HIRSEL_RT_OBSERVATION", &record);
+        .env("HIRSEL_RT_OBSERVATION", &record)
+        .env("HIRSEL_RT_REFUSAL", &refusal);
     if let Some(ticks) = fixture.monotonic {
         command.env("HIRSEL_RT_VIRTUAL_CLOCK", ticks.to_string());
     }
@@ -1502,7 +1506,9 @@ fn launch_impl(
         exit: output.status.code(),
         stdout: output.stdout,
         stderr: output.stderr,
-        record: std::fs::read_to_string(&record).unwrap_or_default(),
+        record: std::fs::read_to_string(&record)
+            .or_else(|_| std::fs::read_to_string(&refusal))
+            .unwrap_or_default(),
     })
 }
 
@@ -1648,11 +1654,43 @@ fn run_live(
 /// Interpret a launched process against the program it was linked from. A
 /// crash, a refused launch, a malformed record and a block left live are tool
 /// errors, never observations.
+/// How a launched process's run ended, from its observation record.
+#[derive(Debug)]
+pub enum Observed {
+    /// The run returned, failed or was Blocked.
+    Ran(Observation),
+    /// The launch was refused before entry: a `RunRefusal`'s JSON, or the launcher's reason.
+    Refused(String),
+    /// The run stopped: `Refused`, `Diverged` or `Environmental`.
+    Stopped(hirsel_run_config::RunOutcome),
+}
+
+/// The observation of a run that returned, failed or was Blocked; a refused or stopped run is
+/// a launch error here (see [`observe_run`]).
 pub fn observe(
     launched: &Launched,
     program: &ReadyProgram,
     sites: &Sites<'_>,
 ) -> Result<Observation, NativeError> {
+    match observe_run(launched, program, sites)? {
+        Observed::Ran(observation) => Ok(observation),
+        Observed::Refused(reason) => Err(NativeError::new(
+            StageName::Launch,
+            format!("launch refused: {reason}"),
+        )),
+        Observed::Stopped(outcome) => Err(NativeError::new(
+            StageName::Launch,
+            format!("the run stopped: {outcome:?}"),
+        )),
+    }
+}
+
+/// Read a launched process's observation record into how its run ended.
+pub fn observe_run(
+    launched: &Launched,
+    program: &ReadyProgram,
+    sites: &Sites<'_>,
+) -> Result<Observed, NativeError> {
     let bad = |what: String| {
         NativeError::new(
             StageName::Launch,
@@ -1679,9 +1717,38 @@ pub fn observe(
     let mut audit = None;
     let mut blocked = false;
     let mut budget = None;
+    let mut stopped = None;
     for line in lines {
         let words: Vec<&str> = line.split(' ').collect();
+        let rest = |n: usize| words[n..].join(" ");
         match words.as_slice() {
+            ["refused", ..] => {
+                if launched.exit != Some(hirsel_run_config::exit::REFUSED) {
+                    return Err(bad("a refused launch did not exit as refused".into()));
+                }
+                return Ok(Observed::Refused(rest(1)));
+            }
+            ["stopped", "refused", ..] => {
+                stopped = Some(hirsel_run_config::RunOutcome::Refused(rest(2)))
+            }
+            ["stopped", "diverged", ..] => {
+                stopped = Some(hirsel_run_config::RunOutcome::Diverged(rest(2)))
+            }
+            ["stopped", "environmental", "codec_limit"] => {
+                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
+                    hirsel_run_config::Environmental::CodecLimit,
+                ))
+            }
+            ["stopped", "environmental", "recording", ..] => {
+                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
+                    hirsel_run_config::Environmental::Recording(rest(3)),
+                ))
+            }
+            ["stopped", "environmental", "output", ..] => {
+                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
+                    hirsel_run_config::Environmental::Output(rest(3)),
+                ))
+            }
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,
             ["budget_exceeded", kind] => {
@@ -1732,9 +1799,20 @@ pub fn observe(
             _ => return Err(bad(format!("a malformed observation line `{line}`"))),
         }
     }
-    // A Blocked run (CONC-8) ends without cleanup, so it has no exit audit, and so does a
-    // run that spent a budget.
+    // A Blocked or stopped run ends without cleanup, so it has no exit audit.
     let unaudited = audit == Some(("unavailable", "unavailable", "unavailable"));
+    if let Some(outcome) = stopped {
+        if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
+            return Err(bad("an inconsistent stopped observation record".into()));
+        }
+        if launched.exit != Some(outcome.exit_code()) {
+            return Err(bad(format!(
+                "a stopped process did not exit {}",
+                outcome.exit_code()
+            )));
+        }
+        return Ok(Observed::Stopped(outcome));
+    }
     if let Some(kind) = budget {
         if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent budget observation record".into()));
@@ -1742,13 +1820,13 @@ pub fn observe(
         if launched.exit != Some(hirsel_run_config::exit::BUDGET_EXCEEDED) {
             return Err(bad("a budget-stopped process did not exit as one".into()));
         }
-        return Ok(Observation {
+        return Ok(Observed::Ran(Observation {
             exit_code: None,
             blocked: false,
             budget: Some(kind),
             output: launched.stdout.clone(),
             failures,
-        });
+        }));
     }
     if blocked {
         if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
@@ -1757,13 +1835,13 @@ pub fn observe(
         if launched.exit != Some(hirsel_run_config::exit::BLOCKED) {
             return Err(bad("a Blocked process did not exit as Blocked".into()));
         }
-        return Ok(Observation {
+        return Ok(Observed::Ran(Observation {
             exit_code: None,
             blocked: true,
             budget: None,
             output: launched.stdout.clone(),
             failures,
-        });
+        }));
     }
     if audit != Some(("0", "0", "0")) && (launched.audit_required || !unaudited) {
         return Err(bad(format!(
@@ -1779,13 +1857,13 @@ pub fn observe(
     if launched.exit != Some(expected) {
         return Err(bad(format!("the process did not exit {expected}")));
     }
-    Ok(Observation {
+    Ok(Observed::Ran(Observation {
         exit_code,
         blocked: false,
         budget: None,
         output: launched.stdout.clone(),
         failures,
-    })
+    }))
 }
 
 impl Toolchain {

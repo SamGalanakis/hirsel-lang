@@ -48,12 +48,7 @@ pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
 
 fn codec_error(error: wire::Error) -> Error {
     if error == wire::Error::Limit {
-        Error::Query(hirsel_types::QueryError::Operational(
-            hirsel_types::OperationalFailure {
-                operation: "codec-budget".into(),
-                message: "codec operational budget exhausted".into(),
-            },
-        ))
+        Error::Environmental(hirsel_run_config::Environmental::CodecLimit)
     } else {
         invalid(format!("invalid checked codec value: {error:?}"))
     }

@@ -225,6 +225,7 @@ fn runtime_error(e: Error) -> LaunchError {
         Error::Blocked(_) => LaunchError::Runtime("unhandled Blocked stop signal".into()),
         Error::BudgetExceeded(_) => LaunchError::Runtime("unhandled budget stop signal".into()),
         Error::Trapped(trap) => LaunchError::Runtime(trap.to_string()),
+        Error::Environmental(cause) => LaunchError::Runtime(format!("environmental: {cause}")),
     }
 }
 

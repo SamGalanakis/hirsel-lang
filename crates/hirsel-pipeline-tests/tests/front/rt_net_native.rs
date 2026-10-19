@@ -294,8 +294,9 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                     port,
                 );
                 assert_eq!(refused.exit, Some(3), "{refused:?}");
+                // The replay stops as diverged, reported to the launcher in its observation.
                 assert!(
-                    String::from_utf8_lossy(&refused.stderr).contains("refused"),
+                    refused.record.contains("\nstopped diverged "),
                     "{refused:?}"
                 );
                 // A net.script@2 grant serves the same program from its peers with no

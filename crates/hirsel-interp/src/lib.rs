@@ -93,6 +93,8 @@ pub enum Outcome {
     Failed(Failure),
     /// Checked execution found the memory model broken; nothing further ran.
     Trapped(checked::Trap),
+    /// A host resource stopped the run; nothing further ran (`RunOutcome::Environmental`).
+    Environmental(hirsel_run_config::Environmental),
 }
 /// One suspended root-task wait; ordinals identify runtime-owned targets only.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +182,9 @@ pub enum Error {
     InvalidTir(String),
     Unavailable(String),
     Query(QueryError),
+    /// A host resource stopped the run (the codec's operational budget, SER-2); the run
+    /// entry points turn it into `Outcome::Environmental`.
+    Environmental(hirsel_run_config::Environmental),
     /// Checked execution's stop signal. The run entry points turn it into
     /// `Outcome::Trapped`; it never leaves them as an error.
     Trapped(Box<checked::Trap>),

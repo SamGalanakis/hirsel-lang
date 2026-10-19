@@ -358,14 +358,22 @@ impl HostRun {
     }
 }
 
-/// Admit fresh grants, or bind a recording, against the selected semantic revision and
-/// entry. A recording bound to other code, entry or roots refuses before entry; a live
-/// launch is admitted by `host`, whose Io writes the granted standard output.
-pub(crate) fn bind_host_run(
+/// A host launch bound to the checked program, before host admission.
+pub(crate) enum BoundHostRun {
+    Live(hirsel_run_config::BoundRun),
+    Replay {
+        run: hirsel_run_config::ValidatedRun,
+        io: hirsel_rt::io_sim::SimIo,
+    },
+}
+
+/// Bind fresh grants, or a recording, to the selected semantic revision and entry, with no
+/// host consulted. A recording bound to other code, entry or roots refuses here; so does a
+/// record whose code policy the entry's reach breaks (CAP-6), naming the path.
+pub(crate) fn bind_launch(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
-    mut host: hirsel_rt::host_launch::HostGrants,
-) -> Result<HostRun, ToolError> {
+) -> Result<BoundHostRun, ToolError> {
     use hirsel_run_config::LaunchKind;
     if matches!(
         launch,
@@ -387,34 +395,19 @@ pub(crate) fn bind_host_run(
         Some(reach) => hirsel_run_config::CodeReach::Escapes(reach.spelled()),
     };
     match launch {
-        HostLaunch::Live {
-            config,
-            record,
-            revocations,
-        } => {
-            if let Some(path) = revocations {
-                host.read_revocations(path)
-                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            }
+        HostLaunch::Live { config, .. } => {
             let requested = config
                 .read(&revision)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let admitted = hirsel_engine::admit_run(
+            let bound = hirsel_engine::bind_run(
                 &signature,
                 &revision,
                 LaunchKind::Main,
                 Some(&requested),
                 code,
-                &mut host,
-                admission_time()?,
             )
             .map_err(ToolError::Launch)?;
-            let mut io = host.into_io();
-            if let Some(tape) = record {
-                hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])
-                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            }
-            Ok(HostRun::Live { admitted, io })
+            Ok(BoundHostRun::Live(bound))
         }
         HostLaunch::Replay(tape) => {
             let refused = |e: hirsel_run_config::RunRefusal| {
@@ -432,8 +425,43 @@ pub(crate) fn bind_host_run(
                 ))
                 .map_err(refused)?
                 .into_run();
-            Ok(HostRun::Replay { run, io })
+            Ok(BoundHostRun::Replay { run, io })
         }
+    }
+}
+
+/// Bind a launch as [`bind_launch`] does, then admit a live one once on `host`, whose Io
+/// writes the granted standard output; a recorded live launch starts its tape here.
+pub(crate) fn bind_host_run(
+    program: &mut LoadedProgram,
+    launch: HostLaunch<'_>,
+    mut host: hirsel_rt::host_launch::HostGrants,
+) -> Result<HostRun, ToolError> {
+    let (record, revocations) = match &launch {
+        HostLaunch::Live {
+            record,
+            revocations,
+            ..
+        } => (*record, *revocations),
+        HostLaunch::Replay(_) => (None, None),
+    };
+    match bind_launch(program, launch)? {
+        BoundHostRun::Live(bound) => {
+            if let Some(path) = revocations {
+                host.read_revocations(path)
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            }
+            let admitted = bound
+                .admit(&mut host, admission_time()?)
+                .map_err(ToolError::Launch)?;
+            let mut io = host.into_io();
+            if let Some(tape) = record {
+                hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            }
+            Ok(HostRun::Live { admitted, io })
+        }
+        BoundHostRun::Replay { run, io } => Ok(HostRun::Replay { run, io }),
     }
 }
 
@@ -545,6 +573,7 @@ pub fn run_path_on_host(
         Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
         Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),
         Outcome::Trapped(t) => RunOutcome::Trapped(t),
+        Outcome::Environmental(cause) => RunOutcome::Environmental(cause),
         Outcome::Blocked(_) => RunOutcome::Blocked(
             execution
                 .observable(&sources)

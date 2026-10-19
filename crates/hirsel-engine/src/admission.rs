@@ -1,7 +1,7 @@
 //! Production entry selection and admission, before any evaluator starts.
 use hirsel_run_config::{
-    AdmittedRun, CodeReach, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision, Root,
-    RunConfig, RunRefusal, ValidatedRun,
+    AdmittedRun, BoundRun, CodeReach, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision,
+    Root, RunConfig, RunRefusal, ValidatedRun,
 };
 use hirsel_syntax::Visibility;
 use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
@@ -100,6 +100,19 @@ pub fn admit_run(
     host: &mut dyn HostAuthority,
     now: i64,
 ) -> Result<AdmittedRun, RunRefusal> {
+    bind_run(signature, revision, launch, requested, code)?.admit(host, now)
+}
+
+/// Bind the requested run (or the program's default record) to the checked code it would
+/// execute, with no host consulted: the entry's signature, binding, roots and code policy. A
+/// launcher that admits the run elsewhere (a native executable) binds here only.
+pub fn bind_run(
+    signature: &Signature,
+    revision: &ProgramRevision,
+    launch: LaunchKind,
+    requested: Option<&ValidatedRun>,
+    code: CodeReach,
+) -> Result<BoundRun, RunRefusal> {
     let roots = entry_roots(signature, launch)?;
     if signature.definition.to_string() != revision.entry() {
         return Err(RunRefusal::Binding {
@@ -110,6 +123,5 @@ pub fn admit_run(
         Some(run) => run.clone(),
         None => RunConfig::for_program(revision, launch).validated()?,
     };
-    run.bind(&ProgramFacts::of(revision, launch, roots, code))?
-        .admit(host, now)
+    run.bind(&ProgramFacts::of(revision, launch, roots, code))
 }

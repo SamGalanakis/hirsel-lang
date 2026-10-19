@@ -225,6 +225,7 @@ impl InterpreterPhase for InterpreterAdapter {
                 RunOutcome::UndefinedBehavior(detected)
             }
             hirsel_interp::Outcome::Trapped(trap) => RunOutcome::Trapped(trap),
+            hirsel_interp::Outcome::Environmental(cause) => RunOutcome::Environmental(cause),
             hirsel_interp::Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
             hirsel_interp::Outcome::Failed(failure) => RunOutcome::Failure {
                 operation: operation_site,
@@ -299,6 +300,7 @@ fn core_error(error: hirsel_interp::Error) -> RuntimeError {
             RuntimeError::Tool("unhandled budget stop signal".into())
         }
         hirsel_interp::Error::Trapped(trap) => RuntimeError::Tool(trap.to_string()),
+        hirsel_interp::Error::Environmental(cause) => RuntimeError::Tool(cause.to_string()),
     }
 }
 fn launch_error(error: hirsel_interp::library::LaunchError) -> RuntimeError {

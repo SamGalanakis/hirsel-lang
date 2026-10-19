@@ -32,7 +32,7 @@ mod admission;
 mod proof_export;
 mod queries;
 mod tools;
-pub use admission::{admit_run, entry_roots, read_run_record};
+pub use admission::{admit_run, bind_run, entry_roots, read_run_record};
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Interner;
 pub use hirsel_interp::library::SimulationConfig;
@@ -67,6 +67,8 @@ pub enum RunOutcome {
     UndefinedBehavior(hirsel_interp::UndefinedBehavior),
     /// Checked execution found the memory model broken.
     Trapped(hirsel_interp::checked::Trap),
+    /// A host resource stopped the run (`hirsel_run_config::RunOutcome::Environmental`).
+    Environmental(hirsel_run_config::Environmental),
     Exit(i32),
     Failure {
         rule: RuleId,

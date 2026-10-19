@@ -466,6 +466,12 @@ impl QueryEngine {
             Outcome::ToolingLimit(limit) => Err(self.comptime_limit(limit)),
             Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
             Outcome::Trapped(trap) => Err(operational(trap.to_string())),
+            Outcome::Environmental(cause) => {
+                Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "codec-budget".into(),
+                    message: cause.to_string(),
+                }))
+            }
         }
     }
     pub(crate) fn comptime_limit(&mut self, limit: hirsel_tir::ToolingLimit) -> QueryError {

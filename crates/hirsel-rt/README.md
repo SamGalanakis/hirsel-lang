@@ -30,6 +30,28 @@ Invariants and boundary:
   `RunOutcome`. Only the standalone launcher turns an outcome into a process exit status
   (`RunOutcome::exit_code`). Invariant faults, host exhaustion, PROG-4 violations, stack
   overflow and a stop inside a foreign call still end the process.
+- A `host::Host` admits a bound run once (`Host::admit`: grants, mounts, revocations, clock and
+  the process's standard input) and starts it (`Host::start`, then `RunHandle::wait`) with its
+  own `Sinks`: the granted stdout and stderr and a `report` stream for the run's failure,
+  PROG-3, refusal and stop reports. `Sinks::process()` are the process's streams;
+  `Sink::capture()` keeps a run's output in memory. Standard input is one take-once
+  `ProcessStdin` token, held from admission by the run whose record grants `io.stdin` and
+  returned when its Io drops; admission refuses a second holder. `Execution` groups the runs
+  that decide CONC-8 together: each started run begins its own until callee runs (`Selection`
+  for calls, runner-core) join their caller's.
+- A launcher that reads the observation record also reads how a run stopped (`stopped
+  refused|diverged|environmental ...`) and, from the file named by `HIRSEL_RT_REFUSAL`, a launch
+  refused before entry (`refused <reason>`, a `RunRefusal`'s JSON when the host refused it);
+  the executable then writes no report of its own. Without them it reports on its report sink.
+- Stops and Rust frames: a stop switches from the frame that raises it to the run's driver, and
+  the frames between are never unwound. Every place Rust enters compiled code holds only raw
+  pointers and plain integers across the call, so abandoning it leaks nothing the context
+  does not own: the root entry (`launch::execute`, inside `stop::run_root`, which is the
+  driver), task code (`tasks.rs`, each task on its own fiber, under scheduler frames) and
+  finalizers (`finalize::run_finalizer`, from `release.rs`'s drain and step walks and from
+  `hirsel_rt_v2_finalize`). Compiled code calls an isolate callback itself, with no Rust frame
+  between. A stop inside a foreign call (C frames between) ends the process. A new Rust frame
+  that calls compiled code must keep to plain data, or return the stop through `Stopped`.
 - Foreign calls push their context and source site on the calling thread, then restore
   the enclosing call when they return. Callback thunks reject null context/Ptr/FnPtr
   arguments before invoking Hirsel. A non-null boundary violation ends the process
@@ -620,7 +642,7 @@ compiled with fuel checks decrements it at each fuel point and calls
 `Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
 an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
 `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
-writes the observation record (`hirsel-observation 1`, the status, the result
+writes the observation record (`hirsel-observation 3`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
 (`hirsel-io-tape 7`, which also reads version 6: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated

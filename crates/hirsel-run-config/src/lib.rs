@@ -269,7 +269,7 @@ pub struct RunConfig {
 }
 
 /// Machine-readable refusal category and the exact offending input field.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunRefusal {
     Malformed { detail: String },
@@ -293,6 +293,12 @@ impl fmt::Display for RunRefusal {
     }
 }
 impl std::error::Error for RunRefusal {}
+impl RunRefusal {
+    /// A refusal from its JSON (`Display`), as a launcher reports it to its host.
+    pub fn parse(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
+}
 fn invalid(field: &str, detail: &str) -> RunRefusal {
     RunRefusal::Invalid {
         field: field.into(),

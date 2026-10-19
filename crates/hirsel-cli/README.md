@@ -147,8 +147,12 @@ fields and deny omitted roots. Standalone executables accept the corresponding
 `hirsel run <source|manifest> --replay <tape>` replays one, in either engine, with no
 grants and no host effect. Replay refuses a tape bound to another semantic revision,
 entry or root set before entry (exit 1), and a divergence, missing or unconsumed event
-after the output it confirmed: a tool error (exit 1) interpreted, the executable's launch
-refusal (`hirsel: native launch: ...`, exit 2) with `--native`. `--replay` takes no `--run`,
+after the output it confirmed (`hirsel: replay refused: ...`, exit 1), in either engine.
+With `--native` the driver only binds the run; the executable admits it once and reports
+an admission refusal, a Blocked run, a stop and a codec limit to the driver, so `hirsel run`
+reports them as the interpreter's run does: a refusal `hirsel: launch: <refusal>` (exit 1),
+Blocked (exit 2), and `hirsel: environmental failure: ...` (exit 6) for a run past the
+codec's operational budget. `--replay` takes no `--run`,
 `--grants` or `--record`, and neither option combines with `--simulation`. Executables
 spell them `--hirsel-record <tape>` (before their launch input) and `--hirsel-replay <tape>`.
 

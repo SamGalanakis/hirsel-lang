@@ -54,6 +54,7 @@ pub mod failure;
 mod fiber;
 pub mod finalize;
 pub mod foreign;
+pub mod host;
 #[cfg(feature = "measurement")]
 pub mod measurement;
 mod memcheck;

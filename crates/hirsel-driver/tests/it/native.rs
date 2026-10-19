@@ -894,8 +894,12 @@ fn generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry() {
                         refused.stdout.is_empty(),
                         "entry produced output before refusal"
                     );
+                    // The launcher reads the refusal from its refusal file.
                     assert!(
-                        String::from_utf8_lossy(&refused.stderr).contains("configuration mismatch")
+                        refused
+                            .record
+                            .contains("\nrefused recording configuration mismatch"),
+                        "{refused:?}"
                     );
                 }
                 std::fs::remove_file(tape).unwrap();

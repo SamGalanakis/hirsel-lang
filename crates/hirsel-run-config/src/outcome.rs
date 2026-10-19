@@ -46,6 +46,15 @@ pub enum Environmental {
     /// A host output sink failed.
     Output(String),
 }
+impl std::fmt::Display for Environmental {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CodecLimit => f.write_str("codec operational budget exhausted"),
+            Self::Recording(reason) => write!(f, "the recording: {reason}"),
+            Self::Output(reason) => write!(f, "output: {reason}"),
+        }
+    }
+}
 
 /// How a run ended. Closed: a host handles every ending, and both engines produce the same
 /// variants for the same ending.

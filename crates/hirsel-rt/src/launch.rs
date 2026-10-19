@@ -41,13 +41,14 @@ use crate::io_sim::SimIo;
 use crate::net::NetRule;
 use crate::program::{Code, Program, ProgramDescriptor};
 use crate::{ABI_VERSION, Layout, RunCtx, STATUS_FAILURE, STATUS_OK};
-use hirsel_run_config::hex;
+use hirsel_run_config::{RunOutcome, hex};
 use std::cell::RefCell;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 2;
+pub const OBSERVATION_VERSION: u32 = 3;
 
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -1053,9 +1054,33 @@ pub struct Config {
 const UNREPLAYABLE_REFUSAL: &str = "this program calls C outside a wrapper with a \
      deterministic model, so its runs cannot be recorded or replayed (PROG-4)";
 
+/// A refusal before any run starts, on the process's streams.
 fn refuse(message: &str) -> i32 {
-    eprintln!("hirsel-rt: launch refused: {message}");
-    hirsel_run_config::exit::REFUSED
+    refused(&crate::host::Sinks::process(), message.into()).exit_code()
+}
+
+/// Report a launch refused before entry and return its outcome. A launcher that names its own
+/// refusal file (`HIRSEL_RT_REFUSAL`) gets it there, as an observation record holding
+/// `refused <reason>`; otherwise it goes to the run's report sink. The observation file itself
+/// is never written for a refusal: it may be the destination refused.
+pub(crate) fn refused(sinks: &crate::host::Sinks, reason: String) -> RunOutcome {
+    let observed = std::env::var_os("HIRSEL_RT_REFUSAL").is_some_and(|path| {
+        crate::host_paths::RecorderDestination::pin(std::path::Path::new(&path))
+            .and_then(|destination| destination.open_with_files(&[], &[]))
+            .is_ok_and(|mut file| {
+                write!(
+                    file,
+                    "hirsel-observation {OBSERVATION_VERSION}\nrefused {}\n",
+                    reason.replace('\n', " ")
+                )
+                .and_then(|()| file.flush())
+                .is_ok()
+            })
+    });
+    if !observed {
+        let _ = writeln!(sinks.report.clone(), "hirsel-rt: launch refused: {reason}");
+    }
+    RunOutcome::Refused(reason)
 }
 
 /// Launch a zero-parameter entry without acquiring any host root or argv snapshot.
@@ -1144,7 +1169,7 @@ unsafe fn harness(
     };
     let program = Program::harness(code, result_size, layouts, layout_count, *config);
     // SAFETY: caller contract.
-    unsafe { launch(&program, std::env::args_os().skip(1).collect()) }
+    unsafe { launch(&program, std::env::args_os().skip(1).collect()) }.exit_code()
 }
 
 /// The entry of a compiled executable or program library: load its program and launch one run
@@ -1172,7 +1197,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_main(
     // SAFETY: caller contract.
     match unsafe { Program::load(descriptor) } {
         // SAFETY: the program's data lives for the process.
-        Ok(program) => unsafe { launch(&program, arguments) },
+        Ok(program) => unsafe { launch(&program, arguments) }.exit_code(),
         Err(error) => refuse(&error),
     }
 }
@@ -1198,11 +1223,15 @@ fn facts(
     )
 }
 
-/// Select the run `arguments` ask for, bind it to `program` and execute it.
+/// Select the run `arguments` ask for, bind it to `program`, admit it on the process's host
+/// with the process's streams, and run it to its outcome.
 ///
 /// # Safety
 /// The program's entry and descriptors are live for the call.
-unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> i32 {
+unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> RunOutcome {
+    let host = crate::host::Host::process();
+    let sinks = crate::host::Sinks::process();
+    let refuse = |reason: &str| refused(&sinks, reason.into());
     let selected = if program.standalone() {
         match crate::standalone::select(
             arguments.clone(),
@@ -1244,8 +1273,21 @@ unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> i32 {
     {
         return refuse("run record binding mismatch");
     }
-    // SAFETY: caller contract.
-    unsafe { execute(program, &config, selected, arguments) }
+    use crate::host::Selection;
+    let selection = match selected {
+        None => Selection::Harness,
+        Some(crate::standalone::Selected::Replay { run, io }) => Selection::Replay { run, io },
+        Some(crate::standalone::Selected::Live {
+            run,
+            tape,
+            revocations,
+        }) => match host.admit(&run, revocations.as_deref(), &sinks) {
+            Ok((admitted, io)) => Selection::Live { admitted, io, tape },
+            Err(error) => return refuse(&error.to_string()),
+        },
+    };
+    host.start(program, config, selection, arguments, sinks)
+        .wait()
 }
 
 /// A launched (not standalone) executable's selection: a replay, a run record the embedded
@@ -1292,58 +1334,41 @@ fn select_bound(
         .map_err(|e| e.to_string())
 }
 
-unsafe fn execute(
+/// Run `selection` of `program` on this thread to its outcome, writing to `sinks`. `Err` is a
+/// launch refused before entry (or a host report that failed after it), for the caller to
+/// report.
+///
+/// # Safety
+/// The program's entry and descriptors are live for the call.
+pub(crate) unsafe fn execute(
     program: &Program,
     launch_config: &Config,
-    selected: Option<crate::standalone::Selected>,
+    selection: crate::host::Selection,
     process_arguments: Vec<std::ffi::OsString>,
-) -> i32 {
+    sinks: &crate::host::Sinks,
+) -> Result<RunOutcome, String> {
     let entry = program.code;
     let (result_size, layouts, layout_count) =
         (program.result_size, program.layouts, program.layout_count);
-    let requested = selected.as_ref().map(|selected| selected.run().clone());
+    let (requested, production_io, production_replay) = match selection {
+        crate::host::Selection::Harness => (None, None, None),
+        crate::host::Selection::Live { admitted, io, tape } => (
+            Some(admitted.run().clone()),
+            Some((io, admitted, tape)),
+            None,
+        ),
+        // A replay performs no host effect: no admission, clock or provider.
+        crate::host::Selection::Replay { run, io } => (Some(run.run().clone()), None, Some(io)),
+    };
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
-    let mut production_io = None;
-    let mut production_replay = None;
-    if let Some(selected) = selected {
-        match selected {
-            // A replay performs no host effect: no admission, clock or provider.
-            crate::standalone::Selected::Replay { io, .. } => production_replay = Some(io),
-            crate::standalone::Selected::Live {
-                run,
-                tape,
-                revocations,
-            } => {
-                let mut host = crate::host_launch::HostGrants::new(RawStdout);
-                if let Some(path) = revocations {
-                    if let Err(e) = host.read_revocations(&path) {
-                        return refuse(&e.to_string());
-                    }
-                }
-                let now = match std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .and_then(|n| i64::try_from(n.as_nanos()).ok())
-                {
-                    Some(now) => now,
-                    None => return refuse("admission clock out of range"),
-                };
-                let admitted = match run.admit(&mut host, now) {
-                    Ok(admitted) => admitted,
-                    Err(e) => return refuse(&e.to_string()),
-                };
-                production_io = Some((host.into_io(), admitted, tape));
-            }
-        }
-    }
     let seed = launch_config.test_seed;
     if !(4..=RESULT_MAX).contains(&result_size) {
-        return refuse("the entry result is not a Result of at most 64 bytes");
+        return Err("the entry result is not a Result of at most 64 bytes".into());
     }
     let inherited_outputs = match crate::host_paths::inherited_output_pins() {
         Ok(pins) => pins,
-        Err(error) => return refuse(&error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
     let output_grants: Vec<_> = inherited_outputs
         .iter()
@@ -1361,7 +1386,7 @@ unsafe fn execute(
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(arguments) => arguments,
-            Err(index) => return refuse(&format!("argument {index} is not UTF-8")),
+            Err(index) => return Err(format!("argument {index} is not UTF-8")),
         }
     };
     let net = if requested.is_some() {
@@ -1370,11 +1395,11 @@ unsafe fn execute(
         match std::env::var("HIRSEL_RT_NET") {
             Ok(text) => match hirsel_run_config::validate_net_grant(text.as_bytes()) {
                 Ok(grant) => Some(grant),
-                Err(error) => return refuse(&format!("the network grant: {error}")),
+                Err(error) => return Err(format!("the network grant: {error}")),
             },
             Err(std::env::VarError::NotPresent) => None,
             Err(std::env::VarError::NotUnicode(_)) => {
-                return refuse("the network grant is not UTF-8");
+                return Err("the network grant is not UTF-8".into());
             }
         }
     };
@@ -1385,11 +1410,11 @@ unsafe fn execute(
         match std::env::var("HIRSEL_RT_PROCESS") {
             Ok(text) => match hirsel_run_config::validate_process_grant(text.as_bytes()) {
                 Ok(grant) => Some(grant),
-                Err(error) => return refuse(&format!("the process grant: {error}")),
+                Err(error) => return Err(format!("the process grant: {error}")),
             },
             Err(std::env::VarError::NotPresent) => None,
             Err(std::env::VarError::NotUnicode(_)) => {
-                return refuse("the process grant is not UTF-8");
+                return Err("the process grant is not UTF-8".into());
             }
         }
     };
@@ -1400,11 +1425,11 @@ unsafe fn execute(
         match std::env::var("HIRSEL_RT_ENV") {
             Ok(text) => match hirsel_run_config::validate_env(text.as_bytes()) {
                 Ok(env) => Some(env),
-                Err(error) => return refuse(&format!("the Env snapshot: {error}")),
+                Err(error) => return Err(format!("the Env snapshot: {error}")),
             },
             Err(std::env::VarError::NotPresent) => None,
             Err(std::env::VarError::NotUnicode(_)) => {
-                return refuse("the Env snapshot is not UTF-8");
+                return Err("the Env snapshot is not UTF-8".into());
             }
         }
     };
@@ -1420,7 +1445,7 @@ unsafe fn execute(
             && let Err(error) =
                 crate::host_launch::record(&mut io, &admitted, &path, &output_grants)
         {
-            return refuse(&error);
+            return Err(error);
         }
         if entry.is_test() {
             io.test_context(seed);
@@ -1444,14 +1469,14 @@ unsafe fn execute(
                     .and_then(|text| parse_recording(&text))
                 {
                     Ok(recording) => recording,
-                    Err(error) => return refuse(&format!("the replayed tape: {error}")),
+                    Err(error) => return Err(format!("the replayed tape: {error}")),
                 };
                 if tape.run_identity != launch_config.run_identity
                     || tape.hash_seed != launch_config.hash_seed
                     || tape.random_seed != launch_config.random_seed
                     || tape.test_seed != launch_config.test_seed
                 {
-                    return refuse("recording configuration mismatch");
+                    return Err("recording configuration mismatch".into());
                 }
                 arguments = tape.arguments;
                 let mut io = SimIo::new(tape.tree, tape.events);
@@ -1466,7 +1491,7 @@ unsafe fn execute(
                 if let Some((peers, listeners)) = net_script.clone()
                     && let Err(error) = io.set_net_script(peers, listeners)
                 {
-                    return refuse(&format!("the network script: {error:?}"));
+                    return Err(format!("the network script: {error:?}"));
                 }
                 if entry.is_test() {
                     io.test_context(seed);
@@ -1493,11 +1518,11 @@ unsafe fn execute(
                     .and_then(|destination| destination.open_with_files(&[], &output_grants))
                     {
                         Ok(file) => file,
-                        Err(error) => return refuse(&error.to_string()),
+                        Err(error) => return Err(error.to_string()),
                     };
                     match RecordingWriter::new(file, &record) {
                         Ok(writer) => zero_recording = Some(writer),
-                        Err(error) => return refuse(&format!("the Io tape: {error}")),
+                        Err(error) => return Err(format!("the Io tape: {error}")),
                     }
                 }
                 Box::new(SimIo::new(initial_tree.clone(), vec![]))
@@ -1506,17 +1531,17 @@ unsafe fn execute(
             // configuration): no mount and no projection.
             None => match std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
                 || {
-                    let mut io =
-                        RealIo::from_pinned_mounts([], RawStdout).expect("an empty mount set");
+                    let mut io = RealIo::from_pinned_mounts([], sinks.stdout.clone())
+                        .expect("an empty mount set");
                     io.set_projections(Default::default());
                     Ok(io)
                 },
-                |root| RealIo::grant_with_output(std::path::Path::new(&root), RawStdout),
+                |root| RealIo::grant_with_output(std::path::Path::new(&root), sinks.stdout.clone()),
             ) {
                 Ok(mut io) => {
                     if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {
                         let Some(ticks) = ticks.to_str().and_then(|s| s.parse::<u64>().ok()) else {
-                            return refuse("invalid harness virtual clock");
+                            return Err("invalid harness virtual clock".into());
                         };
                         io.virtual_clock(ticks);
                     }
@@ -1536,7 +1561,7 @@ unsafe fn execute(
                     if let Some((peers, listeners)) = net_script.clone()
                         && let Err(error) = io.set_net_script(peers, listeners)
                     {
-                        return refuse(&format!("the network script: {error:?}"));
+                        return Err(format!("the network script: {error:?}"));
                     }
                     let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
                         Some(path) => match io.prepare_recording_with_files(
@@ -1544,7 +1569,7 @@ unsafe fn execute(
                             &output_grants,
                         ) {
                             Ok(file) => Some(file),
-                            Err(error) => return refuse(&error.to_string()),
+                            Err(error) => return Err(error.to_string()),
                         },
                         None => None,
                     };
@@ -1552,7 +1577,7 @@ unsafe fn execute(
                         initial_tree = match io.snapshot() {
                             Ok(tree) => tree,
                             Err(error) => {
-                                return refuse(&format!("initial recording tree: {error:?}"));
+                                return Err(format!("initial recording tree: {error:?}"));
                             }
                         };
                     }
@@ -1570,7 +1595,7 @@ unsafe fn execute(
                         let writer = RecordingWriter::new(file, &record);
                         match writer {
                             Ok(writer) => io.record_to(writer),
-                            Err(error) => return refuse(&format!("the Io tape: {error}")),
+                            Err(error) => return Err(format!("the Io tape: {error}")),
                         }
                     }
                     if entry.is_test() {
@@ -1581,7 +1606,7 @@ unsafe fn execute(
                     real = Some(io.clone());
                     Box::new(Shared(io))
                 }
-                Err(error) => return refuse(&format!("the granted directory: {error}")),
+                Err(error) => return Err(format!("the granted directory: {error}")),
             },
         }
     };
@@ -1598,7 +1623,7 @@ unsafe fn execute(
         .transpose()
     {
         Ok(file) => file,
-        Err(error) => return refuse(&error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
     let report_failures = observation.is_none();
     #[cfg(feature = "measurement")]
@@ -1607,7 +1632,7 @@ unsafe fn execute(
         .transpose()
     {
         Ok(file) => file,
-        Err(error) => return refuse(&error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
     #[cfg(feature = "measurement")]
     let profile = match std::env::var_os("HIRSEL_RT_PROFILE")
@@ -1621,7 +1646,7 @@ unsafe fn execute(
         .transpose()
     {
         Ok(file) => file,
-        Err(error) => return refuse(&error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
     let config = RuntimeConfig {
         layouts,
@@ -1641,7 +1666,7 @@ unsafe fn execute(
     };
     let mut ctx = std::ptr::null_mut();
     if unsafe { hirsel_rt_v2_ctx_create(&config, &mut ctx) } != 0 {
-        return refuse("the runtime configuration");
+        return Err("the runtime configuration".into());
     }
     if let Some(budgets) = &budgets {
         unsafe { &mut *ctx }.set_budgets(budgets.fuel, budgets.memory_bytes);
@@ -1669,9 +1694,15 @@ unsafe fn execute(
         if let Some(io) = &replay {
             let io = io.borrow();
             let (out, err) = echoed.get();
-            std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[out..])
+            sinks
+                .stdout
+                .clone()
+                .write_all(&io.stdout()[out..])
                 .map_err(|e| format!("standard output: {e}"))?;
-            std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[err..])
+            sinks
+                .stderr
+                .clone()
+                .write_all(&io.stderr()[err..])
                 .map_err(|e| format!("standard error: {e}"))?;
             echoed.set((io.stdout().len(), io.stderr().len()));
         }
@@ -1709,11 +1740,12 @@ unsafe fn execute(
             {
                 let report = (|| -> Result<(), String> {
                     echo_replay()?;
-                    std::io::Write::flush(&mut std::io::stdout())
-                        .map_err(|e| format!("standard output: {e}"))?;
+                    flush_stdout(sinks).map_err(|e| format!("standard output: {e}"))?;
                     let text = crate::exit_report::render(&returned);
-                    std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes())
-                        .and_then(|()| std::io::Write::flush(&mut std::io::stderr()))
+                    let mut report = sinks.report.clone();
+                    report
+                        .write_all(text.as_bytes())
+                        .and_then(|()| report.flush())
                         .map_err(|e| format!("standard error: {e}"))
                 })();
                 report_refusal = report.err();
@@ -1830,6 +1862,32 @@ unsafe fn execute(
     }
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
     drop(binding);
+    // A stopped run's cause, as its observation records it.
+    let stopped = match &outcome {
+        hirsel_run_config::RunOutcome::Refused(reason) => Some(format!("refused {reason}")),
+        hirsel_run_config::RunOutcome::Diverged(reason) => Some(format!("diverged {reason}")),
+        hirsel_run_config::RunOutcome::Environmental(cause) => Some(match cause {
+            hirsel_run_config::Environmental::CodecLimit => "environmental codec_limit".into(),
+            hirsel_run_config::Environmental::Recording(reason) => {
+                format!("environmental recording {reason}")
+            }
+            hirsel_run_config::Environmental::Output(reason) => {
+                format!("environmental output {reason}")
+            }
+        }),
+        _ => None,
+    };
+    if let Some(stopped) = stopped {
+        let _ = writeln!(record, "stopped {}", stopped.replace('\n', " "));
+    }
+    let mut write_observation = |record: &str| -> Result<(), String> {
+        if let Some(file) = &mut observation {
+            std::io::Write::write_all(file, record.as_bytes())
+                .and_then(|()| std::io::Write::flush(file))
+                .map_err(|e| format!("the observation file: {e}"))?;
+        }
+        Ok(())
+    };
     // What the launch writes last: the replay's remaining output, the outputs' flush, the
     // tapes' trailers and the observation record.
     let mut finish = || -> Result<(), String> {
@@ -1837,13 +1895,10 @@ unsafe fn execute(
         if let Some(io) = &replay
             && let Err(error) = io.borrow().finish()
         {
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+            let _ = flush_stdout(sinks);
             return Err(format!("the replayed tape: {error:?}"));
         }
-        // Rust's stdout is line buffered and a C `main` returning does not flush it: output
-        // after the last newline would be lost.
-        std::io::Write::flush(&mut std::io::stdout())
-            .map_err(|e| format!("standard output: {e}"))?;
+        flush_stdout(sinks).map_err(|e| format!("standard output: {e}"))?;
         if let Some(io) = &real {
             io.borrow_mut()
                 .finish_recording()
@@ -1852,74 +1907,69 @@ unsafe fn execute(
         if let Some(writer) = &mut zero_recording {
             writer.finish().map_err(|e| format!("the Io tape: {e}"))?;
         }
-        if let Some(file) = &mut observation {
-            std::io::Write::write_all(file, record.as_bytes())
-                .and_then(|()| std::io::Write::flush(file))
-                .map_err(|e| format!("the observation file: {e}"))?;
-        }
-        Ok(())
+        write_observation(&record)
     };
     match &outcome {
         hirsel_run_config::RunOutcome::Returned(_)
         | hirsel_run_config::RunOutcome::Blocked
-        | hirsel_run_config::RunOutcome::BudgetExceeded(_) => {
-            if let Err(error) = finish() {
-                return refuse(&error);
-            }
-        }
+        | hirsel_run_config::RunOutcome::BudgetExceeded(_) => finish()?,
         hirsel_run_config::RunOutcome::Failed { primary, causes } => {
             if report_failures {
                 for failure in std::iter::once(primary).chain(causes) {
-                    let _ = std::io::Write::write_all(
-                        &mut std::io::stderr(),
-                        crate::isolate::report(failure).as_bytes(),
-                    );
+                    let _ = sinks
+                        .report
+                        .clone()
+                        .write_all(crate::isolate::report(failure).as_bytes());
                 }
             }
-            if let Err(error) = finish() {
-                return refuse(&error);
-            }
+            finish()?
         }
-        // The recording stopped short of a complete run: no trailer and no observation.
+        // The recording stopped short of a complete run: no trailer. A launcher that reads
+        // the observation reports the stop from it; otherwise the run reports it here.
         hirsel_run_config::RunOutcome::Refused(reason)
         | hirsel_run_config::RunOutcome::Diverged(reason)
         | hirsel_run_config::RunOutcome::Environmental(
             hirsel_run_config::Environmental::Recording(reason),
         ) => {
-            stopped_output(&echo_replay);
-            eprintln!("hirsel-rt: Io refused: {reason}");
+            stopped_output(sinks, &echo_replay);
+            if report_failures {
+                let _ = writeln!(sinks.report.clone(), "hirsel-rt: Io refused: {reason}");
+            }
+            write_observation(&record)?;
         }
         hirsel_run_config::RunOutcome::Environmental(cause) => {
-            stopped_output(&echo_replay);
-            eprintln!(
-                "hirsel-rt: environmental failure: {}",
-                environmental_text(cause)
-            );
+            stopped_output(sinks, &echo_replay);
+            if report_failures {
+                let _ = writeln!(
+                    sinks.report.clone(),
+                    "hirsel-rt: environmental failure: {cause}"
+                );
+            }
+            write_observation(&record)?;
         }
-        hirsel_run_config::RunOutcome::Tooling(reason) => return refuse(reason),
+        hirsel_run_config::RunOutcome::Tooling(reason) => return Err(reason.clone()),
     }
     if let Some(error) = report_refusal {
-        return refuse(&error);
+        return Err(error);
     }
-    outcome.exit_code()
+    Ok(outcome)
 }
 
 /// A stopped run's output before its report: what the replay printed, then the flush.
-fn stopped_output(echo_replay: &dyn Fn() -> Result<(), String>) {
+fn stopped_output(sinks: &crate::host::Sinks, echo_replay: &dyn Fn() -> Result<(), String>) {
     if let Err(error) = echo_replay() {
-        eprintln!("hirsel-rt: replay output: {error}");
+        let _ = writeln!(sinks.report.clone(), "hirsel-rt: replay output: {error}");
     }
-    if let Err(error) = std::io::Write::flush(&mut std::io::stdout()) {
-        eprintln!("hirsel-rt: replay output: {error}");
+    if let Err(error) = flush_stdout(sinks) {
+        let _ = writeln!(sinks.report.clone(), "hirsel-rt: replay output: {error}");
     }
 }
 
-fn environmental_text(cause: &hirsel_run_config::Environmental) -> String {
-    match cause {
-        hirsel_run_config::Environmental::CodecLimit => "codec operational budget exhausted".into(),
-        hirsel_run_config::Environmental::Recording(reason)
-        | hirsel_run_config::Environmental::Output(reason) => reason.clone(),
-    }
+/// Flush the run's stdout sink and Rust's line-buffered stdout, which a C `main` returning
+/// does not flush: output after the last newline would be lost.
+fn flush_stdout(sinks: &crate::host::Sinks) -> std::io::Result<()> {
+    sinks.stdout.clone().flush()?;
+    std::io::stdout().flush()
 }
 
 /// Ordinary flushed streaming tape, explicitly nonresumable after interruption.

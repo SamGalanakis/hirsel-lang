@@ -1200,6 +1200,11 @@ fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
             eprintln!("evaluator tooling limit: {:?}", l.kind);
             2
         }
+        // A host resource stopped the run, in either engine (design: exit 6).
+        Ok(RunOutcome::Environmental(cause)) => {
+            eprintln!("hirsel: environmental failure: {cause}");
+            hirsel_run_config::exit::ENVIRONMENTAL as u8
+        }
         Err(e) => tool_error(e, json),
     }
 }

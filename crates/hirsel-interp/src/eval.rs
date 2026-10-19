@@ -102,6 +102,10 @@ pub fn run_with_runtime(
             execution.outcome = Outcome::BudgetExceeded(kind);
             Ok(())
         }
+        (Err(Error::Environmental(cause)), _) => {
+            execution.outcome = Outcome::Environmental(cause);
+            Ok(())
+        }
         (Err(Error::Trapped(trap)), Some(_)) => {
             execution.outcome = Outcome::Trapped(*trap);
             Ok(())

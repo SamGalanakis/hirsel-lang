@@ -81,7 +81,7 @@ pub fn run_path_native_backend(
     ) {
         loaded.refuse_unreplayable()?;
     }
-    let host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
+    // The driver binds only: the executable admits the run, once (design.md).
     let host = match launch {
         crate::HostLaunch::Live {
             config,
@@ -93,9 +93,11 @@ pub fn run_path_native_backend(
                 record: None,
                 revocations,
             };
-            let bound = crate::bind_host_run(&mut loaded, live, host)?;
+            let crate::BoundHostRun::Live(bound) = crate::bind_launch(&mut loaded, live)? else {
+                unreachable!("a live launch binds live")
+            };
             (
-                bound.run().clone(),
+                bound.into_run(),
                 super::link::Tape::Live {
                     record,
                     revocations,
@@ -103,8 +105,11 @@ pub fn run_path_native_backend(
             )
         }
         launch @ crate::HostLaunch::Replay(tape) => {
-            let bound = crate::bind_host_run(&mut loaded, launch, host)?;
-            (bound.run().clone(), super::link::Tape::Replay(tape))
+            let crate::BoundHostRun::Replay { run, .. } = crate::bind_launch(&mut loaded, launch)?
+            else {
+                unreachable!("a replay binds a recording")
+            };
+            (run, super::link::Tape::Replay(tape))
         }
     };
     let entry = loaded.entry;
@@ -134,7 +139,8 @@ pub fn run_path_native_backend(
         Ok(proofs) => proofs,
         Err(error) => return Ok(Err(error)),
     };
-    Ok(run(
+    let replay = matches!(host.1, super::link::Tape::Replay(_));
+    let observation = match run(
         &validated,
         &entry,
         (&host.0, host.1),
@@ -143,8 +149,35 @@ pub fn run_path_native_backend(
         inherit,
         stdout,
         stderr,
-    )
-    .and_then(|observation| {
+    ) {
+        Ok(super::link::Observed::Ran(observation)) => Ok(observation),
+        // The executable admitted the run and refused it: the same refusal the interpreter's
+        // admission reports.
+        Ok(super::link::Observed::Refused(reason)) => {
+            return Err(match hirsel_run_config::RunRefusal::parse(&reason) {
+                Some(refusal) => ToolError::Launch(refusal),
+                None => ToolError::Runtime(format!("launch: {reason}")),
+            });
+        }
+        Ok(super::link::Observed::Stopped(outcome)) => {
+            return match outcome {
+                hirsel_run_config::RunOutcome::Environmental(cause) => {
+                    Ok(Ok(RunOutcome::Environmental(cause)))
+                }
+                hirsel_run_config::RunOutcome::Refused(reason)
+                | hirsel_run_config::RunOutcome::Diverged(reason) => {
+                    Err(ToolError::Runtime(if replay {
+                        format!("replay refused: {reason}")
+                    } else {
+                        format!("host Io: {reason}")
+                    }))
+                }
+                outcome => Err(ToolError::Runtime(format!("launch: {outcome:?}"))),
+            };
+        }
+        Err(error) => Err(error),
+    };
+    Ok(observation.and_then(|observation| {
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
 
         let sites = Sites::new(validated.snapshot());
@@ -164,6 +197,10 @@ pub fn run_path_native_backend(
         }
         if let Some(kind) = observation.budget {
             return Ok(RunOutcome::BudgetExceeded(kind));
+        }
+        if observation.blocked {
+            // The executable reports no waits (CONC-8).
+            return Ok(RunOutcome::Blocked(vec![]));
         }
         Ok(
             match (observation.exit_code, observation.failures.first()) {
@@ -196,7 +233,7 @@ fn run(
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
-) -> Result<Observation, NativeError> {
+) -> Result<super::link::Observed, NativeError> {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut options = Options::new(target.clone());
     if let Some(proofs) = proofs {
@@ -250,7 +287,8 @@ fn run(
                 stderr,
             },
         )?;
-        let observation = observe(&launched, &program, &Sites::new(validated.snapshot()))?;
+        let observation =
+            super::link::observe_run(&launched, &program, &Sites::new(validated.snapshot()))?;
         Ok(observation)
     })();
     let _ = std::fs::remove_dir_all(&scratch);

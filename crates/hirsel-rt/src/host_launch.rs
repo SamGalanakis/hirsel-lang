@@ -87,12 +87,24 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     Ok((io, run))
 }
 
+/// The process's standard input, read by the run that holds it.
+struct HeldStdin {
+    input: std::io::Stdin,
+    _token: crate::host::ProcessStdin,
+}
+impl std::io::Read for HeldStdin {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buffer)
+    }
+}
+
 pub struct HostGrants {
     /// Admit cooperative providers even when the record grants no tasks (the interpreter).
     always_cooperative: bool,
     revocations: Option<hirsel_run_config::Revocations>,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
+    stderr: Option<Box<dyn std::io::Write>>,
 }
 impl HostGrants {
     /// Native admission: a record that grants `io.tasks` gets the cooperative providers, so a
@@ -104,7 +116,13 @@ impl HostGrants {
             revocations: None,
             io: None,
             output: Some(Box::new(output)),
+            stderr: None,
         }
+    }
+    /// The stream a granted `io.stderr` writes to, instead of the process's standard error.
+    pub fn with_stderr(mut self, stderr: impl std::io::Write + 'static) -> Self {
+        self.stderr = Some(Box::new(stderr));
+        self
     }
     /// Interpreter admission for the cooperative scheduler: sockets and stdin are
     /// nonblocking and record their interest in one Readiness, with or without tasks.
@@ -152,15 +170,23 @@ impl HostAuthority for HostGrants {
             .as_ref()
             .is_some_and(|grants| grants.stdin.is_some())
         {
+            // One run at a time holds the process's standard input.
+            let token =
+                crate::host::ProcessStdin::take().ok_or_else(|| RunRefusal::Unauthorized {
+                    field: "io.stdin: another run of this process holds its standard input".into(),
+                })?;
             match &readiness {
-                Some(readiness) => {
-                    io.set_cooperative_stdin(CooperativeStdin::pin(readiness.clone()).map_err(
-                        |error| RunRefusal::Unauthorized {
+                Some(readiness) => io.set_cooperative_stdin(
+                    CooperativeStdin::pin(readiness.clone())
+                        .map_err(|error| RunRefusal::Unauthorized {
                             field: format!("io.stdin: {error}"),
-                        },
-                    )?)
-                }
-                None => io.set_stdin(std::io::stdin()),
+                        })?
+                        .holding(token),
+                ),
+                None => io.set_stdin(HeldStdin {
+                    input: std::io::stdin(),
+                    _token: token,
+                }),
             }
         }
         if let Some(readiness) = &readiness {
@@ -175,7 +201,10 @@ impl HostAuthority for HostGrants {
             .as_ref()
             .is_some_and(|grants| grants.stderr.is_some())
         {
-            io.set_stderr(std::io::stderr());
+            match self.stderr.take() {
+                Some(stderr) => io.set_stderr(stderr),
+                None => io.set_stderr(std::io::stderr()),
+            }
         }
         io.set_env(record.env.clone().unwrap_or_default());
         let (monotonic, wall) = run.clock_grants();

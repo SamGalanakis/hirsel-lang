@@ -13,6 +13,8 @@ pub struct CooperativeStdin {
     fd: Option<OwnedFd>,
     restore_blocking: bool,
     readiness: Readiness,
+    /// The run's hold on the process's standard input, released with this pin.
+    token: Option<crate::host::ProcessStdin>,
 }
 impl CooperativeStdin {
     pub fn pin(readiness: Readiness) -> std::io::Result<Self> {
@@ -25,6 +27,7 @@ impl CooperativeStdin {
                     fd: None,
                     restore_blocking: false,
                     readiness,
+                    token: None,
                 });
             }
             return Err(e);
@@ -53,7 +56,13 @@ impl CooperativeStdin {
             fd: Some(fd),
             restore_blocking,
             readiness,
+            token: None,
         })
+    }
+    /// This pin, holding `token` for as long as it lives.
+    pub fn holding(mut self, token: crate::host::ProcessStdin) -> Self {
+        self.token = Some(token);
+        self
     }
     /// `None` when no byte is available yet: POLLIN interest is then recorded under
     /// the Readiness token the caller entered.
