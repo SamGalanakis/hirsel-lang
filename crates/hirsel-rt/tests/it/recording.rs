@@ -45,7 +45,10 @@ fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
             .contains("unknown suffix")
     );
     assert!(parse_recording_prefix(&text[..text.len() - 1]).is_err());
-    io.finish_recording().unwrap();
+    io.finish_recording(&hirsel_run_config::RunOutcome::Returned(
+        hirsel_run_config::Returned::Ok,
+    ))
+    .unwrap();
     let text = std::fs::read_to_string(&tape).unwrap();
     assert_eq!(parse_recording(&text).unwrap().events.len(), 1);
     assert!(parse_recording(&text.replace("complete 1", "complete 2")).is_err());

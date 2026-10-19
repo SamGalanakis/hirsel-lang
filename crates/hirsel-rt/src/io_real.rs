@@ -18,7 +18,8 @@ pub struct RealIo {
     output: Box<dyn Write>,
     input: Input,
     stderr: Box<dyn Write>,
-    recording: Option<crate::launch::RecordingWriter<File>>,
+    /// The recording level's gate: every request and event passes through it.
+    journal: crate::journal::Journaled,
     retain_history: bool,
     net: Box<dyn NetProvider>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
@@ -151,7 +152,7 @@ impl RealIo {
             output: Box::new(output),
             input: Input::Blocking(Box::new(std::io::empty())),
             stderr: Box::new(std::io::sink()),
-            recording: None,
+            journal: Default::default(),
             retain_history: true,
             net: Box::new(crate::net_host::HostNet::new()),
             cooperative: None,
@@ -204,13 +205,18 @@ impl RealIo {
     }
     /// Streams ordinary completions; this tape has an unknown suffix after termination.
     pub fn record_to(&mut self, writer: crate::launch::RecordingWriter<File>) {
-        self.recording = Some(writer);
+        self.journal_to(Box::new(crate::journal::TapeJournal(writer)));
     }
-    pub fn finish_recording(&mut self) -> std::io::Result<()> {
-        if let Some(writer) = &mut self.recording {
-            writer.finish()?;
-        }
-        Ok(())
+    /// Record through `journal`, the recording level the run selected.
+    pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
+        self.journal = crate::journal::Journaled::new(journal);
+    }
+    /// The run ended with `outcome`: the recording's trailer.
+    pub fn finish_recording(
+        &mut self,
+        outcome: &hirsel_run_config::RunOutcome,
+    ) -> std::io::Result<()> {
+        self.journal.end(outcome)
     }
     /// The native launcher streams events and needs no duplicate in-memory history.
     pub(crate) fn discard_history(&mut self) {
@@ -219,11 +225,7 @@ impl RealIo {
         self.state.stdout.clear();
     }
     fn record(&mut self, event: Event) -> Result<(), AdapterError> {
-        if let Some(writer) = &mut self.recording {
-            writer
-                .append(&event)
-                .map_err(|e| AdapterError::RecordingFailed(e.to_string()))?;
-        }
+        self.journal.record(&event).map_err(recording_failed)?;
         if self.retain_history {
             self.tape.push(event);
         }
@@ -476,8 +478,33 @@ impl Adapter for RealIo {
     ) {
         self.state.remember_tls_server(stream, identities, clients);
     }
+    fn wants_issuer(&self) -> bool {
+        self.journal.durable()
+    }
+    fn issuer(&mut self, task: &[u32]) {
+        self.journal.issuer(task);
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
-        if self.cooperative.is_none() || !crate::host_waits::may_park(&request) {
+        let parks = self.cooperative.is_some() && crate::host_waits::may_park(&request);
+        // A durable journal prepares the request first; one that may park waits for the
+        // barrier that makes its record durable, parked as for the host (group commit).
+        let token = parks.then(|| self.cooperative.as_ref().unwrap().1.current());
+        if self
+            .journal
+            .before(&request, token)
+            .map_err(recording_failed)?
+            == crate::journal::Gate::Hold
+        {
+            let (_, log) = self.cooperative.as_mut().unwrap();
+            log.park(false);
+            self.record(Event {
+                request,
+                completion: Completion::Blocked { committed: false },
+                fault: None,
+            })?;
+            return Err(AdapterError::Blocked);
+        }
+        if !parks {
             return self.perform(request);
         }
         let retry = request.clone();
@@ -513,6 +540,10 @@ impl Adapter for RealIo {
             readiness.finish(token);
             log.finish(token);
         }
+        // A withdrawal need not be durable: a crash before it leaves the request in doubt.
+        if let Err(error) = self.journal.finish(token) {
+            self.journal.fail(error);
+        }
     }
     fn parked(&mut self, token: u64) {
         if let Some(clock) = &self.test_clock {
@@ -522,6 +553,7 @@ impl Adapter for RealIo {
             readiness.parked(token);
             log.parked(token);
         }
+        self.journal.parked(token);
     }
     fn cancellable(&self, token: u64) -> bool {
         self.cooperative
@@ -536,9 +568,11 @@ impl Adapter for RealIo {
         })?;
         Ok(choice)
     }
-    /// The tokens the Readiness finds ready, each recorded as its wait's `ready` event, in
-    /// token (so ordinal) order, before any of them is re-issued.
+    /// The tokens the Readiness finds ready, with the held requests a journal barrier
+    /// released (which wait on no host interest), each recorded as its wait's `ready` event,
+    /// in token (so ordinal) order, before any of them is re-issued.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
+        let released = self.journal.released().map_err(recording_failed)?;
         let Some((readiness, log)) = &mut self.cooperative else {
             return Ok(Ready::Tokens(Vec::new()));
         };
@@ -546,7 +580,11 @@ impl Adapter for RealIo {
         let mut tokens = readiness.ready()?;
         if let Some(clock) = &self.test_clock {
             tokens.extend(clock.ready()?);
+        }
+        if !released.is_empty() || self.test_clock.is_some() {
+            tokens.extend(released);
             tokens.sort_unstable();
+            tokens.dedup();
         }
         let events: Vec<Event> = tokens
             .iter()
@@ -563,6 +601,10 @@ impl Adapter for RealIo {
         Ok(Ready::Tokens(tokens))
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
+        // The run would wait for the host: first close the journal's batch.
+        if self.journal.idle().map_err(recording_failed)? {
+            return Ok(true);
+        }
         if let Some(clock) = &self.test_clock
             && clock.wait()?
         {
@@ -573,6 +615,9 @@ impl Adapter for RealIo {
             None => Ok(false),
         }
     }
+}
+fn recording_failed(error: std::io::Error) -> AdapterError {
+    AdapterError::RecordingFailed(error.to_string())
 }
 impl RealIo {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {

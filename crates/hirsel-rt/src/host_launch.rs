@@ -10,16 +10,58 @@ use hirsel_run_config::{
 };
 use std::{fs::File, path::Path};
 
-/// Stream every completion of an admitted host run to `path` (DET-1). The header binds
-/// the canonical run record, its admission time and the mounts' initial tree, and is
-/// durable before entry. The destination must lie outside every granted mount and
-/// output file.
-pub fn record(
+/// Record an admitted host run at the level its record selects (determinism.md, Recording
+/// levels), to `path` when the launch names a destination. Absent, the level follows the
+/// launch: a destination records the tape. `record` or `durable` without a destination, or
+/// `none` with one, refuse before entry.
+pub fn journal(
+    io: &mut RealIo,
+    admitted: &AdmittedRun,
+    path: Option<&Path>,
+    outputs: &[(&str, &File)],
+) -> Result<(), String> {
+    use hirsel_run_config::RecordingLevel;
+    match (recording_level(admitted.run(), path.is_some())?, path) {
+        (RecordingLevel::Record, Some(path)) => record(io, admitted, path, outputs),
+        (RecordingLevel::Durable, Some(path)) => durable(io, admitted, path, outputs),
+        _ => Ok(()),
+    }
+}
+
+/// The level a launch records `run` at, with or without a recording destination; a level
+/// and a destination that disagree refuse.
+pub fn recording_level(
+    run: &ValidatedRun,
+    destination: bool,
+) -> Result<hirsel_run_config::RecordingLevel, String> {
+    use hirsel_run_config::RecordingLevel;
+    match (run.record().recording, destination) {
+        (None, false) => Ok(RecordingLevel::None),
+        (None, true) => Ok(RecordingLevel::Record),
+        (Some(RecordingLevel::None), true) => {
+            Err("the run record selects recording none, but the launch names a recording".into())
+        }
+        (Some(level @ (RecordingLevel::Record | RecordingLevel::Durable)), false) => Err(format!(
+            "the run record selects recording {}, which needs a recording destination",
+            if level == RecordingLevel::Record {
+                "record"
+            } else {
+                "durable"
+            }
+        )),
+        (Some(level), _) => Ok(level),
+    }
+}
+
+/// The recording's header: it binds the canonical run record, its admission time and the
+/// mounts' initial tree. The destination must lie outside every granted mount and output
+/// file.
+fn header(
     io: &mut RealIo,
     admitted: &AdmittedRun,
     path: &Path,
     outputs: &[(&str, &File)],
-) -> Result<(), String> {
+) -> Result<(File, Recording, std::path::PathBuf), String> {
     let path = std::path::absolute(path).map_err(|e| format!("the Io tape: {e}"))?;
     let file = io
         .prepare_recording_with_files(&path, outputs)
@@ -43,8 +85,40 @@ pub fn record(
         tree,
         events: vec![],
     };
+    Ok((file, header, path))
+}
+
+/// Stream every completion of an admitted host run to `path` (DET-1), the header flushed
+/// before entry.
+pub fn record(
+    io: &mut RealIo,
+    admitted: &AdmittedRun,
+    path: &Path,
+    outputs: &[(&str, &File)],
+) -> Result<(), String> {
+    let (file, header, _) = header(io, admitted, path, outputs)?;
     let writer = RecordingWriter::new(file, &header).map_err(|e| format!("the Io tape: {e}"))?;
     io.record_to(writer);
+    Ok(())
+}
+
+/// Journal an admitted host run durably to `path`: the header, the file and its directory
+/// entry are durable before entry.
+pub fn durable(
+    io: &mut RealIo,
+    admitted: &AdmittedRun,
+    path: &Path,
+    outputs: &[(&str, &File)],
+) -> Result<(), String> {
+    let (file, header, path) = header(io, admitted, path, outputs)?;
+    let failed = |e: std::io::Error| format!("the durable journal: {e}");
+    let journal = crate::journal::DurableJournal::create(file, &header).map_err(failed)?;
+    journal.file().sync_all().map_err(failed)?;
+    let parent = path.parent().unwrap_or(Path::new("/"));
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(failed)?;
+    io.journal_to(Box::new(journal));
     Ok(())
 }
 
@@ -56,9 +130,19 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
         field: "recording".into(),
         detail,
     };
-    let recording = std::fs::read_to_string(path)
-        .map_err(|e| invalid(format!("{}: {e}", path.display())))
-        .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))?;
+    let bytes = std::fs::read(path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+    let recording = if crate::journal::is_journal(&bytes) {
+        // A durable journal replays only when complete; otherwise recovery names what is in doubt.
+        let recovered = crate::journal::recover(&bytes).map_err(|e| invalid(e.to_string()))?;
+        if !recovered.complete() {
+            return Err(invalid(crate::journal::incomplete(&recovered)));
+        }
+        recovered.recording
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|_| invalid("bad recording UTF-8".into()))
+            .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))?
+    };
     let run = recording.bound_run()?;
     let mut io = SimIo::new(recording.tree, recording.events);
     io.set_projections(run.io_projections());

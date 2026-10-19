@@ -96,6 +96,9 @@ pub fn run_path_native_backend(
             let crate::BoundHostRun::Live(bound) = crate::bind_launch(&mut loaded, live)? else {
                 unreachable!("a live launch binds live")
             };
+            // The executable records; the level and the destination must agree here first.
+            hirsel_rt::host_launch::recording_level(bound.run(), record.is_some())
+                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
             (
                 bound.into_run(),
                 super::link::Tape::Live {

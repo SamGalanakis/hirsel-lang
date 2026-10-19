@@ -72,7 +72,7 @@ zero. Process snapshots contribute to the admitted run identity like any other i
 | `unsafe` | Boolean explicit root grant, false by default. |
 | `admission` | Optional launch-only constraints: not-before, expiry, an external revocation reference and the code policy `code`, `admit.any@1` (the default when absent) or `admit.safe@1` ([CAP-6](capabilities.md#cap-6-safe-code)). The resolved decision and its evidence are captured in the validated record. |
 | `budgets` | Absent (`budgets.none@1`), or the host's resource budgets for the run (**Budgets** below). |
-| `recording` | Planned run-policy member: `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels)); absent, the host's launcher chooses and the validated record states the choice. |
+| `recording` | Run-policy member: `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels), [Recording levels](#recording-levels)); absent, the host's launcher chooses and the validated record states the choice. |
 
 **Directory mounts** are sorted, unique, portable virtual paths (the empty path is the
 virtual root), each with an explicit absolute host root designator and `read` or
@@ -273,7 +273,7 @@ Invalid query names are expected `EnvError` values.
 ## Recording and resuming
 
 Ordinary execution and non-durable recording cannot be resumed. The optional durable
-recording profile uses the protocol below; the planned run-record member `recording`
+recording profile uses the protocol below; the run-record member `recording`
 selects `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels)).
 **InDoubt** is a tooling recovery disposition for a request whose completion was never
 recorded, never a `Failure`, `Canceled` or a source `Result` variant. A runner call's
@@ -328,6 +328,83 @@ one request and one completion at the caller, parked and readied under
 Stores (planned) are Hirsel code over a `Dir`, so their effects are recorded as file
 effects ([STORE-10](storage.md#store-10-recording)), and replay never opens a real
 directory.
+
+### Recording levels
+
+The run record's run-policy member `recording`
+([RUN-14](runners.md#run-14-recording-levels)) selects how a host run is recorded:
+`"none"`, `"record"` or `"durable"`. It is absent by default, and absent means the host
+decides, as before the member existed: a launch with a recording destination (`--record`)
+records at level `record`, and one without records nothing. The level is a host
+implementation choice behind one seam: it never changes what a program may do or observe
+(DET-3), and only the recording, its cost and its recovery differ. A record that names a
+level and a launch that disagrees with it refuse before entry: `record` or `durable` without
+a destination, or `none` with one. The destination is host input, never part of the record's
+identity, and lies outside every granted mount and output file.
+
+- `none` records nothing.
+- `record` writes the ordinary tape: its header before entry, then each completion flushed
+  before delivery. It cannot be resumed and is labelled as having an unknown suffix until its
+  `complete` line.
+- `durable` writes the durable journal below.
+
+Only capability requests reach the journal. A pure call, including every core operation
+that issues no request, is never journaled.
+
+### Durable journal
+
+A durable journal starts with the 17 bytes `hirsel-journal 1` and a newline, then a sequence
+of records. Each record is framed as a 32-bit little-endian payload length, a 32-bit
+little-endian CRC-32C (Castagnoli) of the sequence number, kind and payload, a 64-bit
+little-endian sequence number counting records from 0, a kind byte and the payload. Payloads
+are UTF-8 text that reuses the tape's request and event lines:
+
+| Kind | Payload |
+|---|---|
+| 1 Header | the tape header of an empty recording, `complete 0` included: format, run identity, seeds, the bound run record, admission evidence, arguments and the mounts' initial tree |
+| 2 Prepared | `id task issue request`: the run-local request ordinal from 0, the issuing task's spawn path (`-` for the root task, else ordinals joined by `.`), the task's issue ordinal (its k-th request from 0) and the tape's request text |
+| 3 Event | `id event`, or `- event` for a scheduling input: one tape event line, a completion, a `blocked` park, a `ready` event or a `schedule` choice |
+| 4 Withdrawn | `id`: a prepared request ended with no effect, as when its task was cancelled while it waited to be issued |
+| 5 Trailer | `count outcome`: the number of events and the run's outcome |
+
+The spawn path and issue ordinal identify a request to an operator and are the same in
+both engines, so an interpreted and a native journal of the same run agree. Replay checks
+the request itself, not these fields. No source position is recorded.
+
+The header record, the file and its directory entry are durable before entry. Every request
+is prepared before it is issued, and its completion is durable before it is delivered.
+Completions, parks and ready events follow in the order the run observed them: the tape's
+events in the tape's order, so the journal's events replay as a tape.
+
+**Group commit.** A prepared request that may park its task (a stdin read, a timer wait, a
+process or child request, or a network request) under cooperative scheduling is held: its
+task parks as for a host wait, recorded as an uncommitted `blocked` park, and other tasks
+run and prepare theirs. One barrier (a single write and `fdatasync`) makes the batch durable
+and releases every held request. A batch closes at the first of: the run would otherwise
+wait for the host (no runnable task); 64 records; 1 MiB of record bytes; a scheduling
+point 1 ms or more after the batch's first record. A released request is ready at the next
+scheduling point after its task parked, and its `ready` event is recorded like any other,
+so replay parks and resumes it at the same points. Any other request
+is covered by a barrier before it is issued, and a completion's barrier also covers every
+record appended before it. An effect is never issued before its `Prepared` record is
+durable, and a barrier that fails before issue prevents issuance.
+
+**Recovery.** A reader takes the longest valid prefix. A last record that is short, runs past
+the end of the file, fails its checksum or breaks the sequence is a torn tail and is cut; it
+was never durable, so nothing was delivered on it. Damage to any earlier record, a second
+header, a record after the trailer, or records that disagree (an event of an unprepared
+request, a request completed twice) refuse recovery as `Corrupt`. A journal with no durable
+header was never entered. The recovered journal reports the replayable events, every
+`Prepared` request, the requests in doubt (prepared with neither a completion nor a
+withdrawal, in preparation order) and the trailer's outcome when present. A complete journal
+(a trailer and nothing in doubt) replays exactly as a tape does, in either engine. An
+incomplete one refuses replay and names its requests in doubt. This release offers no live
+continuation: continuation is refused, since no provider supports reacquisition.
+
+**Simulated disk.** Every simulated `Dir` and the simulated journal share one crash model
+([Durability](core-library.md#durability)): a crash keeps each file's last synchronized bytes and each
+directory's last synchronized listing, and the last unsynced write survives as a prefix
+chosen by the crash seed when everything before it in its file is durable.
 
 ### Network recording
 

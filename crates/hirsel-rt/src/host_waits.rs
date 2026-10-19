@@ -118,6 +118,12 @@ pub(crate) unsafe fn issue(
         return Ok((Ok(completion), false));
     }
     let binding = unsafe { Binding::get(ctx) };
+    if binding.adapter.wants_issuer() {
+        let task = crate::tasks::current_path(ctx);
+        let binding = unsafe { Binding::get(ctx) };
+        binding.adapter.issuer(&task);
+    }
+    let binding = unsafe { Binding::get(ctx) };
     if !may_park(&request) {
         return Ok((binding.adapter.call(request), false));
     }
@@ -165,6 +171,12 @@ pub(crate) unsafe fn arm(
     clock: u64,
     at: u64,
 ) -> Stopped<Option<u64>> {
+    let binding = unsafe { Binding::get(ctx) };
+    if binding.adapter.wants_issuer() {
+        let task = crate::tasks::current_path(ctx);
+        let binding = unsafe { Binding::get(ctx) };
+        binding.adapter.issuer(&task);
+    }
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;
     binding.waits.next += 1;

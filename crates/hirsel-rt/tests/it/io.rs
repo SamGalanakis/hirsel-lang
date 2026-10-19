@@ -2491,3 +2491,74 @@ fn put_new_and_sync_on_a_host_tree_record_round_trip_as_text_and_replay() {
     assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
     replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
 }
+
+#[test]
+fn a_durable_journal_of_a_host_run_recovers_at_every_record_boundary_and_replays() {
+    use hirsel_rt::journal::{DurableJournal, recover};
+    use hirsel_rt::launch::Recording;
+    let (temp, io) = setup();
+    let path = temp.path().join("../").join(format!(
+        "{}.journal",
+        temp.path().file_name().unwrap().to_str().unwrap()
+    ));
+    let header = Recording {
+        arguments: vec![],
+        run_identity: [1; 32],
+        hash_seed: 0,
+        random_seed: 0,
+        test_seed: 0,
+        binding: None,
+        tree: initial(),
+        events: vec![],
+    };
+    let file = std::fs::File::create(&path).unwrap();
+    let mut real = Library(io);
+    real.0
+        .journal_to(Box::new(DurableJournal::create(file, &header).unwrap()));
+    actions(&mut real);
+    let outcome = hirsel_run_config::RunOutcome::Returned(hirsel_run_config::Returned::Ok);
+    real.0.finish_recording(&outcome).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let tape = real.0.tape().to_vec();
+    let recovered = recover(&bytes).unwrap();
+    assert!(recovered.complete());
+    assert_eq!(recovered.outcome, Some(outcome));
+    assert_eq!(recovered.recording.events, tape);
+    assert_eq!(recovered.recording.tree, initial());
+    // Every request was prepared, in order, before its completion.
+    assert_eq!(
+        recovered
+            .prepared
+            .iter()
+            .map(|p| &p.request)
+            .collect::<Vec<_>>(),
+        tape.iter().map(|e| &e.request).collect::<Vec<_>>()
+    );
+    // A crash at any byte leaves a valid prefix: its events begin the tape, and its requests
+    // in doubt are exactly the prepared ones it does not complete.
+    let mut boundaries = 0;
+    for cut in 0..bytes.len() {
+        let Ok(prefix) = recover(&bytes[..cut]) else {
+            continue;
+        };
+        boundaries += usize::from(prefix.valid == cut);
+        assert!(tape.starts_with(&prefix.recording.events));
+        let completed = prefix.recording.events.len();
+        let doubt: Vec<_> = prefix.prepared[completed..].to_vec();
+        assert_eq!(prefix.in_doubt, doubt, "{cut}");
+        assert_eq!(prefix.outcome, None);
+    }
+    assert!(boundaries > 2 * tape.len());
+    // The complete journal replays exactly as its tape.
+    let mut sim = SimIo::new(recovered.recording.tree.clone(), recovered.recording.events);
+    for event in &tape {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
+    assert_eq!(sim.stdout(), real.0.stdout());
+    assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
+}

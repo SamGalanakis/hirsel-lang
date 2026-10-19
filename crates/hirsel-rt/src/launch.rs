@@ -119,6 +119,12 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
     }
+    fn wants_issuer(&self) -> bool {
+        self.0.borrow().wants_issuer()
+    }
+    fn issuer(&mut self, task: &[u32]) {
+        self.0.borrow_mut().issuer(task);
+    }
     fn enter(&mut self, token: u64) {
         self.0.borrow_mut().enter(token);
     }
@@ -1522,9 +1528,8 @@ pub(crate) unsafe fn execute(
     let mut zero_recording = None;
     let mut replay = None;
     let adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
-        if let Some(path) = tape
-            && let Err(error) =
-                crate::host_launch::record(&mut io, &admitted, &path, &output_grants)
+        if let Err(error) =
+            crate::host_launch::journal(&mut io, &admitted, tape.as_deref(), &output_grants)
         {
             return Err(error);
         }
@@ -1998,7 +2003,7 @@ pub(crate) unsafe fn execute(
         flush_stdout(sinks).map_err(|e| format!("standard output: {e}"))?;
         if let Some(io) = &real {
             io.borrow_mut()
-                .finish_recording()
+                .finish_recording(&outcome)
                 .map_err(|e| format!("the Io tape: {e}"))?;
         }
         if let Some(writer) = &mut zero_recording {

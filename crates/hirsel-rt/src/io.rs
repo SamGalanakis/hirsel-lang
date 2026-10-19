@@ -1919,6 +1919,12 @@ pub trait Adapter {
         })
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
+    /// Whether the adapter records who issues each request (a durable journal).
+    fn wants_issuer(&self) -> bool {
+        false
+    }
+    /// The spawn path of the task issuing the next request.
+    fn issuer(&mut self, _task: &[u32]) {}
     /// Cooperative waits (`crate::host_waits`, DET-1). Select the readiness token of the
     /// request about to be issued; a `Blocked` answer parks it under that token.
     fn enter(&mut self, _token: u64) {}

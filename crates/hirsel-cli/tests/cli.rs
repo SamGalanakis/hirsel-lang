@@ -8,6 +8,8 @@ use std::{
 mod budgets;
 #[path = "cli/deadlines.rs"]
 mod deadlines;
+#[path = "cli/durable.rs"]
+mod durable;
 #[path = "cli/dwarf.rs"]
 mod dwarf;
 #[path = "cli/entropy_waits.rs"]

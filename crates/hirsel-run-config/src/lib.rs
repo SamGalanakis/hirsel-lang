@@ -315,6 +315,22 @@ pub struct RunConfig {
     /// and identity they had before budgets existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budgets: Option<Budgets>,
+    /// The recording level, a run-policy member (determinism.md, Recording levels). Absent,
+    /// the default, leaves it to the launch: a recording destination records the tape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<RecordingLevel>,
+}
+
+/// How a host run is recorded. The level never changes what the program may do or observe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingLevel {
+    /// Nothing is recorded; a recording destination refuses.
+    None,
+    /// The ordinary tape, which cannot be resumed.
+    Record,
+    /// The durable journal: each request durable before issue, each completion before delivery.
+    Durable,
 }
 
 /// Machine-readable refusal category and the exact offending input field.
@@ -437,6 +453,7 @@ impl RunConfig {
             admission: Option<Admission>,
             #[serde(default)]
             budgets: Option<Budgets>,
+            recording: Option<RecordingLevel>,
         }
         integer_tokens(bytes)?;
         let mut grants: Grants =
@@ -466,6 +483,7 @@ impl RunConfig {
         record.unsafe_root = grants.unsafe_root;
         record.admission = grants.admission;
         record.budgets = grants.budgets;
+        record.recording = grants.recording;
         record.validated()
     }
 
@@ -532,6 +550,7 @@ impl RunConfig {
             unsafe_root: false,
             admission: None,
             budgets: None,
+            recording: None,
         }
     }
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.

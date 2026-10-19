@@ -318,6 +318,39 @@ never replays. The tape path must lie outside every granted directory. Tapes hol
 record, including granted Env values, every byte read or written and every
 `random.system@1` draw: treat them as secrets.
 
+### Durable recording
+
+A run record's `recording` member chooses the level: `"record"` writes the tape above,
+`"durable"` writes a durable journal instead, with each request synced before it is issued
+and each completion before the program sees it
+([Recording levels](spec/determinism.md#recording-levels)). Both need `--record`
+(`--hirsel-record`); `"none"` refuses one; absent, `--record` alone records the tape. A
+complete journal replays with `--replay` exactly like a tape, in either engine. A journal
+cut short by a crash refuses replay and names the requests in doubt, which the operator
+reconciles, never by retrying blindly.
+
+```sh
+hirsel run app.hir --grants durable-grants.json --record run.journal   # "recording": "durable"
+hirsel run app.hir --replay run.journal
+```
+
+Durability costs two barriers (a write and `fdatasync`) per request that does not park.
+Measured 2026-10-19 on one IO-heavy program (2,000 appends to one file, 500 whole-file
+writes and 100 `put_new(Durable())` calls: 2,604 requests), compiled, as a single capped
+local run per level with the median of three, on ext4 over datacenter NVMe with
+power-loss protection:
+
+| Level | Median wall time | Recording size |
+|---|---|---|
+| none | 73.5 ms | none |
+| record | 82.9 ms | 208 KB |
+| durable | 481.3 ms | 508 KB |
+
+The durable level adds about 150 µs per request here (two `fdatasync` calls of about 75 µs
+each). On a drive without power-loss protection a barrier commonly takes milliseconds, so
+expect seconds for the same program. Requests that park (network, process, stdin and timer
+waits) share barriers through group commit.
+
 ## The std precheck
 
 std is part of the toolchain, so it is checked once, when the toolchain is built,

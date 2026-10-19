@@ -427,7 +427,7 @@ pub(crate) fn bind_launch(
 }
 
 /// Bind a launch as [`bind_launch`] does, then admit a live one once on `host`, whose Io
-/// writes the granted standard output; a recorded live launch starts its tape here.
+/// writes the granted standard output; a live launch opens its journal here.
 pub(crate) fn bind_host_run(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
@@ -451,10 +451,8 @@ pub(crate) fn bind_host_run(
                 .admit(&mut host, admission_time()?)
                 .map_err(ToolError::Launch)?;
             let mut io = host.into_io();
-            if let Some(tape) = record {
-                hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])
-                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            }
+            hirsel_rt::host_launch::journal(&mut io, &admitted, record, &[])
+                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
             Ok(HostRun::Live { admitted, io })
         }
         BoundHostRun::Replay { run, io } => Ok(HostRun::Replay { run, io }),
@@ -536,13 +534,9 @@ pub fn run_path_on_host(
         },
         error => ToolError::Runtime(format!("interpret: {error:?}")),
     })?;
-    match &mut operations.io {
-        network::HostIo::Live(io) => io
-            .finish_recording()
-            .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?,
-        network::HostIo::Replay(io) => io
-            .finish()
-            .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?,
+    if let network::HostIo::Replay(io) = &mut operations.io {
+        io.finish()
+            .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
     }
     let failure_site = execution
         .failures
@@ -557,7 +551,7 @@ pub fn run_path_on_host(
                 .ok_or_else(|| ToolError::Runtime("failure operation has no source site".into()))
         })
         .transpose()?;
-    Ok(match execution.outcome {
+    let outcome = match execution.outcome {
         Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
         Outcome::Failed(f) => RunOutcome::Failure {
             operation: operation_site,
@@ -578,7 +572,50 @@ pub fn run_path_on_host(
                     ToolError::Runtime("Blocked observation has no stable source sites".into())
                 })?,
         ),
-    })
+    };
+    if let network::HostIo::Live(io) = &mut operations.io {
+        io.finish_recording(&host_outcome(&outcome, &execution.failures, &sources))
+            .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?;
+    }
+    Ok(outcome)
+}
+
+/// The host's view of an interpreted run's ending, for the recording's trailer.
+fn host_outcome(
+    outcome: &RunOutcome,
+    failures: &[hirsel_interp::observation::FailureRecord],
+    sources: &hirsel_span::SourceMap,
+) -> hirsel_run_config::RunOutcome {
+    use hirsel_run_config::{Failure, Returned, RunOutcome as Host, Site};
+    let site = |site: &hirsel_engine::FailureSite| Site {
+        definition: site.definition.clone(),
+        file: site.file.to_string_lossy().into_owned(),
+        line: site.line as u64,
+        column: u64::from(site.column),
+    };
+    let failure = |record: &hirsel_interp::observation::FailureRecord| Failure {
+        rule: record.failure.rule.to_string(),
+        site: hirsel_engine::FailureSite::from_anchor(&record.anchor, sources)
+            .as_ref()
+            .map(site)
+            .unwrap_or_default(),
+        operation: record
+            .operation
+            .as_ref()
+            .and_then(|a| hirsel_engine::FailureSite::from_anchor(a, sources))
+            .as_ref()
+            .map(site),
+    };
+    match outcome {
+        RunOutcome::Exit(0) => Host::Returned(Returned::Ok),
+        RunOutcome::Exit(_) => Host::Returned(Returned::Error),
+        RunOutcome::Failure { .. } if !failures.is_empty() => Host::Failed {
+            primary: failure(&failures[0]),
+            causes: failures[1..].iter().map(failure).collect(),
+        },
+        RunOutcome::Blocked(_) => Host::Blocked,
+        other => Host::Tooling(format!("{other:?}")),
+    }
 }
 pub(crate) fn admission_time() -> Result<i64, ToolError> {
     let now = std::time::SystemTime::now()

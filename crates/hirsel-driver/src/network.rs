@@ -338,6 +338,10 @@ impl HostLibrary {
         self.host_cancelable(request, self.library.cancellation())
     }
     fn host_cancelable(&mut self, request: R, cancellation: Option<u32>) -> Result<C, Error> {
+        if self.io.adapter().wants_issuer() {
+            let task = self.library.task_path();
+            self.io.adapter().issuer(&task);
+        }
         let result = match cancellation {
             Some(cause) => hirsel_rt::io_checks::cancel(self.io.adapter(), &request, cause)
                 .and_then(|completion| match completion {

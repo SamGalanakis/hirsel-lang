@@ -1169,3 +1169,15 @@ interpreter under all condition subsets for cancellable requests, including
 expired scopes, and explicitly classifies every request's cancellation policy.
 It catches rights, argument and handle checks reordered across cancellation or
 provider faults. The ignored `full_gate_` version broadens argument data.
+
+Recording levels (`journal.rs`, determinism.md, Recording levels): `RealIo` performs effects
+and passes every request and tape event through its `Journaled` gate, whose `Journal` is the
+level the run record's `recording` member selects in `host_launch::journal`: `NoJournal`,
+`TapeJournal` (the v7 `RecordingWriter`, byte for byte) or `DurableJournal` over a
+`JournalFile` (the host's file with `fdatasync`, or `SimJournalFile` on the simulated disk's
+crash model). The durable gate prepares each request before issue and puts a barrier after
+each completion; a request that may park under cooperative scheduling is held (an
+uncommitted `blocked` park) until `wait` or a batch bound closes the batch, and `finish`
+withdraws a held request that was cancelled. `recover` reads a journal back for replay and
+names the requests in doubt. The issuer of each request comes from `Adapter::issuer`, which
+`host_waits::issue` and the interpreter's host library call only for a durable journal.

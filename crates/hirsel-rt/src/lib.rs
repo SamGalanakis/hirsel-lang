@@ -31,6 +31,7 @@ pub mod io_net_script;
 pub mod io_real;
 pub mod io_sim;
 pub mod isolate;
+pub mod journal;
 pub mod kernels;
 pub mod launch;
 pub mod net;
