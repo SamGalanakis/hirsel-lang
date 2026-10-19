@@ -164,7 +164,7 @@ def targets(text: str) -> dict[str, Target]:
             add(Target(name, deps=labels(a['hirsel'], a['precheck'])))
         elif macro == 'hirsel_native_selection':
             add(Target(name, inputs=sources(a.get('data', [])), deps=labels(a['collector'])))
-        elif macro == 'hirsel_script_test':
+        elif macro in ('hirsel_script_test', 'hirsel_link_hosts_test'):
             continue  # A full-gate stage.
         else:
             raise ValueError(f'BUCK: unknown macro {macro} (teach tools/buck2/graph.py its targets)')
