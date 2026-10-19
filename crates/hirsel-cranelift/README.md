@@ -18,6 +18,8 @@ Interface:
   is Cranelift's `none`, every other level its `speed`. The artifact names `TOOLCHAIN`
   (`cranelift 0.136.3`) in its reproducibility record, and the driver links the
   objects of that toolchain with a launcher this crate emits too.
+- `test_dispatcher_object(target, entries)` emits the package-test selector with
+  Cranelift, including decimal-index validation and exit 3 for invalid arguments.
 - Hirsel unit and glue calls use direct PC-relative references across objects.
   This requires image symbols to remain non-preemptible (`local:` units and
   `-Bsymbolic`). Runtime, toolchain and foreign imports retain GOT indirection.

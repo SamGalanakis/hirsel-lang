@@ -14,6 +14,7 @@ mod bounded;
 mod compare;
 mod construction;
 mod data;
+mod dispatcher;
 mod drop;
 mod dwarf;
 mod flat;
@@ -160,3 +161,12 @@ fn caught<T>(emit: impl FnOnce() -> Result<T, CodegenError>) -> Result<T, Codege
 /// where the adapter calls `entry` with `(ctx, dest, out)` and one pointer per root,
 /// root `i` being the word at `roots + 8 * root_words[i]`.
 pub use module::{DescriptorField, ExitReport, ReportNode, named_launch_object};
+
+/// A package-test `main` selecting one named `(argc, argv) -> exit_code` entry.
+/// Invalid selections return 3, matching the LLVM dispatcher.
+pub fn test_dispatcher_object(
+    target: &hirsel_lir::layout_types::TargetSpec,
+    entries: &[&str],
+) -> Result<Vec<u8>, CodegenError> {
+    caught(|| dispatcher::emit(target, entries))
+}

@@ -1103,13 +1103,7 @@ done:
     let name = revision.entry().as_bytes();
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
-    let cranelift = !objects.is_empty()
-        && objects.iter().all(|o| {
-            o.reproducibility
-                .toolchain
-                .starts_with(hirsel_cranelift::TOOLCHAIN)
-        });
-    let main = if cranelift {
+    let main = if cranelift_objects(objects) {
         use hirsel_cranelift::DescriptorField as F;
         let descriptor = [
             F::U32(hirsel_rt::ABI_VERSION),
@@ -1330,6 +1324,16 @@ fn link_launcher(
     Ok(executable)
 }
 
+fn cranelift_objects(objects: &[hirsel_lir::stage::ObjectArtifact]) -> bool {
+    !objects.is_empty()
+        && objects.iter().all(|object| {
+            object
+                .reproducibility
+                .toolchain
+                .starts_with(hirsel_cranelift::TOOLCHAIN)
+        })
+}
+
 /// Link one package test executable. Each child selects one adapter; the
 /// runtime starts fresh with Test as its only root and its own fixed seed.
 pub(crate) fn link_tests(
@@ -1342,9 +1346,11 @@ pub(crate) fn link_tests(
     let mut declarations = String::new();
     let mut cases = String::new();
     let mut launchers = vec![dir.join("tests.o")];
+    let mut entries = Vec::new();
     for (index, test) in tests.iter().enumerate() {
         program.launch.test_seed = test.seed;
         let name = format!("hirsel_test_{index}");
+        entries.push(name.clone());
         let bytes = launcher_object(program, &test.entry, objects, dir, None, false, &name)?;
         launchers.push(write(dir, &format!("test-{index}.o"), &bytes)?);
         declarations.push_str(&format!("declare i32 @{name}(i32, ptr)\n"));
@@ -1375,9 +1381,16 @@ refuse:\n ret i32 3\n}}\n",
         triple = program.target.triple,
         count = tests.len(),
     );
-    let dispatcher = hirsel_llvm::compile_ir(&dispatch, &program.target, OptLevel::None)
-        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
-    write(dir, "tests.o", &dispatcher.bytes)?;
+    let dispatcher = if cranelift_objects(objects) {
+        let entries: Vec<_> = entries.iter().map(String::as_str).collect();
+        hirsel_cranelift::test_dispatcher_object(&program.target, &entries)
+            .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
+    } else {
+        hirsel_llvm::compile_ir(&dispatch, &program.target, OptLevel::None)
+            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
+            .bytes
+    };
+    write(dir, "tests.o", &dispatcher)?;
     link_launcher(
         program,
         &tests[0].entry,

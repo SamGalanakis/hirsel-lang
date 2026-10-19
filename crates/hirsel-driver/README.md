@@ -93,8 +93,8 @@ it names and of each one's parent directory, and with the driver's executable an
 the environment variables drivers read. A link reuses the command while all of
 them hold and asks the driver again otherwise. A GCC driver's LTO plugin options
 are dropped, so AArch64 links with lld rather than GNU ld. `native::test_path`'s
-dispatching `main` is LLVM IR compiled in process, and its adapters are ordinary
-link inputs.
+dispatching `main` is compiled in process with the selected backend, and its
+adapters are ordinary link inputs.
 
 The Cargo fallback shares a frozen `native::RuntimeInputs` snapshot within the
 process. It discovers the runtime's local dependency closure and hashes source
