@@ -88,6 +88,7 @@ def _env_set(key, value):
 def _compile_constraints(name):
     return select({
         "root//tools/buck2:profile_release": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
+        "root//tools/buck2:profile_profiling": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", name)))],
     })
 
@@ -115,6 +116,7 @@ def _dev_codegen(name):
 def _codegen_flags(name):
     return select({
         "root//tools/buck2:profile_release": _release_codegen_units(name),
+        "root//tools/buck2:profile_profiling": _release_codegen_units(name),
         "DEFAULT": _dev_codegen(name),
     })
 

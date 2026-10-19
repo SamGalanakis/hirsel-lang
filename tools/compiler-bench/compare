@@ -3,15 +3,9 @@
 
     tools/compiler-bench/compare BASELINE.json RESULTS.json [--budget budget.json] [--json OUT]
 
-For every cell in both files and every tracked metric (budget.json: wall and
-CPU time, peak RSS, and each tracked driver interval and compiler phase from
-`hirsel --timings=json`), it prints the baseline and
-current medians, the relative delta and the noise bound, and flags a
-regression when the delta exceeds both the metric's threshold and the noise
-bound: k times the larger relative MAD of the two medians (median absolute
-deviation over the median), and the absolute floor. Cells only in one file,
-or whose status changed, are listed. It also prints the Hirsel/Rust scoreboard
-of RESULTS with each pair's ratio change against BASELINE.
+Instructions:u is the only compared metric (1% threshold). Wall/CPU time,
+RSS, phases and intervals remain descriptive in `report`. Cross-session times
+are never compared. Legacy results without instruction counts are unusable.
 
 Exit 0 when nothing regressed, 1 when something did, 2 for unusable input.
 """
@@ -30,6 +24,9 @@ def load(path):
     data = json.loads(Path(path).read_text())
     if data.get('schema') != 1 or data.get('suite') != 'compiler-bench':
         raise ValueError(f'{path}: not a schema-1 compiler-bench result')
+    for cell in data['cells']:
+        if cell['status'] == 'ok' and not cell.get('summary', {}).get('instructions_u'):
+            raise ValueError(f"{path}: {cell['id']} has no instructions:u; record a new baseline")
     return data
 
 
@@ -39,17 +36,6 @@ def metrics(cell, budget):
     for metric in budget['metrics']:
         if summary.get(metric['name']):
             yield metric, summary[metric['name']]
-    for part, prefix in (('intervals', 'interval'), ('phases', 'phase')):
-        tracked = budget[part]
-        for name, values in (summary.get(part) or {}).items():
-            if values and name in tracked['names']:
-                yield {'name': f'{prefix}:{name}', 'threshold': tracked['threshold'], 'floor': tracked['floor'],
-                       'unit': 's'}, values
-
-
-def relative_mad(values):
-    return values['mad'] / values['median'] if values['median'] else 0.0
-
 
 def compare(baseline, current, budget):
     """Rows for every shared cell and metric, and the cells that changed status
@@ -57,7 +43,6 @@ def compare(baseline, current, budget):
     old = {c['id']: c for c in baseline['cells']}
     new = {c['id']: c for c in current['cells']}
     rows, notes = [], []
-    k = budget['noise_k']
     for cid in sorted(old.keys() | new.keys()):
         if cid not in new:
             notes.append(f'{cid}: only in the baseline')
@@ -80,7 +65,7 @@ def compare(baseline, current, budget):
             if not base or not base['median']:
                 continue
             delta = (values['median'] - base['median']) / base['median']
-            bound = max(metric['threshold'], k * max(relative_mad(values), relative_mad(base)))
+            bound = metric['threshold']
             absolute = values['median'] - base['median']
             regressed = delta > bound and absolute > metric['floor']
             improved = delta < -bound and -absolute > metric['floor']
@@ -99,7 +84,7 @@ def scoreboard(baseline, current):
         was = old.get((p['program'], p['mode'], p['rust_jobs']))
         change = f"  (was {was['ratio']:.1f}x)" if was and was['ratio'] else ''
         lines.append(f"  {p['program']:<24} {p['mode']:<17} vs cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']}: "
-                     f"{p['hirsel_wall_s']:.2f} s / {p['rust_wall_s']:.2f} s = {p['ratio']:.1f}x{change}")
+                     f"{p['hirsel_instructions_u']:.0f} / {p['rust_instructions_u']:.0f} insn:u = {p['ratio']:.3f}x{change}")
     return lines
 
 
@@ -138,7 +123,7 @@ def main():
         print('  ' + note)
     board = scoreboard(baseline, current)
     if board:
-        print('Hirsel / Rust (median wall; above 1x Hirsel is slower):')
+        print('Hirsel / Rust (median instructions:u; above 1x Hirsel does more work):')
         print('\n'.join(board))
     regressed = [r for r in rows if r['regressed']]
     print(f'{len(regressed)} regressions in {len(rows)} compared metrics')

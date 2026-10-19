@@ -1,0 +1,51 @@
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) {
+      Ok(v) => v,
+      Error(_) => 1000u64,
+    },
+    Error(_) => 1000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let sum = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let (ping, inbox): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let (pong, replies): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let worker = task.async(
+        s,
+        fn() {
+          let mut rx = take inbox
+          let mut tx = take pong
+          for _ in 0u64..n {
+            match channel.receive(tasks, mut rx) {
+              Ok(v) => {
+                let _ = channel.send(tasks, mut tx, v + 1)
+              },
+              Error(_) => {},
+            }
+          }
+        }
+      )
+      let mut tx = take ping
+      let mut rx = take replies
+      let mut sum: u64 = 0
+      for i in 0u64..n {
+        let _ = channel.send(tasks, mut tx, i)
+        match channel.receive(tasks, mut rx) {
+          Ok(v) => {
+            sum = int.wrapping_add(sum, v)
+          },
+          Error(_) => {},
+        }
+      }
+      task.await(s, take worker)
+      sum
+    }
+  )
+  let output = io.stdout(rt) ? Grant
+  out.print(output, f"{sum}\n") ? Output
+  Ok(())
+}

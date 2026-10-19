@@ -36,9 +36,11 @@ lock for that one command (memory cap HIRSEL_MEMORY_LIMIT, default 4G, no swap,
 and --timeout), so the lock is released between runs. A command the kernel
 killed at the cap is recorded as `cap`. A scale series stops at the first size
 that reaches the cap or the timeout. The suite itself runs one command at a
-time; never run two suites at once.
+time; never run two suites at once. Every compile is pinned under perf stat;
+only instructions:u is compared between sessions, at a 1% threshold.
 """
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -56,6 +58,8 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / 'bench/native'))
 import corpus  # noqa: E402
+sys.path.insert(0, str(ROOT / 'bench/micro'))
+from measure import cpu_snapshot, siblings, busy_share, perf_counts, timing_lock  # noqa: E402
 
 CAPPED = ROOT / 'tools/capped'
 HIRSEL_MODES = ('check', 'clif', 'llvm-o0', 'llvm-o2')
@@ -83,6 +87,11 @@ def summary(values):
     return {'median': median, 'mad': statistics.median(abs(v - median) for v in values), 'n': len(values)}
 
 
+def file_hash(path):
+    with open(path, 'rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
 def git_commit():
     try:
         return subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True,
@@ -91,15 +100,21 @@ def git_commit():
         return None
 
 
-def measured(command, env, timeout):
+def measured(command, env, timeout, cpu=31):
     """One `tools/capped` run of `command`: exit status, wall and CPU seconds
     and peak RSS (MiB) from /usr/bin/time, `cap` or `timeout` from capped's
     report, and the command's own stderr (capped's lines removed)."""
-    with tempfile.NamedTemporaryFile('r', suffix='.time') as times:
-        timed = ['/usr/bin/time', '-f', '%e %U %S %M', '-o', times.name, *command]
+    sibling_cpus = siblings(cpu)
+    with tempfile.NamedTemporaryFile('r', suffix='.time') as times, tempfile.NamedTemporaryFile('r', suffix='.perf') as counters:
+        timed = ['/usr/bin/time', '-f', '%e %U %S %M', '-o', times.name,
+                 'taskset', '-c', str(cpu), 'perf', 'stat', '--no-big-num', '-x', ';',
+                 '-e', 'task-clock,cycles,instructions,cycles:u,instructions:u', '-o', counters.name, '--', *command]
+        before = cpu_snapshot(sibling_cpus)
         started = time.monotonic()
-        process = subprocess.run([str(CAPPED), '--timeout', str(timeout), *timed], env=env,
+        process = subprocess.run([str(CAPPED), '--timeout', str(timeout), *timed], env=dict(env, LC_ALL='C'),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        after = cpu_snapshot(sibling_cpus)
+        perf_text = counters.read()
         elapsed = time.monotonic() - started
         fields = times.read().split()
     lines = process.stderr.splitlines()
@@ -107,7 +122,15 @@ def measured(command, env, timeout):
     stderr = ''.join(line + '\n' for line in lines if not line.startswith('capped:'))
     status = ('cap' if 'memory limit' in report else 'timeout' if 'timed out' in report
               else 'ok' if process.returncode == 0 else 'failed')
-    run = {'exit': process.returncode, 'wall_s': elapsed, 'status': status}
+    run = {'exit': process.returncode, 'wall_s': elapsed, 'status': status,
+           'sibling_before': before, 'sibling_after': after, 'sibling_busy_share': busy_share(before, after)}
+    if status == 'ok':
+        try:
+            counts, running = perf_counts(perf_text)
+            run.update(instructions_u=counts['instructions:u'], perf=counts, running_percent=running)
+        except ValueError as error:
+            run['status'] = status = 'failed'
+            stderr += str(error) + '\n'
     if status == 'ok' and len(fields) >= 4:
         wall, user, system, rss = fields[-4:]
         run.update(wall_s=float(wall), cpu_s=float(user) + float(system), rss_mib=int(rss) / 1024)
@@ -145,7 +168,7 @@ class Runner:
         self.scratch = self.work / 'out'
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.base_env, self.native_env = env['base'], env['native']
-        # Toolchains before the timings lane's report have no --timings: wall, CPU and RSS only.
+        # Older toolchains lack phase reports; perf still counts every compile.
         usage = subprocess.run([str(self.hirsel), '--help'], capture_output=True, text=True).stdout
         self.timings = ['--timings=json'] if '--timings' in usage else []
         self.cells = []
@@ -161,7 +184,7 @@ class Runner:
     def hirsel_command(self, path, mode):
         hirsel = str(self.hirsel)
         if mode == 'precheck':
-            # precheck takes no --timings: wall, CPU and RSS only.
+            # precheck has no phase report; perf still counts it.
             return [hirsel, 'precheck', str(path), '-o', str(self.scratch / 'std.precheck')]
         if mode == 'check' or mode in EDITS:
             return [hirsel, 'check', *self.timings, str(path)]
@@ -192,7 +215,7 @@ class Runner:
             'status': next((s for s in statuses if s != 'ok'), 'ok'),
             'runs': runs,
             'summary': {metric: summary([r.get(metric) for r in runs if r['status'] == 'ok'])
-                        for metric in ('wall_s', 'cpu_s', 'rss_mib')},
+                        for metric in ('instructions_u', 'wall_s', 'cpu_s', 'rss_mib')},
         }
         for part in ('intervals', 'phases'):
             reported = [r[part] for r in runs if r.get(part) and r['status'] == 'ok']
@@ -214,7 +237,7 @@ class Runner:
         return runs
 
     def timed_hirsel(self, path, mode):
-        run, stderr = measured(self.hirsel_command(path, mode), self.env(native=mode in NATIVE), self.args.timeout)
+        run, stderr = measured(self.hirsel_command(path, mode), self.env(native=mode in NATIVE), self.args.timeout, self.args.cpu)
         run.update(timings(stderr) or {})
         return run
 
@@ -228,7 +251,7 @@ class Runner:
 
         def once():
             self.clean_rust(program.path, env)
-            return measured(self.cargo(program.path, verb, jobs), env, self.args.timeout)[0]
+            return measured(self.cargo(program.path, verb, jobs), env, self.args.timeout, self.args.cpu)[0]
         self.cell(program, mode, jobs, RUST_COLD, self.repeated(program, once))
 
     def edit_cell(self, program, edit, jobs):
@@ -248,7 +271,7 @@ class Runner:
             edited.write_text(variants[edit])
             if program.language == 'hirsel':
                 return self.timed_hirsel(copy / 'hirsel.json', edit)
-            return measured(self.cargo(copy, 'check', jobs), env, self.args.timeout)[0]
+            return measured(self.cargo(copy, 'check', jobs), env, self.args.timeout, self.args.cpu)[0]
         cache = HIRSEL_CACHE if program.language == 'hirsel' else RUST_WARM
         self.cell(program, edit, jobs, cache, self.repeated(program, once))
 
@@ -309,8 +332,7 @@ def environment(native):
 
 
 def pairs(cells):
-    """Hirsel vs Rust per program and paired mode: the ratio of median wall
-    times (above 1, Hirsel is slower) and of median peak RSS."""
+    """Hirsel/Rust ratios of median user instructions and peak RSS."""
     by_key = {(c['program'], c['language'], c['mode'], c['jobs']): c for c in cells}
     found = []
     for c in cells:
@@ -320,12 +342,12 @@ def pairs(cells):
             rust = by_key.get((c['program'], 'rust', PAIRED[c['mode']], jobs))
             if not rust:
                 continue
-            h, r = c['summary']['wall_s'], rust['summary']['wall_s']
+            h, r = c['summary']['instructions_u'], rust['summary']['instructions_u']
             hm, rm = c['summary']['rss_mib'], rust['summary']['rss_mib']
             found.append({
                 'program': c['program'], 'mode': c['mode'], 'rust_mode': rust['mode'], 'rust_jobs': jobs,
                 'hirsel': c['id'], 'rust': rust['id'],
-                'hirsel_wall_s': h and h['median'], 'rust_wall_s': r and r['median'],
+                'hirsel_instructions_u': h and h['median'], 'rust_instructions_u': r and r['median'],
                 'ratio': h['median'] / r['median'] if h and r and r['median'] else None,
                 'rss_ratio': hm['median'] / rm['median'] if hm and rm and rm['median'] else None,
             })
@@ -340,6 +362,7 @@ def main():
     parser.add_argument('--groups', help='comma-separated: examples, pairs, conformance, tour, std, stress, scale, edit')
     parser.add_argument('--select', help='only programs whose name matches this regular expression')
     parser.add_argument('--modes', help='comma-separated modes (default: every mode of each program)')
+    parser.add_argument('--cpu', type=int, default=31, help='pinned CPU (default 31; session holds its timing lock)')
     parser.add_argument('--repeat', type=int, default=3, help='runs per cell (default 3)')
     parser.add_argument('--repeat-large', action='store_true', help='repeat programs of 30k lines or more too')
     parser.add_argument('--jobs', default='1,8', help='cargo job counts (default 1,8); Hirsel is single-threaded')
@@ -347,6 +370,8 @@ def main():
     args = parser.parse_args()
     if not (Path(args.toolchain) / 'hirsel').exists():
         parser.error(f'{args.toolchain}/hirsel does not exist')
+    if args.repeat < 1 or args.cpu not in os.sched_getaffinity(0):
+        parser.error('repeat must be positive and cpu must be available')
     temporary = None
     if args.work is None:
         temporary = tempfile.TemporaryDirectory(prefix='compiler-bench-')
@@ -358,12 +383,17 @@ def main():
     native = args.modes is None or any(m in NATIVE for m in args.modes.split(','))
     if native:
         say('compiler-bench: building the pinned native toolchains on the pool')
-    cells = Runner(args, environment(native)).go(programs)
+    with timing_lock(args.cpu):
+        cells = Runner(args, environment(native)).go(programs)
     rustc = subprocess.run(['rustc', '--version'], capture_output=True, text=True).stdout.strip()
     result = {
         'schema': 1, 'suite': 'compiler-bench', 'commit': git_commit(), 'started': started,
+        'cpu': args.cpu,
         'host': {'machine': platform.machine(), 'cpus': os.cpu_count(), 'load1': os.getloadavg()[0]},
-        'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc},
+        'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc,
+                      'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel'),
+                      'std_precheck_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.precheck')},
+        'selection': {'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
         'repeat': args.repeat, 'cells': cells, 'pairs': pairs(cells),
     }
     Path(args.output).write_text(json.dumps(result, indent=1) + '\n')

@@ -1,0 +1,43 @@
+fn run(n: u64, salt: u64) -> u64 {
+  let mut out: List[u8] = []
+  for i in 0u64..n {
+    text.append(mut out, f"{i + salt},")
+  }
+  let s = text.finish_valid(take out)
+  let b = string.as_bytes(s)
+  let mut h: u64 = 14695981039346656037u64
+  for i in 0u64..bytes.len(b) {
+    h = u64.wrapping_mul(h ^ int.widen(b[i]), 1099511628211u64)
+  }
+  h
+}
+
+fn arg_u64(args: Args, index: u64, default: u64) -> u64 {
+  if arg.len(args) <= index {
+    return default
+  }
+  match arg.text(args, index) {
+    Ok(t) => match u64.parse(t) {
+      Ok(n) => n,
+      Error(_) => default,
+    },
+    Error(_) => default,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let n = arg_u64(args, 0, 1000)
+  let rounds = arg_u64(args, 1, 1)
+  let mut sum: u64 = 0
+  for r in 0u64..rounds {
+    sum = int.wrapping_add(sum, run(n, r))
+  }
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("no stdout"),
+  }
+  match out.print(output, f"{sum}\n") {
+    Ok(()) => Ok(()),
+    Error(_) => Error("cannot write output"),
+  }
+}

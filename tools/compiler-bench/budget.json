@@ -1,23 +1,10 @@
 {
-  "noise_k": 3,
   "metrics": [
     {
-      "name": "wall_s",
-      "threshold": 0.1,
-      "floor": 0.05,
-      "unit": "s"
-    },
-    {
-      "name": "cpu_s",
-      "threshold": 0.1,
-      "floor": 0.05,
-      "unit": "s"
-    },
-    {
-      "name": "rss_mib",
-      "threshold": 0.1,
-      "floor": 16,
-      "unit": "MiB"
+      "name": "instructions_u",
+      "threshold": 0.01,
+      "floor": 0,
+      "unit": "insn:u"
     }
   ],
   "phases": {
@@ -39,9 +26,7 @@
       "lir validate",
       "codegen",
       "store lookup"
-    ],
-    "threshold": 0.15,
-    "floor": 0.05
+    ]
   },
   "intervals": {
     "names": [
@@ -55,8 +40,6 @@
       "units",
       "link",
       "(untimed)"
-    ],
-    "threshold": 0.15,
-    "floor": 0.05
+    ]
   }
 }

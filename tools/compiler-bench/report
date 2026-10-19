@@ -36,14 +36,14 @@ def main():
     ids = {c['id'] for c in cells}
     print(f"compiler-bench at {data.get('commit')} ({data.get('started')}, load1 {data['host']['load1']:.1f}, "
           f"{data.get('repeat')} runs per cell)\n")
-    print('| program | lines | Hirsel mode | Hirsel s | Rust | Rust s | ratio | RSS ratio |')
+    print('| program | lines | Hirsel mode | Hirsel insn:u | Rust | Rust insn:u | instruction ratio | RSS ratio |')
     print('|---|---:|---|---:|---|---:|---:|---:|')
     lines = {c['id']: c['lines'] for c in cells}
     for p in data.get('pairs', []):
         if p['hirsel'] not in ids or p['ratio'] is None:
             continue
-        print(f"| {p['program']} | {lines[p['hirsel']]} | {p['mode']} | {number(p['hirsel_wall_s'])} | "
-              f"cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']} | {number(p['rust_wall_s'])} | "
+        print(f"| {p['program']} | {lines[p['hirsel']]} | {p['mode']} | {number(p['hirsel_instructions_u'])} | "
+              f"cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']} | {number(p['rust_instructions_u'])} | "
               f"{number(p['ratio'], 1)}x | {number(p['rss_ratio'], 1)}x |")
     budget = json.loads((HERE / 'budget.json').read_text())
     for part, title in (('intervals', 'Hirsel driver intervals (median wall seconds; they add up to the wall time)'),

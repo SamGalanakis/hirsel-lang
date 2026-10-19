@@ -28,6 +28,7 @@ PANIC_ABORT = select({
 def workspace_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],
         "DEFAULT": [],
     }) + ([] if host_code else PANIC_ABORT)
@@ -36,6 +37,7 @@ def workspace_profile_flags(host_code = False):
 def third_party_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],
         "DEFAULT": ["-Copt-level=1"],
     }) + ([] if host_code else PANIC_ABORT)

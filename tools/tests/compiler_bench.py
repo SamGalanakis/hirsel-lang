@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/compiler-bench: regression verdicts with noise bounds, the scoreboard's
+"""tools/compiler-bench: instruction regression verdicts, the scoreboard's
 pairing, reading `hirsel --timings=json`, corpus determinism and edits, and the
 budget tracking every interval and phase the compiler reports."""
 import importlib.machinery
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / 'tools/compiler-bench'
@@ -31,8 +32,8 @@ BUDGET = json.loads((BENCH / 'budget.json').read_text())
 
 
 def cell(cid, walls, status='ok', phases=None, language='hirsel', mode='check', program='p', jobs=1, intervals=None):
-    runs = [{'status': status, 'wall_s': w, 'cpu_s': w, 'rss_mib': 100.0} for w in walls]
-    summary = {m: run.summary([r[m] for r in runs]) for m in ('wall_s', 'cpu_s', 'rss_mib')}
+    runs = [{'status': status, 'wall_s': w, 'cpu_s': w, 'rss_mib': 100.0, 'instructions_u': w * 1000000} for w in walls]
+    summary = {m: run.summary([r[m] for r in runs]) for m in ('instructions_u', 'wall_s', 'cpu_s', 'rss_mib')}
     for part, values in (('phases', phases), ('intervals', intervals)):
         if values:
             summary[part] = {name: run.summary(v) for name, v in values.items()}
@@ -45,7 +46,7 @@ def result(*cells):
 
 
 class Verdicts(unittest.TestCase):
-    def verdict(self, before, after, metric='wall_s'):
+    def verdict(self, before, after, metric='instructions_u'):
         rows, _ = compare.compare(result(before), result(after), BUDGET)
         return {r['metric']: r for r in rows}[metric]
 
@@ -54,23 +55,26 @@ class Verdicts(unittest.TestCase):
         self.assertTrue(row['regressed'])
         self.assertAlmostEqual(row['delta'], 0.3)
 
-    def test_noise_widens_the_bound(self):
-        # A 30% median move whose runs scatter by about 20% is within 3 MADs.
-        row = self.verdict(cell('c', [2.0, 2.4, 1.6]), cell('c', [2.6, 3.1, 2.1]))
-        self.assertFalse(row['regressed'])
-        self.assertGreater(row['bound'], 0.3)
+    def test_one_percent_threshold_is_counted_without_a_time_noise_bound(self):
+        self.assertFalse(self.verdict(cell('c', [1.0] * 3), cell('c', [1.009] * 3))['regressed'])
+        self.assertTrue(self.verdict(cell('c', [1.0] * 3), cell('c', [1.011] * 3))['regressed'])
 
-    def test_changes_below_the_absolute_floor_are_ignored(self):
-        row = self.verdict(cell('c', [0.10, 0.10, 0.10]), cell('c', [0.14, 0.14, 0.14]))
-        self.assertGreater(row['delta'], row['bound'])
-        self.assertFalse(row['regressed'])
-
-    def test_phases_are_compared_per_phase(self):
-        before = cell('c', [5.0] * 3, phases={'verify': [2.0] * 3, 'parse': [0.5] * 3})
-        after = cell('c', [5.0] * 3, phases={'verify': [3.0] * 3, 'parse': [0.5] * 3})
+    def test_times_rss_and_phases_do_not_change_the_verdict(self):
+        before = cell('c', [5.0] * 3, phases={'verify': [2.0] * 3}, intervals={'units': [2.0] * 3})
+        after = cell('c', [50.0] * 3, phases={'verify': [30.0] * 3}, intervals={'units': [30.0] * 3})
+        after['summary']['instructions_u'] = before['summary']['instructions_u']
         rows, _ = compare.compare(result(before), result(after), BUDGET)
-        flagged = {r['metric'] for r in rows if r['regressed']}
-        self.assertEqual(flagged, {'phase:verify'})
+        self.assertEqual([r['metric'] for r in rows], ['instructions_u'])
+        self.assertFalse(rows[0]['regressed'])
+
+    def test_legacy_baseline_without_counts_is_unusable(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'legacy.json'
+            legacy = cell('c', [1.0])
+            del legacy['summary']['instructions_u']
+            path.write_text(json.dumps(result(legacy)))
+            with self.assertRaisesRegex(ValueError, 'no instructions:u'):
+                compare.load(path)
 
     def test_a_cell_that_stops_completing_regresses(self):
         rows, notes = compare.compare(result(cell('c', [1.0] * 3)), result(cell('c', [9.0], status='cap')), BUDGET)
@@ -88,11 +92,27 @@ class Verdicts(unittest.TestCase):
             self.assertEqual(status, [1, 0])
 
 
-    def test_intervals_are_compared_and_untracked_names_are_not(self):
-        before = cell('c', [5.0] * 3, intervals={'units': [2.0] * 3, 'unknown': [1.0] * 3})
-        after = cell('c', [5.0] * 3, intervals={'units': [2.6] * 3, 'unknown': [3.0] * 3})
-        rows, _ = compare.compare(result(before), result(after), BUDGET)
-        self.assertEqual({r['metric'] for r in rows if r['regressed']}, {'interval:units'})
+
+class Measurement(unittest.TestCase):
+    def test_perf_counts_the_compiler_and_children_inside_one_capped_call(self):
+        snapshots = [{'cpu15': {'total': 100, 'idle': 0}}, {'cpu15': {'total': 200, 'idle': 80}}]
+        def execute(command, **kwargs):
+            self.assertEqual(command[:3], [str(run.CAPPED), '--timeout', '10'])
+            self.assertEqual(command[-3:], ['--', 'hirsel', 'check'])
+            self.assertEqual(command[command.index('taskset') + 1:command.index('taskset') + 3], ['-c', '31'])
+            Path(command[command.index('-o') + 1]).write_text('1.0 0.8 0.1 1024')
+            perf_path = command[command.index('perf'):]
+            Path(perf_path[perf_path.index('-o') + 1]).write_text('\n'.join(
+                f'123;;{e};100;100;;' for e in ('task-clock', 'cycles', 'instructions', 'cycles:u', 'instructions:u')))
+            return type('Completed', (), {'returncode': 0, 'stderr': ''})()
+        with patch.object(run.subprocess, 'run', side_effect=execute), \
+                patch.object(run, 'siblings', return_value=[15]), \
+                patch.object(run, 'cpu_snapshot', side_effect=snapshots):
+            measured, _ = run.measured(['hirsel', 'check'], {}, 10)
+        self.assertEqual(measured['instructions_u'], 123)
+        self.assertEqual(measured['cpu_s'], 0.9)
+        self.assertEqual(measured['rss_mib'], 1)
+        self.assertEqual(measured['sibling_busy_share']['cpu15'], 0.2)
 
 
 class Timings(unittest.TestCase):

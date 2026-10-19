@@ -1,0 +1,3526 @@
+{
+ "schema": 1,
+ "suite": "compiler-bench",
+ "commit": "8c1675a7a502ce15f4392c2397bcb958608ce7f1",
+ "started": "2026-10-19T23:40:56Z",
+ "cpu": 30,
+ "host": {
+  "machine": "x86_64",
+  "cpus": 32,
+  "load1": 16.5341796875
+ },
+ "toolchain": {
+  "hirsel": "/tmp/perf-harness-toolchain/hirsel",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "hirsel_sha256": "37b5eb422f07655be03a8945530a6fd27b198e61d5e248aaab4ac8da7c8f848e",
+  "std_precheck_sha256": "ba54a7aefb977134cddb0d0d0e2000e3f32f01480de09b70994f0d3744292000"
+ },
+ "selection": {
+  "groups": "examples",
+  "select": null,
+  "modes": "check",
+  "jobs": "1"
+ },
+ "repeat": 3,
+ "cells": [
+  {
+   "id": "hello/hirsel/check",
+   "program": "hello",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 7,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 1.88,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551519135,
+       "idle": 360055727
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551519332,
+       "idle": 360055863
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3096446700507614
+     },
+     "instructions_u": 6931962004.0,
+     "perf": {
+      "task-clock": 1824.43,
+      "cycles": 7333214592.0,
+      "instructions": 7840269935.0,
+      "cycles:u": 5007613825.0,
+      "instructions:u": 6931962004.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 1.87,
+     "rss_mib": 432.4921875,
+     "intervals": {
+      "image open": 0.290043715,
+      "S0": 0.733118342,
+      "parallel": 0.650377902,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.132037945,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000481024
+     },
+     "phases": {
+      "parse": 0.657263914,
+      "resolve": 0.006376127,
+      "signatures": 0.590130587,
+      "check": 0.000835619,
+      "modes": 0.002974014,
+      "lower": 0.019279064,
+      "verify": 0.02854409
+     },
+     "counts": {
+      "V runs": 1,
+      "definitions": 2,
+      "lowered": 1,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2293,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 1.7,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551519332,
+       "idle": 360055863
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551519509,
+       "idle": 360055999
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.23163841807909605
+     },
+     "instructions_u": 6931949682.0,
+     "perf": {
+      "task-clock": 1648.1,
+      "cycles": 6674942947.0,
+      "instructions": 7736214322.0,
+      "cycles:u": 4782556034.0,
+      "instructions:u": 6931949682.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 1.69,
+     "rss_mib": 432.49609375,
+     "intervals": {
+      "image open": 0.1567229,
+      "S0": 0.693552496,
+      "parallel": 0.666590073,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.117568596,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000460075
+     },
+     "phases": {
+      "parse": 0.610874545,
+      "resolve": 0.007233446,
+      "signatures": 0.603185102,
+      "check": 0.000849234,
+      "modes": 0.003499805,
+      "lower": 0.019566863,
+      "verify": 0.029423643
+     },
+     "counts": {
+      "V runs": 1,
+      "definitions": 2,
+      "lowered": 1,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2293,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 1.69,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551519509,
+       "idle": 360055999
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551519687,
+       "idle": 360056153
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.1348314606741573
+     },
+     "instructions_u": 6931810436.0,
+     "perf": {
+      "task-clock": 1639.98,
+      "cycles": 6465297345.0,
+      "instructions": 7775159109.0,
+      "cycles:u": 4554492033.0,
+      "instructions:u": 6931810436.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 1.68,
+     "rss_mib": 432.58203125,
+     "intervals": {
+      "image open": 0.158141047,
+      "S0": 0.700020309,
+      "parallel": 0.65995921,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.105233107,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000376459
+     },
+     "phases": {
+      "parse": 0.628151619,
+      "resolve": 0.00700449,
+      "signatures": 0.591490708,
+      "check": 0.00073074,
+      "modes": 0.002947941,
+      "lower": 0.027699455,
+      "verify": 0.028347089
+     },
+     "counts": {
+      "V runs": 1,
+      "definitions": 2,
+      "lowered": 1,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2293,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 6931949682.0,
+     "mad": 12322.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 1.7,
+     "mad": 0.010000000000000009,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 1.69,
+     "mad": 0.010000000000000009,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 432.49609375,
+     "mad": 0.00390625,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000460075,
+      "mad": 2.094899999999998e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.700020309,
+      "mad": 0.006467812999999989,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.158141047,
+      "mad": 0.0014181470000000085,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.117568596,
+      "mad": 0.012335488999999991,
+      "n": 3
+     },
+     "parallel": {
+      "median": 0.65995921,
+      "mad": 0.006630862999999931,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.000835619,
+      "mad": 1.3615000000000025e-05,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.019566863,
+      "mad": 0.0002877990000000018,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.002974014,
+      "mad": 2.6073000000000155e-05,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.628151619,
+      "mad": 0.017277074000000003,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.00700449,
+      "mad": 0.00022895599999999978,
+      "n": 3
+     },
+     "signatures": {
+      "median": 0.591490708,
+      "mad": 0.0013601210000000474,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.02854409,
+      "mad": 0.0001970010000000022,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "hello/rust/check/j1",
+   "program": "hello",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 3,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.29,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551520881,
+       "idle": 360056914
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551520934,
+       "idle": 360056916
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.9622641509433962
+     },
+     "instructions_u": 254515034.0,
+     "perf": {
+      "task-clock": 196.1,
+      "cycles": 763329786.0,
+      "instructions": 463644404.0,
+      "cycles:u": 280544478.0,
+      "instructions:u": 254515034.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.22,
+     "rss_mib": 70.25
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.27,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551520969,
+       "idle": 360056921
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551521018,
+       "idle": 360056924
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.9387755102040817
+     },
+     "instructions_u": 254535984.0,
+     "perf": {
+      "task-clock": 204.59,
+      "cycles": 802576169.0,
+      "instructions": 460050150.0,
+      "cycles:u": 309092776.0,
+      "instructions:u": 254535984.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.23,
+     "rss_mib": 70.25
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.2,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551521060,
+       "idle": 360056928
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551521096,
+       "idle": 360056944
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.5555555555555556
+     },
+     "instructions_u": 254569953.0,
+     "perf": {
+      "task-clock": 159.74,
+      "cycles": 633357081.0,
+      "instructions": 458681560.0,
+      "cycles:u": 222874156.0,
+      "instructions:u": 254569953.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.18,
+     "rss_mib": 70.25
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 254535984.0,
+     "mad": 20950.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.27,
+     "mad": 0.019999999999999962,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.22,
+     "mad": 0.010000000000000009,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 70.25,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "todo-api/hirsel/check",
+   "program": "todo-api",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 498,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 4.04,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551521096,
+       "idle": 360056944
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551521497,
+       "idle": 360057188
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3915211970074813
+     },
+     "instructions_u": 19762178928.0,
+     "perf": {
+      "task-clock": 3981.18,
+      "cycles": 15878981982.0,
+      "instructions": 20757074691.0,
+      "cycles:u": 13439528892.0,
+      "instructions:u": 19762178928.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 4.03,
+     "rss_mib": 541.25390625,
+     "intervals": {
+      "image open": 0.214042908,
+      "S0": 1.077667582,
+      "parallel": 2.540438829,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.137439469,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000504989
+     },
+     "phases": {
+      "parse": 0.980784181,
+      "resolve": 0.033035181,
+      "signatures": 1.176798809,
+      "check": 0.040921951,
+      "modes": 0.266127633,
+      "lower": 0.042233188,
+      "verify": 0.815576248,
+      "comptime": 0.105454476
+     },
+     "counts": {
+      "V runs": 35,
+      "definitions": 38,
+      "lowered": 32,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2466,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 3.42,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551521497,
+       "idle": 360057188
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551521835,
+       "idle": 360057472
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.15976331360946747
+     },
+     "instructions_u": 19760371289.0,
+     "perf": {
+      "task-clock": 3361.14,
+      "cycles": 13691423092.0,
+      "instructions": 20720348246.0,
+      "cycles:u": 11626128658.0,
+      "instructions:u": 19760371289.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.41,
+     "rss_mib": 539.640625,
+     "intervals": {
+      "image open": 0.155566327,
+      "S0": 0.572785227,
+      "parallel": 2.476885251,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.142526925,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000480714
+     },
+     "phases": {
+      "parse": 0.509143213,
+      "resolve": 0.031613899,
+      "signatures": 1.113342914,
+      "check": 0.040529648,
+      "modes": 0.271607543,
+      "lower": 0.041291425,
+      "verify": 0.800542498,
+      "comptime": 0.112092055
+     },
+     "counts": {
+      "V runs": 35,
+      "definitions": 38,
+      "lowered": 32,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2466,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 4.42,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551521835,
+       "idle": 360057472
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551522273,
+       "idle": 360057730
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.410958904109589
+     },
+     "instructions_u": 19753165298.0,
+     "perf": {
+      "task-clock": 4322.68,
+      "cycles": 17682794015.0,
+      "instructions": 21115276761.0,
+      "cycles:u": 14410925250.0,
+      "instructions:u": 19753165298.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 4.4,
+     "rss_mib": 539.89453125,
+     "intervals": {
+      "image open": 0.186134576,
+      "S0": 0.764772143,
+      "parallel": 3.074077755,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.286248791,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000636306
+     },
+     "phases": {
+      "parse": 0.696645489,
+      "resolve": 0.043126696,
+      "signatures": 1.162865499,
+      "check": 0.047409026,
+      "modes": 0.329035404,
+      "lower": 0.062966319,
+      "verify": 1.158245246,
+      "comptime": 0.168975093
+     },
+     "counts": {
+      "V runs": 35,
+      "definitions": 38,
+      "lowered": 32,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2466,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 19760371289.0,
+     "mad": 1807639.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 4.04,
+     "mad": 0.3799999999999999,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 4.03,
+     "mad": 0.3700000000000001,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 539.89453125,
+     "mad": 0.25390625,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000504989,
+      "mad": 2.427499999999998e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.764772143,
+      "mad": 0.19198691599999995,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.186134576,
+      "mad": 0.027908332000000008,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.142526925,
+      "mad": 0.00508745599999999,
+      "n": 3
+     },
+     "parallel": {
+      "median": 2.540438829,
+      "mad": 0.06355357800000005,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.040921951,
+      "mad": 0.0003923029999999966,
+      "n": 3
+     },
+     "comptime": {
+      "median": 0.112092055,
+      "mad": 0.006637578999999991,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.042233188,
+      "mad": 0.0009417629999999982,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.271607543,
+      "mad": 0.005479910000000032,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.696645489,
+      "mad": 0.18750227600000002,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.033035181,
+      "mad": 0.001421281999999996,
+      "n": 3
+     },
+     "signatures": {
+      "median": 1.162865499,
+      "mad": 0.013933309999999866,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.815576248,
+      "mad": 0.015033749999999957,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "todo-api/rust/check/j1",
+   "program": "todo-api",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 527,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.36,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551522344,
+       "idle": 360057765
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551522398,
+       "idle": 360057767
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.9629629629629629
+     },
+     "instructions_u": 494850301.0,
+     "perf": {
+      "task-clock": 303.09,
+      "cycles": 1250826185.0,
+      "instructions": 733531681.0,
+      "cycles:u": 689253594.0,
+      "instructions:u": 494850301.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.32999999999999996,
+     "rss_mib": 122.75
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.89,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551522438,
+       "idle": 360057788
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551522537,
+       "idle": 360057864
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.23232323232323232
+     },
+     "instructions_u": 494497289.0,
+     "perf": {
+      "task-clock": 256.93,
+      "cycles": 1032951219.0,
+      "instructions": 732126279.0,
+      "cycles:u": 543865836.0,
+      "instructions:u": 494497289.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.27,
+     "rss_mib": 122.75
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.45,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551522557,
+       "idle": 360057881
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551522615,
+       "idle": 360057926
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.22413793103448276
+     },
+     "instructions_u": 494494824.0,
+     "perf": {
+      "task-clock": 214.88,
+      "cycles": 878789773.0,
+      "instructions": 730968440.0,
+      "cycles:u": 477115071.0,
+      "instructions:u": 494494824.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.24,
+     "rss_mib": 122.75
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 494497289.0,
+     "mad": 2465.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.45,
+     "mad": 0.09000000000000002,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.27,
+     "mad": 0.030000000000000027,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 122.75,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "kvstore/hirsel/check",
+   "program": "kvstore",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 370,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 3.31,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551522615,
+       "idle": 360057926
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551522950,
+       "idle": 360058126
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.40298507462686567
+     },
+     "instructions_u": 15269818105.0,
+     "perf": {
+      "task-clock": 3239.26,
+      "cycles": 12825666098.0,
+      "instructions": 16377887049.0,
+      "cycles:u": 10117945665.0,
+      "instructions:u": 15269818105.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.29,
+     "rss_mib": 506.40234375,
+     "intervals": {
+      "image open": 0.187503234,
+      "S0": 0.636931314,
+      "parallel": 2.258830145,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.144936722,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000588735
+     },
+     "phases": {
+      "parse": 0.556873347,
+      "resolve": 0.028068788,
+      "signatures": 1.170343298,
+      "check": 0.036002398,
+      "modes": 0.246973351,
+      "lower": 0.033622226,
+      "verify": 0.585336175,
+      "comptime": 0.061346025
+     },
+     "counts": {
+      "V runs": 22,
+      "definitions": 25,
+      "lowered": 20,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2404,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 2.94,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551522950,
+       "idle": 360058126
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551523249,
+       "idle": 360058346
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.26421404682274247
+     },
+     "instructions_u": 15274534852.0,
+     "perf": {
+      "task-clock": 2873.46,
+      "cycles": 11509214338.0,
+      "instructions": 16168867994.0,
+      "cycles:u": 9536550339.0,
+      "instructions:u": 15274534852.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.92,
+     "rss_mib": 506.26171875,
+     "intervals": {
+      "image open": 0.15724506,
+      "S0": 0.634990793,
+      "parallel": 1.924275352,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.145210026,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000507284
+     },
+     "phases": {
+      "parse": 0.558543743,
+      "resolve": 0.029183757,
+      "signatures": 0.958154874,
+      "check": 0.032569392,
+      "modes": 0.210100204,
+      "lower": 0.028796252,
+      "verify": 0.535642671,
+      "comptime": 0.058734059
+     },
+     "counts": {
+      "V runs": 22,
+      "definitions": 25,
+      "lowered": 20,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2404,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 4.12,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551523249,
+       "idle": 360058346
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551523648,
+       "idle": 360058547
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.49624060150375937
+     },
+     "instructions_u": 15274589262.0,
+     "perf": {
+      "task-clock": 4042.17,
+      "cycles": 16001370976.0,
+      "instructions": 16684765152.0,
+      "cycles:u": 12149406141.0,
+      "instructions:u": 15274589262.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 4.1,
+     "rss_mib": 506.21875,
+     "intervals": {
+      "image open": 0.220916134,
+      "S0": 1.151534053,
+      "parallel": 2.477354805,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.192766264,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000547179
+     },
+     "phases": {
+      "parse": 1.03759081,
+      "resolve": 0.029188879,
+      "signatures": 1.311828644,
+      "check": 0.034683969,
+      "modes": 0.220768003,
+      "lower": 0.036575755,
+      "verify": 0.696290646,
+      "comptime": 0.066427169
+     },
+     "counts": {
+      "V runs": 22,
+      "definitions": 25,
+      "lowered": 20,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2404,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 15274534852.0,
+     "mad": 54410.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 3.31,
+     "mad": 0.3700000000000001,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 3.29,
+     "mad": 0.3700000000000001,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 506.26171875,
+     "mad": 0.04296875,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000547179,
+      "mad": 3.989499999999997e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.636931314,
+      "mad": 0.0019405209999999729,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.187503234,
+      "mad": 0.030258174,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.145210026,
+      "mad": 0.000273304000000002,
+      "n": 3
+     },
+     "parallel": {
+      "median": 2.258830145,
+      "mad": 0.21852465999999993,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.034683969,
+      "mad": 0.001318428999999996,
+      "n": 3
+     },
+     "comptime": {
+      "median": 0.061346025,
+      "mad": 0.0026119660000000003,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.033622226,
+      "mad": 0.0029535290000000033,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.220768003,
+      "mad": 0.010667798999999978,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.558543743,
+      "mad": 0.001670395999999963,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.029183757,
+      "mad": 5.121999999999766e-06,
+      "n": 3
+     },
+     "signatures": {
+      "median": 1.170343298,
+      "mad": 0.14148534600000007,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.585336175,
+      "mad": 0.049693504000000055,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "kvstore/rust/check/j1",
+   "program": "kvstore",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 408,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.28,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551523712,
+       "idle": 360058565
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551523754,
+       "idle": 360058586
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.5
+     },
+     "instructions_u": 400972222.0,
+     "perf": {
+      "task-clock": 234.08,
+      "cycles": 882371764.0,
+      "instructions": 631784021.0,
+      "cycles:u": 412445276.0,
+      "instructions:u": 400972222.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.25,
+     "rss_mib": 113.75
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.22,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551523774,
+       "idle": 360058600
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551523813,
+       "idle": 360058629
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.2564102564102564
+     },
+     "instructions_u": 400972200.0,
+     "perf": {
+      "task-clock": 186.27,
+      "cycles": 722291366.0,
+      "instructions": 632528650.0,
+      "cycles:u": 328463172.0,
+      "instructions:u": 400972200.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 114.0
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.22,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551523833,
+       "idle": 360058646
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551523871,
+       "idle": 360058675
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.23684210526315788
+     },
+     "instructions_u": 400977213.0,
+     "perf": {
+      "task-clock": 185.58,
+      "cycles": 713945863.0,
+      "instructions": 630304231.0,
+      "cycles:u": 334760818.0,
+      "instructions:u": 400977213.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 113.75
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 400972222.0,
+     "mad": 22.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.22,
+     "mad": 0.0,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.2,
+     "mad": 0.0,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 113.75,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "logq/hirsel/check",
+   "program": "logq",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 301,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 2.85,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551523871,
+       "idle": 360058675
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524163,
+       "idle": 360058919
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.1643835616438356
+     },
+     "instructions_u": 15449286758.0,
+     "perf": {
+      "task-clock": 2801.06,
+      "cycles": 11019265502.0,
+      "instructions": 16235735560.0,
+      "cycles:u": 9323973321.0,
+      "instructions:u": 15449286758.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.8400000000000003,
+     "rss_mib": 478.55078125,
+     "intervals": {
+      "image open": 0.157189761,
+      "S0": 0.55784917,
+      "parallel": 1.905576625,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.165334144,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000504478
+     },
+     "phases": {
+      "parse": 0.487863602,
+      "resolve": 0.019361822,
+      "signatures": 0.887415401,
+      "check": 0.022379991,
+      "modes": 0.176507956,
+      "lower": 0.025342902,
+      "verify": 0.713430305,
+      "comptime": 0.046062966
+     },
+     "counts": {
+      "V runs": 17,
+      "definitions": 18,
+      "lowered": 15,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2371,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 2.85,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524163,
+       "idle": 360058919
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524453,
+       "idle": 360059157
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.1793103448275862
+     },
+     "instructions_u": 15448101557.0,
+     "perf": {
+      "task-clock": 2792.63,
+      "cycles": 11196002677.0,
+      "instructions": 16278049221.0,
+      "cycles:u": 9326576513.0,
+      "instructions:u": 15448101557.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.84,
+     "rss_mib": 478.2578125,
+     "intervals": {
+      "image open": 0.17338499,
+      "S0": 0.535454915,
+      "parallel": 1.933066171,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.134125642,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000493388
+     },
+     "phases": {
+      "parse": 0.470493707,
+      "resolve": 0.020773567,
+      "signatures": 0.912849646,
+      "check": 0.023141847,
+      "modes": 0.182999581,
+      "lower": 0.024672965,
+      "verify": 0.708437992,
+      "comptime": 0.047540151
+     },
+     "counts": {
+      "V runs": 17,
+      "definitions": 18,
+      "lowered": 15,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2371,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 3.18,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524453,
+       "idle": 360059157
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524775,
+       "idle": 360059402
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.2391304347826087
+     },
+     "instructions_u": 15445444096.0,
+     "perf": {
+      "task-clock": 3114.97,
+      "cycles": 12458287864.0,
+      "instructions": 16661937803.0,
+      "cycles:u": 9600912180.0,
+      "instructions:u": 15445444096.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.1500000000000004,
+     "rss_mib": 477.88671875,
+     "intervals": {
+      "image open": 0.165330579,
+      "S0": 0.54895011,
+      "parallel": 2.276586164,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.129123821,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.00042631
+     },
+     "phases": {
+      "parse": 0.470026688,
+      "resolve": 0.018649692,
+      "signatures": 1.066408011,
+      "check": 0.023819462,
+      "modes": 0.19470539,
+      "lower": 0.02624999,
+      "verify": 0.867090577,
+      "comptime": 0.058663786
+     },
+     "counts": {
+      "V runs": 17,
+      "definitions": 18,
+      "lowered": 15,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2371,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 15448101557.0,
+     "mad": 1185201.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 2.85,
+     "mad": 0.0,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 2.8400000000000003,
+     "mad": 4.440892098500626e-16,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 478.2578125,
+     "mad": 0.29296875,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000493388,
+      "mad": 1.1090000000000058e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.54895011,
+      "mad": 0.008899059999999959,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.165330579,
+      "mad": 0.008054410999999984,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.134125642,
+      "mad": 0.00500182099999999,
+      "n": 3
+     },
+     "parallel": {
+      "median": 1.933066171,
+      "mad": 0.027489546000000198,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.023141847,
+      "mad": 0.0006776149999999995,
+      "n": 3
+     },
+     "comptime": {
+      "median": 0.047540151,
+      "mad": 0.0014771850000000059,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.025342902,
+      "mad": 0.0006699369999999989,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.182999581,
+      "mad": 0.006491625000000001,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.470493707,
+      "mad": 0.00046701899999995744,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.019361822,
+      "mad": 0.0007121300000000018,
+      "n": 3
+     },
+     "signatures": {
+      "median": 0.912849646,
+      "mad": 0.02543424499999991,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.713430305,
+      "mad": 0.004992313000000026,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "logq/rust/check/j1",
+   "program": "logq",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 293,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.21,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524824,
+       "idle": 360059442
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524860,
+       "idle": 360059472
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.16666666666666666
+     },
+     "instructions_u": 369571776.0,
+     "perf": {
+      "task-clock": 173.05,
+      "cycles": 695855111.0,
+      "instructions": 594644059.0,
+      "cycles:u": 306523289.0,
+      "instructions:u": 369571776.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.19,
+     "rss_mib": 106.0
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.21,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524881,
+       "idle": 360059489
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524912,
+       "idle": 360059518
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.06451612903225806
+     },
+     "instructions_u": 369573248.0,
+     "perf": {
+      "task-clock": 159.43,
+      "cycles": 655757399.0,
+      "instructions": 594143464.0,
+      "cycles:u": 289508857.0,
+      "instructions:u": 369573248.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.18,
+     "rss_mib": 106.0
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.2,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524932,
+       "idle": 360059531
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551524962,
+       "idle": 360059558
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.1
+     },
+     "instructions_u": 369541644.0,
+     "perf": {
+      "task-clock": 159.1,
+      "cycles": 654755794.0,
+      "instructions": 593377537.0,
+      "cycles:u": 289710187.0,
+      "instructions:u": 369541644.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.18,
+     "rss_mib": 106.0
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 369571776.0,
+     "mad": 1472.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.21,
+     "mad": 0.0,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.18,
+     "mad": 0.0,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 106.0,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "csvjson/hirsel/check",
+   "program": "csvjson",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 256,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 3.87,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551524962,
+       "idle": 360059558
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551525354,
+       "idle": 360059898
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.1326530612244898
+     },
+     "instructions_u": 24827332053.0,
+     "perf": {
+      "task-clock": 3817.07,
+      "cycles": 15434323320.0,
+      "instructions": 25719400896.0,
+      "cycles:u": 13583485008.0,
+      "instructions:u": 24827332053.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.86,
+     "rss_mib": 507.44140625,
+     "intervals": {
+      "image open": 0.156449324,
+      "S0": 0.48618615,
+      "parallel": 3.046635503,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.113020105,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000435028
+     },
+     "phases": {
+      "parse": 0.419946929,
+      "resolve": 0.01585167,
+      "signatures": 0.598555834,
+      "check": 0.028408613,
+      "modes": 0.428839393,
+      "lower": 0.047335342,
+      "verify": 1.911782355
+     },
+     "counts": {
+      "V runs": 11,
+      "definitions": 15,
+      "lowered": 11,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2355,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 3.9,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551525354,
+       "idle": 360059898
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551525743,
+       "idle": 360060227
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.15424164524421594
+     },
+     "instructions_u": 24833623299.0,
+     "perf": {
+      "task-clock": 3841.96,
+      "cycles": 15599045968.0,
+      "instructions": 25692159268.0,
+      "cycles:u": 13829755437.0,
+      "instructions:u": 24833623299.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.89,
+     "rss_mib": 504.63671875,
+     "intervals": {
+      "image open": 0.145765149,
+      "S0": 0.509956162,
+      "parallel": 3.0530982,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.117788252,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000542941
+     },
+     "phases": {
+      "parse": 0.442913525,
+      "resolve": 0.016666533,
+      "signatures": 0.615638599,
+      "check": 0.02964936,
+      "modes": 0.444307404,
+      "lower": 0.047383132,
+      "verify": 1.886706967
+     },
+     "counts": {
+      "V runs": 11,
+      "definitions": 15,
+      "lowered": 11,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2355,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 3.85,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551525744,
+       "idle": 360060227
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526130,
+       "idle": 360060563
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.12953367875647667
+     },
+     "instructions_u": 24831957233.0,
+     "perf": {
+      "task-clock": 3793.55,
+      "cycles": 15395717857.0,
+      "instructions": 25732274219.0,
+      "cycles:u": 13576678710.0,
+      "instructions:u": 24831957233.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.84,
+     "rss_mib": 505.18359375,
+     "intervals": {
+      "image open": 0.146596253,
+      "S0": 0.550358648,
+      "parallel": 2.955636989,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.125480546,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000438153
+     },
+     "phases": {
+      "parse": 0.484645755,
+      "resolve": 0.016671232,
+      "signatures": 0.593918205,
+      "check": 0.029234633,
+      "modes": 0.436648114,
+      "lower": 0.045576316,
+      "verify": 1.818843809
+     },
+     "counts": {
+      "V runs": 11,
+      "definitions": 15,
+      "lowered": 11,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2355,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 24831957233.0,
+     "mad": 1666066.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 3.87,
+     "mad": 0.020000000000000018,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 3.86,
+     "mad": 0.020000000000000018,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 505.18359375,
+     "mad": 0.546875,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000438153,
+      "mad": 3.124999999999981e-06,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.509956162,
+      "mad": 0.023770012000000063,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.146596253,
+      "mad": 0.0008311039999999992,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.117788252,
+      "mad": 0.004768147,
+      "n": 3
+     },
+     "parallel": {
+      "median": 3.046635503,
+      "mad": 0.006462696999999906,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.029234633,
+      "mad": 0.00041472700000000015,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.047335342,
+      "mad": 4.7789999999998944e-05,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.436648114,
+      "mad": 0.007659290000000041,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.442913525,
+      "mad": 0.02296659599999995,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.016666533,
+      "mad": 4.6990000000003695e-06,
+      "n": 3
+     },
+     "signatures": {
+      "median": 0.598555834,
+      "mad": 0.0046376289999999765,
+      "n": 3
+     },
+     "verify": {
+      "median": 1.886706967,
+      "mad": 0.025075387999999865,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "csvjson/rust/check/j1",
+   "program": "csvjson",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 335,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.21,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526187,
+       "idle": 360060598
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526223,
+       "idle": 360060626
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.2222222222222222
+     },
+     "instructions_u": 422711106.0,
+     "perf": {
+      "task-clock": 170.02,
+      "cycles": 684836085.0,
+      "instructions": 654012803.0,
+      "cycles:u": 313889712.0,
+      "instructions:u": 422711106.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.19,
+     "rss_mib": 114.25
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.24,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526245,
+       "idle": 360060644
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526280,
+       "idle": 360060668
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3142857142857143
+     },
+     "instructions_u": 422713226.0,
+     "perf": {
+      "task-clock": 193.14,
+      "cycles": 764244356.0,
+      "instructions": 654475928.0,
+      "cycles:u": 343045300.0,
+      "instructions:u": 422713226.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.21,
+     "rss_mib": 114.25
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.22,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526300,
+       "idle": 360060684
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526340,
+       "idle": 360060715
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.225
+     },
+     "instructions_u": 422722806.0,
+     "perf": {
+      "task-clock": 183.68,
+      "cycles": 739090340.0,
+      "instructions": 653678744.0,
+      "cycles:u": 348378524.0,
+      "instructions:u": 422722806.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 114.25
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 422713226.0,
+     "mad": 2120.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.22,
+     "mad": 0.010000000000000009,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.2,
+     "mad": 0.009999999999999981,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 114.25,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "mdtoc/hirsel/check",
+   "program": "mdtoc",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 189,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 2.18,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526340,
+       "idle": 360060715
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526565,
+       "idle": 360060862
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3466666666666667
+     },
+     "instructions_u": 9460342950.0,
+     "perf": {
+      "task-clock": 2121.15,
+      "cycles": 8533603538.0,
+      "instructions": 10126722754.0,
+      "cycles:u": 7014273973.0,
+      "instructions:u": 9460342950.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.17,
+     "rss_mib": 456.0625,
+     "intervals": {
+      "image open": 0.157292726,
+      "S0": 0.588740382,
+      "parallel": 1.145408395,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.211604008,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000674026
+     },
+     "phases": {
+      "parse": 0.516356688,
+      "resolve": 0.015352715,
+      "signatures": 0.547404361,
+      "check": 0.011580915,
+      "modes": 0.07233537,
+      "lower": 0.037704349,
+      "verify": 0.438551531
+     },
+     "counts": {
+      "V runs": 10,
+      "definitions": 11,
+      "lowered": 10,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2338,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 3.44,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526565,
+       "idle": 360060862
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551526927,
+       "idle": 360060873
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.9696132596685083
+     },
+     "instructions_u": 9459375092.0,
+     "perf": {
+      "task-clock": 3302.37,
+      "cycles": 12963824939.0,
+      "instructions": 10615907445.0,
+      "cycles:u": 9406441235.0,
+      "instructions:u": 9459375092.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 3.38,
+     "rss_mib": 456.1796875,
+     "intervals": {
+      "image open": 0.542260507,
+      "S0": 1.01096397,
+      "parallel": 1.504977138,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.243796045,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000745902
+     },
+     "phases": {
+      "parse": 0.853223408,
+      "resolve": 0.021087011,
+      "signatures": 0.74426479,
+      "check": 0.014188291,
+      "modes": 0.086287025,
+      "lower": 0.049293628,
+      "verify": 0.565421868
+     },
+     "counts": {
+      "V runs": 10,
+      "definitions": 11,
+      "lowered": 10,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2338,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 2.94,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551526927,
+       "idle": 360060873
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527232,
+       "idle": 360060924
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.8327868852459016
+     },
+     "instructions_u": 9462607502.0,
+     "perf": {
+      "task-clock": 2871.65,
+      "cycles": 11412062904.0,
+      "instructions": 10150736469.0,
+      "cycles:u": 9495075191.0,
+      "instructions:u": 9462607502.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.92,
+     "rss_mib": 456.0546875,
+     "intervals": {
+      "image open": 0.214302894,
+      "S0": 1.016065333,
+      "parallel": 1.398942071,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.21881056,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000651445
+     },
+     "phases": {
+      "parse": 0.916995359,
+      "resolve": 0.022941447,
+      "signatures": 0.719344869,
+      "check": 0.015174649,
+      "modes": 0.088258626,
+      "lower": 0.04668734,
+      "verify": 0.487761232
+     },
+     "counts": {
+      "V runs": 10,
+      "definitions": 11,
+      "lowered": 10,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2338,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 9460342950.0,
+     "mad": 967858.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 2.94,
+     "mad": 0.5,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 2.92,
+     "mad": 0.45999999999999996,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 456.0625,
+     "mad": 0.0078125,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000674026,
+      "mad": 2.2581000000000033e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 1.01096397,
+      "mad": 0.005101363000000081,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.214302894,
+      "mad": 0.057010168,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.21881056,
+      "mad": 0.007206551999999977,
+      "n": 3
+     },
+     "parallel": {
+      "median": 1.398942071,
+      "mad": 0.1060350670000001,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.014188291,
+      "mad": 0.0009863579999999997,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.04668734,
+      "mad": 0.0026062879999999983,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.086287025,
+      "mad": 0.0019716010000000034,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.853223408,
+      "mad": 0.063771951,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.021087011,
+      "mad": 0.001854436000000001,
+      "n": 3
+     },
+     "signatures": {
+      "median": 0.719344869,
+      "mad": 0.024919920999999956,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.487761232,
+      "mad": 0.049209700999999995,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "mdtoc/rust/check/j1",
+   "program": "mdtoc",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 183,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.22,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527304,
+       "idle": 360060968
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527343,
+       "idle": 360060995
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3076923076923077
+     },
+     "instructions_u": 323496049.0,
+     "perf": {
+      "task-clock": 185.27,
+      "cycles": 710686844.0,
+      "instructions": 545193746.0,
+      "cycles:u": 299927234.0,
+      "instructions:u": 323496049.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 101.0
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.22,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527365,
+       "idle": 360061010
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527403,
+       "idle": 360061036
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3157894736842105
+     },
+     "instructions_u": 323496131.0,
+     "perf": {
+      "task-clock": 182.44,
+      "cycles": 698889781.0,
+      "instructions": 545226808.0,
+      "cycles:u": 304131836.0,
+      "instructions:u": 323496131.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 101.25
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.23,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527422,
+       "idle": 360061051
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527460,
+       "idle": 360061081
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.21052631578947367
+     },
+     "instructions_u": 323508922.0,
+     "perf": {
+      "task-clock": 180.28,
+      "cycles": 728652935.0,
+      "instructions": 543983233.0,
+      "cycles:u": 309286974.0,
+      "instructions:u": 323508922.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.2,
+     "rss_mib": 101.25
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 323496131.0,
+     "mad": 82.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.22,
+     "mad": 0.0,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.2,
+     "mad": 0.0,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 101.25,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  },
+  {
+   "id": "bench-lite/hirsel/check",
+   "program": "bench-lite",
+   "language": "hirsel",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 203,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "none retained: fresh process, std precheck read, query cache process-local",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 2.52,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527460,
+       "idle": 360061081
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527722,
+       "idle": 360061226
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.44656488549618323
+     },
+     "instructions_u": 10068984617.0,
+     "perf": {
+      "task-clock": 2467.57,
+      "cycles": 9879827096.0,
+      "instructions": 10777280697.0,
+      "cycles:u": 8121116247.0,
+      "instructions:u": 10068984617.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.52,
+     "rss_mib": 459.23046875,
+     "intervals": {
+      "image open": 0.17872696,
+      "S0": 0.864105843,
+      "parallel": 1.258621931,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.150860457,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.000484462
+     },
+     "phases": {
+      "parse": 0.769986421,
+      "resolve": 0.01078241,
+      "signatures": 0.816436045,
+      "check": 0.013984771,
+      "modes": 0.077241187,
+      "lower": 0.041128469,
+      "verify": 0.279846489,
+      "comptime": 0.016203294
+     },
+     "counts": {
+      "V runs": 14,
+      "definitions": 15,
+      "lowered": 13,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2357,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 2.28,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527722,
+       "idle": 360061226
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551527958,
+       "idle": 360061406
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.23728813559322035
+     },
+     "instructions_u": 10067800072.0,
+     "perf": {
+      "task-clock": 2222.47,
+      "cycles": 8898137230.0,
+      "instructions": 10800717779.0,
+      "cycles:u": 7197079414.0,
+      "instructions:u": 10067800072.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.2800000000000002,
+     "rss_mib": 459.32421875,
+     "intervals": {
+      "image open": 0.165307581,
+      "S0": 0.719788423,
+      "parallel": 1.189482297,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.129531587,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.00040968
+     },
+     "phases": {
+      "parse": 0.640408922,
+      "resolve": 0.009475232,
+      "signatures": 0.760097258,
+      "check": 0.012270676,
+      "modes": 0.066210413,
+      "lower": 0.037726428,
+      "verify": 0.265213489,
+      "comptime": 0.015316364
+     },
+     "counts": {
+      "V runs": 14,
+      "definitions": 15,
+      "lowered": 13,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2357,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    },
+    {
+     "exit": 0,
+     "wall_s": 2.49,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551527958,
+       "idle": 360061406
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551528208,
+       "idle": 360061581
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.3
+     },
+     "instructions_u": 10066532336.0,
+     "perf": {
+      "task-clock": 2439.89,
+      "cycles": 9597446271.0,
+      "instructions": 10836401580.0,
+      "cycles:u": 7654223146.0,
+      "instructions:u": 10066532336.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 2.48,
+     "rss_mib": 459.2265625,
+     "intervals": {
+      "image open": 0.202697271,
+      "S0": 0.877541139,
+      "parallel": 1.20188951,
+      "S1": 0.0,
+      "parallel2": 0.0,
+      "merge": 0.143725014,
+      "plan": 0.0,
+      "units": 0.0,
+      "link": 0.0,
+      "(untimed)": 0.00049546
+     },
+     "phases": {
+      "parse": 0.783396031,
+      "resolve": 0.012087733,
+      "signatures": 0.799588702,
+      "check": 0.014420468,
+      "modes": 0.075887538,
+      "lower": 0.038627134,
+      "verify": 0.243406231,
+      "comptime": 0.013424166
+     },
+     "counts": {
+      "V runs": 14,
+      "definitions": 15,
+      "lowered": 13,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 2357,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 0
+     }
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 10067800072.0,
+     "mad": 1184545.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 2.49,
+     "mad": 0.029999999999999805,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 2.48,
+     "mad": 0.040000000000000036,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 459.23046875,
+     "mad": 0.00390625,
+     "n": 3
+    },
+    "intervals": {
+     "(untimed)": {
+      "median": 0.000484462,
+      "mad": 1.0997999999999965e-05,
+      "n": 3
+     },
+     "S0": {
+      "median": 0.864105843,
+      "mad": 0.01343529599999993,
+      "n": 3
+     },
+     "S1": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "image open": {
+      "median": 0.17872696,
+      "mad": 0.013419378999999981,
+      "n": 3
+     },
+     "link": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "merge": {
+      "median": 0.143725014,
+      "mad": 0.007135442999999991,
+      "n": 3
+     },
+     "parallel": {
+      "median": 1.20188951,
+      "mad": 0.012407212999999917,
+      "n": 3
+     },
+     "parallel2": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "plan": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     },
+     "units": {
+      "median": 0.0,
+      "mad": 0.0,
+      "n": 3
+     }
+    },
+    "phases": {
+     "check": {
+      "median": 0.013984771,
+      "mad": 0.0004356970000000005,
+      "n": 3
+     },
+     "comptime": {
+      "median": 0.015316364,
+      "mad": 0.0008869299999999993,
+      "n": 3
+     },
+     "lower": {
+      "median": 0.038627134,
+      "mad": 0.0009007060000000011,
+      "n": 3
+     },
+     "modes": {
+      "median": 0.075887538,
+      "mad": 0.0013536489999999984,
+      "n": 3
+     },
+     "parse": {
+      "median": 0.769986421,
+      "mad": 0.01340960999999996,
+      "n": 3
+     },
+     "resolve": {
+      "median": 0.01078241,
+      "mad": 0.0013053230000000006,
+      "n": 3
+     },
+     "signatures": {
+      "median": 0.799588702,
+      "mad": 0.016847343000000015,
+      "n": 3
+     },
+     "verify": {
+      "median": 0.265213489,
+      "mad": 0.014632999999999952,
+      "n": 3
+     }
+    }
+   }
+  },
+  {
+   "id": "bench-lite/rust/check/j1",
+   "program": "bench-lite",
+   "language": "rust",
+   "mode": "check",
+   "jobs": 1,
+   "lines": 224,
+   "groups": [
+    "pairs",
+    "examples"
+   ],
+   "cache": "cold: dependencies built, package artifacts and incremental state removed",
+   "status": "ok",
+   "runs": [
+    {
+     "exit": 0,
+     "wall_s": 0.21,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551528265,
+       "idle": 360061620
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551528303,
+       "idle": 360061645
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.34210526315789475
+     },
+     "instructions_u": 337625301.0,
+     "perf": {
+      "task-clock": 165.54,
+      "cycles": 641361920.0,
+      "instructions": 559176300.0,
+      "cycles:u": 271986148.0,
+      "instructions:u": 337625301.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.18,
+     "rss_mib": 104.75
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.26,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551528323,
+       "idle": 360061656
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551528367,
+       "idle": 360061668
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.7272727272727273
+     },
+     "instructions_u": 337608241.0,
+     "perf": {
+      "task-clock": 212.09,
+      "cycles": 829498258.0,
+      "instructions": 559834943.0,
+      "cycles:u": 357315041.0,
+      "instructions:u": 337608241.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.24,
+     "rss_mib": 104.5
+    },
+    {
+     "exit": 0,
+     "wall_s": 0.24,
+     "status": "ok",
+     "sibling_before": {
+      "cpu14": {
+       "total": 551528388,
+       "idle": 360061680
+      }
+     },
+     "sibling_after": {
+      "cpu14": {
+       "total": 551528428,
+       "idle": 360061699
+      }
+     },
+     "sibling_busy_share": {
+      "cpu14": 0.525
+     },
+     "instructions_u": 337609693.0,
+     "perf": {
+      "task-clock": 205.13,
+      "cycles": 798501819.0,
+      "instructions": 559811894.0,
+      "cycles:u": 363545469.0,
+      "instructions:u": 337609693.0
+     },
+     "running_percent": {
+      "task-clock": 100.0,
+      "cycles": 100.0,
+      "instructions": 100.0,
+      "cycles:u": 100.0,
+      "instructions:u": 100.0
+     },
+     "cpu_s": 0.22,
+     "rss_mib": 104.75
+    }
+   ],
+   "summary": {
+    "instructions_u": {
+     "median": 337609693.0,
+     "mad": 1452.0,
+     "n": 3
+    },
+    "wall_s": {
+     "median": 0.24,
+     "mad": 0.020000000000000018,
+     "n": 3
+    },
+    "cpu_s": {
+     "median": 0.22,
+     "mad": 0.01999999999999999,
+     "n": 3
+    },
+    "rss_mib": {
+     "median": 104.75,
+     "mad": 0.0,
+     "n": 3
+    }
+   }
+  }
+ ],
+ "pairs": [
+  {
+   "program": "hello",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "hello/hirsel/check",
+   "rust": "hello/rust/check/j1",
+   "hirsel_instructions_u": 6931949682.0,
+   "rust_instructions_u": 254535984.0,
+   "ratio": 27.23367271324592,
+   "rss_ratio": 6.156528024911032
+  },
+  {
+   "program": "todo-api",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "todo-api/hirsel/check",
+   "rust": "todo-api/rust/check/j1",
+   "hirsel_instructions_u": 19760371289.0,
+   "rust_instructions_u": 494497289.0,
+   "ratio": 39.96052501917761,
+   "rss_ratio": 4.398326120162933
+  },
+  {
+   "program": "kvstore",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "kvstore/hirsel/check",
+   "rust": "kvstore/rust/check/j1",
+   "hirsel_instructions_u": 15274534852.0,
+   "rust_instructions_u": 400972222.0,
+   "ratio": 38.09374817989262,
+   "rss_ratio": 4.450652472527472
+  },
+  {
+   "program": "logq",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "logq/hirsel/check",
+   "rust": "logq/rust/check/j1",
+   "hirsel_instructions_u": 15448101557.0,
+   "rust_instructions_u": 369571776.0,
+   "ratio": 41.80000357224249,
+   "rss_ratio": 4.511866155660377
+  },
+  {
+   "program": "csvjson",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "csvjson/hirsel/check",
+   "rust": "csvjson/rust/check/j1",
+   "hirsel_instructions_u": 24831957233.0,
+   "rust_instructions_u": 422713226.0,
+   "ratio": 58.74421642297987,
+   "rss_ratio": 4.421738238512035
+  },
+  {
+   "program": "mdtoc",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "mdtoc/hirsel/check",
+   "rust": "mdtoc/rust/check/j1",
+   "hirsel_instructions_u": 9460342950.0,
+   "rust_instructions_u": 323496131.0,
+   "ratio": 29.244068300773588,
+   "rss_ratio": 4.504320987654321
+  },
+  {
+   "program": "bench-lite",
+   "mode": "check",
+   "rust_mode": "check",
+   "rust_jobs": 1,
+   "hirsel": "bench-lite/hirsel/check",
+   "rust": "bench-lite/rust/check/j1",
+   "hirsel_instructions_u": 10067800072.0,
+   "rust_instructions_u": 337609693.0,
+   "ratio": 29.820826477277713,
+   "rss_ratio": 4.384061754176611
+  }
+ ]
+}

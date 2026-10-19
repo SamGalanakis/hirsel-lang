@@ -14,6 +14,19 @@ constraint_value(name = "profile_release", constraint_setting = ":profile", visi
 
 constraint_value(name = "profile_checked", constraint_setting = ":profile", visibility = ["PUBLIC"])
 
+constraint_value(name = "profile_profiling", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
+# Release code with line information and walkable stacks for perf.
+platform(
+    name = "profiling",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_profiling",
+    ],
+    visibility = ["PUBLIC"],
+)
+
 # Compiler tools and harnesses share one optimized, checked configuration.
 platform(
     name = "checked",

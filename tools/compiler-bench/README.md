@@ -3,7 +3,7 @@
 This suite measures how fast Hirsel compiles: the whole compiler, each of its
 phases, and Hirsel against Rust on equivalent programs. (`bench/native`
 measures the speed of the generated code instead.) It records a result file,
-compares it with a stored baseline within noise bounds, and runs only when
+compares user-mode instruction counts with a stored baseline, and runs only when
 invoked by hand.
 
 ```sh
@@ -45,8 +45,8 @@ parts of that report:
 
 It also keeps the report's counts, such as definitions, units and V runs.
 `hirsel precheck` takes no `--timings`, so the std cell has wall time, CPU time
-and RSS only. When a toolchain's usage shows no `--timings`, as before that
-report existed, every cell records wall time, CPU time and RSS only.
+and RSS plus perf counters. When a toolchain's usage shows no `--timings`, as before that
+report existed, every cell records wall time, CPU time and RSS plus perf counters.
 Peak RSS always comes from `/usr/bin/time`, never from `--mem-usage`, because
 measuring held memory walks the allocator and slows the run.
 
@@ -89,8 +89,8 @@ and `clif`; conformance and tour programs run `check`. Rust cells run at `-j1`
 and `-j8` (`--jobs`). `HIRSEL_JOBS` gives the capped
 scope the same number of CPUs. Hirsel compiles on one thread, so its cells are
 `jobs: 1`. The scoreboard (`pairs` in the result, printed by `compare`) is each
-Hirsel cell's median wall time divided by its Rust pair's. Above 1x, Hirsel is
-slower. Perf lanes report this ratio.
+Hirsel cell's median `instructions:u` divided by its Rust pair's. Above 1x,
+Hirsel executes more user instructions. Wall and CPU times are descriptive only.
 
 Each cell states its cache in its `cache` field.
 
@@ -113,30 +113,29 @@ Each cell states its cache in its `cache` field.
 - every run, with exit status, wall and CPU seconds, peak RSS in MiB from
   `/usr/bin/time`, and Hirsel's intervals, phases and counts;
 - a `summary`: the median, the median absolute deviation (MAD) and `n` for wall,
-  CPU, RSS and each interval and phase.
+  CPU, RSS, `instructions_u` and each interval and phase. Every run also records
+  all five perf events, multiplex running percentages, and SMT sibling snapshots
+  and busy shares from `/proc/stat`.
 
 By default each cell runs 3 times (`--repeat`). Programs of 30k lines or more
 run once unless `--repeat-large` is given.
 
 ## Budget and regressions
 
-`compare BASELINE RESULTS` checks every cell present in both files and every
-metric listed in `budget.json`, each tracked interval and phase included. The
-gate's `tools/tests/compiler_bench.py` checks that the budget names every
-interval and phase `hirsel_intern::timings` reports, and that this README
-documents each of them. A metric regresses when its median rises by
-more than both its threshold and the noise bound. The noise bound is
-`noise_k` (3) times the larger relative MAD (MAD / median) of the two medians.
-The rise must also exceed the metric's absolute floor. A cell that completed in
-the baseline but not now (`failed`, `cap`, `timeout`) is a regression too.
-`compare` exits 1 when anything regressed.
+`compare BASELINE RESULTS` compares only `instructions_u`, with a +1% threshold.
+A cell that completed in the baseline but now fails, times out, or hits its cap
+also regresses. Missing counters fail the measured cell; legacy successful
+results without counters are rejected. Wall/CPU time, RSS, intervals and phases
+remain descriptive in `report` and never influence this cross-session verdict.
+`compare` exits 1 on a regression and 2 on unusable input.
 
-| tracked metric | threshold | floor |
-|---|---:|---:|
-| wall time (`wall_s`) | +10% | 0.05 s |
-| CPU time (`cpu_s`) | +10% | 0.05 s |
-| peak RSS (`rss_mib`) | +10% | 16 MiB |
-| each interval and phase below | +15% | 0.05 s |
+Every compile is pinned to `--cpu` (31 by default), under
+`perf stat -e task-clock,cycles,instructions,cycles:u,instructions:u`. The whole
+suite holds CPU31's timing lock (other CPUs use a per-CPU lock in `/tmp`).
+Cargo job counts select parallel jobs; all their threads share the pinned CPU. Each compile still gets its own capped slot.
+Counters include compiler child processes (including rustc and the linker).
+
+The following interval and phase names remain documented for attribution:
 
 | interval | driver step |
 |---|---|
@@ -171,15 +170,25 @@ the baseline but not now (`failed`, `cap`, `timeout`) is a regression too.
 | `codegen` | LLVM or Cranelift code generation |
 | `store lookup` | code-store lookups |
 
-The thresholds are wider than the noise of a quiet host, so that a busy shared
-host does not raise false alarms. The suite is for catching big regressions. To
-evaluate one change, run the affected cells before and after with `--repeat 5`
-on a quiet host.
+The instruction threshold exceeds the audit's 0.024% within-session range for
+`hirsel check todo-api`. Shared-host wall time can drift by 140% between
+sessions; use `bench/micro/run` with old/new compiler commands in one interleaved
+session when descriptive timing ratios are needed.
 
 The baseline is the result of an explicit manual run on main, on the same
 host. `run-main` records the first run as
 `$HIRSEL_MAIN_RUNS/compiler-bench/baseline.json`; later manual runs compare
 with it. A committed `tools/compiler-bench/baseline.json` takes precedence.
+Reproduce the initial selection with:
+
+```sh
+tools/compiler-bench/run --toolchain <bundle> --groups examples --modes check --jobs 1 --cpu 30 --output baseline.json
+```
+
+The committed first baseline covers the seven example programs in Hirsel and
+Rust `check` mode at one job (three runs each), on CPU30; its `selection` records the exact scope. It is
+an initial count baseline, not coverage of all backend/stress/scale cells.
+
 After a change that intends to move the numbers, replace the baseline with
 the next manual run's result (copy `latest.json` over it).
 

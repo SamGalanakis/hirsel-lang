@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Run a JSON list of participants interleaved; instructions are the verdict."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import sys
+import time
+import uuid
+
+from measure import comparisons, cross_session, sample, schedule, timing_lock
+
+
+def participants(path):
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, list) or len(data) < 2:
+        raise ValueError('participants must be a JSON list with at least two entries')
+    names = set()
+    for p in data:
+        if not isinstance(p, dict) or not isinstance(p.get('name'), str) or not p['name'] or p['name'] in names:
+            raise ValueError('each participant needs a unique nonempty name')
+        names.add(p['name'])
+        cmd = p.get('command')
+        if not isinstance(cmd, list) or not cmd or not all(isinstance(s, str) for s in cmd):
+            raise ValueError(f"{p['name']}: command must be an argv list")
+        cwd = Path(p.get('cwd', Path.cwd())).resolve()
+        p['cwd'] = str(cwd)
+        executable = shutil.which(cmd[0]) if '/' not in cmd[0] else str(cwd / cmd[0])
+        if not executable or not os.access(executable, os.X_OK):
+            raise ValueError(f'{cmd[0]}: executable not found')
+        cmd[0] = str(Path(executable).resolve())
+        with open(cmd[0], 'rb') as binary:
+            p['binary_sha256'] = hashlib.file_digest(binary, 'sha256').hexdigest()
+        if 'stdin' in p:
+            p['stdin'] = str((cwd / p['stdin']).resolve())
+            with open(p['stdin'], 'rb') as source:
+                p['stdin_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
+    return data
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('participants', help='JSON list: [{"name": "rust", "command": ["/path/exe", "arg"]}, ...]')
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--reference', help='denominator (default: first participant)')
+    parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--cpu', type=int, default=31)
+    parser.add_argument('--timeout', type=int, default=300)
+    parser.add_argument('--compare', type=Path, help='saved session: compare instructions only; times are refused')
+    args = parser.parse_args()
+    result = None
+    try:
+        if args.rounds < 2 or args.timeout < 1 or args.timeout > 900:
+            raise ValueError('need at least two rounds and a timeout in 1..900 seconds')
+        if args.cpu not in os.sched_getaffinity(0):
+            raise ValueError(f'CPU {args.cpu} is not available')
+        entries = participants(args.participants)
+        reference = args.reference or entries[0]['name']
+        if reference not in {p['name'] for p in entries}:
+            raise ValueError(f'unknown reference: {reference}')
+        previous = json.loads(args.compare.read_text()) if args.compare else None
+        if previous and (previous.get('schema') != 1 or previous.get('suite') != 'micro'
+                         or previous.get('status') != 'ok'):
+            raise ValueError('comparison requires a schema-1 micro session')
+        result = {'schema': 1, 'suite': 'micro', 'session': str(uuid.uuid4()),
+                  'started': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                  'host': socket.gethostname(), 'cpu': args.cpu, 'seed': args.seed,
+                  'rounds': args.rounds, 'participants': entries, 'reference': reference, 'samples': [], 'status': 'running'}
+        by_name = {p['name']: p for p in entries}
+        with timing_lock(args.cpu):
+            for round_number, name in schedule(by_name, args.rounds, args.seed):
+                print(f'round {round_number + 1}/{args.rounds}: {name}', file=sys.stderr, flush=True)
+                measured = sample(by_name[name], args.cpu, args.timeout)
+                measured.update(round=round_number, name=name)
+                result['samples'].append(measured)
+        # A checksum disagreement is a correctness failure, never a fast result.
+        if len({s['stdout_sha256'] for s in result['samples']}) != 1:
+            raise ValueError('participant outputs differ (stdout SHA-256); refusing verdict')
+        result['comparisons'] = comparisons(result, reference)
+        if previous:
+            result['cross_session_instructions'] = cross_session(result, previous)
+        result['status'] = 'ok'
+        args.output.write_text(json.dumps(result, indent=2) + '\n')
+        print(f"session {result['session']}; ratios to {reference}; instructions are the verdict")
+        print(f"{'participant':24} {'insn':>9} {'insn:u':>9} {'cycles':>9} {'IPC':>7} {'IPC:u':>7} {'task-clock [95% CI]':>30}")
+        for row in result['comparisons']:
+            lo, hi = row['task-clock_ratio_ci95']
+            print(f"{row['name']:24} {row['instructions_ratio']:9.3f} {row['instructions:u_ratio']:9.3f} "
+                  f"{row['cycles_ratio']:9.3f} {row['ipc']:7.3f} {row['ipc:u']:7.3f} "
+                  f"{row['task-clock_ratio']:9.3f} [{lo:.3f}, {hi:.3f}]")
+        if previous:
+            print('Saved-session comparison: instructions only; cross-session time/cycles comparisons refused.')
+            for row in result['cross_session_instructions']:
+                print(f"  {row['name']} {row['metric']}: {row['ratio']:.3f}x")
+        print(f'{args.output}; CI describes within-session jitter only; sibling load is recorded, no samples excluded.')
+        return 0
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        if result is not None:
+            result.update(status='failed', error=str(error))
+            result.pop('comparisons', None)
+            result.pop('cross_session_instructions', None)
+            try:
+                args.output.write_text(json.dumps(result, indent=2) + '\n')
+            except OSError:
+                pass
+        print(f'micro: {error}', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())
