@@ -42,7 +42,7 @@ impl Reference {
     fn raw_call(
         &mut self,
         name: &str,
-        arguments: Vec<Value>,
+        mut arguments: Vec<Value>,
         bounded: bool,
     ) -> Result<OperationResult, hirsel_interp::Error> {
         let mut types = hirsel_types::TypeStore::default();
@@ -68,7 +68,7 @@ impl Reference {
                     runtime: &Default::default(),
                     path: &path,
                     generics: &[],
-                    arguments: &arguments,
+                    arguments: &mut arguments,
                     result_type,
                     types: &types,
                     site: Span::default(),
@@ -1218,6 +1218,7 @@ fn precedence_process_matrix() {
         args: vec![],
         directory: None,
         env: None,
+        own_group: false,
     };
     let mut count = 0;
     for kind in 0..8 {

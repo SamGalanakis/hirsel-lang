@@ -48,6 +48,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         program: text.clone(),
         directory: (n % 2 != 0).then_some(n),
         args: vec![String::new(), text.clone()],
+        own_group: n & 2 != 0,
         env: if n % 2 == 0 {
             None
         } else {
