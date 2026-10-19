@@ -543,6 +543,8 @@ def push_gate(base_ref, tokens, why, extend):
         if not report.passed:
             say('gate: the floor failed (formatting, the build files, the build, Clippy or a local check); '
                 'no slot taken and no test ran')
+        elif not plan.tests and not plan.campaign_targets():
+            say(f'gate: no Buck2 test to run; the floor passed in {floor_seconds:.0f} s, so no slot is taken')
         else:
             pool = plan.slot_pool()
             say(f'gate: pool: {pool}; the floor passed in {floor_seconds:.0f} s')
