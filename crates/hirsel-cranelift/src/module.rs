@@ -187,7 +187,7 @@ pub(crate) struct Emitter<'a> {
     debug_functions: Vec<crate::dwarf::DebugFunction>,
 }
 
-fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
+pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
     let refuse = |message: String| CodegenError::Target {
         triple: target.triple.clone(),
         message,
@@ -352,9 +352,7 @@ pub(crate) fn emit(
     } = emitter;
     let mut product = module.finish();
     crate::dwarf::write(&mut product, debug_functions)?;
-    let bytes = product.emit().map_err(|e| CodegenError::Object {
-        message: e.to_string(),
-    })?;
+    let bytes = crate::object::finish(product)?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
     artifact(file, manifested, units, inputs, crate::TOOLCHAIN)
@@ -371,6 +369,40 @@ fn thunk_signature(entry: &ir::Signature, caller_site: bool) -> ir::Signature {
             .splice(2..2, [AbiParam::new(types::I64), AbiParam::new(types::I64)]);
     }
     sig
+}
+
+/// Hirsel units and glue bind in this link output. Images must keep their
+/// symbols non-preemptible (`local:` units and `-Bsymbolic`), as shipped links do.
+/// Runtime, foreign and backend-introduced toolchain imports keep GOT indirection.
+pub(crate) fn colocate_hirsel_symbols(
+    module: &ObjectModule,
+    manifested: &Manifested,
+    function: &mut ir::Function,
+) {
+    for (_, reference) in function.stencil.dfg.ext_funcs.iter_mut() {
+        let ir::ExternalName::User(user) = reference.name else {
+            continue;
+        };
+        let user = &function.params.user_named_funcs()[user];
+        if user.namespace != 0 {
+            continue;
+        }
+        let declaration = module
+            .declarations()
+            .get_function_decl(FuncId::from_u32(user.index));
+        let Some(name) = declaration.name.as_deref() else {
+            continue;
+        };
+        let hirsel = manifested
+            .imports
+            .get(name)
+            .or_else(|| manifested.exports.get(name))
+            .is_some_and(|symbol| symbol.kind == ObjectSymbolKind::Function)
+            || manifested.library.contains(name);
+        if hirsel {
+            reference.colocated = true;
+        }
+    }
 }
 
 impl<'a> Emitter<'a> {
@@ -499,6 +531,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn compile(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
+        colocate_hirsel_symbols(&self.module, &self.manifested, &mut context.func);
         if let Some(text) = &mut self.clif {
             text.push_str(&format!("; {name}\n{}\n", context.func.display()));
         }
@@ -776,6 +809,8 @@ pub fn named_launch_object(
             args.push(b.ins().iadd_imm_s(params[3], (word * 8) as i64));
         }
         let callee = module.declare_func_in_func(entry_id, b.func);
+        // Units and glue bind in this executable/image, independently of partition.
+        b.func.dfg.ext_funcs[callee].colocated = true;
         let call = b.ins().call(callee, &args);
         let status = b.inst_results(call)[0];
         let (returned, reported, done) = (b.create_block(), b.create_block(), b.create_block());
@@ -896,9 +931,7 @@ pub fn named_launch_object(
     module
         .define_function(main_id, &mut context)
         .map_err(refuse("main"))?;
-    module.finish().emit().map_err(|e| CodegenError::Object {
-        message: e.to_string(),
-    })
+    crate::object::finish(module.finish())
 }
 
 /// The exit report's view nodes as private constants; the root node's id.

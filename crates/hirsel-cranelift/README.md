@@ -18,6 +18,13 @@ Interface:
   is Cranelift's `none`, every other level its `speed`. The artifact names `TOOLCHAIN`
   (`cranelift 0.136.3`) in its reproducibility record, and the driver links the
   objects of that toolchain with a launcher this crate emits too.
+- Hirsel unit and glue calls use direct PC-relative references across objects.
+  This requires image symbols to remain non-preemptible (`local:` units and
+  `-Bsymbolic`). Runtime, toolchain and foreign imports retain GOT indirection.
+- The one canonical ELF stream validates x86 RIP-relative GOT load and indirect
+  call/jump encodings before marking them `REX_GOTPCRELX`/`GOTPCRELX`. lld can
+  relax references that bind locally; all artifact and launcher consumers receive
+  those same bytes. Other references retain their original relocation.
 - `emit_clif`: the same emission, returning every function's Cranelift IR as text.
 - `launch_object(target, entry, root_words, report, launcher, arguments)`: the launcher
   object, `main` and the `hirsel.entry` adapter with its PROG-3 exit report

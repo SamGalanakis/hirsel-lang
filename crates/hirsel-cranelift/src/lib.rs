@@ -21,6 +21,7 @@ mod foreign;
 mod function;
 mod instructions;
 mod module;
+mod object;
 mod places;
 mod scalar;
 mod soa;
