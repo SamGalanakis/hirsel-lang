@@ -418,11 +418,11 @@ def green_records(root=ROOT) -> dict:
         return {}
 
 
-def record_green(identity, crates, root=ROOT, **record):
-    """Remember a passed change: its crates, when, and what the gate ran
-    (`selection`, `why`, `floor`) with the per-path digests `--extend` compares."""
+def record_gate(identity, crates, root=ROOT, *, passed=True, **record):
+    """Save a gate receipt, including partial results that never authorize land."""
     records = green_records(root)
-    records[identity] = dict(record, crates=sorted(crates), at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+    records[identity] = dict(record, passed=passed, crates=sorted(crates),
+                             at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
     path = green_path(root)
     temporary = path.with_name(path.name + f'.{os.getpid()}')
     temporary.write_text(json.dumps(records, indent=1, sort_keys=True) + '\n')
@@ -431,7 +431,8 @@ def record_green(identity, crates, root=ROOT, **record):
 
 def latest_green(root=ROOT):
     """The most recently recorded passed change of this worktree: (identity, record)."""
-    records = [(record.get('at', ''), identity, record) for identity, record in green_records(root).items()]
+    records = [(record.get('at', ''), identity, record) for identity, record in green_records(root).items()
+               if record.get('passed', True)]
     return max(records)[1:] if records else (None, None)
 
 
@@ -463,7 +464,8 @@ def changed_since(record, digests) -> list[str]:
 
 def is_green(identity, crates, root=ROOT) -> bool:
     record = green_records(root).get(identity)
-    return bool(identity) and record is not None and record['crates'] == sorted(crates)
+    return (bool(identity) and record is not None and record.get('passed', True)
+            and record['crates'] == sorted(crates))
 
 
 # ---------------------------------------------------------------- workspace

@@ -38,6 +38,10 @@ suite on a schedule: per-push selection and its floor are the routine net, and
 `--extend` adds an edit to a change that already passed: it runs the floor of
 the paths whose change differs from the last recorded pass, the test targets
 that own them and any `--tests`, and records the edited change's identity.
+For an identical change whose gate failed, it resumes that gate's selection,
+rerunning local checks and only Buck2 targets without a recorded pass. Target
+results are reusable only with the same change identity and campaign settings;
+a partial receipt never authorizes tools/land.
 
 `$HIRSEL_GATE_SLOTS` (`dir:N`) selects a host's slot directory. Its `count`
 file caps normal gates; N seeds it only when absent. A settled selection with
@@ -326,28 +330,37 @@ def build_first(report, log):
     return report.passed
 
 
-def run_plan(report, plan, log):
+def run_plan(report, plan, log, previous=None):
     """The floor's tests and the chosen ones, as one Buck2 invocation."""
     tests = sorted(plan.tests)
     campaigns = plan.campaign_targets()
-    if not tests and not campaigns:
-        return
-    say(f'gate: one Buck2 invocation: {len(tests)} test targets, {len(campaigns)} campaign targets')
-    say(f'gate: Buck2 output: {log}')
-    with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
-        build_report = Path(scratch) / 'build.json'
-        with open(log, 'a') as out:
-            invoked = time.monotonic()
-            status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
-                                  *tests, *campaigns, '--', '--timeout', str(gating.TIMEOUT),
-                                  stdout=out, stderr=subprocess.STDOUT).returncode
-        wall = time.monotonic() - invoked
-        results = gating.test_results(event_log) if event_log.exists() else {}
-        failures = gating.build_failures(build_report)
-    for target, error in sorted(failures.items()):
-        report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
-                                                         f'.buck2/bin/buck2 build //:{target}'])
-    say(f'gate: tests finished ({wall:.0f} s)')
+    targets = tests + campaigns
+    names = {gating.short(t) for t in targets}
+    # The caller supplies results only for the same change identity and settings.
+    # Campaign output stays available for the aggregate count/agreement checks.
+    results = {name: result for name, result in (previous or {}).items()
+               if result['status'] == gating.PASS and name in names}
+    pending = [t for t in targets if gating.short(t) not in results]
+    if results:
+        say(f'gate: reusing {len(results)} passed targets for this change')
+    status = 0
+    if pending:
+        say(f'gate: one Buck2 invocation: {len(pending)} pending targets')
+        say(f'gate: Buck2 output: {log}')
+        with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
+            build_report = Path(scratch) / 'build.json'
+            with open(log, 'a') as out:
+                invoked = time.monotonic()
+                status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
+                                      *pending, '--', '--timeout', str(gating.TIMEOUT),
+                                      stdout=out, stderr=subprocess.STDOUT).returncode
+            wall = time.monotonic() - invoked
+            results.update(gating.test_results(event_log) if event_log.exists() else {})
+            failures = gating.build_failures(build_report)
+        for target, error in sorted(failures.items()):
+            report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
+                                                             f'.buck2/bin/buck2 build //:{target}'])
+        say(f'gate: tests finished ({wall:.0f} s)')
     for campaign, name, summarize in ((impact.CONFORMANCE, 'conformance', conformance_summary),
                                       (impact.AGREEMENT, f'agreement ({agree.AGREE_LIMIT} variants)', agreement_summary),
                                       (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
@@ -366,6 +379,7 @@ def run_plan(report, plan, log):
     test_rows(report, results, tests)
     if status and report.passed:
         report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+    return results
 
 
 def push_gate(base_ref, tokens, why, extend):
@@ -398,7 +412,15 @@ def push_gate(base_ref, tokens, why, extend):
         return 0 if report.passed else 1
     digests = gating.path_digests(base)
     extended = None
-    if extend:
+    resumed = gating.green_records().get(identity) if extend else None
+    if resumed is not None and resumed.get('crates') != sorted(selection.crates):
+        resumed = None
+    if resumed is not None:
+        say('gate: resuming the recorded targets for this change; local checks run again')
+        tokens = list(dict.fromkeys(resumed.get('tokens', []) + list(tokens)))
+        scope = gating.Selection(base, paths=resumed.get('paths', selection.paths))
+        extended = resumed.get('extends')
+    elif extend:
         extended, record = gating.latest_green()
         if record is None or 'digests' not in record:
             say('gate: --extend needs a change this worktree passed; run tools/gate --tests ... --why ...')
@@ -424,13 +446,14 @@ def push_gate(base_ref, tokens, why, extend):
     needs_buck2 = c.needs_buck2 or bool(tokens) or c.everything
     plan = floor = None
     pool = 'none'
+    target_results = {}
     if needs_buck2:
         if not prepare(report):
             local_rows(report, local.finish())
             report.print(time.monotonic() - started)
             return 1
         floor = scope.floor()
-        if extend and c.owned:
+        if extended and c.owned:
             # The test targets that own each differing file, beside the floor's.
             files = gating.owned_paths(c.owned)
             if files:
@@ -453,27 +476,33 @@ def push_gate(base_ref, tokens, why, extend):
         say(f'gate: pool: {pool}')
         gating.stop_daemons()
         with gating.gate_slot(pool=pool):
+            if resumed is not None and resumed.get('config', []) == plan.config():
+                target_results = resumed.get('target_results', {})
             if build_first(report, log):
-                run_plan(report, plan, log)
+                target_results = run_plan(report, plan, log, target_results)
             else:
                 say('gate: formatting, Clippy or the workspace build failed; no test ran')
     local_rows(report, local.finish())
     report.print(time.monotonic() - started)
-    if not report.passed:
-        return 1
     if gating.change_identity(base) == identity:
         ran = plan.summary() if plan else []
         floored = floor.summary() if floor else []
-        if extend:
+        if extended and resumed is None:
             # The extended change keeps what its first pass ran.
             ran = record.get('selection', []) + [part for part in ran if part not in record.get('selection', [])]
             floored = record.get('floor', []) + [part for part in floored if part not in record.get('floor', [])]
             why = f'{why} (extending: {record.get("why", "")})'
-        gating.record_green(identity, selection.crates, why=why, tokens=list(tokens), selection=ran, floor=floored,
-                            digests=digests, extends=extended, pool=pool)
+        if resumed is not None:
+            ran = list(dict.fromkeys(resumed.get('selection', []) + ran))
+            floored = list(dict.fromkeys(resumed.get('floor', []) + floored))
+            extended = resumed.get('extends')
+            why = f'{why} (resuming: {resumed.get("why", "")})'
+        gating.record_gate(identity, selection.crates, passed=report.passed, why=why, tokens=list(tokens),
+                           selection=ran, floor=floored, digests=digests, extends=extended, pool=pool,
+                           paths=scope.paths, target_results=target_results, config=plan.config() if plan else [])
     else:
-        say('gate: the worktree changed while the gate ran; not recording it as passed')
-    return 0
+        say('gate: the worktree changed while the gate ran; not recording its results')
+    return 0 if report.passed else 1
 
 
 # ---------------------------------------------------------------- full
@@ -577,7 +606,7 @@ def main():
     parser.add_argument('--suggest', action='store_true', help='print the floor and what the change can affect; run nothing')
     parser.add_argument('--tests', nargs='+', default=[], metavar='TEST', help='what to run beyond the floor (forms above)')
     parser.add_argument('--why', help='one line: why this selection suffices')
-    parser.add_argument('--extend', action='store_true', help='add an edit to the last passed change')
+    parser.add_argument('--extend', action='store_true', help='resume a failed gate or add an edit to the last passed change')
     counts = parser.add_mutually_exclusive_group()
     counts.add_argument('--set-slots', type=int, metavar='N', help='set the normal pool count; run no checks')
     counts.add_argument('--set-express-slots', type=int, metavar='N', help='set the express pool count; run no checks')

@@ -784,7 +784,7 @@ class Identity(unittest.TestCase):
     def test_a_green_record_names_the_identity_and_its_crates(self):
         identity = self.identity()
         self.assertFalse(gating.is_green(identity, {'hirsel-lexer'}, self.root))
-        gating.record_green(identity, {'hirsel-lexer'}, self.root)
+        gating.record_gate(identity, {'hirsel-lexer'}, self.root)
         self.assertTrue(gating.is_green(identity, {'hirsel-lexer'}, self.root))
         self.assertFalse(gating.is_green(identity, {'hirsel-llvm'}, self.root))
         self.assertFalse(gating.is_green('', set(), self.root))
@@ -1234,8 +1234,9 @@ fi
 if [[ $1 == test && -n $log ]]; then
   for argument in "$@"; do
     [[ $argument == -- ]] && break
+    [[ $argument == "${OMIT_TARGET:-}" ]] && continue
     [[ $argument == root//* ]] && printf '{"Event":{"data":{"Instant":{"data":{"TestResult":{"name":"%s","status":%s,"details":"%s","duration_us":1000}}}}}}\\n' \\
-      "$argument" "$( [[ -n ${FAIL_TESTS:-} ]] && echo 2 || echo 1 )" "$details" >> "$log.results"
+      "$argument" "$( [[ -n ${FAIL_TESTS:-} || $argument == "${FAIL_TARGET:-}" ]] && echo 2 || echo 1 )" "$details" >> "$log.results"
   done
 fi
 case $1 in
@@ -1775,7 +1776,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         commit(self.root, {'docs/grammar.md': 'grammar, revised\n'}, 'Grammar')
         # docs/grammar.md is a compile input (BUCK names it): this reaches Buck2.
         identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
-        gating.record_green(identity, set(), self.root)
+        gating.record_gate(identity, set(), self.root)
         self.sibling_pushes({'LICENSE': 'MIT\n'})
         git(self.root, 'pull', '-q', '--rebase')
         result, logged = self.run_tool('gate', '--why', 'scratch change')
@@ -1817,6 +1818,93 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('conformance: the whole campaign', result.stdout)
         self.assertIn('agreement: the whole campaign', result.stdout)
         self.assertFalse(any(c.startswith(('build', 'test')) for c in logged), logged)
+
+    def test_extend_reuses_targets_after_a_local_failure_but_land_refuses_red(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus and local checks',
+                                  env={'FAIL_IGNORED': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
+        record = gating.green_records(self.root)[identity]
+        self.assertFalse(gating.is_green(identity, set(), self.root))
+        self.assertEqual(record['target_results']['gate-conformance-shard-16']['status'], gating.PASS)
+        self.assertEqual(gating.latest_green(self.root), (None, None))
+        self.assertEqual(self.run_tool('land')[0].returncode, 1)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'local check fixed')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        self.assertIn('ignored_tests.py', logged)
+        record = gating.green_records(self.root)[identity]
+        self.assertTrue(gating.is_green(identity, set(), self.root))
+        self.assertIn('conformance', record['selection'])
+        self.assertIn('corpus and local checks', record['why'])
+        self.assertEqual(self.run_tool('land')[0].returncode, 0)
+
+    def test_extend_reruns_failed_and_missing_targets_and_preserves_campaign_summary(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus', env={
+            'FAIL_TARGET': 'root//:gate-conformance-shard-3',
+            'OMIT_TARGET': 'root//:gate-conformance-shard-7',
+        })
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'retry failures')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [test] = [c for c in logged if c.startswith('test ')]
+        self.assertEqual([word for word in test.split() if word.startswith('root//')],
+                         ['root//:gate-conformance-shard-3', 'root//:gate-conformance-shard-7'])
+        self.assertIn('16 validated / 16 passing', result.stdout)
+
+    def test_partial_results_never_reuse_a_changed_source(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus',
+                                  env={'FAIL_IGNORED': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn changed() {}\n'}, 'Edit')
+        result, logged = self.run_tool('gate', '--tests', 'conformance', '--why', 'changed source')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [test] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:gate-conformance-shard-16', test)
+        self.assertIn('root//:a', test)
+
+    def test_partial_results_never_reuse_changed_campaign_settings(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'native:README.md', '--why', 'first program',
+                                  env={'FAIL_IGNORED': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        result, logged = self.run_tool('gate', '--extend', '--tests', 'native:docs/grammar.md',
+                                       '--why', 'second program')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [test] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:gate-native-changed', test)
+        self.assertIn('root//:gate-native-cranelift-changed', test)
+        self.assertNotIn('reusing', result.stdout)
+
+    def test_a_build_failure_during_resume_keeps_passed_target_results(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus',
+                                  env={'FAIL_IGNORED': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        result, _ = self.run_tool('gate', '--extend', '--why', 'build failed', env={'FAIL_BUILD': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'local fixed')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+
+    def test_resuming_a_failed_extension_keeps_its_scope_and_inherited_selection(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'initial selection')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        changed = 'crates/hirsel-lexer/tests/it/keywords.rs'
+        commit(self.root, {changed: '#[test]\nfn k() {}\n'}, 'Edit')
+        result, _ = self.run_tool('gate', '--extend', '--why', 'extension', env={'FAIL_IGNORED': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        result, logged = self.run_tool('gate', '--extend', '--why', 'local fixed')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
+        _, record = gating.latest_green(self.root)
+        self.assertEqual(record['paths'], [changed])
+        self.assertIn('conformance', record['selection'])
+        self.assertIsNotNone(record['extends'])
 
     def test_extend_runs_the_edits_floor_and_land_accepts_the_new_identity(self):
         result, _ = self.run_tool('gate', '--extend', '--why', 'scratch change')
