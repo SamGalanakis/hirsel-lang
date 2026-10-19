@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "tasks",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "model.hir",
+      "module": [
+        "model"
+      ]
+    },
+    {
+      "path": "store.hir",
+      "module": [
+        "store"
+      ]
+    },
+    {
+      "path": "html.hir",
+      "module": [
+        "html"
+      ]
+    },
+    {
+      "path": "httpd.hir",
+      "module": [
+        "httpd"
+      ]
+    },
+    {
+      "path": "hub.hir",
+      "module": [
+        "hub"
+      ]
+    },
+    {
+      "path": "view.hir",
+      "module": [
+        "view"
+      ]
+    },
+    {
+      "path": "app.hir",
+      "module": [
+        "app"
+      ]
+    },
+    {
+      "path": "model_test.hir",
+      "module": [
+        "model"
+      ]
+    },
+    {
+      "path": "store_test.hir",
+      "module": [
+        "store"
+      ]
+    },
+    {
+      "path": "httpd_test.hir",
+      "module": [
+        "httpd"
+      ]
+    },
+    {
+      "path": "view_test.hir",
+      "module": [
+        "view"
+      ]
+    },
+    {
+      "path": "app_test.hir",
+      "module": [
+        "app"
+      ]
+    },
+    {
+      "path": "main_test.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../packages/datastar@1/hirsel.json",
+      "package": {
+        "name": "datastar",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "datastar",
+          "module": [
+            "datastar"
+          ]
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

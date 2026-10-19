@@ -1717,13 +1717,18 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
 
 fn check_example_tests(name: &str, source: &str, count: u64) {
     let fixture = Fixture::new(&name.replace('-', "_"), source);
+    check_package_tests(name, &fixture.0.join("hirsel.json"), count);
+}
+
+/// `hirsel test` on a package manifest, interpreted, with LLVM and with Cranelift.
+fn check_package_tests(name: &str, manifest: &std::path::Path, count: u64) {
     for backend in [None, Some("llvm"), Some("cranelift")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.args(["test", "--json"]);
         if let Some(backend) = backend {
             command.args(["--native", "--backend", backend]);
         }
-        let output = command.arg(fixture.0.join("hirsel.json")).output().unwrap();
+        let output = command.arg(manifest).output().unwrap();
         assert!(output.status.success(), "{name} {backend:?}: {output:?}");
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
@@ -1928,4 +1933,277 @@ fn unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends() 
         assert_eq!(replay.stdout, expected.as_bytes(), "{backend}");
         assert!(replay.stderr.is_empty());
     }
+}
+
+/// A package in this repository, by its manifest's path from the root.
+fn repository_manifest(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
+        .canonicalize()
+        .unwrap()
+}
+
+// Multi-file packages run in place: their manifests name siblings and dependencies by
+// relative path.
+#[test]
+fn datastar_package_tests() {
+    check_package_tests(
+        "datastar",
+        &repository_manifest("packages/datastar@1/hirsel.json"),
+        7,
+    );
+}
+
+#[test]
+fn datastar_api_reference_is_current() {
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("doc")
+        .arg(repository_manifest("packages/datastar@1/hirsel.json"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        include_str!("../../../packages/datastar@1/api.md"),
+        "regenerate with `hirsel doc packages/datastar@1/hirsel.json -o packages/datastar@1/api.md`"
+    );
+}
+
+#[test]
+fn tasks_package_tests() {
+    check_package_tests(
+        "tasks",
+        &repository_manifest("examples/tasks/hirsel.json"),
+        22,
+    );
+}
+
+/// A process whose stdout is read line by line on a thread, killed if still running
+/// when dropped.
+struct Running {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Running {
+    fn spawn(mut command: Command, stderr: &std::path::Path) -> Self {
+        use std::io::BufRead;
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::fs::File::create(stderr).unwrap())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { child, lines }
+    }
+
+    fn line(&self, what: &str) -> String {
+        self.lines
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .unwrap_or_else(|e| panic!("{what}: no line: {e}"))
+    }
+
+    /// Closes stdin and waits for the exit status.
+    fn finish(mut self, what: &str) -> std::process::ExitStatus {
+        drop(self.child.stdin.take());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what}: did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// examples/tasks over HTTP: the real server, interpreted or built with LLVM, driven
+/// by the Hirsel client in examples/tasks/e2e, which knows only the routes. The client
+/// runs its `first` phase, holds a stream open while the server stops on stdin EOF
+/// (`watch`), and runs `second` after a restart over the same data directory.
+fn tasks_end_to_end(native: bool) {
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-example-{}-{}-tasks-e2e",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let server = repository_manifest("examples/tasks/hirsel.json");
+    let client = repository_manifest("examples/tasks/e2e/hirsel.json");
+    // Built once each, then launched directly; interpreted runs go through `hirsel run`.
+    let built: Option<(PathBuf, PathBuf)> = native.then(|| {
+        for (manifest, exe) in [(&server, "tasks"), (&client, "tasks_e2e")] {
+            let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .args(["build", "--backend", "llvm"])
+                .arg(manifest)
+                .arg("-o")
+                .arg(dir.join(exe))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "build {exe}: {output:?}");
+        }
+        (dir.join("tasks"), dir.join("tasks_e2e"))
+    });
+    let launch =
+        |manifest: &PathBuf, exe: Option<&PathBuf>, grants: &serde_json::Value, args: &[&str]| {
+            let path = dir.join(format!(
+                "grants-{}.json",
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&path, grants.to_string()).unwrap();
+            let mut command = match exe {
+                Some(exe) => {
+                    let mut command = Command::new(exe);
+                    command.arg("--hirsel-grants").arg(&path);
+                    command
+                }
+                None => {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .arg(manifest)
+                        .arg("--grants")
+                        .arg(&path)
+                        .arg("--");
+                    command
+                }
+            };
+            command.args(args);
+            command
+        };
+    // Two free ports, held together so they differ: the restarted server cannot reuse
+    // the first one's port while its closed connections linger.
+    let listeners: Vec<_> = (0..2)
+        .map(|_| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap())
+        .collect();
+    let ports: Vec<String> = listeners
+        .iter()
+        .map(|l| l.local_addr().unwrap().port().to_string())
+        .collect();
+    drop(listeners);
+    let start = |port: &str| {
+        // No wall clock: due dates read as dates, and log lines carry no time.
+        let grants = serde_json::json!({
+            "io": {
+                "stdout": "stdout.bytes@1",
+                "stderr": "stderr.bytes@1",
+                "stdin": "stdin.bytes@1",
+                "tasks": "tasks.cooperative@1",
+                "dirs": [
+                    {"path": "data", "host": data.canonicalize().unwrap(), "access": "read_write"},
+                    {"path": "static", "host": repository_manifest("examples/tasks/static"), "access": "read"},
+                ],
+                "net": {"provider": "net.stream@1", "rules": [{"address": "127.0.0.1", "service": port, "operation": "listen"}]},
+            },
+            "args": [],
+            "env": {"TASKS_HOST": null, "TASKS_PORT": null, "TASKS_DURABILITY": null, "TASKS_LOG_LEVEL": null},
+        });
+        let command = launch(
+            &server,
+            built.as_ref().map(|b| &b.0),
+            &grants,
+            &["--port", port],
+        );
+        let running = Running::spawn(command, &dir.join(format!("server-{port}.log")));
+        assert_eq!(
+            running.line("server readiness"),
+            format!("listening on http://127.0.0.1:{port}/"),
+            "native={native}"
+        );
+        running
+    };
+    let client_command = |phase: &str, port: &str| {
+        let grants = serde_json::json!({
+            "io": {
+                "stdout": "stdout.bytes@1",
+                "dirs": [],
+                "net": {"provider": "net.stream@1", "rules": [{"address": "127.0.0.1", "service": port, "operation": "connect"}]},
+            },
+            "args": [],
+        });
+        launch(
+            &client,
+            built.as_ref().map(|b| &b.1),
+            &grants,
+            &[phase, port],
+        )
+    };
+    let run_client = |phase: &str, port: &str, expected: &str| {
+        let output = client_command(phase, port).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{phase} native={native}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "native={native}"
+        );
+    };
+    let snapshots = || {
+        let mut names: Vec<String> = std::fs::read_dir(&data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    };
+    let first = start(&ports[0]);
+    run_client("first", &ports[0], "ok: 96 checks\n");
+    let watching = Running::spawn(client_command("watch", &ports[0]), &dir.join("watch.log"));
+    assert_eq!(watching.line("watch"), "watching");
+    assert!(first.finish("first server").success(), "native={native}");
+    assert_eq!(watching.line("watch"), "ended");
+    assert_eq!(watching.line("watch"), "ok: 5 checks");
+    assert!(watching.finish("watch").success(), "native={native}");
+    // Each of the first run's seven changes saved a snapshot; all but two were removed.
+    assert_eq!(
+        snapshots(),
+        [
+            "board-00000000000000000006.json",
+            "board-00000000000000000007.json"
+        ]
+    );
+    let second = start(&ports[1]);
+    run_client("second", &ports[1], "ok: 14 checks\n");
+    assert!(second.finish("second server").success(), "native={native}");
+    assert_eq!(
+        snapshots(),
+        [
+            "board-00000000000000000007.json",
+            "board-00000000000000000008.json"
+        ]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn tasks_end_to_end_interpreted() {
+    tasks_end_to_end(false);
+}
+
+#[test]
+fn tasks_end_to_end_llvm() {
+    tasks_end_to_end(true);
 }

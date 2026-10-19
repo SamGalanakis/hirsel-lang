@@ -1,0 +1,338 @@
+// GAP: std http's ServerConnection cannot stream a response or hand its stream
+// over, so the app reads requests and writes responses on the raw stream itself.
+//
+// Requests are parsed by `http.parse_server_request` from a `bufio.Reader` that
+// keeps bytes after one request for the next (pipelining and keep-alive). Responses
+// carry a Content-Length; the event stream is started by `datastar.new_sse` on the
+// same stream instead.
+pub type Reply {
+  status: u16,
+  headers: List[http.Header],
+  body: Bytes,
+}
+
+pub type Limits {
+  head: u64,
+  body: u64,
+}
+
+/// What ended a connection before a request was read: the peer closed it cleanly
+/// (`Closed`), sent something that is not a request this server accepts
+/// (`Rejected` with the status to answer), or the stream failed.
+pub type ReadError = Closed | Rejected(u16) | Stream(NetError)
+
+pub fn reply(status: u16, content_type: String, take body: Bytes) -> Reply uses {} {
+  Reply(
+    status: status,
+    headers: [http.Header(name: "Content-Type", value: unique content_type)],
+    body: take body
+  )
+}
+
+pub fn empty(status: u16) -> Reply uses {} {
+  Reply(status: status, headers: [], body: b"")
+}
+
+pub fn text_reply(status: u16, message: String) -> Reply uses {} {
+  reply(status, "text/plain; charset=utf-8", unique string.as_bytes(message))
+}
+
+// GAP: std's server parser takes at most 16 headers and browsers send more, so the
+// head is parsed here with room for 64. Bodies need a Content-Length.
+fn slice_text(buf: Bytes, start: u64, end: u64) -> Result[String, u16] uses {} {
+  match string.from_bytes(unique bytes.slice(buf, start, end)) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error(400),
+  }
+}
+
+// A complete request at the start of `buf` and the bytes it used, `None()` when
+// more bytes are needed, or the status that rejects it.
+pub fn parse(buf: Bytes, limits: Limits) -> Result[
+  Option[(http.ServerRequest, u64)],
+  u16
+] uses {} {
+  let blank = http_wire.RawHeader(
+    name_start: 0,
+    name_end: 0,
+    value_start: 0,
+    value_end: 0
+  )
+  // GAP: Inline has no `[blank; 64]` repeat literal.
+  let mut raw: Inline[http_wire.RawHeader, 64] = [
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank,
+    blank
+  ]
+  let mut line = http_wire.RequestLine(
+    method_start: 0,
+    method_end: 0,
+    target_start: 0,
+    target_end: 0,
+    version: 0
+  )
+  let mut count: u64 = 0
+  let end = match http_wire.parse_request(buf, mut line, mut raw, mut count) {
+    Ok(Partial()) => {
+      if bytes.len(buf) >= limits.head {
+        return Error(431)
+      }
+      return Ok(None())
+    },
+    Ok(Complete(end)) => end,
+    Error(TooManyHeaders()) => return Error(431),
+    Error(_) => return Error(400),
+  }
+  if end > limits.head {
+    return Error(431)
+  }
+  let frame = match http_wire.framing(buf, line.version, raw, count) {
+    Ok(f) => f,
+    Error(_) => return Error(400),
+  }
+  if frame.chunked {
+    return Error(411)
+  }
+  let length = option.unwrap_or(frame.content_length, 0)
+  if length > limits.body {
+    return Error(413)
+  }
+  if bytes.len(buf) - end < length {
+    return Ok(None())
+  }
+  let mut headers: List[http.Header] = []
+  for i in 0u64..count {
+    list.push(
+      mut headers,
+      http.Header(
+        name: slice_text(buf, raw[i].name_start, raw[i].name_end)?,
+        value: slice_text(buf, raw[i].value_start, raw[i].value_end)?
+      )
+    )
+  }
+  let version: http.Version = if line.version == 0 {
+    Http10()
+  } else {
+    Http11()
+  }
+  let request = http.ServerRequest(
+    method: slice_text(buf, line.method_start, line.method_end)?,
+    target: slice_text(buf, line.target_start, line.target_end)?,
+    version: version,
+    headers: take headers,
+    body: unique bytes.slice(buf, end, end + length),
+    trailers: [],
+    keep_alive: frame.keep_alive
+  )
+  Ok(Some((take request, end + length)))
+}
+
+/// Reads the next request. Bytes already buffered are used first; reading stops at
+/// the end of one request, leaving any bytes after it in `reader`.
+pub fn read_request(
+  n: Net,
+  mut stream: Stream of n,
+  mut reader: bufio.Reader,
+  limits: Limits
+) -> Result[http.ServerRequest, ReadError] {
+  while true {
+    let buffered = bufio.contents(reader)
+    match parse(buffered, limits) {
+      Ok(Some((request, used))) => {
+        bufio.consume(mut reader, used)
+        return Ok(take request)
+      },
+      Ok(None()) => {},
+      Error(status) => return Error(Rejected(status)),
+    }
+    let count = match bufio.stream_read_more(n, mut stream, mut reader, 4096) {
+      Ok(c) => c,
+      Error(Source(e)) => return Error(Stream(e)),
+      Error(_) => return Error(Rejected(400)),
+    }
+    if count == 0 {
+      if bufio.buffered(reader) == 0 {
+        return Error(Closed())
+      }
+      return Error(Rejected(400))
+    }
+  }
+  Error(Closed())
+}
+
+pub fn reason(status: u16) -> String uses {} {
+  if status == 200 {
+    "OK"
+  } else if status == 201 {
+    "Created"
+  } else if status == 204 {
+    "No Content"
+  } else if status == 304 {
+    "Not Modified"
+  } else if status == 400 {
+    "Bad Request"
+  } else if status == 404 {
+    "Not Found"
+  } else if status == 405 {
+    "Method Not Allowed"
+  } else if status == 411 {
+    "Length Required"
+  } else if status == 413 {
+    "Content Too Large"
+  } else if status == 415 {
+    "Unsupported Media Type"
+  } else if status == 422 {
+    "Unprocessable Content"
+  } else if status == 431 {
+    "Request Header Fields Too Large"
+  } else if status == 500 {
+    "Internal Server Error"
+  } else if status == 503 {
+    "Service Unavailable"
+  } else {
+    ""
+  }
+}
+
+/// The response's bytes: status line, headers, framing and, unless it answers a
+/// HEAD request, the body. A 204 or 304 has no body and no Content-Length.
+pub fn encode(response: Reply, keep_alive: bool, head: bool) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, f"HTTP/1.1 {response.status} {reason(response.status)}\r\n")
+  for h in response.headers {
+    text.append(mut out, f"{h.name}: {h.value}\r\n")
+  }
+  if response.status != 204 && response.status != 304 {
+    text.append(mut out, f"Content-Length: {bytes.len(response.body)}\r\n")
+  }
+  if keep_alive {
+    text.append(mut out, "Connection: keep-alive\r\n\r\n")
+  } else {
+    text.append(mut out, "Connection: close\r\n\r\n")
+  }
+  if !head && response.status != 204 && response.status != 304 {
+    for b in response.body {
+      list.push(mut out, b)
+    }
+  }
+  bytes.from_list(take out)
+}
+
+pub fn write_reply(
+  n: Net,
+  mut stream: Stream of n,
+  response: Reply,
+  keep_alive: bool,
+  head: bool
+) -> Result[(), NetError] {
+  net.write_all(n, mut stream, encode(response, keep_alive, head))
+}
+
+/// The request path without its query.
+pub fn route_path(request: http.ServerRequest) -> String in request uses {} {
+  match string.split_once(request.target, "?") {
+    Some((p, _)) => p,
+    None() => request.target,
+  }
+}
+
+/// The decoded query parameters of the request target; malformed queries give none.
+pub fn query(request: http.ServerRequest) -> unique List[(unique String, unique String)] uses {} {
+  let Some((_, raw)) = string.split_once(request.target, "?") else {
+    return []
+  }
+  match uri.query_pairs(raw) {
+    Ok(pairs) => take pairs,
+    Error(_) => [],
+  }
+}
+
+/// The first value of query parameter `name`.
+pub fn param(pairs: List[(String, String)], name: String) -> Option[String] uses {} {
+  for (key, value) in pairs {
+    if key == name {
+      return Some(unique value)
+    }
+  }
+  None()
+}
+
+/// The fields of an `application/x-www-form-urlencoded` body.
+pub fn form(request: http.ServerRequest) -> Result[
+  unique List[(unique String, unique String)],
+  u16
+] uses {} {
+  let media = option.unwrap_or(http.header(request.headers, "content-type"), "")
+  if !string.starts_with(string.ascii_lower(media), "application/x-www-form-urlencoded") {
+    return Error(415)
+  }
+  let body = match string.from_bytes(unique request.body) {
+    Ok(text) => take text,
+    Error(_) => return Error(400),
+  }
+  match uri.query_pairs(body) {
+    Ok(pairs) => Ok(take pairs),
+    Error(_) => Error(400),
+  }
+}

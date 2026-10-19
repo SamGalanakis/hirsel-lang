@@ -131,6 +131,8 @@ RUNTIME_DATA = {
 # every test whose harness it changes.
 TEST_DATA = {
     "hirsel-cli-test-cli": ["docs/spec/core-library.md", "docs/spec/std-library.md"],
+    # The tasks example's package tests and end-to-end driver run in place.
+    "hirsel-cli-test-examples": ["examples/tasks/**"],
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
     # Relative spec links reach generated documentation outside docs/spec.

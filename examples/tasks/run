@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Usage: ./run [port] [hirsel run options]. Serves on 127.0.0.1 (default 8080) and keeps
+# its snapshots in ./data. Type `quit` or press Ctrl-D to stop it gracefully.
+set -euo pipefail
+cd "$(dirname "$0")"
+port="${1:-8080}"
+shift || true
+mkdir -p data
+# Bind this launch's data and static directories and its listen port.
+python3 - "$port" <<'PY'
+import json, os, sys
+from pathlib import Path
+port = sys.argv[1]
+grants = json.loads(Path('grants.json').read_text())
+for d in grants['io']['dirs']:
+    d['host'] = str(Path(d['host']).resolve())
+grants['io']['net']['rules'][0]['service'] = port
+grants['args'] = ['--port', port]
+for key in grants['env']:
+    grants['env'][key] = os.environ.get(key)
+Path('data/grants.json').write_text(json.dumps(grants))
+PY
+exec hirsel run "$@" hirsel.json --grants data/grants.json

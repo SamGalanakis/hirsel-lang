@@ -1,0 +1,93 @@
+fn request_of(method: String, target: String) -> http.ServerRequest uses {} {
+  http.ServerRequest(
+    method: unique method,
+    target: unique target,
+    version: Http11(),
+    headers: [],
+    body: b"",
+    trailers: [],
+    keep_alive: true
+  )
+}
+
+fn routed(method: String, target: String) -> Route uses {} {
+  route(request_of(method, target))
+}
+
+@test
+fn requests_route_by_method_and_path(t: Test) {
+  test.check(t, routed("GET", "/") == Home(view.default_query()))
+  test.check(
+    t,
+    routed("GET", "/?status=done&tag=farm&q=hay&sort=due") == Home(
+      model.Query(status: "done", tag: "farm", text: "hay", sort: "due")
+    )
+  )
+  // An unknown status or sort falls back to the default.
+  test.check(
+    t,
+    routed("GET", "/?status=later&sort=random") == Home(view.default_query())
+  )
+  test.check(t, routed("POST", "/") == NotAllowed("GET, HEAD"))
+  test.check(t, routed("GET", "/updates") == Updates())
+  test.check(t, routed("HEAD", "/static/app.css") == Static("app.css"))
+  test.check(t, routed("POST", "/tasks") == Create())
+  test.check(t, routed("GET", "/tasks") == NotAllowed("POST"))
+  test.check(t, routed("GET", "/tasks/7") == Detail(7))
+  test.check(t, routed("POST", "/tasks/7") == Edit(7))
+  test.check(t, routed("DELETE", "/tasks/7") == Remove(7))
+  test.check(t, routed("PUT", "/tasks/7") == NotAllowed("GET, HEAD, POST, DELETE"))
+  test.check(t, routed("POST", "/tasks/7/advance") == Advance(7))
+  test.check(t, routed("POST", "/tasks/7/move?dir=up") == Move(7, Up()))
+  test.check(t, routed("POST", "/tasks/7/move?dir=down") == Move(7, Down()))
+  test.check(t, routed("POST", "/tasks/7/move?dir=left") == NotFound())
+  test.check(t, routed("GET", "/tasks/0") == NotFound())
+  test.check(t, routed("GET", "/tasks/x") == NotFound())
+  test.check(t, routed("GET", "/elsewhere") == NotFound())
+}
+
+fn item_of(title: String) -> model.Item uses {} {
+  let draft = model.Draft(
+    title: unique title,
+    description: "",
+    priority: "",
+    due: "",
+    tags: ""
+  )
+  match model.validate(draft) {
+    Ok(item) => take item,
+    Error(_) => model.Item(
+      id: 0,
+      title: "",
+      description: "",
+      status: Todo(),
+      priority: Medium(),
+      due: None(),
+      tags: []
+    ),
+  }
+}
+
+@test
+fn changes_save_a_snapshot_only_when_the_board_changes(t: Test) {
+  let mut board = model.empty_board()
+  let added = apply(mut board, Add(item_of("a")))
+  test.check(t, added.found && added.id == 1)
+  let Some((revision, data)) = added.saved else {
+    test.fail(t)
+  }
+  let back = test.expect_ok(t, store.decode(unique data))
+  test.check(t, revision == 1 && back == board)
+  let _ = apply(mut board, Add(item_of("b")))
+  let edge = apply(mut board, Shift(1, Up()))
+  test.check(t, edge.found && option.is_none(edge.saved))
+  let missing = apply(mut board, Next(9))
+  test.check(t, !missing.found && option.is_none(missing.saved))
+  let advanced = apply(mut board, Next(2))
+  test.check(
+    t,
+    advanced.found && option.is_some(advanced.saved) && board.tasks[1].status == Doing()
+  )
+  let dropped = apply(mut board, Drop(1))
+  test.check(t, dropped.found && board.revision == 4 && list.len(board.tasks) == 1)
+}

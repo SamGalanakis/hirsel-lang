@@ -1,0 +1,54 @@
+fn configured(args: List[String], pairs: List[(String, String)]) -> Result[
+  Option[Config],
+  String
+] uses {} {
+  let mut environment: Map[String, String] = map.empty()
+  for (key, value) in pairs {
+    map.insert(mut environment, unique key, unique value)
+  }
+  configure(unique args, environment)
+}
+
+@test
+fn arguments_win_over_the_environment_which_wins_over_defaults(t: Test) {
+  let Ok(Some(defaults)) = configured([], []) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    defaults.host == "127.0.0.1" && defaults.port == 8080 && defaults.durability == Volatile() && defaults.level == Info()
+  )
+  let Ok(Some(chosen)) = configured(
+    ["-p", "9000", "--durability", "durable"],
+    [("TASKS_PORT", "7000"), ("TASKS_HOST", "0.0.0.0"), ("TASKS_LOG_LEVEL", "debug")]
+  ) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    chosen.host == "0.0.0.0" && chosen.port == 9000 && chosen.durability == Durable() && chosen.level == Debug()
+  )
+  test.check(t, configured(["--help"], []) == Ok(None()))
+}
+
+@test
+fn bad_settings_are_reported(t: Test) {
+  test.check(
+    t,
+    configured(["--port", "70000"], []) == Error("port must be 0 to 65535, not 70000")
+  )
+  test.check(
+    t,
+    configured([], [("TASKS_DURABILITY", "maybe")]) == Error(
+      "durability is volatile or durable, not maybe"
+    )
+  )
+  test.check(
+    t,
+    configured(["--log-level", "loud"], []) == Error(
+      "log level is debug, info, warn or error, not loud"
+    )
+  )
+  test.check(t, configured(["extra"], []) == Error("unexpected argument extra"))
+  test.check(t, results.is_error(configured(["--colour"], [])))
+}

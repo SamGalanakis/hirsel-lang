@@ -1,0 +1,696 @@
+// End-to-end checks of the task manager, over HTTP and its event stream only, so the
+// same suite can drive any implementation of the routes in examples/tasks/README.md.
+// It needs no access to the server beyond its port.
+//
+// Args: `<phase> <port>`, for a server on 127.0.0.1 started with no wall clock:
+// - `first`: on an empty board, every action, its reply events and the patches two
+//   open streams receive, one of them filtered;
+// - `watch`: opens a stream, prints `watching`, then waits for the server to end it
+//   (the caller stops the server) and prints `ended`;
+// - `second`: after a restart over the first run's data, the board is as the first
+//   run left it and ids continue.
+// Prints `ok: <n> checks`, or fails with the first check that did not hold.
+// Grants: stdout and net connect to 127.0.0.1 at the port.
+const TIMEOUT: u64 = 30000000000
+
+const SCREEN: String = r#"{"filter":{"status":"","tag":"","text":"","sort":"manual"},"selected":0}"#
+
+const FARM_SCREEN: String = r#"{"filter":{"status":"","tag":"farm","text":"","sort":"manual"},"selected":0}"#
+
+pub type Response {
+  status: u16,
+  head: String,
+  body: String,
+}
+
+pub type Event {
+  kind: String,
+  data: String,
+}
+
+pub type Checks {
+  count: u64,
+}
+
+fn check(mut checks: Checks, ok: bool, what: String) -> Result[(), String] uses {} {
+  checks.count += 1
+  if ok {
+    Ok(())
+  } else {
+    Error(unique what)
+  }
+}
+
+fn expect_in(mut checks: Checks, haystack: String, needle: String, what: String) -> Result[
+  (),
+  String
+] uses {} {
+  check(
+    mut checks,
+    string.contains(haystack, needle),
+    f"{what}: expected `{needle}` in:\n{haystack}"
+  )
+}
+
+fn expect_not_in(mut checks: Checks, haystack: String, needle: String, what: String) -> Result[
+  (),
+  String
+] uses {} {
+  check(
+    mut checks,
+    !string.contains(haystack, needle),
+    f"{what}: did not expect `{needle}` in:\n{haystack}"
+  )
+}
+
+fn expect_status(mut checks: Checks, response: Response, status: u16, what: String) -> Result[
+  (),
+  String
+] uses {} {
+  check(
+    mut checks,
+    response.status == status,
+    f"{what}: expected status {status}, got {response.status}:\n{response.head}\n\n{response.body}"
+  )
+}
+
+// ---- the wire ----
+fn split_response(raw: String) -> Result[Response, String] uses {} {
+  let Some((head, body)) = string.split_once(raw, "\r\n\r\n") else {
+    return Error(f"no response head in `{raw}`")
+  }
+  let Some((_, rest)) = string.split_once(head, " ") else {
+    return Error(f"no status line in `{head}`")
+  }
+  // GAP: arms yielding a borrowed piece or the binding it came from fail TIR validation.
+  let code = match string.split_once(rest, " ") {
+    Some((c, _)) => unique c,
+    None() => unique rest,
+  }
+  let Ok(status) = u16.parse(code) else {
+    return Error(f"bad status in `{head}`")
+  }
+  Ok(Response(status: status, head: unique head, body: unique body))
+}
+
+fn request_text(method: String, target: String, headers: String, body: String) -> unique String uses {} {
+  let length = string.byte_len(body)
+  f"{method} {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{headers}Content-Length: {length}\r\n\r\n{body}"
+}
+
+fn connect(n: Net, port: u16) -> Result[Stream of n, String] {
+  let mut stream = match net.connect(n, "127.0.0.1", port, Nanos(TIMEOUT)) {
+    Ok(s) => take s,
+    Error(_) => return Error(f"cannot connect to port {port}"),
+  }
+  let _ = net.set_read_timeout(n, mut stream, Nanos(TIMEOUT))
+  Ok(take stream)
+}
+
+/// One request on its own connection, read until the server closes it.
+fn exchange(
+  n: Net,
+  port: u16,
+  method: String,
+  target: String,
+  headers: String,
+  body: String
+) -> Result[Response, String] {
+  let mut stream = connect(n, port)?
+  if results.is_error(
+    net.write_all(
+      n,
+      mut stream,
+      string.as_bytes(request_text(method, target, headers, body))
+    )
+  ) {
+    return Error(f"{method} {target}: write failed")
+  }
+  let mut reader = bufio.new(65536)
+  while true {
+    match bufio.stream_read_more(n, mut stream, mut reader, 65536) {
+      Ok(0) => break,
+      Ok(_) => {},
+      Error(_) => return Error(f"{method} {target}: read failed or timed out"),
+    }
+  }
+  net.close(n, take stream)
+  match string.from_bytes(bufio.contents(reader)) {
+    Ok(raw) => split_response(raw),
+    Error(_) => Error(f"{method} {target}: the response is not UTF-8"),
+  }
+}
+
+fn get(n: Net, port: u16, target: String) -> Result[Response, String] {
+  exchange(n, port, "GET", target, "", "")
+}
+
+fn post_signals(n: Net, port: u16, target: String, signals: String) -> Result[
+  Response,
+  String
+] {
+  exchange(
+    n,
+    port,
+    "POST",
+    target,
+    "Content-Type: application/json\r\nDatastar-Request: true\r\n",
+    signals
+  )
+}
+
+fn post_form(n: Net, port: u16, target: String, fields: List[(String, String)]) -> Result[
+  Response,
+  String
+] {
+  exchange(
+    n,
+    port,
+    "POST",
+    target,
+    "Content-Type: application/x-www-form-urlencoded\r\nDatastar-Request: true\r\n",
+    uri.encode_query(fields)
+  )
+}
+
+// The offset just past the first `delimiter` in `data`.
+fn find_end(data: Bytes, delimiter: Bytes) -> Option[u64] uses {} {
+  let size = bytes.len(delimiter)
+  if bytes.len(data) < size {
+    return None()
+  }
+  for start in 0u64..bytes.len(data) - size + 1 {
+    if bytes.slice(data, start, start + size) == delimiter {
+      return Some(start + size)
+    }
+  }
+  None()
+}
+
+// The text up to and including the next `delimiter`, or `None()` when the stream ends.
+fn read_through(
+  n: Net,
+  mut stream: Stream of n,
+  mut reader: bufio.Reader,
+  delimiter: Bytes
+) -> Result[Option[String], String] {
+  while true {
+    let buffered = bufio.contents(reader)
+    if let Some(end) = find_end(buffered, delimiter) {
+      bufio.consume(mut reader, end)
+      return match string.from_bytes(unique bytes.slice(buffered, 0, end)) {
+        Ok(text) => Ok(Some(take text)),
+        Error(_) => Error("the stream is not UTF-8"),
+      }
+    }
+    match bufio.stream_read_more(n, mut stream, mut reader, 65536) {
+      Ok(0) => return Ok(None()),
+      Ok(_) => {},
+      Error(_) => return Error("the stream failed or timed out"),
+    }
+  }
+  Ok(None())
+}
+
+fn parse_event(block: String) -> Event uses {} {
+  let mut kind = ""
+  let mut data: List[String] = []
+  for line in string.split(unique block, "\n") {
+    if let Some((field, value)) = string.split_once(line, ": ") {
+      if field == "event" {
+        kind = unique value
+      } else if field == "data" {
+        list.push(mut data, unique value)
+      }
+    }
+  }
+  Event(kind: take kind, data: string.join(data, "\n"))
+}
+
+/// Opens the event stream a browser showing `screen` opens, and checks its head.
+fn open_stream(
+  n: Net,
+  port: u16,
+  mut checks: Checks,
+  mut reader: bufio.Reader,
+  screen: String
+) -> Result[Stream of n, String] {
+  let mut stream = connect(n, port)?
+  let query = uri.encode_query([("datastar", unique screen)])
+  let request = f"GET /updates?{query} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\n\r\n"
+  if results.is_error(net.write_all(n, mut stream, string.as_bytes(request))) {
+    return Error("GET /updates: write failed")
+  }
+  let Some(head) = read_through(n, mut stream, mut reader, b"\r\n\r\n")? else {
+    return Error("GET /updates: closed before its head")
+  }
+  expect_in(mut checks, head, "HTTP/1.1 200 OK\r\n", "stream head")?
+  expect_in(mut checks, head, "Content-Type: text/event-stream\r\n", "stream head")?
+  expect_in(mut checks, head, "Cache-Control: no-cache\r\n", "stream head")?
+  Ok(take stream)
+}
+
+/// The elements of the next event on a stream, which must patch elements.
+fn next_patch(
+  n: Net,
+  mut stream: Stream of n,
+  mut reader: bufio.Reader,
+  mut checks: Checks,
+  what: String
+) -> Result[String, String] {
+  let Some(block) = read_through(n, mut stream, mut reader, b"\n\n")? else {
+    return Error(f"{what}: the stream ended")
+  }
+  let event = parse_event(block)
+  check(
+    mut checks,
+    event.kind == "datastar-patch-elements",
+    f"{what}: expected an elements patch:\n{block}"
+  )?
+  Ok(unique event.data)
+}
+
+/// The single event of an action's reply, which must patch signals.
+fn signals_of(mut checks: Checks, response: Response, what: String) -> Result[
+  String,
+  String
+] {
+  expect_status(mut checks, response, 200, what)?
+  expect_in(mut checks, response.head, "Content-Type: text/event-stream", what)?
+  let event = parse_event(response.body)
+  check(
+    mut checks,
+    event.kind == "datastar-patch-signals",
+    f"{what}: expected a signals patch:\n{response.body}"
+  )?
+  Ok(unique event.data)
+}
+
+// ---- the runs ----
+// The first run: an empty board, every action, and two browsers watching.
+fn first_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
+  let home = get(n, port, "/")?
+  expect_status(mut checks, home, 200, "GET /")?
+  expect_in(mut checks, home.head, "Content-Type: text/html; charset=utf-8", "GET /")?
+  expect_in(
+    mut checks,
+    home.body,
+    "<li class=\"empty\">No tasks yet. Add one above.</li>",
+    "GET /"
+  )?
+  expect_in(mut checks, home.body, "@get('/updates'", "GET /")?
+  let css = get(n, port, "/static/app.css")?
+  expect_status(mut checks, css, 200, "GET /static/app.css")?
+  expect_in(mut checks, css.head, "Content-Type: text/css", "GET /static/app.css")?
+  let Some((_, after)) = string.split_once(css.head, "ETag: ") else {
+    return Error(f"no ETag in:\n{css.head}")
+  }
+  let etag = match string.split_once(after, "\r\n") {
+    Some((e, _)) => e,
+    None() => after,
+  }
+  let cached = exchange(
+    n,
+    port,
+    "GET",
+    "/static/app.css",
+    f"If-None-Match: {etag}\r\n",
+    ""
+  )?
+  expect_status(mut checks, cached, 304, "GET /static/app.css revalidated")?
+  check(mut checks, string.byte_len(cached.body) == 0, "a 304 has no body")?
+  let script = get(n, port, "/static/datastar.js")?
+  expect_status(mut checks, script, 200, "GET /static/datastar.js")?
+  expect_in(
+    mut checks,
+    script.head,
+    "Content-Type: text/javascript",
+    "GET /static/datastar.js"
+  )?
+  // Two browsers: one sees everything, one filters by the tag `farm`.
+  let mut a_reader = bufio.new(65536)
+  let mut a = open_stream(n, port, mut checks, mut a_reader, SCREEN)?
+  let mut b_reader = bufio.new(65536)
+  let mut b = open_stream(n, port, mut checks, mut b_reader, FARM_SCREEN)?
+  let mut shown = next_patch(n, mut a, mut a_reader, mut checks, "first patch")?
+  expect_in(
+    mut checks,
+    shown,
+    "elements <p id=\"stats\">0 to do &middot; 0 doing &middot; 0 done</p>",
+    "first patch"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "elements <ul id=\"list\"><li class=\"empty\">No tasks yet.",
+    "first patch"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "elements <aside id=\"detail\" class=\"empty\"></aside>",
+    "first patch"
+  )?
+  let mut filtered = next_patch(
+    n,
+    mut b,
+    mut b_reader,
+    mut checks,
+    "filtered first patch"
+  )?
+  expect_in(
+    mut checks,
+    filtered,
+    "<option value=\"\">Any tag</option>",
+    "filtered first patch"
+  )?
+  // Create: the reply clears the form; both browsers see the task.
+  let created = post_signals(
+    n,
+    port,
+    "/tasks",
+    r#"{"draft":{"title":"Buy hay","description":"Two bales","priority":"high","due":"2026-03-01","tags":"Farm, feed"},"filter":{"tag":""}}"#
+  )?
+  let reset = signals_of(mut checks, created, "create")?
+  check(
+    mut checks,
+    reset == r#"signals {"draft":{"title":"","description":"","priority":"medium","due":"","tags":""},"error":""}"#,
+    f"create reply: {reset}"
+  )?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after create")?
+  expect_in(
+    mut checks,
+    shown,
+    "1 to do &middot; 0 doing &middot; 0 done",
+    "after create"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-1\" class=\"task status-todo priority-high\">",
+    "after create"
+  )?
+  expect_in(mut checks, shown, ">Buy hay</a>", "after create")?
+  // The due date's text depends on the server's clock; its attribute does not.
+  expect_in(mut checks, shown, "datetime=\"2026-03-01\">", "after create")?
+  expect_in(mut checks, shown, "<option value=\"farm\">#farm</option>", "after create")?
+  filtered = next_patch(n, mut b, mut b_reader, mut checks, "broadcast after create")?
+  expect_in(mut checks, filtered, "<li id=\"task-1\"", "broadcast after create")?
+  expect_in(
+    mut checks,
+    filtered,
+    "<option value=\"farm\" selected>#farm</option>",
+    "broadcast after create"
+  )?
+  // An invalid draft is answered with an error signal and changes nothing.
+  let rejected = post_signals(
+    n,
+    port,
+    "/tasks",
+    r#"{"draft":{"title":"  ","description":"","priority":"medium","due":"","tags":""}}"#
+  )?
+  let mut error = signals_of(mut checks, rejected, "invalid create")?
+  check(
+    mut checks,
+    error == r#"signals {"error":"a task needs a title"}"#,
+    f"invalid create reply: {error}"
+  )?
+  let malformed = post_signals(n, port, "/tasks", "{\"draft\":")?
+  expect_status(mut checks, malformed, 400, "malformed signals")?
+  // A second task the filtered browser does not show.
+  let second = post_signals(
+    n,
+    port,
+    "/tasks",
+    r#"{"draft":{"title":"Call <the> vet","description":"","priority":"low","due":"","tags":"vet"}}"#
+  )?
+  let _ = signals_of(mut checks, second, "second create")?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after second create")?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-2\" class=\"task status-todo priority-low\">",
+    "after second create"
+  )?
+  expect_in(mut checks, shown, ">Call &lt;the&gt; vet</a>", "after second create")?
+  filtered = next_patch(
+    n,
+    mut b,
+    mut b_reader,
+    mut checks,
+    "filtered after second create"
+  )?
+  expect_in(mut checks, filtered, "<li id=\"task-1\"", "filtered after second create")?
+  expect_not_in(
+    mut checks,
+    filtered,
+    "<li id=\"task-2\"",
+    "filtered after second create"
+  )?
+  // Edit through the inline form; the status it does not mention is kept.
+  let edited = post_form(
+    n,
+    port,
+    "/tasks/1",
+    [
+      ("title", "Buy oats & hay"),
+      ("description", "Three bales"),
+      ("priority", "medium"),
+      ("due", ""),
+      ("tags", "farm")
+    ]
+  )?
+  let closed = signals_of(mut checks, edited, "edit")?
+  check(
+    mut checks,
+    closed == r#"signals {"editing":0,"error":""}"#,
+    f"edit reply: {closed}"
+  )?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after edit")?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-1\" class=\"task status-todo priority-medium\">",
+    "after edit"
+  )?
+  expect_in(mut checks, shown, ">Buy oats &amp; hay</a>", "after edit")?
+  expect_not_in(mut checks, shown, "datetime=", "after edit")?
+  let _ = next_patch(n, mut b, mut b_reader, mut checks, "filtered after edit")?
+  let invalid_edit = post_form(
+    n,
+    port,
+    "/tasks/1",
+    [("title", "x"), ("due", "2026-02-30")]
+  )?
+  error = signals_of(mut checks, invalid_edit, "invalid edit")?
+  expect_in(mut checks, error, "\"error\":", "invalid edit")?
+  let missing = post_form(n, port, "/tasks/9", [("title", "x")])?
+  expect_status(mut checks, missing, 404, "edit of a missing task")?
+  let json_edit = post_signals(n, port, "/tasks/1", "{}")?
+  expect_status(mut checks, json_edit, 415, "edit without a form")?
+  // Advance, move and delete answer 204; the stream shows each.
+  let mut advanced = exchange(
+    n,
+    port,
+    "POST",
+    "/tasks/1/advance",
+    "Datastar-Request: true\r\n",
+    ""
+  )?
+  expect_status(mut checks, advanced, 204, "advance")?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after advance")?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-1\" class=\"task status-doing priority-medium\">",
+    "after advance"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "1 to do &middot; 1 doing &middot; 0 done",
+    "after advance"
+  )?
+  let _ = next_patch(n, mut b, mut b_reader, mut checks, "filtered after advance")?
+  let moved = exchange(n, port, "POST", "/tasks/2/move?dir=up", "", "")?
+  expect_status(mut checks, moved, 204, "move")?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after move")?
+  let Some((before_one, _)) = string.split_once(shown, "<li id=\"task-1\"") else {
+    return Error(f"after move: no task 1 in:\n{shown}")
+  }
+  expect_in(
+    mut checks,
+    before_one,
+    "<li id=\"task-2\"",
+    "after move, task 2 comes first"
+  )?
+  let _ = next_patch(n, mut b, mut b_reader, mut checks, "filtered after move")?
+  // Already at the top: nothing changes and nothing is sent.
+  let stuck = exchange(n, port, "POST", "/tasks/2/move?dir=up", "", "")?
+  expect_status(mut checks, stuck, 204, "move at the top")?
+  let deleted = exchange(n, port, "DELETE", "/tasks/2", "", "")?
+  expect_status(mut checks, deleted, 204, "delete")?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after delete")?
+  expect_not_in(mut checks, shown, "<li id=\"task-2\"", "after delete")?
+  expect_in(
+    mut checks,
+    shown,
+    "0 to do &middot; 1 doing &middot; 0 done",
+    "after delete"
+  )?
+  let _ = next_patch(n, mut b, mut b_reader, mut checks, "filtered after delete")?
+  let again = exchange(n, port, "DELETE", "/tasks/2", "", "")?
+  expect_status(mut checks, again, 404, "delete of a deleted task")?
+  // The detail view, and requests the server refuses.
+  let detail = get(n, port, "/tasks/1")?
+  expect_status(mut checks, detail, 200, "GET /tasks/1")?
+  expect_in(mut checks, detail.body, "<h2>Buy oats &amp; hay</h2>", "GET /tasks/1")?
+  expect_in(
+    mut checks,
+    detail.body,
+    "<p class=\"description\">Three bales</p>",
+    "GET /tasks/1"
+  )?
+  expect_in(mut checks, detail.body, "&#34;selected&#34;:1", "GET /tasks/1")?
+  expect_status(mut checks, get(n, port, "/tasks/2")?, 404, "GET of a deleted task")?
+  expect_status(mut checks, get(n, port, "/nowhere")?, 404, "GET /nowhere")?
+  let refused = exchange(n, port, "PUT", "/tasks/1", "", "")?
+  expect_status(mut checks, refused, 405, "PUT /tasks/1")?
+  expect_in(mut checks, refused.head, "Allow: GET, HEAD, POST, DELETE", "PUT /tasks/1")?
+  let filtered_home = get(n, port, "/?status=doing&q=OATS")?
+  expect_in(
+    mut checks,
+    filtered_home.body,
+    "<li id=\"task-1\"",
+    "GET /?status=doing&q=OATS"
+  )?
+  let unmatched_home = get(n, port, "/?status=done")?
+  expect_in(mut checks, unmatched_home.body, "No tasks match.", "GET /?status=done")?
+  let headed = exchange(n, port, "HEAD", "/", "", "")?
+  expect_status(mut checks, headed, 200, "HEAD /")?
+  check(mut checks, string.byte_len(headed.body) == 0, "HEAD / has no body")?
+  check(
+    mut checks,
+    !string.contains(headed.head, "Content-Length: 0\r\n"),
+    "HEAD / gives the GET length"
+  )?
+  // Closing one browser leaves the other served.
+  net.close(n, take b)
+  advanced = exchange(n, port, "POST", "/tasks/1/advance", "", "")?
+  expect_status(mut checks, advanced, 204, "advance after a browser left")?
+  shown = next_patch(n, mut a, mut a_reader, mut checks, "after a browser left")?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-1\" class=\"task status-done priority-medium\">",
+    "after a browser left"
+  )?
+  net.close(n, take a)
+  Ok(())
+}
+
+// The second run: the board as the first run left it, after a restart.
+fn second_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
+  let home = get(n, port, "/")?
+  expect_status(mut checks, home, 200, "GET / after restart")?
+  expect_in(
+    mut checks,
+    home.body,
+    "<li id=\"task-1\" class=\"task status-done priority-medium\">",
+    "GET / after restart"
+  )?
+  expect_in(mut checks, home.body, ">Buy oats &amp; hay</a>", "GET / after restart")?
+  expect_not_in(mut checks, home.body, "<li id=\"task-2\"", "GET / after restart")?
+  let mut reader = bufio.new(65536)
+  let mut stream = open_stream(n, port, mut checks, mut reader, SCREEN)?
+  let mut shown = next_patch(
+    n,
+    mut stream,
+    mut reader,
+    mut checks,
+    "first patch after restart"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "0 to do &middot; 0 doing &middot; 1 done",
+    "first patch after restart"
+  )?
+  // Ids and revisions continue where they stopped.
+  let created = post_signals(
+    n,
+    port,
+    "/tasks",
+    r#"{"draft":{"title":"Mend fence","description":"","priority":"low","due":"","tags":""}}"#
+  )?
+  let _ = signals_of(mut checks, created, "create after restart")?
+  shown = next_patch(
+    n,
+    mut stream,
+    mut reader,
+    mut checks,
+    "after create after restart"
+  )?
+  expect_in(
+    mut checks,
+    shown,
+    "<li id=\"task-3\" class=\"task status-todo priority-low\">",
+    "after create after restart"
+  )?
+  net.close(n, take stream)
+  Ok(())
+}
+
+// A browser still watching when the server stops sees its stream end.
+fn watch(n: Net, port: u16, output: Stdout, mut checks: Checks) -> Result[(), String] {
+  let mut reader = bufio.new(65536)
+  let mut stream = open_stream(n, port, mut checks, mut reader, SCREEN)?
+  let _ = next_patch(n, mut stream, mut reader, mut checks, "patch before stopping")?
+  let _ = out.print(output, "watching\n")
+  // Waits past the read timeout: the caller stops the server once it reads `watching`.
+  let _ = net.set_read_timeout(n, mut stream, Unbounded())
+  let rest = read_through(n, mut stream, mut reader, b"\n\n")
+  net.close(n, take stream)
+  match rest {
+    Ok(None()) => {},
+    Ok(Some(block)) => return Error(f"an event after stopping:\n{block}"),
+    Error(e) => return Error(f"the stream did not end when the server stopped: {e}"),
+  }
+  check(mut checks, true, "the stream ended")?
+  let _ = out.print(output, "ended\n")
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let usage = "usage: tasks_e2e first|watch|second <port>"
+  if arg.len(args) != 2 {
+    return Error(usage)
+  }
+  let Ok(phase) = arg.text(args, 0) else {
+    return Error(usage)
+  }
+  let Ok(port_text) = arg.text(args, 1) else {
+    return Error(usage)
+  }
+  let Ok(port) = u16.parse(port_text) else {
+    return Error(f"not a port: {port_text}")
+  }
+  let Ok(n) = io.net(rt) else {
+    return Error("needs the net grant")
+  }
+  let Ok(output) = io.stdout(rt) else {
+    return Error("needs stdout")
+  }
+  let mut checks = Checks(count: 0)
+  if phase == "first" {
+    first_run(n, port, mut checks)?
+  } else if phase == "watch" {
+    watch(n, port, output, mut checks)?
+  } else if phase == "second" {
+    second_run(n, port, mut checks)?
+  } else {
+    return Error(usage)
+  }
+  let _ = out.print(output, f"ok: {checks.count} checks\n")
+  Ok(())
+}

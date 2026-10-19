@@ -67,6 +67,7 @@ selects an explicit bound.
 | [mdtoc](mdtoc/main.hir) | Print a nested Markdown table of contents for `FILE`: ATX headings outside code fences, GitHub-style anchors over NFC text with `-1`, `-2` for repeats; non-UTF-8 input exits 1 with `error: ...`. |
 | [bench-lite](bench-lite/main.hir) | `[WORDS [SEED [ARENA_BYTES]]]`: count the words of a seeded generated corpus in a `List`/`Map` on the heap and again in a bounded arena, print the summary and its checksum, and check the two agree. Deterministic, with no timing. |
 | [kvstore](kvstore/main.hir) | `[PORT]`: serve `GET /kv`, `GET`/`PUT`/`DELETE /kv/<key>` with percent-decoded UTF-8 keys, one task per connection; entries live in a mutex and a writer task replaces `data/kv.json` atomically before each reply. |
+| [tasks](tasks/README.md) | `tasks/run [PORT]`: a task manager over HTTP with [Datastar](../packages/datastar@1/README.md). Server-rendered HTML with inline editing, filters, search and sorting; every open browser updates live over an event stream; snapshots in `data/` survive restarts. Unit tests and a Hirsel end-to-end suite (`tasks/e2e`). |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a

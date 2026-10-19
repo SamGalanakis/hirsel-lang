@@ -1,0 +1,128 @@
+// Persistence: the one module that knows how the board is stored, so the backend
+// can change without touching the rest of the app.
+//
+// Each change is written as a new snapshot file, `board-<revision>.json` with the
+// revision zero-padded to 20 digits so names sort by revision, by `file.put_new`,
+// which never leaves a partial file. With `Durable()` the write returns once the
+// file and its directory survive a crash. Loading takes the newest snapshot that
+// parses, sets aside newer ones that do not, and removes all but the newest two.
+pub type StoreError = Files(FileError) | Corrupt(String)
+
+const PREFIX: String = "board-"
+
+const SUFFIX: String = ".json"
+
+/// The file name of the snapshot at `revision`.
+pub fn snapshot_name(revision: u64) -> unique String uses {} {
+  f"{PREFIX}{revision:020}{SUFFIX}"
+}
+
+// The revision a snapshot name denotes.
+fn snapshot_revision(name: String) -> Option[u64] uses {} {
+  if !string.starts_with(name, PREFIX) || !string.ends_with(name, SUFFIX) {
+    return None()
+  }
+  let digits = string.replace(string.replace(name, PREFIX, ""), SUFFIX, "")
+  if string.byte_len(digits) != 20 {
+    return None()
+  }
+  match u64.parse(digits) {
+    Ok(revision) => Some(revision),
+    Error(_) => None(),
+  }
+}
+
+/// The board's stored form: compact JSON.
+pub fn encode(board: model.Board) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  match json.stringify_into(model.board_to_json(board), mut out) {
+    Ok(()) => bytes.from_list(take out),
+    Error(_) => b"{}",
+  }
+}
+
+pub fn decode(take data: Bytes) -> Result[unique model.Board, String] uses {} {
+  let text = match string.from_bytes(take data) {
+    Ok(t) => take t,
+    Error(_) => return Error("not UTF-8"),
+  }
+  let value = match json.parse(take text) {
+    Ok(v) => take v,
+    Error(_) => return Error("not JSON"),
+  }
+  model.board_from_json(value)
+}
+
+// Every snapshot revision in the directory, ascending.
+fn revisions(dir: Dir) -> Result[List[u64], StoreError] {
+  let entries = file.read_dir(dir, path.of(".")) ? Files
+  let mut found: List[u64] = []
+  for entry in entries {
+    let Some(name) = path.filename(entry.path) else {
+      continue
+    }
+    if let Some(revision) = snapshot_revision(name) {
+      list.push(mut found, revision)
+    }
+  }
+  list.sort(mut found, u64_order)
+  Ok(take found)
+}
+
+@noalloc
+fn u64_order(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn remove_quietly(dir: Dir, name: String) -> Result[(), StoreError] {
+  match file.remove(dir, path.of(name)) {
+    Ok(()) | Error(NotFound()) => Ok(()),
+    Error(e) => Error(Files(e)),
+  }
+}
+
+/// The newest board that parses, or an empty board when there is no snapshot. A
+/// snapshot newer than it that does not parse is renamed with a `.corrupt` suffix, so
+/// the next save does not collide with it.
+pub fn load(dir: Dir) -> Result[unique model.Board, StoreError] {
+  let found = revisions(dir)?
+  let mut i = list.len(found)
+  while i > 0 {
+    i -= 1
+    let name = snapshot_name(found[i])
+    let data = file.read_bytes(dir, path.of(name)) ? Files
+    match decode(unique data) {
+      Ok(board) => {
+        for j in 0u64..i {
+          if j + 2 <= i {
+            remove_quietly(dir, snapshot_name(found[j]))?
+          }
+        }
+        return Ok(take board)
+      },
+      Error(_) => {
+        file.rename(dir, path.of(name), path.of(f"{name}.corrupt")) ? Files
+      },
+    }
+  }
+  Ok(model.empty_board())
+}
+
+/// Writes the snapshot of `revision` holding `data`, then removes the one two
+/// revisions older. Writing a revision twice with the same data succeeds.
+pub fn save(dir: Dir, revision: u64, take data: Bytes, mode: Durability) -> Result[
+  (),
+  StoreError
+] {
+  file.put_new(dir, path.of(snapshot_name(revision)), take data, mode) ? Files
+  if revision >= 2 {
+    remove_quietly(dir, snapshot_name(revision - 2))?
+  }
+  Ok(())
+}

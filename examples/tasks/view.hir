@@ -1,0 +1,353 @@
+// Server-rendered HTML. Every element the event stream replaces has an id, so one
+// `datastar-patch-elements` event morphs them all in place. Text from tasks is
+// always written through `html.esc`.
+/// What a browser is looking at, as the event stream renders it.
+pub type Screen {
+  query: model.Query,
+  selected: u64,
+  today: Option[time.Date],
+}
+
+pub fn default_query() -> model.Query uses {} {
+  model.Query(status: "", tag: "", text: "", sort: "manual")
+}
+
+// ---- dates for people ----
+/// How a due date reads next to today: `due today`, `due tomorrow`, `due in 3 days`,
+/// `due yesterday`, `2 days overdue`; the date itself when today is unknown.
+pub fn due_text(due: String, today: Option[time.Date]) -> unique String uses {} {
+  let Some(day) = today else {
+    return f"due {due}"
+  }
+  let Ok(when) = date.parse(due) else {
+    return f"due {due}"
+  }
+  let days = date.days_between(day, when)
+  if days == 0 {
+    "due today"
+  } else if days == 1 {
+    "due tomorrow"
+  } else if days > 1 {
+    f"due in {days} days"
+  } else if days == -1 {
+    "due yesterday"
+  } else {
+    f"{-days} days overdue"
+  }
+}
+
+fn overdue(item: model.Item, today: Option[time.Date]) -> bool uses {} {
+  let Some(day) = today else {
+    return false
+  }
+  let Some(due) = item.due else {
+    return false
+  }
+  let Ok(when) = date.parse(due) else {
+    return false
+  }
+  item.status != Done() && date.compare(when, day) < 0
+}
+
+// ---- fragments ----
+@preserves_unique(out)
+fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
+  for tag in tags {
+    text.append(
+      mut out,
+      f"<button class=\"tag\" type=\"button\" data-on:click=\"$filter.tag = {html.esc(
+        html.js_string(tag)
+      )}\">#{html.esc(tag)}</button>"
+    )
+  }
+}
+
+@preserves_unique(out)
+fn option_html(mut out: List[u8], value: String, label: String, current: String) -> () uses {} {
+  text.append(
+    mut out,
+    f"<option value=\"{html.esc(value)}\"{html.selected(value == current)}>{html.esc(
+      label
+    )}</option>"
+  )
+}
+
+@preserves_unique(out)
+fn priority_options(mut out: List[u8], current: String) -> () uses {} {
+  option_html(mut out, "low", "Low", current)
+  option_html(mut out, "medium", "Medium", current)
+  option_html(mut out, "high", "High", current)
+}
+
+// The inline edit form of one task, shown while `$editing` names it.
+@preserves_unique(out)
+fn edit_form(mut out: List[u8], item: model.Item) -> () uses {} {
+  let id = item.id
+  let due = match item.due {
+    Some(d) => unique d,
+    None() => "",
+  }
+  let tags = string.join(item.tags, ", ")
+  text.append(
+    mut out,
+    f"<form class=\"edit\" data-show=\"$editing == {id}\" data-on:submit__prevent=\"@post('/tasks/{id}', {{contentType: 'form'}})\">"
+  )
+  text.append(
+    mut out,
+    f"<input name=\"title\" required maxlength=\"{model.MAX_TITLE}\" value=\"{html.esc(
+      item.title
+    )}\" aria-label=\"Title\">"
+  )
+  text.append(
+    mut out,
+    f"<textarea name=\"description\" rows=\"3\" aria-label=\"Description\">{html.esc(
+      item.description
+    )}</textarea>"
+  )
+  text.append(
+    mut out,
+    "<div class=\"fields\"><select name=\"priority\" aria-label=\"Priority\">"
+  )
+  priority_options(mut out, model.priority_text(item.priority))
+  text.append(
+    mut out,
+    f"</select><input name=\"due\" type=\"date\" value=\"{html.esc(due)}\" aria-label=\"Due date\"><input name=\"tags\" value=\"{html.esc(
+      tags
+    )}\" placeholder=\"tags, comma separated\" aria-label=\"Tags\"></div>"
+  )
+  text.append(
+    mut out,
+    "<div class=\"buttons\"><button type=\"submit\">Save</button><button type=\"button\" data-on:click=\"$editing = 0\">Cancel</button></div></form>"
+  )
+}
+
+/// One task in the list.
+@preserves_unique(out)
+pub fn row(mut out: List[u8], item: model.Item, today: Option[time.Date], selected: u64) -> () uses {} {
+  let id = item.id
+  let status = model.status_text(item.status)
+  let priority = model.priority_text(item.priority)
+  let chosen = if id == selected {
+    " selected"
+  } else {
+    ""
+  }
+  text.append(
+    mut out,
+    f"<li id=\"task-{id}\" class=\"task status-{status} priority-{priority}{chosen}\">"
+  )
+  text.append(mut out, "<div class=\"line\">")
+  text.append(
+    mut out,
+    f"<button class=\"status\" title=\"Advance status\" data-on:click=\"@post('/tasks/{id}/advance')\">{html.esc(
+      model.status_label(item.status)
+    )}</button>"
+  )
+  text.append(
+    mut out,
+    f"<a class=\"title\" href=\"/tasks/{id}\" data-on:click__prevent=\"$selected = {id}\">{html.esc(
+      item.title
+    )}</a>"
+  )
+  text.append(mut out, f"<span class=\"priority\">{priority}</span>")
+  if let Some(due) = item.due {
+    let late = if overdue(item, today) {
+      " overdue"
+    } else {
+      ""
+    }
+    text.append(
+      mut out,
+      f"<time class=\"due{late}\" datetime=\"{html.esc(due)}\">{html.esc(
+        due_text(due, today)
+      )}</time>"
+    )
+  }
+  tags_html(mut out, item.tags)
+  text.append(
+    mut out,
+    f"<span class=\"actions\"><button title=\"Move up\" data-on:click=\"@post('/tasks/{id}/move?dir=up')\">&uarr;</button><button title=\"Move down\" data-on:click=\"@post('/tasks/{id}/move?dir=down')\">&darr;</button><button data-on:click=\"$editing = {id}\">Edit</button><button class=\"danger\" data-on:click=\"confirm('Delete this task?') &amp;&amp; @delete('/tasks/{id}')\">Delete</button></span>"
+  )
+  text.append(mut out, "</div>")
+  edit_form(mut out, item)
+  text.append(mut out, "</li>")
+}
+
+/// The list of the tasks a screen selects.
+@preserves_unique(out)
+pub fn task_list(mut out: List[u8], board: model.Board, screen: Screen) -> () uses {} {
+  let shown = model.select(board, screen.query)
+  text.append(mut out, "<ul id=\"list\">")
+  if list.len(shown) == 0 {
+    let message = if list.len(board.tasks) == 0 {
+      "No tasks yet. Add one above."
+    } else {
+      "No tasks match."
+    }
+    text.append(mut out, f"<li class=\"empty\">{message}</li>")
+  }
+  for item in shown {
+    row(mut out, item, screen.today, screen.selected)
+  }
+  text.append(mut out, "</ul>")
+}
+
+/// The detail panel of the selected task; empty when none is selected or it is gone.
+@preserves_unique(out)
+pub fn detail(mut out: List[u8], board: model.Board, screen: Screen) -> () uses {} {
+  let Some(item) = model.find(board, screen.selected) else {
+    text.append(mut out, "<aside id=\"detail\" class=\"empty\"></aside>")
+    return ()
+  }
+  let id = item.id
+  text.append(mut out, "<aside id=\"detail\">")
+  text.append(
+    mut out,
+    f"<header><h2>{html.esc(item.title)}</h2><button title=\"Close\" data-on:click=\"$selected = 0\">&times;</button></header>"
+  )
+  text.append(mut out, "<dl>")
+  text.append(
+    mut out,
+    f"<dt>Status</dt><dd>{html.esc(model.status_label(item.status))}</dd>"
+  )
+  text.append(
+    mut out,
+    f"<dt>Priority</dt><dd>{model.priority_text(item.priority)}</dd>"
+  )
+  if let Some(due) = item.due {
+    text.append(
+      mut out,
+      f"<dt>Due</dt><dd>{html.esc(due)} ({html.esc(due_text(due, screen.today))})</dd>"
+    )
+  }
+  if list.len(item.tags) > 0 {
+    text.append(mut out, "<dt>Tags</dt><dd>")
+    tags_html(mut out, item.tags)
+    text.append(mut out, "</dd>")
+  }
+  text.append(mut out, "</dl>")
+  if string.byte_len(item.description) > 0 {
+    text.append(mut out, f"<p class=\"description\">{html.esc(item.description)}</p>")
+  }
+  text.append(
+    mut out,
+    f"<p class=\"links\"><a href=\"/tasks/{id}\">Link to this task</a> <button data-on:click=\"$editing = {id}\">Edit</button></p></aside>"
+  )
+}
+
+@preserves_unique(out)
+pub fn stats(mut out: List[u8], board: model.Board) -> () uses {} {
+  let (waiting, active, finished) = model.counts(board)
+  text.append(
+    mut out,
+    f"<p id=\"stats\">{waiting} to do &middot; {active} doing &middot; {finished} done</p>"
+  )
+}
+
+@preserves_unique(out)
+pub fn tag_filter(mut out: List[u8], board: model.Board, query: model.Query) -> () uses {} {
+  text.append(
+    mut out,
+    "<select id=\"tag-filter\" data-bind:filter.tag aria-label=\"Tag\">"
+  )
+  option_html(mut out, "", "Any tag", query.tag)
+  for tag in model.all_tags(board) {
+    option_html(mut out, tag, f"#{tag}", query.tag)
+  }
+  text.append(mut out, "</select>")
+}
+
+/// Every element the event stream keeps current, as one patch.
+pub fn live(board: model.Board, screen: Screen) -> unique String uses {} {
+  let mut out: List[u8] = []
+  stats(mut out, board)
+  text.append(mut out, "\n")
+  tag_filter(mut out, board, screen.query)
+  text.append(mut out, "\n")
+  task_list(mut out, board, screen)
+  text.append(mut out, "\n")
+  detail(mut out, board, screen)
+  text.finish_valid(take out)
+}
+
+// ---- the page ----
+fn signals_json(screen: Screen) -> unique String uses {} {
+  let mut filter: Map[String, json.Value] = map.empty()
+  map.insert(mut filter, "status", Text(unique screen.query.status))
+  map.insert(mut filter, "tag", Text(unique screen.query.tag))
+  map.insert(mut filter, "text", Text(unique screen.query.text))
+  map.insert(mut filter, "sort", Text(unique screen.query.sort))
+  let mut draft: Map[String, json.Value] = map.empty()
+  map.insert(mut draft, "title", Text(""))
+  map.insert(mut draft, "description", Text(""))
+  map.insert(mut draft, "priority", Text("medium"))
+  map.insert(mut draft, "due", Text(""))
+  map.insert(mut draft, "tags", Text(""))
+  let mut signals: Map[String, json.Value] = map.empty()
+  map.insert(mut signals, "filter", Object(take filter))
+  map.insert(mut signals, "selected", Number(u64.to_string(screen.selected)))
+  map.insert(mut signals, "editing", Number("0"))
+  map.insert(mut signals, "error", Text(""))
+  map.insert(mut signals, "draft", Object(take draft))
+  match json.stringify(Object(take signals)) {
+    Ok(s) => take s,
+    Error(_) => "{}",
+  }
+}
+
+/// The whole page, rendered with the current tasks so it is complete before the
+/// event stream opens.
+pub fn page(board: model.Board, screen: Screen) -> unique String uses {} {
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Tasks</title>\n<link rel=\"stylesheet\" href=\"/static/app.css\">\n<script type=\"module\" src=\"/static/datastar.js\"></script>\n</head>\n"
+  )
+  text.append(mut out, f"<body data-signals=\"{html.esc(signals_json(screen))}\">\n")
+  // Reading the filter and selection subscribes this effect to them, so a change
+  // reopens the stream with the new values; Datastar cancels the previous request.
+  text.append(
+    mut out,
+    "<div id=\"updates\" data-effect=\"$filter.status; $filter.tag; $filter.text; $filter.sort; $selected; @get('/updates', {openWhenHidden: true, filterSignals: {include: /^(filter|selected)/}})\"></div>\n"
+  )
+  text.append(mut out, "<header class=\"top\"><h1><a href=\"/\">Tasks</a></h1>")
+  stats(mut out, board)
+  text.append(mut out, "</header>\n")
+  text.append(
+    mut out,
+    "<section class=\"new\" data-on:keydown=\"evt.key == 'Enter' &amp;&amp; evt.target.tagName == 'INPUT' &amp;&amp; @post('/tasks')\"><input data-bind:draft.title placeholder=\"New task\" aria-label=\"Title\" maxlength=\"200\"><select data-bind:draft.priority aria-label=\"Priority\">"
+  )
+  priority_options(mut out, "medium")
+  text.append(
+    mut out,
+    "</select><input type=\"date\" data-bind:draft.due aria-label=\"Due date\"><input data-bind:draft.tags placeholder=\"tags, comma separated\" aria-label=\"Tags\"><button data-on:click=\"@post('/tasks')\">Add</button><textarea data-bind:draft.description rows=\"2\" placeholder=\"Description (optional)\" aria-label=\"Description\"></textarea><p class=\"error\" data-show=\"$error != ''\" data-text=\"$error\"></p></section>\n"
+  )
+  text.append(
+    mut out,
+    "<section class=\"filters\"><select data-bind:filter.status aria-label=\"Status\">"
+  )
+  option_html(mut out, "", "Any status", screen.query.status)
+  option_html(mut out, "todo", "To do", screen.query.status)
+  option_html(mut out, "doing", "Doing", screen.query.status)
+  option_html(mut out, "done", "Done", screen.query.status)
+  text.append(mut out, "</select>")
+  tag_filter(mut out, board, screen.query)
+  text.append(
+    mut out,
+    "<input type=\"search\" data-bind:filter.text placeholder=\"Search\" aria-label=\"Search\"><select data-bind:filter.sort aria-label=\"Sort\">"
+  )
+  option_html(mut out, "manual", "My order", screen.query.sort)
+  option_html(mut out, "due", "Due date", screen.query.sort)
+  option_html(mut out, "priority", "Priority", screen.query.sort)
+  option_html(mut out, "title", "Title", screen.query.sort)
+  text.append(mut out, "</select></section>\n<main>\n")
+  task_list(mut out, board, screen)
+  text.append(mut out, "\n")
+  detail(mut out, board, screen)
+  text.append(mut out, "\n</main>\n</body>\n</html>\n")
+  text.finish_valid(take out)
+}
+
+pub fn not_found_page() -> String uses {} {
+  "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found</title><link rel=\"stylesheet\" href=\"/static/app.css\"></head><body><main><p>There is no such page. <a href=\"/\">All tasks</a></p></main></body></html>\n"
+}

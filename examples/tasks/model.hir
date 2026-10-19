@@ -1,0 +1,464 @@
+// Tasks and the board that holds them: validation, the mutations a request can make,
+// and the filtered, sorted view a browser asks for. Everything here is pure.
+@serializable
+pub type Status = Todo | Doing | Done
+
+@serializable
+pub type Priority = Low | Medium | High
+
+// GAP: time.Date has no serialized form, so `due` is canonical date text.
+/// A task as stored and shown. `due` is an ISO 8601 date (`YYYY-MM-DD`); `tags` are
+/// lowercase, unique and in the order given.
+@serializable
+pub type Item {
+  id: u64,
+  title: String,
+  description: String,
+  status: Status,
+  priority: Priority,
+  due: Option[String],
+  tags: List[String],
+}
+
+/// Every task in manual order, the next id to assign and a revision that every
+/// change increments; persistence and live updates are keyed by the revision.
+@serializable
+pub type Board {
+  next_id: u64,
+  revision: u64,
+  tasks: List[Item],
+}
+
+/// The text of a create or edit form, before validation.
+@serializable
+pub type Draft {
+  title: String,
+  description: String,
+  priority: String,
+  due: String,
+  tags: String,
+}
+
+pub type Sort = Manual | Due | PriorityFirst | Title
+
+/// What one browser is looking at: an optional status and tag, a search text and an
+/// order.
+@serializable
+pub type Query {
+  status: String,
+  tag: String,
+  text: String,
+  sort: String,
+}
+
+pub type Direction = Up | Down
+
+pub type Invalid = Title(String) | Description(String) | Priority(String) | Due(String) | Tags(
+  String
+)
+
+pub const MAX_TITLE: u64 = 200
+
+pub const MAX_DESCRIPTION: u64 = 4000
+
+pub const MAX_TAGS: u64 = 8
+
+pub const MAX_TAG: u64 = 32
+
+pub fn invalid_text(error: Invalid) -> String uses {} {
+  match error {
+    Title(m) | Description(m) | Priority(m) | Due(m) | Tags(m) => unique m,
+  }
+}
+
+pub fn empty_board() -> unique Board uses {} {
+  Board(next_id: 1, revision: 0, tasks: [])
+}
+
+pub fn status_text(status: Status) -> String uses {} {
+  match status {
+    Todo() => "todo",
+    Doing() => "doing",
+    Done() => "done",
+  }
+}
+
+pub fn status_label(status: Status) -> String uses {} {
+  match status {
+    Todo() => "To do",
+    Doing() => "Doing",
+    Done() => "Done",
+  }
+}
+
+pub fn priority_text(priority: Priority) -> String uses {} {
+  match priority {
+    Low() => "low",
+    Medium() => "medium",
+    High() => "high",
+  }
+}
+
+// GAP: native builds refuse String literal patterns, so these parsers compare in turn.
+pub fn parse_status(text: String) -> Option[Status] uses {} {
+  let all: List[Status] = [Todo(), Doing(), Done()]
+  for status in all {
+    if status_text(status) == text {
+      return Some(status)
+    }
+  }
+  None()
+}
+
+pub fn parse_priority(text: String) -> Option[Priority] uses {} {
+  let all: List[Priority] = [Low(), Medium(), High()]
+  for priority in all {
+    if priority_text(priority) == text {
+      return Some(priority)
+    }
+  }
+  None()
+}
+
+pub fn sort_text(sort: Sort) -> String uses {} {
+  match sort {
+    Manual() => "manual",
+    Due() => "due",
+    PriorityFirst() => "priority",
+    Title() => "title",
+  }
+}
+
+pub fn parse_sort(text: String) -> Sort uses {} {
+  let all: List[Sort] = [Manual(), Due(), PriorityFirst(), Title()]
+  for sort in all {
+    if sort_text(sort) == text {
+      return sort
+    }
+  }
+  Manual()
+}
+
+/// The status after `status` when a task's status is advanced: todo, doing, done, todo.
+pub fn next_status(status: Status) -> Status uses {} {
+  match status {
+    Todo() => Doing(),
+    Doing() => Done(),
+    Done() => Todo(),
+  }
+}
+
+// ---- validation ----
+/// Splits comma-separated tags: trimmed, lowercased, without empties or repeats.
+pub fn parse_tags(text: String) -> Result[List[String], Invalid] uses {} {
+  let mut tags: List[String] = []
+  for part in string.split(unique text, ",") {
+    let tag = string.to_lower(string.trim(part))
+    if string.byte_len(tag) == 0 || list.any(
+      tags,
+      fn(t: String) -> bool {
+        t == tag
+      }
+    ) {
+      continue
+    }
+    if string.byte_len(tag) > MAX_TAG {
+      return Error(Tags(f"a tag is at most {MAX_TAG} bytes"))
+    }
+    for c in string.scalars(tag) {
+      if !(unicode.is_letter(c) || unicode.is_digit(c) || c == '-' || c == '_') {
+        return Error(Tags("tags hold letters, digits, - and _"))
+      }
+    }
+    list.push(mut tags, take tag)
+  }
+  if list.len(tags) > MAX_TAGS {
+    return Error(Tags(f"at most {MAX_TAGS} tags"))
+  }
+  Ok(take tags)
+}
+
+/// A valid due date in canonical form, or `None()` for empty text.
+pub fn parse_due(text: String) -> Result[Option[String], Invalid] uses {} {
+  let trimmed = string.trim(text)
+  if string.byte_len(trimmed) == 0 {
+    return Ok(None())
+  }
+  match date.parse(trimmed) {
+    Ok(day) => Ok(Some(date.to_string(day))),
+    Error(_) => Error(Due("the due date is YYYY-MM-DD")),
+  }
+}
+
+/// The task a draft describes, with id 0 and status `Todo`, or why it is invalid.
+pub fn validate(draft: Draft) -> Result[Item, Invalid] uses {} {
+  let title = string.trim(draft.title)
+  if string.byte_len(title) == 0 {
+    return Error(Title("a task needs a title"))
+  }
+  if string.byte_len(title) > MAX_TITLE {
+    return Error(Title(f"a title is at most {MAX_TITLE} bytes"))
+  }
+  if string.byte_len(draft.description) > MAX_DESCRIPTION {
+    return Error(Description(f"a description is at most {MAX_DESCRIPTION} bytes"))
+  }
+  let priority: Priority = if string.byte_len(draft.priority) == 0 {
+    Medium()
+  } else {
+    match parse_priority(draft.priority) {
+      Some(p) => p,
+      None() => return Error(Priority("priority is low, medium or high")),
+    }
+  }
+  Ok(
+    Item(
+      id: 0,
+      title: unique title,
+      description: unique string.trim(draft.description),
+      status: Todo(),
+      priority: priority,
+      due: parse_due(draft.due)?,
+      tags: parse_tags(draft.tags)?
+    )
+  )
+}
+
+// ---- mutations ----
+fn index_of(board: Board, id: u64) -> Option[u64] uses {} {
+  for i in 0u64..list.len(board.tasks) {
+    if board.tasks[i].id == id {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+pub fn find(board: Board, id: u64) -> Option[Item] uses {} {
+  match index_of(board, id) {
+    Some(i) => Some(unique board.tasks[i]),
+    None() => None(),
+  }
+}
+
+/// Adds a validated task at the end of the manual order and returns its id.
+pub fn create(mut board: unique Board, take item: unique Item) -> u64 uses {} {
+  let id = board.next_id
+  let mut added = take item
+  added.id = id
+  list.push(mut board.tasks, take added)
+  board.next_id += 1
+  board.revision += 1
+  id
+}
+
+/// Replaces the edited fields of task `id`, keeping its status; false when absent.
+pub fn update(mut board: unique Board, id: u64, take edit: unique Item) -> bool uses {} {
+  let Some(i) = index_of(board, id) else {
+    return false
+  }
+  let mut changed = take edit
+  changed.id = id
+  changed.status = board.tasks[i].status
+  board.tasks[i] = take changed
+  board.revision += 1
+  true
+}
+
+pub fn set_status(mut board: unique Board, id: u64, status: Status) -> bool uses {} {
+  let Some(i) = index_of(board, id) else {
+    return false
+  }
+  board.tasks[i].status = status
+  board.revision += 1
+  true
+}
+
+pub fn delete(mut board: unique Board, id: u64) -> bool uses {} {
+  let Some(i) = index_of(board, id) else {
+    return false
+  }
+  let _ = list.remove(mut board.tasks, i)
+  board.revision += 1
+  true
+}
+
+/// Moves task `id` one place in the manual order; false when absent or already at
+/// that end.
+pub fn move(mut board: unique Board, id: u64, direction: Direction) -> bool uses {} {
+  let Some(i) = index_of(board, id) else {
+    return false
+  }
+  let j = match direction {
+    Up() => {
+      if i == 0 {
+        return false
+      }
+      i - 1
+    },
+    Down() => {
+      if i + 1 >= list.len(board.tasks) {
+        return false
+      }
+      i + 1
+    },
+  }
+  list.swap(mut board.tasks, i, j)
+  board.revision += 1
+  true
+}
+
+// ---- the view ----
+fn matches(item: Item, query: Query, folded: String) -> bool uses {} {
+  if string.byte_len(query.status) > 0 && status_text(item.status) != query.status {
+    return false
+  }
+  if string.byte_len(query.tag) > 0 && !list.any(
+    item.tags,
+    fn(t: String) -> bool {
+      t == query.tag
+    }
+  ) {
+    return false
+  }
+  if string.byte_len(folded) == 0 {
+    return true
+  }
+  string.contains(string.casefold(item.title), folded) || string.contains(
+    string.casefold(item.description),
+    folded
+  ) || list.any(
+    item.tags,
+    fn(t: String) -> bool {
+      string.contains(t, folded)
+    }
+  )
+}
+
+@noalloc
+fn priority_rank(priority: Priority) -> i32 uses {} {
+  match priority {
+    High() => 0,
+    Medium() => 1,
+    Low() => 2,
+  }
+}
+
+@noalloc
+fn by_priority(a: Item, b: Item) -> i32 uses {} {
+  priority_rank(a.priority) - priority_rank(b.priority)
+}
+
+// Tasks without a due date come last; ISO dates order as text.
+@noalloc
+fn by_due(a: Item, b: Item) -> i32 uses {} {
+  match (a.due, b.due) {
+    (Some(x), Some(y)) => string.compare(x, y),
+    (Some(_), None()) => -1,
+    (None(), Some(_)) => 1,
+    (None(), None()) => 0,
+  }
+}
+
+@noalloc
+fn by_title(a: Item, b: Item) -> i32 uses {} {
+  string.compare(a.title, b.title)
+}
+
+/// The tasks `query` selects, in its order. Sorting is stable, so ties keep the
+/// manual order.
+pub fn select(board: Board, query: Query) -> unique List[Item] uses {} {
+  let folded = string.casefold(string.trim(query.text))
+  let mut shown: List[Item] = []
+  for item in board.tasks {
+    if matches(item, query, folded) {
+      list.push(mut shown, unique item)
+    }
+  }
+  match parse_sort(query.sort) {
+    Manual() => {},
+    Due() => list.sort(mut shown, by_due),
+    PriorityFirst() => list.sort(mut shown, by_priority),
+    Title() => list.sort(mut shown, by_title),
+  }
+  take shown
+}
+
+/// Every tag in use, in first-use order.
+pub fn all_tags(board: Board) -> unique List[String] uses {} {
+  let mut tags: List[String] = []
+  for item in board.tasks {
+    for tag in item.tags {
+      if !list.any(
+        tags,
+        fn(t: String) -> bool {
+          t == tag
+        }
+      ) {
+        list.push(mut tags, unique tag)
+      }
+    }
+  }
+  take tags
+}
+
+/// How many tasks have each status, in `Todo`, `Doing`, `Done` order.
+pub fn counts(board: Board) -> (u64, u64, u64) uses {} {
+  let mut waiting: u64 = 0
+  let mut active: u64 = 0
+  let mut finished: u64 = 0
+  for item in board.tasks {
+    match item.status {
+      Todo() => {
+        waiting += 1
+      },
+      Doing() => {
+        active += 1
+      },
+      Done() => {
+        finished += 1
+      },
+    }
+  }
+  (waiting, active, finished)
+}
+
+// ---- JSON ----
+pub fn board_to_json(board: Board) -> json.Value uses {} = comptime derive.json_value(
+  shape(Board)
+)
+
+pub fn board_from_json(value: json.Value) -> Result[unique Board, String] uses {} = comptime derive.from_json(
+  shape(Board)
+)
+
+pub fn item_to_json(item: Item) -> json.Value uses {} = comptime derive.json_value(
+  shape(Item)
+)
+
+pub fn item_from_json(value: json.Value) -> Result[unique Item, String] uses {} = comptime derive.from_json(
+  shape(Item)
+)
+
+pub fn status_to_json(status: Status) -> json.Value uses {} = comptime derive.json_value(
+  shape(Status)
+)
+
+pub fn status_from_json(value: json.Value) -> Result[unique Status, String] uses {} = comptime derive.from_json(
+  shape(Status)
+)
+
+pub fn priority_to_json(priority: Priority) -> json.Value uses {} = comptime derive.json_value(
+  shape(Priority)
+)
+
+pub fn priority_from_json(value: json.Value) -> Result[unique Priority, String] uses {} = comptime derive.from_json(
+  shape(Priority)
+)
+
+pub fn draft_from_json(value: json.Value) -> Result[unique Draft, String] uses {} = comptime derive.from_json(
+  shape(Draft)
+)
+
+pub fn query_from_json(value: json.Value) -> Result[unique Query, String] uses {} = comptime derive.from_json(
+  shape(Query)
+)

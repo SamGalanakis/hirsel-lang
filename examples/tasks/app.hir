@@ -1,0 +1,979 @@
+// Routing, handlers and the server loop.
+//
+// Every connection runs in its own task. The board lives in a Mutex; a change is
+// applied under the lock, its snapshot is saved by the single writer task before the
+// reply, and its revision is published to the hub, which wakes every open event
+// stream to re-render what its browser shows.
+pub type Logger {
+  sink: Option[Stderr],
+  minimum: log.Level,
+}
+
+/// A static file, loaded once at startup.
+pub type Asset {
+  content_type: String,
+  etag: String,
+  body: Bytes,
+}
+
+/// What every connection shares besides the board and the static files. All
+/// fields are copyable capabilities and settings, so a connection task captures a
+/// copy.
+// GAP: a record holding a Mutex or Shared handle is not sendable, so `state` and
+// `assets` travel as separate parameters.
+pub type Services {
+  tasks: Tasks,
+  logger: Logger,
+  wall: Option[WallClock],
+  limits: httpd.Limits,
+  idle: NetTimeout,
+}
+
+/// A board snapshot for the writer task, and where to say whether it was saved.
+pub type SaveJob {
+  revision: u64,
+  data: unique Bytes,
+  reply: Sender[bool],
+}
+
+pub type Route = Home(model.Query) | Detail(u64) | Updates | Static(String) | Create | Edit(
+  u64
+) | Advance(u64) | Remove(u64) | Move(u64, model.Direction) | NotFound | NotAllowed(
+  String
+)
+
+// What a change does to the board, decided before taking the lock.
+pub type Change = Add(model.Item) | Replace(u64, model.Item) | Next(u64) | Drop(u64) | Shift(
+  u64,
+  model.Direction
+)
+
+// The outcome of a change under the lock: whether its task existed, the id it
+// concerns and, when the board changed, the new revision and its snapshot.
+pub type Applied {
+  found: bool,
+  id: u64,
+  saved: Option[(u64, Bytes)],
+}
+
+/// The signals a create sends: the new-task form.
+@serializable
+pub type CreateSignals {
+  draft: model.Draft,
+}
+
+/// The signals an event stream opens with: what its browser is looking at.
+@serializable
+pub type ScreenSignals {
+  filter: model.Query,
+  selected: u64,
+}
+
+fn create_signals_from_json(value: json.Value) -> Result[unique CreateSignals, String] uses {} = comptime derive.from_json(
+  shape(CreateSignals)
+)
+
+fn screen_signals_from_json(value: json.Value) -> Result[unique ScreenSignals, String] uses {} = comptime derive.from_json(
+  shape(ScreenSignals)
+)
+
+// GAP: derive.from_json looks for a nested record's decoder in this module, so these
+// forward to model's.
+fn draft_from_json(value: json.Value) -> Result[unique model.Draft, String] uses {} {
+  model.draft_from_json(value)
+}
+
+fn query_from_json(value: json.Value) -> Result[unique model.Query, String] uses {} {
+  model.query_from_json(value)
+}
+
+// ---- logging ----
+pub fn note(
+  logger: Logger,
+  level: log.Level,
+  message: String,
+  fields: List[(String, String)],
+  wall: Option[WallClock]
+) -> () {
+  let Some(sink) = logger.sink else {
+    return ()
+  }
+  let mut entry_fields: List[log.Field] = []
+  for (name, value) in fields {
+    list.push(mut entry_fields, log.Field(name: unique name, value: unique value))
+  }
+  let timestamp: Option[time.Timestamp] = match wall {
+    Some(clock) => match clock.wall(clock) {
+      Ok(ns) => Some(time.Timestamp(unix_nanoseconds: int.widen(ns))),
+      Error(_) => None(),
+    },
+    None() => None(),
+  }
+  let _ = log.write(
+    sink,
+    logger.minimum,
+    log.Entry(
+      level: level,
+      message: unique message,
+      fields: take entry_fields,
+      timestamp: timestamp
+    )
+  )
+}
+
+/// Today's UTC date, when a wall clock is granted.
+pub fn today(wall: Option[WallClock]) -> Option[time.Date] {
+  let Some(clock) = wall else {
+    return None()
+  }
+  let Ok(ns) = clock.wall(clock) else {
+    return None()
+  }
+  date.from_epoch_days(int.div_floor(ns, 86400000000000i64))
+}
+
+// ---- routing ----
+fn segments(target: String) -> List[String] uses {} {
+  let mut parts: List[String] = []
+  for part in string.split(unique target, "/") {
+    if string.byte_len(part) > 0 {
+      list.push(mut parts, unique part)
+    }
+  }
+  take parts
+}
+
+fn task_id(text: String) -> Option[u64] uses {} {
+  match u64.parse(text) {
+    Ok(id) => if id > 0 {
+      Some(id)
+    } else {
+      None()
+    },
+    Error(_) => None(),
+  }
+}
+
+fn home_query(request: http.ServerRequest) -> model.Query uses {} {
+  let pairs = httpd.query(request)
+  let mut query = unique view.default_query()
+  if let Some(status) = httpd.param(pairs, "status") {
+    if option.is_some(model.parse_status(status)) {
+      query.status = status
+    }
+  }
+  if let Some(tag) = httpd.param(pairs, "tag") {
+    query.tag = tag
+  }
+  if let Some(text) = httpd.param(pairs, "q") {
+    query.text = text
+  }
+  if let Some(sort) = httpd.param(pairs, "sort") {
+    query.sort = model.sort_text(model.parse_sort(sort))
+  }
+  take query
+}
+
+/// Which handler a request goes to.
+pub fn route(request: http.ServerRequest) -> Route uses {} {
+  let method = request.method
+  let parts = segments(httpd.route_path(request))
+  let count = list.len(parts)
+  if count == 0 {
+    if method != "GET" && method != "HEAD" {
+      return NotAllowed("GET, HEAD")
+    }
+    return Home(home_query(request))
+  }
+  if parts[0] == "updates" && count == 1 {
+    if method != "GET" {
+      return NotAllowed("GET")
+    }
+    return Updates()
+  }
+  if parts[0] == "static" && count == 2 {
+    if method != "GET" && method != "HEAD" {
+      return NotAllowed("GET, HEAD")
+    }
+    return Static(unique parts[1])
+  }
+  if parts[0] != "tasks" {
+    return NotFound()
+  }
+  if count == 1 {
+    if method != "POST" {
+      return NotAllowed("POST")
+    }
+    return Create()
+  }
+  let Some(id) = task_id(parts[1]) else {
+    return NotFound()
+  }
+  if count == 2 {
+    if method == "GET" || method == "HEAD" {
+      return Detail(id)
+    }
+    if method == "POST" {
+      return Edit(id)
+    }
+    if method == "DELETE" {
+      return Remove(id)
+    }
+    return NotAllowed("GET, HEAD, POST, DELETE")
+  }
+  if count != 3 {
+    return NotFound()
+  }
+  if parts[2] == "advance" {
+    if method != "POST" {
+      return NotAllowed("POST")
+    }
+    return Advance(id)
+  }
+  if parts[2] == "move" {
+    if method != "POST" {
+      return NotAllowed("POST")
+    }
+    let pairs = httpd.query(request)
+    let direction = option.unwrap_or(httpd.param(pairs, "dir"), "")
+    if direction == "up" {
+      return Move(id, Up())
+    }
+    if direction == "down" {
+      return Move(id, Down())
+    }
+    return NotFound()
+  }
+  NotFound()
+}
+
+// ---- changes ----
+/// Applies a change to the board under its lock.
+pub fn apply(mut board: unique model.Board, what: Change) -> unique Applied uses {} {
+  let start = board.revision
+  let (found, id) = match what {
+    Add(item) => (true, model.create(mut board, unique item)),
+    Replace(id, item) => (model.update(mut board, id, unique item), id),
+    Next(id) => match model.find(board, id) {
+      Some(item) => (
+        model.set_status(mut board, id, model.next_status(item.status)),
+        id
+      ),
+      None() => (false, id),
+    },
+    Drop(id) => (model.delete(mut board, id), id),
+    Shift(id, direction) => {
+      let present = option.is_some(model.find(board, id))
+      let _ = model.move(mut board, id, direction)
+      (present, id)
+    },
+  }
+  // A move at either end changes nothing, so it saves nothing.
+  let saved: Option[(u64, Bytes)] = if board.revision != start {
+    Some((board.revision, store.encode(board)))
+  } else {
+    None()
+  }
+  Applied(found: found, id: id, saved: take saved)
+}
+
+fn board_snapshot(svc: Services, state: Mutex[model.Board]) -> model.Board {
+  mutex.with(
+    svc.tasks,
+    state,
+    fn(mut board: unique model.Board) -> unique model.Board uses {} {
+      // GAP: `unique board` is not proved sendable; a rebuilt record is.
+      model.Board(
+        next_id: board.next_id,
+        revision: board.revision,
+        tasks: unique board.tasks
+      )
+    }
+  )
+}
+
+/// Applies `change`, waits for its snapshot to be saved and publishes the new
+/// revision. Returns whether the task existed and the change was saved.
+pub fn commit(
+  svc: Services,
+  state: Mutex[model.Board],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  what: Change
+) -> Result[u64, u16] {
+  let mut applied = mutex.with(
+    svc.tasks,
+    state,
+    fn(mut board: unique model.Board) -> unique Applied uses {} {
+      apply(mut board, what)
+    }
+  )
+  if !applied.found {
+    return Error(404)
+  }
+  let id = applied.id
+  let Some((revision, data)) = option.remove(mut applied.saved) else {
+    return Ok(id)
+  }
+  let (done, wait): (Sender[bool], Receiver[bool]) = channel.open(svc.tasks)
+  let mut answer = take wait
+  let job = SaveJob(revision: revision, data: take data, reply: take done)
+  if results.is_error(channel.send(svc.tasks, mut saves, take job)) {
+    return Error(503)
+  }
+  let saved = match channel.receive(svc.tasks, mut answer) {
+    Ok(ok) => ok,
+    Error(_) => false,
+  }
+  if !saved {
+    return Error(500)
+  }
+  hub.publish(svc.tasks, mut updates, revision)
+  Ok(id)
+}
+
+/// The writer task: saves snapshots in the order they arrive, skipping one already
+/// superseded on disk, and acknowledges each.
+pub fn write_loop(
+  tasks: Tasks,
+  dir: Dir,
+  mode: Durability,
+  logger: Logger,
+  take jobs: Receiver[SaveJob]
+) -> () {
+  let mut incoming = take jobs
+  let mut written: u64 = 0
+  while let Ok(SaveJob(revision: revision, data: data, reply: reply_to)) = channel.receive(
+    tasks,
+    mut incoming
+  ) {
+    let mut ok = true
+    if revision > written {
+      match store.save(dir, revision, take data, mode) {
+        Ok(()) => {
+          written = revision
+        },
+        Error(_) => {
+          ok = false
+          note(
+            logger,
+            Error(),
+            "save failed",
+            [("revision", u64.to_string(revision))],
+            None()
+          )
+        },
+      }
+    }
+    let mut reply = take reply_to
+    let _ = channel.send(tasks, mut reply, ok)
+  }
+}
+
+// ---- handlers ----
+fn events_reply(take events: String) -> httpd.Reply uses {} {
+  httpd.Reply(
+    status: 200,
+    headers: [
+      http.Header(name: "Content-Type", value: "text/event-stream"),
+      http.Header(name: "Cache-Control", value: "no-cache")
+    ],
+    body: unique string.as_bytes(events)
+  )
+}
+
+fn error_signal(message: String) -> unique String uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "error", Text(unique message))
+  match datastar.patch_signals_value_event(
+    Object(take fields),
+    datastar.signals_options()
+  ) {
+    Ok(event) => take event,
+    Error(_) => "",
+  }
+}
+
+fn failure_reply(status: u16) -> httpd.Reply uses {} {
+  if status == 404 {
+    return httpd.text_reply(404, "no such task\n")
+  }
+  if status == 503 {
+    return httpd.text_reply(503, "shutting down\n")
+  }
+  httpd.text_reply(500, "could not save\n")
+}
+
+/// POST /tasks: the draft arrives as signals; on success the form is cleared.
+pub fn create(
+  svc: Services,
+  state: Mutex[model.Board],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  request: http.ServerRequest
+) -> httpd.Reply {
+  let signals = match datastar.read_signals(request, create_signals_from_json) {
+    Ok(s) => take s,
+    Error(_) => return httpd.text_reply(400, "expected the draft signals\n"),
+  }
+  let item = match model.validate(signals.draft) {
+    Ok(i) => take i,
+    Error(e) => return events_reply(error_signal(model.invalid_text(e))),
+  }
+  match commit(svc, state, mut saves, mut updates, Add(take item)) {
+    Ok(_) => events_reply(
+      datastar.patch_signals_event(
+        r#"{"draft":{"title":"","description":"","priority":"medium","due":"","tags":""},"error":""}"#,
+        datastar.signals_options()
+      )
+    ),
+    Error(status) => failure_reply(status),
+  }
+}
+
+fn form_value(pairs: List[(String, String)], name: String) -> String uses {} {
+  option.unwrap_or(httpd.param(pairs, name), "")
+}
+
+/// POST /tasks/<id>: the inline edit form arrives form-encoded.
+pub fn edit(
+  svc: Services,
+  state: Mutex[model.Board],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  id: u64,
+  request: http.ServerRequest
+) -> httpd.Reply {
+  let pairs = match httpd.form(request) {
+    Ok(p) => take p,
+    Error(status) => return httpd.text_reply(status, "expected a form\n"),
+  }
+  let draft = model.Draft(
+    title: form_value(pairs, "title"),
+    description: form_value(pairs, "description"),
+    priority: form_value(pairs, "priority"),
+    due: form_value(pairs, "due"),
+    tags: form_value(pairs, "tags")
+  )
+  let item = match model.validate(draft) {
+    Ok(i) => take i,
+    Error(e) => return events_reply(error_signal(model.invalid_text(e))),
+  }
+  match commit(svc, state, mut saves, mut updates, Replace(id, take item)) {
+    Ok(_) => events_reply(
+      datastar.patch_signals_event(
+        r#"{"editing":0,"error":""}"#,
+        datastar.signals_options()
+      )
+    ),
+    Error(status) => failure_reply(status),
+  }
+}
+
+/// A change that needs no input: advance, delete or move.
+pub fn simple_change(
+  svc: Services,
+  state: Mutex[model.Board],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  take what: Change
+) -> httpd.Reply {
+  match commit(svc, state, mut saves, mut updates, what) {
+    Ok(_) => httpd.empty(204),
+    Error(status) => failure_reply(status),
+  }
+}
+
+fn html_reply(status: u16, take document: String) -> httpd.Reply uses {} {
+  httpd.Reply(
+    status: status,
+    headers: [
+      http.Header(name: "Content-Type", value: "text/html; charset=utf-8"),
+      http.Header(name: "Cache-Control", value: "no-cache")
+    ],
+    body: unique string.as_bytes(document)
+  )
+}
+
+pub fn page(svc: Services, state: Mutex[model.Board], query: model.Query, selected: u64) -> httpd.Reply {
+  let board = board_snapshot(svc, state)
+  if selected != 0 && option.is_none(model.find(board, selected)) {
+    return html_reply(404, view.not_found_page())
+  }
+  let screen = view.Screen(
+    query: unique query,
+    selected: selected,
+    today: today(svc.wall)
+  )
+  html_reply(200, view.page(board, screen))
+}
+
+/// GET /static/<name>, with an ETag so a browser can revalidate cheaply.
+pub fn asset(
+  assets: Shared[Map[String, Asset]],
+  name: String,
+  request: http.ServerRequest
+) -> httpd.Reply {
+  let found = shared.with(
+    assets,
+    fn(files: Map[String, Asset]) -> Option[Asset] {
+      match map.get(files, name) {
+        Some(a) => Some(unique a),
+        None() => None(),
+      }
+    }
+  )
+  let Some(served) = found else {
+    return httpd.text_reply(404, "not found\n")
+  }
+  let mut headers: List[http.Header] = [
+    http.Header(name: "Content-Type", value: unique served.content_type),
+    http.Header(name: "ETag", value: unique served.etag),
+    http.Header(name: "Cache-Control", value: "no-cache")
+  ]
+  if http.header(request.headers, "if-none-match") == Some(served.etag) {
+    return httpd.Reply(status: 304, headers: take headers, body: b"")
+  }
+  httpd.Reply(status: 200, headers: take headers, body: unique served.body)
+}
+
+/// The media type of a static file name.
+pub fn content_type(name: String) -> String uses {} {
+  if string.ends_with(name, ".js") {
+    "text/javascript; charset=utf-8"
+  } else if string.ends_with(name, ".css") {
+    "text/css; charset=utf-8"
+  } else if string.ends_with(name, ".svg") {
+    "image/svg+xml"
+  } else if string.ends_with(name, ".html") {
+    "text/html; charset=utf-8"
+  } else {
+    "application/octet-stream"
+  }
+}
+
+/// Loads every file of the static directory.
+pub fn load_assets(dir: Dir) -> Result[unique Map[String, Asset], FileError] {
+  let mut files: Map[String, Asset] = map.empty()
+  for entry in file.read_dir(dir, path.of("."))? {
+    if entry.kind != Regular() {
+      continue
+    }
+    let Some(name) = path.filename(entry.path) else {
+      continue
+    }
+    let body = unique file.read_bytes(dir, entry.path)?
+    let media = unique content_type(name)
+    let etag = etag_of(body)
+    map.insert(
+      mut files,
+      take name,
+      Asset(content_type: media, etag: take etag, body: take body)
+    )
+  }
+  Ok(take files)
+}
+
+fn etag_of(body: Bytes) -> unique String uses {} {
+  let digest = match u64.format_radix(fnv.digest(body), 16) {
+    Ok(hex) => take hex,
+    Error(_) => "0",
+  }
+  f"\"{digest}\""
+}
+
+// ---- the event stream ----
+fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique view.Screen {
+  match datastar.read_signals(request, screen_signals_from_json) {
+    Ok(signals) => view.Screen(
+      query: unique signals.filter,
+      selected: signals.selected,
+      today: today(wall)
+    ),
+    Error(_) => view.Screen(
+      query: unique view.default_query(),
+      selected: 0,
+      today: today(wall)
+    ),
+  }
+}
+
+/// GET /updates: the long-lived stream of one browser. It renders the live elements
+/// now and again after every published revision, until the browser goes or the
+/// server stops.
+pub fn stream_updates(
+  n: Net,
+  svc: Services,
+  state: Mutex[model.Board],
+  mut updates: Sender[hub.Command],
+  take stream: Stream of n,
+  request: http.ServerRequest
+) -> () {
+  let screen = screen_of(request, svc.wall)
+  let Some(subscription) = hub.subscribe(svc.tasks, mut updates) else {
+    return ()
+  }
+  let mut wakeups = take subscription
+  let Ok(generator) = datastar.new_sse(n, take stream, request) else {
+    return ()
+  }
+  let mut sse = take generator
+  let mut shown: u64 = 0
+  let mut first = true
+  while true {
+    let board = board_snapshot(svc, state)
+    if first || board.revision > shown {
+      first = false
+      shown = board.revision
+      if results.is_error(
+        datastar.patch_elements(
+          mut sse,
+          view.live(board, screen),
+          datastar.elements_options()
+        )
+      ) {
+        return ()
+      }
+    }
+    match channel.receive(svc.tasks, mut wakeups) {
+      Ok(_) => {},
+      Error(_) => break,
+    }
+  }
+  datastar.close(take sse)
+}
+
+// ---- connections ----
+fn method_not_allowed(allow: String) -> httpd.Reply uses {} {
+  httpd.Reply(
+    status: 405,
+    headers: [http.Header(name: "Allow", value: unique allow)],
+    body: b""
+  )
+}
+
+/// The reply to every request but the event stream.
+pub fn handle(
+  svc: Services,
+  state: Mutex[model.Board],
+  assets: Shared[Map[String, Asset]],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  take target: Route,
+  request: http.ServerRequest
+) -> httpd.Reply {
+  match take target {
+    Home(query) => page(svc, state, query, 0),
+    Detail(id) => page(svc, state, view.default_query(), id),
+    Static(name) => asset(assets, name, request),
+    Create() => create(svc, state, mut saves, mut updates, request),
+    Edit(id) => edit(svc, state, mut saves, mut updates, id, request),
+    Advance(id) => simple_change(svc, state, mut saves, mut updates, Next(id)),
+    Remove(id) => simple_change(svc, state, mut saves, mut updates, Drop(id)),
+    Move(id, direction) => simple_change(
+      svc,
+      state,
+      mut saves,
+      mut updates,
+      Shift(id, direction)
+    ),
+    NotAllowed(allow) => method_not_allowed(allow),
+    NotFound() | Updates() => html_reply(404, view.not_found_page()),
+  }
+}
+
+// Serves requests in order until the connection closes, returning the request
+// that asks for the event stream, if one does.
+fn serve_requests(
+  n: Net,
+  svc: Services,
+  state: Mutex[model.Board],
+  assets: Shared[Map[String, Asset]],
+  mut saves: Sender[SaveJob],
+  mut updates: Sender[hub.Command],
+  mut stream: Stream of n
+) -> Option[http.ServerRequest] {
+  let mut reader = bufio.new(4096)
+  while true {
+    let request = match httpd.read_request(n, mut stream, mut reader, svc.limits) {
+      Ok(r) => take r,
+      Error(Rejected(status)) => {
+        let _ = httpd.write_reply(
+          n,
+          mut stream,
+          httpd.text_reply(status, "bad request\n"),
+          false,
+          false
+        )
+        return None()
+      },
+      Error(_) => return None(),
+    }
+    let target = route(request)
+    if target == Updates() {
+      return Some(take request)
+    }
+    let response = handle(
+      svc,
+      state,
+      assets,
+      mut saves,
+      mut updates,
+      take target,
+      request
+    )
+    note(
+      svc.logger,
+      Info(),
+      "request",
+      [
+        ("method", unique request.method),
+        ("path", unique request.target),
+        ("status", u16.to_string(response.status))
+      ],
+      svc.wall
+    )
+    let keep = request.keep_alive
+    if results.is_error(
+      httpd.write_reply(n, mut stream, response, keep, request.method == "HEAD")
+    ) || !keep {
+      return None()
+    }
+  }
+  None()
+}
+
+/// Serves one connection: its requests in order, then, if it asks for one, the
+/// event stream. `done` hears when it stops serving requests, so the server can
+/// wait for requests in flight before it ends the streams.
+pub fn serve_connection(
+  n: Net,
+  svc: Services,
+  state: Mutex[model.Board],
+  assets: Shared[Map[String, Asset]],
+  take saves: Sender[SaveJob],
+  take updates: Sender[hub.Command],
+  take done: Sender[()],
+  take incoming: Stream of n
+) -> () {
+  let mut stream = take incoming
+  let mut save_to = take saves
+  let mut notify = take updates
+  let mut finished = take done
+  let _ = net.set_read_timeout(n, mut stream, svc.idle)
+  let opened = serve_requests(
+    n,
+    svc,
+    state,
+    assets,
+    mut save_to,
+    mut notify,
+    mut stream
+  )
+  let _ = channel.send(svc.tasks, mut finished, ())
+  if let Some(request) = opened {
+    note(svc.logger, Info(), "stream", [("path", unique request.target)], svc.wall)
+    stream_updates(n, svc, state, mut notify, take stream, request)
+  }
+}
+
+/// Accepts connections until the listener fails, waits until every connection has
+/// stopped serving requests, then stops the hub so every event stream ends.
+/// Cancelling the enclosing scope stops all of it at once.
+pub fn accept_loop(
+  n: Net,
+  svc: Services,
+  state: Mutex[model.Board],
+  assets: Shared[Map[String, Asset]],
+  take listener: Listener of n,
+  take saves: Sender[SaveJob],
+  take updates: Sender[hub.Command]
+) -> () {
+  task.scope(
+    svc.tasks,
+    fn(s: Scope) -> () {
+      let mut accepting = take listener
+      let save_to = take saves
+      let mut notify = take updates
+      let (done_tx, done_rx): (Sender[()], Receiver[()]) = channel.open(svc.tasks)
+      let mut finished = take done_rx
+      let mut accepted: u64 = 0
+      while true {
+        let Ok((stream, _)) = net.accept(n, mut accepting) else {
+          break
+        }
+        accepted += 1
+        let connection_saves = sender.dup(svc.tasks, save_to)
+        let connection_updates = sender.dup(svc.tasks, notify)
+        let connection_done = sender.dup(svc.tasks, done_tx)
+        let child = task.async(
+          s,
+          fn() -> () {
+            serve_connection(
+              n,
+              svc,
+              state,
+              assets,
+              take connection_saves,
+              take connection_updates,
+              take connection_done,
+              take stream
+            )
+          }
+        )
+        task.detach(s, take child)
+      }
+      for _ in 0u64..accepted {
+        if results.is_error(channel.receive(svc.tasks, mut finished)) {
+          break
+        }
+      }
+      hub.stop(svc.tasks, mut notify)
+    }
+  )
+}
+
+// GAP: no way to observe SIGINT/SIGTERM; a granted stdin ending, or a `quit` line,
+// asks the server to stop instead.
+fn wait_for_quit(input: Stdin) -> () {
+  while let Ok(Some(line)) = input.read_line(input) {
+    if string.trim(line) == "quit" {
+      return ()
+    }
+  }
+}
+
+fn close_sender[T](take sender: Sender[T]) -> () {}
+
+/// Where the server tells the address it bound: nowhere, as a line on stdout, or
+/// on a channel, for a program that runs the server itself.
+pub type Announce = Quiet | Print(Stdout) | Report(Sender[SocketAddr])
+
+/// What stops the server besides its listener failing: nothing, a granted stdin
+/// that ends or reads `quit`, or a message (or the sender closing) on a channel.
+pub type Stop = Never | Input(Stdin) | Signal(Receiver[()])
+
+/// Listens on `address` and serves until the listener fails or `stop` says so.
+/// Then it stops accepting, ends every event stream, waits for the writer to save
+/// what it was given and returns. The bound address, with the port chosen when
+/// `address` has port 0, goes to `announce`.
+// GAP: a listener taken as a parameter cannot move into a task, so this listens.
+pub fn serve(
+  n: Net,
+  svc: Services,
+  address: SocketAddr,
+  take announce: Announce,
+  data: Dir,
+  mode: Durability,
+  take board: unique model.Board,
+  take files: unique Map[String, Asset],
+  take stop: Stop
+) -> Result[(), NetError] {
+  let listener = net.listen(n, address)?
+  let bound = net.local_addr(n, listener)?
+  let shown = net.socket_addr_to_string(bound)
+  note(svc.logger, Info(), "listening", [("address", copy shown)], svc.wall)
+  match take announce {
+    Quiet() => {},
+    Print(out) => {
+      let _ = out.print(out, f"listening on http://{shown}/\n")
+    },
+    Report(sender) => {
+      let mut report = take sender
+      let _ = channel.send(svc.tasks, mut report, bound)
+    },
+  }
+  let assets: Shared[Map[String, Asset]] = shared.freeze(take files)
+  task.scope(
+    svc.tasks,
+    fn(s: Scope) -> () {
+      let accepting = take listener
+      let state: Mutex[model.Board] = mutex.create(svc.tasks, take board)
+      let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(svc.tasks)
+      let (updates, commands): (Sender[hub.Command], Receiver[hub.Command]) = channel.open(
+        svc.tasks
+      )
+      let writer = task.async(
+        s,
+        fn() -> () {
+          write_loop(svc.tasks, data, mode, svc.logger, take jobs)
+        }
+      )
+      let broadcaster = task.async(
+        s,
+        fn() -> () {
+          hub.run(svc.tasks, take commands)
+        }
+      )
+      let server_saves = sender.dup(svc.tasks, saves)
+      let server_updates = sender.dup(svc.tasks, updates)
+      let reason = task.scope(
+        svc.tasks,
+        fn(inner: Scope) -> u64 {
+          let open = take accepting
+          let first_saves = take server_saves
+          let first_updates = take server_updates
+          let mut set: TaskSet[()] of inner = task.set(inner)
+          task.add(
+            inner,
+            mut set,
+            task.async(
+              inner,
+              fn() -> () {
+                accept_loop(
+                  n,
+                  svc,
+                  state,
+                  assets,
+                  take open,
+                  take first_saves,
+                  take first_updates
+                )
+              }
+            )
+          )
+          match take stop {
+            Never() => {},
+            Input(input) => task.add(
+              inner,
+              mut set,
+              task.async(
+                inner,
+                fn() -> () {
+                  wait_for_quit(input)
+                }
+              )
+            ),
+            Signal(receiver) => task.add(
+              inner,
+              mut set,
+              task.async(
+                inner,
+                fn() -> () {
+                  let mut quit = take receiver
+                  let _ = channel.receive(svc.tasks, mut quit)
+                }
+              )
+            ),
+          }
+          let (index, _) = task.select(inner, take set)
+          index
+        }
+      )
+      let why = if reason == 0 {
+        "listener closed"
+      } else {
+        "asked to stop"
+      }
+      note(svc.logger, Info(), "stopping", [("reason", why)], svc.wall)
+      let mut notify = take updates
+      hub.stop(svc.tasks, mut notify)
+      close_sender(take notify)
+      close_sender(take saves)
+      task.await(s, take broadcaster)
+      task.await(s, take writer)
+    }
+  )
+  note(svc.logger, Info(), "stopped", [], svc.wall)
+  Ok(())
+}

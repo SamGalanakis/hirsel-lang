@@ -1,0 +1,110 @@
+// Built directly rather than validated, as a snapshot on disk might hold it: the
+// view escapes whatever a task holds, not only what validation lets through.
+fn hostile_board() -> unique model.Board uses {} {
+  let mut board = model.empty_board()
+  let item = model.Item(
+    id: 0,
+    title: "<script>alert(\"x\")</script>",
+    description: "a & b",
+    status: Todo(),
+    priority: High(),
+    due: Some("2026-03-01"),
+    tags: ["x'y"]
+  )
+  let _ = model.create(mut board, unique item)
+  take board
+}
+
+fn screen_on(selected: u64) -> Screen uses {} {
+  Screen(
+    query: default_query(),
+    selected: selected,
+    today: results.ok(date.parse("2026-03-04"))
+  )
+}
+
+@test
+fn due_dates_read_relative_to_today(t: Test) {
+  let today = results.ok(date.parse("2026-03-04"))
+  test.check(t, due_text("2026-03-04", today) == "due today")
+  test.check(t, due_text("2026-03-05", today) == "due tomorrow")
+  test.check(t, due_text("2026-03-14", today) == "due in 10 days")
+  test.check(t, due_text("2026-03-03", today) == "due yesterday")
+  test.check(t, due_text("2026-02-26", today) == "6 days overdue")
+  test.check(t, due_text("2026-03-04", None()) == "due 2026-03-04")
+}
+
+@test
+fn task_text_is_escaped_everywhere_it_is_shown(t: Test) {
+  let board = hostile_board()
+  let shown = live(board, screen_on(1))
+  test.check(t, !string.contains(shown, "<script>"))
+  test.check(
+    t,
+    string.contains(shown, ">&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;</a>")
+  )
+  test.check(
+    t,
+    string.contains(shown, "<h2>&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;</h2>")
+  )
+  test.check(t, string.contains(shown, "<p class=\"description\">a &amp; b</p>"))
+  // A tag lands in a JavaScript string inside an attribute: quoted, then escaped.
+  test.check(
+    t,
+    string.contains(
+      shown,
+      "data-on:click=\"$filter.tag = &#34;x&#39;y&#34;\">#x&#39;y</button>"
+    )
+  )
+  test.check(
+    t,
+    string.contains(
+      shown,
+      "<time class=\"due overdue\" datetime=\"2026-03-01\">3 days overdue</time>"
+    )
+  )
+}
+
+@test
+fn the_live_patch_holds_every_element_the_stream_replaces(t: Test) {
+  let board = hostile_board()
+  let lines = string.split(live(board, screen_on(0)), "\n")
+  test.check(t, list.len(lines) == 4)
+  test.check(
+    t,
+    string.starts_with(
+      lines[0],
+      "<p id=\"stats\">1 to do &middot; 0 doing &middot; 0 done</p>"
+    )
+  )
+  test.check(t, string.starts_with(lines[1], "<select id=\"tag-filter\""))
+  test.check(
+    t,
+    string.starts_with(
+      lines[2],
+      "<ul id=\"list\"><li id=\"task-1\" class=\"task status-todo priority-high\">"
+    )
+  )
+  test.check(t, lines[3] == "<aside id=\"detail\" class=\"empty\"></aside>")
+  let none = live(model.empty_board(), screen_on(0))
+  test.check(
+    t,
+    string.contains(none, "<li class=\"empty\">No tasks yet. Add one above.</li>")
+  )
+}
+
+@test
+fn the_page_carries_its_signals_and_the_update_stream(t: Test) {
+  let shown = page(hostile_board(), screen_on(1))
+  test.check(t, string.contains(shown, "<body data-signals=\"{&#34;"))
+  test.check(t, string.contains(shown, "&#34;draft&#34;:{&#34;"))
+  test.check(t, string.contains(shown, "&#34;selected&#34;:1"))
+  test.check(t, string.contains(shown, "@get('/updates', {openWhenHidden: true"))
+  test.check(
+    t,
+    string.contains(
+      shown,
+      "<script type=\"module\" src=\"/static/datastar.js\"></script>"
+    )
+  )
+}

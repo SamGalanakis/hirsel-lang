@@ -1,0 +1,99 @@
+fn board_with(titles: List[String]) -> unique model.Board uses {} {
+  let mut board = model.empty_board()
+  for title in titles {
+    let draft = model.Draft(
+      title: unique title,
+      description: "",
+      priority: "",
+      due: "",
+      tags: ""
+    )
+    let Ok(item) = model.validate(draft) else {
+      continue
+    }
+    let _ = model.create(mut board, unique item)
+  }
+  take board
+}
+
+fn listing(dir: Dir) -> Result[List[String], FileError] {
+  let mut names: List[String] = []
+  for entry in file.read_dir(dir, path.of("."))? {
+    if let Some(name) = path.filename(entry.path) {
+      list.push(mut names, unique name)
+    }
+  }
+  list.sort(mut names, string.compare)
+  Ok(take names)
+}
+
+@test
+fn an_empty_directory_loads_an_empty_board(t: Test) {
+  let d = test.dir(t, [])
+  let board = test.expect_ok(t, load(d))
+  test.check(t, board.revision == 0 && list.len(board.tasks) == 0)
+}
+
+@test
+fn durable_snapshots_survive_a_crash_and_old_ones_are_pruned(t: Test) {
+  let d = test.dir(t, [])
+  let mut titles: List[String] = []
+  for n in 1u64..4 {
+    list.push(mut titles, f"task {n}")
+    let board = board_with(titles)
+    test.check(t, results.is_ok(save(d, board.revision, encode(board), Durable())))
+  }
+  test.crash(t, d, 1u64)
+  let board = test.expect_ok(t, load(d))
+  test.check(t, board.revision == 3 && list.len(board.tasks) == 3)
+  test.check(t, test.expect_ok(t, listing(d)) == [snapshot_name(2), snapshot_name(3)])
+}
+
+@test
+fn a_volatile_snapshot_may_be_lost_in_a_crash_but_the_older_one_loads(t: Test) {
+  let d = test.dir(t, [])
+  let first = board_with(["kept"])
+  test.check(t, results.is_ok(save(d, 1, encode(first), Durable())))
+  let second = board_with(["kept", "lost"])
+  test.check(t, results.is_ok(save(d, 2, encode(second), Volatile())))
+  test.crash(t, d, 2u64)
+  let board = test.expect_ok(t, load(d))
+  test.check(t, board.revision == 1 && list.len(board.tasks) == 1)
+}
+
+@test
+fn a_corrupt_newest_snapshot_is_set_aside(t: Test) {
+  let good = board_with(["a", "b"])
+  let d = test.dir(
+    t,
+    [
+      (path.of(snapshot_name(2)), encode(good)),
+      (path.of(snapshot_name(3)), b"{\"next_id\":")
+    ]
+  )
+  let board = test.expect_ok(t, load(d))
+  test.check(t, board == good)
+  test.check(
+    t,
+    test.expect_ok(t, listing(d)) == [snapshot_name(2), f"{snapshot_name(3)}.corrupt"]
+  )
+  // The next save reuses the revision the corrupt file had.
+  test.check(
+    t,
+    results.is_ok(save(d, 3, encode(board_with(["a", "b", "c"])), Durable()))
+  )
+  test.check(t, test.expect_ok(t, load(d)).revision == 3)
+}
+
+@test
+fn snapshot_names_sort_by_revision(t: Test) {
+  test.check(t, snapshot_name(7) == "board-00000000000000000007.json")
+  test.check(
+    t,
+    snapshot_revision(snapshot_name(18446744073709551615)) == Some(18446744073709551615)
+  )
+  test.check(
+    t,
+    snapshot_revision("board-7.json") == None() && snapshot_revision("notes.txt") == None()
+  )
+}

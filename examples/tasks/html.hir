@@ -1,0 +1,63 @@
+// GAP: std has no HTML escaping or templating; this is the app's minimal version.
+//
+// Pages are built with f-strings. A hole holding `esc(text)` writes the text with
+// `&`, `<`, `>`, `"` and `'` as character references, so it is safe both as element
+// text and inside a quoted attribute value; a plain `String` hole is written as is
+// and is only for markup the app wrote itself.
+/// Text to escape when formatted.
+@format(escaped_format)
+pub type Escaped {
+  text: String,
+}
+
+pub fn esc(value: String) -> Escaped uses {} {
+  Escaped(text: unique value)
+}
+
+fn escaped_format(value: Escaped, mut out: List[u8]) -> () uses {} {
+  escape_into(value.text, mut out)
+}
+
+@preserves_unique(out)
+pub fn escape_into(value: String, mut out: List[u8]) -> () uses {} {
+  for b in string.as_bytes(value) {
+    if b == b'&' {
+      text.append(mut out, "&amp;")
+    } else if b == b'<' {
+      text.append(mut out, "&lt;")
+    } else if b == b'>' {
+      text.append(mut out, "&gt;")
+    } else if b == b'"' {
+      text.append(mut out, "&#34;")
+    } else if b == b'\'' {
+      text.append(mut out, "&#39;")
+    } else {
+      list.push(mut out, b)
+    }
+  }
+}
+
+pub fn escape(value: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  escape_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+/// A JavaScript string literal for `value`, safe inside a double-quoted HTML attribute
+/// once escaped: JSON's escaping, with `<` written as `\u003c`.
+pub fn js_string(value: String) -> unique String uses {} {
+  let quoted = match json.stringify(Text(unique value)) {
+    Ok(s) => take s,
+    Error(_) => "\"\"",
+  }
+  string.replace(quoted, "<", "\\u003c")
+}
+
+/// ` selected` when `on`, for an `<option>`.
+pub fn selected(on: bool) -> String uses {} {
+  if on {
+    " selected"
+  } else {
+    ""
+  }
+}

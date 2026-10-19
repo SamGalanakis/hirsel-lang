@@ -1,0 +1,157 @@
+fn make_draft(title: String, priority: String, due: String, tags: String) -> Draft uses {} {
+  Draft(
+    title: unique title,
+    description: "",
+    priority: unique priority,
+    due: unique due,
+    tags: unique tags
+  )
+}
+
+fn board_of(names: List[String]) -> unique Board uses {} {
+  let mut board = empty_board()
+  for title in names {
+    let Ok(item) = validate(make_draft(title, "", "", "")) else {
+      continue
+    }
+    let _ = create(mut board, unique item)
+  }
+  take board
+}
+
+fn names_of(items: List[Item]) -> List[String] uses {} {
+  list.map(
+    items,
+    fn(i: Item) -> String {
+      unique i.title
+    }
+  )
+}
+
+@test
+fn validation_normalizes_and_rejects(t: Test) {
+  let Ok(item) = validate(
+    make_draft("  Shear the sheep ", "high", " 2026-02-03", "Farm, wool,farm, ,WOOL")
+  ) else {
+    test.fail(t)
+  }
+  test.check(t, item.title == "Shear the sheep" && item.priority == High())
+  test.check(t, item.due == Some("2026-02-03") && item.tags == ["farm", "wool"])
+  test.check(
+    t,
+    validate(make_draft("   ", "", "", "")) == Error(Title("a task needs a title"))
+  )
+  test.check(t, results.is_error(validate(make_draft("x", "urgent", "", ""))))
+  test.check(t, results.is_error(validate(make_draft("x", "", "2026-02-30", ""))))
+  test.check(t, results.is_error(validate(make_draft("x", "", "", "a b"))))
+  test.check(
+    t,
+    results.is_error(validate(make_draft("x", "", "", "a,b,c,d,e,f,g,h,i")))
+  )
+}
+
+@test
+fn mutations_bump_the_revision_only_when_they_change_something(t: Test) {
+  let mut board = board_of(["a", "b", "c"])
+  test.check(t, board.revision == 3 && board.next_id == 4)
+  test.check(t, move(mut board, 3, Up()))
+  test.check(t, names_of(board.tasks) == ["a", "c", "b"])
+  test.check(
+    t,
+    !move(mut board, 1, Up()) && !move(mut board, 2, Down()) && board.revision == 4
+  )
+  test.check(t, set_status(mut board, 2, next_status(Todo())))
+  test.check(t, delete(mut board, 1) && !delete(mut board, 1))
+  let Ok(edit) = validate(make_draft("B!", "low", "", "x")) else {
+    test.fail(t)
+  }
+  test.check(t, update(mut board, 2, unique edit) && !update(mut board, 9, unique edit))
+  let Some(b) = find(board, 2) else {
+    test.fail(t)
+  }
+  // An edit keeps the status it does not mention.
+  test.check(t, b.title == "B!" && b.status == Doing() && b.tags == ["x"])
+  test.check(t, board.revision == 7 && board.next_id == 4)
+}
+
+@test
+fn select_filters_searches_and_sorts_stably(t: Test) {
+  let mut board = empty_board()
+  let specs: List[(String, String, String, String)] = [
+    ("Write report", "high", "2026-03-01", "work"),
+    ("buy hay", "low", "", "farm"),
+    ("Call vet", "high", "2026-02-01", "farm, urgent"),
+    ("Report taxes", "medium", "2026-02-15", "")
+  ]
+  for (title, priority, due, tags) in specs {
+    let Ok(item) = validate(make_draft(title, priority, due, tags)) else {
+      test.fail(t)
+    }
+    let _ = create(mut board, unique item)
+  }
+  let _ = set_status(mut board, 4, Done())
+  let everything = Query(status: "", tag: "", text: "", sort: "manual")
+  test.check(
+    t,
+    names_of(select(board, everything)) == [
+      "Write report",
+      "buy hay",
+      "Call vet",
+      "Report taxes"
+    ]
+  )
+  let mut q = unique everything
+  q.sort = "due"
+  test.check(
+    t,
+    names_of(select(board, q)) == [
+      "Call vet",
+      "Report taxes",
+      "Write report",
+      "buy hay"
+    ]
+  )
+  q.sort = "priority"
+  test.check(
+    t,
+    names_of(select(board, q)) == [
+      "Write report",
+      "Call vet",
+      "Report taxes",
+      "buy hay"
+    ]
+  )
+  q.sort = "title"
+  test.check(
+    t,
+    names_of(select(board, q)) == [
+      "Call vet",
+      "Report taxes",
+      "Write report",
+      "buy hay"
+    ]
+  )
+  q.sort = "manual"
+  q.text = "REPORT"
+  test.check(t, names_of(select(board, q)) == ["Write report", "Report taxes"])
+  q.text = "urg"
+  test.check(t, names_of(select(board, q)) == ["Call vet"])
+  q.text = ""
+  q.tag = "farm"
+  test.check(t, names_of(select(board, q)) == ["buy hay", "Call vet"])
+  q.tag = ""
+  q.status = "done"
+  test.check(t, names_of(select(board, q)) == ["Report taxes"])
+  test.check(t, all_tags(board) == ["work", "farm", "urgent"])
+  test.check(t, counts(board) == (3, 0, 1))
+}
+
+@test
+fn boards_round_trip_through_json(t: Test) {
+  let mut board = board_of(["one", "two"])
+  let _ = set_status(mut board, 2, Done())
+  let Ok(back) = board_from_json(board_to_json(board)) else {
+    test.fail(t)
+  }
+  test.check(t, back == board)
+}

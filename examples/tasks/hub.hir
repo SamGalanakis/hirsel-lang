@@ -1,0 +1,46 @@
+// Live updates across connections. One hub task owns a Sender per open event stream;
+// every change publishes the board's new revision, which the hub passes to each
+// stream, and each stream re-renders what its own browser is looking at.
+//
+// A stream whose browser has gone drops its Receiver; the next publish finds its
+// Sender closed and forgets it. `Stop` closes every stream's channel, which ends
+// the streams.
+pub type Command = Subscribe(Sender[u64]) | Publish(u64) | Stop
+
+pub fn run(tasks: Tasks, take commands: Receiver[Command]) -> () {
+  let mut incoming = take commands
+  let mut streams: List[Sender[u64]] = []
+  while let Ok(command) = channel.receive(tasks, mut incoming) {
+    match take command {
+      Subscribe(stream) => list.push(mut streams, take stream),
+      Publish(revision) => {
+        let mut open: List[Sender[u64]] = []
+        for stream in take streams {
+          let mut sender = take stream
+          if results.is_ok(channel.send(tasks, mut sender, revision)) {
+            list.push(mut open, take sender)
+          }
+        }
+        streams = take open
+      },
+      Stop() => break,
+    }
+  }
+}
+
+/// Subscribes a new stream and returns its end of the channel.
+pub fn subscribe(tasks: Tasks, mut hub: Sender[Command]) -> Option[Receiver[u64]] {
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  match channel.send(tasks, mut hub, Subscribe(take sender)) {
+    Ok(()) => Some(take receiver),
+    Error(_) => None(),
+  }
+}
+
+pub fn publish(tasks: Tasks, mut hub: Sender[Command], revision: u64) -> () {
+  let _ = channel.send(tasks, mut hub, Publish(revision))
+}
+
+pub fn stop(tasks: Tasks, mut hub: Sender[Command]) -> () {
+  let _ = channel.send(tasks, mut hub, Stop())
+}
