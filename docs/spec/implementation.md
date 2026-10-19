@@ -211,6 +211,15 @@ opening and the close leaves the close without its element. The checked heap exe
 tracks each builder's open element and refuses any other write of the builder while one
 is open. Without this optimization, the byte lists are ordinary lists with the same meaning.
 
+### Memory without interpretation
+
+These memory paths of compiled code do no runtime interpretation; none changes a program's
+meaning, TIR or LIR, and each falls back to the general path when its condition fails.
+
+- The deep copy of a block whose layout has no counted children is one allocation and one
+  byte copy, with no visited map; a copy of a larger graph keeps its first visited blocks
+  in place before using a map.
+
 ### Time in the checked heap executor
 
 The checked heap executor audits programs that hold a monotonic clock, its timer waits,

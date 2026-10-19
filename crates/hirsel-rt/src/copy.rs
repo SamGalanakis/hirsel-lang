@@ -17,7 +17,9 @@
 //! step is an invariant fault: resources and handles are noncopyable, which the validators
 //! enforce. The walk keeps its state in runtime-owned scratch (a visited map and two explicit
 //! stacks) and never recurses, so its native stack is constant whatever the graph's depth
-//! (MEM-3).
+//! (MEM-3). The scratch allocates only for a graph of more than a few blocks or a block with
+//! counted children; a root whose layout holds no counted child (a String, Bytes or a List
+//! of plain elements) is copied as one allocation and its bytes, with no walk.
 //!
 //! Into a bounded arena (MEM-6) the copy is charged before anything is copied: every block
 //! of the tree once per reference to it, independently of sharing, at its descriptor's
@@ -111,6 +113,7 @@ struct Span {
 }
 
 /// Visits every counted holder slot of the value at `value`, read through `layout`'s program.
+/// The value's own steps run without allocating; only a loop or column queues spans.
 pub(crate) unsafe fn holders(
     layout: *const Layout,
     value: *mut u8,
@@ -120,23 +123,20 @@ pub(crate) unsafe fn holders(
     unsafe {
         let steps: *const Step = (*layout).steps;
         let count = (*layout).step_count as usize;
-        // A pointer-free layout holds nothing; skip the work list's allocation.
-        if count == 0 {
-            return;
-        }
-        let mut work = vec![Span {
+        let mut work: Vec<Span> = Vec::new();
+        let mut span = Span {
             pc: 0,
             end: count,
             base: value,
             index: 0,
-        }];
-        while let Some(Span {
-            mut pc,
-            end,
-            base,
-            index,
-        }) = work.pop()
-        {
+        };
+        loop {
+            let Span {
+                mut pc,
+                end,
+                base,
+                index,
+            } = span;
             while pc < end {
                 let step = &*steps.add(pc);
                 pc += 1;
@@ -190,6 +190,10 @@ pub(crate) unsafe fn holders(
                     _ => fault("a drop step has an unknown kind"),
                 }
             }
+            match work.pop() {
+                Some(next) => span = next,
+                None => return,
+            }
         }
     }
 }
@@ -203,6 +207,37 @@ pub(crate) unsafe fn holders(
 unsafe fn keyed_index(layout: *const Layout, payload: *mut u8, slot: *mut u8) -> bool {
     // SAFETY: caller contract.
     unsafe { (*layout).flags & LAYOUT_KEYED != 0 && slot != payload }
+}
+
+/// Blocks inline in [`Copies`] before it spills to a map.
+const INLINE_COPIES: usize = 8;
+
+/// The deep copy walk's visited map, original to copy: a small graph's lives inline, so a
+/// copy of a few blocks allocates nothing for it.
+#[derive(Default)]
+struct Copies {
+    inline: [(usize, usize); INLINE_COPIES],
+    len: usize,
+    spilled: HashMap<*mut Header, *mut Header>,
+}
+
+impl Copies {
+    fn get(&self, original: *mut Header) -> Option<*mut Header> {
+        let key = original.addr();
+        match self.inline[..self.len].iter().find(|(o, _)| *o == key) {
+            Some(&(_, copy)) => Some(original.with_addr(copy)),
+            None => self.spilled.get(&original).copied(),
+        }
+    }
+
+    fn insert(&mut self, original: *mut Header, copy: *mut Header) {
+        if self.len < INLINE_COPIES {
+            self.inline[self.len] = (original.addr(), copy.addr());
+            self.len += 1;
+        } else {
+            self.spilled.insert(original, copy);
+        }
+    }
 }
 
 /// The deep copy walk: each slot of `root` naming a counted block is rewritten to that
@@ -228,8 +263,8 @@ unsafe fn copy_graph(
             ctx.heap.measurement.deep_copies += 1;
         }
         let diagnostic = ctx.heap.diagnostic;
-        let mut copies: HashMap<*mut Header, *mut Header> = HashMap::new();
-        // Each copy still to walk, and whether the sequences below it are tracked.
+        let mut copies = Copies::default();
+        // Each copy with holders still to walk, and whether the sequences below it are tracked.
         let pending: RefCell<Vec<(*mut Header, bool)>> = RefCell::new(Vec::new());
         // The copy whose holder slots are being walked, if any: a Map's or Set's index is not
         // tracked.
@@ -248,8 +283,8 @@ unsafe fn copy_graph(
                 crate::count::hirsel_rt_v2_dup(raw, child);
                 return;
             }
-            let target = match copies.get(&child) {
-                Some(&target) => {
+            let target = match copies.get(child) {
+                Some(target) => {
                     // Another holder of a block already copied.
                     crate::count::hirsel_rt_v2_dup(raw, target);
                     target
@@ -282,8 +317,11 @@ unsafe fn copy_graph(
                         );
                     }
                     copies.insert(child, target);
-                    let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
-                    pending.borrow_mut().push((target, tracks));
+                    // A copy whose layout holds nothing has no holders to walk.
+                    if (*(*raw).descriptor((*target).index())).step_count != 0 {
+                        let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
+                        pending.borrow_mut().push((target, tracks));
+                    }
                     target
                 }
             };
@@ -428,6 +466,26 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
         }
         // The root is tracked as the caller says; the sequences below it always are.
         let root_tracked = flags & ALLOC_TRACKED != 0;
+        // A block whose layout holds no counted child is the whole graph: one allocation and
+        // its bytes, with no holder walk and no visited map. A Shared root is never copied.
+        if (*(*ctx).descriptor((*block).index())).step_count == 0
+            && !crate::shared::is_root(&*ctx, block)
+        {
+            #[cfg(feature = "measurement")]
+            {
+                let measurement = &mut (*ctx).heap.measurement;
+                measurement.record("deep_copies", 1);
+                measurement.deep_copies += 1;
+            }
+            let arena = !destination.is_null() && (*destination).bound != 0;
+            out_block.write(clone_block(
+                &mut *ctx,
+                block,
+                destination,
+                root_tracked && arena,
+            ));
+            return STATUS_OK;
+        }
         let mut root: *mut Header = ptr::null_mut();
         let walk = |redirect: &mut dyn FnMut(*mut u8)| {
             let slot = (&raw mut root).cast::<u8>();

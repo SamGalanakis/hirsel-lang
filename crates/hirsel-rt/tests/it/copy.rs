@@ -83,6 +83,55 @@ fn a_diamond_keeps_its_sharing_and_every_copy_is_fresh() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
+/// The visited map keeps its first blocks inline; a block first copied after it has spilled
+/// is still copied once, whichever store finds it.
+#[test]
+fn sharing_found_past_the_inline_visited_map_is_kept() {
+    let ctx = Ctx::diagnostic();
+    let (leaf, pair) = (leaf(8), pair());
+    let shared = alloc_block(ctx.0, leaf, 8);
+    write_u64(shared, 0, 9);
+    for _ in 0..2 {
+        unsafe { hirsel_rt_v2_dup(ctx.0, shared) };
+    }
+    // p0 .. p11: each holds the next on the left and its own leaf on the right, except that
+    // p10 and p11 hold `shared` on the right and p11 also on the left.
+    let links = 12;
+    let mut next = shared;
+    for i in (0..links).rev() {
+        let node = alloc_block(ctx.0, pair, 24);
+        let right = if i >= links - 2 {
+            shared
+        } else {
+            let own = alloc_block(ctx.0, leaf, 8);
+            write_u64(own, 0, i as u64);
+            own
+        };
+        write_ref(node, 0, next);
+        write_ref(node, 8, right);
+        next = node;
+    }
+    let root = next;
+    let live = ctx.stats().live_blocks;
+    let copied = copy(ctx.0, root);
+    let mut node = copied;
+    for _ in 0..links - 2 {
+        node = child(node, 0);
+    }
+    let (p10, p11) = (node, child(node, 0));
+    let copy_of_shared = child(p10, 8);
+    assert_ne!(copy_of_shared, shared);
+    assert_eq!(read_u64(copy_of_shared, 0), 9);
+    assert_eq!(child(p11, 8), copy_of_shared);
+    assert_eq!(child(p11, 0), copy_of_shared);
+    assert_eq!(count(copy_of_shared), 3);
+    // The pairs, their own leaves and one shared leaf.
+    assert_eq!(ctx.stats().live_blocks, live + 2 * links as u64 - 1);
+    release(ctx.0, copied);
+    release(ctx.0, root);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
 #[test]
 fn immortal_blocks_are_copied_so_the_copy_is_unique() {
     pair();
