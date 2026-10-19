@@ -17,6 +17,23 @@ fn rules() -> hirsel_conformance::Rules {
 fn header(source: &str) -> Result<hirsel_conformance::Header, String> {
     parse_header(Path::new("conformance/OWN/test.hir"), source, &rules())
 }
+
+#[test]
+fn corpus_cases_cannot_select_a_compiled_only_native_oracle() {
+    let ordinary = "// rule: OWN-6\n// expect: run\npub fn main() {}\n";
+    header(ordinary).unwrap();
+    for directive in [
+        "// oracle: expected-stdout\n",
+        "// oracle-reason: too large\n",
+    ] {
+        let source = format!("{directive}{ordinary}");
+        assert!(
+            header(&source)
+                .unwrap_err()
+                .contains("native-tests/library")
+        );
+    }
+}
 /// Every file passes except those whose path ends with a listed name.
 struct Statuses(Vec<(&'static str, Status)>);
 impl Driver for Statuses {

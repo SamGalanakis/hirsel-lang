@@ -1,0 +1,15 @@
+// oracle: expected-stdout
+// oracle-reason: A million-iteration sum exceeds the interpreter budget; n*(n-1)/2 independently gives 499999500000.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut sum = 0u64
+  for i in 0u64..1000000u64 {
+    sum += i
+  }
+  let _ = out.print(stdout, if sum == 499999500000u64 {
+    "499999500000\n"
+  } else {
+    "wrong\n"
+  })
+  Ok(())
+}

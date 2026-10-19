@@ -192,8 +192,20 @@ pub struct Header {
 }
 
 /// Header directive names; other colon-bearing comments are prose.
-const DIRECTIVES: [&str; 11] = [
-    "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "env", "net", "process", "steps",
+const DIRECTIVES: [&str; 13] = [
+    "rule",
+    "expect",
+    "stdout",
+    "exit",
+    "entry",
+    "spec",
+    "grant",
+    "env",
+    "net",
+    "process",
+    "steps",
+    "oracle",
+    "oracle-reason",
 ];
 
 /// The most ordinary-interpretation steps a `// steps:` header may grant.
@@ -364,6 +376,9 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             }
             let value_trimmed = value.trim();
             match key {
+                "oracle" | "oracle-reason" => return Err(
+                    "oracle directives are only allowed in native-tests/library, not the conformance corpus".into()
+                ),
                 "rule" => {
                     if rule.is_some() {
                         return Err("duplicate rule directive".into());

@@ -590,3 +590,189 @@ fn cranelift_keeps_the_parity_ratchet_when_the_llvm_control_agrees() {
     assert!(report.ok(), "{report:?}");
     assert_eq!(report.passing, 1);
 }
+
+#[test]
+fn compiled_only_library_oracles_skip_interpretation_on_both_backends() {
+    on_compiler(|| {
+        let id = "native-tests/library/oracle-expected-stdout.hir";
+        let case = native::cranelift::cases(&root())
+            .unwrap()
+            .into_iter()
+            .find(|case| case.id == id)
+            .unwrap();
+        let mut matrix = native::cranelift::matrix(
+            hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu(),
+        );
+        matrix.push(hirsel_driver::native::smoke_matrix().remove(0));
+        let toolchain = hirsel_driver::native::Toolchain::for_matrix(
+            &native::runtime_cache().unwrap(),
+            &matrix,
+        )
+        .unwrap();
+        let scratch = native::scratch::RunRoot::create_in(&fresh_parent("stdout-oracle")).unwrap();
+        let result = case.run(&matrix, &toolchain, &scratch.join("oracle").unwrap());
+        assert!(result.snapshot.is_none(), "{:?}", result.snapshot);
+        let expected = result.reference.as_ref().unwrap();
+        assert_eq!(expected.exit_code, Some(0), "{expected:?}");
+        assert_eq!(expected.output, b"499999500000\n");
+        assert_eq!(result.outcomes.len(), 2);
+        assert!(
+            result
+                .outcomes
+                .iter()
+                .all(|(_, class, _)| *class != Class::Heap)
+        );
+        assert!(
+            result
+                .outcomes
+                .iter()
+                .all(|(_, _, outcome)| matches!(outcome, Outcome::Agree)),
+            "{:?}",
+            result.outcomes
+        );
+    });
+}
+
+#[test]
+fn stdout_oracles_require_library_paths_reasons_and_exact_sidecar_bytes() {
+    let parent = fresh_parent("oracle-header");
+    let id = "native-tests/library/control.hir";
+    let path = parent.join(id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    std::fs::write(path.with_extension("stdout"), [0, 255, b'\n']).unwrap();
+    let header = "// oracle: expected-stdout\n// oracle-reason: independent reference vectors\n";
+    let case = native::Case {
+        id: id.into(),
+        source: header.into(),
+        path: Some(path.clone()),
+    };
+    let expected = case.expected_stdout().unwrap().unwrap();
+    assert_eq!(expected.output, [0, 255, b'\n']);
+    assert_eq!(expected.exit_code, Some(0));
+    assert!(!expected.blocked && expected.budget.is_none() && expected.failures.is_empty());
+    let ordinary = native::Case {
+        source: "// ordinary interpreted control\n".into(),
+        ..case.clone()
+    };
+    assert!(ordinary.expected_stdout().unwrap().is_none());
+    for source in [
+        "// oracle: expected-stdout\n",
+        "// oracle: expected-stdout\n// oracle-reason: \n",
+        "// oracle-reason: no oracle\n",
+        "// oracle: unknown\n// oracle-reason: reason\n",
+        "// oracle expected-stdout\n",
+        &format!("{header}// oracle: expected-stdout\n"),
+        &format!("{header}// oracle-reason: duplicate\n"),
+        &format!("pub fn main() {{}}\n{header}"),
+    ] {
+        let invalid = native::Case {
+            source: source.into(),
+            ..case.clone()
+        };
+        assert!(invalid.expected_stdout().is_err(), "{source}");
+    }
+    for id in [
+        "conformance/CAP/control.hir",
+        "native-tests/regressions/control.hir",
+        "native-tests/library/../control.hir",
+        "/native-tests/library/control.hir",
+    ] {
+        let outside = native::Case {
+            id: id.into(),
+            ..case.clone()
+        };
+        assert!(outside.expected_stdout().is_err(), "{id}");
+    }
+    let no_path = native::Case {
+        path: None,
+        ..case.clone()
+    };
+    assert!(no_path.expected_stdout().is_err());
+    let outside_path = parent.join("outside.hir");
+    std::fs::write(&outside_path, "").unwrap();
+    let outside = native::Case {
+        path: Some(outside_path.clone()),
+        ..case.clone()
+    };
+    assert!(outside.expected_stdout().is_err());
+    #[cfg(unix)]
+    {
+        let link = path.with_file_name("alias.hir");
+        std::os::unix::fs::symlink(&outside_path, &link).unwrap();
+        let alias = native::Case {
+            id: "native-tests/library/alias.hir".into(),
+            path: Some(link),
+            ..case.clone()
+        };
+        assert!(alias.expected_stdout().is_err());
+    }
+    std::fs::write(path.with_extension("stdout"), []).unwrap();
+    assert!(case.expected_stdout().unwrap().unwrap().output.is_empty());
+    std::fs::remove_file(path.with_extension("stdout")).unwrap();
+    assert!(case.expected_stdout().unwrap_err().contains(".stdout"));
+    assert!(ordinary.expected_stdout().unwrap().is_none());
+    std::fs::remove_dir_all(parent).unwrap();
+}
+
+#[test]
+fn stdout_oracles_reject_wrong_native_answers_and_keep_unmarked_references() {
+    on_compiler(|| {
+        let id = "native-tests/library/oracle-expected-stdout.hir";
+        let path = root().join(id);
+        let mut case = native::Case {
+            id: id.into(),
+            source: std::fs::read_to_string(&path).unwrap(),
+            path: Some(path),
+        };
+        let matrix = native::cranelift::matrix(
+            hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu(),
+        );
+        let toolchain = hirsel_driver::native::Toolchain::for_matrix(
+            &native::runtime_cache().unwrap(),
+            &matrix,
+        )
+        .unwrap();
+        let scratch =
+            native::scratch::RunRoot::create_in(&fresh_parent("oracle-controls")).unwrap();
+        let heap = [hirsel_driver::native::smoke_matrix().remove(0)];
+        let unrun = case.run(&heap, &toolchain, &scratch.join("heap-only").unwrap());
+        assert!(
+            unrun
+                .snapshot
+                .unwrap()
+                .contains("requires a compiled native configuration")
+        );
+        let suite = native::Case {
+            source: format!("// expect: test\n{}", case.source),
+            ..case.clone()
+        };
+        let refused = suite.run(&matrix, &toolchain, &scratch.join("suite").unwrap());
+        assert!(refused.snapshot.unwrap().contains("main entry"));
+        case.source = case.source.replace("1000000u64", "4u64");
+        let wrong = case.run(&matrix, &toolchain, &scratch.join("wrong").unwrap());
+        assert!(wrong.snapshot.is_none(), "{:?}", wrong.snapshot);
+        assert_eq!(wrong.outcomes.len(), 2);
+        assert!(
+            wrong
+                .outcomes
+                .iter()
+                .all(|(_, _, outcome)| matches!(outcome, Outcome::Mismatch(_))),
+            "{:?}",
+            wrong.outcomes
+        );
+        assert!(!native::cranelift::judge(&[wrong], &Default::default(), &Exclusions::new()).ok());
+        case.source = "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"ordinary\\n\")\n Ok(()) }".into();
+        let ordinary = case.run(&matrix, &toolchain, &scratch.join("ordinary").unwrap());
+        assert!(ordinary.snapshot.is_none(), "{:?}", ordinary.snapshot);
+        assert_eq!(ordinary.reference.as_ref().unwrap().output, b"ordinary\n");
+        assert!(
+            ordinary
+                .outcomes
+                .iter()
+                .all(|(_, _, outcome)| matches!(outcome, Outcome::Agree)),
+            "{:?}",
+            ordinary.outcomes
+        );
+    });
+}

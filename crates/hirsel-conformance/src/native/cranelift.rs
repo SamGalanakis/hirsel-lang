@@ -73,11 +73,13 @@ pub fn cases(root: &Path) -> Result<Vec<Case>, String> {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
             let id = format!("{dir}/{name}");
             let source = std::fs::read_to_string(&path).map_err(|e| format!("{id}: {e}"))?;
-            cases.push(Case {
+            let case = Case {
                 id,
                 source,
                 path: Some(path),
-            });
+            };
+            let _ = case.expected_stdout()?;
+            cases.push(case);
         }
     }
     Ok(cases)
@@ -210,9 +212,9 @@ pub fn clif(case: &Case) -> Result<String, String> {
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    let (validated, _, _) = super::checked(&mut engine, &case.source, case.path.as_deref())?;
+    let prepared = super::checked(&mut engine, &case.id, &case.source, case.path.as_deref())?;
     let program = hirsel_driver::native::build(
-        &validated,
+        &prepared.input,
         &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
     )
     .map_err(|e| e.to_string())?;
@@ -227,9 +229,9 @@ pub fn compile_times(case: &Case) -> Result<Vec<std::time::Duration>, String> {
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    let (validated, _, _) = super::checked(&mut engine, &case.source, case.path.as_deref())?;
+    let prepared = super::checked(&mut engine, &case.id, &case.source, case.path.as_deref())?;
     let program = build(
-        &validated,
+        &prepared.input,
         &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
     )
     .map_err(|e| e.to_string())?;

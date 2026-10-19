@@ -265,6 +265,25 @@ Cranelift does not is a row of
 `native-tests/regressions/cranelift-parity.tsv` (`case`, then Cranelift's reason); a
 failure without its row, a changed reason and a row whose case agrees fail. The run
 prints the rows its results imply, keeping rows of cases it did not select.
+
+Large library vectors can select a compiled-only stdout oracle:
+
+```hirsel
+// oracle: expected-stdout
+// oracle-reason: Independent published vectors exceed the interpreter step budget.
+```
+
+Only programs in `native-tests/library` may use these headers. `example.hir`
+requires a sibling `example.stdout`, whose exact bytes (including final newlines,
+or an explicitly empty file) are the expected output. Every selected native
+configuration must exit successfully without failures and match those bytes;
+LLVM and Cranelift are each checked against the sidecar. The reference interpreter
+and heap configurations are skipped for these cases, including filtered smoke;
+native record/replay still runs. A missing sidecar, missing/empty reason, duplicate
+or unknown oracle, escaped source path, or `expect: test` is refused. Ordinary
+cases retain interpretation even when a `.stdout` file exists. The conformance
+corpus and native regression directory cannot select this oracle.
+
 `--clif` first prints each selected case's Cranelift IR. `--aarch64` runs both builds as
 AArch64 executables under qemu against `cranelift-parity-aarch64.tsv`
 (`//:gate-native-cranelift-aarch64-shard-1` to `-8`). `native --cranelift-times`

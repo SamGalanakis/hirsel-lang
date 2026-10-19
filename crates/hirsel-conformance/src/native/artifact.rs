@@ -68,7 +68,9 @@ pub fn reference(source: &str, warm: Option<&str>) -> Option<Observation> {
         let file = engine.sources.add("warm.hir", warm.into())?;
         let _ = hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context());
     }
-    super::checked(&mut engine, source, None).ok().map(|c| c.2)
+    super::checked(&mut engine, "<reference>", source, None)
+        .ok()
+        .map(|c| c.reference)
 }
 
 /// The reference interpreter against one native configuration.
@@ -93,8 +95,14 @@ impl Probe for NativeProbe<'_> {
             let _ =
                 hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context());
         }
-        let (validated, entry, reference) = super::checked_with_config(
+        let super::Prepared {
+            input: validated,
+            entry,
+            reference,
+            ..
+        } = super::checked_with_config(
             &mut engine,
+            "<artifact>",
             source,
             self.source_path.as_deref(),
             self.configuration.options.launch.clone(),

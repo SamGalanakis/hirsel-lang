@@ -1,6 +1,8 @@
 //! The native differential gate: every baseline-passing
 //! executable corpus case is run by the heap executor and as native code under
 //! a named configuration matrix and compared with the reference observation.
+//! Large library evidence can explicitly select a stdout sidecar instead;
+//! those cases run only compiled configurations.
 //!
 //! Promotion is set-wise. B is the executable cases in `conformance/passing.txt`;
 //! N is the cases every configuration of an engine agrees on. Every case and
@@ -13,6 +15,7 @@ pub mod artifact;
 pub mod cranelift;
 pub mod diet;
 pub mod generate;
+mod oracle;
 pub mod scratch;
 
 pub use scratch::{runtime_cache, scratch};
@@ -26,16 +29,20 @@ use std::path::{Path, PathBuf};
 
 pub const EXCLUSIONS: &str = "native-tests/regressions/exclusions.tsv";
 
-/// One baseline-passing executable corpus case.
+/// One executable corpus, regression or library case.
 #[derive(Clone, Debug)]
 pub struct Case {
-    /// The corpus path relative to the repository root: the case ID.
+    /// The source path relative to the repository root: the case ID.
     pub id: String,
     pub source: String,
     pub path: Option<PathBuf>,
 }
 
 impl Case {
+    /// An explicit compiled-only library oracle, or the ordinary interpreter default.
+    pub fn expected_stdout(&self) -> Result<Option<Observation>, String> {
+        oracle::expected_stdout(&self.id, &self.source, self.path.as_deref())
+    }
     /// Run this case with its package graph under a case-specific plan.
     pub fn run(&self, matrix: &[Configuration], toolchain: &Toolchain, dir: &Path) -> CaseResult {
         run_source_path(
@@ -266,9 +273,10 @@ pub fn exclusion(outcome: &Outcome) -> Option<Exclusion> {
 #[derive(Clone, Debug)]
 pub struct CaseResult {
     pub id: String,
-    /// The reference could not be exported or imported as a native snapshot.
+    /// The source or oracle could not be prepared as a native snapshot.
     pub snapshot: Option<String>,
     pub outcomes: Vec<(String, Class, Outcome)>,
+    /// The expected observation, from interpretation or an explicit library sidecar.
     pub reference: Option<Observation>,
     /// The case's wall time on its job, every configuration included;
     /// `run_cases_with` sets it.
@@ -305,34 +313,31 @@ impl CaseResult {
     }
 }
 
+struct Prepared {
+    input: hirsel_engine::ValidatedNativeInput,
+    entry: hirsel_engine::DefPath,
+    reference: Observation,
+    compiled_only: bool,
+}
+
 fn checked(
     engine: &mut hirsel_engine::QueryEngine,
+    id: &str,
     source: &str,
     path: Option<&Path>,
-) -> Result<
-    (
-        hirsel_engine::ValidatedNativeInput,
-        hirsel_engine::DefPath,
-        Observation,
-    ),
-    String,
-> {
-    checked_with_config(engine, source, path, Default::default())
+) -> Result<Prepared, String> {
+    checked_with_config(engine, id, source, path, Default::default())
 }
 
 fn checked_with_config(
     engine: &mut hirsel_engine::QueryEngine,
+    id: &str,
     source: &str,
     path: Option<&Path>,
     launch: hirsel_driver::native::LaunchInputs,
-) -> Result<
-    (
-        hirsel_engine::ValidatedNativeInput,
-        hirsel_engine::DefPath,
-        Observation,
-    ),
-    String,
-> {
+) -> Result<Prepared, String> {
+    let expected = oracle::expected_stdout(id, source, path)?;
+    let compiled_only = expected.is_some();
     let (output, entry) = if let Some(path) = path.filter(|p| p.with_extension("hir.json").exists())
     {
         let mut program =
@@ -354,27 +359,32 @@ fn checked_with_config(
     if let Some(d) = output.diagnostics.first() {
         return Err(format!("check: {} {}", d.rule, d.message));
     }
-    let config = hirsel_engine::RunConfiguration {
-        entry: entry.clone(),
-        hash_seed: launch.hash_seed,
-        inputs: vec![],
+    let reference = if let Some(expected) = expected {
+        crate::fixture(source)?;
+        expected
+    } else {
+        let config = hirsel_engine::RunConfiguration {
+            entry: entry.clone(),
+            hash_seed: launch.hash_seed,
+            inputs: vec![],
+        };
+        engine.adapters.interpreter = Some(crate::interpreter(source)?);
+        let execution = hirsel_engine::run_observed_snapshot(
+            engine,
+            &config,
+            hirsel_engine::SimulationConfig {
+                random_seed: launch.random_seed,
+                test_seed: launch.test_seed,
+                ..crate::simulation(source)?
+            },
+        )
+        .map_err(|e| format!("reference: {e}"))?;
+        execution
+            .observation
+            .as_ref()
+            .map(Observation::of_reference)
+            .ok_or("reference: no observation")?
     };
-    engine.adapters.interpreter = Some(crate::interpreter(source)?);
-    let execution = hirsel_engine::run_observed_snapshot(
-        engine,
-        &config,
-        hirsel_engine::SimulationConfig {
-            random_seed: launch.random_seed,
-            test_seed: launch.test_seed,
-            ..crate::simulation(source)?
-        },
-    )
-    .map_err(|e| format!("reference: {e}"))?;
-    let reference = execution
-        .observation
-        .as_ref()
-        .map(Observation::of_reference)
-        .ok_or("reference: no observation")?;
     let input = engine.export_native_input().map_err(|e| {
         let text = format!("{e:?}");
         let head = text.split("DefPath").next().unwrap_or(&text).to_string();
@@ -390,7 +400,12 @@ fn checked_with_config(
             .take(110)
             .collect::<String>()
     })?;
-    Ok((validated, entry, reference))
+    Ok(Prepared {
+        input: validated,
+        entry,
+        reference,
+        compiled_only,
+    })
 }
 
 /// Run one source under `matrix`. Must be called on a compiler stack.
@@ -420,13 +435,25 @@ fn run_source_path(
     );
     match checked_with_config(
         &mut engine,
+        id,
         source,
         path,
         matrix
             .first()
             .map(|c| c.options.launch.clone())
             .unwrap_or_default(),
-    ) {
+    )
+    .and_then(|prepared| {
+        if prepared.compiled_only
+            && !matrix
+                .iter()
+                .any(|c| !matches!(c.engine, Engine::Heap { .. }))
+        {
+            Err("expected-stdout oracle requires a compiled native configuration".into())
+        } else {
+            Ok(prepared)
+        }
+    }) {
         Err(reason) => CaseResult {
             id: id.to_string(),
             snapshot: Some(reason),
@@ -434,18 +461,28 @@ fn run_source_path(
             reference: None,
             wall: Default::default(),
         },
-        Ok((validated, entry, reference)) => {
+        Ok(Prepared {
+            input: validated,
+            entry,
+            reference,
+            compiled_only,
+        }) => {
+            let matrix: Vec<_> = matrix
+                .iter()
+                .filter(|c| !compiled_only || !matches!(c.engine, Engine::Heap { .. }))
+                .cloned()
+                .collect();
             let outcomes = differential_in(
                 &validated,
                 &entry,
                 &reference,
-                matrix,
+                &matrix,
                 toolchain,
                 dir,
                 &crate::fixture(source).unwrap(),
             )
             .into_iter()
-            .zip(matrix)
+            .zip(&matrix)
             .map(|((name, outcome), configuration)| (name, Class::of(configuration), outcome))
             .collect();
             CaseResult {
@@ -514,6 +551,9 @@ fn visit_test_suite(
     ) -> Vec<(String, Class, Outcome)>,
 ) -> CaseResult {
     let run = || -> Result<CaseResult, String> {
+        if oracle::expected_stdout(id, source, path)?.is_some() {
+            return Err("expected-stdout oracle requires a main entry, not expect: test".into());
+        }
         let fallback = dir.join("test-suite.hir");
         if path.is_none() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -642,7 +682,7 @@ pub fn replay_source_with_config(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    match checked_with_config(&mut engine, source, path, launch.clone()) {
+    match checked_with_config(&mut engine, id, source, path, launch.clone()) {
         Err(reason) => CaseResult {
             id: id.to_string(),
             snapshot: Some(reason),
@@ -650,7 +690,12 @@ pub fn replay_source_with_config(
             reference: None,
             wall: Default::default(),
         },
-        Ok((validated, entry, reference)) => CaseResult {
+        Ok(Prepared {
+            input: validated,
+            entry,
+            reference,
+            ..
+        }) => CaseResult {
             id: id.to_string(),
             snapshot: None,
             outcomes: vec![(
