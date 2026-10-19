@@ -173,27 +173,39 @@ def daemon_lifetime():
 
 # ---------------------------------------------------------------- gate slots
 
-# `dir:N`: count and express-count control independent FIFO pools. Preserve
-# normal slot/queue paths so already-loaded gates share the normal pool.
-# Unset, there is no cap.
+# The host's slot directory: its `count` and `express-count` files cap normal
+# and express gates and are re-read every poll (tools/gate --set-slots). The
+# count is the host's, never a process's: a `:N` in HIRSEL_GATE_SLOTS is
+# ignored, so a stale value in a brief or a shell cannot strand slots.
+# HIRSEL_GATE_SLOTS=<dir> selects another directory and `none` runs uncapped.
 GATE_SLOTS = 'HIRSEL_GATE_SLOTS'
+GATE_SLOT_DIR = Path('/workspace/code/hirsel-briefs/locks/gate-slots')
+NO_SLOTS = 'none'
 SLOT_POLL_SECONDS = 5
 NORMAL_POOL = 'normal'
 EXPRESS_POOL = 'express'
-EXPRESS_SLOTS = 2
+# What seeds a missing count file.
+DEFAULT_SLOTS = {NORMAL_POOL: 6, EXPRESS_POOL: 2}
 # One selected conformance slice and one agreement slice, plus two test targets.
 EXPRESS_TEST_TARGETS = 4
 POOL_PREFIX = {NORMAL_POOL: '', EXPRESS_POOL: 'express-'}
 
 
-def gate_slot_config(environ):
-    spec = environ.get(GATE_SLOTS, '')
-    if not spec:
+def gate_slot_dir(environ):
+    """The host's slot directory, or None for no cap: HIRSEL_GATE_SLOTS names
+    another directory (`dir`, or `dir:N` with N ignored) or `none`; unset, the
+    host default when its parent exists."""
+    spec = environ.get(GATE_SLOTS)
+    if spec is None:
+        return GATE_SLOT_DIR if GATE_SLOT_DIR.parent.is_dir() else None
+    if spec == NO_SLOTS:
         return None
-    directory, _, count = spec.rpartition(':')
-    if not directory or not count.isascii() or not count.isdigit() or int(count) < 1:
-        raise SystemExit(f'gate: {GATE_SLOTS}={spec!r} is not dir:N')
-    return Path(directory), int(count)
+    directory, colon, count = spec.rpartition(':')
+    if colon and count.isascii() and count.isdigit():
+        spec = directory
+    if not spec:
+        raise SystemExit(f'gate: {GATE_SLOTS}={environ[GATE_SLOTS]!r} names no directory (dir, or {NO_SLOTS})')
+    return Path(spec)
 
 
 def write_gate_slot_count(directory, count, *, pool=NORMAL_POOL, seed=False):
@@ -217,12 +229,12 @@ def write_gate_slot_count(directory, count, *, pool=NORMAL_POOL, seed=False):
             pending.unlink(missing_ok=True)
 
 
-def read_gate_slot_count(directory, fallback, *, pool=NORMAL_POOL):
+def read_gate_slot_count(directory, fallback=None, *, pool=NORMAL_POOL):
     path = directory / (POOL_PREFIX[pool] + 'count')
     try:
         text = path.read_text().strip()
     except FileNotFoundError:
-        return fallback
+        return DEFAULT_SLOTS[pool] if fallback is None else fallback
     if not text.isascii() or not text.isdigit() or int(text) < 1:
         raise SystemExit(f'gate: {path}={text!r} is not a positive slot count')
     return int(text)
@@ -237,10 +249,11 @@ def process_start(pid):
     return None if fields[0] == 'Z' else int(fields[19])
 
 
-def oldest_gate_ticket(queue):
-    """Find the earliest live waiter, discarding tickets left by exited gates."""
+def live_tickets(queue):
+    """The queue's live waiters, earliest first, as (stamp, pid, ticket);
+    tickets left by exited gates are discarded."""
     live = []
-    for ticket in queue.iterdir():
+    for ticket in queue.iterdir() if queue.is_dir() else ():
         try:
             stamp, pid = map(int, ticket.name.split('-'))
         except ValueError:
@@ -264,7 +277,74 @@ def oldest_gate_ticket(queue):
         except PermissionError:
             pass  # A live process owned by another user.
         live.append((stamp, pid, ticket))
-    return min(live)[2] if live else None
+    return sorted(live)
+
+
+def oldest_gate_ticket(queue):
+    """The earliest live waiter's ticket."""
+    live = live_tickets(queue)
+    return live[0][2] if live else None
+
+
+def process_cwd(pid):
+    """A process's working directory: a gate's or a land's worktree."""
+    try:
+        return os.readlink(f'/proc/{pid}/cwd')
+    except OSError:
+        return '?'
+
+
+def holder(path):
+    """A slot file's live holder as (pid, worktree, acquired), or None when free."""
+    try:
+        fields = path.read_text().split()
+        acquired = path.stat().st_mtime
+    except (OSError, ValueError):
+        return None
+    if len(fields) < 2 or not fields[0].isdigit() or str(process_start(int(fields[0]))) != fields[1]:
+        return None
+    # A live process may have released the slot: probe the lock without waiting.
+    # A gate that meets the probe moves on to the next slot or the next poll.
+    try:
+        with open(path) as handle:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return None
+    except BlockingIOError:
+        return int(fields[0]), (fields[2] if len(fields) > 2 else '?'), acquired
+    except OSError:
+        return None
+
+
+def minutes(seconds):
+    return f'{seconds / 60:.0f} min' if seconds >= 60 else f'{seconds:.0f} s'
+
+
+def queue_status(directory, *, pool=NORMAL_POOL, label='gate', me=(), now=None):
+    """A pool's cap, its holders with their age, and its queue in order, as lines.
+    `me` are this lane's worktrees: their holders and waiters are marked."""
+    now = time.time() if now is None else now
+    prefix = POOL_PREFIX[pool]
+    description = 'land lock' if label == 'land' else f'{pool} gate slots'
+    count = read_gate_slot_count(directory, pool=pool) if label != 'land' else 1
+    slots = sorted((int(path.name.rpartition('-')[2]), path) for path in directory.glob(prefix + 'slot-*')
+                   if path.name.rpartition('-')[2].isdigit())
+    held = [(slot, found) for slot, path in slots if (found := holder(path))]
+    waiting = [(stamp, pid, process_cwd(pid)) for stamp, pid, _ in live_tickets(directory / (prefix + 'queue'))]
+    lines = [f'{label}: {description}: {count} in {directory}; {len(held)} held, {len(waiting)} queued']
+    for slot, (pid, worktree, acquired) in held:
+        retired = ' (retired by a lowered count)' if slot >= count else ''
+        mine = ' (you)' if worktree in me else ''
+        lines.append(f'  slot {slot}{retired}: held {minutes(now - acquired)} by {worktree} (pid {pid}){mine}')
+    for position, (stamp, pid, worktree) in enumerate(waiting, 1):
+        mine = ' (you)' if worktree in me else ''
+        lines.append(f'  queued {position}: waiting {minutes(now - stamp / 1e9)}, {worktree} (pid {pid}){mine}')
+    for slot, (pid, worktree, acquired) in held:
+        if worktree in me:
+            lines.append(f'{label}: you hold {description.removesuffix("s")} {slot}')
+    positions = [position for position, (_, _, worktree) in enumerate(waiting, 1) if worktree in me]
+    if positions:
+        lines.append(f'{label}: you are at {positions[0]} of {len(waiting)} in the {description.removesuffix("s")} queue')
+    return lines
 
 
 @dataclass
@@ -276,14 +356,11 @@ class SlotTiming:
 @contextlib.contextmanager
 def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
     """Hold one slot in the selected host pool, in its own FIFO waiter order."""
-    config = gate_slot_config(environ)
-    if config is None:
+    directory = gate_slot_dir(environ)
+    if directory is None:
         yield
         return
-    directory, fallback = config
-    if pool == EXPRESS_POOL:
-        fallback = EXPRESS_SLOTS
-    with fifo_slot(directory, fallback, pool=pool) as timing:
+    with fifo_slot(directory, DEFAULT_SLOTS[pool], pool=pool) as timing:
         yield timing
 
 
@@ -330,7 +407,8 @@ def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=
                         continue
                     with handle:
                         handle.truncate(0)
-                        handle.write(f'{os.getpid()} {process_start(os.getpid())} {ROOT}\n')
+                        # The worktree, not ROOT: land runs main's copy of the scripts.
+                        handle.write(f'{os.getpid()} {process_start(os.getpid())} {os.getcwd()}\n')
                         handle.flush()
                         ticket.unlink(missing_ok=True)
                         acquired = time.monotonic()

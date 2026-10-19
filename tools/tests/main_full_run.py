@@ -34,7 +34,7 @@ class MainFullRun(unittest.TestCase):
             'HIRSEL_MAIN_RUNS': str(self.runs),
             'HIRSEL_MAIN_WORKTREES': str(self.trees),
         }
-        self.env.pop('HIRSEL_GATE_SLOTS', None)
+        self.env['HIRSEL_GATE_SLOTS'] = 'none'
         self.scope_args = self.root / 'scope-args'
         self.env['SCOPE_ARGS'] = str(self.scope_args)
         scope = self.bin / 'systemd-run'
@@ -282,7 +282,7 @@ sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
         self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7',
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not acquire a slot held by the gate running this test.
-        self.env.pop('HIRSEL_GATE_SLOTS', None)
+        self.env['HIRSEL_GATE_SLOTS'] = 'none'
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.write_text('''#!/usr/bin/env bash
 if [[ ${2:-} == --event-log ]]; then command=$1; shift 3; set -- "$command" "$@"; fi
@@ -365,7 +365,7 @@ class NativeGate(unittest.TestCase):
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
-        self.env.pop('HIRSEL_GATE_SLOTS', None)
+        self.env['HIRSEL_GATE_SLOTS'] = 'none'
         (self.root / 'tools').mkdir()
         (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
         (self.root / 'tools/buck2').mkdir()

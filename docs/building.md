@@ -704,8 +704,10 @@ context lines, and the crates it touches), its floor, its selection and its
 builds and checks formatting. After an edit to a passed change (a one-file
 fix, a hand-resolved conflict), `tools/gate --extend --why "<line>"` runs the
 floor of the paths whose change differs from the recorded pass and the test
-targets that own them, plus any `--tests`, and records the edited change. With
-`HIRSEL_GATE_SLOTS=dir:N` set, gates use two independent FIFO pools. The gate
+targets that own them, plus any `--tests`, and records the edited change.
+Gates use two independent FIFO pools in the host's slot directory,
+`/workspace/code/hirsel-briefs/locks/gate-slots` (`HIRSEL_GATE_SLOTS=<dir>`
+selects another, `none` runs uncapped). The gate
 classifies its settled floor plus choice before queueing: no whole
 conformance/agreement campaign, no native/LLVM/Cranelift campaign, and at most
 four distinct test targets (including selected corpus shards) uses express;
@@ -714,15 +716,18 @@ agreement slice (260 cases), and two ordinary test targets. Sharded tests
 count each resolved shard. `--full` uses normal; a passed change's build-only
 check uses express; tooling-only gates take no slot.
 
-The normal pool keeps `dir/count`, `dir/queue` and `dir/slot-<n>`; N seeds a
-missing count. Express uses `dir/express-count` (default 2), `dir/express-queue`
-and `dir/express-slot-<n>`, so it never waits for normal gates. Each pool
-re-reads its count every poll. `tools/gate --set-slots N` and
+The normal pool keeps `dir/count` (6 when absent), `dir/queue` and
+`dir/slot-<n>`. Express uses `dir/express-count` (default 2), `dir/express-queue`
+and `dir/express-slot-<n>`, so it never waits for normal gates. The counts are
+the host's: each pool re-reads its count every poll, and a `:N` suffix on
+`HIRSEL_GATE_SLOTS` is ignored, so a stale count in a brief or a shell cannot
+strand slots. `tools/gate --set-slots N` and
 `tools/gate --set-express-slots N` atomically change the respective count;
 neither option chooses a gate's class. Lowering a count leaves existing
 holders running. The gate output, green receipt and landing log name the pool.
-Already-queued gates keep their loaded code and their normal queue. Unset,
-there is no host slot cap.
+`tools/gate --status` prints each pool's count, its holders with how long they
+have held a slot, the queue in order with each waiter's worktree and wait, and
+this worktree's place; it runs no Buck2 and leaves the worktree's daemon alone.
 
 Nothing runs the full suite on a schedule. Per-push selection and its floor
 are the only routine net, so choose what the change can break, and say in

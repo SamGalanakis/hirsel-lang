@@ -7,6 +7,7 @@
     tools/gate --extend [--tests ...] --why ...   # after an edit to a passed change
     tools/gate --base <commit> ...                # the change from <commit> (for example a replay)
     tools/gate --full                             # every stage, on demand at milestone cuts
+    tools/gate --status                           # the slot queues: holders, their age, your position
     tools/gate --set-slots N                      # change the normal pool's cap
     tools/gate --set-express-slots N              # change the express pool's cap
 
@@ -43,8 +44,10 @@ rerunning local checks and only Buck2 targets without a recorded pass. Target
 results are reusable only with the same change identity and campaign settings;
 a partial receipt never authorizes tools/land.
 
-`$HIRSEL_GATE_SLOTS` (`dir:N`) selects a host's slot directory. Its `count`
-file caps normal gates; N seeds it only when absent. A settled selection with
+Gates share the host's slot directory, /workspace/code/hirsel-briefs/locks/gate-slots
+(`$HIRSEL_GATE_SLOTS` names another, or `none` for no cap; a `:N` suffix is
+ignored). Its `count` file caps normal gates (6 when absent): the count is the
+host's, never a process's. A settled selection with
 no whole campaign or native programs and at most four distinct test targets
 (including selected corpus shards) uses a separate express pool: its
 `express-count` defaults to 2. Four accommodates one conformance slice (up to
@@ -52,8 +55,9 @@ no whole campaign or native programs and at most four distinct test targets
 Each pool has its own FIFO, and re-reads its count every poll. `--set-slots N`
 and `--set-express-slots N` atomically update their counts without running a
 gate; neither selects a gate's class. Lowering a count leaves held slots
-running. Unset, there is no cap. Output and the green receipt name the pool;
-tooling-only gates use no pool.
+running. Output and the green receipt name the pool;
+tooling-only gates use no pool. `--status` prints each pool's cap, its holders
+and how long they have held, the queue in order, and this worktree's place.
 
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff without the generated docs/api.md, and the
@@ -609,10 +613,16 @@ def main():
     parser.add_argument('--tests', nargs='+', default=[], metavar='TEST', help='what to run beyond the floor (forms above)')
     parser.add_argument('--why', help='one line: why this selection suffices')
     parser.add_argument('--extend', action='store_true', help='resume a failed gate or add an edit to the last passed change')
+    parser.add_argument('--status', action='store_true', help='print the slot queues and this worktree\'s place; run nothing')
     counts = parser.add_mutually_exclusive_group()
     counts.add_argument('--set-slots', type=int, metavar='N', help='set the normal pool count; run no checks')
     counts.add_argument('--set-express-slots', type=int, metavar='N', help='set the express pool count; run no checks')
     args = parser.parse_args()
+    if args.status:
+        if (args.full or args.suggest or args.tests or args.extend or args.why or args.base != 'origin/main'
+                or args.set_slots is not None or args.set_express_slots is not None):
+            parser.error('--status takes no other option')
+        return status()
     if args.set_slots is not None or args.set_express_slots is not None:
         pool = gating.NORMAL_POOL if args.set_slots is not None else gating.EXPRESS_POOL
         option = '--set-slots' if args.set_slots is not None else '--set-express-slots'
@@ -621,13 +631,30 @@ def main():
             parser.error(f'{option} takes no other option')
         if count < 1:
             parser.error(f'{option} must be positive')
-        config = gating.gate_slot_config(os.environ)
-        if config is None:
-            parser.error(f'{option} requires HIRSEL_GATE_SLOTS=dir:N')
-        directory, _ = config
+        directory = gating.gate_slot_dir(os.environ)
+        if directory is None:
+            parser.error(f'{option} needs a slot directory, and {gating.GATE_SLOTS} is {gating.NO_SLOTS}')
         gating.write_gate_slot_count(directory, count, pool=pool)
         say(f'gate: set {directory / (gating.POOL_PREFIX[pool] + "count")} to {count}')
         return 0
+    # Only what runs Buck2 owns the worktree's daemon: --status and the slot
+    # counts must never stop the daemon of a gate running in this worktree.
+    with gating.daemon_lifetime():
+        return checks(args, parser)
+
+
+def status():
+    directory = gating.gate_slot_dir(os.environ)
+    if directory is None:
+        say(f'gate: no slot cap ({gating.GATE_SLOTS}={gating.NO_SLOTS})')
+        return 0
+    for pool in (gating.NORMAL_POOL, gating.EXPRESS_POOL):
+        for line in gating.queue_status(directory, pool=pool, me={str(ROOT)}):
+            say(line)
+    return 0
+
+
+def checks(args, parser):
     os.chdir(ROOT)
     if args.full:
         if args.suggest or args.tests or args.extend or args.base != 'origin/main':
@@ -646,5 +673,4 @@ def main():
 
 
 if __name__ == '__main__':
-    with gating.daemon_lifetime():
-        sys.exit(main())
+    sys.exit(main())

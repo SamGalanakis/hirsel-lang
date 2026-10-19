@@ -957,10 +957,11 @@ class Slots(unittest.TestCase):
                                 self.fail('a gate acquired a retired slot')
                 self.assertEqual((directory / (prefix + 'count')).read_text(), '1\n')
 
-    def test_a_missing_count_falls_back_to_the_environment_on_the_next_poll(self):
+    def test_a_missing_count_falls_back_to_the_host_default_not_the_environment(self):
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch) / 'slots'
-            environ = {gating.GATE_SLOTS: f'{directory}:2'}
+            # A stale `:1` from a brief must not cap the host at one slot.
+            environ = {gating.GATE_SLOTS: f'{directory}:1'}
             gating.write_gate_slot_count(directory, 1)
             polls = []
 
@@ -974,17 +975,33 @@ class Slots(unittest.TestCase):
                         self.assertEqual(polls, ['waited'])
                         self.assertFalse((directory / 'count').exists())
                         self.assertTrue((directory / 'slot-1').exists())
+                        with gating.gate_slot(environ):
+                            self.assertTrue((directory / 'slot-2').exists())
 
-    def test_the_environment_seeds_only_an_absent_count(self):
+    def test_the_default_seeds_only_an_absent_count_and_the_environment_count_is_ignored(self):
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch) / 'slots'
-            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}):
-                self.assertEqual((directory / 'count').read_text(), '2\n')
+            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:4'}):
+                self.assertEqual((directory / 'count').read_text(), '6\n')
+            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}, pool=gating.EXPRESS_POOL):
+                self.assertEqual((directory / 'express-count').read_text(), '2\n')
             gating.write_gate_slot_count(directory, 1)
             gating.write_gate_slot_count(directory, 6, seed=True)
-            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:4'}):
+            with gating.gate_slot({gating.GATE_SLOTS: str(directory)}):
                 self.assertEqual((directory / 'count').read_text(), '1\n')
             self.assertEqual(list(directory.glob('.count-*')), [])
+
+    def test_unset_the_host_directory_is_used_and_none_runs_uncapped(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            host = Path(scratch) / 'locks/gate-slots'
+            with patch.object(gating, 'GATE_SLOT_DIR', host):
+                self.assertIsNone(gating.gate_slot_dir({}))
+                host.parent.mkdir()
+                self.assertEqual(gating.gate_slot_dir({}), host)
+                self.assertEqual(gating.gate_slot_dir({gating.GATE_SLOTS: f'{scratch}/other:4'}), Path(scratch) / 'other')
+                self.assertIsNone(gating.gate_slot_dir({gating.GATE_SLOTS: gating.NO_SLOTS}))
+                with gating.gate_slot({}):
+                    self.assertEqual((host / 'count').read_text(), '6\n')
 
     def test_an_invalid_count_is_refused_and_the_ticket_is_removed(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -999,7 +1016,8 @@ class Slots(unittest.TestCase):
 
     def test_a_gate_waits_while_every_slot_is_held_and_takes_the_first_freed(self):
         with tempfile.TemporaryDirectory() as scratch:
-            environ = {gating.GATE_SLOTS: f'{scratch}/slots:2'}
+            environ = {gating.GATE_SLOTS: f'{scratch}/slots'}
+            gating.write_gate_slot_count(Path(scratch) / 'slots', 2)
             poll, gating.SLOT_POLL_SECONDS = gating.SLOT_POLL_SECONDS, 0.05
             self.addCleanup(setattr, gating, 'SLOT_POLL_SECONDS', poll)
             entered = threading.Event()
@@ -1168,7 +1186,8 @@ class Slots(unittest.TestCase):
 
     def test_an_interrupted_waiter_removes_its_ticket(self):
         with tempfile.TemporaryDirectory() as scratch:
-            environ = {gating.GATE_SLOTS: f'{scratch}/slots:1'}
+            environ = {gating.GATE_SLOTS: f'{scratch}/slots'}
+            gating.write_gate_slot_count(Path(scratch) / 'slots', 1)
             queue = Path(scratch) / 'slots/queue'
 
             def interrupt(_):
@@ -1181,11 +1200,47 @@ class Slots(unittest.TestCase):
                         self.fail('a waiter entered an occupied slot')
                 self.assertEqual(list(queue.iterdir()), [])
 
-    def test_no_cap_without_the_variable_and_a_malformed_one_is_refused(self):
-        with gating.gate_slot({}), gating.gate_slot({}), gating.gate_slot({}):
+    def test_no_cap_with_none_and_a_spec_without_a_directory_is_refused(self):
+        none = {gating.GATE_SLOTS: gating.NO_SLOTS}
+        with gating.gate_slot(none), gating.gate_slot(none), gating.gate_slot(none):
             pass
-        with self.assertRaises(SystemExit), gating.gate_slot({gating.GATE_SLOTS: '/tmp/slots'}):
-            pass
+        for spec in ('', ':4'):
+            with self.subTest(spec=spec):
+                with self.assertRaises(SystemExit), gating.gate_slot({gating.GATE_SLOTS: spec}):
+                    pass
+
+    def test_status_names_holders_their_age_the_queue_and_this_worktrees_place(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            gating.write_gate_slot_count(directory, 2)
+            mine = os.getcwd()
+            sleeper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=scratch)
+            self.addCleanup(sleeper.wait)
+            self.addCleanup(sleeper.kill)
+            queue = directory / 'queue'
+            queue.mkdir()
+            now = gating.time.time()
+            (queue / f'{int((now - 600) * 1e9)}-{sleeper.pid}').write_text(f'{gating.process_start(sleeper.pid)}\n')
+            (queue / f'{int((now - 40) * 1e9)}-{os.getpid()}').write_text(f'{gating.process_start(os.getpid())}\n')
+            # A slot file whose holder exited is free.
+            (directory / 'slot-1').write_text(f'{sleeper.pid} 1 /elsewhere\n')
+            handle = open(directory / 'slot-0', 'a+')
+            self.addCleanup(handle.close)
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            handle.truncate(0)
+            handle.write(f'{os.getpid()} {gating.process_start(os.getpid())} {mine}\n')
+            handle.flush()
+            os.utime(directory / 'slot-0', (now - 300, now - 300))
+            lines = gating.queue_status(directory, me={mine}, now=now)
+            self.assertEqual(lines[0], f'gate: normal gate slots: 2 in {directory}; 1 held, 2 queued')
+            self.assertEqual(lines[1], f'  slot 0: held 5 min by {mine} (pid {os.getpid()}) (you)')
+            self.assertEqual(lines[2], f'  queued 1: waiting 10 min, {scratch} (pid {sleeper.pid})')
+            self.assertEqual(lines[3], f'  queued 2: waiting 40 s, {mine} (pid {os.getpid()}) (you)')
+            self.assertEqual(lines[4:], ['gate: you hold normal gate slot 0',
+                                         'gate: you are at 2 of 2 in the normal gate slot queue'])
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            self.assertEqual(gating.queue_status(directory, me={mine}, now=now)[0],
+                             f'gate: normal gate slots: 2 in {directory}; 0 held, 2 queued')
 
 
 class Summary(unittest.TestCase):
@@ -1416,8 +1471,9 @@ class Scripts(unittest.TestCase):
                                  'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
                                  'HIRSEL_LAND_LOCK_DIR': str(top / 'land-lock'),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
-        # Scratch gates must not acquire a slot held by the gate running this test.
-        self.env.pop('HIRSEL_GATE_SLOTS', None)
+        # Scratch gates must not queue for the host's slots, nor acquire one
+        # held by the gate running this test.
+        self.env[gating.GATE_SLOTS] = gating.NO_SLOTS
         self.env.pop('HIRSEL_KEEP_DAEMON', None)
         self.env.pop('BUCK_ISOLATION_DIR', None)
         # A sibling's clone, to move main.
@@ -1623,6 +1679,16 @@ Local.start = traced_local_check
                     self.assertEqual(path.read_text(), '1\n')
         self.assertEqual((directory / 'count').read_text(), '1\n')
         self.assertEqual(list(directory.glob('.*count-*')), [])
+
+    def test_status_runs_no_buck2_and_leaves_the_worktrees_daemon_running(self):
+        directory = self.root.parent / 'slots'
+        with gating.gate_slot({gating.GATE_SLOTS: str(directory)}):
+            result, logged = self.run_tool('gate', '--status', env={gating.GATE_SLOTS: f'{directory}:4',
+                                                                    **self.daemon_env()})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((logged, self.daemon_trace()), ([], []))
+        self.assertIn(f'gate: normal gate slots: 6 in {directory}; 1 held, 0 queued', result.stdout)
+        self.assertIn('gate: express gate slots: 2', result.stdout)
 
     def test_set_slots_refuses_invalid_counts_missing_configuration_and_gate_options(self):
         directory = self.root.parent / 'slots'

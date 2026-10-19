@@ -59,6 +59,8 @@ worktree=$(mktemp -d "$trees/main-full-XXXXXXXX")
 rmdir "$worktree"
 git -C "$repo" worktree add --detach "$worktree" "$sha" >> "$log" 2>&1
 export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
+# The owner's on-demand run queues for no lane's gate slot unless told to.
+export HIRSEL_GATE_SLOTS="${HIRSEL_GATE_SLOTS:-none}"
 # Reuse build artifacts between scheduled runs; source inputs always come from the fresh tree.
 unset CARGO_TARGET_DIR_AUTO
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/hirsel/main-full-target}"
