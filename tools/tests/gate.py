@@ -1312,6 +1312,18 @@ if os.environ.get("INDEX_PUSH_ONCE"):
 sys.stdout.write(os.environ.get("INDEX_TEXT", Path("docs/catalogue.md").read_text()))
 '''
 
+FAKE_SCOPE = '''#!/usr/bin/env python3
+import os, sys
+with open(os.environ["COMMANDS"], "a") as log:
+    print("systemd-run " + " ".join(sys.argv[1:]), file=log)
+assert sys.argv[1:8] == ["--user", "--scope", "-q", "-p", "MemoryMax=2560M", "-p", "RuntimeMaxSec=300"]
+assert os.environ["XDG_RUNTIME_DIR"]
+if os.environ.get("FAIL_SCOPE"):
+    print("scope killed by resource limit", file=sys.stderr)
+    sys.exit(137)
+os.execv(sys.argv[8], sys.argv[8:])
+'''
+
 
 class Scripts(unittest.TestCase):
     """tools/gate and tools/land in a scratch clone with a fake Buck2 and fake helpers."""
@@ -1347,6 +1359,9 @@ class Scripts(unittest.TestCase):
         fake_buck2 = fake_bin / 'buck2'
         fake_buck2.write_text(FAKE_BUCK2)
         fake_buck2.chmod(0o755)
+        scope = fake_bin / 'systemd-run'
+        scope.write_text(FAKE_SCOPE)
+        scope.chmod(0o755)
         buck2.symlink_to(fake_buck2)
         hirsel = buck2.with_name('hirsel')
         hirsel.write_text(FAKE_HIRSEL)
@@ -1646,7 +1661,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
         directory.mkdir()
         result, logged = self.run_tool('land', env={
-            'PATH': str(wrapper.parent) + os.pathsep + os.environ['PATH'],
+            'PATH': str(wrapper.parent) + os.pathsep + self.env['PATH'],
             'REAL_GIT': real_git, 'LOCK_TRACE': str(trace), 'ASSERT_LAND_LOCK': '1',
         })
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1686,6 +1701,19 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(git(self.origin, 'rev-parse', 'main'), before)
         self.assertEqual((self.root / 'docs/api.md').read_text(), 'index\n')
         self.assertEqual(git(self.root, 'status', '--porcelain'), '')
+
+    def test_land_caps_the_index_generator_and_refuses_a_scope_kill(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        before = git(self.origin, 'rev-parse', 'main')
+        result, logged = self.run_tool('land', env={'FAIL_SCOPE': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('scope exit 137; MemoryMax=2560M, RuntimeMaxSec=300', result.stdout)
+        self.assertIn('refusing to push', result.stdout)
+        self.assertEqual(git(self.origin, 'rev-parse', 'main'), before)
+        self.assertEqual((self.root / 'docs/api.md').read_text(), 'index\n')
+        self.assertFalse(any(c.startswith('hirsel ') for c in logged), logged)
+        self.assertTrue(any(c.startswith('systemd-run --user --scope') for c in logged), logged)
 
     def test_land_regenerates_after_a_push_race_without_regating_or_extra_index_commits(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')

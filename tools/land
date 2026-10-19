@@ -92,12 +92,18 @@ def regenerate_index(checked_head):
         say('land: CLI build did not report its executable')
         return False, None
     try:
-        rendered = gating.run([str(executable), 'doc', 'stdlib/std@1/hirsel.json'], cwd=ROOT, capture_output=True)
+        rendered = gating.run(
+            ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=2560M', '-p', 'RuntimeMaxSec=300',
+             str(executable), 'doc', 'stdlib/std@1/hirsel.json'],
+            cwd=ROOT, capture_output=True,
+            env=os.environ | {'XDG_RUNTIME_DIR': os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'})
     except OSError as error:
         say(f'land: cannot run the index generator: {error}')
         return False, None
     if rendered.returncode:
-        say('land: index generation failed\n' + gating.last_lines(rendered.stderr.decode(errors='replace'), 20))
+        say(f'land: index generation failed (scope exit {rendered.returncode}; '
+            'MemoryMax=2560M, RuntimeMaxSec=300); refusing to push\n'
+            + gating.last_lines(rendered.stderr.decode(errors='replace'), 20))
         return False, None
     if (run('git', 'rev-parse', 'HEAD').stdout.strip() != checked_head
             or run('git', 'status', '--porcelain').stdout.strip()):
