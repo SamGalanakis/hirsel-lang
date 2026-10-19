@@ -636,7 +636,10 @@ fn precedence_file_matrix(rounds: usize) {
                     .map(|c| c.unwrap_or_else(|| file_completion(&request, error)));
                 let interpreted = reference.call(name, args);
                 match (native, interpreted) {
-                    (Err(AdapterError::InvalidHandle(_)), Err(_)) => (),
+                    (
+                        Err(AdapterError::InvalidHandle(_)),
+                        Err(hirsel_interp::Error::InvalidTir(_)),
+                    ) => (),
                     (Ok(expected), Ok(value)) => assert_eq!(
                         crate::support::io::decode(&expected, value),
                         expected,
@@ -984,7 +987,9 @@ fn precedence_net_matrix() {
             reference.cancel();
             let (name, args) = net_arguments(&request, &fallback);
             match (expected, reference.call(name, args)) {
-                (Err(AdapterError::InvalidHandle(_)), Err(_)) => (),
+                (Err(AdapterError::InvalidHandle(_)), Err(hirsel_interp::Error::InvalidTir(_))) => {
+                    ()
+                }
                 (Ok(expected), Ok(value)) => assert_eq!(
                     crate::support::io::network::decode(&expected, value, &[]),
                     expected,
@@ -1360,7 +1365,9 @@ fn precedence_process_matrix() {
             reference.cancel();
             let (name, args) = process_arguments(&request);
             match (expected, reference.call(name, args)) {
-                (Err(AdapterError::InvalidHandle(_)), Err(_)) => (),
+                (Err(AdapterError::InvalidHandle(_)), Err(hirsel_interp::Error::InvalidTir(_))) => {
+                    ()
+                }
                 (Ok(expected), Ok(value)) => assert_eq!(
                     value,
                     process_error_value(expected),
@@ -1466,7 +1473,9 @@ fn precedence_stream_matrix() {
             let expected = native.preflight(&request).map(|v| v.unwrap_or(expected));
             reference.cancel();
             match (expected, reference.call(name, arguments)) {
-                (Err(AdapterError::InvalidHandle(_)), Err(_)) => (),
+                (Err(AdapterError::InvalidHandle(_)), Err(hirsel_interp::Error::InvalidTir(_))) => {
+                    ()
+                }
                 (Ok(expected), Ok(value)) => {
                     let expected = match expected {
                         Completion::Input(Err(InputError::InvalidInput)) => {
