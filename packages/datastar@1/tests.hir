@@ -1,0 +1,256 @@
+// Tests of the datastar@1 SDK beyond the official golden cases, which run in the
+// corpus (conformance/PROG/PROG-1-datastar-sdk-golden.hir).
+@serializable
+type Search {
+  query: String,
+  page: u64,
+  tags: Option[List[String]],
+}
+
+fn search_from_json(value: json.Value) -> Result[unique Search, String] uses {} = comptime derive.from_json(
+  shape(Search)
+)
+
+fn parsed(raw: String) -> Option[http.ServerRequest] uses {} {
+  match http.parse_server_request(string.as_bytes(raw), 65536, 65536) {
+    Ok(Some((request, _))) => Some(take request),
+    _ => None(),
+  }
+}
+
+@test
+fn every_line_terminator_starts_a_new_data_line(t: Test) {
+  let event = patch_elements_event(
+    "<a id=\"x\">1</a>\r\n<b>\r2</b>\n<c id=\"y\"></c>",
+    elements_options()
+  )
+  test.equal(
+    t,
+    event,
+    "event: datastar-patch-elements\ndata: elements <a id=\"x\">1</a>\ndata: elements <b>\ndata: elements 2</b>\ndata: elements <c id=\"y\"></c>\n\n"
+  )
+  // A signal value cannot end the event early or add a field.
+  let signals = patch_signals_event("{\"a\":1}\n\nevent: forged", signals_options())
+  test.equal(
+    t,
+    signals,
+    "event: datastar-patch-signals\ndata: signals {\"a\":1}\ndata: signals \ndata: signals event: forged\n\n"
+  )
+}
+
+@test
+fn only_non_default_options_are_written(t: Test) {
+  let mut options = elements_options()
+  options.view_transition_selector = Some("#main")
+  options.retry_ms = DEFAULT_RETRY_MS
+  // A view transition selector needs a view transition.
+  test.equal(
+    t,
+    patch_elements_event("<p id=\"p\"></p>", options),
+    "event: datastar-patch-elements\ndata: elements <p id=\"p\"></p>\n\n"
+  )
+  options.use_view_transition = true
+  options.namespace = Svg()
+  options.mode = Inner()
+  options.selector = Some("#vis")
+  options.event_id = Some("7")
+  options.retry_ms = 0
+  test.equal(
+    t,
+    patch_elements_event("<circle r=\"5\"/>", options),
+    "event: datastar-patch-elements\nid: 7\nretry: 0\ndata: selector #vis\ndata: mode inner\ndata: useViewTransition true\ndata: viewTransitionSelector #main\ndata: namespace svg\ndata: elements <circle r=\"5\"/>\n\n"
+  )
+  let mut missing = signals_options()
+  missing.only_if_missing = true
+  test.equal(
+    t,
+    patch_signals_event("{\"n\":1}", missing),
+    "event: datastar-patch-signals\ndata: onlyIfMissing true\ndata: signals {\"n\":1}\n\n"
+  )
+}
+
+@test
+fn remove_keeps_its_other_options(t: Test) {
+  let mut options = elements_options()
+  options.mode = Append()
+  options.event_id = Some("r1")
+  test.equal(
+    t,
+    remove_elements_event("#feed, #other", options),
+    "event: datastar-patch-elements\nid: r1\ndata: selector #feed, #other\ndata: mode remove\n\n"
+  )
+}
+
+@test
+fn scripts_escape_attributes_and_redirects_quote_urls(t: Test) {
+  let mut options = script_options()
+  options.auto_remove = false
+  list.push(mut options.attributes, ("data-note", "a\"b<c>&'"))
+  test.equal(
+    t,
+    execute_script_event("go()", options),
+    "event: datastar-patch-elements\ndata: selector body\ndata: mode append\ndata: elements <script data-note=\"a&#34;b&lt;c&gt;&amp;&#39;\">go()</script>\n\n"
+  )
+  test.equal(
+    t,
+    redirect_event("/x\"</script>"),
+    "event: datastar-patch-elements\ndata: selector body\ndata: mode append\ndata: elements <script data-effect=\"el.remove()\">setTimeout(() => window.location.href = \"/x\\\"\\u003c/script>\")</script>\n\n"
+  )
+  test.equal(
+    t,
+    escape("<b class=\"x\">Tom & 'Jerry'</b>"),
+    "&lt;b class=&#34;x&#34;&gt;Tom &amp; &#39;Jerry&#39;&lt;/b&gt;"
+  )
+}
+
+@test
+fn signals_come_from_the_query_on_get_and_delete_and_the_body_otherwise(t: Test) {
+  let Some(get) = parsed(
+    "GET /search?x=1&datastar=%7B%22query%22%3A%22sheep+%26+goats%22%2C%22page%22%3A2%7D HTTP/1.1\r\nHost: a\r\n\r\n"
+  ) else {
+    test.fail(t)
+  }
+  let from_get = read_signals(get, search_from_json)
+  test.check(t, from_get == Ok(Search(query: "sheep & goats", page: 2, tags: None())))
+  let Some(delete) = parsed(
+    "DELETE /search?datastar=%7B%22query%22%3A%22%22%2C%22page%22%3A0%7D HTTP/1.1\r\nHost: a\r\n\r\n"
+  ) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    read_signals(delete, search_from_json) == Ok(
+      Search(query: "", page: 0, tags: None())
+    )
+  )
+  let Some(post) = parsed(
+    "POST /search HTTP/1.1\r\nHost: a\r\nContent-Type: application/json\r\nContent-Length: 45\r\n\r\n{\"query\":\"q\",\"page\":1,\"tags\":[\"a\",\"b\"],\"x\":1}"
+  ) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    read_signals(post, search_from_json) == Ok(
+      Search(query: "q", page: 1, tags: Some(["a", "b"]))
+    )
+  )
+}
+
+@test
+fn unreadable_signals_are_errors(t: Test) {
+  let Some(bare) = parsed("GET /search?page=1 HTTP/1.1\r\nHost: a\r\n\r\n") else {
+    test.fail(t)
+  }
+  test.check(t, read_signals_value(bare) == Error(Missing()))
+  let Some(empty) = parsed(
+    "POST /search HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n"
+  ) else {
+    test.fail(t)
+  }
+  test.check(t, read_signals_value(empty) == Error(Missing()))
+  let Some(broken) = parsed(
+    "PUT /search HTTP/1.1\r\nHost: a\r\nContent-Length: 6\r\n\r\n{\"a\":}"
+  ) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    match read_signals_value(broken) {
+      Error(Json(_)) => true,
+      _ => false,
+    }
+  )
+  let Some(bad_escape) = parsed("GET /search?datastar=%zz HTTP/1.1\r\nHost: a\r\n\r\n") else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    match read_signals_value(bad_escape) {
+      Error(Query(_)) => true,
+      _ => false,
+    }
+  )
+  let Some(wrong_shape) = parsed(
+    "PATCH /search HTTP/1.1\r\nHost: a\r\nContent-Length: 14\r\n\r\n{\"query\":true}"
+  ) else {
+    test.fail(t)
+  }
+  test.check(
+    t,
+    match read_signals(wrong_shape, search_from_json) {
+      Error(Decode(_)) => true,
+      _ => false,
+    }
+  )
+}
+
+// A browser opens the stream, receives two events in order, and sees it close.
+@test
+fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
+  let request = "GET /updates HTTP/1.1\r\nHost: tasks.test\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\n\r\n"
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 7331,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 50000),
+            tls: Plain(),
+            steps: [
+              Send(string.as_bytes(request)),
+              Expect(
+                b"HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+              ),
+              Expect(
+                b"event: datastar-patch-elements\ndata: elements <p id=\"n\">1</p>\n\n"
+              ),
+              Expect(b"event: datastar-patch-signals\ndata: signals {\"n\":1}\n\n")
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let Ok(listener) = net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 7331)
+  ) else {
+    test.fail(t)
+  }
+  let mut accepting = take listener
+  let Ok((stream, _)) = net.accept(n, mut accepting) else {
+    test.fail(t)
+  }
+  let mut incoming = take stream
+  let mut received: List[u8] = []
+  let mut parsed_request: Option[http.ServerRequest] = None()
+  while option.is_none(parsed_request) {
+    let Ok(count) = net.read(n, mut incoming, mut received, 4096) else {
+      test.fail(t)
+    }
+    test.check(t, count > 0)
+    if let Ok(Some((r, _))) = http.parse_server_request(
+      bytes.from_list(copy received),
+      65536,
+      0
+    ) {
+      parsed_request = Some(take r)
+    }
+  }
+  let Some(opened) = parsed_request else {
+    test.fail(t)
+  }
+  let Ok(generator) = new_sse(n, take incoming, opened) else {
+    test.fail(t)
+  }
+  let mut sse = take generator
+  test.check(
+    t,
+    results.is_ok(patch_elements(mut sse, "<p id=\"n\">1</p>", elements_options()))
+  )
+  test.check(t, results.is_ok(patch_signals(mut sse, "{\"n\":1}", signals_options())))
+  close(take sse)
+}

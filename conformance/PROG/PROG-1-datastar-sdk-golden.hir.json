@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "PROG-1-datastar-sdk-golden.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/datastar@1/hirsel.json",
+      "package": {
+        "name": "datastar",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "datastar",
+          "module": [
+            "datastar"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "get_execute_script_with_all_options"
+  }
+}

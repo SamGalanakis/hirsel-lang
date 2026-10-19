@@ -153,6 +153,7 @@ the license named in its row; the license texts follow once each.
 | FoundationDB | tuple layer `design/tuple.md` and `bindings/python/fdb/tuple.py`: the order-preserving byte-string escape, sign-bit integer transform, IEEE total-order float transform and `strinc`; the typecode table's test cases (`foo\x00bar`, `F\u00d4O\u0000bar`, `-5551212`, `-42f`) without their type codes | `stdlib/std@1/keys.hir`, `conformance/SEM/SEM-3-keys-*`, `docs/spec/std-library.md` | apple/foundationdb `487620d5aa41152b1f034f4e932005a87eb2947f` | Apache-2.0 (text below, without the LLVM exception) |
 | rustc-hash | `src/lib.rs` FxHasher: the rotate-xor-multiply word step and its 64-bit seed, with the 8/4/1-byte tail split | `crates/hirsel-intern/src/lib.rs` `IdHash` (session-id maps and spelling indexes) | rust-lang/rustc-hash `v1.1.0` | MIT |
 | Rust standard library | `library/core/src/num/imp/dec2flt/{lemire,table}.rs` Eisel-Lemire algorithm and 128-bit power-of-five table; `library/coretests/tests/num/dec2flt/lemire.rs` halfway, shifted-exponent and boundary vectors | `stdlib/std@1/float_lemire.hir`, `stdlib/std@1/float_decimal.hir` fast path, `conformance/SEM/SEM-2-float-parse-lemire-vectors.hir` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
+| Datastar | `sdk/ADR.md` server SDK specification and the Go and Python SDKs' API shape; `sdk/tests/golden` SDK conformance cases, inputs and outputs verbatim, with the Go test runner's event comparison | `packages/datastar@1/`, `conformance/PROG/PROG-1-datastar-sdk-golden.hir` | starfederation/datastar `1efcdc3cb336ec3e9139491604e770e0329657bc` | MIT |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -194,6 +195,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - zlib: Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler
 - FoundationDB: Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 - rustc-hash: Copyright (c) The Rust Project Developers
+- Datastar: Copyright (c) Star Federation
 
 ## Zlib License (zlib)
 

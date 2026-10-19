@@ -3812,6 +3812,7 @@ conformance/OWN/OWN-8-physical-finalizer-projection-ok.hir
 conformance/OWN/OWN-8-plain-field-copy.hir
 conformance/OWN/OWN-8-projected-part-survives-update.hir
 conformance/OWN/OWN-8-self-copy-ok.hir
+conformance/PROG/PROG-1-datastar-sdk-golden.hir
 conformance/PROG/PROG-1-definition-order-reversed.hir
 conformance/PROG/PROG-1-definition-order.hir
 conformance/PROG/PROG-1-dependency-role-bad.hir

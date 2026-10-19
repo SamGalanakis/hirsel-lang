@@ -1,0 +1,472 @@
+// The Datastar server SDK: Server-Sent Event rendering and writing for the
+// datastar-patch-elements and datastar-patch-signals events, and signal reading
+// from requests, after the SDK specification in starfederation/datastar
+// (sdk/ADR.md) and its Go and Python SDKs.
+/// The query parameter that carries signals on GET and DELETE requests.
+pub const DATASTAR_KEY: String = "datastar"
+
+/// The reconnection delay a browser assumes when an event names none, in milliseconds.
+pub const DEFAULT_RETRY_MS: u64 = 1000
+
+/// The two event types of the Datastar SSE protocol.
+pub type EventType = PatchElements | PatchSignals
+
+/// How patched elements enter the DOM. `Outer` and `Inner` morph, keeping element
+/// state; the others replace, insert or remove without morphing.
+pub type ElementPatchMode = Outer | Inner | Remove | Replace | Prepend | Append | Before | After
+
+/// The namespace new elements are created in.
+pub type Namespace = Html | Svg | MathMl
+
+/// The options of `patch_elements`; start from `elements_options()` and change fields.
+/// `selector` targets elements by CSS selector instead of by each element's id.
+/// `view_transition_selector` is sent only with `use_view_transition`.
+pub type ElementsOptions {
+  selector: Option[String],
+  mode: ElementPatchMode,
+  use_view_transition: bool,
+  view_transition_selector: Option[String],
+  namespace: Namespace,
+  event_id: Option[String],
+  retry_ms: u64,
+}
+
+/// The options of `patch_signals`; start from `signals_options()`.
+/// `only_if_missing` patches only signals the browser does not have yet.
+pub type SignalsOptions {
+  only_if_missing: bool,
+  event_id: Option[String],
+  retry_ms: u64,
+}
+
+/// The options of `execute_script`; start from `script_options()`.
+/// `auto_remove` removes the script element once it has run. `attributes` are written
+/// on the script tag in order, each value HTML-escaped.
+pub type ScriptOptions {
+  auto_remove: bool,
+  attributes: List[(String, String)],
+  event_id: Option[String],
+  retry_ms: u64,
+}
+
+/// Why signals could not be read: the request carried no JSON in the expected place
+/// (`Missing`), the query or body was not valid (`Query`, `Utf8`, `Json`), or the
+/// caller's decoder rejected the value (`Decode`).
+pub type SignalsError = Missing | Query(uri.QueryError) | Utf8 | Json(json.JsonError) | Decode(
+  String
+)
+
+/// Why an event could not be sent: the stream failed, so the browser has gone.
+pub type SseError = Write(NetError)
+
+/// The defaults: target by id, morph the outer element, no view transition, HTML.
+pub fn elements_options() -> ElementsOptions uses {} {
+  ElementsOptions(
+    selector: None(),
+    mode: Outer(),
+    use_view_transition: false,
+    view_transition_selector: None(),
+    namespace: Html(),
+    event_id: None(),
+    retry_ms: DEFAULT_RETRY_MS
+  )
+}
+
+/// The defaults: patch every signal, no event id, the default retry.
+pub fn signals_options() -> SignalsOptions uses {} {
+  SignalsOptions(only_if_missing: false, event_id: None(), retry_ms: DEFAULT_RETRY_MS)
+}
+
+/// The defaults: remove the script after it runs, no attributes.
+pub fn script_options() -> ScriptOptions uses {} {
+  ScriptOptions(
+    auto_remove: true,
+    attributes: [],
+    event_id: None(),
+    retry_ms: DEFAULT_RETRY_MS
+  )
+}
+
+/// The protocol name of an event type.
+pub fn event_type_text(kind: EventType) -> String uses {} {
+  match kind {
+    PatchElements() => "datastar-patch-elements",
+    PatchSignals() => "datastar-patch-signals",
+  }
+}
+
+/// The protocol name of a patch mode.
+pub fn mode_text(mode: ElementPatchMode) -> String uses {} {
+  match mode {
+    Outer() => "outer",
+    Inner() => "inner",
+    Remove() => "remove",
+    Replace() => "replace",
+    Prepend() => "prepend",
+    Append() => "append",
+    Before() => "before",
+    After() => "after",
+  }
+}
+
+/// The patch mode a protocol name denotes.
+pub fn mode_from_text(text: String) -> Option[ElementPatchMode] uses {} {
+  // GAP: native builds refuse String literal patterns, so this compares in turn.
+  let modes: List[ElementPatchMode] = [
+    Outer(),
+    Inner(),
+    Remove(),
+    Replace(),
+    Prepend(),
+    Append(),
+    Before(),
+    After()
+  ]
+  for mode in modes {
+    if mode_text(mode) == text {
+      return Some(mode)
+    }
+  }
+  None()
+}
+
+/// The protocol name of a namespace.
+pub fn namespace_text(namespace: Namespace) -> String uses {} {
+  match namespace {
+    Html() => "html",
+    Svg() => "svg",
+    MathMl() => "mathml",
+  }
+}
+
+/// The namespace a protocol name denotes.
+pub fn namespace_from_text(text: String) -> Option[Namespace] uses {} {
+  // GAP: native builds refuse String literal patterns, so this compares in turn.
+  let namespaces: List[Namespace] = [Html(), Svg(), MathMl()]
+  for namespace in namespaces {
+    if namespace_text(namespace) == text {
+      return Some(namespace)
+    }
+  }
+  None()
+}
+
+// ---- events ----
+// Appends `prefix` and each line of `text` as one data line. Every SSE line
+// terminator (CRLF, LF or a lone CR) splits a line, so no data can end the event
+// early or inject a field.
+fn data_lines(mut out: List[String], prefix: String, text: String) -> () uses {} {
+  let data = string.as_bytes(text)
+  let len = bytes.len(data)
+  let mut begin: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    let b = data[i]
+    if b == 10 || b == 13 {
+      list.push(mut out, line_at(prefix, data, begin, i))
+      if b == 13 && i + 1 < len && data[i + 1] == 10 {
+        i += 1
+      }
+      begin = i + 1
+    }
+    i += 1
+  }
+  list.push(mut out, line_at(prefix, data, begin, len))
+}
+
+fn line_at(prefix: String, data: Bytes, begin: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, prefix)
+  for b in bytes.slice(data, begin, end) {
+    list.push(mut out, b)
+  }
+  text.finish_valid(take out)
+}
+
+/// One complete SSE event, in the specification's order: `event`, `id` when given,
+/// `retry` unless it is the default, a `data` line per entry of `data`, and the blank
+/// line that ends the event. A data entry must not contain a line terminator; the
+/// `_event` functions below split their text so none does.
+pub fn event_text(
+  kind: EventType,
+  data: List[String],
+  event_id: Option[String],
+  retry_ms: u64
+) -> unique String uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, "event: ")
+  text.append(mut out, event_type_text(kind))
+  text.append(mut out, "\n")
+  if let Some(id) = event_id {
+    text.append(mut out, "id: ")
+    text.append(mut out, id)
+    text.append(mut out, "\n")
+  }
+  if retry_ms != DEFAULT_RETRY_MS {
+    text.append(mut out, "retry: ")
+    u64.format_into(retry_ms, mut out)
+    text.append(mut out, "\n")
+  }
+  for line in data {
+    text.append(mut out, "data: ")
+    text.append(mut out, line)
+    text.append(mut out, "\n")
+  }
+  text.append(mut out, "\n")
+  text.finish_valid(take out)
+}
+
+/// The `datastar-patch-elements` event for `elements`, one or more complete HTML
+/// elements; each top-level element needs an id unless `options.selector` is set.
+/// Only options that differ from the defaults are written. Empty `elements` writes no
+/// elements line, as `Remove` needs.
+pub fn patch_elements_event(elements: String, options: ElementsOptions) -> unique String uses {} {
+  let mut data: List[String] = []
+  if let Some(selector) = options.selector {
+    list.push(mut data, f"selector {selector}")
+  }
+  if options.mode != Outer() {
+    list.push(mut data, f"mode {mode_text(options.mode)}")
+  }
+  if options.use_view_transition {
+    list.push(mut data, "useViewTransition true")
+    if let Some(selector) = options.view_transition_selector {
+      list.push(mut data, f"viewTransitionSelector {selector}")
+    }
+  }
+  if options.namespace != Html() {
+    list.push(mut data, f"namespace {namespace_text(options.namespace)}")
+  }
+  if string.byte_len(elements) > 0 {
+    data_lines(mut data, "elements ", elements)
+  }
+  event_text(PatchElements(), data, options.event_id, options.retry_ms)
+}
+
+/// The event that removes the elements `selector` matches: `patch_elements` with no
+/// elements, the selector and mode `Remove`. Other options are kept.
+pub fn remove_elements_event(selector: String, options: ElementsOptions) -> unique String uses {} {
+  let mut removal = unique options
+  removal.selector = Some(unique selector)
+  removal.mode = Remove()
+  patch_elements_event("", removal)
+}
+
+/// The `datastar-patch-signals` event for `signals`, JSON text applied as an RFC 7386
+/// merge patch: a `null` member removes that signal.
+pub fn patch_signals_event(signals: String, options: SignalsOptions) -> unique String uses {} {
+  let mut data: List[String] = []
+  if options.only_if_missing {
+    list.push(mut data, "onlyIfMissing true")
+  }
+  data_lines(mut data, "signals ", signals)
+  event_text(PatchSignals(), data, options.event_id, options.retry_ms)
+}
+
+/// `patch_signals` for a JSON value, written compactly.
+pub fn patch_signals_value_event(signals: json.Value, options: SignalsOptions) -> Result[
+  unique String,
+  json.JsonError
+] uses {} {
+  let text = json.stringify(signals)?
+  Ok(patch_signals_event(text, options))
+}
+
+/// The event that runs `script` in the browser: a script element appended to `body`,
+/// with the attributes in order, then `data-effect="el.remove()"` when `auto_remove`.
+pub fn execute_script_event(script: String, options: ScriptOptions) -> unique String uses {} {
+  let mut tag: List[u8] = []
+  text.append(mut tag, "<script")
+  for (name, value) in options.attributes {
+    text.append(mut tag, " ")
+    text.append(mut tag, name)
+    text.append(mut tag, "=\"")
+    escape_into(value, mut tag)
+    text.append(mut tag, "\"")
+  }
+  if options.auto_remove {
+    text.append(mut tag, " data-effect=\"el.remove()\"")
+  }
+  text.append(mut tag, ">")
+  text.append(mut tag, script)
+  text.append(mut tag, "</script>")
+  let mut placement = elements_options()
+  placement.selector = Some("body")
+  placement.mode = Append()
+  placement.event_id = unique options.event_id
+  placement.retry_ms = options.retry_ms
+  patch_elements_event(text.finish_valid(take tag), placement)
+}
+
+/// The event that sends the browser to `url`, as the Go SDK's `Redirect` does.
+pub fn redirect_event(url: String) -> unique String uses {} {
+  let mut js: List[u8] = []
+  text.append(mut js, "setTimeout(() => window.location.href = ")
+  js_string_into(url, mut js)
+  text.append(mut js, ")")
+  execute_script_event(text.finish_valid(take js), script_options())
+}
+
+/// Appends `value` with `&`, `<`, `>`, `"` and `'` written as character references,
+/// so it is safe as HTML text or as a quoted attribute value.
+@preserves_unique(out)
+pub fn escape_into(value: String, mut out: List[u8]) -> () uses {} {
+  for b in string.as_bytes(value) {
+    match b {
+      b'&' => text.append(mut out, "&amp;"),
+      b'<' => text.append(mut out, "&lt;"),
+      b'>' => text.append(mut out, "&gt;"),
+      b'"' => text.append(mut out, "&#34;"),
+      b'\'' => text.append(mut out, "&#39;"),
+      _ => list.push(mut out, b),
+    }
+  }
+}
+
+/// `value` HTML-escaped as `escape_into` writes it.
+pub fn escape(value: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  escape_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+// A JavaScript string literal for `value` (JSON's escaping, which is valid JS),
+// with `<` escaped so the text cannot close a script element.
+fn js_string_into(value: String, mut out: List[u8]) -> () uses {} {
+  let quoted = match json.stringify(Text(unique value)) {
+    Ok(s) => take s,
+    Error(_) => "\"\"",
+  }
+  text.append(mut out, string.replace(quoted, "<", "\\u003c"))
+}
+
+// ---- reading signals ----
+/// The signals a request carries, as JSON: the `datastar` query parameter of a GET or
+/// DELETE request, or the body of any other method. A request without them is
+/// `Missing`.
+pub fn read_signals_value(request: http.ServerRequest) -> Result[
+  json.Value,
+  SignalsError
+] uses {} {
+  if request.method == "GET" || request.method == "DELETE" {
+    let Some((_, query)) = string.split_once(request.target, "?") else {
+      return Error(Missing())
+    }
+    let pairs = uri.query_pairs(query) ? Query
+    for (key, value) in pairs {
+      if key == DATASTAR_KEY {
+        return Ok(json.parse(unique value) ? Json)
+      }
+    }
+    return Error(Missing())
+  }
+  if bytes.len(request.body) == 0 {
+    return Error(Missing())
+  }
+  let body = match string.from_bytes(unique request.body) {
+    Ok(text) => take text,
+    Error(_) => return Error(Utf8()),
+  }
+  Ok(json.parse(take body) ? Json)
+}
+
+/// The signals a request carries, decoded by `decode`, usually a derived
+/// `from_json` (`fn form_from_json(v: json.Value) -> Result[unique Form, String]
+/// uses {} = comptime derive.from_json(shape(Form))`).
+pub fn read_signals[T](
+  request: http.ServerRequest,
+  decode: fn(json.Value) -> Result[T, String]
+) -> Result[T, SignalsError] {
+  let value = read_signals_value(request)?
+  Ok(decode(value) ? Decode)
+}
+
+// ---- the generator ----
+/// An open `text/event-stream` response. Each operation writes one complete event and
+/// returns once it is on the stream, so events arrive in call order. A failed write
+/// means the browser has gone; the generator is then of no further use. Dropping it
+/// closes the stream.
+pub opaque resource type ServerSentEventGenerator: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+}
+@noalloc drop(self) {}
+
+/// Starts the SSE response to `request` on `stream`: status 200 with
+/// `Cache-Control: no-cache`, `Content-Type: text/event-stream` and, for HTTP/1.1,
+/// `Connection: keep-alive`, written at once so the browser does not time out.
+/// The body runs until the generator is dropped or closed.
+// GAP: std http has no streaming server response, so the head is written to the stream here.
+pub fn new_sse(n: Net, take stream: Stream of n, request: http.ServerRequest) -> Result[
+  ServerSentEventGenerator,
+  SseError
+] {
+  let mut out = take stream
+  let mut head: List[u8] = []
+  text.append(
+    mut head,
+    "HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: text/event-stream\r\n"
+  )
+  if request.version == Http11() {
+    text.append(mut head, "Connection: keep-alive\r\n")
+  }
+  text.append(mut head, "\r\n")
+  net.write_all(n, mut out, bytes.from_list(take head)) ? Write
+  Ok(ServerSentEventGenerator(net: n, stream: take out))
+}
+
+/// Writes `event`, complete event text from one of the `_event` functions. Rendering
+/// once and sending the same text to many generators is how a server broadcasts.
+pub fn send(mut sse: ServerSentEventGenerator, text: String) -> Result[(), SseError] {
+  let n = sse.net
+  Ok(net.write_all(n, mut sse.stream, string.as_bytes(text)) ? Write)
+}
+
+/// Writes `patch_elements_event(elements, options)`.
+pub fn patch_elements(
+  mut sse: ServerSentEventGenerator,
+  elements: String,
+  options: ElementsOptions
+) -> Result[(), SseError] {
+  send(mut sse, patch_elements_event(elements, options))
+}
+
+/// Writes `remove_elements_event(selector, options)`.
+pub fn remove_elements(
+  mut sse: ServerSentEventGenerator,
+  selector: String,
+  options: ElementsOptions
+) -> Result[(), SseError] {
+  send(mut sse, remove_elements_event(selector, options))
+}
+
+/// Writes `patch_signals_event(signals, options)`.
+pub fn patch_signals(
+  mut sse: ServerSentEventGenerator,
+  signals: String,
+  options: SignalsOptions
+) -> Result[(), SseError] {
+  send(mut sse, patch_signals_event(signals, options))
+}
+
+/// Writes `execute_script_event(script, options)`.
+pub fn execute_script(
+  mut sse: ServerSentEventGenerator,
+  script: String,
+  options: ScriptOptions
+) -> Result[(), SseError] {
+  send(mut sse, execute_script_event(script, options))
+}
+
+/// Writes `redirect_event(url)`.
+pub fn redirect(mut sse: ServerSentEventGenerator, url: String) -> Result[(), SseError] {
+  send(mut sse, redirect_event(url))
+}
+
+/// Ends the response: the browser sees the stream close.
+pub fn close(take sse: ServerSentEventGenerator) -> () {
+  let ServerSentEventGenerator(net: n, stream: stream) = take sse
+  let mut s = take stream
+  let _ = net.shutdown(n, mut s, Both())
+  net.close(n, take s)
+}

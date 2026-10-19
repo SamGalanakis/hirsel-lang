@@ -1,0 +1,736 @@
+// rule: PROG-1
+// expect: test
+// The official Datastar SDK conformance cases (starfederation/datastar
+// sdk/tests/golden, inputs and outputs verbatim), run against the datastar@1
+// package as the suite's /test endpoint: read the request's signals, emit one event
+// per entry of `events`, and compare the SSE text as the suite's runner does.
+pub type CaseError = Signals(datastar.SignalsError) | Json(json.JsonError) | Bad(String)
+
+fn member(fields: Map[String, json.Value], name: String) -> Option[json.Value] in fields uses {} {
+  map.get(fields, name)
+}
+
+fn text_of(fields: Map[String, json.Value], name: String) -> Option[String] uses {} {
+  match member(fields, name) {
+    Some(Text(s)) => Some(unique s),
+    _ => None(),
+  }
+}
+
+fn bool_of(fields: Map[String, json.Value], name: String) -> Option[bool] uses {} {
+  match member(fields, name) {
+    Some(Bool(b)) => Some(b),
+    _ => None(),
+  }
+}
+
+fn retry_of(fields: Map[String, json.Value]) -> u64 uses {} {
+  match member(fields, "retryDuration") {
+    Some(Number(n)) => match u64.parse(n) {
+      Ok(ms) => ms,
+      Error(_) => datastar.DEFAULT_RETRY_MS,
+    },
+    _ => datastar.DEFAULT_RETRY_MS,
+  }
+}
+
+// One event of the suite's input, as its /test endpoint renders it.
+fn render(fields: Map[String, json.Value]) -> Result[String, CaseError] uses {} {
+  let Some(kind) = text_of(fields, "type") else {
+    return Error(Bad("event without type"))
+  }
+  let event_id = text_of(fields, "eventId")
+  let retry_ms = retry_of(fields)
+  if kind == "patchElements" {
+    let mut options = datastar.elements_options()
+    options.selector = text_of(fields, "selector")
+    if let Some(mode) = text_of(fields, "mode") {
+      let Some(parsed) = datastar.mode_from_text(mode) else {
+        return Error(Bad(f"mode {mode}"))
+      }
+      options.mode = parsed
+    }
+    options.use_view_transition = option.unwrap_or(
+      bool_of(fields, "useViewTransition"),
+      false
+    )
+    options.view_transition_selector = text_of(fields, "viewTransitionSelector")
+    if let Some(namespace) = text_of(fields, "namespace") {
+      let Some(parsed) = datastar.namespace_from_text(namespace) else {
+        return Error(Bad(f"namespace {namespace}"))
+      }
+      options.namespace = parsed
+    }
+    options.event_id = event_id
+    options.retry_ms = retry_ms
+    let elements = option.unwrap_or(text_of(fields, "elements"), "")
+    return Ok(datastar.patch_elements_event(elements, options))
+  }
+  if kind == "patchSignals" {
+    let mut options = datastar.signals_options()
+    options.only_if_missing = option.unwrap_or(bool_of(fields, "onlyIfMissing"), false)
+    options.event_id = event_id
+    options.retry_ms = retry_ms
+    if let Some(raw) = text_of(fields, "signals-raw") {
+      return Ok(datastar.patch_signals_event(raw, options))
+    }
+    let Some(signals) = member(fields, "signals") else {
+      return Error(Bad("patchSignals without signals"))
+    }
+    return Ok(datastar.patch_signals_value_event(signals, options) ? Json)
+  }
+  if kind == "executeScript" {
+    let mut options = datastar.script_options()
+    options.auto_remove = option.unwrap_or(bool_of(fields, "autoRemove"), true)
+    if let Some(Object(attributes)) = member(fields, "attributes") {
+      for (name, value) in attributes {
+        let Text(s) = value else {
+          return Error(Bad(f"attribute {name}"))
+        }
+        list.push(mut options.attributes, (unique name, unique s))
+      }
+    }
+    options.event_id = event_id
+    options.retry_ms = retry_ms
+    let script = option.unwrap_or(text_of(fields, "script"), "")
+    return Ok(datastar.execute_script_event(script, options))
+  }
+  Error(Bad(f"event type {kind}"))
+}
+
+// The suite's /test endpoint: every event of the request's `events` array, in order.
+fn endpoint(request: http.ServerRequest) -> Result[String, CaseError] uses {} {
+  let signals = datastar.read_signals_value(request) ? Signals
+  let Object(fields) = signals else {
+    return Error(Bad("signals are not an object"))
+  }
+  let Some(Array(events)) = member(fields, "events") else {
+    return Error(Bad("no events array"))
+  }
+  let mut out: List[u8] = []
+  for entry in events {
+    let Object(event_fields) = entry else {
+      return Error(Bad("event is not an object"))
+    }
+    text.append(mut out, render(event_fields)?)
+  }
+  Ok(text.finish_valid(take out))
+}
+
+// The suite's runner reads a case as a GET with the input in the `datastar` query
+// parameter, or a POST with it as a JSON body.
+fn suite_request(post: bool, input: String) -> Result[http.ServerRequest, CaseError] uses {} {
+  let mut raw: List[u8] = []
+  if post {
+    let length = string.byte_len(input)
+    text.append(
+      mut raw,
+      f"POST /test HTTP/1.1\r\nHost: localhost:7331\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
+    )
+    text.append(mut raw, input)
+  } else {
+    let query = uri.encode_query([("datastar", unique input)])
+    text.append(
+      mut raw,
+      f"GET /test?{query} HTTP/1.1\r\nHost: localhost:7331\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\n\r\n"
+    )
+  }
+  match http.parse_server_request(bytes.from_list(take raw), 65536, 65536) {
+    Ok(Some((parsed, _))) => Ok(take parsed),
+    _ => Error(Bad("request did not parse")),
+  }
+}
+
+// An event's fields in order of appearance, as the runner's parseSSE keeps them:
+// the name before the first colon and the trimmed value after it.
+type Event {
+  fields: Map[String, List[String]],
+}
+
+fn parse_sse(stream: String) -> List[Event] uses {} {
+  let mut events: List[Event] = []
+  let mut fields: Map[String, List[String]] = map.empty()
+  for line in string.split(unique stream, "\n") {
+    if string.byte_len(line) == 0 {
+      if map.len(fields) > 0 {
+        list.push(mut events, Event(fields: replace(mut fields, map.empty())))
+      }
+      continue
+    }
+    let Some((name, value)) = string.split_once(line, ":") else {
+      continue
+    }
+    let mut values: List[String] = match map.get(fields, name) {
+      Some(existing) => unique existing,
+      None() => [],
+    }
+    list.push(mut values, unique string.trim(value))
+    map.insert(mut fields, unique name, take values)
+  }
+  if map.len(fields) > 0 {
+    list.push(mut events, Event(fields: take fields))
+  }
+  take events
+}
+
+// Data lines grouped by their first word, as the runner's parseDataFields does.
+fn data_groups(lines: List[String]) -> Map[String, List[String]] uses {} {
+  let mut groups: Map[String, List[String]] = map.empty()
+  for line in lines {
+    let (key, content) = match string.split_once(line, " ") {
+      Some((k, c)) => (unique k, unique c),
+      None() => (unique line, ""),
+    }
+    let mut values: List[String] = match map.get(groups, key) {
+      Some(existing) => unique existing,
+      None() => [],
+    }
+    list.push(mut values, take content)
+    map.insert(mut groups, take key, take values)
+  }
+  take groups
+}
+
+// The runner's comparison: the same number of events; per event the same non-data
+// fields with equal values, and the same data groups with equal lines. The runner
+// compares `elements` after normalizing HTML attribute order; this compares them
+// exactly, which is stricter.
+fn same_stream(expected: String, actual: String) -> bool uses {} {
+  let want = parse_sse(expected)
+  let got = parse_sse(actual)
+  if list.len(want) != list.len(got) {
+    return false
+  }
+  for i in 0u64..list.len(want) {
+    let mut want_fields = unique want[i].fields
+    let mut got_fields = unique got[i].fields
+    let want_data = option.unwrap_or(map.remove(mut want_fields, "data"), [])
+    let got_data = option.unwrap_or(map.remove(mut got_fields, "data"), [])
+    if !map.same_entries(want_fields, got_fields) {
+      return false
+    }
+    if !map.same_entries(data_groups(want_data), data_groups(got_data)) {
+      return false
+    }
+  }
+  true
+}
+
+fn golden(t: Test, post: bool, input: String, expected: String) {
+  let Ok(parsed) = suite_request(post, input) else {
+    test.fail(t)
+  }
+  match endpoint(parsed) {
+    Ok(actual) => {
+      if !same_stream(expected, actual) {
+        test.log(t, f"expected:\n{expected}actual:\n{actual}")
+        test.fail(t)
+      }
+    },
+    Error(_) => test.fail(t),
+  }
+}
+
+@test
+fn get_execute_script_with_all_options(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "executeScript",
+      "script": "console.log('hello');",
+      "eventId": "event1",
+      "retryDuration": 2000,
+      "attributes": {
+        "type": "text/javascript",
+        "blocking": "false"
+      },
+      "autoRemove": false
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+id: event1
+retry: 2000
+data: mode append
+data: selector body
+data: elements <script type="text/javascript" blocking="false">console.log('hello');</script>
+
+"##
+  )
+}
+
+@test
+fn get_execute_script_with_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "executeScript",
+      "script": "console.log('hello');",
+      "autoRemove": true
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: mode append
+data: selector body
+data: elements <script data-effect="el.remove()">console.log('hello');</script>
+
+"##
+  )
+}
+
+@test
+fn get_execute_script_with_multiline_script(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "executeScript",
+      "script": "if (true) {\n  console.log('hello');\n}"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: mode append
+data: selector body
+data: elements <script data-effect="el.remove()">if (true) {
+data: elements   console.log('hello');
+data: elements }</script>
+
+"##
+  )
+}
+
+@test
+fn get_execute_script_without_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "executeScript",
+      "script": "console.log('hello');"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: mode append
+data: selector body
+data: elements <script data-effect="el.remove()">console.log('hello');</script>
+
+"##
+  )
+}
+
+@test
+fn get_patch_elements_with_all_options(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge</div>",
+      "eventId": "event1",
+      "retryDuration": 2000,
+      "selector": "div",
+      "mode": "append",
+      "useViewTransition": true
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+id: event1
+retry: 2000
+data: selector div
+data: mode append
+data: useViewTransition true
+data: elements <div>Merge</div>
+
+"##
+  )
+}
+
+@test
+fn get_patch_elements_with_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge</div>",
+      "mode": "outer",
+      "useViewTransition": false
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: elements <div>Merge</div>
+
+"##
+  )
+}
+
+@test
+fn get_patch_elements_with_multiline_elements(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>\n  <span>Merge</span>\n</div>"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: elements <div>
+data: elements   <span>Merge</span>
+data: elements </div>
+
+"##
+  )
+}
+
+@test
+fn get_patch_elements_without_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge</div>"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: elements <div>Merge</div>
+
+"##
+  )
+}
+
+@test
+fn get_patch_signals_with_all_options(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": 1,
+        "two": 2
+      },
+      "eventId": "event1",
+      "retryDuration": 2000,
+      "onlyIfMissing": true
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+id: event1
+retry: 2000
+data: onlyIfMissing true
+data: signals {"one":1,"two":2}
+
+"##
+  )
+}
+
+@test
+fn get_patch_signals_with_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": 1,
+        "two": 2
+      },
+      "onlyIfMissing": false
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+data: signals {"one":1,"two":2}
+
+"##
+  )
+}
+
+@test
+fn get_patch_signals_with_multiline_json(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals-raw": "{\n\"one\": \"first signal\",\n\"two\":  \n\"second signal\"}"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+data: signals {
+data: signals "one": "first signal",
+data: signals "two":  
+data: signals "second signal"}
+
+"##
+  )
+}
+
+@test
+fn get_patch_signals_with_multiline_signals(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": "first\n signal",
+        "two": "second signal"
+      }
+    }
+  ]
+}"##,
+    r##"event: datastar-patch-signals
+data: signals {"one":"first\n signal","two":"second signal"}
+
+"##
+  )
+}
+
+@test
+fn get_patch_signals_without_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": 1,
+        "two": 2
+      }
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+data: signals {"one":1,"two":2}
+
+"##
+  )
+}
+
+@test
+fn get_remove_elements_with_all_options(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "selector": "#target",
+      "eventId": "event1",
+      "mode": "remove",
+      "retryDuration": 2000,
+      "useViewTransition": true
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+id: event1
+retry: 2000
+data: selector #target
+data: mode remove
+data: useViewTransition true
+
+"##
+  )
+}
+
+@test
+fn get_remove_elements_with_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "selector": "#target",
+      "mode": "remove",
+      "useViewTransition": false
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: mode remove
+data: selector #target
+
+"##
+  )
+}
+
+@test
+fn get_remove_elements_without_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "selector": "#target",
+      "mode": "remove"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: mode remove
+data: selector #target
+
+"##
+  )
+}
+
+@test
+fn get_remove_signals_with_all_options(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": null,
+        "two": {"alpha": null}
+      },
+      "eventId": "event1",
+      "retryDuration": 2000
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+id: event1
+retry: 2000
+data: signals {"one":null,"two":{"alpha":null}}
+
+"##
+  )
+}
+
+@test
+fn get_remove_signals_with_defaults(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchSignals",
+      "signals": {
+        "one": null
+      }
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-signals
+data: signals {"one":null}
+
+"##
+  )
+}
+
+@test
+fn get_send_two_events(t: Test) {
+  golden(
+    t,
+    false,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge</div>"
+    },
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge 2</div>"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: elements <div>Merge</div>
+
+event: datastar-patch-elements
+data: elements <div>Merge 2</div>
+
+"##
+  )
+}
+
+@test
+fn post_read_signals_from_body(t: Test) {
+  golden(
+    t,
+    true,
+    r##"{
+  "events": [
+    {
+      "type": "patchElements",
+      "elements": "<div>Merge</div>"
+    }
+  ]
+}
+"##,
+    r##"event: datastar-patch-elements
+data: elements <div>Merge</div>
+
+"##
+  )
+}

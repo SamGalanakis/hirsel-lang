@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "datastar",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "datastar.hir",
+      "module": [
+        "datastar"
+      ]
+    },
+    {
+      "path": "tests.hir",
+      "module": [
+        "datastar"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}
