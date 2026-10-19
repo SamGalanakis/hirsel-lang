@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1250 exported definitions; 388 variants.
+1271 exported definitions; 406 variants.
 
 ## Types and roots
 
@@ -9843,3 +9843,339 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Document`](#
 - `pub fn yaml.stringify(value: Value) -> Result[unique String, YamlError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+
+## zip
+
+<a id="def-std_401_2fzip_2fEntry"></a>
+
+- `pub type zip.Entry { name: String, comment: String, method: Method, flags: u64, creator: u64, external: u64, modified: Option[i64], dos_time: u64, crc: u32, compressed: u64, size: u64, offset: u64, }`
+
+One central directory entry. `offset` is the entry's local header offset
+within the data (including any prefix), `modified` the Unix time of an
+extended timestamp extra field, and `dos_time` the MS-DOS date (high 16
+bits) and time (low 16 bits). `creator` and `external` are the version
+made by and external attributes (Unix modes in the high 16 bits when the
+creator's high byte is 3).
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/Method`](#def-std_401_2fzip_2fMethod)
+
+<a id="def-std_401_2fzip_2fExtractError"></a>
+
+- `pub type zip.ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File( FileError )`
+
+Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
+the archive is malformed, or a file operation failed.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/String`](#def-core_401_2fString), [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fExtractError_23File"></a>
+
+- `File( FileError ) -> zip.ExtractError`
+
+Variant of zip.ExtractError.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2fzip_2fExtractError_23Insecure"></a>
+
+- `Insecure(String) -> zip.ExtractError`
+
+Variant of zip.ExtractError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fzip_2fExtractError_23Read"></a>
+
+- `Read(ZipError) -> zip.ExtractError`
+
+Variant of zip.ExtractError.
+
+References: [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fExtractError_23Unsupported"></a>
+
+- `Unsupported(String) -> zip.ExtractError`
+
+Variant of zip.ExtractError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fzip_2fFileZipError"></a>
+
+- `pub type zip.FileZipError = Storage(FileError) | Archive(ZipError)`
+
+A file operation failed or the archive is malformed.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError), [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fFileZipError_23Archive"></a>
+
+- `Archive(ZipError) -> zip.FileZipError`
+
+Variant of zip.FileZipError.
+
+References: [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fFileZipError_23Storage"></a>
+
+- `Storage(FileError) -> zip.FileZipError`
+
+Variant of zip.FileZipError.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2fzip_2fMethod"></a>
+
+- `pub type zip.Method = Stored | Deflate | Other(u64)`
+
+An entry's compression method (APPNOTE 4.4.5).
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzip_2fMethod_23Deflate"></a>
+
+- `Deflate -> zip.Method`
+
+Variant of zip.Method.
+
+<a id="def-std_401_2fzip_2fMethod_23Other"></a>
+
+- `Other(u64) -> zip.Method`
+
+Variant of zip.Method.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzip_2fMethod_23Stored"></a>
+
+- `Stored -> zip.Method`
+
+Variant of zip.Method.
+
+<a id="def-std_401_2fzip_2fWriteError"></a>
+
+- `pub type zip.WriteError = Field | Directory | Closed`
+
+Writing errors: a name, comment or extra field too long for its 16-bit
+length, data written to a directory entry, or a write after `close`.
+
+<a id="def-std_401_2fzip_2fWriteError_23Closed"></a>
+
+- `Closed -> zip.WriteError`
+
+Variant of zip.WriteError.
+
+<a id="def-std_401_2fzip_2fWriteError_23Directory"></a>
+
+- `Directory -> zip.WriteError`
+
+Variant of zip.WriteError.
+
+<a id="def-std_401_2fzip_2fWriteError_23Field"></a>
+
+- `Field -> zip.WriteError`
+
+Variant of zip.WriteError.
+
+<a id="def-std_401_2fzip_2fWriter"></a>
+
+- `pub opaque type zip.Writer: copyable + inert + noalloc_drop uses {}`
+
+Writing state: the central directory so far, the output offset and the
+entry being written.
+
+<a id="def-std_401_2fzip_2fZipError"></a>
+
+- `pub type zip.ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data( flate.FlateError )`
+
+Malformed archive data: `Format(n)` at byte offset `n`, a name or
+comment that is not UTF-8 (`Encoding(n)`, the offset of its directory
+header), an unsupported method, data whose CRC-32 or size disagrees with
+its entry, or more data than `limit` allows.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fzip_2fZipError_23Algorithm"></a>
+
+- `Algorithm(String) -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fzip_2fZipError_23Checksum"></a>
+
+- `Checksum(String) -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fzip_2fZipError_23Data"></a>
+
+- `Data( flate.FlateError ) -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+References: [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fzip_2fZipError_23Encoding"></a>
+
+- `Encoding(u64) -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzip_2fZipError_23Format"></a>
+
+- `Format(u64) -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzip_2fZipError_23TooLarge"></a>
+
+- `TooLarge -> zip.ZipError`
+
+Variant of zip.ZipError.
+
+<a id="def-std_401_2fzip_2farchive_5fcomment"></a>
+
+- `pub fn zip.archive_comment(data: Bytes) -> Result[unique String, ZipError] uses {}`
+
+The archive comment of the end-of-central-directory record.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fclose"></a>
+
+- `@preserves_unique(out) pub fn zip.close(mut w: Writer, comment: String, mut out: List[u8]) -> Result[ (), WriteError ] uses {}`
+
+Go Writer.Close: finishes the last entry and appends the central
+directory, ZIP64 end records when an entry, the record count, the
+directory's size or its offset needs them, and the end record with
+`comment`. `offset` counts `out`'s bytes from the start of the archive,
+so a writer that drains `out` between calls reports it with `flushed`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/zip/WriteError`](#def-std_401_2fzip_2fWriteError), [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+<a id="def-std_401_2fzip_2fcreate"></a>
+
+- `@preserves_unique(out) pub fn zip.create(mut w: Writer, h: Entry, level: u64, mut out: List[u8]) -> Result[ (), WriteError ] uses {}`
+
+Go Writer.CreateHeader: finishes the previous entry and starts `h`, whose
+data follows through `write`, compressed at `level` when `h.method` is
+`Deflate`; a name ending in `/` is a stored directory with no data. The
+CRC-32 and sizes follow the data in a data descriptor (flag 8). Other
+methods are `Field`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/WriteError`](#def-std_401_2fzip_2fWriteError), [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+<a id="def-std_401_2fzip_2fcreate_5fraw"></a>
+
+- `@preserves_unique(out) pub fn zip.create_raw(mut w: Writer, h: Entry, mut out: List[u8]) -> Result[(), WriteError] uses {}`
+
+Go Writer.CreateRaw: starts `h` with its CRC-32 and sizes as given, its
+data written through `write` as already compressed, with no data
+descriptor; sizes of 4 GiB or more get a ZIP64 extra field.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/WriteError`](#def-std_401_2fzip_2fWriteError), [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+<a id="def-std_401_2fzip_2fentries"></a>
+
+- `pub fn zip.entries(data: Bytes) -> Result[List[Entry], ZipError] uses {}`
+
+Go Reader.init: the entries of the archive in `data`, in central
+directory order. Data before the archive (a prefix such as a
+self-extracting stub) is allowed: offsets are relative to the end of the
+central directory when its recorded offset does not hold a directory
+header.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fentry"></a>
+
+- `pub fn zip.entry(take name: String) -> Entry uses {}`
+
+An entry to write: deflated, modified at Unix time 0, with no comment.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry)
+
+<a id="def-std_401_2fzip_2fextract"></a>
+
+- `pub fn zip.extract(data: Bytes, into: Dir, limit: u64) -> Result[u64, ExtractError]`
+
+Extracts every entry of the archive in `data` into `into` and returns how
+many were written: directory entries (names ending in `/`) and files,
+creating missing parents and replacing existing files. Names are refused
+as for `tar.extract` (`Insecure`), as is a path through or onto an
+existing symlink; Unix symlink, device, FIFO and socket entries are
+`Unsupported`. Every entry's size counts against `limit` before it is
+decoded, and decoding never produces more than the size, so at most
+`limit` bytes are written. The first refusal stops extraction.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_401_2fDir), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/ExtractError`](#def-std_401_2fzip_2fExtractError)
+
+<a id="def-std_401_2fzip_2ffile_5fentries"></a>
+
+- `pub fn zip.file_entries(dir: Dir, mut f: File of dir, size: u64) -> Result[ List[Entry], FileZipError ]`
+
+`entries` of a zip file of `size` bytes, reading only its last 65 KiB
+and its central directory.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/FileZipError`](#def-std_401_2fzip_2fFileZipError)
+
+<a id="def-std_401_2fzip_2ffile_5fextract"></a>
+
+- `pub fn zip.file_extract(from: Dir, mut f: File of from, size: u64, into: Dir, limit: u64) -> Result[ u64, ExtractError ]`
+
+`extract` from a zip file of `size` bytes, holding one entry's data at a
+time.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/ExtractError`](#def-std_401_2fzip_2fExtractError)
+
+<a id="def-std_401_2fzip_2ffile_5fread"></a>
+
+- `pub fn zip.file_read(dir: Dir, mut f: File of dir, e: Entry, limit: u64) -> Result[ unique Bytes, FileZipError ]`
+
+`read` of an entry of a zip file, reading only that entry: its local
+header, data and data descriptor.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/FileZipError`](#def-std_401_2fzip_2fFileZipError)
+
+<a id="def-std_401_2fzip_2fflushed"></a>
+
+- `pub fn zip.flushed(mut w: Writer, count: u64) -> () uses {}`
+
+Records that the caller drained `count` bytes of output, keeping the
+offsets of later entries and the directory right.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+<a id="def-std_401_2fzip_2fread"></a>
+
+- `pub fn zip.read(data: Bytes, e: Entry, limit: u64) -> Result[unique Bytes, ZipError] uses {}`
+
+Go File.Open read to the end: the entry's data, which must decode to
+exactly its size with a matching CRC-32 (and, after a data descriptor,
+the descriptor's CRC-32). An entry whose size exceeds `limit` is
+`TooLarge` before any of it is decoded; a directory entry has no data.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zip/Entry`](#def-std_401_2fzip_2fEntry), [`std@1/zip/ZipError`](#def-std_401_2fzip_2fZipError)
+
+<a id="def-std_401_2fzip_2fwrite"></a>
+
+- `@preserves_unique(out) pub fn zip.write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(), WriteError] uses {}`
+
+Appends data to the entry being written.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/zip/WriteError`](#def-std_401_2fzip_2fWriteError), [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+<a id="def-std_401_2fzip_2fwriter"></a>
+
+- `pub fn zip.writer() -> unique Writer uses {}`
+
+References: [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
