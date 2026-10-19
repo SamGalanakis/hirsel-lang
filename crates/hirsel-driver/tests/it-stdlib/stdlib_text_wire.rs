@@ -383,6 +383,11 @@ fn sse_is_ordinary_source() {
 }
 
 #[test]
+fn multipart_is_ordinary_source() {
+    source_codec("multipart", "multipart", &["decode", "parse_media_type"]);
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

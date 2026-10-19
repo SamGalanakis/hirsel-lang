@@ -1,0 +1,90 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// application/x-www-form-urlencoded through uri.encode_query and uri.query_pairs:
+// Go net/url/url_test.go queryEscapeTests, unescapeTests and encodeQueryTests
+// (golang/go ebe2feefc400f813aefdc8a036e66d2619da6649), with Go's sorted maps
+// written as ordered pairs.
+pub fn main(t: Test) -> Result[(), uri.QueryError] {
+  let escapes: List[(String, String)] = [
+    ("", ""),
+    ("abc", "abc"),
+    ("one two", "one+two"),
+    ("10%", "10%25"),
+    (
+      " ?&=#+%!<>#\"{}|\\^[]`☺\t:/@$'()*,;",
+      "+%3F%26%3D%23%2B%25%21%3C%3E%23%22%7B%7D%7C%5C%5E%5B%5D%60%E2%98%BA%09%3A%2F%40%24%27%28%29%2A%2C%3B"
+    )
+  ]
+  for (plain, escaped) in escapes {
+    let encoded = uri.encode_query([(copy plain, copy plain)])
+    test.check(t, encoded == f"{escaped}={escaped}")
+    test.check(t, uri.query_pairs(encoded)? == [(copy plain, copy plain)])
+  }
+  let unescapes: List[(String, String)] = [
+    ("", ""),
+    ("abc", "abc"),
+    ("1%41", "1A"),
+    ("1%41%42%43", "1ABC"),
+    ("%4a", "J"),
+    ("%6F", "o"),
+    ("a+b", "a b"),
+    ("a%20b", "a b")
+  ]
+  for (escaped, plain) in unescapes {
+    test.check(t, uri.query_pairs(f"v={escaped}")? == [("v", copy plain)])
+  }
+  test.check(t, uri.query_pairs("v=%") == Error(InvalidEscape(2u64)))
+  test.check(t, uri.query_pairs("v=%a") == Error(InvalidEscape(2u64)))
+  test.check(t, uri.query_pairs("v=%1") == Error(InvalidEscape(2u64)))
+  test.check(t, uri.query_pairs("v=123%45%6") == Error(InvalidEscape(8u64)))
+  test.check(t, uri.query_pairs("v=%zzzzz") == Error(InvalidEscape(2u64)))
+  test.check(t, uri.encode_query([]) == "")
+  test.check(
+    t,
+    uri.encode_query([("oe", "utf8"), ("q", "puppies")]) == "oe=utf8&q=puppies"
+  )
+  test.check(
+    t,
+    uri.encode_query([("q", "dogs"), ("q", "&"), ("q", "7")]) == "q=dogs&q=%26&q=7"
+  )
+  test.check(
+    t,
+    uri.encode_query(
+      [
+        ("a", "a1"),
+        ("a", "a2"),
+        ("a", "a3"),
+        ("b", "b1"),
+        ("b", "b2"),
+        ("b", "b3"),
+        ("c", "c1"),
+        ("c", "c2"),
+        ("c", "c3")
+      ]
+    ) == "a=a1&a=a2&a=a3&b=b1&b=b2&b=b3&c=c1&c=c2&c=c3"
+  )
+  test.check(
+    t,
+    uri.encode_query(
+      [
+        ("a", "a"),
+        ("b", "b"),
+        ("c", "c"),
+        ("d", "d"),
+        ("e", "e"),
+        ("f", "f"),
+        ("g", "g"),
+        ("h", "h"),
+        ("i", "i")
+      ]
+    ) == "a=a&b=b&c=c&d=d&e=e&f=f&g=g&h=h&i=i"
+  )
+  // http.form_body is the same encoding with its media type.
+  let body = http.form_body([("one two", "10%")])
+  test.check(
+    t,
+    body.content_type == "application/x-www-form-urlencoded" && body.bytes == b"one+two=10%25"
+  )
+  Ok(())
+}

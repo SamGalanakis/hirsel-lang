@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Go mime/multipart TestMultipartTruncated (golang/go
+// d934b909f6a50247e2a2e9b89de02cdcef93a163), with malformed headers, a missing
+// boundary and the part and header limits.
+pub fn main(t: Test) -> Result[(), multipart.MultipartError] {
+  // Truncated bodies and stray lines fail.
+  let truncated: List[Bytes] = [
+    b"\nThis is a multi-part message.  This line is ignored.\n--MyBoundary\nfoo-bar: baz\n\nOh no, premature EOF!",
+    b"--MyBoundary\r\nfoo-bar: baz",
+    b"--MyBoundary\r\n\r\ndata\r\n--MyBoundary\r\n",
+    b""
+  ]
+  for body in truncated {
+    test.check(
+      t,
+      multipart.decode(body, "MyBoundary", multipart.default_limits()) == Error(
+        UnexpectedEof()
+      )
+    )
+  }
+  test.check(
+    t,
+    multipart.decode(
+      b"--b\r\n\r\nx\r\n--b\r\nstray\r\n",
+      "b",
+      multipart.default_limits()
+    ) != Error(UnexpectedEof())
+  )
+  test.check(
+    t,
+    multipart.decode(
+      b"--b\r\nno colon\r\n\r\nx\r\n--b--",
+      "b",
+      multipart.default_limits()
+    ) == Error(MalformedHeader(5))
+  )
+  test.check(
+    t,
+    multipart.decode(b"--b--", "", multipart.default_limits()) == Error(
+      MissingBoundary()
+    )
+  )
+  let few = multipart.Limits(max_parts: 1, max_headers: 10)
+  test.check(
+    t,
+    multipart.decode(b"--b\r\n\r\nx\r\n--b\r\n\r\ny\r\n--b--", "b", few) == Error(
+      TooManyParts()
+    )
+  )
+  let narrow = multipart.Limits(max_parts: 10, max_headers: 1)
+  test.check(
+    t,
+    multipart.decode(b"--b\r\nA: 1\r\nB: 2\r\n\r\nx\r\n--b--", "b", narrow) == Error(
+      TooManyHeaders()
+    )
+  )
+  Ok(())
+}

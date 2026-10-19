@@ -5078,6 +5078,7 @@ conformance/SEM/SEM-3-flate-read-errors-run.hir
 conformance/SEM/SEM-3-flate-read-run.hir
 conformance/SEM/SEM-3-flate-zlib-run.hir
 conformance/SEM/SEM-3-fnv-vectors-run.hir
+conformance/SEM/SEM-3-form-urlencoded-run.hir
 conformance/SEM/SEM-3-format-alias-bad.hir
 conformance/SEM/SEM-3-format-alias-ok.hir
 conformance/SEM/SEM-3-format-enum-run.hir
@@ -5465,6 +5466,11 @@ conformance/SEM/SEM-3-msgpack-import-060-run.hir
 conformance/SEM/SEM-3-msgpack-invalid-run.hir
 conformance/SEM/SEM-3-msgpack-nesting-run.hir
 conformance/SEM/SEM-3-msgpack-vectors-run.hir
+conformance/SEM/SEM-3-multipart-errors-run.hir
+conformance/SEM/SEM-3-multipart-media-type-run.hir
+conformance/SEM/SEM-3-multipart-parse-run.hir
+conformance/SEM/SEM-3-multipart-run.hir
+conformance/SEM/SEM-3-multipart-writer-run.hir
 conformance/SEM/SEM-3-net-address-text-run.hir
 conformance/SEM/SEM-3-net-rust-vectors-run.hir
 conformance/SEM/SEM-3-net-uri-text-run.hir

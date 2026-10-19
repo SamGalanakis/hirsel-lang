@@ -1,0 +1,135 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Go mime/multipart reader tests (golang/go
+// d934b909f6a50247e2a2e9b89de02cdcef93a163): TestParse's App Engine,
+// empty-part, LWSP, no-part, fake-delimiter and nested-delimiter (issue 46042)
+// cases, TestLineContinuation and TestNameAccessors.
+fn h(name: String, value: String) -> http.Header uses {} {
+  http.Header(name: unique name, value: unique value)
+}
+
+fn parts(t: Test, body: Bytes, boundary: String) -> List[multipart.Part] {
+  match multipart.decode(body, boundary, multipart.default_limits()) {
+    Ok(found) => found,
+    Error(_) => {
+      test.check(t, false)
+      []
+    },
+  }
+}
+
+// Go's longLine, shortened from 1 MiB to four repetitions.
+pub fn main(t: Test) -> Result[(), multipart.MultipartError] {
+  // App Engine's blob upload: empty fields, then a message/external-body part.
+  let app = parts(
+    t,
+    b"--00151757727e9583fd04bfbca4c6\r\nContent-Type: text/plain; charset=ISO-8859-1\r\nContent-Disposition: form-data; name=otherEmpty1\r\n\r\n--00151757727e9583fd04bfbca4c6\r\nContent-Type: text/plain; charset=ISO-8859-1\r\nContent-Disposition: form-data; name=otherFoo1\r\n\r\nfoo\r\n--00151757727e9583fd04bfbca4c6\r\nContent-Type: text/plain; charset=ISO-8859-1\r\nContent-Disposition: form-data; name=submit\r\n\r\nSubmit\r\n--00151757727e9583fd04bfbca4c6\r\nContent-Type: message/external-body; charset=ISO-8859-1; blob-key=AHAZQqG84qllx7HUqO\r\nContent-Disposition: form-data; name=file; filename=\"fall.png\"\r\n\r\nContent-Type: image/png\r\nContent-Length: 232303\r\n\r\n\r\n--00151757727e9583fd04bfbca4c6--",
+    "00151757727e9583fd04bfbca4c6"
+  )
+  test.check(t, list.len(app) == 4)
+  test.check(t, app[0].name == Some("otherEmpty1") && app[0].body == b"")
+  test.check(t, app[1].name == Some("otherFoo1") && app[1].body == b"foo")
+  test.check(
+    t,
+    app[2].body == b"Submit" && app[2].content_type == Some(
+      "text/plain; charset=ISO-8859-1"
+    )
+  )
+  test.check(t, app[3].name == Some("file") && app[3].filename == Some("fall.png"))
+  test.check(
+    t,
+    app[3].body == b"Content-Type: image/png\r\nContent-Length: 232303\r\n\r\n"
+  )
+  // Empty parts, LWSP after delimiters, no parts, fake and nested delimiters.
+  let single = parts(t, b"--abc\r\nFoo: bar\r\n\r\n--abc--", "abc")
+  test.check(
+    t,
+    list.len(single) == 1 && single[0].headers == [h("Foo", "bar")] && single[0].body == b""
+  )
+  test.check(t, list.len(parts(t, b"--abc\r\nFoo: bar\r\n\r\n\r\n--abc--", "abc")) == 1)
+  test.check(
+    t,
+    list.len(
+      parts(t, b"--abc\r\nFoo: bar\r\n\r\n--abc\r\nFoo2: bar2\r\n\r\n--abc--", "abc")
+    ) == 2
+  )
+  test.check(t, list.len(parts(t, b"--abc\r\nFoo: bar\r\n\r\n--abc--\r\n", "abc")) == 1)
+  test.check(t, list.len(parts(t, b"--abc\r\nFoo: bar\r\n\r\n--abc-- \t", "abc")) == 1)
+  test.check(
+    t,
+    parts(
+      t,
+      b"------WebKitFormBoundaryQfEAfzFOiSemeHfA--\r\n",
+      "----WebKitFormBoundaryQfEAfzFOiSemeHfA"
+    ) == []
+  )
+  let fake = parts(t, b"--sep\r\nFoo: bar\r\n\r\n--sepFAKE\r\n--sep--", "sep")
+  test.check(t, list.len(fake) == 1 && fake[0].body == b"--sepFAKE")
+  let spaced = parts(t, b"--sep \r\nFoo: bar\r\n\r\ntext\r\n--sep--", "sep")
+  test.check(t, list.len(spaced) == 1 && spaced[0].body == b"text")
+  let issue = parts(
+    t,
+    b"--sep \r\nFoo: bar\r\n\r\na\r\n--sep_alt\r\nb\r\n\r\n--sep--",
+    "sep"
+  )
+  test.check(t, list.len(issue) == 1 && issue[0].body == b"a\r\n--sep_alt\r\nb\r\n")
+  let nested = parts(
+    t,
+    b"--foo\r\nContent-Type: multipart/alternative; boundary=\"foo-bar\"\r\n\r\n--foo-bar\r\n\r\nBody\r\n--foo-bar\r\n\r\nBody2\r\n--foo-bar--\r\n--foo--",
+    "foo"
+  )
+  test.check(
+    t,
+    list.len(nested) == 1 && nested[0].body == b"--foo-bar\r\n\r\nBody\r\n--foo-bar\r\n\r\nBody2\r\n--foo-bar--"
+  )
+  let nested_dash = parts(
+    t,
+    b"--foo\r\nContent-Type: multipart/alternative; boundary=\"foo--\"\r\n\r\n--foo--\r\n\r\nBody\r\n\r\n--foo--",
+    "foo"
+  )
+  test.check(t, list.len(nested_dash) == 1 && nested_dash[0].body == b"")
+  // Folded header lines join with one space.
+  let mail = parts(
+    t,
+    b"\n--Apple-Mail-2-292336769\nContent-Transfer-Encoding: 7bit\nContent-Type: text/plain;\n\x09charset=US-ASCII;\n\x09delsp=yes;\n\x09format=flowed\n\nI'm finding the same thing happening on my system (10.4.1).\n\n\n--Apple-Mail-2-292336769\nContent-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\x09charset=ISO-8859-1\n\n<HTML><BODY>I'm finding the same thing =\nhappening on my system (10.4.1).=A0 But I built it with XCode =\n2.0.</BODY></=\nHTML>=\n\r\n--Apple-Mail-2-292336769--\n",
+    "Apple-Mail-2-292336769"
+  )
+  test.check(t, list.len(mail) == 2)
+  test.check(
+    t,
+    mail[0].content_type == Some(
+      "text/plain; charset=US-ASCII; delsp=yes; format=flowed"
+    )
+  )
+  test.check(
+    t,
+    mail[0].body == b"I'm finding the same thing happening on my system (10.4.1).\n\n"
+  )
+  // Content-Disposition names (TestNameAccessors); filenames lose directories.
+  let names: List[(String, Option[String], Option[String])] = [
+    ("form-data; name=\"foo\"", Some("foo"), None()),
+    (" FORM-DATA ; name=foo", Some("foo"), None()),
+    (
+      " FORM-DATA ; filename=\"foo.txt\"; name=foo; baz=quux",
+      Some("foo"),
+      Some("foo.txt")
+    ),
+    (
+      " not-form-data ; filename=\"bar.txt\"; name=foo; baz=quux",
+      None(),
+      Some("bar.txt")
+    ),
+    ("form-data; name=\"f\"; filename=\"../../etc/passwd\"", Some("f"), Some("passwd")),
+    ("form-data; name=\"f\"; filename=\"\"", Some("f"), None())
+  ]
+  for (disposition, name, filename) in names {
+    let form = f"--b\r\nContent-Disposition: {disposition}\r\n\r\nx\r\n--b--"
+    let found = parts(t, string.as_bytes(form), "b")
+    test.check(
+      t,
+      list.len(found) == 1 && found[0].name == name && found[0].filename == filename
+    )
+  }
+  Ok(())
+}

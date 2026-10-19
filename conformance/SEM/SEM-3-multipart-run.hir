@@ -1,0 +1,87 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Go mime/multipart reader tests (golang/go
+// d934b909f6a50247e2a2e9b89de02cdcef93a163): TestMultipart's bodies with LF and
+// CRLF line ends and TestVariousTextLineEndings. TestParse and the name and
+// continuation cases run in SEM-3-multipart-parse-run.hir, truncation and
+// limits in SEM-3-multipart-errors-run.hir, media types in
+// SEM-3-multipart-media-type-run.hir and the writer in
+// SEM-3-multipart-writer-run.hir.
+fn h(name: String, value: String) -> http.Header uses {} {
+  http.Header(name: unique name, value: unique value)
+}
+
+fn parts(t: Test, body: Bytes, boundary: String) -> List[multipart.Part] {
+  match multipart.decode(body, boundary, multipart.default_limits()) {
+    Ok(found) => found,
+    Error(_) => {
+      test.check(t, false)
+      []
+    },
+  }
+}
+
+// Go's longLine, shortened from 1 MiB to four repetitions.
+fn long_line() -> unique String uses {} {
+  "\n\n\r\r\r\n\r\u{0}\n\n\r\r\r\n\r\u{0}\n\n\r\r\r\n\r\u{0}\n\n\r\r\r\n\r\u{0}"
+}
+
+fn check_body(t: Test, sep: String) {
+  // As Go's testMultipartBody: line ends first, then the long line verbatim.
+  let template = string.replace(
+    "\nThis is a multi-part message.  This line is ignored.\n--MyBoundary\nHeader1: value1\nHEADER2: value2\nfoo-bar: baz\n\nMy value\nThe end.\n--MyBoundary\nname: bigsection\n\n[longline]\n--MyBoundary\nHeader1: value1b\nHEADER2: value2b\nfoo-bar: bazb\n\nLine 1\nLine 2\nLine 3 ends in a newline, but just one.\n\n--MyBoundary\n\nnever read data\n--MyBoundary--\n\n\nuseless trailer\n",
+    "\n",
+    sep
+  )
+  let body = string.as_bytes(string.replace(template, "[longline]", long_line()))
+  let found = parts(t, body, "MyBoundary")
+  test.check(t, list.len(found) == 4)
+  test.check(
+    t,
+    found[0].headers == [
+      h("Header1", "value1"),
+      h("Header2", "value2"),
+      h("Foo-Bar", "baz")
+    ]
+  )
+  test.check(
+    t,
+    found[0].body == string.as_bytes(string.replace("My value\nThe end.", "\n", sep))
+  )
+  test.check(t, found[1].headers == [h("Name", "bigsection")])
+  test.check(t, found[1].body == string.as_bytes(long_line()))
+  test.check(
+    t,
+    found[2].body == string.as_bytes(
+      string.replace(
+        "Line 1\nLine 2\nLine 3 ends in a newline, but just one.\n",
+        "\n",
+        sep
+      )
+    )
+  )
+  test.check(t, found[3].headers == [] && found[3].body == b"never read data")
+}
+
+pub fn main(t: Test) -> Result[(), multipart.MultipartError] {
+  check_body(t, "\n")
+  check_body(t, "\r\n")
+  // Text bodies keep every line end that is not the delimiter's.
+  let texts: List[String] = [
+    "Foo\nBar",
+    "Foo\nBar\n",
+    "Foo\r\nBar",
+    "Foo\r\nBar\r\n",
+    "Foo\rBar",
+    "Foo\rBar\r",
+    "\u{0}\u{1}\u{2}\t\n\u{b}\u{c}\r\u{e}\u{f}\u{10}"
+  ]
+  for text_body in texts {
+    let form = f"--BOUNDARY\r\nContent-Disposition: form-data; name=\"value\"\r\n\r\n{text_body}\r\n--BOUNDARY--\r\n"
+    let found = parts(t, string.as_bytes(form), "BOUNDARY")
+    test.check(t, list.len(found) == 1 && found[0].body == string.as_bytes(text_body))
+    test.check(t, found[0].name == Some("value"))
+  }
+  Ok(())
+}

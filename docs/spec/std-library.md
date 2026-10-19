@@ -3649,6 +3649,66 @@ Connection (`Http(Malformed(ContentLength()))`, as `http.respond` reports framin
 headers). `send` writes one encoded event and `comment` one
 `: note` line, such as a keep-alive; dropping the `Writer` ends the stream.
 
+## Multipart form data
+
+`std@1/multipart` encodes and decodes `multipart/form-data` (RFC 7578 over RFC 2046)
+and parses media types (RFC 2045 and RFC 2231), adapted from Go `mime/multipart` and
+`mime.ParseMediaType` with their tests:
+
+```text
+Part           = { headers: List[http.Header], name: Option[String], filename: Option[String],
+                   content_type: Option[String], body: Bytes }
+Field          = { name: String, filename: Option[String], content_type: Option[String], data: Bytes }
+Limits         = { max_parts: u64, max_headers: u64 }
+MultipartError = MediaType | NotMultipart | MissingBoundary | InvalidBoundary | UnexpectedEof
+               | UnexpectedLine(u64) | MalformedHeader(u64) | TooManyParts | TooManyHeaders
+
+fn default_limits() -> Limits uses {}
+fn parse_media_type(value: String) -> Result[(unique String, Map[String, String]), MultipartError] uses {}
+fn decode(body: Bytes, boundary: String, limits: Limits) -> Result[List[Part], MultipartError] uses {}
+fn decode_form(media: String, body: Bytes, limits: Limits) -> Result[List[Part], MultipartError] uses {}
+fn valid_boundary(boundary: String) -> bool uses {}
+fn random_boundary(r: Random) -> Result[unique String, RandomError]
+fn form_type(boundary: String) -> unique String uses {}
+fn encode(boundary: String, fields: List[Field]) -> Result[unique Bytes, MultipartError] uses {}
+fn form_body(boundary: String, fields: List[Field]) -> Result[http.Body, MultipartError] uses {}
+```
+
+`parse_media_type` returns the lowercased type and its parameters with lowercased names.
+Values are tokens or quoted strings with backslash escapes; RFC 2231 `name*` values are
+percent-decoded when their charset is UTF-8 or US-ASCII (others drop the parameter) and
+`name*0`, `name*1`... continuations are joined. A missing type, a non-token, a repeated
+parameter or trailing garbage is `MediaType()`, as Go reports. `default_limits()` is 1000
+parts and 10000 header lines in all, as Go's `ReadForm`.
+
+`decode` splits a whole body: text before the first delimiter is skipped, a delimiter
+line is `--boundary` followed only by spaces and tabs, the final one adds `--`, and a part
+whose delimiter uses LF alone switches the body to LF line ends, as Go's reader does. Each
+part's headers are MIME headers with canonical names, folded lines joined with one space;
+the body runs to the CRLF (or LF) before the next delimiter, and data that only starts
+like a delimiter stays in the body. A missing delimiter or end before the final one is
+`UnexpectedEof()`, a header line without a colon `MalformedHeader(offset)`, and more parts
+or header lines than `limits` allow `TooManyParts()` or `TooManyHeaders()`. A part's `name`
+and `filename` come from a `form-data` Content-Disposition, `filename` without directories
+(`None()` when empty), and `content_type` from its Content-Type. `decode_form` takes the
+request's Content-Type, which must be `multipart/form-data` (`NotMultipart()`) with a
+`boundary` (`MissingBoundary()`). Content-Transfer-Encoding is not decoded (RFC 7578
+section 4.7 forbids it).
+
+A valid boundary is 1-70 characters from RFC 2046's set, not ending in a space
+(`InvalidBoundary()` otherwise). `random_boundary` is the hex of 30 bytes drawn from `r`,
+and `form_type` is the Content-Type, quoting a boundary that needs it. `encode` writes
+Go's layout: each field opens with `--boundary` (preceded by CRLF after the first), then
+`Content-Disposition: form-data; name="..."`, `; filename="..."` for a file, a
+`Content-Type` (the field's, else `application/octet-stream` for a file), a blank line
+and the data; the body ends with CRLF, `--boundary--` and CRLF, which is all an empty
+form holds. Names and filenames escape `\`
+and `"` with a backslash and encode CR and LF as `%0D` and `%0A`. `form_body` pairs the
+encoding with `form_type` as an `http.Body`.
+
+`application/x-www-form-urlencoded` is `uri.query_pairs`, `uri.encode_query` and
+`http.form_body` (see Network addresses and URIs).
+
 ## Arbitrary-precision integers
 
 `bigint` is exact integer arithmetic of any size, in ordinary std source:

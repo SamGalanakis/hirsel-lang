@@ -1,0 +1,143 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Go mime TestParseMediaType's cases (golang/go
+// d934b909f6a50247e2a2e9b89de02cdcef93a163), including greenbytes tc2231 and
+// RFC 2231 continuations and charsets, and its rejected inputs.
+fn media(t: Test, input: String, kind: String, expected: List[(String, String)]) {
+  match multipart.parse_media_type(input) {
+    Ok((got, params)) => {
+      let mut want: Map[String, String] = map.empty()
+      for (k, v) in expected {
+        map.insert(mut want, unique k, unique v)
+      }
+      test.check(t, got == kind && map.same_entries(params, want))
+    },
+    Error(_) => test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), multipart.MultipartError] {
+  media(t, "form-data; name=\"foo\"", "form-data", [("name", "foo")])
+  media(t, " form-data ; name=foo", "form-data", [("name", "foo")])
+  media(t, "FORM-DATA;name=\"foo\"", "form-data", [("name", "foo")])
+  media(
+    t,
+    "form-data; key=value;  blah=\"value\";name=\"foo\" ",
+    "form-data",
+    [("key", "value"), ("blah", "value"), ("name", "foo")]
+  )
+  media(
+    t,
+    "application/x-stuff; title*=us-ascii'en-us'This%20is%20%2A%2A%2Afun%2A%2A%2A",
+    "application/x-stuff",
+    [("title", "This is ***fun***")]
+  )
+  media(
+    t,
+    "message/external-body; access-type=URL; URL*0=\"ftp://\";URL*1=\"cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar\"",
+    "message/external-body",
+    [
+      ("access-type", "URL"),
+      ("url", "ftp://cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar")
+    ]
+  )
+  media(
+    t,
+    "application/x-stuff; title*0*=us-ascii'en'This%20is%20even%20more%20; title*1*=%2A%2A%2Afun%2A%2A%2A%20; title*2=\"isn't it!\"",
+    "application/x-stuff",
+    [("title", "This is even more ***fun*** isn't it!")]
+  )
+  media(t, "ATTACHMENT", "attachment", [])
+  media(
+    t,
+    "attachment; filename=\"f\\oo.html\"",
+    "attachment",
+    [("filename", "f\\oo.html")]
+  )
+  media(
+    t,
+    "attachment; filename=\"\\\"quoting\\\" tested.html\"",
+    "attachment",
+    [("filename", "\"quoting\" tested.html")]
+  )
+  media(
+    t,
+    "attachment; filename=\"Here's a semicolon;.html\"",
+    "attachment",
+    [("filename", "Here's a semicolon;.html")]
+  )
+  media(
+    t,
+    "attachment; foo=\"\\\"\\\\\";filename=\"foo.html\"",
+    "attachment",
+    [("foo", "\"\\"), ("filename", "foo.html")]
+  )
+  media(
+    t,
+    "attachment; FILENAME=\"foo.html\"",
+    "attachment",
+    [("filename", "foo.html")]
+  )
+  media(t, "attachment; filename=foo.html ;", "attachment", [("filename", "foo.html")])
+  media(
+    t,
+    "attachment; filename='foo.html'",
+    "attachment",
+    [("filename", "'foo.html'")]
+  )
+  media(
+    t,
+    "attachment; filename=\"foo-ä.html\"",
+    "attachment",
+    [("filename", "foo-ä.html")]
+  )
+  media(
+    t,
+    "attachment; filename=\"foo-%41.html\"",
+    "attachment",
+    [("filename", "foo-%41.html")]
+  )
+  media(
+    t,
+    "attachment; filename =\"foo.html\"",
+    "attachment",
+    [("filename", "foo.html")]
+  )
+  media(
+    t,
+    "attachment; filename*=UTF-8''foo-%c3%a4-%e2%82%ac.html",
+    "attachment",
+    [("filename", "foo-ä-€.html")]
+  )
+  media(t, "attachment; filename*=iso-8859-1''foo-%E4.html", "attachment", [])
+  media(t, "noslash; x=Y", "noslash", [("x", "Y")])
+  media(t, "foo/BAR", "foo/bar", [])
+  let bad: List[String] = [
+    "bogus ;=========",
+    "application/pdf; x-mac-type=\"3F3F3F3F\"; x-mac-creator=\"3F3F3F3F\" name=\"a.pdf\";",
+    "bogus/<script>alert</script>",
+    "bogus/bogus<script>alert</script>",
+    "\"attachment\"",
+    "attachment; filename=foo,bar.html",
+    "attachment; ;filename=foo",
+    "attachment; filename=foo bar.html",
+    "attachment; filename=\"foo.html\"; filename=\"bar.html\"",
+    "attachment; filename=foo-ä.html",
+    "attachment; filename *=UTF-8''foo-%c3%a4.html",
+    "foo; key=val1; key=the-key-appears-again-which-is-bogus",
+    "filename=foo.html",
+    "x=y; filename=foo.html",
+    "; filename=foo.html",
+    "inline; attachment; filename=foo.html",
+    "attachment; filename=\"foo.html\".txt",
+    "attachment; filename=\"bar",
+    "attachment filename=bar",
+    "foo bar/baz",
+    "foo/bar baz"
+  ]
+  for input in bad {
+    test.check(t, multipart.parse_media_type(input) == Error(MediaType()))
+  }
+  Ok(())
+}

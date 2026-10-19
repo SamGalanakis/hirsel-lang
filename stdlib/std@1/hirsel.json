@@ -1125,6 +1125,12 @@
       "module": [
         "sse"
       ]
+    },
+    {
+      "path": "multipart.hir",
+      "module": [
+        "multipart"
+      ]
     }
   ],
   "dependencies": []

@@ -1,0 +1,765 @@
+// multipart/form-data (RFC 7578 over RFC 2046), adapted from Go
+// src/mime/multipart multipart.go (NextPart, scanUntilBoundary,
+// matchAfterPrefix, isBoundaryDelimiterLine, isFinalBoundary), writer.go
+// (CreatePart, SetBoundary, FormDataContentType, escapeQuotes) and
+// src/mime/mediatype.go (ParseMediaType, consumeMediaParam, decode2231Enc),
+// golang/go d934b909f6a50247e2a2e9b89de02cdcef93a163 (BSD-3-Clause; third-
+// party/NOTICES.md). Bodies are decoded whole, as http.ServerRequest holds
+// them; Content-Transfer-Encoding is left to the caller, since RFC 7578 forbids
+// it in form data.
+/// One decoded part. `name` is the Content-Disposition `name` of a `form-data`
+/// part, `filename` its `filename` without directories, as Go's FileName returns it.
+pub type Part {
+  headers: List[http.Header],
+  name: Option[String],
+  filename: Option[String],
+  content_type: Option[String],
+  body: Bytes,
+}
+
+/// One field to encode: a file when `filename` is present, whose content type then
+/// defaults to `application/octet-stream`.
+pub type Field {
+  name: String,
+  filename: Option[String],
+  content_type: Option[String],
+  data: Bytes,
+}
+
+/// Go's defaults are 1000 parts and 10000 header fields.
+pub type Limits {
+  max_parts: u64,
+  max_headers: u64,
+}
+
+/// Offsets are byte positions in the decoded body.
+pub type MultipartError = MediaType | NotMultipart | MissingBoundary | InvalidBoundary | UnexpectedEof | UnexpectedLine(
+  u64
+) | MalformedHeader(u64) | TooManyParts | TooManyHeaders
+
+pub fn default_limits() -> Limits uses {} {
+  Limits(max_parts: 1000, max_headers: 10000)
+}
+
+// RFC 2045 tspecials.
+@noalloc
+fn tspecial(b: u8) -> bool uses {} {
+  b == b'(' || b == b')' || b == b'<' || b == b'>' || b == b'@' || b == b',' || b == b';' || b == b':' || b == b'\\' || b == b'"' || b == b'/' || b == b'[' || b == b']' || b == b'?' || b == b'='
+}
+
+@noalloc
+fn token_byte(b: u8) -> bool uses {} {
+  b > 0x20 && b < 0x7f && !tspecial(b)
+}
+
+@noalloc
+fn space(b: u8) -> bool uses {} {
+  b == b' ' || b == b'\t' || b == b'\r' || b == b'\n' || b == 0x0b || b == 0x0c
+}
+
+fn slice_text(data: Bytes, start: u64, end: u64) -> unique List[u8] uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    list.push(mut out, data[i])
+    i += 1
+  }
+  out
+}
+
+fn lower_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    list.push(mut out, ascii.to_lower(data[i]))
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+@noalloc
+fn skip_space(data: Bytes, mut pos: u64) -> () uses {} {
+  while pos < bytes.len(data) && space(data[pos]) {
+    pos += 1
+  }
+}
+
+@noalloc
+fn skip_token(data: Bytes, mut pos: u64) -> () uses {} {
+  while pos < bytes.len(data) && token_byte(data[pos]) {
+    pos += 1
+  }
+}
+
+// Go consumeValue: a token or a quoted string whose backslash escapes only a
+// tspecial; CR or LF inside quotes, or no closing quote, is no value.
+fn value_at(data: Bytes, mut pos: u64) -> Option[unique List[u8]] uses {} {
+  let size = bytes.len(data)
+  if pos >= size {
+    return None()
+  }
+  if data[pos] != b'"' {
+    let start = pos
+    skip_token(data, mut pos)
+    if pos == start {
+      return None()
+    }
+    return Some(slice_text(data, start, pos))
+  }
+  let mut out: List[u8] = []
+  let mut i = pos + 1
+  while i < size {
+    let b = data[i]
+    if b == b'"' {
+      pos = i + 1
+      return Some(out)
+    }
+    if b == b'\\' && i + 1 < size && tspecial(data[i + 1]) {
+      list.push(mut out, data[i + 1])
+      i += 2
+      continue
+    }
+    if b == b'\r' || b == b'\n' {
+      return None()
+    }
+    list.push(mut out, b)
+    i += 1
+  }
+  None()
+}
+
+fn unhex(b: u8) -> Option[u8] uses {} {
+  ascii.digit_value_radix(b, 16)
+}
+
+// Go percentHexUnescape, then UTF-8.
+fn percent_unescape(data: Bytes) -> Option[unique String] uses {} {
+  let size = bytes.len(data)
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < size {
+    if data[i] != b'%' {
+      list.push(mut out, data[i])
+      i += 1
+      continue
+    }
+    if i + 2 >= size {
+      return None()
+    }
+    let Some(high) = unhex(data[i + 1]) else {
+      return None()
+    }
+    let Some(low) = unhex(data[i + 2]) else {
+      return None()
+    }
+    list.push(mut out, high * 16 + low)
+    i += 3
+  }
+  match text.finish(take out) {
+    Ok(s) => Some(take s),
+    Error(_) => None(),
+  }
+}
+
+// Go decode2231Enc: charset'language'percent-encoded, us-ascii or utf-8 only.
+fn decode_2231(value: String) -> Option[unique String] uses {} {
+  let Some((charset, rest)) = string.split_once(value, "'") else {
+    return None()
+  }
+  let Some((_, encoded)) = string.split_once(rest, "'") else {
+    return None()
+  }
+  let name = string.ascii_lower(charset)
+  if name != "us-ascii" && name != "utf-8" {
+    return None()
+  }
+  percent_unescape(string.as_bytes(encoded))
+}
+
+fn put(mut params: Map[String, String], key: String, value: String) -> Result[
+  (),
+  MultipartError
+] uses {} {
+  match map.get(params, key) {
+    Some(existing) if existing != value => return Error(MediaType()),
+    _ => (),
+  }
+  map.insert(mut params, unique key, unique value)
+  Ok(())
+}
+
+/// Splits a media type or disposition value into its lowercased type (`token` or
+/// `token/token`) and parameters, lowercased by name. Parameter values are tokens or
+/// quoted strings; RFC 2231 `name*` values and `name*0`, `name*1*` continuations are
+/// decoded from us-ascii or utf-8. A malformed value or a repeated name with another
+/// value is `MediaType()`.
+pub fn parse_media_type(value: String) -> Result[
+  (unique String, Map[String, String]),
+  MultipartError
+] uses {} {
+  let data = string.as_bytes(value)
+  let size = bytes.len(data)
+  let mut end: u64 = 0
+  while end < size && data[end] != b';' {
+    end += 1
+  }
+  let mut first: u64 = 0
+  skip_space(data, mut first)
+  let mut last = end
+  while last > first && space(data[last - 1]) {
+    last -= 1
+  }
+  let mut cursor = first
+  skip_token(data, mut cursor)
+  if cursor == first {
+    return Error(MediaType())
+  }
+  if cursor < last {
+    if data[cursor] != b'/' {
+      return Error(MediaType())
+    }
+    let sub = cursor + 1
+    cursor = sub
+    skip_token(data, mut cursor)
+    if cursor == sub || cursor != last {
+      return Error(MediaType())
+    }
+  }
+  let kind = lower_text(data, first, last)
+  let mut params: Map[String, String] = map.empty()
+  // Names with `*`, by base name in order of first appearance.
+  let mut pieces: Map[String, Map[String, String]] = map.empty()
+  let mut pos = end
+  while true {
+    skip_space(data, mut pos)
+    if pos >= size {
+      break
+    }
+    if data[pos] != b';' {
+      return Error(MediaType())
+    }
+    let mut at = pos + 1
+    skip_space(data, mut at)
+    let key_start = at
+    skip_token(data, mut at)
+    if at == key_start {
+      // Go accepts one trailing semicolon.
+      let mut rest = pos + 1
+      skip_space(data, mut rest)
+      if rest == size {
+        break
+      }
+      return Error(MediaType())
+    }
+    let key = lower_text(data, key_start, at)
+    skip_space(data, mut at)
+    if at >= size || data[at] != b'=' {
+      return Error(MediaType())
+    }
+    at += 1
+    skip_space(data, mut at)
+    let Some(raw) = value_at(data, mut at) else {
+      return Error(MediaType())
+    }
+    let Ok(text_value) = text.finish(take raw) else {
+      return Error(MediaType())
+    }
+    match string.split_once(key, "*") {
+      Some((base, _)) => {
+        let mut group = match map.get(pieces, base) {
+          Some(g) => unique g,
+          None() => map.empty(),
+        }
+        put(mut group, key, text_value)?
+        map.insert(mut pieces, unique base, take group)
+      },
+      None() => put(mut params, key, text_value)?,
+    }
+    pos = at
+  }
+  for (base, group) in pieces {
+    let single = f"{base}*"
+    if let Some(encoded) = map.get(group, single) {
+      if let Some(decoded) = decode_2231(encoded) {
+        map.insert(mut params, unique base, take decoded)
+      }
+      continue
+    }
+    let mut joined: List[u8] = []
+    let mut valid = false
+    let mut n: u64 = 0
+    while true {
+      let simple = f"{base}*{n}"
+      if let Some(v) = map.get(group, simple) {
+        valid = true
+        text.append(mut joined, v)
+        n += 1
+        continue
+      }
+      let Some(v) = map.get(group, f"{simple}*") else {
+        break
+      }
+      valid = true
+      let decoded = if n == 0 {
+        decode_2231(v)
+      } else {
+        percent_unescape(string.as_bytes(v))
+      }
+      if let Some(d) = decoded {
+        text.append(mut joined, d)
+      }
+      n += 1
+    }
+    if valid {
+      map.insert(mut params, unique base, text.finish_valid(take joined))
+    }
+  }
+  Ok((take kind, take params))
+}
+
+// Go CanonicalMIMEHeaderKey for a token name; other names are kept as sent.
+fn canonical_key(name: Bytes) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut valid = true
+  for b in name {
+    if !token_byte(b) {
+      valid = false
+    }
+  }
+  let mut upper = true
+  for b in name {
+    if !valid {
+      list.push(mut out, b)
+    } else if upper {
+      list.push(mut out, ascii.to_upper(b))
+    } else {
+      list.push(mut out, ascii.to_lower(b))
+    }
+    upper = b == b'-'
+  }
+  text.finish_valid(take out)
+}
+
+// The end of the line starting at pos: the index after its LF, or None at EOF.
+@noalloc
+fn line_end(data: Bytes, pos: u64) -> Option[u64] uses {} {
+  let mut i = pos
+  while i < bytes.len(data) {
+    if data[i] == b'\n' {
+      return Some(i + 1)
+    }
+    i += 1
+  }
+  None()
+}
+
+@noalloc
+fn has_at(data: Bytes, pos: u64, end: u64, prefix: Bytes) -> bool uses {} {
+  let n = bytes.len(prefix)
+  if end < pos || end - pos < n {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < n {
+    if data[pos + i] != prefix[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Whether data[pos..end] is exactly `expected`.
+@noalloc
+fn equals_at(data: Bytes, pos: u64, end: u64, expected: Bytes) -> bool uses {} {
+  end - pos == bytes.len(expected) && has_at(data, pos, end, expected)
+}
+
+@noalloc
+fn skip_lwsp(data: Bytes, mut pos: u64, end: u64) -> () uses {} {
+  while pos < end && (data[pos] == b' ' || data[pos] == b'\t') {
+    pos += 1
+  }
+}
+
+// Go matchAfterPrefix with the whole body read: -1 no boundary, +1 boundary.
+@noalloc
+fn boundary_follows(data: Bytes, after: u64) -> bool uses {} {
+  let size = bytes.len(data)
+  if after >= size {
+    return true
+  }
+  let c = data[after]
+  if c == b' ' || c == b'\t' || c == b'\r' || c == b'\n' {
+    return true
+  }
+  c == b'-' && after + 1 < size && data[after + 1] == b'-'
+}
+
+// textproto.ReadMIMEHeader over data[pos..]: fields up to the blank line, folded
+// continuation lines joined with one space.
+fn read_headers(data: Bytes, mut pos: u64, mut budget: u64) -> Result[
+  List[http.Header],
+  MultipartError
+] uses {} {
+  let mut headers: List[http.Header] = []
+  while true {
+    let Some(end) = line_end(data, pos) else {
+      return Error(UnexpectedEof())
+    }
+    let mut stop = end - 1
+    if stop > pos && data[stop - 1] == b'\r' {
+      stop -= 1
+    }
+    if stop == pos {
+      pos = end
+      return Ok(headers)
+    }
+    if data[pos] == b' ' || data[pos] == b'\t' {
+      // A continuation of the previous field.
+      let count = list.len(headers)
+      if count == 0 {
+        return Error(MalformedHeader(pos))
+      }
+      let mut start = pos
+      skip_lwsp(data, mut start, stop)
+      let mut trimmed = stop
+      while trimmed > start && (data[trimmed - 1] == b' ' || data[trimmed - 1] == b'\t') {
+        trimmed -= 1
+      }
+      let Ok(more) = text.finish(slice_text(data, start, trimmed)) else {
+        return Error(MalformedHeader(pos))
+      }
+      let joined = f"{headers[count - 1].value} {more}"
+      headers[count - 1].value = take joined
+      pos = end
+      continue
+    }
+    let mut colon = pos
+    while colon < stop && data[colon] != b':' {
+      colon += 1
+    }
+    if colon == stop || colon == pos {
+      return Error(MalformedHeader(pos))
+    }
+    let mut name_check = pos
+    skip_token(data, mut name_check)
+    if name_check != colon {
+      return Error(MalformedHeader(pos))
+    }
+    if budget == 0 {
+      return Error(TooManyHeaders())
+    }
+    budget -= 1
+    let mut start = colon + 1
+    skip_lwsp(data, mut start, stop)
+    let mut trimmed = stop
+    while trimmed > start && (data[trimmed - 1] == b' ' || data[trimmed - 1] == b'\t') {
+      trimmed -= 1
+    }
+    let Ok(value) = text.finish(slice_text(data, start, trimmed)) else {
+      return Error(MalformedHeader(pos))
+    }
+    list.push(
+      mut headers,
+      http.Header(
+        name: canonical_key(bytes.from_list(slice_text(data, pos, colon))),
+        value: take value
+      )
+    )
+    pos = end
+  }
+  Ok(headers)
+}
+
+// Go filepath.Base on a slash-separated name.
+fn base_name(name: String) -> unique String uses {} {
+  let data = string.as_bytes(name)
+  let mut end = bytes.len(data)
+  while end > 0 && data[end - 1] == b'/' {
+    end -= 1
+  }
+  if end == 0 {
+    return if bytes.len(data) == 0 {
+      "."
+    } else {
+      "/"
+    }
+  }
+  let mut start = end
+  while start > 0 && data[start - 1] != b'/' {
+    start -= 1
+  }
+  text.finish_valid(slice_text(data, start, end))
+}
+
+fn part(take headers: List[http.Header], take body: Bytes) -> Part uses {} {
+  let mut name: Option[String] = None()
+  let mut filename: Option[String] = None()
+  if let Some(disposition) = http.header(headers, "content-disposition") {
+    if let Ok((kind, params)) = parse_media_type(disposition) {
+      if kind == "form-data" {
+        if let Some(n) = map.get(params, "name") {
+          name = Some(unique n)
+        }
+      }
+      match map.get(params, "filename") {
+        Some(f) if f != "" => {
+          filename = Some(base_name(f))
+        },
+        _ => (),
+      }
+    }
+  }
+  let media = http.header(headers, "content-type")
+  Part(
+    headers: take headers,
+    name: take name,
+    filename: take filename,
+    content_type: take media,
+    body: take body
+  )
+}
+
+/// Decodes a multipart body delimited by `boundary` (Go Reader.NextPart over the
+/// whole body): the preamble before the first delimiter and the epilogue after the
+/// final one are ignored, delimiter lines may end in spaces or tabs, and a body
+/// whose first delimiter line ends in LF alone uses LF line ends throughout. More
+/// than `limits.max_parts` parts or `limits.max_headers` header fields in all fails.
+pub fn decode(body: Bytes, boundary: String, limits: Limits) -> Result[
+  List[Part],
+  MultipartError
+] uses {} {
+  if boundary == "" {
+    return Error(MissingBoundary())
+  }
+  let mut dash_list: List[u8] = []
+  text.append(mut dash_list, "--")
+  text.append(mut dash_list, boundary)
+  let dash = bytes.from_list(take dash_list)
+  let size = bytes.len(body)
+  let mut nl: Bytes = b"\r\n"
+  let mut parts: List[Part] = []
+  let mut budget = limits.max_headers
+  let mut pos: u64 = 0
+  let mut expect_part = false
+  while true {
+    let (end, eof) = match line_end(body, pos) {
+      Some(e) => (e, false),
+      None() => (size, true),
+    }
+    let dash_count = bytes.len(dash)
+    // Final boundary: --boundary-- with optional LWSP, then the line end or EOF.
+    if has_at(body, pos, end, dash) && has_at(body, pos + dash_count, end, b"--") {
+      let mut rest = pos + dash_count + 2
+      skip_lwsp(body, mut rest, end)
+      if rest == end || equals_at(body, rest, end, nl) {
+        return Ok(parts)
+      }
+    }
+    if eof {
+      return Error(UnexpectedEof())
+    }
+    if has_at(body, pos, end, dash) {
+      let mut rest = pos + dash_count
+      skip_lwsp(body, mut rest, end)
+      if list.len(parts) == 0 && end - rest == 1 && body[rest] == b'\n' {
+        nl = b"\n"
+      }
+      if equals_at(body, rest, end, nl) {
+        if list.len(parts) >= limits.max_parts {
+          return Error(TooManyParts())
+        }
+        let mut cursor = end
+        let headers = read_headers(body, mut cursor, mut budget)?
+        let mut boundary_line: List[u8] = []
+        for b in nl {
+          list.push(mut boundary_line, b)
+        }
+        for b in dash {
+          list.push(mut boundary_line, b)
+        }
+        let separator = bytes.from_list(take boundary_line)
+        let start = cursor
+        // An empty part may be followed directly by its delimiter.
+        let mut stop = size
+        if has_at(body, start, size, dash) && boundary_follows(body, start + dash_count) {
+          stop = start
+        } else {
+          let mut i = start
+          while i < size {
+            if has_at(body, i, size, separator) && boundary_follows(
+              body,
+              i + bytes.len(separator)
+            ) {
+              stop = i
+              break
+            }
+            i += 1
+          }
+          if stop == size {
+            return Error(UnexpectedEof())
+          }
+        }
+        list.push(
+          mut parts,
+          part(take headers, bytes.from_list(slice_text(body, start, stop)))
+        )
+        pos = stop
+        expect_part = false
+        continue
+      }
+    }
+    if expect_part {
+      return Error(UnexpectedLine(pos))
+    }
+    if list.len(parts) == 0 {
+      pos = end
+      continue
+    }
+    if equals_at(body, pos, end, nl) {
+      expect_part = true
+      pos = end
+      continue
+    }
+    return Error(UnexpectedLine(pos))
+  }
+  Ok(parts)
+}
+
+/// Decodes a `multipart/form-data` request body from its Content-Type value: a
+/// different media type is `NotMultipart()`, a missing `boundary` parameter
+/// `MissingBoundary()`.
+pub fn decode_form(media: String, body: Bytes, limits: Limits) -> Result[
+  List[Part],
+  MultipartError
+] uses {} {
+  let (kind, params) = parse_media_type(media)?
+  if kind != "multipart/form-data" {
+    return Error(NotMultipart())
+  }
+  let Some(boundary) = map.get(params, "boundary") else {
+    return Error(MissingBoundary())
+  }
+  decode(body, boundary, limits)
+}
+
+/// Go SetBoundary's rule: 1 to 70 bytes of letters, digits and `'()+_,-./:=?`, and
+/// spaces except last.
+pub fn valid_boundary(boundary: String) -> bool uses {} {
+  let data = string.as_bytes(boundary)
+  let size = bytes.len(data)
+  if size < 1 || size > 70 {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < size {
+    let b = data[i]
+    let ok = ascii.is_alnum(b) || b == b'\'' || b == b'(' || b == b')' || b == b'+' || b == b'_' || b == b',' || b == b'-' || b == b'.' || b == b'/' || b == b':' || b == b'=' || b == b'?' || b == b' ' && i + 1 != size
+    if !ok {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+/// Sixty hex digits from 30 bytes of `r`, as Go's randomBoundary.
+pub fn random_boundary(r: Random) -> Result[unique String, RandomError] {
+  let data = core@1/random.bytes(r, 30)?
+  Ok(hex.encode(data))
+}
+
+/// The Content-Type of a form with `boundary`, quoting the boundary when it holds a
+/// tspecial or space.
+pub fn form_type(boundary: String) -> unique String uses {} {
+  let mut quote = false
+  for b in string.as_bytes(boundary) {
+    if tspecial(b) || b == b' ' {
+      quote = true
+    }
+  }
+  if quote {
+    f"multipart/form-data; boundary=\"{boundary}\""
+  } else {
+    f"multipart/form-data; boundary={boundary}"
+  }
+}
+
+// Go escapeQuotes.
+@preserves_unique(out)
+fn escape_quotes(value: String, mut out: List[u8]) -> () uses {} {
+  for b in string.as_bytes(value) {
+    if b == b'\\' {
+      text.append(mut out, "\\\\")
+    } else if b == b'"' {
+      text.append(mut out, "\\\"")
+    } else if b == b'\r' {
+      text.append(mut out, "%0D")
+    } else if b == b'\n' {
+      text.append(mut out, "%0A")
+    } else {
+      list.push(mut out, b)
+    }
+  }
+}
+
+/// Encodes `fields` as Go's Writer does: each part's Content-Disposition (`form-data;
+/// name="..."` with `filename` for a file, quotes and backslashes escaped and CR and
+/// LF percent-encoded) and Content-Type, CRLF line ends and a final delimiter. An
+/// invalid boundary is `InvalidBoundary()`.
+pub fn encode(boundary: String, fields: List[Field]) -> Result[
+  unique Bytes,
+  MultipartError
+] uses {} {
+  if !valid_boundary(boundary) {
+    return Error(InvalidBoundary())
+  }
+  let mut out: List[u8] = []
+  let mut first = true
+  for field in fields {
+    if first {
+      text.append(mut out, f"--{boundary}\r\n")
+    } else {
+      text.append(mut out, f"\r\n--{boundary}\r\n")
+    }
+    first = false
+    text.append(mut out, "Content-Disposition: form-data; name=\"")
+    escape_quotes(field.name, mut out)
+    list.push(mut out, b'"')
+    if let Some(f) = field.filename {
+      text.append(mut out, "; filename=\"")
+      escape_quotes(f, mut out)
+      list.push(mut out, b'"')
+    }
+    text.append(mut out, "\r\n")
+    let media: Option[String] = match (field.content_type, field.filename) {
+      (Some(t), _) => Some(unique t),
+      (None(), Some(_)) => Some("application/octet-stream"),
+      (None(), None()) => None(),
+    }
+    if let Some(t) = media {
+      for b in string.as_bytes(t) {
+        if b == b'\r' || b == b'\n' {
+          return Error(MediaType())
+        }
+      }
+      text.append(mut out, f"Content-Type: {t}\r\n")
+    }
+    text.append(mut out, "\r\n")
+    for b in field.data {
+      list.push(mut out, b)
+    }
+  }
+  text.append(mut out, f"\r\n--{boundary}--\r\n")
+  Ok(bytes.from_list(take out))
+}
+
+/// `fields` encoded with `boundary` as an `http.Body` for `http.client_send`.
+pub fn form_body(boundary: String, fields: List[Field]) -> Result[
+  http.Body,
+  MultipartError
+] uses {} {
+  let data = encode(boundary, fields)?
+  Ok(http.Body(bytes: take data, content_type: form_type(boundary)))
+}
