@@ -39,7 +39,8 @@ import tomllib
 from action_sizes_from_log import CALIBRATED_CPUS, CPU_CLASSES, MAX_CPUS, compile_cpus
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
+ROOT = pathlib.Path(os.environ.get('HIRSEL_LAND_TREE') or pathlib.Path(__file__).resolve().parents[2])
 HERE = ROOT / "tools/buck2"
 THIRD_PARTY = ROOT / "third-party"
 REINDEER = HERE / "bin/reindeer"

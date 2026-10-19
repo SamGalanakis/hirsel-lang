@@ -27,7 +27,8 @@ import event_logs
 from sync import (AGREE_LIMIT, AGREE_SHARDS, AGREE_SLICE_PROGRAMS, CONFORMANCE_SHARDS, CONFORMANCE_SLICE_PROGRAMS,
                   SELECTED_SLICES)
 
-ROOT = Path(__file__).resolve().parents[2]
+# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
+ROOT = Path(os.environ.get('HIRSEL_LAND_TREE') or Path(__file__).resolve().parents[2])
 BUCK2 = ROOT / '.buck2/bin/buck2'
 # Every Buck2 command of the per-push gate and of land, so the daemon keeps one
 # state: the Clippy twins exist, and `buck2 test` also builds the non-test

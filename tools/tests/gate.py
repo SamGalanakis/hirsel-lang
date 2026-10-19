@@ -1801,7 +1801,11 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         rows = trace.read_text().splitlines()
         for command in ('fetch', 'rebase', 'push'):
             self.assertIn(command + ' True', rows)
+        for command in ('rebase', 'push'):
             self.assertNotIn(command + ' False', rows)
+        # One fetch before the queue finds main's copy of the landing scripts.
+        self.assertEqual(rows.count('fetch False'), 1)
+        self.assertLess(rows.index('fetch False'), rows.index('archive False'))
         self.assertIn('status False', rows)
         self.assertEqual([row for row in rows if row.startswith('prepare.py')],
                          ['prepare.py False', 'prepare.py True'])
@@ -1809,6 +1813,41 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('sync.py True', rows)
         self.assertEqual(logged[0], 'prepare.py')
         self.assertEqual(logged.count('prepare.py'), 2)
+
+    def test_land_runs_main_s_copy_of_itself_on_the_worktree(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
+        land = (self.sibling / 'tools/land').read_text()
+        marker = "    say('land: main copy marker ' + str(ROOT))\n"
+        land = land.replace('    os.chdir(ROOT)\n', '    os.chdir(ROOT)\n' + marker, 1)
+        self.sibling_pushes({'tools/land': land})
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("running origin/main's copy of the landing scripts", result.stdout)
+        # The worktree's stale copy ran once, to start main's; main's ran on the worktree.
+        self.assertEqual(result.stdout.count(f'land: main copy marker {self.root}'), 1, result.stdout)
+        self.assertIn('pushed', result.stdout)
+        self.assertEqual(git(self.root, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+
+    def test_land_refuses_to_run_under_an_outer_timeout(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
+        self.commands.unlink(missing_ok=True)
+        result = subprocess.run(['timeout', '60', str(self.root / 'tools/land')], cwd=self.root, env=self.env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('refusing to run under timeout', result.stdout)
+        self.assertFalse(self.commands.exists())
+        self.assertNotEqual(git(self.root, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+
+    def test_land_status_names_the_holder_its_age_and_the_waiters_without_buck2(self):
+        directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
+        with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+            result, logged = self.run_tool('land', '--status', env=self.daemon_env())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((logged, self.daemon_trace()), ([], []))
+        self.assertIn(f'land: land lock: 1 in {directory}; 1 held, 0 queued', result.stdout)
+        self.assertRegex(result.stdout, r'slot 0: held \d+ s by ')
 
     def test_land_commits_the_index_generated_from_the_rebased_sources(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')

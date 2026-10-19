@@ -11,7 +11,8 @@ import tempfile
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[2]
+# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
+ROOT = Path(os.environ.get('HIRSEL_LAND_TREE') or Path(__file__).resolve().parents[2])
 BUCK2 = ROOT / '.buck2/bin/buck2'
 MAX_AGE = 3 * 86400
 MAX_BYTES = 4 * 1024**3

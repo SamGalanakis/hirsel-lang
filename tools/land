@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Land the lane's committed change on main.
 
-    tools/land
+    tools/land            # land this worktree's gated change
+    tools/land --status   # the land queue: the holder and its age, the waiters, your place
+
+Land runs origin/main's copy of itself and of the gate's scripts on the lane's
+worktree, never the worktree's own copy: every lane in the queue runs the same
+landing code, and a lane's unlanded edit to the tooling cannot land itself. It
+refuses to run under an outer `timeout`: a kill can stop it between the push
+and its record. Run it in the background with a log instead.
 
 Validate the lane and prepare before joining the exclusive FIFO land queue.
 Hold the lock while fetching, rebasing onto origin/main, building the workspace,
@@ -28,21 +35,34 @@ conflict is resolved by regenerating the page and needs no new gate.
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'tools/buck2'))
+# The lane's worktree: the script's own checkout, or the worktree main's copy
+# was started on (main_copy).
+TREE = 'HIRSEL_LAND_TREE'
+ROOT = Path(os.environ.get(TREE) or Path(__file__).resolve().parents[1])
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'buck2'))
 sys.dont_write_bytecode = True
 import gating  # noqa: E402
 from gating import say  # noqa: E402
 
+# The scripts have read the tree; helpers run from the tree resolve their own.
+os.environ.pop(TREE, None)
 PY = sys.executable
 ATTEMPTS = 20
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 CLI = 'root//:hirsel-cli-bin-hirsel'
 LANDINGS = 'hirsel-landings.jsonl'
 LAND_LOCK_DIR = Path('/workspace/code/hirsel-briefs/locks/land')
+# origin/main's copies of the landing scripts, by commit, in the common git dir.
+MAIN_COPIES = 'hirsel-land-tools'
+# Set in main's copy: the commit it was extracted from.
+MAIN_COPY = 'HIRSEL_LAND_MAIN'
+KEEP_COPIES = 8
 
 
 def run(*command, **kwargs):
@@ -171,16 +191,78 @@ def log_landing(pushed, base, identity, record, timing):
         log.write(json.dumps(entry, sort_keys=True) + '\n')
 
 
+def outer_timeout():
+    """The pid of a `timeout` this process runs under, or None."""
+    pid = os.getppid()
+    while pid > 1:
+        try:
+            comm = Path(f'/proc/{pid}/comm').read_text().strip()
+            parent = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+        if comm == 'timeout':
+            return pid
+        pid = parent
+    return None
+
+
+def main_copy():
+    """The path of origin/main's tools/land, extracted with tools/buck2 into the
+    common git directory once per commit."""
+    sha = run('git', 'rev-parse', 'origin/main').stdout.strip()
+    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
+    copies = common / MAIN_COPIES
+    target = copies / sha
+    if not (target / 'tools/land').is_file():
+        copies.mkdir(exist_ok=True)
+        pending = Path(tempfile.mkdtemp(dir=copies, prefix='.pending-'))
+        try:
+            archive = subprocess.run(['git', 'archive', sha, 'tools/land', 'tools/buck2'], cwd=ROOT,
+                                     capture_output=True, check=True).stdout
+            subprocess.run(['tar', '-x', '-C', str(pending)], input=archive, check=True)
+            try:
+                pending.rename(target)
+            except OSError:
+                pass  # Another lane extracted the same commit first.
+        finally:
+            shutil.rmtree(pending, ignore_errors=True)
+        for old in sorted((p for p in copies.iterdir() if not p.name.startswith('.')),
+                          key=lambda p: p.stat().st_mtime)[:-KEEP_COPIES]:
+            shutil.rmtree(old, ignore_errors=True)
+    return target / 'tools/land', sha
+
+
+def status():
+    directory = Path(os.environ.get('HIRSEL_LAND_LOCK_DIR', str(LAND_LOCK_DIR)))
+    for line in gating.queue_status(directory, label='land', me={str(ROOT)}):
+        say(line)
+    return 0
+
+
 def main():
-    if len(sys.argv) > 1:
+    if sys.argv[1:]:
         print(__doc__, file=sys.stderr)
         return 2
+    if (pid := outer_timeout()) is not None:
+        say(f'land: refusing to run under timeout (pid {pid}): a kill can stop land between its push and its '
+            'record, or strand a rebase. Run it in the background with a log: '
+            'tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log')
+        return 2
     os.chdir(ROOT)
-    for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
-        os.environ.setdefault(name, value)
     if run('git', 'status', '--porcelain').stdout.strip():
         say('land: the worktree has uncommitted changes; commit them (and gate the result) first')
         return 1
+    if not os.environ.get(MAIN_COPY):
+        if (fetch := run('git', 'fetch', 'origin')).returncode:
+            say('land: git fetch failed\n' + fetch.stderr)
+            return 1
+        script, sha = main_copy()
+        say(f'land: running origin/main\'s copy of the landing scripts ({sha[:12]})')
+        sys.stdout.flush()
+        os.execve(sys.executable, [sys.executable, str(script)],
+                  os.environ | {TREE: str(ROOT), MAIN_COPY: sha})
+    for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
+        os.environ.setdefault(name, value)
     # Reject an ungated lane before waiting; check again after every rebase.
     gated_change()
     if run(PY, 'tools/buck2/prepare.py').returncode:
@@ -253,5 +335,7 @@ def land_rounds():
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--status']:
+        sys.exit(status())
     with gating.daemon_lifetime():
         sys.exit(main())

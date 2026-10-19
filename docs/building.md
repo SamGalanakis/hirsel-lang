@@ -734,7 +734,15 @@ are the only routine net, so choose what the change can break, and say in
 `--why` what you skipped and why that is safe. The full suite (`tools/gate
 --full`, below) runs on demand at milestone cuts.
 
-`tools/land` validates the lane's green receipt and prepares its toolchain
+`tools/land` runs origin/main's copy of itself and of the gate's scripts on
+the lane's worktree (extracted once per commit into the common git directory),
+so every lane in the queue runs the same landing code and a lane's unlanded
+tooling edit cannot land itself. It refuses to run under an outer `timeout`,
+whose kill could stop it between its push and its record; run it in the
+background with a log. `tools/land --status` prints the lock's holder and how
+long it has held it, the waiters in order and this worktree's place.
+
+Land validates the lane's green receipt and prepares its toolchain
 before joining an exclusive FIFO queue. The lock defaults to
 `/workspace/code/hirsel-briefs/locks/land`; `HIRSEL_LAND_LOCK_DIR` selects
 another shared directory (all lanes landing to the same main must agree).
