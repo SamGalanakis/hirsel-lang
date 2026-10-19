@@ -29,9 +29,15 @@ fn native_snapshot_owns_declarations_materializations_sources_and_program_select
         frozen
             .sources
             .file(
-                frozen.source_owners[&entry_path(&default_context())]
-                    .syntax
-                    .file
+                frozen
+                    .sources
+                    .anchor(
+                        frozen.source_owners[&entry_path(&default_context())]
+                            .syntax
+                            .anchor
+                    )
+                    .unwrap()
+                    .0
             )
             .is_some()
     );
@@ -719,9 +725,9 @@ fn explicit_native_roots_keep_their_private_closure() {
             .unwrap();
         let visible = parsed
             .value
-            .tree
             .items
             .iter()
+            .map(|syntax| &syntax.item)
             .find(|i| i.name.as_str() == "visible")
             .unwrap()
             .definition

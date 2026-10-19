@@ -268,7 +268,7 @@ impl Checker<'_> {
                     value: copied,
                 } if self
                     .identity(copied)
-                    .is_some_and(|o| o.root == OriginRoot::Expression(copied)) =>
+                    .is_some_and(|o| o.root == OriginRoot::Expression(self.lexical, copied)) =>
                 {
                     None
                 }
@@ -353,7 +353,7 @@ impl Checker<'_> {
                     b.site == NameSite::Pattern(*child)
                 })?;
                 let root = match b.binding {
-                    ResolvedName::Local(l) => OriginRoot::Local(l),
+                    ResolvedName::Local(l) => OriginRoot::Local(self.lexical, l),
                     _ => return None,
                 };
                 Some((

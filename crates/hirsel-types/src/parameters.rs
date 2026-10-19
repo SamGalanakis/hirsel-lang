@@ -290,7 +290,7 @@ fn rewrite_parameter_graph(
 pub fn bind_parameter_scopes(
     store: &mut TypeStore,
     root: TypeId,
-    scopes: &[NameSite],
+    scopes: &[SiteRef],
 ) -> Result<TypeId, GraphError> {
     let root = map_parameter_references(store, root, |p, nested| match p {
         ParameterRef::Bound { depth, parameter } if depth >= nested => scopes
@@ -614,7 +614,7 @@ pub fn instantiate_parameter_authorities(
 pub fn abstract_parameter_scope(
     store: &mut TypeStore,
     root: TypeId,
-    scope: NameSite,
+    scope: SiteRef,
 ) -> Result<TypeId, GraphError> {
     let root = map_parameter_references(store, root, |p, depth| match p {
         ParameterRef::Body {

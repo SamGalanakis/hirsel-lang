@@ -9,7 +9,7 @@ fn header_sites_distinguish_names_from_nested_type_and_body_uses() {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let id = engine.sources.add("origins.hir", source.into()).unwrap();
         let file = engine.parse_file(id, &default_context()).unwrap().value;
-        let item = &file.tree.items[file.roots[0].0 as usize];
+        let (item, tree) = (&file.items[0].item, &file.items[0].tree);
         let ItemKind::Function { signature, .. } = &item.kind else {
             panic!()
         };
@@ -20,7 +20,7 @@ fn header_sites_distinguish_names_from_nested_type_and_body_uses() {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            spellings(file.generic_name_spans(item.origin)),
+            spellings(tree.generic_name_spans(item.origin)),
             ["T", "n", "U"]
         );
         assert_eq!(
@@ -29,7 +29,7 @@ fn header_sites_distinguish_names_from_nested_type_and_body_uses() {
                 .iter()
                 .map(|p| engine
                     .sources
-                    .slice(file.parameter_name_span(item.origin, p).unwrap())
+                    .slice(tree.parameter_name_span(item.origin, p).unwrap())
                     .unwrap())
                 .collect::<Vec<_>>(),
             ["a", "b"]
@@ -37,12 +37,15 @@ fn header_sites_distinguish_names_from_nested_type_and_body_uses() {
         let labels: Vec<_> = signature
             .parameters
             .iter()
-            .map(|p| file.parameter_label_span(item.origin, p).unwrap())
+            .map(|p| tree.parameter_label_span(item.origin, p).unwrap())
             .collect();
         assert_eq!(spellings(labels.clone()), ["from", "from"]);
-        assert_eq!(labels[1].start as usize, source.find("from mut").unwrap());
         assert_eq!(
-            spellings(file.uses_path_spans(item.origin)),
+            engine.sources.resolve(labels[1]).start as usize,
+            source.find("from mut").unwrap()
+        );
+        assert_eq!(
+            spellings(tree.uses_path_spans(item.origin)),
             ["zz", "pkg@1/mod.cap"]
         );
     });
@@ -55,11 +58,12 @@ fn variant_origins_ignore_generic_and_payload_names() {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let id = engine.sources.add("origins.hir", source.into()).unwrap();
         let file = engine.parse_file(id, &default_context()).unwrap().value;
-        let item = &file.tree.items[file.roots[0].0 as usize];
-        let spans = file.variant_name_spans(item.origin);
+        let (item, tree) = (&file.items[0].item, &file.items[0].tree);
+        let spans = tree.variant_name_spans(item.origin);
         assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].start as usize, source.find("X(").unwrap());
-        assert_eq!(spans[1].start as usize, source.rfind("X(").unwrap());
+        let start = |span| engine.sources.resolve(span).start as usize;
+        assert_eq!(start(spans[0]), source.find("X(").unwrap());
+        assert_eq!(start(spans[1]), source.rfind("X(").unwrap());
     });
 }
 
@@ -70,13 +74,13 @@ fn closure_trailing_uses_keeps_its_exact_path_site() {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let id = engine.sources.add("origins.hir", source.into()).unwrap();
         let file = engine.parse_file(id, &default_context()).unwrap().value;
-        let closure = file
-            .tree
+        let tree = &file.items[0].tree;
+        let closure = tree
             .expressions
             .iter()
             .find(|e| matches!(e.kind, ExprKind::Closure { .. }))
             .unwrap();
-        let spans = file.uses_path_spans(closure.origin);
+        let spans = tree.uses_path_spans(closure.origin);
         assert_eq!(spans.len(), 1);
         assert_eq!(engine.sources.slice(spans[0]), Some("cap"));
     });

@@ -14,7 +14,7 @@ fn closure_inputs_inspect_only_their_bindings_and_captures() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::OwnershipInitializedRows);
             let result = engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(result.diagnostics.is_empty());
             let rows =

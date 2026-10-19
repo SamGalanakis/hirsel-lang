@@ -67,9 +67,7 @@ impl QueryEngine {
             return Err(QueryError::NotImplemented);
         };
         let source = self.definition_items(definition)?;
-        if source.len() != 1
-            || source[0].0.tree.items[source[0].1.0 as usize].text_hash != record.text_hash
-        {
+        if source.len() != 1 || source[0].text_hash != record.text_hash {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "owner representation".into(),
                 message: "stale private representation".into(),

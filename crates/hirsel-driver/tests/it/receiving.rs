@@ -360,10 +360,10 @@ fn freezing_a_projected_box_requires_global_contents_before_uniqueness() {
         let file = engine.sources.add("global.hir", global.clone()).unwrap();
         let unique = check_progress(&mut engine, file, &default_context()).unwrap();
         assert_eq!(unique.diagnostics[0].rule.as_str(), "MEM-11");
-        for (text, checked) in [(source, &checked), (global.as_str(), &unique)] {
+        for checked in [&checked, &unique] {
             let diagnostic = &checked.diagnostics[0];
             assert_eq!(
-                &text[diagnostic.primary.start as usize..diagnostic.primary.end as usize],
+                checked.sources.slice(diagnostic.primary).unwrap(),
                 "shared.freeze(take built)",
             );
         }
@@ -406,7 +406,7 @@ fn inferred_receivers_of_local_content_accept_local_writes() {
             let first = checked.diagnostics.first();
             assert_eq!(first.map(|d| d.rule.as_str()), Some("MODE-1"), "{source}");
             if let Some(line) = line {
-                let start = first.unwrap().primary.start as usize;
+                let start = checked.sources.resolve(first.unwrap().primary).start as usize;
                 assert_eq!(source[..start].matches('\n').count() + 1, line, "{source}");
             }
         }
@@ -438,7 +438,9 @@ fn once_receiving_storage_consumes_its_function_on_call() {
         let first = checked.diagnostics.first().expect("a second once call");
         assert_eq!(first.rule.as_str(), "MODE-3");
         assert_eq!(
-            source[..first.primary.start as usize].matches('\n').count(),
+            source[..checked.sources.resolve(first.primary).start as usize]
+                .matches('\n')
+                .count(),
             3
         );
     });

@@ -181,7 +181,6 @@ impl Parser<'_> {
             }
             self.expect(")", const { RuleId::of("LANG-1") })?;
             self.analyses.push(AnalysisAnnotation {
-                item: ItemId(0),
                 site,
                 name: name.join("."),
                 payload,
@@ -466,7 +465,7 @@ impl Parser<'_> {
             .analyses
             .iter()
             .filter(|a| a.site == AnalysisSite::Item)
-            .map(|a| a.origin.tokens.end as usize)
+            .map(|a| self.local.map_or(0, |l| l.first_token) + a.origin.tokens.end as usize)
             .max()
             .unwrap_or(self.significant[start]);
         Ok(Item {
@@ -480,14 +479,11 @@ impl Parser<'_> {
                     )
                 })
                 .find(|t| matches!(t.kind, TokenKind::Ident(s) if s == name))
-                .map(|t| t.span)
+                .map(|t| self.local_span(t.span))
                 .unwrap_or(self.origin(begin).span),
-
             origin: self.origin(begin),
-            owned_tokens: TokenRange::default(),
             name,
             definition,
-            text_hash: ContentHash::default(),
             visibility,
             attributes,
             kind,

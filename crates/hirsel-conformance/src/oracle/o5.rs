@@ -36,11 +36,26 @@ pub fn sites(source: &str) -> Result<Vec<usize>, String> {
         hirsel_driver::compiler_adapters(),
     );
     let file = crate::corpus_format::parsed(&mut engine, source)?;
-    let significant: Vec<&Token> = file
-        .tokens
+    let sources = &engine.sources;
+    // Sites are file offsets: each item's spans resolve through its anchor,
+    // and its tokens are rebased onto the file's own anchor (base 0).
+    let at = |span: hirsel_span::Span| sources.resolve(span);
+    let base = sources.file_anchor(file.file);
+    let tokens: Vec<Token> = file
+        .items
         .iter()
+        .flat_map(|item| &item.tree.tokens)
+        .chain(&file.tokens)
         .filter(|t| !matches!(t.kind, TokenKind::Trivia(_) | TokenKind::Eof))
+        .map(|t| {
+            let span = at(t.span);
+            Token {
+                kind: t.kind.clone(),
+                span: hirsel_span::Span::new(base, span.start, span.end).unwrap(),
+            }
+        })
         .collect();
+    let significant: Vec<&Token> = tokens.iter().collect();
     let text = |t: &Token| &source[t.span.start as usize..t.span.end as usize];
     // The entries of the bracketed list opening at significant index `open`:
     // the start of each entry at depth one, except an empty tail.
@@ -67,14 +82,14 @@ pub fn sites(source: &str) -> Result<Vec<usize>, String> {
         }
     };
     let mut out = vec![];
-    for id in &file.roots {
-        let item = &file.tree.items[id.0 as usize];
-        out.push(item.origin.span.start as usize);
+    for syntax in &file.items {
+        let item = &syntax.item;
+        out.push(at(item.origin.span).start as usize);
         let after_name = significant
             .iter()
-            .position(|t| t.span.start >= item.name_span.end)
+            .position(|t| t.span.start >= at(item.name_span).end)
             .unwrap_or(significant.len());
-        let end = item.origin.span.end;
+        let end = at(item.origin.span).end;
         match &item.kind {
             ItemKind::Function { .. } => {
                 let mut depth = 0usize;
@@ -92,9 +107,9 @@ pub fn sites(source: &str) -> Result<Vec<usize>, String> {
             }
             ItemKind::Type { body, .. } => match body {
                 TypeBody::Record(fields) => {
-                    out.extend(fields.iter().map(|f| f.origin.span.start as usize));
+                    out.extend(fields.iter().map(|f| at(f.origin.span).start as usize));
                 }
-                TypeBody::Distinct { field, .. } => out.push(field.origin.span.start as usize),
+                TypeBody::Distinct { field, .. } => out.push(at(field.origin.span).start as usize),
                 TypeBody::Variants(_) => {
                     let mut depth = 0usize;
                     for (i, &t) in significant.iter().enumerate().skip(after_name) {

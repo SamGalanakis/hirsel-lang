@@ -47,7 +47,7 @@ fn every_conformance_file_round_trips_and_positive_headers_lex_cleanly() {
         let mut reconstructed = Vec::new();
         let mut cursor = 0;
         for token in &output.tokens {
-            assert_eq!(token.span.file, file);
+            assert_eq!(token.span.anchor, sources.file_anchor(file));
             assert_eq!(
                 token.span.start,
                 cursor,

@@ -154,15 +154,16 @@ pub enum ContractParameter {
 /// declared inside the expression belong to its ordinary nested calls instead.
 /// Result types count too: an empty Inline can receive its size from context.
 pub fn comptime_inputs(
-    tree: &ast::SyntaxTree,
+    syntax: &ast::ItemSyntax,
     checked: &CheckedBody,
     expression: ast::ExprId,
 ) -> Vec<SizeParameterRef> {
     use std::collections::BTreeSet;
+    let tree = &syntax.tree;
     let region = tree.expressions[expression.0 as usize].origin.span;
     let contains = |site: NameSite| {
         let span = match site {
-            NameSite::Item(id) => tree.items[id.0 as usize].origin.span,
+            NameSite::Item => syntax.item.origin.span,
             NameSite::Statement(id) => tree.statements[id.0 as usize].origin.span,
             NameSite::Expression(id) => tree.expressions[id.0 as usize].origin.span,
             NameSite::Pattern(id) => tree.patterns[id.0 as usize].origin.span,
@@ -170,8 +171,9 @@ pub fn comptime_inputs(
         };
         span.start >= region.start && span.end <= region.end
     };
+    let owner = syntax.owner();
     let outer = |parameter: SizeParameterRef| match parameter.binder() {
-        GenericBinder::Body(scope) => !contains(scope),
+        GenericBinder::Body(scope) => scope.owner != owner || !contains(scope.site),
         GenericBinder::Bound(_) => false,
     };
     let mut inputs = BTreeSet::new();

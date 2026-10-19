@@ -737,11 +737,7 @@ pub(crate) fn state(config: CheckedRuntime) -> Shared {
         task: 0,
         open: vec![],
         kinds: vec![],
-        site: Span {
-            file: hirsel_span::FileId(0),
-            start: 0,
-            end: 0,
-        },
+        site: Span::default(),
         definition: None,
         constructed: 0,
         released: 0,

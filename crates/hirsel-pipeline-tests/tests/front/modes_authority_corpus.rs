@@ -54,7 +54,7 @@ fn divergent_alias_joins_publish_fresh_identities_and_preserve_original_owners()
                 "{source}: {:?}",
                 out.diagnostics
             );
-            let file = &out.value.typed.file;
+            let syntax = &out.value.typed.syntax;
             let root = out
                 .value
                 .typed
@@ -66,14 +66,14 @@ fn divergent_alias_joins_publish_fresh_identities_and_preserve_original_owners()
                         return None;
                     };
                     let ast::PatternKind::Binding(name) =
-                        file.tree.patterns[pattern.0 as usize].kind
+                        syntax.tree.patterns[pattern.0 as usize].kind
                     else {
                         return None;
                     };
                     let ResolvedName::Local(local) = binding.binding else {
                         return None;
                     };
-                    (name.as_str() == "r").then_some(OriginRoot::Local(local))
+                    (name.as_str() == "r").then_some(OriginRoot::Local(syntax.owner(), local))
                 })
                 .expect("r binding");
             assert_eq!(

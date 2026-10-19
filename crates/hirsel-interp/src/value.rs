@@ -5,7 +5,7 @@ use hirsel_types::{BuiltinType, Primitive};
 
 /// Concrete lexical size bindings, keyed by the declaration rather than its ordinal alone.
 pub type SizeBindings =
-    std::collections::BTreeMap<(hirsel_types::NameSite, hirsel_types::SizeParamId), u64>;
+    std::collections::BTreeMap<(hirsel_types::SiteRef, hirsel_types::SizeParamId), u64>;
 
 /// A named callable has no environment. Generic type rows retain their owner.
 #[derive(Clone, Debug)]

@@ -21,11 +21,8 @@ impl QueryEngine {
             return true;
         };
         let typed = &analyzed.value.typed;
-        let tree = &typed.file.tree;
-        if matches!(
-            tree.items[typed.item.0 as usize].kind,
-            ItemKind::Const { .. }
-        ) {
+        let tree = &typed.syntax.tree;
+        if matches!(typed.syntax.item.kind, ItemKind::Const { .. }) {
             return true;
         }
         typed.checked.expressions.iter().any(|row| {
@@ -45,12 +42,7 @@ impl QueryEngine {
         self.items
             .get(path)
             .and_then(|i| i.first())
-            .is_some_and(|item| {
-                matches!(
-                    item.file.tree.items[item.item.0 as usize].kind,
-                    ItemKind::Const { .. }
-                )
-            })
+            .is_some_and(|item| matches!(item.item.kind, ItemKind::Const { .. }))
     }
 
     /// Whether every body a file check under `policy` lowers is lowered.
@@ -63,9 +55,9 @@ impl QueryEngine {
             let Some((_, _, Ok(parsed))) = self.parsed.get(f) else {
                 return false;
             };
-            parsed.value.roots.iter().all(|id| {
-                let item = &parsed.value.tree.items[id.0 as usize];
-                !generation::executable(&parsed.value, *id)
+            parsed.value.items.iter().all(|syntax| {
+                let item = &syntax.item;
+                !generation::executable(syntax)
                     || self.lowered.contains_key(&item.definition)
                     || !self.lowers_at_check(&item.definition, policy)
             })
@@ -77,12 +69,11 @@ impl QueryEngine {
         let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
             return vec![];
         };
-        let tree = &parsed.value.tree;
         parsed
             .value
-            .roots
+            .items
             .iter()
-            .map(|id| tree.items[id.0 as usize].definition.clone())
+            .map(|syntax| syntax.item.definition.clone())
             .collect()
     }
 
@@ -91,13 +82,12 @@ impl QueryEngine {
         let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
             return vec![];
         };
-        let tree = &parsed.value.tree;
         parsed
             .value
-            .roots
+            .items
             .iter()
-            .filter_map(|id| {
-                let item = &tree.items[id.0 as usize];
+            .filter_map(|syntax| {
+                let item = &syntax.item;
                 match &item.kind {
                     ItemKind::Function { abi, .. } => {
                         Some((item.definition.clone(), abi.is_some()))

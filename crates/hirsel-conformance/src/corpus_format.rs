@@ -25,7 +25,6 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
         .ok_or("missing lexer")?
         .lex(file, &engine.sources)
         .map_err(|e| format!("{e:?}"))?;
-    let source = engine.sources.file(file).ok_or("missing source")?;
     let syntax = if lexed
         .value
         .iter()
@@ -41,7 +40,7 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
                         file,
                         lexed.value.clone(),
                         &hirsel_engine::default_context(),
-                        &engine.sources,
+                        &mut engine.sources,
                     )
                     .ok()
             })
@@ -49,6 +48,7 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
     } else {
         None
     };
+    let source = engine.sources.file(file).ok_or("missing source")?;
     let mut result: Vec<_> = lexed
         .value
         .iter()
@@ -71,22 +71,31 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
         })
         .collect();
     if let Some(syntax) = syntax {
-        order_closure_clauses(&mut result, &syntax);
+        order_closure_clauses(&mut result, &syntax, &engine.sources);
     }
     Ok(result)
 }
 // A closure's optional trailing uses clause moves before its body. The AST
 // names that exact body; braces belonging to a result relation are never moved.
-fn order_closure_clauses(tokens: &mut Vec<Token>, syntax: &SyntaxFile) {
-    for expr in &syntax.tree.expressions {
+fn order_closure_clauses(
+    tokens: &mut Vec<Token>,
+    syntax: &SyntaxFile,
+    sources: &hirsel_span::SourceMap,
+) {
+    let expressions = syntax.items.iter().flat_map(|item| {
+        item.tree
+            .expressions
+            .iter()
+            .map(move |expr| (&item.tree, expr))
+    });
+    for (tree, expr) in expressions {
         let ExprKind::Closure { body, .. } = expr.kind else {
             continue;
         };
-        let body = syntax.tree.expressions[body.0 as usize].origin.span;
+        let body = sources.resolve(tree.expressions[body.0 as usize].origin.span);
+        let closure = sources.resolve(expr.origin.span);
         let Some(start) = tokens.iter().position(|t| {
-            t.start >= body.end as usize
-                && t.start < expr.origin.span.end as usize
-                && t.spelling == "uses"
+            t.start >= body.end as usize && t.start < closure.end as usize && t.spelling == "uses"
         }) else {
             continue;
         };
@@ -132,7 +141,7 @@ pub(crate) fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFil
             file,
             lexed.value,
             &hirsel_engine::default_context(),
-            &engine.sources,
+            &mut engine.sources,
         )
         .map_err(|e| format!("{e:?}"))?;
     if parsed.value.has_syntax_errors || !parsed.diagnostics.is_empty() {
@@ -140,7 +149,10 @@ pub(crate) fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFil
     }
     Ok(parsed.value)
 }
-fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
+/// An item with its source coordinates, tokens and hash erased.
+fn normalized(syntax: &ItemSyntax) -> (Item, SyntaxTree, u32) {
+    let mut item = syntax.item.clone();
+    let mut tree = syntax.tree.clone();
     let origin = Origin {
         span: Span::default(),
         tokens: TokenRange::default(),
@@ -153,11 +165,10 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     for a in &mut tree.analyses {
         a.origin = origin;
     }
-    for item in &mut tree.items {
+    tree.tokens.clear();
+    {
         item.origin = origin;
         item.name_span = Span::default();
-        item.owned_tokens = TokenRange::default();
-        item.text_hash = ContentHash::default();
         attrs(&mut item.attributes, origin);
         match &mut item.kind {
             ItemKind::Function { signature, .. } => attrs(&mut signature.attributes, origin),
@@ -202,7 +213,7 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
             _ => {}
         }
     }
-    tree
+    (item, tree, syntax.occurrence)
 }
 /// Grouping has no AST node. Erase only source coordinates, written groups, trivia and hashes;
 /// operators, qualifiers, clauses, roots and every indexed child must agree.
@@ -213,12 +224,16 @@ pub fn verify_tree(old: &str, new: &str) -> Result<(), String> {
     );
     let a = parsed(&mut engine, old)?;
     let b = parsed(&mut engine, new)?;
-    if a.roots != b.roots || normalized(a.tree.clone()) != normalized(b.tree.clone()) {
+    if a.items.len() != b.items.len()
+        || a.items
+            .iter()
+            .zip(&b.items)
+            .any(|(a, b)| normalized(a) != normalized(b))
+    {
         return Err("formatter changed the parsed AST".into());
     }
     let comments = |file: &SyntaxFile| {
-        file.tokens
-            .iter()
+        file.tape()
             .filter(|t| {
                 matches!(
                     t.kind,
@@ -402,6 +417,7 @@ fn primary(
     })
 }
 pub(crate) fn primary_at_span(engine: &mut QueryEngine, rule: &str, span: Span) -> Option<Primary> {
+    let span = engine.sources.resolve(span);
     primary(
         engine,
         span.file,
@@ -422,11 +438,12 @@ pub(crate) fn primary_at_site(
     let syntax = parsed(engine, &text).ok();
     let limit = syntax.as_ref().and_then(|syntax| {
         syntax
-            .tree
-            .expressions
+            .items
             .iter()
-            .filter(|e| e.origin.span.start as usize == offset)
-            .map(|e| e.origin.span.end as usize)
+            .flat_map(|item| &item.tree.expressions)
+            .map(|e| engine.sources.resolve(e.origin.span))
+            .filter(|span| span.start as usize == offset)
+            .map(|span| span.end as usize)
             .max()
     });
     primary(engine, file, rule, offset, limit)

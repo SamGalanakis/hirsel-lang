@@ -95,9 +95,10 @@ impl StdSurface {
                 .parse_file(file, &context)
                 .map_err(|e| format!("{e:?}"))?
                 .value;
-            let source = package.engine.sources.file(file).ok_or("missing source")?;
-            for id in &syntax.roots {
-                let item = &syntax.tree.items[id.0 as usize];
+            let sources = &package.engine.sources;
+            let source = sources.file(file).ok_or("missing source")?;
+            for item_syntax in &syntax.items {
+                let item = &item_syntax.item;
                 let ItemKind::Function {
                     signature,
                     body: Some(_),
@@ -130,15 +131,16 @@ impl StdSurface {
                             )
                         })
                         .collect();
-                    let span = syntax.tree.types[id.0 as usize].origin.span;
+                    let span = sources.resolve(item_syntax.tree.types[id.0 as usize].origin.span);
                     let mut text = String::new();
                     let mut start = span.start as usize;
-                    for token in &syntax.tokens {
-                        if token.span.start < span.start || token.span.end > span.end {
+                    for token in &item_syntax.tree.tokens {
+                        let token = sources.resolve(token.span);
+                        if token.start < span.start || token.end > span.end {
                             continue;
                         }
-                        let from = token.span.start as usize;
-                        let to = token.span.end as usize;
+                        let from = token.start as usize;
+                        let to = token.end as usize;
                         if let Some(replacement) = substitutions.get(&source.text()[from..to]) {
                             text.push_str(&source.text()[start..from]);
                             text.push_str(replacement);

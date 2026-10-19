@@ -2576,13 +2576,15 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.extend_from_slice(&(sizes.len() as u64).to_le_bytes());
                 for ((scope, parameter), size) in sizes {
                     use hirsel_types::NameSite;
-                    let (tag, ordinal): (u8, u32) = match scope {
+                    let (tag, ordinal): (u8, u32) = match scope.site {
                         NameSite::Expression(id) => (0, id.0),
                         NameSite::Pattern(id) => (1, id.0),
                         NameSite::Type(id) => (2, id.0),
                         NameSite::Statement(id) => (3, id.0),
-                        NameSite::Item(id) => (4, id.0),
+                        NameSite::Item => (4, 0),
                     };
+                    path(&mut out, scope.owner.def.path());
+                    out.extend_from_slice(&scope.owner.occurrence.to_le_bytes());
                     out.push(tag);
                     out.extend_from_slice(&ordinal.to_le_bytes());
                     out.extend_from_slice(&parameter.0.to_le_bytes());

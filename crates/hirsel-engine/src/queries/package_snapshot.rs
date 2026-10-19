@@ -36,7 +36,8 @@ impl PackageProof {
 pub(super) struct PackagePublication {
     proof: PackageProof,
     closure: BTreeSet<hirsel_syntax::PackageId>,
-    sites: Arc<[(FileId, hirsel_syntax::PackageId, usize, u32)]>,
+    /// The closure's sources: each FileId with its (package, manifest ordinal).
+    files: Arc<[(FileId, hirsel_syntax::PackageId, usize)]>,
     lowerings: crate::package_cache::SharedLowerings,
 }
 
@@ -56,12 +57,17 @@ pub(crate) struct PackageSnapshot {
     constants: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
     mode_diagnostics: Vec<(Diagnostic, String)>,
 }
-/// Generated text is placed relative to a manifest source, never its old host root.
+/// Generated text is placed relative to its declaration's manifest source,
+/// never its old host root.
 struct PackageSource {
+    /// The publisher's FileId, which the snapshot's `generated` entries name.
     file: FileId,
-    origin: FileId,
+    /// An anchor in the declaration's source, which the adopter has placed.
+    origin: hirsel_span::Anchor,
     suffix: String,
     text: String,
+    /// The anchors standing in this source, with their bases.
+    anchors: Vec<(hirsel_span::Anchor, u32)>,
 }
 impl PackageSnapshot {
     pub(crate) fn contains_lowering(&self, path: &DefPath) -> bool {
@@ -144,7 +150,7 @@ impl QueryEngine {
             self.items
                 .get(p)?
                 .first()
-                .map(|s| s.file.tree.items[s.item.0 as usize].origin.span)
+                .map(|s| self.sources.resolve(s.item.origin.span))
         });
         let mut snapshot = PackageSnapshot {
             sources: vec![],
@@ -162,13 +168,14 @@ impl QueryEngine {
                 .mode_diagnostics
                 .iter()
                 .filter(|(d, _)| {
+                    let primary = self.sources.resolve(d.primary);
                     if let Some(span) = owner_span {
-                        return span.file == d.primary.file
-                            && span.start <= d.primary.start
-                            && d.primary.end <= span.end;
+                        return span.file == primary.file
+                            && span.start <= primary.start
+                            && primary.end <= span.end;
                     }
                     self.parsed
-                        .get(&d.primary.file)
+                        .get(&primary.file)
                         .is_some_and(|(c, _, _)| &c.package == package)
                 })
                 .cloned()
@@ -176,53 +183,28 @@ impl QueryEngine {
         };
         // A generated body's syntax mixes the written header's tokens with
         // tokens in its generated source. Both sources must travel with it.
-        let mut files = BTreeSet::new();
-        let mut owners = BTreeSet::new();
-        let mut syntax = |file: &Arc<SyntaxFile>| {
-            if !owners.insert(Arc::as_ptr(file) as usize) {
-                return;
-            }
-            files.insert(file.file);
-            files.extend(file.tokens.iter().map(|t| t.span.file));
-        };
-        for c in snapshot.checked.values() {
-            if let Ok(output) = &c.result {
-                syntax(&output.value.file);
-            }
-        }
-        for c in snapshot.modes.values() {
-            if let Ok(output) = &c.result {
-                syntax(&output.value.typed.file);
-            }
-        }
-        for s in snapshot
-            .resolver_outputs
-            .values()
-            .chain(snapshot.signature_resolutions.values())
-        {
-            syntax(&s.file);
-        }
         for g in snapshot.generated.values() {
-            files.extend([g.file, g.site.file]);
-        }
-        for file in files {
-            if self.parsed.contains_key(&file) {
-                continue;
-            }
-            let source = self.sources.file(file)?;
-            let path = source.path.display().to_string();
-            let (origin, suffix) = self.parsed.keys().find_map(|origin| {
-                let written = self.sources.file(*origin)?.path.display().to_string();
-                let suffix = path.strip_prefix(&written)?;
-                suffix
-                    .starts_with('#')
-                    .then(|| (*origin, suffix.to_owned()))
-            })?;
+            let source = self.sources.file(g.file)?;
+            let (origin, _) = self.sources.anchor(g.site.anchor)?;
+            let written = self.sources.file(origin)?.path.display().to_string();
+            let suffix = source
+                .path
+                .display()
+                .to_string()
+                .strip_prefix(&written)
+                .filter(|suffix| suffix.starts_with('#'))?
+                .to_owned();
             snapshot.sources.push(PackageSource {
-                file,
-                origin,
+                file: g.file,
+                origin: g.site.anchor,
                 suffix,
                 text: source.text().into(),
+                anchors: self
+                    .sources
+                    .anchors()
+                    .filter(|(_, file, _)| *file == g.file)
+                    .map(|(anchor, _, base)| (anchor, base))
+                    .collect(),
             });
         }
         Some(snapshot)
@@ -231,7 +213,7 @@ impl QueryEngine {
         &mut self,
         package: hirsel_syntax::PackageId,
         closure: BTreeSet<hirsel_syntax::PackageId>,
-        sites: Vec<(FileId, hirsel_syntax::PackageId, usize, u32)>,
+        files: Vec<(FileId, hirsel_syntax::PackageId, usize)>,
         lowerings: crate::package_cache::SharedLowerings,
     ) {
         self.package_publications.insert(
@@ -239,10 +221,39 @@ impl QueryEngine {
             PackagePublication {
                 proof: PackageProof::new(self),
                 closure,
-                sites: sites.into(),
+                files: files.into(),
                 lowerings,
             },
         );
+    }
+    /// Where this engine's anchors in `files` stand, by source.
+    pub(crate) fn anchor_sites(
+        &self,
+        files: &[(FileId, hirsel_syntax::PackageId, usize)],
+    ) -> Arc<[crate::package_cache::AnchorSite]> {
+        let sources: BTreeMap<FileId, (&hirsel_syntax::PackageId, usize)> = files
+            .iter()
+            .map(|(file, package, index)| (*file, (package, *index)))
+            .collect();
+        self.sources
+            .anchors()
+            .filter_map(|(anchor, file, base)| {
+                let (package, index) = sources.get(&file)?;
+                Some((anchor, (*package).clone(), *index, base))
+            })
+            .collect()
+    }
+    /// Place another engine's anchors at this engine's FileId for each source.
+    pub(crate) fn place_anchors(
+        &mut self,
+        sites: &[crate::package_cache::AnchorSite],
+        files: &BTreeMap<(hirsel_syntax::PackageId, usize), FileId>,
+    ) {
+        for (anchor, package, index, base) in sites {
+            if let Some(file) = files.get(&(package.clone(), *index)) {
+                self.sources.move_anchor(*anchor, *file, *base);
+            }
+        }
     }
     pub(super) fn publish_lowering(&self, definition: &DefPath) {
         let Some(publication) = self.package_publications.get(&definition.0.package) else {
@@ -288,18 +299,14 @@ impl QueryEngine {
             .or_insert_with(|| {
                 Arc::new(crate::package_cache::PublishedLowering {
                     snapshot,
-                    sites: publication.sites.clone(),
+                    sites: self.anchor_sites(&publication.files),
                 })
             });
     }
-    pub(super) fn adopt_package_snapshot(
-        &mut self,
-        snapshot: &PackageSnapshot,
-        moves: &[(FileId, FileId, u32)],
-    ) {
-        // Old IDs may collide with client IDs. Rebase only the transported nodes
-        // before merging into the fresh engine; Arc::make_mut detaches changed sites.
-        // Transport only rebases cached artifacts and compiler state; it runs no phase.
+    /// Merge a published snapshot, whose anchors the caller has placed.
+    pub(super) fn adopt_package_snapshot(&mut self, snapshot: &PackageSnapshot) {
+        // Old cache IDs may collide with client IDs: transport renumbers the
+        // nodes before merging into the fresh engine. It runs no phase.
         let adapters = PhaseAdapters {
             compiler_state: Some(Default::default()),
             ..Default::default()
@@ -308,25 +315,30 @@ impl QueryEngine {
         transport.package_manifests = self.package_manifests.clone();
         transport.comptime_limits = self.comptime_limits;
         transport.cache_sequence = self.cache_sequence;
-        let mut moves = moves.to_vec();
+        let mut placed = BTreeMap::new();
         for source in &snapshot.sources {
-            let origin = moves
-                .iter()
-                .find(|(old, _, _)| *old == source.origin)
-                .expect("generated source's manifest placement")
-                .1;
-            let path = format!(
-                "{}{}",
-                self.sources.file(origin).unwrap().path.display(),
-                source.suffix
-            );
+            let (origin, _) = self
+                .sources
+                .anchor(source.origin)
+                .expect("generated source's manifest placement");
+            let origin = self.sources.file(origin).unwrap();
+            let path = format!("{}{}", origin.path.display(), source.suffix);
+            let logical = format!("{}{}", origin.logical_path().display(), source.suffix);
             let file = self
                 .sources
-                .add(path, source.text.clone())
+                .add_logical(path, logical, source.text.clone())
                 .expect("cached generated sources fit the source map");
-            moves.push((source.file, file, source.text.len() as u32));
+            for &(anchor, base) in &source.anchors {
+                self.sources.move_anchor(anchor, file, base);
+            }
+            placed.insert(source.file, file);
         }
         transport.generated = snapshot.generated.clone();
+        for g in transport.generated.values_mut() {
+            if let Some(file) = placed.get(&g.file) {
+                g.file = *file;
+            }
+        }
         macro_rules! adopt {
             ($field:ident) => {
                 for (path, node) in &snapshot.$field {
@@ -356,7 +368,6 @@ impl QueryEngine {
             state.constant_values = snapshot.constants.clone().into_iter().collect();
             state.mode_diagnostics = snapshot.mode_diagnostics.clone();
         }
-        transport.rebase_package_snapshot(&moves);
         self.cache_sequence = transport.cache_sequence;
         self.generated.append(&mut transport.generated);
         macro_rules! merge {
@@ -445,22 +456,5 @@ impl QueryEngine {
                 .insert(package.clone(), PackageProof::new(self));
         }
         valid
-    }
-    pub(crate) fn rebase_package_snapshot(&mut self, moves: &[(FileId, FileId, u32)]) {
-        self.rebase_positions(
-            &moves
-                .iter()
-                .filter(|(old, new, _)| old != new)
-                .map(|&(old, new, len)| {
-                    let before = Span::new(old, 0, len).unwrap();
-                    positions::Movement {
-                        old: before,
-                        new_file: new,
-                        delta: 0,
-                        whole: (before, Span::new(new, 0, len).unwrap()),
-                    }
-                })
-                .collect::<Vec<_>>(),
-        );
     }
 }

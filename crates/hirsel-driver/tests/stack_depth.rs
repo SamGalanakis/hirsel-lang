@@ -63,7 +63,7 @@ fn deepest_source_phases_fit_with_fourfold_stack_margin() {
         let parsed = measured("parser", || {
             engine.parse_file(file, &default_context()).unwrap()
         });
-        let path = parsed.value.tree.items[0].definition.clone();
+        let path = parsed.value.items[0].item.definition.clone();
         measured("printer", || {
             format_snapshot(&mut engine, file, &default_context()).unwrap()
         });

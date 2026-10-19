@@ -21,7 +21,7 @@ fn run(
             .insert(signature.definition.clone(), signature.clone());
     }
     support::normalize_file(&file, &mut provider).unwrap();
-    let item = file.roots[0];
+    let item = &file.items[0];
     let resolution =
         hirsel_resolve::resolve_item(&file, item, &provider.index.clone(), &mut provider);
     assert!(
@@ -29,14 +29,13 @@ fn run(
         "{:?}",
         resolution.query.diagnostics
     );
-    let signature = provider.signatures[&file.tree.items[item.0 as usize].definition].clone();
+    let signature = provider.signatures[&item.item.definition].clone();
     change(&mut provider);
     provider.reads.clear();
     let output = check_with_loop_protocols(
         LoopInput {
             body: Input {
-                tree: &file.tree,
-                item,
+                syntax: item,
                 context: &support::context(),
                 resolution: &resolution,
                 signature: &signature,

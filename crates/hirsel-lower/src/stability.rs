@@ -38,7 +38,7 @@ impl Builder<'_, '_> {
                     return false;
                 }
             }
-            match &self.input.tree.expressions[id.0 as usize].kind {
+            match &self.input.syntax.tree.expressions[id.0 as usize].kind {
                 ExprKind::Literal(_)
                 | ExprKind::Path(_)
                 | ExprKind::Formatter(_)
@@ -79,7 +79,7 @@ impl Builder<'_, '_> {
                 } => {
                     pending.extend(tail);
                     for statement in statements {
-                        match &self.input.tree.statements[statement.0 as usize].kind {
+                        match &self.input.syntax.tree.statements[statement.0 as usize].kind {
                             StmtKind::Let {
                                 value, otherwise, ..
                             } => pending.extend(std::iter::once(*value).chain(*otherwise)),

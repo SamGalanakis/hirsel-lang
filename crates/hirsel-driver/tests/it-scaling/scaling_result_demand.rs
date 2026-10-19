@@ -18,7 +18,7 @@ fn result_permissions_follow_backward_cfg_dependencies() {
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateResultDemandSteps);
             assert!(
                 engine
-                    .lower_to_tir(&parsed.value.tree.items[0].definition)
+                    .lower_to_tir(&parsed.value.items[0].item.definition)
                     .unwrap()
                     .diagnostics
                     .is_empty()

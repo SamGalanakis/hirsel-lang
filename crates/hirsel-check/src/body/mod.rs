@@ -28,8 +28,7 @@ use hirsel_types::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub struct Input<'a> {
-    pub tree: &'a ast::SyntaxTree,
-    pub item: ast::ItemId,
+    pub syntax: &'a ast::ItemSyntax,
     pub context: &'a ast::FileContext,
     pub resolution: &'a Resolution,
     pub signature: &'a Signature,
@@ -67,6 +66,7 @@ fn check_inner(
     } = input;
     let mut c = Checker {
         body: CheckedBody {
+            lexical: input.syntax.owner(),
             tails: vec![],
             places: vec![],
             calls: vec![],
@@ -79,6 +79,7 @@ fn check_inner(
             closures: vec![],
         },
         source_rows: source_rows::SourceRows::new(input.resolution),
+        lexical: input.syntax.owner(),
         input,
         provider,
         loop_protocols: protocols,
@@ -101,8 +102,8 @@ fn check_inner(
         mut_aliases: BTreeSet::new(),
         proof_failure: failure,
     };
-    let item = &c.input.tree.items[c.input.item.0 as usize];
-    let owner = NameSite::Item(c.input.item);
+    let item = &c.input.syntax.item;
+    let owner = NameSite::Item;
     match (&item.kind, &c.input.signature.kind) {
         (
             ast::ItemKind::Function {
@@ -139,19 +140,20 @@ fn check_inner(
             let generics = declaration.generics.clone();
             let unit = c.ty(TypeKind::Tuple(vec![].into()));
             let frame = c.empty_frame(owner, None, Some(unit), None, false);
+            let scope = c.site(owner);
             c.body
                 .resolution
                 .generic_declarations
-                .insert(NameSite::Item(c.input.item), generics.clone());
+                .insert(scope, generics.clone());
             let arguments = generics
                 .iter()
                 .enumerate()
                 .map(|(i, generic)| match generic {
                     GenericParameter::Type { .. } => GenericArgument::Type(c.ty(
-                        TypeKind::Parameter(TypeParameterRef::body(owner, TypeParamId(i as u32))),
+                        TypeKind::Parameter(TypeParameterRef::body(scope, TypeParamId(i as u32))),
                     )),
                     GenericParameter::Size { .. } => GenericArgument::Size(Size::Parameter(
-                        SizeParameterRef::body(owner, SizeParamId(i as u32)),
+                        SizeParameterRef::body(scope, SizeParamId(i as u32)),
                     )),
                 })
                 .collect();
@@ -166,9 +168,9 @@ fn check_inner(
                 arguments,
             });
             c.body.bindings.push(BindingDecision {
-                owner: NameSite::Item(c.input.item),
+                owner: NameSite::Item,
                 binding: ResolvedName::Local(binding),
-                site: NameSite::Item(c.input.item),
+                site: NameSite::Item,
                 ty: own,
                 usage: UseKind::Borrow,
                 mutable: false,
@@ -299,6 +301,8 @@ enum After {
 }
 struct Checker<'a, 'p> {
     input: Input<'a>,
+    /// The owner of this item's lexical sites, which rows qualify them with.
+    lexical: LexicalOwner,
     provider: &'p mut dyn SignatureProvider,
     loop_protocols: &'a [LoopProtocolPaths],
     body: CheckedBody,
@@ -328,6 +332,10 @@ struct Checker<'a, 'p> {
     proof_failure: &'p std::cell::RefCell<Option<QueryError>>,
 }
 impl Checker<'_, '_> {
+    /// A site of this item, as rows name it.
+    fn site(&self, site: NameSite) -> SiteRef {
+        self.lexical.site(site)
+    }
     /// Whether a relation place is a frame's own Arena parameter (PROV-4).
     fn arena_place(&self, o: &Origin) -> bool {
         let Some(heap) = &self.input.signature.metadata.roles.heap else {
@@ -340,7 +348,7 @@ impl Checker<'_, '_> {
             && self
                 .frames
                 .iter()
-                .find(|f| f.owner == *scope)
+                .find(|f| self.site(f.owner) == *scope)
                 .and_then(|f| f.parameters.get(parameter.0 as usize))
                 .is_some_and(|t| hirsel_types::is_arena_type(&self.body.types, *t, &heap.arena))
     }
@@ -367,7 +375,9 @@ impl Checker<'_, '_> {
         fallback
     }
     fn span(&self, id: ast::ExprId) -> Span {
-        self.input.tree.expressions[id.0 as usize].origin.span
+        self.input.syntax.tree.expressions[id.0 as usize]
+            .origin
+            .span
     }
     fn report(&mut self, rule: RuleId, span: Span, message: &str) {
         self.diagnostics
@@ -678,7 +688,7 @@ impl Checker<'_, '_> {
     }
     fn finish_place(&mut self, id: ast::ExprId) {
         use ast::{ExprKind as E, UnaryOp as U};
-        match self.input.tree.expressions[id.0 as usize].kind {
+        match self.input.syntax.tree.expressions[id.0 as usize].kind {
             E::Index { base, index } => {
                 self.project_box_place(id, base);
                 self.project_place(id, id, SourceProjectionKind::Index(index))
@@ -718,7 +728,7 @@ impl Checker<'_, '_> {
         usage: UseKind,
     ) -> Result<(), QueryError> {
         if let Some(expected) = expected {
-            match self.input.tree.expressions[id.0 as usize].kind {
+            match self.input.syntax.tree.expressions[id.0 as usize].kind {
                 ast::ExprKind::Literal(_) => ty = self.placed_part_type(expected, ty),
                 ast::ExprKind::Tuple(_) | ast::ExprKind::Sequence(_) => {
                     ty = self.construction_type(ty, expected);
@@ -838,20 +848,20 @@ impl Checker<'_, '_> {
             });
             let span = attribute.map_or_else(
                 || match owner {
-                    NameSite::Item(i) => self.input.tree.items[i.0 as usize].origin.span,
+                    NameSite::Item => self.input.syntax.item.origin.span,
                     NameSite::Expression(e) => self.span(e),
-                    NameSite::Statement(s) => self.input.tree.statements[s.0 as usize].origin.span,
-                    NameSite::Type(t) => self.input.tree.types[t.0 as usize].origin.span,
-                    NameSite::Pattern(p) => self.input.tree.patterns[p.0 as usize].origin.span,
+                    NameSite::Statement(s) => self.input.syntax.tree.statements[s.0 as usize].origin.span,
+                    NameSite::Type(t) => self.input.syntax.tree.types[t.0 as usize].origin.span,
+                    NameSite::Pattern(p) => self.input.syntax.tree.patterns[p.0 as usize].origin.span,
                 },
                 |a| a.origin.span,
             );
             self.report(const { RuleId::of("CLO-4") }, span, "this declared capture promise is not yet provable; executable flow proofs are pending");
         }
-        let mut scopes = vec![owner];
+        let mut scopes = vec![self.site(owner)];
         let mut ancestor = parent;
         while let Some(index) = ancestor {
-            scopes.push(self.frames[index].owner);
+            scopes.push(self.site(self.frames[index].owner));
             ancestor = self.frames[index].parent;
         }
         let result = bind_parameter_scopes(&mut self.body.types, f.result, &scopes)
@@ -864,7 +874,7 @@ impl Checker<'_, '_> {
         self.body
             .resolution
             .generic_declarations
-            .insert(owner, f.generics.to_vec());
+            .insert(self.site(owner), f.generics.to_vec());
         for (i, p) in f.parameters.iter().enumerate() {
             let ty = bind_parameter_scopes(&mut self.body.types, p.ty, &scopes)
                 .expect("checked lexical parameter scope");
@@ -895,13 +905,13 @@ impl Checker<'_, '_> {
         frame
     }
     fn final_return(&mut self, body: ast::ExprId) {
-        let expr = &self.input.tree.expressions[body.0 as usize];
+        let expr = &self.input.syntax.tree.expressions[body.0 as usize];
         let last = match &expr.kind {
             ast::ExprKind::Block {
                 tail, statements, ..
             } => tail.or_else(|| {
                 statements.last().and_then(|s| {
-                    match self.input.tree.statements[s.0 as usize].kind {
+                    match self.input.syntax.tree.statements[s.0 as usize].kind {
                         ast::StmtKind::Expr(e) => Some(e),
                         _ => None,
                     }
@@ -911,7 +921,7 @@ impl Checker<'_, '_> {
         };
         if let Some(e) = last {
             if matches!(
-                self.input.tree.expressions[e.0 as usize].kind,
+                self.input.syntax.tree.expressions[e.0 as usize].kind,
                 ast::ExprKind::Return(_)
             ) {
                 self.report(
@@ -949,7 +959,9 @@ impl Checker<'_, '_> {
         frame: usize,
     ) -> Result<(), QueryError> {
         use ast::ExprKind as E;
-        let kind = self.input.tree.expressions[id.0 as usize].kind.clone();
+        let kind = self.input.syntax.tree.expressions[id.0 as usize]
+            .kind
+            .clone();
         match kind {
             E::Literal(lit) => {
                 let ty = self.literal(&lit, expected, self.span(id), false);
@@ -978,15 +990,17 @@ impl Checker<'_, '_> {
             }
             E::Call { callee, arguments }
                 if let ast::ExprKind::Formatter(step) =
-                    self.input.tree.expressions[callee.0 as usize].kind =>
+                    self.input.syntax.tree.expressions[callee.0 as usize].kind =>
             {
                 self.start_format_step(id, callee, step, &arguments, expected, frame)?;
             }
             E::Call { callee, .. } => {
                 self.work
                     .push(Work::AfterChild(After::CallCallee(id, expected, frame)));
-                if let ast::ExprKind::Path(path) =
-                    self.input.tree.expressions[callee.0 as usize].kind.clone()
+                if let ast::ExprKind::Path(path) = self.input.syntax.tree.expressions
+                    [callee.0 as usize]
+                    .kind
+                    .clone()
                 {
                     let t = self.path_type(callee, &path, expected, frame, true, true)?;
                     self.put(callee, t, None, UseKind::Borrow)?;
@@ -1070,11 +1084,13 @@ impl Checker<'_, '_> {
                 op: ast::UnaryOp::Neg,
                 value,
             } if matches!(
-                self.input.tree.expressions[value.0 as usize].kind,
+                self.input.syntax.tree.expressions[value.0 as usize].kind,
                 E::Literal(ast::Literal::Integer(_))
             ) =>
             {
-                let E::Literal(lit) = self.input.tree.expressions[value.0 as usize].kind.clone()
+                let E::Literal(lit) = self.input.syntax.tree.expressions[value.0 as usize]
+                    .kind
+                    .clone()
                 else {
                     unreachable!()
                 };
@@ -1103,7 +1119,8 @@ impl Checker<'_, '_> {
                 {
                     // The try expression owns a fresh inference scope, separate
                     // from every declared generic binder and enclosing error.
-                    let variable = TypeParameterRef::body(NameSite::Expression(id), TypeParamId(0));
+                    let variable =
+                        TypeParameterRef::body(self.site(NameSite::Expression(id)), TypeParamId(0));
                     self.inference_variables.insert(variable);
                     let error = self.ty(TypeKind::Parameter(variable));
                     Some(self.ty(TypeKind::Named {
@@ -1139,8 +1156,10 @@ impl Checker<'_, '_> {
                     self.put(index, error, None, UseKind::Borrow)?;
                     // The bracketed name is typed as the callee it was meant to
                     // instantiate, so this fault is reported once.
-                    if let ast::ExprKind::Path(path) =
-                        self.input.tree.expressions[base.0 as usize].kind.clone()
+                    if let ast::ExprKind::Path(path) = self.input.syntax.tree.expressions
+                        [base.0 as usize]
+                        .kind
+                        .clone()
                     {
                         let t = self.path_type(base, &path, None, frame, true, true)?;
                         self.put(base, t, None, UseKind::Borrow)?;
@@ -1295,7 +1314,9 @@ impl Checker<'_, '_> {
         frame: usize,
     ) -> Result<(), QueryError> {
         use ast::ExprKind as E;
-        let kind = self.input.tree.expressions[id.0 as usize].kind.clone();
+        let kind = self.input.syntax.tree.expressions[id.0 as usize]
+            .kind
+            .clone();
         let mut usage = UseKind::Borrow;
         let ty = match kind {
             E::Path(path) => {
@@ -1347,7 +1368,13 @@ impl Checker<'_, '_> {
                             Some(GenericArgument::Size(Size::Constant(n))) => Some(*n),
                             _ => None,
                         };
-                        if !self.input.tree.repeats.iter().any(|r| r.sequence == id)
+                        if !self
+                            .input
+                            .syntax
+                            .tree
+                            .repeats
+                            .iter()
+                            .any(|r| r.sequence == id)
                             && length != Some(cs.len() as u64)
                         {
                             self.report(
@@ -1649,7 +1676,7 @@ impl Checker<'_, '_> {
                 label: Some(label),
                 value: Some(_),
             } if self.frames[frame].loops.iter().any(|statement| {
-                self.input.tree.statements[statement.0 as usize]
+                self.input.syntax.tree.statements[statement.0 as usize]
                     .kind
                     .loop_label()
                     == Some(label)
@@ -1679,7 +1706,7 @@ impl Checker<'_, '_> {
             E::Break { label, .. } | E::Continue(label) => {
                 let found = self.frames[frame].loops.iter().rev().any(|statement| {
                     label.is_none()
-                        || self.input.tree.statements[statement.0 as usize]
+                        || self.input.syntax.tree.statements[statement.0 as usize]
                             .kind
                             .loop_label()
                             == label
@@ -1779,8 +1806,11 @@ impl Checker<'_, '_> {
         self.put(id, ty, expected, usage)
     }
     fn enter_loop(&mut self, id: ast::StmtId, frame: usize) {
-        if let Some(label) = self.input.tree.statements[id.0 as usize].kind.loop_label() {
-            let span = self.input.tree.statements[id.0 as usize].origin.span;
+        if let Some(label) = self.input.syntax.tree.statements[id.0 as usize]
+            .kind
+            .loop_label()
+        {
+            let span = self.input.syntax.tree.statements[id.0 as usize].origin.span;
             self.check_label_shadow(label, span, frame);
         }
         self.frames[frame].loops.push(id);
@@ -1790,7 +1820,7 @@ impl Checker<'_, '_> {
         let f = &self.frames[frame];
         if f.blocks.iter().any(|b| b.label == label)
             || f.loops.iter().any(|outer| {
-                self.input.tree.statements[outer.0 as usize]
+                self.input.syntax.tree.statements[outer.0 as usize]
                     .kind
                     .loop_label()
                     == Some(label)
@@ -1805,7 +1835,7 @@ impl Checker<'_, '_> {
     }
     fn statement(&mut self, id: ast::StmtId, frame: usize) -> Result<(), QueryError> {
         use ast::StmtKind as S;
-        let stmt = self.input.tree.statements[id.0 as usize].clone();
+        let stmt = self.input.syntax.tree.statements[id.0 as usize].clone();
         match stmt.kind {
             S::Let {
                 ty,
@@ -1869,7 +1899,7 @@ impl Checker<'_, '_> {
         match after {
             After::Binary(id, expected, frame) => {
                 let ast::ExprKind::Binary { op, left, right } =
-                    self.input.tree.expressions[id.0 as usize].kind
+                    self.input.syntax.tree.expressions[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -1899,7 +1929,7 @@ impl Checker<'_, '_> {
                     value,
                     ty: annotation,
                     otherwise,
-                } = self.input.tree.statements[id.0 as usize].kind
+                } = self.input.syntax.tree.statements[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -1908,7 +1938,7 @@ impl Checker<'_, '_> {
                 // unmarked binding place is inspected in place, not moved.
                 let inspected = otherwise.is_some()
                     && !matches!(
-                        self.input.tree.expressions[value.0 as usize].kind,
+                        self.input.syntax.tree.expressions[value.0 as usize].kind,
                         ast::ExprKind::Unary { .. }
                     )
                     && self
@@ -1989,7 +2019,7 @@ impl Checker<'_, '_> {
             }
             After::AssignPlace(id, frame) => {
                 let ast::StmtKind::Assign { place, value, .. } =
-                    self.input.tree.statements[id.0 as usize].kind
+                    self.input.syntax.tree.statements[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -1998,7 +2028,7 @@ impl Checker<'_, '_> {
                 self.work.push(Work::Enter(value, Some(t), frame));
             }
             After::Assign(id, frame) => {
-                let stmt = &self.input.tree.statements[id.0 as usize];
+                let stmt = &self.input.syntax.tree.statements[id.0 as usize];
                 let ast::StmtKind::Assign { place, op, value } = stmt.kind else {
                     unreachable!()
                 };
@@ -2017,8 +2047,10 @@ impl Checker<'_, '_> {
                 }
             }
             After::Match(id, expected, frame) => {
-                let ast::ExprKind::Match { value, arms } =
-                    self.input.tree.expressions[id.0 as usize].kind.clone()
+                let ast::ExprKind::Match { value, arms } = self.input.syntax.tree.expressions
+                    [id.0 as usize]
+                    .kind
+                    .clone()
                 else {
                     unreachable!()
                 };
@@ -2038,7 +2070,7 @@ impl Checker<'_, '_> {
                 }
                 // LANG-13: an if-let without else is an if without else.
                 let mut arm_expected = expected;
-                let conditions = &self.input.tree.conditions;
+                let conditions = &self.input.syntax.tree.conditions;
                 if let Some(condition) = conditions.iter().copied().find(|c| c.matching() == id) {
                     self.let_condition(condition, ty, arms[0].pattern)?;
                     if let ast::LetCondition::If {
@@ -2058,7 +2090,7 @@ impl Checker<'_, '_> {
             }
             After::MatchArm(id, index, expected, frame) => {
                 let ast::ExprKind::Match { arms, .. } =
-                    &self.input.tree.expressions[id.0 as usize].kind
+                    &self.input.syntax.tree.expressions[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -2088,7 +2120,7 @@ impl Checker<'_, '_> {
                     then_branch,
                     else_branch: Some(other),
                     ..
-                } = self.input.tree.expressions[id.0 as usize].kind
+                } = self.input.syntax.tree.expressions[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -2104,13 +2136,13 @@ impl Checker<'_, '_> {
                     source,
                     body,
                     ..
-                } = self.input.tree.statements[id.0 as usize].kind
+                } = self.input.syntax.tree.statements[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
                 let t = self.value(source);
                 let e = self.iteration_type(source, t)?;
-                let marker = match self.input.tree.expressions[source.0 as usize].kind {
+                let marker = match self.input.syntax.tree.expressions[source.0 as usize].kind {
                     ast::ExprKind::Unary {
                         op: ast::UnaryOp::Mut,
                         ..
@@ -2130,13 +2162,13 @@ impl Checker<'_, '_> {
                 ) && !self.ranges.contains_key(&source);
                 let binding_use = if iterator { UseKind::Take } else { marker };
                 let previous = self.frames[frame].restricted.len();
-                let protocol = match &self.input.tree.expressions[source.0 as usize].kind {
+                let protocol = match &self.input.syntax.tree.expressions[source.0 as usize].kind {
                     ast::ExprKind::Binary {
                         op: ast::BinaryOp::Range | ast::BinaryOp::RangeInclusive,
                         ..
                     } => ForProtocol::Range {
                         inclusive: matches!(
-                            self.input.tree.expressions[source.0 as usize].kind,
+                            self.input.syntax.tree.expressions[source.0 as usize].kind,
                             ast::ExprKind::Binary {
                                 op: ast::BinaryOp::RangeInclusive,
                                 ..
@@ -2214,19 +2246,19 @@ impl Checker<'_, '_> {
                         if matches!(&s.kind,SignatureKind::Type(td) if td.fact.is_some()) {
                             self.report(
                                 const { RuleId::of("SEM-4") },
-                                self.input.tree.statements[id.0 as usize].origin.span,
+                                self.input.syntax.tree.statements[id.0 as usize].origin.span,
                                 "mutable iteration element may not carry facts",
                             );
                         }
                     }
-                    let base = match self.input.tree.expressions[source.0 as usize].kind {
+                    let base = match self.input.syntax.tree.expressions[source.0 as usize].kind {
                         ast::ExprKind::Unary { value, .. } => value,
                         _ => source,
                     };
                     if let Some((_, r)) = self.input_name(base) {
                         self.frames[frame].restricted.push((
                             r.clone(),
-                            self.input.tree.statements[id.0 as usize].origin.span,
+                            self.input.syntax.tree.statements[id.0 as usize].origin.span,
                         ));
                     }
                 }
@@ -2251,7 +2283,7 @@ impl Checker<'_, '_> {
             }
             After::Closure(id, expected, _parent, child, mut f) => {
                 let ast::ExprKind::Closure { body, .. } =
-                    self.input.tree.expressions[id.0 as usize].kind
+                    self.input.syntax.tree.expressions[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
@@ -2345,7 +2377,7 @@ impl Checker<'_, '_> {
             return Ok(UseKind::Copy);
         }
         if let ast::ExprKind::Unary { op, .. } =
-            self.input.tree.expressions[expression.0 as usize].kind
+            self.input.syntax.tree.expressions[expression.0 as usize].kind
         {
             return Ok(match op {
                 ast::UnaryOp::Copy => UseKind::Copy,
@@ -2371,7 +2403,7 @@ impl Checker<'_, '_> {
     }
     fn readonly_byte_projection(&self, mut expression: ast::ExprId) -> bool {
         loop {
-            match self.input.tree.expressions[expression.0 as usize].kind {
+            match self.input.syntax.tree.expressions[expression.0 as usize].kind {
                 ast::ExprKind::Index { base, .. } => {
                     if matches!(
                         self.kind(self.value(base)),
@@ -2388,7 +2420,7 @@ impl Checker<'_, '_> {
     }
     fn mutable_place(&self, mut expression: ast::ExprId, _frame: usize) -> Option<RuleId> {
         loop {
-            match self.input.tree.expressions[expression.0 as usize].kind {
+            match self.input.syntax.tree.expressions[expression.0 as usize].kind {
                 ast::ExprKind::Index { base, .. }
                     if matches!(
                         self.kind(self.value(base)),

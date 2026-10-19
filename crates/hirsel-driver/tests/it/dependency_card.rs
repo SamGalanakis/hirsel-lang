@@ -16,8 +16,8 @@ fn dependency_card_reuses_checked_queries_and_does_not_recheck_bodies() {
         let mut keys = Vec::new();
         for (file, context) in program.files.clone() {
             let parsed = program.engine.parse_file(file, &context).unwrap().value;
-            for item in &parsed.roots {
-                let path = parsed.tree.items[item.0 as usize].definition.clone();
+            for syntax in &parsed.items {
+                let path = syntax.item.definition.clone();
                 for kind in [
                     QueryKind::Signature,
                     QueryKind::Check,
@@ -57,9 +57,9 @@ fn dependency_card_verifies_signed_code_store_objects() {
             .flat_map(|(file, context)| {
                 let parsed = program.engine.parse_file(file, &context).unwrap().value;
                 parsed
-                    .roots
+                    .items
                     .iter()
-                    .map(|id| parsed.tree.items[id.0 as usize].definition.clone())
+                    .map(|syntax| syntax.item.definition.clone())
                     .collect::<Vec<_>>()
             })
             .filter(|p| p.package_is("leaf", "1"))

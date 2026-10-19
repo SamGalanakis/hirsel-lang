@@ -836,7 +836,10 @@ impl Checker<'_, '_> {
         let mut id = id;
         let mut projections = vec![];
         let mut ty = loop {
-            match self.input.tree.expressions[id.0 as usize].kind.clone() {
+            match self.input.syntax.tree.expressions[id.0 as usize]
+                .kind
+                .clone()
+            {
                 ast::ExprKind::Literal(l) => {
                     break literals::fixed_primitive(&l).map(|p| self.primitive(p));
                 }
@@ -948,7 +951,7 @@ impl Checker<'_, '_> {
             relation,
             brand,
             ..
-        } = self.input.tree.types[syntax.0 as usize].kind.clone()
+        } = self.input.syntax.tree.types[syntax.0 as usize].kind.clone()
         {
             if let Some(relation) = relation {
                 let site = NameSite::Type(syntax);
@@ -1105,19 +1108,20 @@ impl Checker<'_, '_> {
         // sources (spec #70). Body rows do
         // not record named sources, so a written relation decides.
         if let (NameSite::Statement(_), Some(t)) = (owner, s.result)
-            && hirsel_check_protocol::declaration::written_local(self.input.tree, t).unwrap_or(
-                self.body
-                    .types
-                    .get(result)
-                    .unwrap()
-                    .modes
-                    .relation
-                    .has_environment(),
-            )
+            && hirsel_check_protocol::declaration::written_local(&self.input.syntax.tree, t)
+                .unwrap_or(
+                    self.body
+                        .types
+                        .get(result)
+                        .unwrap()
+                        .modes
+                        .relation
+                        .has_environment(),
+                )
         {
             self.report(
                 const { RuleId::of("MODE-1") },
-                self.input.tree.types[t.0 as usize].origin.span,
+                self.input.syntax.tree.types[t.0 as usize].origin.span,
                 "a named function has no environment: its local result names its sources, `in x`",
             );
         }
@@ -1125,7 +1129,7 @@ impl Checker<'_, '_> {
         // narrow a non-Plain parameter out of its result.
         if !matches!(owner, NameSite::Statement(_))
             && let Some(span) = s.result.and_then(|t| {
-                hirsel_check_protocol::declaration::environment_alone(self.input.tree, t)
+                hirsel_check_protocol::declaration::environment_alone(&self.input.syntax.tree, t)
             })
         {
             let mut candidates = vec![];
@@ -1147,9 +1151,10 @@ impl Checker<'_, '_> {
             }
         }
         let error = self.result_parts(result)?.map(|(_, _, e)| e);
+        let scope = self.site(owner);
         let mut abstract_type = |root| {
             map_generic_binders(&mut self.body.types, root, |b, nested| {
-                Ok(if b == GenericBinder::Body(owner) {
+                Ok(if b == GenericBinder::Body(scope) {
                     GenericBinder::Bound(nested)
                 } else {
                     b
@@ -1358,7 +1363,7 @@ impl Checker<'_, '_> {
         if let ast::TypeExprKind::Qualified {
             relation: Some(relation),
             ..
-        } = &self.input.tree.types[t.0 as usize].kind
+        } = &self.input.syntax.tree.types[t.0 as usize].kind
             && relation.places.contains(&ast::RelationPlace::Environment)
         {
             let span = relation.origin.span;
@@ -1401,7 +1406,7 @@ impl Checker<'_, '_> {
     pub(super) fn written_modes(&self, mut syntax: ast::TypeExprId) -> WrittenModes {
         let mut written = WrittenModes::default();
         loop {
-            match &self.input.tree.types[syntax.0 as usize].kind {
+            match &self.input.syntax.tree.types[syntax.0 as usize].kind {
                 ast::TypeExprKind::Qualified {
                     base,
                     modifiers,
@@ -1435,7 +1440,7 @@ impl Checker<'_, '_> {
         let mut stack = vec![(root, false)];
         let mut done = BTreeMap::new();
         while let Some((id, exit)) = stack.pop() {
-            let node = &self.input.tree.types[id.0 as usize];
+            let node = &self.input.syntax.tree.types[id.0 as usize];
             if !exit {
                 stack.push((id, true));
                 let children = match &node.kind {
@@ -1488,7 +1493,7 @@ impl Checker<'_, '_> {
                 {
                     self.report(
                         const { RuleId::of("LANG-7") },
-                        self.input.tree.types[part.0 as usize].origin.span,
+                        self.input.syntax.tree.types[part.0 as usize].origin.span,
                         hirsel_check_protocol::declaration::PART_LOCALITY,
                     );
                 }
@@ -1601,7 +1606,7 @@ impl Checker<'_, '_> {
                                         if bounds.contains(&ast::Bound::Serializable)
                                             && !self.bound(*actual, ast::Bound::Serializable)?
                                         {
-                                            self.report(const { RuleId::of("SER-1") }, self.input.tree.types[id.0 as usize].origin.span,
+                                            self.report(const { RuleId::of("SER-1") }, self.input.syntax.tree.types[id.0 as usize].origin.span,
                                                 "type argument needs a transparent serializable schema");
                                             serializable = false;
                                         }
@@ -1610,7 +1615,7 @@ impl Checker<'_, '_> {
                                 if !serializable {
                                     self.error()
                                 } else if !self.schema_arguments(
-                                    self.input.tree.types[id.0 as usize].origin.span,
+                                    self.input.syntax.tree.types[id.0 as usize].origin.span,
                                     &s.metadata.schema,
                                     &args,
                                 )? {
@@ -1654,7 +1659,7 @@ impl Checker<'_, '_> {
                                     if unmet {
                                         self.report(
                                             const { RuleId::of("GEN-1") },
-                                            self.input.tree.types[id.0 as usize].origin.span,
+                                            self.input.syntax.tree.types[id.0 as usize].origin.span,
                                             "builtin argument does not satisfy its bound",
                                         );
                                         self.error()
@@ -1944,7 +1949,7 @@ impl Checker<'_, '_> {
         if let TypeKind::Builtin { kind, arguments } = self.kind(ty) {
             if kind == BuiltinType::Iter
                 && !matches!(
-                    self.input.tree.expressions[source.0 as usize].kind,
+                    self.input.syntax.tree.expressions[source.0 as usize].kind,
                     ast::ExprKind::Unary {
                         op: ast::UnaryOp::Mut | ast::UnaryOp::Take,
                         ..
@@ -1970,7 +1975,7 @@ impl Checker<'_, '_> {
         }
         if let Some(item) = self.declared_loop_item(ty)? {
             if matches!(
-                self.input.tree.expressions[source.0 as usize].kind,
+                self.input.syntax.tree.expressions[source.0 as usize].kind,
                 ast::ExprKind::Unary {
                     op: ast::UnaryOp::Mut | ast::UnaryOp::Take,
                     ..

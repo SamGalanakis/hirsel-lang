@@ -30,13 +30,14 @@ pub fn format(file: &SyntaxFile, sources: &SourceMap) -> FormatResult {
         source: original.to_owned(),
         unchanged: true,
     };
-    if file.has_syntax_errors || damaged(file) || !trivia::valid_tape(file, sources) {
+    let tape = trivia::Tape::new(file, sources);
+    if file.has_syntax_errors || damaged(file) || !trivia::valid_tape(file, &tape, sources) {
         return unchanged();
     }
-    let Some(doc) = printer::Printer::new(file, sources).file() else {
+    let Some(doc) = printer::file(file) else {
         return unchanged();
     };
-    let Some(source) = trivia::merge(file, sources, doc::render(&doc)) else {
+    let Some(source) = trivia::merge(file, &tape, sources, doc::render(&doc)) else {
         return unchanged();
     };
     FormatResult {
@@ -46,24 +47,21 @@ pub fn format(file: &SyntaxFile, sources: &SourceMap) -> FormatResult {
 }
 
 fn damaged(file: &SyntaxFile) -> bool {
-    file.tokens
-        .iter()
-        .any(|t| matches!(t.kind, TokenKind::Invalid))
-        || file
-            .tree
-            .expressions
-            .iter()
-            .any(|e| matches!(e.kind, ExprKind::Error))
-        || file
-            .tree
-            .patterns
-            .iter()
-            .any(|p| matches!(p.kind, PatternKind::Error))
-        || file
-            .tree
-            .types
-            .iter()
-            .any(|t| matches!(t.kind, TypeExprKind::Error))
+    file.tape().any(|t| matches!(t.kind, TokenKind::Invalid))
+        || file.items.iter().any(|item| {
+            let tree = &item.tree;
+            tree.expressions
+                .iter()
+                .any(|e| matches!(e.kind, ExprKind::Error))
+                || tree
+                    .patterns
+                    .iter()
+                    .any(|p| matches!(p.kind, PatternKind::Error))
+                || tree
+                    .types
+                    .iter()
+                    .any(|t| matches!(t.kind, TypeExprKind::Error))
+        })
 }
 
 #[cfg(test)]

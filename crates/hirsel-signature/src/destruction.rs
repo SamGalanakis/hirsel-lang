@@ -29,7 +29,7 @@ impl Normalizer<'_, '_> {
             CleanupLeaf::Component(t) => self.drop_visit(t, active),
             CleanupLeaf::Parameter(p) => parameter_cleanup(&self.declarations(), p),
             CleanupLeaf::Nominal(definition, arguments) => {
-                let own = &self.input.tree.items[self.input.item.0 as usize];
+                let own = &self.input.syntax.item;
                 if *definition == own.definition {
                     if let ast::ItemKind::Type { flavor, drop, .. } = &own.kind {
                         if own.visibility == ast::Visibility::PublicOpaque {

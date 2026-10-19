@@ -15,7 +15,7 @@ mod walk;
 use hirsel_diag::Diagnostic;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
-use hirsel_syntax::{DefPath, ExprId, ItemId, SyntaxTree};
+use hirsel_syntax::{DefPath, ExprId, ItemSyntax, LexicalOwner, SyntaxTree};
 use hirsel_types::core_roles::Intrinsic;
 use hirsel_types::*;
 use std::collections::BTreeMap;
@@ -91,8 +91,7 @@ impl AuthorityOutput {
 
 /// H's signature clauses are checked in distinct all-borrow frames.
 pub fn check_file_with_clauses(
-    file: &hirsel_syntax::SyntaxFile,
-    item: ItemId,
+    syntax: &ItemSyntax,
     signature: &Signature,
     body: CheckedBody,
     provider: &mut dyn SignatureProvider,
@@ -100,7 +99,7 @@ pub fn check_file_with_clauses(
     loops: &[CursorPlan],
     clauses: &[(ExprId, TypeId)],
 ) -> AuthorityOutput {
-    walk::Checker::new(&file.tree, item, signature, body, provider, intrinsics)
+    walk::Checker::new(syntax, signature, body, provider, intrinsics)
         .with_cursor_loops(loops)
         .with_clauses(clauses)
         .run()

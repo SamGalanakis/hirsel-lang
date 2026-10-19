@@ -4,7 +4,7 @@ use hirsel_check::body;
 use hirsel_check_protocol::header::{Input, NormalizedDeclaration};
 use hirsel_engine::*;
 use hirsel_lower as lower;
-use hirsel_syntax::{ItemId, SyntaxFile};
+use hirsel_syntax::ItemSyntax;
 use hirsel_types::{NameSite, Resolution, Signature, TypeId, TypeKind};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -68,8 +68,7 @@ pub struct BodyAdapter;
 impl CheckerPhase for BodyAdapter {
     fn check(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         resolution: Resolution,
         signature: &Signature,
         provider: &mut dyn SignatureProvider,
@@ -82,8 +81,7 @@ impl CheckerPhase for BodyAdapter {
         let mut output = body::check_with_loop_protocols(
             body::LoopInput {
                 body: body::Input {
-                    tree: &file.tree,
-                    item,
+                    syntax: &syntax,
                     context: &context,
                     resolution: &resolution,
                     signature,
@@ -110,8 +108,7 @@ impl CheckerPhase for BodyAdapter {
         });
         Ok(QueryOutput {
             value: TypedBody {
-                file,
-                item,
+                syntax,
                 checked: output.checked.value,
                 plans: output.plans,
                 unit,
@@ -132,8 +129,7 @@ impl ModesPhase for ModeAdapter {
         signature: &Signature,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
-        let file = typed.file.clone();
-        let item = typed.item;
+        let syntax = typed.syntax.clone();
         let intrinsics = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
             .collect();
@@ -150,8 +146,7 @@ impl ModesPhase for ModeAdapter {
             .map(|c| (c.expression, c.function))
             .collect();
         let mut output = hirsel_authority::check_file_with_clauses(
-            &file,
-            item,
+            &syntax,
             signature,
             typed.checked,
             provider,
@@ -174,14 +169,13 @@ impl ModesPhase for ModeAdapter {
                     .plans
                     .functions
                     .iter()
-                    .filter(|f| f.owner == NameSite::Item(item))
+                    .filter(|f| f.owner == NameSite::Item)
                     .map(|f| (f.owner.clone(), f.result)),
             );
         }
         // Run I even when J reports source errors: availability can own the obligation.
         let owned = hirsel_ownership::check_ownership_with_clauses(
-            &file.tree,
-            item,
+            &syntax,
             signature,
             &mut output.body,
             &captures,
@@ -263,8 +257,7 @@ impl ModesPhase for ModeAdapter {
 
         let audited = hirsel_check::audit::check(
             hirsel_check::audit::Input {
-                tree: &file.tree,
-                item,
+                syntax: &syntax,
                 signature,
                 checked: &output.body,
                 loops: &typed.plans.loops,
@@ -305,9 +298,7 @@ impl LoweringPhase for LowerAdapter {
         analyzed: AnalyzedBody,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
-        let file = &analyzed.typed.file;
-        let item = analyzed.typed.item;
-        let source = &file.tree.items[item.0 as usize];
+        let source = &analyzed.typed.syntax.item;
         let expression = match &source.kind {
             hirsel_syntax::ItemKind::Function { body: Some(e), .. } => *e,
             hirsel_syntax::ItemKind::Const { value, .. } => *value,
@@ -355,10 +346,9 @@ fn lower_expression(
     constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
 ) -> Result<hirsel_tir::Definition, QueryError> {
     let typed = &analyzed.typed;
-    let file = &typed.file;
-    let item = typed.item;
+    let file = &*typed.syntax;
     let checked = &typed.checked;
-    let owner = NameSite::Item(item);
+    let owner = NameSite::Item;
     let result = evaluation_result.unwrap_or(
         analyzed
             .results
@@ -379,7 +369,7 @@ fn lower_expression(
         .map_err(|e| invariant(e.to_string()))?;
     plans.staged = analyzed.staged.clone();
     let owner_span = |owner| match owner {
-        NameSite::Item(id) => Some(file.tree.items[id.0 as usize].origin.span),
+        NameSite::Item => Some(file.item.origin.span),
         NameSite::Statement(id) => Some(file.tree.statements[id.0 as usize].origin.span),
         NameSite::Expression(id) => Some(file.tree.expressions[id.0 as usize].origin.span),
         _ => None,
@@ -428,7 +418,7 @@ fn lower_expression(
     }
     lower::lower(lower::Input {
         track_caller: evaluation_result.is_none() && signature.metadata.track_caller,
-        tree: &file.tree,
+        syntax: file,
         checked: &checked,
         plans: &plans,
         ownership: &analyzed.ownership,

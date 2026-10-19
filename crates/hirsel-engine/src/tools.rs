@@ -183,7 +183,9 @@ pub(crate) fn read_source(path: &Path) -> Result<String, ToolError> {
             let file = sources
                 .add(path, prefix.into())
                 .ok_or(ToolError::SourceTooLarge)?;
-            let span = hirsel_span::Span::new(file, offset as u32, offset as u32).unwrap();
+            let span =
+                hirsel_span::Span::new(sources.file_anchor(file), offset as u32, offset as u32)
+                    .unwrap();
             let mut diagnostic = Diagnostic::error(
                 const { hirsel_diag::RuleId::of("SEM-3") },
                 span,
@@ -214,8 +216,8 @@ pub(crate) fn association_diagnostics(
     if crate::queries::has_errors(&diagnostics) {
         return Ok(diagnostics);
     }
-    for item in &parsed.value.roots {
-        let source = &parsed.value.tree.items[item.0 as usize];
+    for syntax in &parsed.value.items {
+        let source = &syntax.item;
         for attribute in &source.attributes {
             let name = attribute.name.as_str();
             if !matches!(name, "loop_source" | "format")
@@ -275,8 +277,8 @@ pub(crate) fn check_file_lowering(
         if crate::queries::has_errors(&diagnostics) {
             return Ok(());
         }
-        for item in &parsed.value.roots {
-            let source = &parsed.value.tree.items[item.0 as usize];
+        for syntax in &parsed.value.items {
+            let source = &syntax.item;
             match engine.mode_definition(&source.definition) {
                 Ok(mode) => diagnostics.extend(mode.diagnostics),
                 Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
@@ -306,10 +308,10 @@ pub(crate) fn check_file_lowering(
             // file, does `Reachable` lower the rest, which reports none.
             let (comptime, rest): (Vec<_>, Vec<_>) = parsed
                 .value
-                .roots
+                .items
                 .iter()
-                .filter(|id| crate::queries::generation::executable(&parsed.value, **id))
-                .map(|id| parsed.value.tree.items[id.0 as usize].definition.clone())
+                .filter(|syntax| crate::queries::generation::executable(syntax))
+                .map(|syntax| syntax.item.definition.clone())
                 .partition(|definition| {
                     engine.lowers_at_check(definition, LoweringPolicy::Comptime)
                 });
@@ -319,9 +321,9 @@ pub(crate) fn check_file_lowering(
             // CT-5: each instance a body selects is generated and checked here.
             let roots = parsed
                 .value
-                .roots
+                .items
                 .iter()
-                .map(|id| parsed.value.tree.items[id.0 as usize].definition.clone());
+                .map(|syntax| syntax.item.definition.clone());
             match engine.select_generated_instances(roots) {
                 Ok(instances) => {
                     for instance in instances {

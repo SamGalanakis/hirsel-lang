@@ -78,22 +78,29 @@ impl SignatureProvider for Fake {
     }
 }
 
+/// An item's index in the built file.
+type ItemId = usize;
 struct Tree {
     file: SyntaxFile,
+    /// The arenas of the item being built: the next `item` takes them.
+    tree: SyntaxTree,
+    /// Every span is file-relative: each item's anchor is the file's.
+    anchor: hirsel_span::Anchor,
     source: String,
 }
 impl Tree {
     fn new(source: &str) -> Self {
-        let file = SourceMap::default().add("test.hir", source.into()).unwrap();
+        let mut sources = SourceMap::default();
+        let file = sources.add("test.hir", source.into()).unwrap();
         Self {
             file: SyntaxFile {
                 has_syntax_errors: false,
-
                 file,
+                items: vec![],
                 tokens: vec![],
-                tree: SyntaxTree::default(),
-                roots: vec![],
             },
+            tree: SyntaxTree::default(),
+            anchor: sources.file_anchor(file),
             source: source.into(),
         }
     }
@@ -112,7 +119,7 @@ impl Tree {
                 .unwrap_or("")
                 .len() as u32;
         Origin {
-            span: Span::new(self.file.file, start, end).unwrap(),
+            span: Span::new(self.anchor, start, end).unwrap(),
             tokens: TokenRange::default(),
         }
     }
@@ -126,8 +133,8 @@ impl Tree {
         }
     }
     fn expr(&mut self, kind: ExprKind, line: u32) -> ExprId {
-        let id = ExprId(self.file.tree.expressions.len() as u32);
-        self.file.tree.expressions.push(Expr {
+        let id = ExprId(self.tree.expressions.len() as u32);
+        self.tree.expressions.push(Expr {
             kind,
             origin: self.origin(line),
         });
@@ -164,8 +171,8 @@ impl Tree {
         )
     }
     fn ty(&mut self, kind: TypeExprKind, line: u32) -> TypeExprId {
-        let id = TypeExprId(self.file.tree.types.len() as u32);
-        self.file.tree.types.push(TypeExpr {
+        let id = TypeExprId(self.tree.types.len() as u32);
+        self.tree.types.push(TypeExpr {
             kind,
             origin: self.origin(line),
         });
@@ -190,8 +197,8 @@ impl Tree {
         }
     }
     fn pattern(&mut self, kind: PatternKind, line: u32) -> PatternId {
-        let id = PatternId(self.file.tree.patterns.len() as u32);
-        self.file.tree.patterns.push(Pattern {
+        let id = PatternId(self.tree.patterns.len() as u32);
+        self.tree.patterns.push(Pattern {
             kind,
             origin: self.origin(line),
         });
@@ -202,8 +209,8 @@ impl Tree {
         self.pattern(PatternKind::Binding(name), line)
     }
     fn stmt(&mut self, kind: StmtKind, line: u32) -> StmtId {
-        let id = StmtId(self.file.tree.statements.len() as u32);
-        self.file.tree.statements.push(Stmt {
+        let id = StmtId(self.tree.statements.len() as u32);
+        self.tree.statements.push(Stmt {
             kind,
             origin: self.origin(line),
         });
@@ -223,22 +230,25 @@ impl Tree {
         )
     }
     fn item(&mut self, name: &str, kind: ItemKind, visibility: Visibility, line: u32) -> ItemId {
-        let id = ItemId(self.file.tree.items.len() as u32);
+        let id = self.file.items.len();
         let symbol = self.name(name);
-        self.file.tree.items.push(Item {
+        let item = Item {
             name_span: self.origin(line).span,
-
             name: symbol,
             kind,
             visibility,
             definition: own(name),
             origin: self.origin(line),
-            owned_tokens: TokenRange::default(),
             attributes: vec![],
-            text_hash: ContentHash::of_bytes(name.as_bytes()),
             generated: None,
-        });
-        self.file.roots.push(id);
+        };
+        self.file.items.push(std::sync::Arc::new(ItemSyntax {
+            item,
+            tree: std::mem::take(&mut self.tree),
+            anchor: self.anchor,
+            text_hash: ContentHash::of_bytes(name.as_bytes()),
+            occurrence: 0,
+        }));
         id
     }
     fn function(
@@ -293,7 +303,7 @@ impl Tree {
     fn run(&self, item: ItemId) -> ResolveOutput {
         let index = self.index();
         let mut fake = Fake::new(&index);
-        resolve_item(&self.file, item, &index, &mut fake)
+        resolve_item(&self.file, &self.file.items[item], &index, &mut fake)
     }
 }
 fn clean(output: &ResolveOutput) {
@@ -317,7 +327,8 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
         })],
         origin: t.origin(1),
     };
-    t.file.tree.items[item.0 as usize]
+    std::sync::Arc::make_mut(&mut t.file.items[item])
+        .item
         .attributes
         .push(attribute);
     let mut manifest =
@@ -329,13 +340,16 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
     }
     let (index, diagnostics) = ManifestIndex::new(manifest);
     assert!(diagnostics.is_empty());
-    for view in [
-        ResolveView::File(item),
-        ResolveView::Item(item),
-        ResolveView::Header(item),
-    ] {
+    for view in [ResolveView::File, ResolveView::Item, ResolveView::Header] {
         let mut fake = Fake::new(&index);
-        let output = resolve_view(&t.file, view, &index, &mut fake, &ExpectedTypes::default());
+        let output = resolve_view(
+            &t.file.items[item],
+            &t.file.items,
+            view,
+            &index,
+            &mut fake,
+            &ExpectedTypes::default(),
+        );
         clean(&output);
         assert!(fake.reads.is_empty(), "{:?}", fake.reads);
         assert!(output.query.dependencies.is_empty());
@@ -343,7 +357,7 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
             assert!(
                 output
                     .paths
-                    .contains(&(NameSite::Item(item), ResolvedName::Definition(own(name)),))
+                    .contains(&(NameSite::Item, ResolvedName::Definition(own(name)),))
             );
             assert!(output.reads.iter().any(|read| matches!(
                 read,
@@ -460,9 +474,9 @@ fn internal_paths_are_visible_only_under_the_parent_in_the_same_package() {
 #[test]
 fn duplicate_paths_keep_stable_identity_and_cite_both_spans() {
     let mut a = entry(own("same"), Namespace::Value, Visibility::Private);
-    a.span = Span::new(hirsel_span::FileId(0), 0, 4).unwrap();
+    a.span = Span::new(hirsel_span::Anchor(0), 0, 4).unwrap();
     let mut b = a.clone();
-    b.span = Span::new(hirsel_span::FileId(0), 5, 9).unwrap();
+    b.span = Span::new(hirsel_span::Anchor(0), 5, 9).unwrap();
     let (index, d) = ManifestIndex::new(fixture(vec![b.clone(), a.clone()]));
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].rule.as_str(), "LANG-7");
@@ -505,7 +519,7 @@ fn unresolved_ambiguous_and_private_uses_have_rule_and_use_span() {
     }
     let (index, _) = ManifestIndex::new(fixture);
     let mut provider = Fake::new(&index);
-    let output = resolve_item(&t.file, item, &index, &mut provider);
+    let output = resolve_item(&t.file, &t.file.items[item], &index, &mut provider);
     assert_eq!(output.query.diagnostics.len(), 3);
     for (d, (rule, line)) in
         output
@@ -563,7 +577,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
     let mut fake = Fake::new(&index);
     let signature = constant(own("good"), ty::TypeKind::Primitive(ty::Primitive::U32));
     fake.signatures.insert(own("good"), signature.clone());
-    let output = resolve_item(&t.file, item, &index, &mut fake);
+    let output = resolve_item(&t.file, &t.file.items[item], &index, &mut fake);
     assert_eq!(
         output.query.dependencies,
         vec![ty::SignatureDependency {
@@ -655,17 +669,15 @@ proptest::proptest! {
             let body = t.block(vec![],Some(value),1);
             t.function(&format!("f{i}"),FunctionSyntax::default(),body,Visibility::Private,1);
         }
-        let before = t.file.roots.iter().map(|id| {
-            let output = t.run(*id); clean(&output);
-            (t.file.tree.items[id.0 as usize].definition.clone(),output.query.value)
+        let resolved = |t: &Tree| (0..t.file.items.len()).map(|id| {
+            let output = t.run(id); clean(&output);
+            (t.file.items[id].item.definition.clone(),output.query.value)
         }).collect::<BTreeMap<_,_>>();
-        let mut items = t.file.tree.items.clone().into_iter().enumerate().collect::<Vec<_>>();
+        let before = resolved(&t);
+        let mut items = t.file.items.clone().into_iter().enumerate().collect::<Vec<_>>();
         items.sort_by_key(|(i,_)| priorities[*i]);
-        t.file.tree.items = items.into_iter().map(|(_,item)| item).collect();
-        let after = t.file.roots.iter().map(|id| {
-            let output = t.run(*id); clean(&output);
-            (t.file.tree.items[id.0 as usize].definition.clone(),output.query.value)
-        }).collect::<BTreeMap<_,_>>();
+        t.file.items = items.into_iter().map(|(_,item)| item).collect();
+        let after = resolved(&t);
         proptest::prop_assert_eq!(before, after);
     }
 }
@@ -704,7 +716,12 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
         Visibility::Private,
         3,
     );
-    let output = resolve_item(&t.file, item, &t.index(), &mut ReportingProvider);
+    let output = resolve_item(
+        &t.file,
+        &t.file.items[item],
+        &t.index(),
+        &mut ReportingProvider,
+    );
     assert_eq!(output.query.diagnostics.len(), 1);
     error_at(&output, "LANG-4", t.origin(2).span);
     assert_eq!(
@@ -758,33 +775,22 @@ fn mixed_generic_parameter_ids_use_full_declaration_ordinals() {
     );
     let output = t.run(item);
     clean(&output);
+    let binder = LexicalOwner::first(&own("example")).site(NameSite::Item);
     assert!(output.types.contains(&(
         t_ty,
-        ResolvedName::TypeParameter(ty::TypeParameterRef::body(
-            NameSite::Item(item),
-            ty::TypeParamId(0)
-        ))
+        ResolvedName::TypeParameter(ty::TypeParameterRef::body(binder, ty::TypeParamId(0)))
     )));
     assert!(output.types.contains(&(
         u_ty,
-        ResolvedName::TypeParameter(ty::TypeParameterRef::body(
-            NameSite::Item(item),
-            ty::TypeParamId(2)
-        ))
+        ResolvedName::TypeParameter(ty::TypeParameterRef::body(binder, ty::TypeParamId(2)))
     )));
     assert!(output.query.value.expressions.contains(&(
         n,
-        ResolvedName::Size(ty::SizeParameterRef::body(
-            NameSite::Item(item),
-            ty::SizeParamId(1)
-        ))
+        ResolvedName::Size(ty::SizeParameterRef::body(binder, ty::SizeParamId(1)))
     )));
     assert!(output.query.value.expressions.contains(&(
         m,
-        ResolvedName::Size(ty::SizeParameterRef::body(
-            NameSite::Item(item),
-            ty::SizeParamId(3)
-        ))
+        ResolvedName::Size(ty::SizeParameterRef::body(binder, ty::SizeParamId(3)))
     )));
     assert_eq!(
         output
@@ -793,22 +799,10 @@ fn mixed_generic_parameter_ids_use_full_declaration_ordinals() {
             .map(|g| g.parameter.clone())
             .collect::<Vec<_>>(),
         vec![
-            GenericParameterName::Type(ty::TypeParameterRef::body(
-                NameSite::Item(item),
-                ty::TypeParamId(0)
-            )),
-            GenericParameterName::Size(ty::SizeParameterRef::body(
-                NameSite::Item(item),
-                ty::SizeParamId(1)
-            )),
-            GenericParameterName::Type(ty::TypeParameterRef::body(
-                NameSite::Item(item),
-                ty::TypeParamId(2)
-            )),
-            GenericParameterName::Size(ty::SizeParameterRef::body(
-                NameSite::Item(item),
-                ty::SizeParamId(3)
-            ))
+            GenericParameterName::Type(ty::TypeParameterRef::body(binder, ty::TypeParamId(0))),
+            GenericParameterName::Size(ty::SizeParameterRef::body(binder, ty::SizeParamId(1))),
+            GenericParameterName::Type(ty::TypeParameterRef::body(binder, ty::TypeParamId(2))),
+            GenericParameterName::Size(ty::SizeParameterRef::body(binder, ty::SizeParamId(3)))
         ]
     );
 }
@@ -816,7 +810,7 @@ fn mixed_generic_parameter_ids_use_full_declaration_ordinals() {
 #[test]
 fn invalid_manifest_paths_have_a_prog1_diagnostic_at_the_manifest_site() {
     let mut invalid = entry(own("bad.name"), Namespace::Value, Visibility::Public);
-    invalid.span = Span::new(hirsel_span::FileId(0), 3, 11).unwrap();
+    invalid.span = Span::new(hirsel_span::Anchor(0), 3, 11).unwrap();
     let (index, diagnostics) = ManifestIndex::new(fixture(vec![invalid.clone()]));
     assert!(index.entry(&invalid.definition).is_none());
     assert_eq!(diagnostics.len(), 1);

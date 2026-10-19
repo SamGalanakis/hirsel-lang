@@ -21,7 +21,7 @@ fn lexical_scope_exits_visit_only_descendant_locals() {
                 )
                 .unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path = &parsed.value.tree.items[0].definition;
+            let path = &parsed.value.items[0].item.definition;
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateScopeLocalRows);
             let result = engine.lower_to_tir(path).unwrap();

@@ -21,8 +21,7 @@ fn signature_queries_visit_shared_dependency_nodes_once() {
                 .unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             assert!(parsed.diagnostics.is_empty());
-            let path =
-                &parsed.value.tree.items[parsed.value.roots.last().unwrap().0 as usize].definition;
+            let path = &parsed.value.items.last().unwrap().item.definition;
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::CacheValidationRows);
             let signature = engine.item_signature(path).unwrap();
@@ -51,8 +50,7 @@ fn changing_a_transitive_nominal_dependency_matches_a_fresh_session() {
                 .add("dependencies.hir", source.clone())
                 .unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path =
-                &parsed.value.tree.items[parsed.value.roots.last().unwrap().0 as usize].definition;
+            let path = &parsed.value.items.last().unwrap().item.definition;
             let actual = engine.item_signature(path).unwrap();
             let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
             let file = fresh

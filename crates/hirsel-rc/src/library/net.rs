@@ -3,8 +3,8 @@
 //! `$intrinsic.ReadHalfReadInto[k]`), the fixed runtime entry `hirsel_rt_v2_net_read_into`,
 //! with the buffer's address and `k`.
 
+use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::{BINDER, LibraryBody};
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, instantiate_function};
 use hirsel_core_contract::Passing;
@@ -45,7 +45,7 @@ fn read_into(cx: &mut Cx<'_>, intrinsic: &str) -> R<LirUnit<Value>> {
         return Err(PassError::Malformed(format!("{path:?} is not a function")));
     };
     let mut actuals = Actuals {
-        binder: Some(BINDER),
+        binder: Some(super::binder(&path)),
         store: cx.store.clone(),
         arguments: cx.arguments.clone(),
         outer: Vec::new(),

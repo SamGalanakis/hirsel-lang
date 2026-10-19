@@ -6,7 +6,15 @@ Allowed dependencies: hirsel-span, hirsel-intern, sha2; no phase implementation 
 
 Invariants and boundary:
 
-- IDs are u32 indices into the owning Vec; no node borrows another crate's storage.
+- Each top-level item is an `ItemSyntax` with its own arenas and token tape
+  (`SyntaxTree`): `ExprId`, `PatternId`, `TypeExprId`, `StmtId` and `TokenRange`
+  are u32 indices into that item's Vecs, so inserting other items or moving the
+  item to another file leaves them unchanged. No node borrows another crate's
+  storage. Spans are relative to the item's anchor (hirsel-span).
+- `SyntaxFile` is the file's items in source order plus its trailing tokens;
+  `tape()` is the whole token tape. `ItemSyntax.occurrence` is the item's ordinal
+  among its DefPath's candidates in (file path, position) order (LANG-7
+  duplicates), and `owner()` names its lexical sites' owner `(DefId, occurrence)`.
 - `DefId(NonZeroU32)` is the process-global session identity of a DefPath
   (`ids.rs`). Its table caches each path's fingerprint and Display form. Eq and
   Hash compare ids; Ord compares DefPaths, so a `BTreeMap<DefId, _>` iterates in
@@ -15,22 +23,23 @@ Invariants and boundary:
   hashed, printed and mangled form. `salt_ids` (feature `id-salt`) is
   hirsel-intern's, re-exported.
 - The token tape covers every source byte once, in order, plus empty EOF; comments and invalid tokens remain (LANG-1).
-- Origin ranges cover significant syntax. Item.owned_tokens includes leading trivia and trailing same-line comments; the file owns leftover EOF trivia.
-- A top-level item's text_hash hashes the exact bytes covered by owned_tokens, including attributes, contracts and drop; no newline normalization.
+- Origin ranges cover significant syntax. An item's tokens include its leading trivia and the rest of its last line; the file owns leftover EOF trivia.
+- `ItemSyntax.text_hash` hashes the exact bytes of the item's tokens, including attributes, contracts and drop; no newline normalization.
 - DefPath uses package/version/module/item spellings supplied by FileContext; never spans, file names, hashes or Symbols (PROG-1/5).
   `DefPath::core` constructs core@1 from dot-separated module/item names;
   `is_core` compares the same identity without allocation. `package_is` matches
   both package name and version. `PackageId::name_is` explicitly ignores versions.
   Display is `package@version/module/item`, shared by diagnostics and tooling;
   binary fingerprints and the engine's module-only proof key remain separate.
-- Duplicate paths are errors, not position-disambiguated identities. SyntaxFile roots preserve source order.
+- Duplicate paths are errors, not position-disambiguated identities. SyntaxFile items preserve source order.
 - Path/constructor classification, pattern refutability, labels and generic argument kinds need no parser type lookup (LANG-1/2).
 
 Trivia attachment is deterministic: the first item takes initial trivia; between
-items the preceding item takes any same-line trailing comment and its line break,
-and the next item takes the remainder (including doc comments). Whitespace after
-the last item stays with the file unless it belongs to a trailing same-line
-comment. Formatting uses all tokens, not just owned item ranges. A resource's
+items the preceding item takes the rest of its last line (spaces and any
+trailing comment) and its line break, and the next item takes the remainder
+(blank lines and doc comments). Inserting a whole item above another therefore
+leaves the other's tokens and text hash unchanged. Trivia after the last item's
+line stays with the file. Formatting uses the whole tape, not just item tapes. A resource's
 `drop` and a function's attributes/contracts belong to the same item.
 
 Canonical DefPath segments are nonempty, contain no separators, and use the

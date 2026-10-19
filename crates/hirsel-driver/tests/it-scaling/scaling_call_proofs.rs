@@ -21,7 +21,7 @@ fn calls_query_only_required_binding_origins() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("call-proofs.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path = &parsed.value.tree.items[1].definition;
+            let path = &parsed.value.items[1].item.definition;
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateCallProofRows);
             let result = engine.lower_to_tir(path).unwrap();

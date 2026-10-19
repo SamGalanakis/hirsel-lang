@@ -22,7 +22,7 @@ fn cleanup_compilation_inspects_only_changed_live_roots() {
                     hirsel_intern::work::Counter::LoweringCleanupRootRows,
                 );
                 let result = engine
-                    .lower_to_tir(&parsed.value.tree.items[0].definition)
+                    .lower_to_tir(&parsed.value.items[0].item.definition)
                     .unwrap();
                 assert!(result.diagnostics.is_empty());
                 let rows = hirsel_intern::work::read(

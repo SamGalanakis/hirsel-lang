@@ -14,7 +14,7 @@ fn repeated_parameter_reads_use_exact_scoped_storage_lookup() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::LoweringBindingRows);
             let output = engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::LoweringBindingRows)

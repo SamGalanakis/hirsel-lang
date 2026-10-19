@@ -4,7 +4,25 @@ use crate::stage::Ready;
 use hirsel_syntax::DefPath;
 use std::collections::BTreeMap;
 
-pub use hirsel_span::SourceFile as ProfileSource;
+/// A source owner's file and its item's anchor base: LIR sites are relative to
+/// the item, so a site's file offset is `base + site`.
+#[derive(Clone, Debug)]
+pub struct ProfileSource {
+    pub path: std::path::PathBuf,
+    pub file: hirsel_span::SourceFile,
+    pub base: u32,
+}
+impl ProfileSource {
+    pub const COMPILATION_DIRECTORY: &str = hirsel_span::SourceFile::COMPILATION_DIRECTORY;
+    /// The package-qualified name artifacts carry (`SourceFile::logical_path`).
+    pub fn logical_path(&self) -> &std::path::Path {
+        self.file.logical_path()
+    }
+    /// The line and column of an item-relative site offset.
+    pub fn location(&self, site: u32) -> Option<hirsel_span::LineColumn> {
+        self.file.location(self.base.checked_add(site)?)
+    }
+}
 pub type ProfileSources = BTreeMap<DefPath, ProfileSource>;
 
 /// Prefer the operation's explicit source/cleanup anchor. LIR operations without

@@ -17,6 +17,14 @@ pub(crate) fn path(name: &str) -> DefPath {
         name: name.into(),
     })
 }
+/// The lexical owner of the fixture definition's sites.
+pub(crate) fn lexical() -> hirsel_syntax::LexicalOwner {
+    hirsel_syntax::LexicalOwner::first(&path("main"))
+}
+/// A site of the fixture definition, qualified by its owner.
+pub(crate) fn scoped(site: NameSite) -> SiteRef {
+    lexical().site(site)
+}
 pub(crate) fn ty(kind: TypeKind) -> Type {
     Type::with_kind(kind)
 }
@@ -77,7 +85,7 @@ impl Fixture {
                 entry: BodyId(0),
                 contracts: vec![],
                 bodies: vec![Body {
-                    parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+                    parameter_scope: scoped(hirsel_types::NameSite::Item),
                     locals: vec![Local {
                         ty: unit,
                         storage: Storage::ReturnSlot,
@@ -544,9 +552,9 @@ pub(crate) fn empty_body(f: &mut Fixture) -> Body {
     // Closure type IDs refer to the definition store.
     let unit = f.body().locals[0].ty;
     Body {
-        parameter_scope: hirsel_types::NameSite::Statement(hirsel_syntax::StmtId(
+        parameter_scope: scoped(hirsel_types::NameSite::Statement(hirsel_syntax::StmtId(
             f.definition.bodies.len() as u32,
-        )),
+        ))),
         locals: vec![Local {
             ty: unit,
             storage: Storage::ReturnSlot,

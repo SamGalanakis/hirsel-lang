@@ -134,7 +134,8 @@ fn heap_clean(source: &str, b: &Ready_) -> Outcome {
 
 fn observed(source: &str, o: hirsel_heapcheck::Observation) -> Outcome {
     if let Some(f) = o.failures.first() {
-        return Outcome::Failed(f.rule.clone(), line_of(source, f.site.0));
+        let base = item_bases(source)[&f.definition];
+        return Outcome::Failed(f.rule.clone(), line_of(source, base + f.site.0));
     }
     let payload = match o.returned {
         Some(Observed::Variant { fields, .. }) => fields.into_iter().next().flatten(),

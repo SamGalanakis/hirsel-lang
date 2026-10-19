@@ -148,10 +148,10 @@ fn real_phase_corpus_ratchet() {
                     return Err(format!("dependency-owned E/v20 follow-up: {e}"));
                 }
                 let mut diagnostics = Vec::new();
-                for id in &file.roots {
+                for id in &file.items {
                     let resolution = hirsel_resolve::resolve_item(
                         &file,
-                        *id,
+                        id,
                         &registry.index.clone(),
                         &mut registry,
                     );
@@ -162,13 +162,11 @@ fn real_phase_corpus_ratchet() {
                             map.location(d.primary).unwrap().line
                         ));
                     }
-                    let sig =
-                        registry.signatures[&file.tree.items[id.0 as usize].definition].clone();
+                    let sig = registry.signatures[&id.item.definition].clone();
                     let output = body::check_with_loop_protocols(
                         body::LoopInput {
                             body: body::Input {
-                                tree: &file.tree,
-                                item: *id,
+                                syntax: id,
                                 context: &support::context(),
                                 resolution: &resolution,
                                 signature: &sig,
@@ -188,7 +186,10 @@ fn real_phase_corpus_ratchet() {
                         ));
                     }
                     if std::env::var("HIRSEL_AUTHORITY_DEBUG").ok().as_deref() == Some(&name) {
-                        eprintln!("DEBUG {name} item {id:?} signature {:?}", sig.kind);
+                        eprintln!(
+                            "DEBUG {name} item {:?} signature {:?}",
+                            id.item.definition, sig.kind
+                        );
                         eprintln!("RES {:?}", checked.value.resolution);
                         for b in &checked.value.bindings {
                             eprintln!("BIND {b:?}");
@@ -198,16 +199,15 @@ fn real_phase_corpus_ratchet() {
                                 "EXPR {:?} line {:?} {:?} TYPE {:?}",
                                 row.expression,
                                 map.location(
-                                    file.tree.expressions[row.expression.0 as usize].origin.span
+                                    id.tree.expressions[row.expression.0 as usize].origin.span
                                 ),
-                                file.tree.expressions[row.expression.0 as usize].kind,
+                                id.tree.expressions[row.expression.0 as usize].kind,
                                 checked.value.types.get(row.ty)
                             );
                         }
                     }
                     let out = check_file_with_clauses(
-                        &file,
-                        *id,
+                        id,
                         &sig,
                         checked.value,
                         &mut registry,
@@ -232,12 +232,8 @@ fn real_phase_corpus_ratchet() {
                 }
                 diagnostics.sort_by_key(|d| {
                     let (p, n) = d.rule.as_str().split_once('-').unwrap();
-                    (
-                        d.primary.start,
-                        d.primary.end,
-                        p.to_owned(),
-                        n.parse::<u32>().unwrap(),
-                    )
+                    let at = map.resolve(d.primary);
+                    (at.start, at.end, p.to_owned(), n.parse::<u32>().unwrap())
                 });
                 if let Some((rule, line)) = rejection {
                     match diagnostics.first() {
@@ -332,17 +328,11 @@ fn real_phase_corpus_ratchet() {
     );
 }
 
-fn last_function(file: &ast::SyntaxFile) -> ast::ItemId {
-    *file
-        .roots
+fn last_function(file: &ast::SyntaxFile) -> &ast::ItemSyntax {
+    file.items
         .iter()
         .rev()
-        .find(|item| {
-            matches!(
-                file.tree.items[item.0 as usize].kind,
-                ast::ItemKind::Function { .. }
-            )
-        })
+        .find(|syntax| matches!(syntax.item.kind, ast::ItemKind::Function { .. }))
         .expect("fixture has a function")
 }
 
@@ -372,12 +362,11 @@ fn check_source_phases(
         "{:?}",
         resolution.query.diagnostics
     );
-    let signature = registry.signatures[&file.tree.items[item.0 as usize].definition].clone();
+    let signature = registry.signatures[&item.item.definition].clone();
     let output = body::check_with_loop_protocols(
         body::LoopInput {
             body: body::Input {
-                tree: &file.tree,
-                item,
+                syntax: item,
                 context: &support::context(),
                 resolution: &resolution,
                 signature: &signature,
@@ -390,7 +379,6 @@ fn check_source_phases(
     let checked = output.checked;
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let out = check_file_with_clauses(
-        &file,
         item,
         &signature,
         checked.value.clone(),
@@ -417,14 +405,14 @@ fn result_types_cover_formal_named_frames_and_inferred_closures() {
     let source = "fn outer(p: u64) -> u64 {\n fn inner(q: u64) -> u64 { q }\n let callback = fn() { p }\n inner(p)\n}\n";
     let (file, out) = check_source(source);
     super::test_support::clean(&out);
-    let item = file.roots[0];
+    let tree = &file.items[0].tree;
     let statement = out.body.resolution.local_functions[0].0;
     let closure = out
         .captures
         .iter()
         .find(|c| {
             matches!(
-                file.tree.expressions[c.expression.0 as usize].kind,
+                tree.expressions[c.expression.0 as usize].kind,
                 ast::ExprKind::Closure { .. }
             )
         })
@@ -432,7 +420,7 @@ fn result_types_cover_formal_named_frames_and_inferred_closures() {
         .expression;
     assert_eq!(out.result_types.len(), 3);
     for owner in [
-        NameSite::Item(item),
+        NameSite::Item,
         NameSite::Statement(statement),
         NameSite::Expression(closure),
     ] {
@@ -474,7 +462,8 @@ fn named_frame_result_origins_resolve_the_outer_declaring_scope() {
         } else {
             super::test_support::rejected(&out, "PROV-1");
         }
-        let outer = NameSite::Item(file.roots[0]);
+        let outer = NameSite::Item;
+        let declaring = file.items[0].owner().site(outer);
         let inner = NameSite::Statement(out.body.resolution.local_functions[0].0);
         for (owner, ordinal) in [(outer.clone(), 1), (inner, if same { 1 } else { 0 })] {
             let result = out
@@ -489,7 +478,7 @@ fn named_frame_result_origins_resolve_the_outer_declaring_scope() {
             let OriginRoot::Parameter(parameter) = root else {
                 panic!("{root:?}")
             };
-            assert_eq!(parameter, ParameterRef::body(outer, ParamId(ordinal)));
+            assert_eq!(parameter, ParameterRef::body(declaring, ParamId(ordinal)));
         }
     }
 }
@@ -504,7 +493,7 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
     let ast::StmtKind::Function {
         body: body_expression,
         ..
-    } = file.tree.statements[out.body.resolution.local_functions[0].0.0 as usize].kind
+    } = item.tree.statements[out.body.resolution.local_functions[0].0.0 as usize].kind
     else {
         panic!()
     };
@@ -530,7 +519,6 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .collect();
     assert!(!parameters.is_empty());
     let owned = hirsel_ownership::check_ownership_with_clauses(
-        &file.tree,
         item,
         &signature,
         &mut out.body,

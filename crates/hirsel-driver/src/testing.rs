@@ -351,8 +351,8 @@ pub fn discover(
             .engine
             .parse_file(file, &context)
             .map_err(|e| program.error(e))?;
-        for id in &parsed.value.roots {
-            let item = &parsed.value.tree.items[id.0 as usize];
+        for syntax in &parsed.value.items {
+            let item = &syntax.item;
             names.insert(item.definition.clone());
             if item
                 .attributes

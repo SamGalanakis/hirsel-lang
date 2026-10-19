@@ -165,7 +165,7 @@ impl Frame {
     /// Bind the actual arguments of exactly one invocation, preserving captures.
     pub fn bind_sizes(
         sizes: &mut crate::value::SizeBindings,
-        scope: hirsel_types::NameSite,
+        scope: hirsel_types::SiteRef,
         arguments: impl IntoIterator<Item = Option<u64>>,
     ) {
         for (ordinal, size) in arguments.into_iter().enumerate() {

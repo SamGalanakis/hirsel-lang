@@ -703,9 +703,10 @@ pub(super) fn join_captures(target: &mut Vec<CapturedOrigin>, incoming: &[Captur
 #[cfg(test)]
 mod environment_tests {
     use super::*;
+    use crate::support::lexical;
     #[test]
     fn call_names_snapshot_filters_ended_bindings_without_changing_past_proofs() {
-        let root = OriginRoot::Local(hirsel_types::LocalId(1));
+        let root = OriginRoot::Local(lexical(), hirsel_types::LocalId(1));
         let origin = Origin {
             root: root.clone(),
             fields: vec![].into(),
@@ -727,7 +728,7 @@ mod environment_tests {
     #[test]
     fn expiry_preserves_siblings_snapshots_and_existing_value_expiration() {
         let origin = |root, fields: Vec<u32>| Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(root)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(root)),
             fields: fields
                 .into_iter()
                 .map(hirsel_types::FieldId)
@@ -798,7 +799,7 @@ mod environment_tests {
     #[test]
     fn recursive_storage_summaries_stabilize_without_losing_expiration() {
         let owner = Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(1)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(1)),
             fields: vec![].into(),
         };
         let paths = BTreeSet::from([
@@ -824,7 +825,7 @@ mod environment_tests {
     #[test]
     fn replacing_one_sequence_element_keeps_other_elements_dependencies() {
         let owner = Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(1)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(1)),
             fields: vec![].into(),
         };
         let capture = Environment::closure(BTreeSet::from([owner.clone()]), BTreeSet::new());

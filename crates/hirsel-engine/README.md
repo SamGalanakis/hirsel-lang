@@ -18,9 +18,20 @@ Query caches retain shared immutable nodes and outputs. A rooted signature query
 or cache-validity walk visits each retained dependency node once, replaying its
 lookup results, execution reads and signature fingerprints. Visitation ends with
 the query and supplies no validity evidence across edits. Provider reads share
-the output; public query calls return owned output snapshots. Source-position
-rebasing detaches shared nodes before updating their sites. `work::read(Counter::CacheValidationRows)`
+the output; public query calls return owned output snapshots. `work::read(Counter::CacheValidationRows)`
 counts actual node inspections for the shared-dependency regression.
+
+Syntax and positions are item-local (design rule 6). `parse_file` retains each
+item's `Arc<ItemSyntax>` when its DefPath, text hash and occurrence match an
+earlier one, and only moves its anchor with `SourceMap::move_anchor`; a changed
+item at the same (DefPath, occurrence) keeps the old anchor. Nothing downstream
+holds a file offset, so no cached signature, resolution, body, mode result,
+TIR or diagnostic is rewritten after an edit: inserting or removing other items,
+or moving an item to another file, leaves every memo of the item in place.
+Items removed from one file wait in a detached pool until the next parse, so a
+cross-file move keeps the same syntax. Package images, prechecked records and
+artifacts carry anchors as (source ordinal, base) and are placed on load, never
+rebased.
 
 Publication consumes one immutable `ValidatedSignatures` input per owning package,
 indexed source revision and explicit environment/manifest input. V independently checks every

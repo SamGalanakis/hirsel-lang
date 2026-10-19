@@ -128,7 +128,10 @@ impl Library {
         let Some(source) = anchor.source_site(context.sources) else {
             return;
         };
-        let Some(file) = context.sources.file(anchor.site.file) else {
+        let Some(file) = context
+            .sources
+            .file(context.sources.resolve(anchor.site).file)
+        else {
             return;
         };
         let access = Access {

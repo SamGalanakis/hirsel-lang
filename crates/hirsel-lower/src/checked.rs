@@ -1,7 +1,7 @@
 //! Adapter for H's shared producer plans, without importing another phase crate.
 use super::*;
 use hirsel_check_protocol::body::ForProtocol;
-use hirsel_syntax::{ExprKind, StmtKind, UnaryOp};
+use hirsel_syntax::{ExprKind, StmtKind, SyntaxTree, UnaryOp};
 use hirsel_tir::Constructor;
 use hirsel_types::{CallTarget, ContextualName, GenericArgument, TypeKind};
 impl Plans {

@@ -11,7 +11,6 @@ mod lowering;
 mod package_image;
 pub(crate) use package_image::{ImageInput, ImagePackage, PackageImage};
 mod package_snapshot;
-mod positions;
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
@@ -26,9 +25,8 @@ pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
 use hirsel_intern::timings::{self, Count, Interval, Phase};
 use hirsel_span::Span;
-use hirsel_syntax::{ItemKind, ItemPath};
+use hirsel_syntax::{ItemKind, ItemPath, ItemSyntax};
 pub(crate) use package_snapshot::PackageSnapshot;
-pub(crate) use positions::rebase_package_diagnostics;
 pub use signature_input::SignatureInput;
 pub(crate) use signature_input::release_signature_inputs;
 use std::{
@@ -42,23 +40,22 @@ use std::{
 pub trait SignaturePhase {
     fn signature_items(
         &self,
-        items: &[(Arc<SyntaxFile>, ItemId)],
+        items: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        let (file, item) = items.first().ok_or(QueryError::NotImplemented)?;
-        self.signature(file.clone(), *item, provider)
+        let syntax = items.first().ok_or(QueryError::NotImplemented)?;
+        self.signature(syntax.clone(), provider)
     }
     fn signature(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
     /// A recursive type group member's provisional signature at `stage`,
     /// which another member reads; it publishes nothing.
     fn staged_signature(
         &self,
-        _items: &[(Arc<SyntaxFile>, ItemId)],
+        _items: &[Arc<ItemSyntax>],
         _provider: &mut dyn SignatureProvider,
         _stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
@@ -94,6 +91,8 @@ pub struct DependencyReads {
     pub lookups: Vec<(DefPath, bool)>,
     pub manifest_lookups: Vec<hirsel_types::DependencyRead>,
     pub resolver: Vec<hirsel_resolve::DependencyRead>,
+    /// Other items' name sites a result cites, as read (`cite_name`).
+    pub citations: Vec<(DefPath, Option<Span>)>,
 }
 #[derive(Clone)]
 struct Cached<T> {
@@ -131,14 +130,8 @@ pub(crate) type ParsedFile = (
     QueryEnvironment,
     Result<QueryOutput<SyntaxFile>, QueryError>,
 );
-#[derive(Clone)]
-struct ItemSnapshot {
-    file: Arc<SyntaxFile>,
-    item: ItemId,
-}
-
-/// A single coherent session. Reused owners keep their arena IDs while their
-/// origins and cached artifact sites are re-spanned to the current source revision.
+/// A single coherent session. Items are item-local syntax at anchors: moving an
+/// item moves its anchor, never its IDs, spans or cached results.
 pub struct QueryEngine {
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
@@ -156,7 +149,10 @@ pub struct QueryEngine {
     pub sources: SourceMap,
     pub environment: QueryEnvironment,
     pub adapters: PhaseAdapters,
-    items: Layered<DefPath, Vec<ItemSnapshot>>,
+    /// Each definition's candidates in occurrence order.
+    items: Layered<DefPath, Vec<Arc<ItemSyntax>>>,
+    /// The items the last index dropped, which the next can adopt.
+    detached: Vec<Arc<ItemSyntax>>,
     parsed: Layered<FileId, ParsedFile>,
     registry: crate::registry::BuiltinRegistry,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
@@ -377,6 +373,7 @@ impl QueryEngine {
             environment,
             adapters,
             items: Layered::default(),
+            detached: vec![],
             parsed: Layered::default(),
             registry,
             builtins: BTreeMap::new(),
@@ -445,7 +442,7 @@ impl QueryEngine {
         self.unavailable = Some(kind);
         Err(QueryError::NotImplemented)
     }
-    fn snapshot(&self, definition: &DefPath) -> Result<ItemSnapshot, QueryError> {
+    fn snapshot(&self, definition: &DefPath) -> Result<Arc<ItemSyntax>, QueryError> {
         self.items
             .get(definition)
             .and_then(|items| items.first())
@@ -454,29 +451,31 @@ impl QueryEngine {
     }
     fn key(&self, definition: &DefPath, kind: QueryKind) -> Result<DefinitionKey, QueryError> {
         let snapshot = self.snapshot(definition)?;
-        let item = &snapshot.file.tree.items[snapshot.item.0 as usize];
         let text_hash = if kind == QueryKind::Signature {
+            // Each header's text and its offset in its item, which positions
+            // the header's spans relative to the item's anchor.
             let hashes: Vec<_> = self
                 .items
                 .get(definition)
                 .unwrap()
                 .iter()
                 .map(|snapshot| {
-                    let item = &snapshot.file.tree.items[snapshot.item.0 as usize];
-                    let text = self.sources.file(snapshot.file.file).unwrap().text();
-                    ContentHash::of_bytes(
-                        text[header_span(&snapshot.file, item).start as usize
-                            ..header_span(&snapshot.file, item).end as usize]
-                            .as_bytes(),
+                    let header = header_span(snapshot);
+                    ContentHash::of_parts(
+                        "hirsel.signature.header.v2",
+                        [
+                            self.sources.slice(header).unwrap_or_default().as_bytes(),
+                            header.start.to_le_bytes().as_slice(),
+                        ],
                     )
                 })
                 .collect();
             ContentHash::of_parts(
-                "hirsel.signature.inputs.v1",
+                "hirsel.signature.inputs.v2",
                 hashes.iter().map(|h| h.0.as_slice()),
             )
         } else {
-            item.text_hash
+            snapshot.text_hash
         };
         Ok(DefinitionKey {
             kind,
@@ -622,6 +621,14 @@ impl QueryEngine {
                 return false;
             }
         }
+        if cached
+            .reads
+            .citations
+            .iter()
+            .any(|(path, cited)| self.cited_name(&key.definition, path) != *cited)
+        {
+            return false;
+        }
         for (path, previous) in &cached.reads.failed_signature_keys {
             if self.signature(path).is_ok() || self.failed_signature_key(path) != *previous {
                 return false;
@@ -633,6 +640,16 @@ impl QueryEngine {
             .visited
             .insert(cached.id);
         true
+    }
+    /// The name site of `path`'s first item in the file of `owner`'s first
+    /// item, relative to that item's anchor.
+    fn cited_name(&self, owner: &DefPath, path: &DefPath) -> Option<Span> {
+        let file = self.item_file(self.items.get(owner)?.first()?);
+        self.items
+            .get(path)?
+            .iter()
+            .find(|candidate| self.item_file(candidate) == file)
+            .map(|candidate| candidate.item.name_span)
     }
     fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {
         self.signatures
@@ -650,11 +667,11 @@ impl QueryEngine {
             if let ItemKind::Type {
                 body: hirsel_syntax::TypeBody::Alias(target),
                 ..
-            } = &snapshot.file.tree.items[snapshot.item.0 as usize].kind
+            } = &snapshot.item.kind
             {
                 return Err(QueryError::Diagnostics(vec![Diagnostic::error(
                     const { hirsel_diag::RuleId::of("LANG-7") },
-                    snapshot.file.tree.types[target.0 as usize].origin.span,
+                    snapshot.tree.types[target.0 as usize].origin.span,
                     "cyclic type aliases have no representation",
                 )]));
             }
@@ -726,80 +743,89 @@ impl QueryEngine {
             covered: vec![],
         })
     }
-    /// Parsing a new snapshot updates definitions in that manifest module. Unchanged items
-    /// retain their old owning AST, so body edits in siblings don't invalidate their queries.
-    fn index(&mut self, file: &SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
+    /// The file an item stands in.
+    pub(crate) fn item_file(&self, syntax: &ItemSyntax) -> FileId {
+        self.sources
+            .anchor(syntax.anchor)
+            .expect("an indexed item's anchor is placed")
+            .0
+    }
+    /// Where an item stands: its file's path and its anchor's base, the order
+    /// of a definition's candidates.
+    fn position(&self, syntax: &ItemSyntax) -> (std::path::PathBuf, u32) {
+        let (file, base) = self
+            .sources
+            .anchor(syntax.anchor)
+            .expect("an indexed item's anchor is placed");
+        (self.sources.file(file).unwrap().path.clone(), base)
+    }
+    /// Index a new snapshot of one source. Each definition's candidates are
+    /// ordered by (file path, position); an item's occurrence is its ordinal
+    /// there. An item unchanged in (definition, text, occurrence) is the same
+    /// `ItemSyntax`: only its anchor moves, so its IDs, spans and queries stay.
+    /// A changed item takes over its predecessor's anchor (same definition and
+    /// occurrence), so a signature surviving a body edit still names it. The
+    /// items this snapshot dropped stay adoptable until the next index, for a
+    /// definition moving to another file.
+    fn index(&mut self, file: &mut SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
         self.drop_precheck(&context.package);
         self.source_revision += 1;
         self.comptime_runtime = None;
-        let source_path = &self.sources.file(file.file).unwrap().path;
-        let from_source =
-            |old: &ItemSnapshot| &self.sources.file(old.file.file).unwrap().path == source_path;
+        let source_path = self.sources.file(file.file).unwrap().path.clone();
+        let from_source = |engine: &Self, old: &ItemSyntax| engine.position(old).0 == source_path;
         // Only definitions this source owned or now owns can change; every
         // other entry, including a shared image's, is left untouched.
         let owned: Vec<DefPath> = self
             .items
             .iter()
-            .filter(|(_, candidates)| candidates.iter().any(from_source))
+            .filter(|(_, candidates)| candidates.iter().any(|old| from_source(self, old)))
             .map(|(path, _)| path.clone())
             .collect();
-        let mut previous: Vec<_> = owned
+        // Which items stand where, before: a query whose candidates now stand
+        // elsewhere names other anchors and is retired.
+        let anchors = |engine: &Self, path: &DefPath| -> Vec<hirsel_span::Anchor> {
+            engine
+                .items
+                .get(path)
+                .into_iter()
+                .flatten()
+                .map(|candidate| candidate.anchor)
+                .collect()
+        };
+        // A detached item stands where it was dropped until this index adopts
+        // it, so adopting it is not a move.
+        let carried = std::mem::take(&mut self.detached);
+        let placed = |engine: &Self, path: &DefPath| -> Vec<hirsel_span::Anchor> {
+            let mut placed = anchors(engine, path);
+            placed.extend(
+                carried
+                    .iter()
+                    .filter(|old| &old.item.definition == path)
+                    .map(|old| old.anchor),
+            );
+            placed.sort();
+            placed
+        };
+        let before: BTreeMap<DefPath, Vec<hirsel_span::Anchor>> = owned
+            .iter()
+            .chain(file.items.iter().map(|new| &new.item.definition))
+            .flat_map(|path| [path.clone(), hirsel_check_protocol::fact::fact_path(path)])
+            .map(|path| {
+                let anchors = placed(self, &path);
+                (path, anchors)
+            })
+            .collect();
+        // Fact helpers are derived again from their sources below.
+        let mut previous: Vec<Arc<ItemSyntax>> = owned
             .iter()
             .flat_map(|path| &self.items[path])
-            .filter(|old| from_source(old))
+            .filter(|old| {
+                from_source(self, old)
+                    && hirsel_check_protocol::fact::fact_owner(&old.item.definition).is_none()
+            })
             .cloned()
             .collect();
-        // Signature queries can survive a body/trivia edit as well as whole-item
-        // reuse. Match their unchanged header independently before retiring owners.
-        let mut movements = vec![];
-        let mut matched = BTreeSet::new();
-        for id in &file.roots {
-            let item = &file.tree.items[id.0 as usize];
-            let candidate = previous
-                .iter()
-                .enumerate()
-                .filter(|(i, old)| {
-                    !matched.contains(i)
-                        && old.file.tree.items[old.item.0 as usize].definition == item.definition
-                })
-                .find(|(_, old)| {
-                    old.file.tree.items[old.item.0 as usize].text_hash == item.text_hash
-                })
-                .or_else(|| {
-                    previous.iter().enumerate().find(|(i, old)| {
-                        if matched.contains(i) {
-                            return false;
-                        }
-                        let before = &old.file.tree.items[old.item.0 as usize];
-                        before.definition == item.definition
-                            && self.sources.slice(header_span(&old.file, before))
-                                == self.sources.slice(header_span(file, item))
-                    })
-                });
-            if let Some((i, old)) = candidate {
-                matched.insert(i);
-                let before = &old.file.tree.items[old.item.0 as usize];
-                let span = if before.text_hash == item.text_hash {
-                    let start = old
-                        .file
-                        .tokens
-                        .get(before.owned_tokens.start as usize)
-                        .map_or(before.origin.span.start, |t| t.span.start);
-                    Span {
-                        start,
-                        ..before.origin.span
-                    }
-                } else {
-                    header_span(&old.file, before)
-                };
-                movements.push(positions::Movement {
-                    old: span,
-                    new_file: file.file,
-                    delta: i64::from(item.origin.span.start) - i64::from(before.origin.span.start),
-                    whole: (before.origin.span, item.origin.span),
-                });
-            }
-        }
+        previous.extend(carried.iter().cloned());
         // CT-5: a retired declaration's instances are made again from its new
         // text when a call selects them.
         for path in &owned {
@@ -815,49 +841,139 @@ impl QueryEngine {
             }
         }
         for path in &owned {
-            let sources = &self.sources;
-            let candidates = self.items.get_mut(path).unwrap();
-            candidates.retain(|old| &sources.file(old.file.file).unwrap().path != source_path);
-            if candidates.is_empty() {
+            let kept: Vec<_> = self.items[path]
+                .iter()
+                .filter(|old| !from_source(self, old))
+                .cloned()
+                .collect();
+            if kept.is_empty() {
                 self.items.remove(path);
+            } else {
+                self.items.insert(path.clone(), kept);
             }
         }
         let mut affected: BTreeSet<DefPath> = owned.into_iter().collect();
-        let shared_file = Arc::new(file.clone());
-        for id in &file.roots {
-            let item = &file.tree.items[id.0 as usize];
-            let unchanged = previous.iter().position(|old| {
-                let old_item = &old.file.tree.items[old.item.0 as usize];
-                old_item.definition == item.definition && old_item.text_hash == item.text_hash
+        // Occurrences: this source's items take their places among each
+        // definition's other candidates.
+        let new_positions: Vec<_> = file.items.iter().map(|new| self.position(new)).collect();
+        let mut occurrences = vec![0u32; file.items.len()];
+        let mut reordered = vec![];
+        for path in file
+            .items
+            .iter()
+            .map(|new| &new.item.definition)
+            .collect::<BTreeSet<_>>()
+        {
+            let mut order: Vec<(std::path::PathBuf, u32, Result<usize, Arc<ItemSyntax>>)> = self
+                .items
+                .get(path)
+                .into_iter()
+                .flatten()
+                .map(|old| {
+                    let (p, base) = self.position(old);
+                    (p, base, Err(old.clone()))
+                })
+                .collect();
+            for (i, new) in file.items.iter().enumerate() {
+                if &new.item.definition == path {
+                    let (p, base) = new_positions[i].clone();
+                    order.push((p, base, Ok(i)));
+                }
+            }
+            order.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+            for (occurrence, (_, _, entry)) in order.into_iter().enumerate() {
+                match entry {
+                    Ok(i) => occurrences[i] = occurrence as u32,
+                    Err(old) if old.occurrence != occurrence as u32 => {
+                        reordered.push((old, occurrence as u32));
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        // Another file's candidate whose ordinal changed is the same item at
+        // its new occurrence.
+        for (old, occurrence) in reordered {
+            let path = old.item.definition.clone();
+            let moved = Arc::new(ItemSyntax {
+                occurrence,
+                ..(*old).clone()
             });
-            let snapshot = unchanged
-                .map(|index| previous.remove(index))
-                .unwrap_or_else(|| ItemSnapshot {
-                    file: shared_file.clone(),
-                    item: *id,
-                });
+            for candidate in self.items.get_mut(&path).unwrap().iter_mut() {
+                if Arc::ptr_eq(candidate, &old) {
+                    *candidate = moved.clone();
+                }
+            }
+            if let Some(helper) = crate::facts::snapshot(&moved) {
+                let helper_path = helper.item.definition.clone();
+                for candidate in self.items.get_mut(&helper_path).into_iter().flatten() {
+                    if candidate.anchor == moved.anchor {
+                        *candidate = Arc::new(ItemSyntax {
+                            occurrence,
+                            ..(*helper).clone()
+                        });
+                    }
+                }
+                affected.insert(helper_path);
+            }
+            affected.insert(path);
+        }
+        let file_id = file.file;
+        for (i, new) in file.items.iter_mut().enumerate() {
+            let occurrence = occurrences[i];
+            let base = new_positions[i].1;
+            let definition = new.item.definition.clone();
+            let unchanged = previous.iter().position(|old| {
+                old.item.definition == definition
+                    && old.text_hash == new.text_hash
+                    && old.occurrence == occurrence
+            });
+            if let Some(index) = unchanged {
+                let old = previous.remove(index);
+                self.sources.move_anchor(old.anchor, file_id, base);
+                *new = old;
+            } else {
+                let syntax = Arc::make_mut(new);
+                syntax.occurrence = occurrence;
+                if let Some(index) = previous.iter().position(|old| {
+                    old.item.definition == definition && old.occurrence == occurrence
+                }) {
+                    let old = previous.remove(index);
+                    self.sources.move_anchor(old.anchor, file_id, base);
+                    syntax.reanchor(old.anchor);
+                }
+            }
+        }
+        // Items this source dropped stay adoptable through the next index, with
+        // their queries; a carried item nobody adopted expires now.
+        let (expired, dropped): (Vec<_>, Vec<_>) = previous
+            .into_iter()
+            .partition(|old| carried.iter().any(|c| Arc::ptr_eq(c, old)));
+        for old in &expired {
+            affected.insert(old.item.definition.clone());
+        }
+        self.detached = dropped;
+        for new in &file.items {
             // Duplicate paths keep one semantic identity and multiple addressable items.
             // Task E diagnoses overloading as LANG-7 at the later definition's name.
-            if let Some((helper_file, helper_item)) =
-                crate::facts::snapshot(&snapshot.file, snapshot.item)
-            {
-                let helper = &helper_file.tree.items[helper_item.0 as usize];
-                affected.insert(helper.definition.clone());
+            if let Some(helper) = crate::facts::snapshot(new) {
+                affected.insert(helper.item.definition.clone());
                 self.items
-                    .entry_or_default(helper.definition.clone())
-                    .push(ItemSnapshot {
-                        file: helper_file,
-                        item: helper_item,
-                    });
+                    .entry_or_default(helper.item.definition.clone())
+                    .push(helper);
             }
-            affected.insert(item.definition.clone());
+            affected.insert(new.item.definition.clone());
             self.items
-                .entry_or_default(item.definition.clone())
-                .push(snapshot);
+                .entry_or_default(new.item.definition.clone())
+                .push(new.clone());
         }
-        // Retire changed inputs before moving surviving sites. Otherwise a deleted
-        // or renamed definition can later revive an old key whose sites skipped
-        // intervening source revisions. Unchanged headers survive body edits.
+        for path in &affected {
+            if let Some(mut candidates) = self.items.get(path).cloned() {
+                candidates.sort_by_key(|candidate| candidate.occurrence);
+                self.items.insert(path.clone(), candidates);
+            }
+        }
+        // Retire changed inputs. Unchanged headers survive body edits.
         let body_hashes: BTreeMap<_, _> = affected
             .iter()
             .filter(|path| self.items.contains_key(*path))
@@ -878,14 +994,26 @@ impl QueryEngine {
                 )
             })
             .collect();
+        // A definition whose only item this source just dropped keeps its
+        // queries while that item waits to be adopted.
+        let waiting: BTreeSet<DefPath> = self
+            .detached
+            .iter()
+            .map(|old| old.item.definition.clone())
+            .filter(|path| !self.items.contains_key(path))
+            .collect();
+        let moved: BTreeSet<DefPath> = affected
+            .iter()
+            .filter(|path| !waiting.contains(*path))
+            .filter(|path| before.get(*path) != Some(&anchors(self, path)))
+            .cloned()
+            .collect();
         macro_rules! retire {
             ($field:ident, $hashes:ident) => {
-                for path in &affected {
-                    if self
-                        .$field
-                        .get(path)
-                        .is_some_and(|c| $hashes.get(path) != Some(&c.key.text_hash))
-                    {
+                for path in affected.iter().filter(|path| !waiting.contains(*path)) {
+                    if self.$field.get(path).is_some_and(|c| {
+                        moved.contains(path) || $hashes.get(path) != Some(&c.key.text_hash)
+                    }) {
                         self.$field.remove(path);
                     }
                 }
@@ -917,7 +1045,6 @@ impl QueryEngine {
                 }
             }
         }
-        self.rebase_positions(&movements);
         self.publish_declarations();
         Ok(())
     }
@@ -928,7 +1055,7 @@ impl QueryEngine {
             .items
             .iter()
             .flat_map(|(path, candidates)| {
-                let item = &candidates[0].file.tree.items[candidates[0].item.0 as usize];
+                let item = &candidates[0].item;
                 let public = item.visibility != hirsel_syntax::Visibility::Private;
                 let kind = match &item.kind {
                     ItemKind::Function { .. } => 0,
@@ -951,11 +1078,21 @@ impl QueryEngine {
         );
         if let Some(state) = &self.adapters.compiler_state {
             let mut state = state.borrow_mut();
+            let mut files: BTreeMap<FileId, Vec<Arc<ItemSyntax>>> = BTreeMap::new();
+            for item in self.items.values().flatten() {
+                files
+                    .entry(self.item_file(item))
+                    .or_default()
+                    .push(item.clone());
+            }
             state.set_declarations(
-                self.items
-                    .values()
-                    .flatten()
-                    .map(|item| (item.file.clone(), item.item)),
+                files
+                    .into_values()
+                    .map(|mut items| {
+                        items.sort_by_key(|item| self.sources.anchor(item.anchor).unwrap().1);
+                        items
+                    })
+                    .collect(),
             );
             state.manifest_revision = ContentHash::of_parts(
                 "hirsel.manifest.v1",
@@ -966,31 +1103,24 @@ impl QueryEngine {
             );
         }
     }
-    /// All source items sharing a semantic path, in index order. Ordinals stay local;
-    /// neither duplicates nor file positions are ever appended to DefPath identity.
+    /// All source items sharing a semantic path, in occurrence order. Ordinals stay
+    /// local; neither duplicates nor file positions are ever appended to DefPath identity.
     pub fn definition_items(
         &self,
         definition: &DefPath,
-    ) -> Result<Vec<(Arc<SyntaxFile>, ItemId)>, QueryError> {
+    ) -> Result<Vec<Arc<ItemSyntax>>, QueryError> {
         self.items
             .get(definition)
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|item| (item.file.clone(), item.item))
-                    .collect()
-            })
+            .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    /// The item remains indexed within the returned immutable owning file; clients
-    /// must use this ItemId with this file, never another revision's AST.
+    /// The indexed definition's first item: its own arenas, at its anchor.
     pub fn parse_definition(
         &mut self,
         definition: &DefPath,
-    ) -> Result<QueryOutput<(Arc<SyntaxFile>, ItemId)>, QueryError> {
+    ) -> Result<QueryOutput<Arc<ItemSyntax>>, QueryError> {
         self.syntax_view(definition, QueryKind::Parse)?;
-        let snapshot = self.snapshot(definition)?;
-        Ok(output((snapshot.file, snapshot.item)))
+        Ok(output(self.snapshot(definition)?))
     }
     fn syntax_view(&mut self, definition: &DefPath, kind: QueryKind) -> Result<(), QueryError> {
         let key = self.key(definition, kind)?;
@@ -1011,16 +1141,7 @@ impl QueryEngine {
     /// The lexing and parsing views resolution reads, without copying them.
     fn syntax_views(&mut self, definition: &DefPath) -> Result<(), QueryError> {
         self.syntax_view(definition, QueryKind::Lex)?;
-        let snapshot = self.snapshot(definition)?;
-        let range = snapshot.file.tree.items[snapshot.item.0 as usize].owned_tokens;
-        if snapshot
-            .file
-            .tokens
-            .get(range.start as usize..range.end as usize)
-            .is_none()
-        {
-            return Err(QueryError::NotImplemented);
-        }
+        self.snapshot(definition)?;
         self.syntax_view(definition, QueryKind::Parse)
     }
     /// The signature's shared output: cache hits never copy it.
@@ -1068,7 +1189,7 @@ impl QueryEngine {
             groups: BTreeMap::new(),
         };
         let result = match adapter {
-            Some(adapter) => adapter.resolve(snapshot.file.clone(), snapshot.item, &mut recorder),
+            Some(adapter) => adapter.resolve(snapshot.clone(), &mut recorder),
             None => recorder.engine.missing(QueryKind::Resolve),
         };
         let representations = recorder.representations;
@@ -1151,7 +1272,7 @@ impl QueryEngine {
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
         let snapshot = self.snapshot(definition)?;
-        if let Some(body) = generation::generator(&snapshot.file, snapshot.item) {
+        if let Some(body) = generation::generator(&snapshot) {
             return self.generated_check_query(definition, snapshot, body);
         }
         let resolution = self.resolve_query(definition)?;
@@ -1192,8 +1313,7 @@ impl QueryEngine {
         };
         let result = match adapter {
             Some(adapter) => adapter.check(
-                snapshot.file.clone(),
-                snapshot.item,
+                snapshot.clone(),
                 resolution.value.clone(),
                 &signature.value,
                 &mut recorder,
@@ -1463,7 +1583,7 @@ impl DefinitionQueries for QueryEngine {
             return self.missing(QueryKind::Parse);
         };
         self.last_phase = Some(QueryKind::Parse);
-        let mut output = match parser.parse(file, tokens.value, context, &self.sources) {
+        let mut output = match parser.parse(file, tokens.value, context, &mut self.sources) {
             Ok(output) => output,
             Err(error) => {
                 // This fixed implementation limit is deterministic for an exact
@@ -1481,8 +1601,8 @@ impl DefinitionQueries for QueryEngine {
         let mut diagnostics = tokens.diagnostics;
         diagnostics.append(&mut output.diagnostics);
         if context.package.name_is("std") {
-            for id in &output.value.roots {
-                let item = &output.value.tree.items[id.0 as usize];
+            for syntax in &output.value.items {
+                let item = &syntax.item;
                 let mut core = item.definition.clone();
                 core.0.package = DefPath::core("Result").0.package;
                 if !core.0.modules.is_empty() && self.registry.get(&core).is_some() {
@@ -1501,7 +1621,7 @@ impl DefinitionQueries for QueryEngine {
         let result = if has_errors(&output.diagnostics) {
             Err(QueryError::Diagnostics(output.diagnostics.clone()))
         } else {
-            self.index(&output.value, context).map(|_| output)
+            self.index(&mut output.value, context).map(|_| output)
         };
         self.parsed.insert(
             file,
@@ -1662,12 +1782,8 @@ impl TirProvider for QueryEngine {
             .iter()
             .filter_map(|(path, items)| {
                 let item = items.first()?;
-                matches!(
-                    item.file.tree.items[item.item.0 as usize].kind,
-                    ItemKind::Const { .. }
-                )
-                .then(|| {
-                    let site = item.file.tree.items[item.item.0 as usize].name_span;
+                matches!(item.item.kind, ItemKind::Const { .. }).then(|| {
+                    let site = self.sources.resolve(item.item.name_span);
                     (
                         self.sources.file(site.file).unwrap().path.clone(),
                         site.start,
@@ -1788,6 +1904,11 @@ impl SignatureProvider for Recorder<'_> {
             result
         }
     }
+    fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
+        let cited = self.engine.cited_name(&self.owner, definition);
+        self.reads.citations.push((definition.clone(), cited));
+        cited
+    }
     fn lookup(
         &mut self,
         context: &FileContext,
@@ -1862,11 +1983,12 @@ fn shared_output<T>(output: QueryOutput<T>) -> QueryOutput<std::sync::Arc<T>> {
     }
 }
 
-fn header_span(file: &SyntaxFile, item: &hirsel_syntax::Item) -> Span {
+fn header_span(syntax: &ItemSyntax) -> Span {
+    let item = &syntax.item;
     let end = match item.kind {
         ItemKind::Function {
             body: Some(body), ..
-        } => file.tree.expressions[body.0 as usize].origin.span.start,
+        } => syntax.tree.expressions[body.0 as usize].origin.span.start,
         _ => item.origin.span.end,
     };
     Span {

@@ -177,7 +177,8 @@ fn repeated_inferred_closure_calls_keep_verdicts_and_each_call_site() {
         );
         assert!(diagnostic.notes.is_empty());
     }
-    assert!(diagnostics[0].primary.start < diagnostics[1].primary.start);
+    let start = |span| engine.sources.resolve(span).start;
+    assert!(start(diagnostics[0].primary) < start(diagnostics[1].primary));
 }
 
 #[test]

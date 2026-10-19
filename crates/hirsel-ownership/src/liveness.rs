@@ -9,6 +9,7 @@ use super::properties::Properties;
 use super::source_rows::SourceRows;
 use super::*;
 use hirsel_syntax::StmtKind;
+use hirsel_syntax::SyntaxTree;
 use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

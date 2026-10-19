@@ -44,7 +44,9 @@ pub(crate) struct PackageImage {
     generated: BTreeMap<DefPath, GeneratedSource>,
     source_revision: u64,
     cache_sequence: u64,
-    items: Base<DefPath, Vec<ItemSnapshot>>,
+    /// Where the builder's anchors stand; engines hold the same FileIds.
+    anchors: Arc<[(hirsel_span::Anchor, FileId, u32)]>,
+    items: Base<DefPath, Vec<Arc<ItemSyntax>>>,
     parsed: Base<FileId, ParsedFile>,
     syntax_keys: Base<(DefPath, QueryKind), DefinitionKey>,
     signatures: Base<DefPath, Arc<Cached<hirsel_types::SignatureRef>>>,
@@ -258,8 +260,8 @@ impl PackageImage {
         Self::freeze(engine, adopted, None, input.files.len())
     }
 
-    /// Adopt `artifacts` (when given) and `lowerings` on `base`, rebasing their
-    /// FileIds to this placement once, then validate every package once.
+    /// Adopt `artifacts` (when given) and `lowerings` on `base`, placing their
+    /// anchors at this placement's files, then validate every package once.
     fn adopt(
         base: &PackageImage,
         input: &ImageInput,
@@ -284,19 +286,15 @@ impl PackageImage {
                 )
             })
             .collect();
-        let moves = |sites_of: &[(FileId, PackageId, usize, u32)]| -> Vec<_> {
-            sites_of
-                .iter()
-                .map(|(old, id, index, len)| (*old, sites[&(id.clone(), *index)], *len))
-                .collect()
-        };
         if let Some(artifacts) = &artifacts {
             for artifact in artifacts.iter().flatten() {
-                engine.adopt_package_snapshot(&artifact.snapshot, &moves(&artifact.sites));
+                engine.place_anchors(&artifact.sites, &sites);
+                engine.adopt_package_snapshot(&artifact.snapshot);
             }
         }
         for lowering in lowerings.iter().flat_map(BTreeMap::values) {
-            engine.adopt_package_snapshot(&lowering.snapshot, &moves(&lowering.sites));
+            engine.place_anchors(&lowering.sites, &sites);
+            engine.adopt_package_snapshot(&lowering.snapshot);
         }
         let adopted = base
             .adopted
@@ -344,6 +342,7 @@ impl PackageImage {
             generated: std::mem::take(&mut engine.generated),
             source_revision: engine.source_revision,
             cache_sequence: engine.cache_sequence,
+            anchors: engine.sources.anchors().collect(),
             items: engine.items.freeze(),
             parsed: engine.parsed.freeze(),
             syntax_keys: engine.syntax_keys.freeze(),
@@ -385,6 +384,9 @@ impl QueryEngine {
             assert_eq!(placed, *file, "package image source placement");
         }
         self.generated = image.generated.clone();
+        for &(anchor, file, base) in image.anchors.iter() {
+            self.sources.move_anchor(anchor, file, base);
+        }
         self.source_revision = image.source_revision;
         self.cache_sequence = image.cache_sequence;
         self.comptime_runtime = None;

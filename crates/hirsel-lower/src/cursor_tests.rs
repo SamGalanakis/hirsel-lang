@@ -21,7 +21,7 @@ fn declaration(f: &mut Fixture, path: DefPath, mut kind: SignatureKind) {
         let mut abstract_type = |t| {
             map_parameter_references(&mut types, t, |p, depth| {
                 Ok(match p {
-                    ParameterRef::Body { scope, parameter } if scope == f.owner => {
+                    ParameterRef::Body { scope, parameter } if scope == f.scope(f.owner) => {
                         ParameterRef::Bound { depth, parameter }
                     }
                     p => p,
@@ -229,7 +229,7 @@ fn fixture() -> (Fixture, ExprId) {
     });
     let result = f.read(binding, f.scalar, UseKind::Copy);
     let root = f.block(vec![count, statement], result);
-    f.plans = Plans::from_body(&f.tree, &f.checked, &producer, root).unwrap();
+    f.plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, root).unwrap();
     let open = core("$intrinsic.UnicodeScalars_open");
     let next = core("$intrinsic.UnicodeScalars_next");
     operation(

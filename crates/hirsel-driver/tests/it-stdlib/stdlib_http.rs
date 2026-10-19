@@ -45,13 +45,15 @@ fn details(e: &ToolError) -> String {
         } => d
             .iter()
             .map(|d| {
-                let file = sources.file(d.primary.file).unwrap();
+                let file = sources.file(sources.resolve(d.primary).file).unwrap();
                 format!(
                     "{} {:?} {} at {}",
                     file.path.display(),
                     d.rule,
                     d.message,
-                    file.location(d.primary.start).unwrap().line
+                    file.location(sources.resolve(d.primary).start)
+                        .unwrap()
+                        .line
                 )
             })
             .collect::<Vec<_>>()

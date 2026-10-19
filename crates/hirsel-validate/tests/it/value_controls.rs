@@ -447,7 +447,7 @@ fn fresh_local_capture_requires_the_slots_current_global_content() {
 fn captured_name(second_carrier: bool) -> Fixture {
     let mut f = copied_capture_fixture(Uniqueness::Aliased, Uniqueness::Aliased);
     let name = Origin {
-        root: OriginRoot::Expression(hirsel_syntax::ExprId(71)),
+        root: OriginRoot::Expression(lexical(), hirsel_syntax::ExprId(71)),
         fields: vec![].into(),
     };
     let named = f.body().places.len() as u32;
@@ -536,14 +536,14 @@ fn loop_owner_introduction(kind: OriginBindingKind) -> Fixture {
     f.body().parameters.push(LocalId(condition));
     let handle = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Temporary);
     let name = Origin {
-        root: OriginRoot::Expression(hirsel_syntax::ExprId(71)),
+        root: OriginRoot::Expression(lexical(), hirsel_syntax::ExprId(71)),
         fields: vec![].into(),
     };
     row(&mut f, handle, |t| t.brand.alternatives.push(name.clone()));
     let named = PlaceId(f.body().places.len() as u32);
     let mut access = f.body().places[owner as usize].clone();
     access.binding = Some(Origin {
-        root: OriginRoot::Expression(hirsel_syntax::ExprId(71)),
+        root: OriginRoot::Expression(lexical(), hirsel_syntax::ExprId(71)),
         fields: vec![].into(),
     });
     f.body().places.push(access);
@@ -678,7 +678,7 @@ fn parameter_alias(kind: OriginBindingKind) -> Fixture {
     });
     let mut alias = f.body().places[owner as usize].clone();
     alias.binding = Some(Origin {
-        root: OriginRoot::Expression(hirsel_syntax::ExprId(71)),
+        root: OriginRoot::Expression(lexical(), hirsel_syntax::ExprId(71)),
         fields: vec![].into(),
     });
     let alias_id = PlaceId(f.body().places.len() as u32);

@@ -94,54 +94,60 @@ struct Shape {
 }
 
 /// Resolves one definition, so local numbering cannot depend on declaration order.
-/// SyntaxFile may include other headers, but resolution never walks their bodies.
+/// The other items of `file` supply header fixtures, but resolution never walks
+/// their bodies.
 pub fn resolve_item(
     file: &SyntaxFile,
-    item: ItemId,
+    syntax: &ItemSyntax,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
 ) -> ResolveOutput {
-    resolve_item_with_expected(file, item, index, provider, &ExpectedTypes::default())
+    resolve_item_with_expected(file, syntax, index, provider, &ExpectedTypes::default())
 }
 
-/// Syntax read domain. File permits local header fixtures; Item and Header
-/// require every other declaration to come through the signature provider.
+/// Syntax read domain. File permits local header fixtures from the file's
+/// items; Item and Header require every other declaration to come through the
+/// signature provider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveView {
-    File(ItemId),
-    Item(ItemId),
-    Header(ItemId),
-}
-impl ResolveView {
-    fn item(self) -> ItemId {
-        match self {
-            Self::File(item) | Self::Item(item) | Self::Header(item) => item,
-        }
-    }
+    File,
+    Item,
+    Header,
 }
 
 pub fn resolve_item_with_expected(
     file: &SyntaxFile,
-    item: ItemId,
+    syntax: &ItemSyntax,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
 ) -> ResolveOutput {
-    resolve_view(file, ResolveView::File(item), index, provider, expected)
+    resolve_view(
+        syntax,
+        &file.items,
+        ResolveView::File,
+        index,
+        provider,
+        expected,
+    )
 }
 
 /// Resolve the selected domain without modifying syntax or its arena identities.
+/// `siblings` are the items of the resolved item's file: their written variant
+/// names and signatures serve as same-file fallbacks.
 pub fn resolve_view(
-    file: &SyntaxFile,
+    syntax: &ItemSyntax,
+    siblings: &[std::sync::Arc<ItemSyntax>],
     view: ResolveView,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
 ) -> ResolveOutput {
-    let item = view.item();
-    let definition = &file.tree.items[item.0 as usize].definition;
+    let definition = &syntax.item.definition;
     let mut resolver = Resolver {
-        file,
+        syntax,
+        siblings,
+        lexical: syntax.owner(),
         view,
         index,
         provider,
@@ -175,7 +181,7 @@ pub fn resolve_view(
         declaring: vec![],
         deferred: vec![],
     };
-    resolver.item(item);
+    resolver.item();
     let value = &mut resolver.output.query.value;
     value.expressions.sort_by_key(|(id, _)| *id);
     value.expressions.dedup();
@@ -193,7 +199,12 @@ pub fn resolve_view(
 }
 
 struct Resolver<'a, P: ?Sized> {
-    file: &'a SyntaxFile,
+    /// The item being read: the resolved one, or a same-file header fixture.
+    syntax: &'a ItemSyntax,
+    /// The items of the resolved item's file.
+    siblings: &'a [std::sync::Arc<ItemSyntax>],
+    /// The owner of the resolved item's lexical sites.
+    lexical: LexicalOwner,
     view: ResolveView,
     index: &'a ManifestIndex,
     provider: &'a mut P,
@@ -228,7 +239,7 @@ struct Resolver<'a, P: ?Sized> {
     generator_parameters: Vec<Symbol>,
 }
 
-impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
+impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
     fn spelling(&self, symbol: Symbol) -> String {
         symbol.as_str().to_owned()
     }
@@ -500,11 +511,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     fn origin(&self, site: NameSite) -> Origin {
         match site {
-            NameSite::Item(id) => self.file.tree.items[id.0 as usize].origin,
-            NameSite::Expression(id) => self.file.tree.expressions[id.0 as usize].origin,
-            NameSite::Statement(id) => self.file.tree.statements[id.0 as usize].origin,
-            NameSite::Type(id) => self.file.tree.types[id.0 as usize].origin,
-            NameSite::Pattern(id) => self.file.tree.patterns[id.0 as usize].origin,
+            NameSite::Item => self.syntax.item.origin,
+            NameSite::Expression(id) => self.syntax.tree.expressions[id.0 as usize].origin,
+            NameSite::Statement(id) => self.syntax.tree.statements[id.0 as usize].origin,
+            NameSite::Type(id) => self.syntax.tree.types[id.0 as usize].origin,
+            NameSite::Pattern(id) => self.syntax.tree.patterns[id.0 as usize].origin,
         }
     }
     fn generics(&mut self, generics: &[GenericParam], span: Span) {
@@ -514,7 +525,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .unwrap()
             .owner
             .expect("generic declaration has an owner");
-        let name_spans = self.file.generic_name_spans(self.origin(owner));
+        let name_spans = self.syntax.tree.generic_name_spans(self.origin(owner));
         let declarations = generics
             .iter()
             .map(|p| match &p.kind {
@@ -527,8 +538,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 },
             })
             .collect();
+        let scope = self.lexical.site(owner);
         if !generics.is_empty() {
-            self.output.generic_declarations.insert(owner, declarations);
+            self.output.generic_declarations.insert(scope, declarations);
         }
         for (ordinal, parameter) in generics.iter().enumerate() {
             if self.generic(parameter.name).is_some() || self.value(parameter.name).is_some() {
@@ -541,11 +553,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
             let name = match parameter.kind {
                 GenericKind::Type(_) => {
-                    let id = TypeParameterRef::body(owner, TypeParamId(ordinal as u32));
+                    let id = TypeParameterRef::body(scope, TypeParamId(ordinal as u32));
                     GenericName::Type(id)
                 }
                 GenericKind::Size => {
-                    let id = SizeParameterRef::body(owner, SizeParamId(ordinal as u32));
+                    let id = SizeParameterRef::body(scope, SizeParamId(ordinal as u32));
                     GenericName::Size(id)
                 }
             };
@@ -572,15 +584,15 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 .insert(parameter.name, name);
         }
     }
-    fn item(&mut self, id: ItemId) {
-        let item = self.file.tree.items[id.0 as usize].clone();
-        self.scopes.last_mut().unwrap().owner = Some(NameSite::Item(id));
+    fn item(&mut self) {
+        let item = self.syntax.item.clone();
+        self.scopes.last_mut().unwrap().owner = Some(NameSite::Item);
         self.exported = item.visibility != Visibility::Private;
         match item.kind {
             ItemKind::Function {
                 signature, body, ..
             } => {
-                let result = self.function_header(&signature, item.origin.span, NameSite::Item(id));
+                let result = self.function_header(&signature, item.origin.span, NameSite::Item);
                 self.exported = false;
                 self.return_type = result.clone();
                 // CT-5: a generated body binds the declared parameters by its
@@ -599,7 +611,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     }
                 }
                 if let Some(body) = body
-                    && !matches!(self.view, ResolveView::Header(_))
+                    && !matches!(self.view, ResolveView::Header)
                 {
                     self.expr(body, result);
                 }
@@ -610,7 +622,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 }
                 let expected = self.type_expr(ty);
                 self.exported = false;
-                if !matches!(self.view, ResolveView::Header(_)) {
+                if !matches!(self.view, ResolveView::Header) {
                     self.expr(value, expected);
                 }
             }
@@ -650,7 +662,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                             Ok(definition) => self
                                 .output
                                 .paths
-                                .push((NameSite::Item(id), ResolvedName::Definition(definition))),
+                                .push((NameSite::Item, ResolvedName::Definition(definition))),
                             Err(e) => self.lookup_diagnostic(&e, path, span),
                         }
                     }
@@ -661,14 +673,13 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                             if let Some(GenericName::Type(parameter)) =
                                 self.generic(path.segments[0])
                             {
-                                self.output.paths.push((
-                                    NameSite::Item(id),
-                                    ResolvedName::TypeParameter(parameter),
-                                ));
+                                self.output
+                                    .paths
+                                    .push((NameSite::Item, ResolvedName::TypeParameter(parameter)));
                                 continue;
                             }
                         }
-                        self.extra_path(&path, item.origin.span, NameSite::Item(id));
+                        self.extra_path(&path, item.origin.span, NameSite::Item);
                     }
                 }
                 // Opaque representation is not part of an external signature.
@@ -700,7 +711,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     }
                     TypeBody::Variants(variants) => {
                         let mut names = BTreeSet::new();
-                        let name_spans = self.file.variant_name_spans(item.origin);
+                        let name_spans = self.syntax.tree.variant_name_spans(item.origin);
                         for (ordinal, variant) in variants.into_iter().enumerate() {
                             if !names.insert(variant.name) {
                                 self.diagnostic(
@@ -746,7 +757,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         ExpectedType::nominal(item.definition),
                     );
                     self.output.drop_binding = Some(binding);
-                    if !matches!(self.view, ResolveView::Header(_)) {
+                    if !matches!(self.view, ResolveView::Header) {
                         self.expr(drop.body, ExpectedType::Unknown);
                     }
                     self.scopes.pop();
@@ -784,7 +795,8 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         name: ResolvedName::Parameter(ParamId(i as u32)),
                         expected,
                         span: self
-                            .file
+                            .syntax
+                            .tree
                             .parameter_name_span(origin, parameter)
                             .unwrap_or(span),
                         owner: Some(site.clone()),
@@ -809,7 +821,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
         }
         if let Some(paths) = &signature.uses {
-            let path_spans = self.file.uses_path_spans(origin);
+            let path_spans = self.syntax.tree.uses_path_spans(origin);
             for (ordinal, path) in paths.iter().enumerate() {
                 self.extra_path(
                     path,
@@ -836,7 +848,8 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 {
                     self.diagnostic(
                         const { RuleId::of("LANG-12") },
-                        self.file
+                        self.syntax
+                            .tree
                             .parameter_label_span(origin, parameter)
                             .unwrap_or(span),
                         "duplicate parameter label",
@@ -848,7 +861,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         result
     }
     fn type_expr(&mut self, id: TypeExprId) -> ExpectedType {
-        let node = self.file.tree.types[id.0 as usize].clone();
+        let node = self.syntax.tree.types[id.0 as usize].clone();
         match node.kind {
             TypeExprKind::Named { path, arguments } => {
                 let expected = if path.package.is_none() && path.segments.len() == 1 {
@@ -1199,7 +1212,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     /// Reads only a written type annotation, never an initializer/body.
     fn hint(&self, id: TypeExprId) -> ExpectedType {
-        match &self.file.tree.types[id.0 as usize].kind {
+        match &self.syntax.tree.types[id.0 as usize].kind {
             TypeExprKind::Named { path, arguments } => {
                 if path.package.is_none()
                     && let [name] = path.segments[..]
@@ -1322,29 +1335,27 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     /// Header-only adapter for written same-file type signatures: runs `f` on
     /// the body of `owner`'s declaration with its generics bound to
-    /// `arguments`. Type IDs here belong to this SyntaxFile, not to a foreign store.
+    /// `arguments`. Type IDs here belong to the declaring item's arenas, not
+    /// to a foreign store.
     fn type_header<R>(
         &mut self,
         owner: &DefPath,
         arguments: &[ExpectedType],
         f: impl FnOnce(&mut Self, TypeBody) -> R,
     ) -> Option<R> {
-        let item = self
-            .file
-            .tree
-            .items
-            .iter()
-            .enumerate()
-            .find(|(index, item)| {
-                &item.definition == owner
-                    && (matches!(self.view, ResolveView::File(_))
-                        || *index == self.view.item().0 as usize)
-            })
-            .map(|(_, item)| item)
-            .cloned()?;
-        let ItemKind::Type { generics, body, .. } = item.kind else {
+        let fixture = match self.view {
+            ResolveView::File => self
+                .siblings
+                .iter()
+                .map(|item| &**item)
+                .find(|item| &item.item.definition == owner),
+            _ => Some(self.syntax).filter(|item| &item.item.definition == owner),
+        }?;
+        let ItemKind::Type { generics, body, .. } = fixture.item.kind.clone() else {
             return None;
         };
+        // Read from the declaring item's own arenas.
+        let old_syntax = std::mem::replace(&mut self.syntax, fixture);
         let old_context = std::mem::replace(
             &mut self.context,
             FileContext {
@@ -1361,6 +1372,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 .collect(),
         );
         let result = f(self, body);
+        self.syntax = old_syntax;
         self.context = old_context;
         self.type_arguments = old_arguments;
         Some(result)
@@ -1402,13 +1414,13 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     fn syntax_expected(&mut self, id: TypeExprId) -> ExpectedType {
         let hint = self.hint(id);
-        match self.file.tree.types[id.0 as usize].kind.clone() {
+        match self.syntax.tree.types[id.0 as usize].kind.clone() {
             TypeExprKind::Named { path, arguments } => {
                 let definition = match hint {
                     ExpectedType::Named { definition, .. } => definition,
                     // A referenced header need not itself have been resolved yet.
                     ExpectedType::Unknown => {
-                        let span = self.file.tree.types[id.0 as usize].origin.span;
+                        let span = self.syntax.tree.types[id.0 as usize].origin.span;
                         let Ok(definition) = self.lookup(&path, span) else {
                             return ExpectedType::Unknown;
                         };
@@ -1527,10 +1539,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     fn declared_variant(&mut self, name: Symbol, core: bool) -> bool {
         let headers = self
-            .file
-            .tree
-            .items
+            .siblings
             .iter()
+            .map(|syntax| &syntax.item)
             .filter_map(|item| {
                 if let ItemKind::Type {
                     body: TypeBody::Variants(variants),
@@ -1643,7 +1654,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .get(&id)
             .cloned()
             .unwrap_or(expected);
-        let node = self.file.tree.expressions[id.0 as usize].clone();
+        let node = self.syntax.tree.expressions[id.0 as usize].clone();
         let span = node.origin.span;
         match node.kind {
             ExprKind::Path(path) => self.expression_path(id, &path, expected, span),
@@ -1981,32 +1992,32 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     }
                 }
                 // Written same-file signatures work without a provider.
-                if let Some(item) = self
-                    .file
-                    .tree
-                    .items
+                if let Some(fixture) = self
+                    .siblings
                     .iter()
-                    .find(|i| i.definition == definition)
-                    .cloned()
+                    .find(|i| i.item.definition == definition)
                 {
-                    match item.kind {
-                        ItemKind::Function { signature, .. } => {
-                            return ExpectedType::Function {
-                                parameters: signature
-                                    .parameters
-                                    .iter()
-                                    .map(|p| self.syntax_expected(p.ty))
-                                    .collect(),
-                                result: Box::new(
-                                    signature
-                                        .result
-                                        .map(|id| self.syntax_expected(id))
-                                        .unwrap_or_default(),
-                                ),
-                            };
-                        }
-                        ItemKind::Const { ty, .. } => return self.syntax_expected(ty),
-                        _ => {}
+                    let old_syntax = std::mem::replace(&mut self.syntax, fixture);
+                    let written = match fixture.item.kind.clone() {
+                        ItemKind::Function { signature, .. } => Some(ExpectedType::Function {
+                            parameters: signature
+                                .parameters
+                                .iter()
+                                .map(|p| self.syntax_expected(p.ty))
+                                .collect(),
+                            result: Box::new(
+                                signature
+                                    .result
+                                    .map(|id| self.syntax_expected(id))
+                                    .unwrap_or_default(),
+                            ),
+                        }),
+                        ItemKind::Const { ty, .. } => Some(self.syntax_expected(ty)),
+                        ItemKind::Type { .. } => None,
+                    };
+                    self.syntax = old_syntax;
+                    if let Some(written) = written {
+                        return written;
                     }
                 }
                 expected
@@ -2109,7 +2120,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         Some((binding.name, expected))
     }
     fn dot_path(&self, id: ExprId) -> Option<Path> {
-        match &self.file.tree.expressions[id.0 as usize].kind {
+        match &self.syntax.tree.expressions[id.0 as usize].kind {
             ExprKind::Path(path) => Some(path.clone()),
             ExprKind::Field { base, field } => {
                 let mut path = self.dot_path(*base)?;
@@ -2143,7 +2154,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     ) -> ExpectedType {
         self.callees.insert(callee);
         let callee_type = self.expr(callee, expected.clone());
-        let span = self.file.tree.expressions[callee.0 as usize].origin.span;
+        let span = self.syntax.tree.expressions[callee.0 as usize].origin.span;
         let mut fields = vec![];
         let mut owner_variant = None;
         if let Some((_, ContextualName::Variant { owner, variant })) = self
@@ -2229,14 +2240,14 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         }
     }
     fn statement_names(&self, id: StmtId) -> Vec<Symbol> {
-        match &self.file.tree.statements[id.0 as usize].kind {
+        match &self.syntax.tree.statements[id.0 as usize].kind {
             StmtKind::Function { name, .. } => vec![*name],
             StmtKind::Let { pattern, .. } => self.pattern_names(*pattern),
             _ => vec![],
         }
     }
     fn pattern_names(&self, id: PatternId) -> Vec<Symbol> {
-        match &self.file.tree.patterns[id.0 as usize].kind {
+        match &self.syntax.tree.patterns[id.0 as usize].kind {
             PatternKind::Binding(name) => vec![*name],
             PatternKind::Tuple(patterns) => patterns
                 .iter()
@@ -2251,7 +2262,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         }
     }
     fn statement(&mut self, id: StmtId) {
-        let statement = self.file.tree.statements[id.0 as usize].clone();
+        let statement = self.syntax.tree.statements[id.0 as usize].clone();
         match statement.kind {
             StmtKind::Let {
                 pattern,
@@ -2350,7 +2361,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     fn pattern(&mut self, id: PatternId, expected: ExpectedType) {
         let expected = self.expected.patterns.get(&id).cloned().unwrap_or(expected);
-        let node = self.file.tree.patterns[id.0 as usize].clone();
+        let node = self.syntax.tree.patterns[id.0 as usize].clone();
         match node.kind {
             PatternKind::Binding(name) => {
                 let variant = self
@@ -2404,7 +2415,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                             "every alternative binds the same names; this one does not bind `{}`",
                             self.spelling(name)
                         );
-                        let span = self.file.tree.patterns[alternative.0 as usize].origin.span;
+                        let span = self.syntax.tree.patterns[alternative.0 as usize]
+                            .origin
+                            .span;
                         self.diagnostic(const { RuleId::of("LANG-13") }, span, message);
                     }
                 }

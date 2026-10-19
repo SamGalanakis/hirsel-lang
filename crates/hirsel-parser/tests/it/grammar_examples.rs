@@ -228,32 +228,42 @@ fn snapshots_pin_every_declaration_and_expression_family() {
     for (name, source) in fixtures {
         let file = clean(source);
         let mut snapshot = format!("{source}\n\n");
-        for (i, item) in file.tree.items.iter().enumerate() {
+        for (i, syntax) in file.items.iter().enumerate() {
+            // Anchors are process-unique: show every span relative to anchor 0,
+            // which also checks that re-anchoring reaches every span.
+            let mut syntax = (**syntax).clone();
+            syntax.reanchor(hirsel_span::Anchor(0));
+            let debug = format!("{syntax:?}");
+            assert!(
+                !debug.replace("Anchor(0)", "").contains("Anchor("),
+                "an item span kept its anchor: {debug}"
+            );
+            let (item, tree) = (&syntax.item, &syntax.tree);
             snapshot.push_str(&format!(
-                "item {i} {:?} {:?} {:?} hash={:02x?}\n  {:?} {:?}\n  {:?}\n",
+                "item {i} {:?} {:?} occurrence={} hash={:02x?}\n  {:?} {:?}\n  {:?}\n",
                 item.definition,
                 item.origin,
-                item.owned_tokens,
-                item.text_hash.0,
+                syntax.occurrence,
+                syntax.text_hash.0,
                 item.visibility,
                 item.attributes,
                 item.kind
             ));
-        }
-        for (i, expr) in file.tree.expressions.iter().enumerate() {
-            snapshot.push_str(&format!("expr {i} {:?}: {:?}\n", expr.origin, expr.kind));
-        }
-        for (i, stmt) in file.tree.statements.iter().enumerate() {
-            snapshot.push_str(&format!("stmt {i} {:?}: {:?}\n", stmt.origin, stmt.kind));
-        }
-        for (i, pattern) in file.tree.patterns.iter().enumerate() {
-            snapshot.push_str(&format!(
-                "pattern {i} {:?}: {:?}\n",
-                pattern.origin, pattern.kind
-            ));
-        }
-        for (i, ty) in file.tree.types.iter().enumerate() {
-            snapshot.push_str(&format!("type {i} {:?}: {:?}\n", ty.origin, ty.kind));
+            for (i, expr) in tree.expressions.iter().enumerate() {
+                snapshot.push_str(&format!("expr {i} {:?}: {:?}\n", expr.origin, expr.kind));
+            }
+            for (i, stmt) in tree.statements.iter().enumerate() {
+                snapshot.push_str(&format!("stmt {i} {:?}: {:?}\n", stmt.origin, stmt.kind));
+            }
+            for (i, pattern) in tree.patterns.iter().enumerate() {
+                snapshot.push_str(&format!(
+                    "pattern {i} {:?}: {:?}\n",
+                    pattern.origin, pattern.kind
+                ));
+            }
+            for (i, ty) in tree.types.iter().enumerate() {
+                snapshot.push_str(&format!("type {i} {:?}: {:?}\n", ty.origin, ty.kind));
+            }
         }
         insta::assert_snapshot!(name, snapshot);
     }
@@ -278,7 +288,7 @@ fn serializable_has_no_attribute_payload_or_value_modifier_form() {
 fn an_extern_carries_its_attached_doc_comments_as_its_contract() {
     let contract = |source: &str| {
         let file = clean(source);
-        let item = file.tree.items.last().unwrap();
+        let item = &file.items.last().unwrap().item;
         let ItemKind::Function { abi: Some(abi), .. } = &item.kind else {
             panic!("expected an extern");
         };

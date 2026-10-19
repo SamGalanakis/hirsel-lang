@@ -7,8 +7,8 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Shared source declarations with a separate lexical signature overlay.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenericDeclarations {
-    body: Arc<BTreeMap<NameSite, Arc<[GenericParameter]>>>,
-    permissions: Arc<BTreeMap<NameSite, Arc<[GenericParameter]>>>,
+    body: Arc<BTreeMap<SiteRef, Arc<[GenericParameter]>>>,
+    permissions: Arc<BTreeMap<SiteRef, Arc<[GenericParameter]>>>,
     bound: Option<Arc<BoundDeclarations>>,
     depth: i64,
     pub lexical: Option<LexicalContext>,
@@ -61,7 +61,7 @@ impl GenericDeclarations {
             ..Self::default()
         }
     }
-    pub fn insert(&mut self, scope: NameSite, parameters: Vec<GenericParameter>) {
+    pub fn insert(&mut self, scope: SiteRef, parameters: Vec<GenericParameter>) {
         if self.permissions.contains_key(&scope) {
             if Arc::strong_count(&self.permissions) > 1 {
                 work::count_by(
@@ -89,7 +89,7 @@ impl GenericDeclarations {
             body.insert(scope, parameters.into());
         }
     }
-    fn remove_lexical_parameters(&mut self, scope: NameSite) {
+    fn remove_lexical_parameters(&mut self, scope: SiteRef) {
         if let Some(context) = &mut self.lexical {
             if context.declarations.parameters.contains_key(&scope) {
                 if Arc::strong_count(&context.declarations) > 1 {
@@ -300,7 +300,7 @@ pub fn generic_authority_valid(
 /// One lexical declaration tree, shared by every body's constant-size view.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LexicalDeclarations {
-    parameters: BTreeMap<NameSite, (Vec<usize>, std::sync::Arc<[GenericParameter]>)>,
+    parameters: BTreeMap<SiteRef, (Vec<usize>, std::sync::Arc<[GenericParameter]>)>,
     intervals: Vec<(usize, usize)>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -312,11 +312,11 @@ impl GenericDeclarations {
     /// Build ancestry intervals once. Body scope identities may coincide only
     /// when both declarations are empty; an ambiguous generic binder is invalid.
     pub fn lexical(
-        scopes: Vec<(NameSite, Option<usize>, std::sync::Arc<[GenericParameter]>)>,
+        scopes: Vec<(SiteRef, Option<usize>, std::sync::Arc<[GenericParameter]>)>,
     ) -> Option<Vec<Self>> {
         let mut children = vec![vec![]; scopes.len()];
         let mut roots = vec![];
-        let mut parameters: BTreeMap<NameSite, (Vec<usize>, std::sync::Arc<[GenericParameter]>)> =
+        let mut parameters: BTreeMap<SiteRef, (Vec<usize>, std::sync::Arc<[GenericParameter]>)> =
             BTreeMap::new();
         for (index, (name, parent, declaration)) in scopes.iter().enumerate() {
             if let Some((owners, previous)) = parameters.get_mut(name) {
@@ -410,6 +410,9 @@ impl GenericDeclarations {
 #[cfg(test)]
 mod lexical_tests {
     use super::*;
+    pub(super) fn site(owner: &str, site: NameSite) -> SiteRef {
+        LexicalOwner::first(&hirsel_syntax::DefPath::core(owner)).site(site)
+    }
     #[test]
     fn nested_generic_scope_views_retain_one_declaration_tree() {
         for count in [32, 128] {
@@ -418,17 +421,19 @@ mod lexical_tests {
                 bounds: vec![Bound::Plain].into(),
             }]
             .into();
-            let mut scopes = vec![(NameSite::Item(hirsel_syntax::ItemId(0)), None, parameter)];
+            let mut scopes = vec![(site("f", NameSite::Item), None, parameter)];
             scopes.extend((1..=count).map(|index| {
                 (
-                    NameSite::Expression(hirsel_syntax::ExprId(index as u32)),
+                    site(
+                        "f",
+                        NameSite::Expression(hirsel_syntax::ExprId(index as u32)),
+                    ),
                     Some(index - 1),
                     std::sync::Arc::from([]),
                 )
             }));
             let declarations = GenericDeclarations::lexical(scopes).unwrap();
-            let owner =
-                TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(0)), TypeParamId(0));
+            let owner = TypeParameterRef::body(site("f", NameSite::Item), TypeParamId(0));
             for view in &declarations {
                 assert_eq!(view.bounds(owner), &[Bound::Plain]);
                 assert!(std::sync::Arc::ptr_eq(
@@ -451,6 +456,7 @@ mod lexical_tests {
 
 #[cfg(test)]
 mod sharing_tests {
+    use super::lexical_tests::site;
     use super::*;
     fn parameter(name: &str) -> GenericParameter {
         GenericParameter::Type {
@@ -460,8 +466,8 @@ mod sharing_tests {
     }
     #[test]
     fn proof_permissions_preserve_source_declarations_and_exact_binder_identity() {
-        let scope = NameSite::Item(hirsel_syntax::ItemId(0));
-        let other = NameSite::Item(hirsel_syntax::ItemId(1));
+        let scope = site("f", NameSite::Item);
+        let other = site("g", NameSite::Item);
         let original = GenericDeclarations::from_binders([
             (GenericBinder::Body(scope), vec![parameter("Body")]),
             (GenericBinder::Body(other), vec![parameter("Other")]),
@@ -496,14 +502,14 @@ mod sharing_tests {
     fn many_nonempty_body_binders_do_not_amplify_proof_copies() {
         let declarations = GenericDeclarations::from_binders((0..1600).map(|i| {
             (
-                GenericBinder::Body(NameSite::Expression(hirsel_syntax::ExprId(i))),
+                GenericBinder::Body(site("f", NameSite::Expression(hirsel_syntax::ExprId(i)))),
                 vec![parameter("T")],
             )
         }));
         let before = work::read(Counter::CopiedGenericDeclarationRows);
         for i in 0..1600 {
             let reference = TypeParameterRef::body(
-                NameSite::Expression(hirsel_syntax::ExprId(i)),
+                site("f", NameSite::Expression(hirsel_syntax::ExprId(i))),
                 TypeParamId(0),
             );
             let proof = declarations
@@ -517,8 +523,8 @@ mod sharing_tests {
     }
     #[test]
     fn lexical_empty_overrides_are_isolated_and_duplicate_scopes_still_validate() {
-        let scope = NameSite::Item(hirsel_syntax::ItemId(0));
-        let child = NameSite::Expression(hirsel_syntax::ExprId(1));
+        let scope = site("f", NameSite::Item);
+        let child = site("f", NameSite::Expression(hirsel_syntax::ExprId(1)));
         let declared: Arc<[GenericParameter]> = vec![parameter("T")].into();
         let mut views = GenericDeclarations::lexical(vec![
             (scope, None, declared.clone()),

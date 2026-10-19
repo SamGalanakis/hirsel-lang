@@ -81,7 +81,7 @@ pub(super) fn parse(
         Symbol::intern(s);
     }
     let lex = hirsel_lexer::lex(file, &map);
-    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &map);
+    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &mut map);
     let mut ds = lex.diagnostics;
     ds.extend(parsed.diagnostics);
     (parsed.syntax, map, ds)
@@ -171,7 +171,7 @@ pub(super) fn normalize_file(
                     },
                 )
             })
-            .chain(file.tree.items.iter().map(|i| {
+            .chain(file.items.iter().map(|s| &s.item).map(|i| {
                 (
                     i.definition.clone(),
                     DefinitionMetadata {
@@ -189,21 +189,20 @@ pub(super) fn normalize_file(
             .collect(),
         ..Default::default()
     };
-    let mut pending = file.roots.clone();
+    let mut pending: Vec<_> = file.items.iter().collect();
     let mut last = String::new();
-    for _ in 0..file.roots.len() + 1 {
+    for _ in 0..file.items.len() + 1 {
         let mut next = vec![];
-        for id in pending {
-            let r = hirsel_resolve::resolve_item(file, id, &registry.index.clone(), registry);
-            let item = &file.tree.items[id.0 as usize];
+        for syntax in pending {
+            let r = hirsel_resolve::resolve_item(file, syntax, &registry.index.clone(), registry);
+            let item = &syntax.item;
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
                 modules: item.definition.0.modules.clone(),
             };
             match hirsel_signature::normalize(
                 hirsel_check_protocol::header::Input {
-                    tree: &file.tree,
-                    item: id,
+                    syntax,
                     context: &ctx,
                     resolution: &r,
                     metadata: &metadata,
@@ -218,7 +217,7 @@ pub(super) fn normalize_file(
                         .insert(item.definition.clone(), Arc::new(out.value));
                 }
                 Err(e) => {
-                    next.push(id);
+                    next.push(syntax);
                     last = format!("{e:?}");
                 }
             }

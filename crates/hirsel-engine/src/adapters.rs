@@ -25,23 +25,24 @@ impl ParserPhase for ParserAdapter {
         file: FileId,
         tokens: Vec<Token>,
         context: &FileContext,
-        sources: &SourceMap,
+        sources: &mut SourceMap,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
         let result = hirsel_parser::parse(file, tokens, context, sources);
         if let Some(span) = result.nesting_limit {
             let location = sources.location(span);
+            let at = sources.resolve(span);
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "parser-tooling-limit".into(),
                 message: format!(
                     "tree height exceeds {} in {} at {:?} (bytes {}..{}); incomplete syntax judgment (issue #33)",
                     hirsel_parser::MAX_PARSE_DEPTH,
                     sources
-                        .file(span.file)
+                        .file(at.file)
                         .map(|f| f.path.display().to_string())
                         .unwrap_or_else(|| "<unknown>".into()),
                     location,
-                    span.start,
-                    span.end
+                    at.start,
+                    at.end
                 ),
             }));
         }
@@ -298,7 +299,11 @@ fn locate(
     let location = sources.location(span)?;
     Some(hirsel_run_schema::Site {
         definition: definition.to_string(),
-        file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
+        file: sources
+            .file(sources.resolve(span).file)?
+            .path
+            .to_string_lossy()
+            .into_owned(),
         line: location.line.into(),
         column: location.column.into(),
     })
@@ -376,7 +381,11 @@ pub fn project_outcome(
             site: limit.site.and_then(|span| {
                 let location = sources.location(span)?;
                 Some(Site {
-                    file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
+                    file: sources
+                        .file(sources.resolve(span).file)?
+                        .path
+                        .to_string_lossy()
+                        .into_owned(),
                     line: location.line.into(),
                     column: location.column.into(),
                     ..Default::default()

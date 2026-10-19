@@ -28,8 +28,8 @@ fn acyclic_dataflow_visits_follow_cfg_dependencies() {
                     hirsel_intern::work::read(hirsel_intern::work::Counter::OwnershipLivenessSteps),
                     hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateFlowSteps),
                 );
-                for id in &parsed.value.roots {
-                    let path = &parsed.value.tree.items[id.0 as usize].definition;
+                for id in &parsed.value.items {
+                    let path = &id.item.definition;
                     let output = engine.lower_to_tir(path).unwrap();
                     assert!(output.diagnostics.is_empty());
                 }

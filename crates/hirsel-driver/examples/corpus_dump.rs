@@ -21,8 +21,8 @@ fn main() {
                 for diagnostic in &parsed.diagnostics {
                     println!("diagnostic\t{diagnostic:?}");
                 }
-                for root in &parsed.value.roots {
-                    let path = &parsed.value.tree.items[root.0 as usize].definition;
+                for syntax in &parsed.value.items {
+                    let path = &syntax.item.definition;
                     match engine.lower_to_tir(path) {
                         Err(error) => println!("error\t{}\t{error:?}", path.0.name),
                         Ok(definition) => {

@@ -201,7 +201,7 @@ impl KeyEncoder<'_> {
             NameSite::Pattern(id) => ("pattern", id.0),
             NameSite::Type(id) => ("type", id.0),
             NameSite::Statement(id) => ("statement", id.0),
-            NameSite::Item(id) => ("item", id.0),
+            NameSite::Item => ("item", 0),
         };
         self.tag(kind);
         self.number(u64::from(index));
@@ -219,7 +219,9 @@ impl KeyEncoder<'_> {
             }
             hirsel_types::BinderRef::Body { scope, parameter } => {
                 self.tag("body");
-                self.name_site(scope);
+                self.path(scope.owner.def.path());
+                self.number(u64::from(scope.owner.occurrence));
+                self.name_site(scope.site);
                 self.number(u64::from(parameter.ordinal()));
             }
         }

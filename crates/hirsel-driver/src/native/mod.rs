@@ -69,8 +69,16 @@ pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
         .source_owners
         .iter()
         .filter_map(|(definition, owner)| {
-            let file = input.sources.file(owner.syntax.file)?;
-            Some((definition.clone(), file.clone()))
+            let (file, base) = input.sources.anchor(owner.syntax.anchor)?;
+            let file = input.sources.file(file)?;
+            Some((
+                definition.clone(),
+                ProfileSource {
+                    path: file.path.clone(),
+                    file: file.clone(),
+                    base,
+                },
+            ))
         })
         .collect()
 }

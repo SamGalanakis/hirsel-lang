@@ -126,7 +126,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             types,
             projection_paths: Default::default(),
             body: Body {
-                parameter_scope: owner,
+                parameter_scope: decisions.lexical.site(owner),
                 locals: vec![],
                 places: vec![],
                 scopes: vec![Scope {
@@ -198,19 +198,18 @@ impl<'a, 'b> Builder<'a, 'b> {
             let place = this.slot(b.ty, Storage::Parameter, Span::default(), own);
             this.state.live.insert(this.root(place).0);
             this.body.parameters.push(this.root(place));
-            this.body.places[place.0 as usize].binding = Self::binding_origin(b.owner, &b.binding);
+            this.body.places[place.0 as usize].binding =
+                Self::binding_origin(decisions.lexical, b.owner, &b.binding);
             this.bindings.push((b.owner, b.binding, place));
         }
         // H's implicit finalizer self is a resolver local, but the runtime
         // supplies it at entry just like a borrowed parameter. Consume the
         // producer row rather than assigning a new resolver identity or type.
-        if let NameSite::Item(item) = this.owner {
-            if input.tree.items.get(item.0 as usize).is_some_and(|item| {
-                matches!(
-                    item.kind,
-                    hirsel_syntax::ItemKind::Type { drop: Some(_), .. }
-                )
-            }) {
+        if let NameSite::Item = this.owner {
+            if matches!(
+                input.syntax.item.kind,
+                hirsel_syntax::ItemKind::Type { drop: Some(_), .. }
+            ) {
                 let mut binders = decisions
                     .owners
                     .get(&this.owner)
@@ -233,7 +232,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 let place = this.slot(b.ty, Storage::Parameter, Span::default(), false);
                 this.state.live.insert(this.root(place).0);
                 this.body.parameters.push(this.root(place));
-                let origin = Self::binding_origin(b.owner, &b.binding).unwrap();
+                let origin = Self::binding_origin(decisions.lexical, b.owner, &b.binding).unwrap();
                 let place =
                     this.bind_origin(place, origin, OriginBindingKind::Alias, Span::default());
                 this.bindings.push((b.owner, b.binding.clone(), place));
@@ -274,7 +273,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             matches!(
                 origin.root,
                 hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body { scope, .. })
-                    if scope != self.owner
+                    if scope != self.decisions.lexical.site(self.owner)
             )
         });
         for local in &self.body.locals {
@@ -288,9 +287,9 @@ impl<'a, 'b> Builder<'a, 'b> {
                         hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body {
                             scope,
                             parameter,
-                        }) if scope != self.owner => {
+                        }) if scope != self.decisions.lexical.site(self.owner) => {
                             self.input.checked.bindings.iter().any(|binding| {
-                                binding.owner == scope
+                                self.decisions.lexical.site(binding.owner) == scope
                                     && binding.binding == ResolvedName::Parameter(parameter)
                             })
                         }
@@ -308,7 +307,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     // fixed name; this frame needs no runtime owner slot.
                     let enclosing_parameter = matches!(origin.root,
                         hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body { scope, .. })
-                            if scope != self.owner);
+                            if scope != self.decisions.lexical.site(self.owner));
                     if !captured_origins.contains(origin) && !enclosing_parameter {
                         self.origin_place(origin, local.span)?;
                     }
@@ -369,8 +368,13 @@ impl<'a, 'b> Builder<'a, 'b> {
     }
     fn origin_parameter(&self, id: hirsel_types::ParameterRef, span: Span) -> Result<PlaceId> {
         match id {
-            hirsel_types::ParameterRef::Body { scope, parameter } => {
-                self.lookup(&ResolvedName::Parameter(parameter), &scope, span)
+            hirsel_types::ParameterRef::Body { scope, parameter }
+                if scope.owner == self.decisions.lexical =>
+            {
+                self.lookup(&ResolvedName::Parameter(parameter), &scope.site, span)
+            }
+            hirsel_types::ParameterRef::Body { .. } => {
+                self.error(span, "another definition's parameter in body storage")
             }
             hirsel_types::ParameterRef::Bound { .. } => {
                 self.error(span, "unbound signature parameter in body storage")
@@ -393,6 +397,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     }
     pub fn span(&self, id: ExprId) -> Result<Span> {
         self.input
+            .syntax
             .tree
             .expressions
             .get(id.0 as usize)
@@ -460,11 +465,17 @@ impl<'a, 'b> Builder<'a, 'b> {
         });
         id
     }
-    pub fn binding_origin(owner: NameSite, binding: &ResolvedName) -> Option<hirsel_types::Origin> {
+    pub fn binding_origin(
+        lexical: hirsel_types::LexicalOwner,
+        owner: NameSite,
+        binding: &ResolvedName,
+    ) -> Option<hirsel_types::Origin> {
         use hirsel_types::{Origin, OriginRoot, ParameterRef};
         let root = match binding {
-            ResolvedName::Local(l) => OriginRoot::Local(*l),
-            ResolvedName::Parameter(p) => OriginRoot::Parameter(ParameterRef::body(owner, *p)),
+            ResolvedName::Local(l) => OriginRoot::Local(lexical, *l),
+            ResolvedName::Parameter(p) => {
+                OriginRoot::Parameter(ParameterRef::body(lexical.site(owner), *p))
+            }
             _ => return None,
         };
         Some(Origin {
@@ -484,7 +495,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             .collect();
         for (_, owner, origin) in joins {
             let name = match origin.root {
-                hirsel_types::OriginRoot::Local(l) => ResolvedName::Local(l),
+                hirsel_types::OriginRoot::Local(_, l) => ResolvedName::Local(l),
                 hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body {
                     parameter,
                     ..
@@ -506,7 +517,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             .collect();
         for (_, owner, origin, projections) in fields {
             let name = match origin.root {
-                hirsel_types::OriginRoot::Local(l) => ResolvedName::Local(l),
+                hirsel_types::OriginRoot::Local(_, l) => ResolvedName::Local(l),
                 hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body {
                     parameter,
                     ..
@@ -1377,11 +1388,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             }
             let inside = self
                 .input
+                .syntax
                 .tree
                 .expressions
                 .get(place.0 as usize)
                 .is_some_and(|e| {
-                    e.origin.span.file == span.file
+                    e.origin.span.anchor == span.anchor
                         && span.start <= e.origin.span.start
                         && e.origin.span.end <= span.end
                 });

@@ -21,8 +21,8 @@ fn measure_counters<const N: usize>(source: String, counters: [Counter; N]) -> [
     let parsed = engine.parse_file(file, &default_context()).unwrap();
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
     let before = counters.map(work::read);
-    for root in &parsed.value.roots {
-        let item = &parsed.value.tree.items[root.0 as usize];
+    for root in &parsed.value.items {
+        let item = &root.item;
         if matches!(item.kind, hirsel_syntax::ItemKind::Function { .. }) {
             let output = engine.lower_to_tir(&item.definition).unwrap();
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);

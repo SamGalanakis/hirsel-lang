@@ -492,7 +492,7 @@ impl Export {
             .collect();
         Rc::new(move |span| {
             tables
-                .get(span.file.0 as usize)
+                .get(span.anchor.0 as usize)
                 .and_then(|table| table.get(span.start as usize))
                 .cloned()
                 .unwrap_or_else(Location::unknown)

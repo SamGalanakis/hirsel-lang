@@ -19,7 +19,7 @@
 //! `Expired(r)`, otherwise `Finished(r)` (CONC-3).
 use super::builder::{Body, Cx};
 use super::iter::{local, option};
-use super::{BINDER, LibraryBody, Request, native_path};
+use super::{LibraryBody, Request, native_path};
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, instantiate_function};
 use hirsel_core_contract::{OperationId, Passing};
@@ -96,7 +96,7 @@ pub(super) fn intrinsic(
         return Err(PassError::Malformed(format!("{path:?} is not a function")));
     };
     let mut actuals = Actuals {
-        binder: (!arguments.is_empty()).then_some(BINDER),
+        binder: (!arguments.is_empty()).then(|| super::binder(&path)),
         store: cx.store.clone(),
         arguments,
         outer: Vec::new(),

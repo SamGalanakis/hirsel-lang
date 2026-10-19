@@ -44,7 +44,7 @@ pub fn path(name: &str) -> DefPath {
 }
 pub fn origin(n: u32) -> s::Origin {
     s::Origin {
-        span: Span::new(hirsel_span::FileId(0), n, n + 1).unwrap(),
+        span: Span::new(hirsel_span::Anchor(0), n, n + 1).unwrap(),
         tokens: TokenRange::default(),
     }
 }
@@ -67,7 +67,7 @@ pub fn function(parameters: Vec<hirsel_types::Parameter>, result: TypeId) -> Fun
     }
 }
 pub struct Fixture {
-    pub tree: SyntaxTree,
+    pub syntax: ItemSyntax,
     pub body: CheckedBody,
     pub signature: Signature,
     pub provider: Provider,
@@ -93,14 +93,12 @@ impl Fixture {
             fingerprint: Default::default(),
         };
         let name = Symbol::intern("example");
-        let tree = SyntaxTree {
-            items: vec![Item {
+        let syntax = ItemSyntax {
+            item: Item {
                 name_span: origin(0).span,
                 origin: origin(0),
-                owned_tokens: Default::default(),
                 name,
                 definition: path("example"),
-                text_hash: Default::default(),
                 visibility: Visibility::Private,
                 attributes: vec![],
                 kind: ItemKind::Function {
@@ -109,12 +107,15 @@ impl Fixture {
                     abi: None,
                 },
                 generated: None,
-            }],
-            ..Default::default()
+            },
+            tree: Default::default(),
+            anchor: hirsel_span::Anchor(0),
+            text_hash: Default::default(),
+            occurrence: 0,
         };
         Self {
-            tree,
             body: CheckedBody {
+                lexical: syntax.owner(),
                 tails: vec![],
                 places: vec![],
                 calls: vec![],
@@ -126,6 +127,7 @@ impl Fixture {
                 instantiations: vec![],
                 closures: vec![],
             },
+            syntax,
             signature,
             provider: Provider::default(),
             bytes,
@@ -158,7 +160,7 @@ impl Fixture {
         };
         let index = self.body.bindings.len();
         self.body.bindings.push(BindingDecision {
-            owner: NameSite::Item(ItemId(0)),
+            owner: NameSite::Item,
             binding: ResolvedName::Parameter(ParamId(p as u32)),
             site: NameSite::Type(TypeExprId(p as u32)),
             ty,
@@ -172,8 +174,8 @@ impl Fixture {
         index
     }
     pub fn expr(&mut self, kind: ExprKind, ty: TypeId) -> ExprId {
-        let id = ExprId(self.tree.expressions.len() as u32);
-        self.tree.expressions.push(Expr {
+        let id = ExprId(self.syntax.tree.expressions.len() as u32);
+        self.syntax.tree.expressions.push(Expr {
             origin: origin(id.0 * 10 + 10),
             kind,
         });
@@ -183,7 +185,9 @@ impl Fixture {
             usage: UseKind::Borrow,
             instantiated_arguments: vec![],
         });
-        if let ExprKind::Call { callee, arguments } = &self.tree.expressions[id.0 as usize].kind {
+        if let ExprKind::Call { callee, arguments } =
+            &self.syntax.tree.expressions[id.0 as usize].kind
+        {
             if let TypeKind::Function(f) = &self
                 .body
                 .types
@@ -238,8 +242,8 @@ impl Fixture {
         self.expr(ExprKind::Literal(Literal::Bytes("b\"fresh\"".into())), ty)
     }
     pub fn stmt(&mut self, kind: StmtKind) -> StmtId {
-        let id = StmtId(self.tree.statements.len() as u32);
-        self.tree.statements.push(Stmt {
+        let id = StmtId(self.syntax.tree.statements.len() as u32);
+        self.syntax.tree.statements.push(Stmt {
             origin: origin(id.0 * 10 + 500),
             kind,
         });
@@ -251,8 +255,8 @@ impl Fixture {
     }
     pub fn bind(&mut self, value: ExprId, mutable: bool) -> usize {
         let name = Symbol::intern(&format!("local{}", self.next_local));
-        let pattern = PatternId(self.tree.patterns.len() as u32);
-        self.tree.patterns.push(Pattern {
+        let pattern = PatternId(self.syntax.tree.patterns.len() as u32);
+        self.syntax.tree.patterns.push(Pattern {
             origin: origin(pattern.0 + 300),
             kind: PatternKind::Binding(name),
         });
@@ -261,7 +265,7 @@ impl Fixture {
         self.next_local += 1;
         let index = self.body.bindings.len();
         self.body.bindings.push(BindingDecision {
-            owner: NameSite::Item(ItemId(0)),
+            owner: NameSite::Item,
             binding: ResolvedName::Local(local),
             site: NameSite::Pattern(pattern),
             ty,
@@ -365,7 +369,8 @@ impl Fixture {
             })
             .collect::<Vec<_>>();
         let result = import_type(&signature.types, f.result, &mut self.body.types).unwrap();
-        let ExprKind::Call { arguments, .. } = &self.tree.expressions[call.0 as usize].kind else {
+        let ExprKind::Call { arguments, .. } = &self.syntax.tree.expressions[call.0 as usize].kind
+        else {
             unreachable!()
         };
         self.body.calls.push(CheckedCall {
@@ -396,13 +401,12 @@ impl Fixture {
                 .map(|id| expression_type(&self.body, id).unwrap())
                 .unwrap_or(self.unit),
         );
-        if let ItemKind::Function { body, .. } = &mut self.tree.items[0].kind {
+        if let ItemKind::Function { body, .. } = &mut self.syntax.item.kind {
             *body = Some(root);
         }
-        hirsel_authority::test_support::publish_places(&self.tree, &mut self.body);
+        hirsel_authority::test_support::publish_places(&self.syntax.tree, &mut self.body);
         check_ownership_with_clauses(
-            &self.tree,
-            ItemId(0),
+            &self.syntax,
             &self.signature,
             &mut self.body,
             &self.captures,

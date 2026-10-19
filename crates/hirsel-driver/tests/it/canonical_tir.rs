@@ -12,7 +12,7 @@ fn comparison_preserves_qualifiers_and_ignores_equal_row_sharing() {
             .add("canonical.hir", "fn t123(a:u8)->u8{a}".into())
             .unwrap();
         let parsed = engine.parse_file(file, &default_context()).unwrap();
-        let path = &parsed.value.tree.items[0].definition;
+        let path = &parsed.value.items[0].item.definition;
         let original = engine.lower_to_tir(path).unwrap().value;
         let mut duplicate = (*original).clone();
         let id = duplicate.bodies[0].locals[0].ty;

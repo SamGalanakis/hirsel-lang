@@ -127,8 +127,10 @@ impl Checker<'_, '_> {
         expected: Option<TypeId>,
         frame: usize,
     ) -> Result<(), QueryError> {
-        let ast::ExprKind::Call { callee, arguments } =
-            self.input.tree.expressions[id.0 as usize].kind.clone()
+        let ast::ExprKind::Call { callee, arguments } = self.input.syntax.tree.expressions
+            [id.0 as usize]
+            .kind
+            .clone()
         else {
             unreachable!()
         };
@@ -137,7 +139,7 @@ impl Checker<'_, '_> {
         if self.invalid(ty) {
             return self.recover_format(id, callee, &arguments, expected, frame, 1);
         }
-        let spec = match self.input.tree.expressions[callee.0 as usize].kind {
+        let spec = match self.input.syntax.tree.expressions[callee.0 as usize].kind {
             ast::ExprKind::Formatter(ast::FormatStep::AppendSpec(spec)) => Some(spec),
             _ => None,
         };
@@ -238,8 +240,10 @@ impl Checker<'_, '_> {
         frame: usize,
         checked: usize,
     ) -> Result<(), QueryError> {
-        let ast::ExprKind::Call { arguments, .. } =
-            self.input.tree.expressions[id.0 as usize].kind.clone()
+        let ast::ExprKind::Call { arguments, .. } = self.input.syntax.tree.expressions
+            [id.0 as usize]
+            .kind
+            .clone()
         else {
             unreachable!()
         };

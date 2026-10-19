@@ -17,8 +17,8 @@ use hirsel_span::Span;
 use hirsel_syntax::ExprId;
 use hirsel_tir::{Callee, CleanupAction, InstructionKind, Materialized, Rvalue, Terminator};
 use hirsel_types::{
-    BinderRef, GenericArgument, NameSite, Size, SizeParamId, SizeParameterRef, TypeId, TypeKind,
-    TypeParamId, TypeParameterRef, TypeStore, UseKind,
+    BinderRef, GenericArgument, NameSite, SiteRef, Size, SizeParamId, SizeParameterRef, TypeId,
+    TypeKind, TypeParamId, TypeParameterRef, TypeStore, UseKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,11 +51,11 @@ pub enum InstanceKind {
 #[derive(Clone, Debug)]
 pub struct InstanceEdge {
     pub owner: DefPath,
-    pub owner_binder: Option<NameSite>,
+    pub owner_binder: Option<SiteRef>,
     pub site: Span,
     pub kind: InstanceKind,
     pub callee: DefPath,
-    pub binder: NameSite,
+    pub binder: SiteRef,
     pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
 }
@@ -137,7 +137,10 @@ impl InstanceGraph {
             let mut seen = BTreeSet::new();
             while let Some(node) = todo.pop() {
                 if *node == edge.from {
-                    sites.insert((edge.site.file, edge.site.start, edge.site.end), edge.site);
+                    sites.insert(
+                        (edge.site.anchor, edge.site.start, edge.site.end),
+                        edge.site,
+                    );
                     break;
                 }
                 if seen.insert(node) {
@@ -167,11 +170,11 @@ impl InstanceGraph {
             let (Some(record), Some(owner)) = (record, input.source_owners.get(path)) else {
                 continue;
             };
-            let site = owner.syntax.tree.items[owner.item.0 as usize].origin.span;
+            let site = owner.syntax.item.origin.span;
             collector.store_start = collector.edges.len();
             let edge = Edge {
                 owner: path,
-                owner_binder: Some(NameSite::Item(owner.item)),
+                owner_binder: Some(owner.syntax.owner().site(NameSite::Item)),
                 types: &record.types,
                 site,
                 kind: InstanceKind::Representation,
@@ -182,7 +185,7 @@ impl InstanceGraph {
             let site = input
                 .source_owners
                 .get(path)
-                .map(|owner| owner.syntax.tree.items[owner.item.0 as usize].origin.span);
+                .map(|owner| owner.syntax.item.origin.span);
             collector.materialized(path, site, value);
         }
         for (path, values) in &input.materialized {
@@ -205,7 +208,7 @@ fn expression_site(owner: &NativeSource, expression: ExprId) -> Option<Span> {
 }
 struct Edge<'a> {
     owner: &'a DefPath,
-    owner_binder: Option<NameSite>,
+    owner_binder: Option<SiteRef>,
     types: &'a TypeStore,
     site: Span,
     kind: InstanceKind,
@@ -218,11 +221,11 @@ struct Collector<'a> {
 }
 impl Collector<'_> {
     /// Generic bodies in the selected program; library operations are runtime code.
-    fn binder(&self, callee: &DefPath) -> Option<NameSite> {
+    fn binder(&self, callee: &DefPath) -> Option<SiteRef> {
         self.input
             .source_owners
             .get(callee)
-            .map(|owner| NameSite::Item(owner.item))
+            .map(|owner| owner.syntax.owner().site(NameSite::Item))
     }
     fn push(&mut self, edge: &Edge<'_>, callee: &DefPath, arguments: &[GenericArgument]) {
         let Some(binder) = self.binder(callee) else {
@@ -409,11 +412,16 @@ impl QueryEngine {
         let bodies = self.instantiation_bodies()?;
         let binders: BTreeMap<_, _> = bodies
             .iter()
-            .map(|(path, typed)| (path.clone(), NameSite::Item(typed.value.item)))
+            .map(|(path, typed)| {
+                (
+                    path.clone(),
+                    typed.value.syntax.owner().site(NameSite::Item),
+                )
+            })
             .collect();
         let mut graph = InstanceGraph::default();
         for (caller, typed) in &bodies {
-            let (file, checked) = (&typed.value.file, &typed.value.checked);
+            let (file, checked) = (&typed.value.syntax, &typed.value.checked);
             for call in &checked.instantiations {
                 let Some(binder) = binders.get(&call.callee) else {
                     continue;
@@ -512,7 +520,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
 fn parameters(
     types: &TypeStore,
     argument: &GenericArgument,
-    owner_binder: Option<NameSite>,
+    owner_binder: Option<SiteRef>,
 ) -> Vec<(GenericParameterRef, bool)> {
     let mut result = BTreeSet::new();
     let size = |size: &Size, depth: u32, nested: bool, result: &mut BTreeSet<_>| {
@@ -570,7 +578,7 @@ fn parameters(
 fn owned<P: Copy>(
     reference: BinderRef<P>,
     depth: u32,
-    owner_binder: Option<NameSite>,
+    owner_binder: Option<SiteRef>,
 ) -> Option<BinderRef<P>> {
     match reference {
         BinderRef::Body { .. } => Some(reference),

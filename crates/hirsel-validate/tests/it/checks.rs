@@ -803,7 +803,7 @@ fn closure_fixture() -> Fixture {
     });
     let capture_ty = f.body().places[1].ty;
     let nested = Body {
-        parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+        parameter_scope: scoped(hirsel_types::NameSite::Item),
 
         locals: vec![Local {
             ty: capture_ty,
@@ -2230,7 +2230,7 @@ fn dependent_result_origins_require_a_live_binding() {
     let mut f = Fixture::call();
     let mut result = ty(TypeKind::Primitive(Primitive::String));
     result.brand.alternatives.push(Origin {
-        root: OriginRoot::Local(hirsel_types::LocalId(7)),
+        root: OriginRoot::Local(lexical(), hirsel_types::LocalId(7)),
         fields: vec![].into(),
     });
     result.modes.relation = result
@@ -2320,7 +2320,7 @@ fn nested_call_brands_do_not_hide_payload_type_mismatches() {
 // The nested callable references the enclosing binder, not its own parameter 0.
 fn owner_origin_fixture(nested: bool) -> Fixture {
     let mut f = Fixture::unit();
-    f.body().parameter_scope = NameSite::Item(hirsel_syntax::ItemId(37));
+    f.body().parameter_scope = scoped(NameSite::Item);
     let scope = f.body().parameter_scope;
     let mut body_string = ty(TypeKind::Primitive(Primitive::String));
     body_string.brand.alternatives.push(Origin {
@@ -2416,7 +2416,7 @@ fn scoped_nested_owner_origins_preserve_type_mode_placement_and_arity_checks() {
             1 => payload.modes.relation = Relation::environment(),
             2 => {
                 payload.modes.relation = Relation::place(Origin {
-                    root: OriginRoot::Local(hirsel_types::LocalId(0)),
+                    root: OriginRoot::Local(lexical(), hirsel_types::LocalId(0)),
                     fields: vec![].into(),
                 })
             }
@@ -3255,7 +3255,7 @@ fn comparison_fixture(op: BinaryOp, reversed: bool) -> Fixture {
 pub(super) fn arena_binding(f: &mut Fixture) -> Origin {
     let local = arena_slot(f, Storage::Local);
     let origin = Origin {
-        root: OriginRoot::Local(hirsel_types::LocalId(90)),
+        root: OriginRoot::Local(lexical(), hirsel_types::LocalId(90)),
         fields: vec![].into(),
     };
     f.body().places[local as usize].binding = Some(origin.clone());
@@ -3285,7 +3285,7 @@ fn read_only_comparisons_set_aside_root_holder_and_identity_evidence() {
     // Identity and holder evidence are not operand type: a branded or local
     // operand compares with an unbranded global one (PROV-2, MODE-1).
     let origin = || Origin {
-        root: OriginRoot::Local(hirsel_types::LocalId(0)),
+        root: OriginRoot::Local(lexical(), hirsel_types::LocalId(0)),
         fields: vec![].into(),
     };
     for place in [1, 2] {
@@ -3431,7 +3431,7 @@ fn comparison_sets_aside_nested_brands() {
             let mut row = f.definition.types.get(plain).unwrap().clone();
             row.brand = Brand {
                 alternatives: vec![Origin {
-                    root: OriginRoot::Local(hirsel_types::LocalId(scalar)),
+                    root: OriginRoot::Local(lexical(), hirsel_types::LocalId(scalar)),
                     fields: vec![hirsel_types::FieldId(field)].into(),
                 }]
                 .into(),
@@ -4368,7 +4368,7 @@ fn size_reads_require_a_declared_size_parameter_and_u64_result() {
         f.assign(
             result,
             Rvalue::Size(SizeParameterRef::body(
-                NameSite::Item(hirsel_syntax::ItemId(0)),
+                scoped(NameSite::Item),
                 SizeParamId(parameter),
             )),
             0,
@@ -4403,7 +4403,7 @@ fn size_reads_require_a_declared_size_parameter_and_u64_result() {
 fn size_reads_inherit_lexical_scope_but_nested_generics_bind_fresh_ordinals() {
     let mut f = closure_fixture();
     size_scope(&mut f);
-    f.definition.bodies[1].parameter_scope = NameSite::Statement(hirsel_syntax::StmtId(1));
+    f.definition.bodies[1].parameter_scope = scoped(NameSite::Statement(hirsel_syntax::StmtId(1)));
     let nested = &mut f.definition.bodies[1];
     let ty = f
         .definition
@@ -4423,7 +4423,7 @@ fn size_reads_inherit_lexical_scope_but_nested_generics_bind_fresh_ordinals() {
         ty,
     });
     nested.rvalues.push(Rvalue::Size(SizeParameterRef::body(
-        NameSite::Item(hirsel_syntax::ItemId(0)),
+        scoped(NameSite::Item),
         SizeParamId(1),
     )));
     nested.blocks[0].instructions.push(inst(
@@ -4464,7 +4464,7 @@ fn size_reads_inherit_lexical_scope_but_nested_generics_bind_fresh_ordinals() {
     body.places[closure].ty = ty;
     f.valid(); // Adding an inner binder cannot hide an explicitly captured outer size.
     f.definition.bodies[1].rvalues[0] = Rvalue::Size(SizeParameterRef::body(
-        NameSite::Statement(hirsel_syntax::StmtId(1)),
+        scoped(NameSite::Statement(hirsel_syntax::StmtId(1))),
         SizeParamId(1),
     ));
     assert!(f.kinds().contains(&ViolationKind::InvalidId {
@@ -4487,7 +4487,7 @@ fn forwarded_size_arguments_require_the_callers_size_scope() {
         callee: Callee::Definition {
             path: path("sized"),
             arguments: vec![GenericArgument::Size(Size::Parameter(
-                SizeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(0)), SizeParamId(1)),
+                SizeParameterRef::body(scoped(NameSite::Item), SizeParamId(1)),
             ))],
         },
         arguments: vec![],
@@ -4510,7 +4510,7 @@ fn forwarded_size_arguments_require_the_callers_size_scope() {
 #[test]
 fn closure_parameter_origins_must_name_the_nested_bodys_scope() {
     let mut f = closure_fixture();
-    let scope = NameSite::Expression(hirsel_syntax::ExprId(7));
+    let scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(7)));
     let mut parameter = ty(TypeKind::Primitive(Primitive::U32));
     parameter.brand.alternatives.push(Origin {
         root: OriginRoot::Parameter(ParameterRef::body(scope, ParamId(0))),
@@ -4564,7 +4564,7 @@ fn closure_parameter_origins_must_name_the_nested_bodys_scope() {
         }
     }
     f.valid();
-    f.definition.bodies[1].parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(8));
+    f.definition.bodies[1].parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(8)));
     f.broken(vec![ViolationKind::TypeMismatch {
         entity: "closure parameter",
     }]);
@@ -4575,7 +4575,9 @@ fn owner_origin_references_cannot_forge_a_different_declaring_scope() {
     for nested in [false, true] {
         let mut f = owner_origin_fixture(nested);
         f.valid();
-        f.body().parameter_scope = NameSite::Item(hirsel_syntax::ItemId(38));
+        // Another definition's item binder.
+        f.body().parameter_scope =
+            hirsel_syntax::LexicalOwner::first(&path("other")).site(NameSite::Item);
         f.broken(vec![
             ViolationKind::TypeMismatch {
                 entity: "body parameter",
@@ -5049,7 +5051,7 @@ fn loop_backedge_expires_a_handle_of_an_iteration_owner() {
         fields: vec![].into(),
     };
     let iteration = Origin {
-        root: OriginRoot::Local(hirsel_types::LocalId(71)),
+        root: OriginRoot::Local(lexical(), hirsel_types::LocalId(71)),
         fields: vec![].into(),
     };
     let owner = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Parameter);
@@ -5288,7 +5290,7 @@ fn a_rebound_name_cannot_read_its_previous_storage_location() {
     for (source, name) in [(a, 7), (b, 8)] {
         let mut place = f.body().places[source as usize].clone();
         place.binding = Some(Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(name)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(name)),
             fields: vec![].into(),
         });
         let target = PlaceId(f.body().places.len() as u32);
@@ -5312,7 +5314,7 @@ fn a_rebound_name_cannot_read_its_previous_storage_location() {
         .binding
         .as_mut()
         .unwrap()
-        .root = OriginRoot::Local(hirsel_types::LocalId(7));
+        .root = OriginRoot::Local(lexical(), hirsel_types::LocalId(7));
     f.broken(vec![ViolationKind::InvalidOrigin(aliases[0])]);
 }
 
@@ -5566,26 +5568,26 @@ fn dependent_generic_return_derives_local_sendability_without_changing_actuals()
     let mut f = Fixture::unit();
     let a = f.slot(
         TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            scoped(NameSite::Item),
             TypeParamId(0),
         )),
         Storage::Parameter,
     );
     let b = f.slot(
         TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            scoped(NameSite::Item),
             TypeParamId(0),
         )),
         Storage::Parameter,
     );
     let mut local = ty(TypeKind::Parameter(TypeParameterRef::body(
-        NameSite::Item(hirsel_syntax::ItemId(0)),
+        scoped(NameSite::Item),
         TypeParamId(0),
     )));
     local.modes.relation = Relation::environment();
     local.drop_allocation = DropAllocation::DependsOn(
         vec![TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            scoped(NameSite::Item),
             TypeParamId(0),
         )]
         .into(),
@@ -5600,7 +5602,7 @@ fn dependent_generic_return_derives_local_sendability_without_changing_actuals()
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
     result.modes.sendability = Sendability::DependsOn(
         vec![TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            scoped(NameSite::Item),
             TypeParamId(0),
         )]
         .into(),
@@ -7412,7 +7414,8 @@ fn loop_feedback_expires_exact_written_prefixes_and_owned_aliases() {
         f.body().places.push(base.clone());
         let mut mutation = vec![];
         if mode == "alias" {
-            base.binding.as_mut().unwrap().root = OriginRoot::Local(hirsel_types::LocalId(72));
+            base.binding.as_mut().unwrap().root =
+                OriginRoot::Local(lexical(), hirsel_types::LocalId(72));
             let alias = PlaceId(f.body().places.len() as u32);
             f.body().places.push(base.clone());
             f.emit(InstructionKind::BindOrigin {
@@ -7567,7 +7570,7 @@ fn literal_result_promises_weaken_but_cannot_invent_evidence() {
     child.body().locals[1].ty = unique;
     child.body().places[1].ty = unique;
     child.body().result = unique;
-    child.body().parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(1));
+    child.body().parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(1)));
     child.body().blocks[0].terminator = ret(1, 0);
     let mut child_body = child.definition.bodies.remove(0);
     for local in &mut child_body.locals {
@@ -8085,7 +8088,7 @@ fn local_closure_results_retain_capture_content_but_not_callable_access() {
     f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
 
     let mut child = f.body().clone();
-    child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(1));
+    child.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(1)));
     child.locals = vec![Local {
         ty: local,
         storage: Storage::Capture,
@@ -8220,7 +8223,7 @@ fn a_dependent_callable_receives_proven_or_matching_crossing_evidence() {
         Sendability::NotSendable,
         Sendability::DependsOn(
             vec![TypeParameterRef::body(
-                NameSite::Item(hirsel_syntax::ItemId(0)),
+                scoped(NameSite::Item),
                 TypeParamId(0),
             )]
             .into(),
@@ -8423,7 +8426,7 @@ fn closure_parameter_brands_use_the_installed_capture_identity() {
     branded.brand.alternatives.push(origin.clone());
     let branded = f.definition.types.push(branded);
     let mut child = empty_body(&mut f);
-    child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(7));
+    child.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(7)));
     child.locals[0].ty = branded;
     child.locals[0].storage = Storage::Parameter;
     child.places[0].ty = branded;

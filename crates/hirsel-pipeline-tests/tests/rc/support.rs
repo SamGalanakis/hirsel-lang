@@ -3,8 +3,8 @@
 //! (the driver wires the same adapter).
 use hirsel_driver::compiler_adapters;
 use hirsel_engine::{
-    InstanceKind, NativeInput, QueryEngine, check_progress, default_context, default_environment,
-    with_compiler_stack,
+    DefinitionQueries, InstanceKind, NativeInput, QueryEngine, check_progress, default_context,
+    default_environment, with_compiler_stack,
 };
 use hirsel_layout::layout::{OwnerRepresentation, Owners};
 
@@ -12,6 +12,24 @@ use hirsel_lir::stage::InputIdentity;
 use hirsel_rc::instance::{Program, Requirement, RequirementKind};
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_types::{NameSite, SignatureKind};
+
+/// Each item's anchor base in `source`; LIR and H sites are relative to it.
+pub fn item_bases(source: &str) -> std::collections::BTreeMap<DefPath, u32> {
+    let source = source.to_string();
+    with_compiler_stack(move || {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("test.hir", source).unwrap();
+        let parsed = engine.parse_file(file, &default_context()).unwrap().value;
+        parsed
+            .items
+            .iter()
+            .map(|syntax| {
+                let (_, base) = engine.sources.anchor(syntax.anchor).unwrap();
+                (syntax.item.definition.clone(), base)
+            })
+            .collect()
+    })
+}
 
 /// Check `source`, export its native snapshot and import it again, so every
 /// program a test uses passed the driver's revalidation.
@@ -126,7 +144,7 @@ pub fn program(input: &NativeInput) -> Program {
         binders: input
             .source_owners
             .iter()
-            .map(|(p, o)| (p.clone(), NameSite::Item(o.item)))
+            .map(|(p, o)| (p.clone(), o.syntax.owner().site(NameSite::Item)))
             .collect(),
         operations: input
             .operations

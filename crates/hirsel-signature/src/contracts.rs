@@ -112,6 +112,7 @@ impl Normalizer<'_, '_> {
     ) -> Result<(), QueryError> {
         let expr = self
             .input
+            .syntax
             .tree
             .expressions
             .get(id.0 as usize)
@@ -366,6 +367,7 @@ impl Normalizer<'_, '_> {
     ) -> Result<(), QueryError> {
         let s = self
             .input
+            .syntax
             .tree
             .statements
             .get(id.0 as usize)
@@ -487,6 +489,7 @@ impl Normalizer<'_, '_> {
         }
         let p = self
             .input
+            .syntax
             .tree
             .patterns
             .get(id.0 as usize)

@@ -7,8 +7,7 @@ use hirsel_types::{
 
 /// All borrowed input snapshots must belong to the same syntax/interner session.
 pub struct Input<'a> {
-    pub tree: &'a ast::SyntaxTree,
-    pub item: ast::ItemId,
+    pub syntax: &'a ast::ItemSyntax,
     pub context: &'a ast::FileContext,
     pub resolution: &'a Resolution,
     pub metadata: &'a Metadata,

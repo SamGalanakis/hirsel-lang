@@ -100,14 +100,15 @@ impl<T: Dependencies> Index<usize> for DependencyRows<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::lexical;
     #[test]
     fn overwrites_and_snapshot_joins_keep_exact_dependency_holders() {
         let a = Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(1)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(1)),
             fields: vec![].into(),
         };
         let b = Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(2)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(2)),
             fields: vec![].into(),
         };
         let mut rows = DependencyRows::new(64);
@@ -123,7 +124,7 @@ mod tests {
         assert_eq!(rows[7], BTreeSet::from([a, b]));
         rows.update(7, BTreeSet::clear);
         assert!(
-            rows.holders(&OriginRoot::Local(hirsel_types::LocalId(1)))
+            rows.holders(&OriginRoot::Local(lexical(), hirsel_types::LocalId(1)))
                 .is_empty()
         );
     }

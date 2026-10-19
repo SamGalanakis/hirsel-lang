@@ -1,36 +1,37 @@
 use crate::doc::{Doc, cat, join, list, nest, token};
 use Doc::{Line, Space};
 use hirsel_intern::Symbol;
-use hirsel_span::SourceMap;
 use hirsel_syntax::*;
 
 type Printed = Option<Doc>;
+/// Every item of the file, a blank line apart.
+pub(crate) fn file(file: &SyntaxFile) -> Printed {
+    Some(join(
+        file.items
+            .iter()
+            .map(|item| Printer::new(item).item())
+            .collect::<Option<Vec<_>>>()?,
+        cat([Line, Line]),
+    ))
+}
+/// Prints one top-level item from its own arenas and tokens.
 pub(crate) struct Printer<'a> {
-    file: &'a SyntaxFile,
+    item: &'a Item,
+    tree: &'a SyntaxTree,
     /// Written f-strings by the block each desugars to.
     formats: std::collections::BTreeMap<ExprId, &'a FormatString>,
     repeats: std::collections::BTreeMap<ExprId, &'a RepeatLiteral>,
     /// Written `if let` by its match, and `while let` by its loop body block.
     conditions: std::collections::BTreeMap<ExprId, LetCondition>,
-    /// Analysis annotations by item and site, in source order (PS-17).
-    analyses: std::collections::BTreeMap<(ItemId, AnalysisSite), Vec<&'a AnalysisAnnotation>>,
+    /// The item's analysis annotations by site, in source order (PS-17).
+    analyses: std::collections::BTreeMap<AnalysisSite, Vec<&'a AnalysisAnnotation>>,
 }
 impl<'a> Printer<'a> {
-    pub fn new(file: &'a SyntaxFile, _sources: &SourceMap) -> Self {
-        let formats = file
-            .tree
-            .formats
-            .iter()
-            .map(|f| (f.expression, f))
-            .collect();
-        let repeats = file
-            .tree
-            .repeats
-            .iter()
-            .map(|r| (r.expression, r))
-            .collect();
-        let conditions = file
-            .tree
+    pub fn new(syntax: &'a ItemSyntax) -> Self {
+        let tree = &syntax.tree;
+        let formats = tree.formats.iter().map(|f| (f.expression, f)).collect();
+        let repeats = tree.repeats.iter().map(|r| (r.expression, r)).collect();
+        let conditions = tree
             .conditions
             .iter()
             .map(|c| match *c {
@@ -39,11 +40,12 @@ impl<'a> Printer<'a> {
             })
             .collect();
         let mut analyses = std::collections::BTreeMap::<_, Vec<_>>::new();
-        for a in &file.tree.analyses {
-            analyses.entry((a.item, a.site)).or_default().push(a);
+        for a in &tree.analyses {
+            analyses.entry(a.site).or_default().push(a);
         }
         Self {
-            file,
+            item: &syntax.item,
+            tree,
             formats,
             repeats,
             conditions,
@@ -64,7 +66,7 @@ impl<'a> Printer<'a> {
         }
         let range = origin.tokens;
         let inside = self
-            .file
+            .tree
             .tokens
             .get(range.start as usize..range.end as usize);
         if inside.is_some_and(|ts| {
@@ -81,13 +83,13 @@ impl<'a> Printer<'a> {
         }) {
             return true;
         }
-        let before = self.file.tokens.get(..range.start as usize).and_then(|ts| {
+        let before = self.tree.tokens.get(..range.start as usize).and_then(|ts| {
             ts.iter()
                 .enumerate()
                 .rev()
                 .find(|(_, t)| !matches!(t.kind, TokenKind::Trivia(_)))
         });
-        let after = self.file.tokens.get(range.end as usize..).and_then(|ts| {
+        let after = self.tree.tokens.get(range.end as usize..).and_then(|ts| {
             ts.iter()
                 .enumerate()
                 .find(|(_, t)| !matches!(t.kind, TokenKind::Trivia(_)))
@@ -109,7 +111,7 @@ impl<'a> Printer<'a> {
                     },
                 )),
             ) => self
-                .file
+                .tree
                 .tokens
                 .get(start + 1..range.end as usize + offset)
                 .is_some_and(|ts| ts.iter().any(comment)),
@@ -137,16 +139,6 @@ impl<'a> Printer<'a> {
             token("."),
         ));
         Some(cat(ds))
-    }
-    pub fn file(&self) -> Printed {
-        Some(join(
-            self.file
-                .roots
-                .iter()
-                .map(|id| self.item(*id))
-                .collect::<Option<Vec<_>>>()?,
-            cat([Line, Line]),
-        ))
     }
     fn attribute(&self, a: &Attribute) -> Printed {
         let mut ds = vec![token("@"), self.name(a.name)?];
@@ -212,9 +204,12 @@ impl<'a> Printer<'a> {
         ds.push(token(")"));
         cat(ds)
     }
-    /// The annotations at `site` of `item`, each followed by `separator`.
-    fn analyses(&self, item: Option<ItemId>, site: AnalysisSite, separator: Doc) -> Vec<Doc> {
-        item.and_then(|item| self.analyses.get(&(item, site)))
+    /// The item's annotations at `site` when `annotated`, each followed by
+    /// `separator`.
+    fn analyses(&self, annotated: bool, site: AnalysisSite, separator: Doc) -> Vec<Doc> {
+        annotated
+            .then(|| self.analyses.get(&site))
+            .flatten()
             .into_iter()
             .flatten()
             .flat_map(|a| [self.analysis(a), separator.clone()])
@@ -280,10 +275,10 @@ impl<'a> Printer<'a> {
         ]))
     }
     fn header(&self, sig: &FunctionSyntax) -> Printed {
-        self.annotated_header(sig, None)
+        self.annotated_header(sig, false)
     }
     /// A header; `item` names the definition whose parameters carry annotations.
-    fn annotated_header(&self, sig: &FunctionSyntax, item: Option<ItemId>) -> Printed {
+    fn annotated_header(&self, sig: &FunctionSyntax, annotated: bool) -> Printed {
         let mut ds = vec![
             self.generics(&sig.generics)?,
             list(
@@ -292,7 +287,8 @@ impl<'a> Printer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, p)| {
-                        let mut ds = self.analyses(item, AnalysisSite::Parameter(i as u32), Space);
+                        let mut ds =
+                            self.analyses(annotated, AnalysisSite::Parameter(i as u32), Space);
                         if let Some(s) = p.label {
                             ds.extend([self.name(s)?, Space]);
                         }
@@ -338,15 +334,15 @@ impl<'a> Printer<'a> {
         Some(cat(ds))
     }
     fn result_accepts_uses(&self, id: TypeExprId) -> Option<bool> {
-        match &self.file.tree.types.get(id.0 as usize)?.kind {
+        match &self.tree.types.get(id.0 as usize)?.kind {
             TypeExprKind::Function(_) => Some(true),
             TypeExprKind::Box(inner) => self.result_accepts_uses(*inner),
             _ => Some(false),
         }
     }
-    fn item(&self, id: ItemId) -> Printed {
-        let item = self.file.tree.items.get(id.0 as usize)?;
-        let mut ds = self.analyses(Some(id), AnalysisSite::Item, Line);
+    fn item(&self) -> Printed {
+        let item = self.item;
+        let mut ds = self.analyses(true, AnalysisSite::Item, Line);
         for a in &item.attributes {
             ds.extend([self.attribute(a)?, Line]);
         }
@@ -379,10 +375,10 @@ impl<'a> Printer<'a> {
                     token("fn"),
                     Space,
                     self.name(item.name)?,
-                    self.annotated_header(signature, Some(id))?,
+                    self.annotated_header(signature, true)?,
                 ]);
                 if let Some(e) = body {
-                    match self.file.tree.expressions.get(e.0 as usize)?.kind {
+                    match self.tree.expressions.get(e.0 as usize)?.kind {
                         ExprKind::Comptime(value) => ds.extend([
                             Space,
                             token("="),
@@ -452,7 +448,7 @@ impl<'a> Printer<'a> {
                                         .iter()
                                         .enumerate()
                                         .map(|(i, f)| {
-                                            self.field(f, Some(id), AnalysisSite::Field(i as u32))
+                                            self.field(f, true, AnalysisSite::Field(i as u32))
                                         })
                                         .collect::<Option<Vec<_>>>()?,
                                     cat([token(","), Line]),
@@ -481,7 +477,7 @@ impl<'a> Printer<'a> {
                                                     .enumerate()
                                                     .map(|(field, (s, t))| {
                                                         let mut ds = self.analyses(
-                                                            Some(id),
+                                                            true,
                                                             AnalysisSite::Payload {
                                                                 variant: variant as u32,
                                                                 field: field as u32,
@@ -514,7 +510,7 @@ impl<'a> Printer<'a> {
                     TypeBody::Distinct { field, fact } => {
                         ds.extend([
                             token("("),
-                            self.field(field, Some(id), AnalysisSite::Field(0))?,
+                            self.field(field, true, AnalysisSite::Field(0))?,
                             token(")"),
                         ]);
                         if let Some(e) = fact {
@@ -541,8 +537,8 @@ impl<'a> Printer<'a> {
         }
         Some(cat(ds))
     }
-    fn field(&self, f: &FieldSyntax, item: Option<ItemId>, site: AnalysisSite) -> Printed {
-        let mut ds = self.analyses(item, site, Space);
+    fn field(&self, f: &FieldSyntax, annotated: bool, site: AnalysisSite) -> Printed {
+        let mut ds = self.analyses(annotated, site, Space);
         ds.extend([self.name(f.name)?, token(":"), Space, self.ty(f.ty)?]);
         if f.growable {
             ds.extend([Space, token("@"), Space, token("growable")]);
@@ -551,7 +547,7 @@ impl<'a> Printer<'a> {
     }
     fn ty(&self, id: TypeExprId) -> Printed {
         (|| {
-            let node = self.file.tree.types.get(id.0 as usize)?;
+            let node = self.tree.types.get(id.0 as usize)?;
             let doc = self.ty_inner(id)?;
             Some(
                 if !matches!(node.kind, TypeExprKind::Tuple(_)) && self.comment_group(node.origin) {
@@ -563,7 +559,7 @@ impl<'a> Printer<'a> {
         })()
     }
     fn ty_inner(&self, id: TypeExprId) -> Printed {
-        Some(match &self.file.tree.types.get(id.0 as usize)?.kind {
+        Some(match &self.tree.types.get(id.0 as usize)?.kind {
             TypeExprKind::Named { path, arguments } => cat([
                 self.path(path)?,
                 if arguments.is_empty() {
@@ -609,7 +605,7 @@ impl<'a> Printer<'a> {
                 // (whose part takes no relation) or a nested qualified type
                 // is grouped to carry its own (LANG-7, R5).
                 let suffixed = brand.is_some() || relation.is_some();
-                let grouped = match &self.file.tree.types.get(base.0 as usize)?.kind {
+                let grouped = match &self.tree.types.get(base.0 as usize)?.kind {
                     TypeExprKind::Function(f) => suffixed && f.uses.is_none(),
                     TypeExprKind::Box(_) => suffixed,
                     TypeExprKind::Qualified { .. } => true,
@@ -662,7 +658,7 @@ impl<'a> Printer<'a> {
     }
     fn pattern(&self, id: PatternId) -> Printed {
         (|| {
-            Some(match &self.file.tree.patterns.get(id.0 as usize)?.kind {
+            Some(match &self.tree.patterns.get(id.0 as usize)?.kind {
                 PatternKind::Wildcard => token("_"),
                 PatternKind::Binding(s) => self.name(*s)?,
                 PatternKind::Literal(l) => literal(l),
@@ -720,7 +716,7 @@ impl<'a> Printer<'a> {
         })
     }
     fn stmt(&self, id: StmtId, final_statement: bool) -> Printed {
-        Some(match &self.file.tree.statements.get(id.0 as usize)?.kind {
+        Some(match &self.tree.statements.get(id.0 as usize)?.kind {
             StmtKind::Let {
                 mutable,
                 pattern,
@@ -737,7 +733,7 @@ impl<'a> Printer<'a> {
                     ds.extend([token(":"), Space, self.ty(*t)?]);
                 }
                 // LANG-13: an else would continue an initializer ending in a block.
-                let value = if otherwise.is_some() && self.file.tree.ends_in_block(*value, false) {
+                let value = if otherwise.is_some() && self.tree.ends_in_block(*value, false) {
                     cat([token("("), self.expr(*value, 0)?, token(")")])
                 } else {
                     self.expr(*value, 0)?
@@ -823,9 +819,9 @@ impl<'a> Printer<'a> {
         for (i, piece) in format.pieces.iter().enumerate() {
             parts.push(token(piece));
             if let Some(&hole) = format.holes.get(i) {
-                let origin = self.file.tree.expressions.get(hole.0 as usize)?.origin;
+                let origin = self.tree.expressions.get(hole.0 as usize)?.origin;
                 let braced = matches!(
-                    self.file
+                    self.tree
                         .tokens
                         .get(origin.tokens.start as usize)
                         .map(|t| &t.kind),
@@ -848,8 +844,7 @@ impl<'a> Printer<'a> {
     /// `let P = e A` of a conditional let desugared to `matching` (LANG-13). A
     /// scrutinee that is a lazy boolean operation keeps its parentheses.
     fn let_condition(&self, matching: ExprId) -> Printed {
-        let ExprKind::Match { value, arms } =
-            &self.file.tree.expressions.get(matching.0 as usize)?.kind
+        let ExprKind::Match { value, arms } = &self.tree.expressions.get(matching.0 as usize)?.kind
         else {
             return None;
         };
@@ -881,7 +876,7 @@ impl<'a> Printer<'a> {
                 token("]"),
             ]));
         }
-        let e = self.file.tree.expressions.get(id.0 as usize)?;
+        let e = self.tree.expressions.get(id.0 as usize)?;
         if let Some(LetCondition::If { otherwise, .. }) = self.conditions.get(&id) {
             let mut ds = vec![token("if"), Space, self.let_condition(id)?];
             if let (true, ExprKind::Match { arms, .. }) = (otherwise, &e.kind) {
@@ -945,7 +940,7 @@ impl<'a> Printer<'a> {
             ExprKind::Field { base, field } => {
                 let base_doc = self.expr(*base, 12)?;
                 let base_doc = if matches!(
-                    self.file.tree.expressions.get(base.0 as usize)?.kind,
+                    self.tree.expressions.get(base.0 as usize)?.kind,
                     ExprKind::Try {
                         map_error: Some(_),
                         ..
@@ -1075,7 +1070,7 @@ impl<'a> Printer<'a> {
                 cat(ds)
             }
             ExprKind::Closure { signature, body } => {
-                let trailing = crate::trivia::trailing_uses(self.file, e.origin, *body)
+                let trailing = crate::trivia::trailing_uses(self.tree, e.origin, *body)
                     .is_some_and(|(_, _, preserve)| preserve);
                 if trailing {
                     let mut header = signature.clone();

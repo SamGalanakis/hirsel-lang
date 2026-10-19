@@ -116,7 +116,7 @@ impl Importer<'_, '_> {
                         && let Some(body) = crate::library::body_index(finalizer)
                     {
                         let actuals = Actuals {
-                            binder: (!a.is_empty()).then_some(crate::library::BINDER),
+                            binder: (!a.is_empty()).then(|| crate::library::binder(finalizer)),
                             store: self.store.clone(),
                             arguments: a.to_vec(),
                             outer: Vec::new(),

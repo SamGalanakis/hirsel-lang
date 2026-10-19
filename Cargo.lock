@@ -1036,6 +1036,7 @@ name = "hirsel-span"
 version = "0.1.0"
 dependencies = [
  "hirsel-guard",
+ "hirsel-intern",
  "serde",
 ]
 

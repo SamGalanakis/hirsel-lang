@@ -97,7 +97,8 @@ impl Checker<'_> {
                             .bindings
                             .iter()
                             .find(|b| {
-                                b.owner == scope && b.binding == ResolvedName::Parameter(parameter)
+                                checker.lexical.site(b.owner) == scope
+                                    && b.binding == ResolvedName::Parameter(parameter)
                             })
                             .map(|b| b.ty);
                         let summary = ty

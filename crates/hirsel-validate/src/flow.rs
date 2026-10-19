@@ -363,7 +363,10 @@ impl Model {
                     Storage::Local | Storage::Temporary
                 ) && !root_accesses[root].iter().any(|&access| {
                     body.places[access].binding.as_ref().is_some_and(|origin| {
-                        matches!(origin.root, OriginRoot::Local(_) | OriginRoot::Parameter(_))
+                        matches!(
+                            origin.root,
+                            OriginRoot::Local(..) | OriginRoot::Parameter(_)
+                        )
                     })
                 }) {
                     protocol_holders.insert(root);
@@ -1258,7 +1261,7 @@ impl Model {
             OriginRoot::Parameter(hirsel_types::ParameterRef::Body { scope, .. }) => {
                 *scope != body.parameter_scope
             }
-            OriginRoot::Local(_) | OriginRoot::Expression(_) => true,
+            OriginRoot::Local(..) | OriginRoot::Expression(..) => true,
             _ => false,
         };
         for local in &body.parameters {
@@ -2257,7 +2260,7 @@ impl Checker<'_> {
                     && slots.insert(model.mapping[field.0 as usize])
                     && access.binding.as_ref().is_some_and(|binding| {
                         binding.fields.is_empty()
-                            && matches!(binding.root, OriginRoot::Local(_))
+                            && matches!(binding.root, OriginRoot::Local(..))
                             && names.insert(binding.root.clone())
                             && !self.body.places.iter().any(|p| {
                                 self.body.locals[p.root.0 as usize].storage == Storage::Capture
@@ -4541,7 +4544,7 @@ impl Checker<'_> {
                             *multiple
                                 || first.root != to.root
                                 || first.projection != to.projection
-                                || !matches!(origin.root, OriginRoot::Expression(_))
+                                || !matches!(origin.root, OriginRoot::Expression(..))
                         },
                     );
                     if from.root != to.root
@@ -4551,7 +4554,7 @@ impl Checker<'_> {
                         || (!origin.fields.is_empty() && *kind != OriginBindingKind::Fresh)
                         || !(matches!(
                             origin.root,
-                            OriginRoot::Local(_) | OriginRoot::Expression(_)
+                            OriginRoot::Local(..) | OriginRoot::Expression(..)
                         ) || (*kind == OriginBindingKind::Fresh
                             && matches!(origin.root, OriginRoot::Parameter(ParameterRef::Body { scope, .. }) if scope == self.body.parameter_scope)
                             && model.binding_valid(state, to, self.body)))
@@ -4648,7 +4651,7 @@ impl Checker<'_> {
                             && state.origins.identities[root].iter().all(|identity| {
                                 identity.fields.is_empty()
                                     && (identity.root == origin.root
-                                        || (matches!(identity.root, OriginRoot::Expression(_))
+                                        || (matches!(identity.root, OriginRoot::Expression(..))
                                             && state.origins.owners[root].contains(identity)))
                             });
                         if !origin.fields.is_empty()
@@ -6345,7 +6348,7 @@ impl Checker<'_> {
                             && p.binding.as_ref().is_some_and(|o| {
                                 matches!(
                                     o.root,
-                                    hirsel_types::OriginRoot::Local(_)
+                                    hirsel_types::OriginRoot::Local(..)
                                         | hirsel_types::OriginRoot::Parameter(_)
                                 )
                             })
@@ -6413,7 +6416,7 @@ impl Checker<'_> {
 #[cfg(test)]
 mod nominal_limit_tests {
     use super::*;
-    use crate::support::{Fixture, path, ty};
+    use crate::support::{Fixture, path, scoped, ty};
     use hirsel_syntax::ContentHash;
     use hirsel_types::*;
 
@@ -6563,7 +6566,7 @@ mod nominal_limit_tests {
 #[cfg(test)]
 mod header_name_tests {
     use super::*;
-    use crate::support::{Fixture, ty};
+    use crate::support::{Fixture, scoped, ty};
     use hirsel_types::*;
 
     #[test]
@@ -6609,7 +6612,7 @@ mod header_name_tests {
             child.locals.truncate(1);
             child.places.truncate(1);
             child.parameters.clear();
-            child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(0));
+            child.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
             child.locals.push(Local {
                 ty: root,
                 storage: Storage::Local,
@@ -6702,7 +6705,7 @@ mod header_name_tests {
             child.locals.truncate(1);
             child.places.truncate(1);
             child.parameters.clear();
-            child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(0));
+            child.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
             child.locals.push(Local {
                 ty: root,
                 storage: Storage::Capture,

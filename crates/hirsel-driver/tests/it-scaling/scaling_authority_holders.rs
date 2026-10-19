@@ -14,7 +14,7 @@ fn temporary_identities_query_their_actual_surviving_holders() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::AuthorityHolderRows);
             let output = engine
-                .mode_definition(&parsed.value.tree.items[0].definition)
+                .mode_definition(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::AuthorityHolderRows)

@@ -29,7 +29,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, DefinitionRef, Rvalue, Storage};
 use hirsel_types::{
     AuthoritySummary, BinderRef, FunctionType, GenericArgument, GenericBinder, GraphError,
-    Multiplicity, NameSite, SignatureKind, SignatureRef, Size, SizeParamId, SizeParameterRef, Type,
+    Multiplicity, SignatureKind, SignatureRef, SiteRef, Size, SizeParamId, SizeParameterRef, Type,
     TypeId, TypeKind, TypeParamId, TypeParameterRef, TypeStore, UseKind,
 };
 use std::collections::BTreeSet;
@@ -57,11 +57,11 @@ pub enum RequirementKind {
 #[derive(Clone, Debug)]
 pub struct Requirement {
     pub owner: DefPath,
-    pub owner_binder: Option<NameSite>,
+    pub owner_binder: Option<SiteRef>,
     pub site: Span,
     pub kind: RequirementKind,
     pub callee: DefPath,
-    pub binder: NameSite,
+    pub binder: SiteRef,
     pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
 }
@@ -77,7 +77,7 @@ pub struct Program {
     /// Implementation revision of each executable definition's source owner.
     pub revisions: BTreeMap<DefPath, ContentHash>,
     /// The lexical binder of each source definition's generics.
-    pub binders: BTreeMap<DefPath, NameSite>,
+    pub binders: BTreeMap<DefPath, SiteRef>,
     /// Registry operations by definition path.
     pub operations: BTreeMap<DefPath, OperationId>,
     pub requirements: Vec<Requirement>,
@@ -289,10 +289,10 @@ impl Instances {
 /// the same store, innermost first.
 #[derive(Clone, Debug)]
 pub struct Actuals {
-    pub binder: Option<NameSite>,
+    pub binder: Option<SiteRef>,
     pub store: TypeStore,
     pub arguments: Vec<GenericArgument>,
-    pub outer: Vec<(NameSite, Vec<GenericArgument>)>,
+    pub outer: Vec<(SiteRef, Vec<GenericArgument>)>,
 }
 
 impl Actuals {
@@ -305,7 +305,7 @@ impl Actuals {
         }
     }
     /// Every binder these actuals bind with its arguments, own first.
-    pub fn binders(&self) -> impl Iterator<Item = (NameSite, &[GenericArgument])> {
+    pub fn binders(&self) -> impl Iterator<Item = (SiteRef, &[GenericArgument])> {
         self.binder
             .map(|scope| (scope, self.arguments.as_slice()))
             .into_iter()
@@ -435,7 +435,7 @@ pub fn import_actuals(
 /// The callee actuals of a requirement or call site whose `arguments` live in
 /// `types` and name `owner`'s binder.
 pub fn callee_actuals(
-    callee_binder: Option<NameSite>,
+    callee_binder: Option<SiteRef>,
     types: &TypeStore,
     arguments: &[GenericArgument],
     owner: &Actuals,
@@ -1264,12 +1264,12 @@ impl Expander<'_, '_, '_> {
         &mut self,
         owner: &DefPath,
         actuals: &Actuals,
-        only: Option<NameSite>,
+        only: Option<SiteRef>,
     ) -> Result<(), InstanceError> {
         let requirements = self.by_owner.get(owner).cloned().unwrap_or_default();
         for requirement in requirements {
             let named = body_scopes(&requirement.types, &requirement.arguments);
-            let bound: Vec<NameSite> = actuals.binders().map(|(s, _)| s).collect();
+            let bound: Vec<SiteRef> = actuals.binders().map(|(s, _)| s).collect();
             if !named.iter().all(|s| bound.contains(s))
                 || only.is_some_and(|scope| !named.contains(&scope))
             {
@@ -1587,9 +1587,9 @@ fn instantiate_row(
 }
 
 /// The lexical binders whose generics `arguments` (rows of `types`) name.
-fn body_scopes(types: &TypeStore, arguments: &[GenericArgument]) -> Vec<NameSite> {
+fn body_scopes(types: &TypeStore, arguments: &[GenericArgument]) -> Vec<SiteRef> {
     let mut scopes = Vec::new();
-    let size = |s: &Size, scopes: &mut Vec<NameSite>| {
+    let size = |s: &Size, scopes: &mut Vec<SiteRef>| {
         if let Size::Parameter(BinderRef::Body { scope, .. }) = s
             && !scopes.contains(scope)
         {

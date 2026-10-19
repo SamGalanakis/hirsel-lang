@@ -27,7 +27,9 @@ and never publish its recovered tree. Deep direct callers use the driver compile
 thread boundary; ordinary recovery scans iteratively. Empty tapes, missing EOF and invalid spans
 are handled without panics. Invalid lexical tokens remain on the
 tape; lexer diagnostics should precede parser diagnostics in driver reports.
-Item ownership plus the file-owned complement partitions the token tape. Final
+Each item is parsed into its own `ItemSyntax`: fresh arenas and parse-height
+table, a fresh anchor at the start of its first owned token, and spans relative
+to that anchor (hirsel-span). Item ownership plus the file-owned complement partitions the token tape. Final
 orphan trivia/EOF remain in that complement; failed-item text is retained even
 when no item AST can be constructed. Duplicate DefPaths remain unchanged for
 resolution to diagnose.

@@ -266,7 +266,9 @@ impl LoadedProgram {
                 .map(|(file, _)| *file)
                 .collect();
             for warning in self.engine.dead_arm_warnings(&files) {
-                if let Some((_, file_diagnostics)) = outputs.get_mut(&warning.primary.file) {
+                if let Some((_, file_diagnostics)) =
+                    outputs.get_mut(&self.engine.sources.resolve(warning.primary).file)
+                {
                     file_diagnostics.push(warning.clone());
                 }
                 diagnostics.push(warning);
@@ -339,7 +341,10 @@ impl LoadedProgram {
                 .map(|((_, diagnostics), (f, _))| {
                     diagnostics
                         .iter()
-                        .filter(|d| d.primary.file == *f && d.rule.as_str() != "GEN-5")
+                        .filter(|d| {
+                            self.engine.sources.resolve(d.primary).file == *f
+                                && d.rule.as_str() != "GEN-5"
+                        })
                         .cloned()
                         .collect()
                 })
@@ -354,22 +359,17 @@ impl LoadedProgram {
                 continue;
             };
             let mut ordinals = BTreeMap::<_, usize>::new();
-            let sites = self
+            let files: Vec<_> = self
                 .files
                 .iter()
                 .filter(|(_, c)| package.closure.contains(&c.package))
                 .map(|(file, c)| {
                     let index = ordinals.entry(c.package.clone()).or_default();
-                    let site = (
-                        *file,
-                        c.package.clone(),
-                        *index,
-                        self.engine.sources.file(*file).unwrap().text().len() as u32,
-                    );
                     *index += 1;
-                    site
+                    (*file, c.package.clone(), *index - 1)
                 })
                 .collect();
+            let sites = self.engine.anchor_sites(&files);
             self.cache.insert(
                 package.key,
                 crate::package_cache::Artifact {
@@ -930,26 +930,14 @@ pub(crate) fn load_program_source_with_cache(
         })
         .collect();
     program.indexed_revision = program.engine.package_cache_revision();
-    // Diagnostic display locations are projected into this program's SourceMap;
-    // stored artifacts remain immutable, including after callers retain old output.
+    // An artifact's diagnostics name its publisher's anchors: placing them in
+    // this program's SourceMap locates them; stored artifacts stay immutable.
     for p in &mut program.packages {
         if let Some(artifact) = &p.artifact {
-            let moves: Vec<_> = artifact
-                .sites
-                .iter()
-                .map(|(old, id, index, len)| (*old, sites[&(id.clone(), *index)], *len))
-                .collect();
+            program.engine.place_anchors(&artifact.sites, &sites);
             p.diagnostics = Some(crate::package_cache::PackageDiagnostics {
-                preflight: artifact
-                    .preflight
-                    .iter()
-                    .map(|ds| crate::queries::rebase_package_diagnostics(ds, &moves))
-                    .collect(),
-                files: artifact
-                    .files
-                    .iter()
-                    .map(|ds| crate::queries::rebase_package_diagnostics(ds, &moves))
-                    .collect(),
+                preflight: artifact.preflight.clone(),
+                files: artifact.files.clone(),
             });
         }
         if let Some(lowerings) = &p.lowerings {
@@ -962,15 +950,7 @@ pub(crate) fn load_program_source_with_cache(
                         .sources
                         .iter()
                         .enumerate()
-                        .map(|(index, _)| {
-                            let file = sites[&(id.clone(), index)];
-                            (
-                                file,
-                                id.clone(),
-                                index,
-                                program.engine.sources.file(file).unwrap().text().len() as u32,
-                            )
-                        })
+                        .map(|(index, _)| (sites[&(id.clone(), index)], id.clone(), index))
                         .collect::<Vec<_>>()
                 })
                 .collect();

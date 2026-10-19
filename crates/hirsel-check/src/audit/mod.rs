@@ -2,7 +2,7 @@
 //! Inputs are producer decisions; this pass does not infer modes or call effects.
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::work::{self, Counter};
-use hirsel_syntax::{self as ast, ExprId, ItemId};
+use hirsel_syntax::{self as ast, ExprId};
 use hirsel_types::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,8 +11,7 @@ mod layout;
 mod packed;
 
 pub struct Input<'a> {
-    pub tree: &'a ast::SyntaxTree,
-    pub item: ItemId,
+    pub syntax: &'a ast::ItemSyntax,
     pub signature: &'a Signature,
     pub call_allocations: &'a [(ExprId, Allocation)],
     pub allocating_copies: &'a [ExprId],
@@ -26,7 +25,7 @@ pub fn check(
     provider: &mut dyn SignatureProvider,
 ) -> Result<QueryOutput<()>, QueryError> {
     let mut audit = Audit {
-        source_rows: source_rows::SourceRows::new(input.checked, input.tree),
+        source_rows: source_rows::SourceRows::new(input.checked, &input.syntax.tree),
         types: input.checked.types.clone(),
         expression_types: input
             .checked
@@ -57,7 +56,7 @@ pub fn check(
     audit.allocations()?;
     audit.variant_places()?;
     for row in &audit.input.checked.expressions {
-        let expression = &audit.input.tree.expressions[row.expression.0 as usize];
+        let expression = &audit.input.syntax.tree.expressions[row.expression.0 as usize];
         if let ast::ExprKind::Index { base, .. } = expression.kind {
             let Some(ty) = audit.expression_type(base) else {
                 continue;
@@ -80,7 +79,7 @@ pub fn check(
         }
     }
     // Checked expression membership excludes statements in unrelated definitions.
-    for statement in &audit.input.tree.statements {
+    for statement in &audit.input.syntax.tree.statements {
         if let ast::StmtKind::Assign { place, .. } = statement.kind
             && let Some(ty) = audit.expression_type(place)
             && audit.in_flat_projection(place)?
@@ -134,7 +133,7 @@ impl Audit<'_, '_> {
         Ok(s)
     }
     fn declaration(&mut self) {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let item = &self.input.syntax.item;
         let ast::ItemKind::Type {
             flavor,
             body: ast::TypeBody::Record(fields),
@@ -185,7 +184,7 @@ impl Audit<'_, '_> {
     /// Whether an annotation's root is written `in heap`.
     fn written_heap(&self, mut syntax: ast::TypeExprId) -> bool {
         while let ast::TypeExprKind::Qualified { base, relation, .. } =
-            &self.input.tree.types[syntax.0 as usize].kind
+            &self.input.syntax.tree.types[syntax.0 as usize].kind
         {
             if relation
                 .as_ref()
@@ -203,14 +202,17 @@ impl Audit<'_, '_> {
         let Some(heap) = &self.input.signature.metadata.roles.heap else {
             return false;
         };
+        let lexical = self.input.syntax.owner();
         origin.fields.is_empty()
             && self.input.checked.bindings.iter().any(|b| {
                 let root = match (&origin.root, &b.binding) {
-                    (OriginRoot::Local(l), ResolvedName::Local(m)) => l == m,
+                    (OriginRoot::Local(owner, l), ResolvedName::Local(m)) => {
+                        *owner == lexical && l == m
+                    }
                     (
                         OriginRoot::Parameter(ParameterRef::Body { scope, parameter }),
                         ResolvedName::Parameter(p),
-                    ) => *scope == b.owner && parameter == p,
+                    ) => *scope == lexical.site(b.owner) && parameter == p,
                     _ => false,
                 };
                 root && is_arena_type(&self.types, b.ty, &heap.arena)

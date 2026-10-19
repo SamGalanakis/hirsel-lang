@@ -56,19 +56,16 @@ impl Checker<'_> {
         spell(self.tree, expression)
     }
     pub(super) fn sites(&self) -> Sites<'_> {
-        Sites { tree: self.tree }
+        Sites {
+            syntax: self.syntax,
+        }
     }
     /// A binding's name and the site that declares it: a parameter's type,
     /// or the pattern that binds it.
     pub(super) fn binding_site(&self, index: usize) -> (String, Span) {
         let binding = &self.body.bindings[index];
-        if let NameSite::Item(item) = binding.site {
-            if let Some(item) = self
-                .tree
-                .items
-                .get(item.0 as usize)
-                .filter(|_| self.finalizer_self(index))
-            {
+        if let NameSite::Item = binding.site {
+            if let Some(item) = Some(&self.syntax.item).filter(|_| self.finalizer_self(index)) {
                 let name = match &item.kind {
                     hirsel_syntax::ItemKind::Type {
                         drop: Some(drop), ..

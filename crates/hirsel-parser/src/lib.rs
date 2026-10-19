@@ -5,8 +5,9 @@ hirsel_guard::install!();
 
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
-use hirsel_span::{FileId, SourceMap, Span};
+use hirsel_span::{Anchor, FileId, SourceMap, Span};
 use hirsel_syntax::*;
+use std::sync::Arc;
 
 mod conditions;
 mod declarations;
@@ -30,13 +31,16 @@ pub struct ParseOutput {
     pub nesting_limit: Option<Span>,
 }
 
-/// Parse a lexer-owned tape without mutating the source.
-/// Invalid/missing EOF and spans are handled without indexing panics.
+/// Parse a lexer-owned tape without mutating the source. Each top-level item
+/// gets its own arenas and a new anchor at the start of its owned tokens: the
+/// spans of `file`'s own tokens become relative to it, and spans the tape
+/// carries from elsewhere are kept. Invalid/missing EOF and spans are handled
+/// without indexing panics.
 pub fn parse(
     file: FileId,
     tokens: Vec<Token>,
     context: &FileContext,
-    sources: &SourceMap,
+    sources: &mut SourceMap,
 ) -> ParseOutput {
     let significant = tokens
         .iter()
@@ -45,6 +49,8 @@ pub fn parse(
         .collect();
     let mut parser = Parser {
         file,
+        file_anchor: sources.file_anchor(file),
+        local: None,
         tokens,
         significant,
         pos: 0,
@@ -59,21 +65,24 @@ pub fn parse(
         formats: 0,
         analyses: vec![],
     };
-    let mut roots = vec![];
+    let mut items = vec![];
+    // The first token the next item owns: everything after the previous one's.
+    let mut owned_start = 0usize;
     while !parser.eof() && parser.nesting_limit.is_none() {
         if parser.eat(";") {
             continue;
         }
         let start = parser.pos;
+        parser.anchor_at(owned_start);
+        // Arenas and their heights are item-local.
+        parser.tree = SyntaxTree::default();
+        parser.heights = depth::Heights::default();
         parser.analyses.clear();
         if let Ok(item) = parser.item(context) {
-            let id = ItemId(parser.tree.items.len() as u32);
-            roots.push(id);
-            parser.tree.items.push(item);
-            for mut annotation in parser.analyses.drain(..) {
-                annotation.item = id;
-                parser.tree.analyses.push(annotation);
-            }
+            let owned_end = parser.owned_end(&item);
+            parser.tree.analyses = std::mem::take(&mut parser.analyses);
+            items.push(Arc::new(parser.item_syntax(item, owned_start, owned_end)));
+            owned_start = owned_end;
             if parser.end(false).is_err() {
                 parser.recover_item(start);
             }
@@ -81,31 +90,44 @@ pub fn parse(
             parser.recover_item(start);
         }
     }
-    parser.attach_trivia();
+    let tokens = parser
+        .tokens
+        .split_off(owned_start.min(parser.tokens.len()));
     ParseOutput {
         syntax: SyntaxFile {
             has_syntax_errors: parser.nesting_limit.is_some()
                 || !parser.diagnostics.is_empty()
-                || parser
-                    .tokens
+                || items
                     .iter()
+                    .flat_map(|item| &item.tree.tokens)
+                    .chain(&tokens)
                     .any(|t| matches!(t.kind, TokenKind::Invalid)),
             file,
-            tokens: parser.tokens,
-            tree: parser.tree,
-            roots,
+            items,
+            tokens,
         },
         diagnostics: parser.diagnostics,
         nesting_limit: parser.nesting_limit,
     }
 }
 
+/// The item being parsed: its anchor, the file offset of its base and its
+/// first owned token.
+#[derive(Clone, Copy)]
+struct Local {
+    anchor: Anchor,
+    base: u32,
+    first_token: usize,
+}
+
 struct Parser<'a> {
     file: FileId,
+    file_anchor: Anchor,
+    local: Option<Local>,
     tokens: Vec<Token>,
     significant: Vec<usize>,
     pos: usize,
-    sources: &'a SourceMap,
+    sources: &'a mut SourceMap,
     tree: SyntaxTree,
     diagnostics: Vec<Diagnostic>,
     recovered_names: std::collections::BTreeSet<String>,
@@ -158,17 +180,51 @@ impl Parser<'_> {
         }
     }
     fn span(&self) -> Span {
-        self.token(0).map(|t| t.span).unwrap_or(Span {
-            file: self.file,
-            start: self
-                .sources
-                .file(self.file)
-                .map_or(0, |s| s.text().len() as u32),
-            end: self
-                .sources
-                .file(self.file)
-                .map_or(0, |s| s.text().len() as u32),
-        })
+        let end = self
+            .sources
+            .file(self.file)
+            .map_or(0, |s| s.text().len() as u32);
+        self.local_span(self.token(0).map_or(
+            Span {
+                anchor: self.file_anchor,
+                start: end,
+                end,
+            },
+            |t| t.span,
+        ))
+    }
+    /// A span of the tape relative to the current item's anchor, when it is one
+    /// of this file's own; spans the tape carries from elsewhere are kept.
+    fn local_span(&self, span: Span) -> Span {
+        match self.local {
+            Some(local) if span.anchor == self.file_anchor && span.start >= local.base => Span {
+                anchor: local.anchor,
+                start: span.start - local.base,
+                end: span.end - local.base,
+            },
+            _ => span,
+        }
+    }
+    /// A tape index relative to the current item's first owned token.
+    fn local_token(&self, index: usize) -> u32 {
+        index.saturating_sub(self.local.map_or(0, |l| l.first_token)) as u32
+    }
+    /// Start the item whose owned tokens begin at tape index `first`. Failed
+    /// attempts own no tokens, so they leave the anchor to the next attempt.
+    fn anchor_at(&mut self, first: usize) {
+        if self.local.is_some_and(|l| l.first_token == first) {
+            return;
+        }
+        let base = self
+            .tokens
+            .get(first)
+            .filter(|t| t.span.anchor == self.file_anchor)
+            .map_or(0, |t| t.span.start);
+        self.local = Some(Local {
+            anchor: self.sources.item_anchor(self.file, base),
+            base,
+            first_token: first,
+        });
     }
     fn fail<T>(&mut self, rule: RuleId, message: impl Into<String>) -> Parsed<T> {
         self.fail_at(rule, self.span(), message)
@@ -190,18 +246,21 @@ impl Parser<'_> {
             .filter(|&p| p >= start)
             .and_then(|p| self.significant.get(p))
             .copied();
-        let span = self.tokens.get(first).map_or(self.span(), |t| t.span);
+        let span = self
+            .tokens
+            .get(first)
+            .map_or(self.span(), |t| self.local_span(t.span));
         Origin {
             span: Span {
                 end: last
                     .and_then(|i| self.tokens.get(i))
-                    .map_or(span.start, |t| t.span.end)
+                    .map_or(span.start, |t| self.local_span(t.span).end)
                     .max(span.start),
                 ..span
             },
             tokens: TokenRange {
-                start: first as u32,
-                end: last.map_or(first, |i| i + 1) as u32,
+                start: self.local_token(first),
+                end: self.local_token(last.map_or(first, |i| i + 1)),
             },
         }
     }
@@ -434,53 +493,63 @@ impl Parser<'_> {
         }
         self.pos += 1;
     }
-    fn attach_trivia(&mut self) {
-        let mut owned_start = 0usize;
-        for item in &mut self.tree.items {
-            let end = item.origin.tokens.end as usize;
-            let mut owned_end = end;
-            let mut comment = false;
-            for (i, t) in self.tokens.iter().enumerate().skip(end) {
-                match t.kind {
-                    TokenKind::Punct(Punct::Semicolon) if i == end => {
+    /// The end of the tokens `item` owns: its own, a `;` right after it, and the
+    /// rest of its last line with the line break. The next item takes the rest,
+    /// including blank lines and doc comments, so inserting a whole item above
+    /// another leaves the other's text unchanged.
+    fn owned_end(&self, item: &Item) -> usize {
+        let end = self.local.map_or(0, |l| l.first_token) + item.origin.tokens.end as usize;
+        let mut owned_end = end;
+        for (i, t) in self.tokens.iter().enumerate().skip(end) {
+            match t.kind {
+                TokenKind::Punct(Punct::Semicolon) if i == end => {
+                    owned_end = i + 1;
+                }
+                TokenKind::Trivia(TriviaKind::Newline) => {
+                    owned_end = i + 1;
+                    break;
+                }
+                TokenKind::Trivia(kind) => {
+                    if kind != TriviaKind::Space {
                         owned_end = i + 1;
                     }
-                    TokenKind::Trivia(TriviaKind::Newline) => {
-                        if comment {
-                            owned_end = i + 1;
-                        }
+                    if self.sources.slice(t.span).is_some_and(|s| s.contains('\n')) {
                         break;
                     }
-                    TokenKind::Trivia(kind) => {
-                        if kind != TriviaKind::Space {
-                            comment = true;
-                            owned_end = i + 1;
-                        }
-                        if self.sources.slice(t.span).is_some_and(|s| s.contains('\n')) {
-                            break;
-                        }
-                    }
-                    _ => break,
                 }
+                _ => break,
             }
-            item.owned_tokens = TokenRange {
-                start: owned_start as u32,
-                end: owned_end as u32,
-            };
-            let bytes = self
-                .tokens
-                .get(owned_start)
-                .zip(self.tokens.get(owned_end.saturating_sub(1)))
-                .and_then(|(a, b)| {
-                    self.sources.slice(Span {
-                        file: self.file,
-                        start: a.span.start,
-                        end: b.span.end,
-                    })
+        }
+        owned_end
+    }
+    /// The parsed item with the arenas built for it and its owned tokens.
+    fn item_syntax(&mut self, item: Item, owned_start: usize, owned_end: usize) -> ItemSyntax {
+        let bytes = self
+            .tokens
+            .get(owned_start)
+            .zip(self.tokens.get(owned_end.saturating_sub(1)))
+            .and_then(|(a, b)| {
+                self.sources.slice(Span {
+                    end: b.span.end,
+                    ..a.span
                 })
-                .unwrap_or("");
-            item.text_hash = ContentHash::of_bytes(bytes.as_bytes());
-            owned_start = owned_end;
+            })
+            .unwrap_or("");
+        let text_hash = ContentHash::of_bytes(bytes.as_bytes());
+        let mut tree = std::mem::take(&mut self.tree);
+        tree.tokens = self.tokens[owned_start..owned_end]
+            .iter()
+            .map(|t| Token {
+                kind: t.kind.clone(),
+                span: self.local_span(t.span),
+            })
+            .collect();
+        ItemSyntax {
+            item,
+            tree,
+            anchor: self.local.expect("an item has an anchor").anchor,
+            text_hash,
+            occurrence: 0,
         }
     }
     fn path(&mut self, type_context: bool) -> Parsed<Path> {

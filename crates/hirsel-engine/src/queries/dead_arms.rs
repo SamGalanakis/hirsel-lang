@@ -23,7 +23,7 @@ impl QueryEngine {
             let Ok(snapshot) = self.snapshot(definition) else {
                 return vec![];
             };
-            let item = &snapshot.file.tree.items[snapshot.item.0 as usize];
+            let item = &snapshot.item;
             match &item.kind {
                 ItemKind::Type {
                     body: TypeBody::Variants(arms),
@@ -82,7 +82,7 @@ impl QueryEngine {
         }
         let mut warnings = vec![];
         for (owner, snapshot) in declarations {
-            let item = &snapshot.file.tree.items[snapshot.item.0 as usize];
+            let item = &snapshot.item;
             if !errors.contains(&owner) {
                 continue;
             }
@@ -93,7 +93,7 @@ impl QueryEngine {
             else {
                 continue;
             };
-            let names = arm_names(&snapshot.file, item);
+            let names = arm_names(&snapshot);
             if names.len() != declared.len() {
                 continue;
             }
@@ -122,8 +122,10 @@ impl QueryEngine {
 
 /// Each arm's name and site in a variant declaration: the identifiers that
 /// follow its `=` and each top-level `|`.
-fn arm_names(file: &SyntaxFile, item: &hirsel_syntax::Item) -> Vec<(String, Span)> {
-    let tokens = &file.tokens[item.origin.tokens.start as usize..item.origin.tokens.end as usize];
+fn arm_names(syntax: &ItemSyntax) -> Vec<(String, Span)> {
+    let item = &syntax.item;
+    let tokens =
+        &syntax.tree.tokens[item.origin.tokens.start as usize..item.origin.tokens.end as usize];
     let mut arms = vec![];
     let mut depth = 0i32;
     let mut started = false;

@@ -90,7 +90,7 @@ impl Fixture {
             },
         );
         if public {
-            self.file.tree.items.last_mut().unwrap().visibility = Visibility::Public;
+            self.built(self.file.items.len() - 1).visibility = Visibility::Public;
         }
     }
     fn generic(&mut self, name: &str, bounds: Vec<Bound>) -> GenericParam {
@@ -565,7 +565,7 @@ fn build(name: &str) -> Fixture {
                 arguments: vec![],
                 origin: f.origin(),
             };
-            f.file.tree.items.last_mut().unwrap().attributes.push(attr);
+            f.built(f.file.items.len() - 1).attributes.push(attr);
         }
         "Item" => f.record(name, TypeFlavor::Flat, &[("sku", "String"), ("qty", "u32")]),
         "Order" => {
@@ -617,7 +617,7 @@ fn build(name: &str) -> Fixture {
                 binding: f.s("f"),
                 body,
             };
-            if let ItemKind::Type { drop: d, .. } = &mut f.file.tree.items[0].kind {
+            if let ItemKind::Type { drop: d, .. } = &mut f.built(0).kind {
                 *d = Some(drop);
             }
         }
@@ -683,7 +683,7 @@ fn build(name: &str) -> Fixture {
                 arguments: vec![AttributeArgument::Name(c)],
                 origin: f.origin(),
             };
-            f.file.tree.items[0].attributes.push(attr);
+            f.built(0).attributes.push(attr);
         }
         "Tree" => {
             let tree = f.named("Tree");

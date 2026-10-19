@@ -230,16 +230,20 @@ impl Diagnostic {
 }
 fn span_json(span: Span, sources: &SourceMap) -> serde_json::Value {
     use serde_json::json;
-    let file = sources.file(span.file);
     let location = sources.location(span);
-    let end = sources.slice(span).and_then(|_| file?.location(span.end));
+    let span = sources.resolve(span);
+    let file = sources.file(span.file);
+    let end = sources
+        .file_slice(span)
+        .and_then(|_| file?.location(span.end));
     json!({"file_id": span.file.0, "file": file.map(|f| f.path.to_string_lossy()),
         "start": span.start, "end": span.end,
         "line": location.map(|l| l.line), "column": location.map(|l| l.column),
         "end_line": end.map(|l| l.line), "end_column": end.map(|l| l.column)})
 }
 fn render_site(out: &mut String, span: Span, message: &str, sources: &SourceMap) {
-    if let (Some(file), Some(loc)) = (sources.file(span.file), sources.location(span)) {
+    let site = sources.resolve(span);
+    if let (Some(file), Some(loc)) = (sources.file(site.file), sources.location(span)) {
         out.push_str(&format!(
             " --> {}:{}:{}\n",
             file.path.display(),
@@ -273,7 +277,7 @@ fn render_site(out: &mut String, span: Span, message: &str, sources: &SourceMap)
     } else {
         out.push_str(&format!(
             " --> <unavailable>:{}..{} {message}\n",
-            span.start, span.end
+            site.start, site.end
         ));
     }
 }
@@ -358,7 +362,7 @@ mod tests {
     fn stable_json_and_unicode_locations() {
         let mut sources = SourceMap::default();
         let file = sources.add("a.hir", "é x\n".into()).unwrap();
-        let span = Span::new(file, 3, 4).unwrap();
+        let span = Span::new(sources.file_anchor(file), 3, 4).unwrap();
         let mut d = Diagnostic::error(RuleId::new("OWN-2").unwrap(), span, "moved");
         d.secondary.push(Label {
             span,
@@ -392,7 +396,7 @@ mod tests {
             let start = source.find("nope").unwrap() as u32;
             let diagnostic = Diagnostic::error(
                 RuleId::new("LANG-4").unwrap(),
-                Span::new(file, start, start + 4).unwrap(),
+                Span::new(sources.file_anchor(file), start, start + 4).unwrap(),
                 "unresolved name",
             );
             let human = diagnostic.render_human(&sources);
@@ -406,7 +410,7 @@ mod tests {
         let file = sources.add("wide.hir", "日".into()).unwrap();
         let diagnostic = Diagnostic::error(
             RuleId::new("LANG-1").unwrap(),
-            Span::new(file, 0, 3).unwrap(),
+            Span::new(sources.file_anchor(file), 0, 3).unwrap(),
             "unexpected character",
         );
         assert!(diagnostic.render_human(&sources).contains("     | ^^ "));

@@ -284,6 +284,10 @@ pub(crate) mod tests {
     pub(crate) fn row(kind: TypeKind) -> Type {
         Type::with_kind(kind)
     }
+    /// The binder of the `n`th test item.
+    pub(crate) fn item(n: u32) -> SiteRef {
+        hirsel_syntax::LexicalOwner::first(&path(&format!("item{n}"))).site(NameSite::Item)
+    }
     pub(crate) fn path(name: &str) -> DefPath {
         DefPath(hirsel_syntax::ItemPath {
             package: hirsel_syntax::PackageId {
@@ -334,23 +338,23 @@ pub(crate) mod tests {
     fn scoped_evidence_and_intrinsic_capability_authority_are_independent() {
         let mut store = TypeStore::default();
         let a = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            item(0),
             TypeParamId(0),
         ))));
         let b = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(1)),
+            item(1),
             TypeParamId(0),
         ))));
         let mut declarations = GenericDeclarations::default();
         declarations.insert(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            item(0),
             vec![GenericParameter::Type {
                 name: "A".into(),
                 bounds: vec![Bound::Data].into(),
             }],
         );
         declarations.insert(
-            NameSite::Item(hirsel_syntax::ItemId(1)),
+            item(1),
             vec![GenericParameter::Type {
                 name: "B".into(),
                 bounds: vec![].into(),
@@ -368,7 +372,7 @@ pub(crate) mod tests {
             .unwrap(),
             AuthoritySummary::Known(
                 vec![AuthorityTerm::TypeParameter(TypeParameterRef::body(
-                    NameSite::Item(hirsel_syntax::ItemId(1)),
+                    item(1),
                     TypeParamId(0)
                 ))]
                 .into()
@@ -428,11 +432,11 @@ pub(crate) mod tests {
             for both in [false, true] {
                 let mut store = TypeStore::default();
                 let bad = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
-                    NameSite::Item(hirsel_syntax::ItemId(0)),
+                    item(0),
                     TypeParamId(0),
                 ))));
                 let good = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
-                    NameSite::Item(hirsel_syntax::ItemId(1)),
+                    item(1),
                     TypeParamId(0),
                 ))));
                 let mut roots = vec![];
@@ -458,7 +462,7 @@ pub(crate) mod tests {
                         bound,
                         &GenericDeclarations::from_binders([
                             (
-                                GenericBinder::Body(NameSite::Item(hirsel_syntax::ItemId(0))),
+                                GenericBinder::Body(item(0)),
                                 vec![GenericParameter::Type {
                                     name: "Bad".into(),
                                     bounds: if both {
@@ -469,7 +473,7 @@ pub(crate) mod tests {
                                 }],
                             ),
                             (
-                                GenericBinder::Body(NameSite::Item(hirsel_syntax::ItemId(1))),
+                                GenericBinder::Body(item(1)),
                                 vec![GenericParameter::Type {
                                     name: "Good".into(),
                                     bounds: vec![bound].into(),
@@ -488,7 +492,7 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod finite_nominal_tests {
-    use super::tests::{nominal, path, row};
+    use super::tests::{item, nominal, path, row};
     use super::*;
     #[test]
     fn finite_nominal_depth_is_not_a_property_failure() {

@@ -50,3 +50,17 @@ fn every_recursive_and_loop_built_chain_has_the_same_boundary() {
         }
     });
 }
+
+#[test]
+fn heights_are_item_local_so_an_item_after_a_deep_one_keeps_its_own_height() {
+    support::with_compiler_stack(|| {
+        // The first item is at the limit; the second is shallow but has many nodes,
+        // whose ids restart in its own arenas.
+        let deep = program("binary", MAX_PARSE_DEPTH);
+        let shallow: String = (0..64).map(|i| format!(" let x{i} = 1 + 2\n")).collect();
+        let source = format!("{deep}\nfn shallow() {{\n{shallow}}}\n");
+        let (output, _) = support::parse(&source);
+        assert!(output.nesting_limit.is_none(), "{:?}", output.nesting_limit);
+        assert_eq!(output.syntax.items.len(), 2);
+    });
+}

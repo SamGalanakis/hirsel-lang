@@ -1,26 +1,36 @@
 use super::*;
 use hirsel_intern::Symbol;
-use hirsel_span::{FileId, Span};
+use hirsel_span::{Anchor, Span};
+use std::sync::Arc;
 
 /// Test-only token fixtures: the trees themselves are built by hand, never parsed.
+/// Every item sees the arenas built so far, so items may share nodes; the first
+/// item owns the whole tape but its end, at the file's own anchor.
 struct Fixture {
     file: SyntaxFile,
+    /// The arenas built so far; each item takes a copy.
+    tree: SyntaxTree,
+    /// The whole tape, EOF included.
+    tokens: Vec<Token>,
+    anchor: Anchor,
     sources: SourceMap,
 }
 impl Fixture {
     fn new(source: &str) -> Self {
         let mut sources = SourceMap::default();
         let file = sources.add("test.hir", source.into()).unwrap();
-        let tokens = tape(source, file);
+        let anchor = sources.file_anchor(file);
+        let tokens = tape(source, anchor);
         Self {
             file: SyntaxFile {
                 has_syntax_errors: false,
-
                 file,
-                tokens,
-                tree: SyntaxTree::default(),
-                roots: vec![],
+                items: vec![],
+                tokens: tokens.clone(),
             },
+            tree: SyntaxTree::default(),
+            tokens,
+            anchor,
             sources,
         }
     }
@@ -49,19 +59,19 @@ impl Fixture {
     fn origin(&self) -> Origin {
         Origin {
             span: Span {
-                file: self.file.file,
+                anchor: self.anchor,
                 start: 0,
                 end: self.sources.file(self.file.file).unwrap().text().len() as u32,
             },
             tokens: TokenRange {
                 start: 0,
-                end: self.file.tokens.len() as u32 - 1,
+                end: self.tokens.len() as u32 - 1,
             },
         }
     }
     fn e(&mut self, kind: ExprKind) -> ExprId {
-        let id = ExprId(self.file.tree.expressions.len() as u32);
-        self.file.tree.expressions.push(Expr {
+        let id = ExprId(self.tree.expressions.len() as u32);
+        self.tree.expressions.push(Expr {
             origin: Origin {
                 span: Span::default(),
                 tokens: TokenRange::default(),
@@ -71,16 +81,16 @@ impl Fixture {
         id
     }
     fn p(&mut self, kind: PatternKind) -> PatternId {
-        let id = PatternId(self.file.tree.patterns.len() as u32);
-        self.file.tree.patterns.push(Pattern {
+        let id = PatternId(self.tree.patterns.len() as u32);
+        self.tree.patterns.push(Pattern {
             origin: self.origin(),
             kind,
         });
         id
     }
     fn t(&mut self, kind: TypeExprKind) -> TypeExprId {
-        let id = TypeExprId(self.file.tree.types.len() as u32);
-        self.file.tree.types.push(TypeExpr {
+        let id = TypeExprId(self.tree.types.len() as u32);
+        self.tree.types.push(TypeExpr {
             origin: Origin {
                 span: Span::default(),
                 tokens: TokenRange::default(),
@@ -90,8 +100,8 @@ impl Fixture {
         id
     }
     fn st(&mut self, kind: StmtKind) -> StmtId {
-        let id = StmtId(self.file.tree.statements.len() as u32);
-        self.file.tree.statements.push(Stmt {
+        let id = StmtId(self.tree.statements.len() as u32);
+        self.tree.statements.push(Stmt {
             origin: self.origin(),
             kind,
         });
@@ -110,19 +120,17 @@ impl Fixture {
         if s.contains('.') {
             if let Some(start) = self.sources.file(self.file.file).unwrap().text().find(s) {
                 let first = self
-                    .file
                     .tokens
                     .iter()
                     .position(|t| t.span.start as usize == start)
                     .unwrap();
                 let end = self
-                    .file
                     .tokens
                     .iter()
                     .position(|t| t.span.end as usize == start + s.len())
                     .unwrap()
                     + 1;
-                self.file.tree.expressions[id.0 as usize].origin.tokens = TokenRange {
+                self.tree.expressions[id.0 as usize].origin.tokens = TokenRange {
                     start: first as u32,
                     end: end as u32,
                 };
@@ -142,12 +150,19 @@ impl Fixture {
     }
     fn item(&mut self, name: &str, kind: ItemKind) {
         let s = self.s(name);
-        let id = ItemId(self.file.tree.items.len() as u32);
-        self.file.tree.items.push(Item {
+        let first = self.file.items.is_empty();
+        let mut tree = self.tree.clone();
+        if first {
+            tree.tokens = self.tokens[..self.tokens.len() - 1].to_vec();
+            self.file.tokens = self.tokens[self.tokens.len() - 1..].to_vec();
+        }
+        let mut origin = self.origin();
+        if !first {
+            origin.tokens = TokenRange::default();
+        }
+        let item = Item {
             name_span: Default::default(),
-
-            origin: self.origin(),
-            owned_tokens: self.origin().tokens,
+            origin,
             name: s,
             definition: DefPath(ItemPath {
                 package: PackageId {
@@ -157,13 +172,27 @@ impl Fixture {
                 modules: vec![],
                 name: name.into(),
             }),
-            text_hash: ContentHash::default(),
             visibility: Visibility::Private,
             attributes: vec![],
             kind,
             generated: None,
-        });
-        self.file.roots.push(id);
+        };
+        self.file.items.push(Arc::new(ItemSyntax {
+            item,
+            tree,
+            anchor: self.anchor,
+            text_hash: ContentHash::default(),
+            occurrence: 0,
+        }));
+    }
+    /// The item built `index`th, to adjust after building it: it sees every
+    /// node built so far.
+    fn built(&mut self, index: usize) -> &mut Item {
+        let syntax = Arc::make_mut(&mut self.file.items[index]);
+        let tokens = std::mem::take(&mut syntax.tree.tokens);
+        syntax.tree = self.tree.clone();
+        syntax.tree.tokens = tokens;
+        &mut syntax.item
     }
     fn main(&mut self, e: ExprId) {
         let b = self.block(vec![], Some(e));
@@ -189,7 +218,7 @@ impl Fixture {
     }
 }
 // This fixture scanner only supplies tape spans and names, not AST structure.
-fn tape(source: &str, file: FileId) -> Vec<Token> {
+fn tape(source: &str, file: Anchor) -> Vec<Token> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < source.len() {
@@ -391,7 +420,7 @@ fn tape(source: &str, file: FileId) -> Vec<Token> {
         out.push(Token {
             kind,
             span: Span {
-                file,
+                anchor: file,
                 start: start as u32,
                 end: i as u32,
             },
@@ -400,7 +429,7 @@ fn tape(source: &str, file: FileId) -> Vec<Token> {
     out.push(Token {
         kind: TokenKind::Eof,
         span: Span {
-            file,
+            anchor: file,
             start: i as u32,
             end: i as u32,
         },
@@ -634,19 +663,17 @@ fn versioned_paths_and_reserved_members() {
     let field = f.s("type");
     let e = f.e(ExprKind::Field { base, field });
     let start = f
-        .file
         .tokens
         .iter()
         .position(|t| f.sources.slice(t.span) == Some("x"))
         .unwrap();
     let end = f
-        .file
         .tokens
         .iter()
         .position(|t| f.sources.slice(t.span) == Some("type"))
         .unwrap()
         + 1;
-    f.file.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
+    f.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
         start: start as u32,
         end: end as u32,
     };
@@ -1083,7 +1110,7 @@ fn generic_labelled_signatures_contracts_and_visibility() {
             abi: None,
         },
     );
-    f.file.tree.items[0].visibility = Visibility::Public;
+    f.built(0).visibility = Visibility::Public;
     f.check("pub fn append[T: plain + flat + data + key + sendable + inert + copyable, n: size](\n  into mut xs: T,\n  take x: T\n) -> T uses {xs}\n  requires x\n  ensures result\n");
 }
 #[test]
@@ -1203,10 +1230,10 @@ fn all_declaration_bodies_and_resource_drop() {
             drop: None,
         },
     );
-    f.file.tree.items.last_mut().unwrap().visibility = Visibility::PublicOpaque;
+    f.built(f.file.items.len() - 1).visibility = Visibility::PublicOpaque;
     let value = f.int("1");
     f.item("X", ItemKind::Const { ty: u, value });
-    f.file.tree.items.last_mut().unwrap().visibility = Visibility::Public;
+    f.built(f.file.items.len() - 1).visibility = Visibility::Public;
     f.item(
         "foreign",
         ItemKind::Function {
@@ -1264,7 +1291,7 @@ fn attribute_payloads_and_named_variant_fields() {
         origin: f.origin(),
     })
     .collect();
-    f.file.tree.items[0].attributes = attrs;
+    f.built(0).attributes = attrs;
     f.check("@layout(c)\n@align(8)\n@packed\n@custom(\"x\")\ntype Rec = Rec(x: T)\n");
 }
 #[test]
@@ -1304,19 +1331,17 @@ fn comments_in_grouped_continuations_keep_parentheses() {
         right: b,
     });
     let start = f
-        .file
         .tokens
         .iter()
         .position(|t| f.sources.slice(t.span) == Some("(") && t.span.start > 10)
         .unwrap();
     let end = f
-        .file
         .tokens
         .iter()
         .rposition(|t| f.sources.slice(t.span) == Some(")"))
         .unwrap()
         + 1;
-    f.file.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
+    f.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
         start: start as u32,
         end: end as u32,
     };
@@ -1385,7 +1410,7 @@ fn malformed_or_unrepresented_syntax_is_byte_identical() {
     let r = format(&f.file, &f.sources);
     assert!(r.unchanged);
     assert_eq!(r.source, "fn main() {}");
-    f.file.tokens.remove(0);
+    Arc::make_mut(&mut f.file.items[0]).tree.tokens.remove(0);
     assert!(format(&f.file, &f.sources).unchanged);
 }
 #[test]
@@ -1435,7 +1460,6 @@ fn trailing_closure_authority_moves_only_when_comment_order_allows() {
             body,
         });
         let opens: Vec<_> = f
-            .file
             .tokens
             .iter()
             .enumerate()
@@ -1443,23 +1467,23 @@ fn trailing_closure_authority_moves_only_when_comment_order_allows() {
             .map(|(i, _)| i)
             .collect();
         let body_start = opens[1];
-        let body_end = (body_start + 1..f.file.tokens.len())
-            .find(|i| matches!(f.file.tokens[*i].kind, TokenKind::Punct(Punct::RBrace)))
+        let body_end = (body_start + 1..f.tokens.len())
+            .find(|i| matches!(f.tokens[*i].kind, TokenKind::Punct(Punct::RBrace)))
             .unwrap()
             + 1;
         let closure_start = (0..body_start)
             .rev()
-            .find(|i| matches!(f.file.tokens[*i].kind, TokenKind::Keyword(Keyword::Fn)))
+            .find(|i| matches!(f.tokens[*i].kind, TokenKind::Keyword(Keyword::Fn)))
             .unwrap();
-        let closure_end = (body_end..f.file.tokens.len())
-            .find(|i| matches!(f.file.tokens[*i].kind, TokenKind::Punct(Punct::RBrace)))
+        let closure_end = (body_end..f.tokens.len())
+            .find(|i| matches!(f.tokens[*i].kind, TokenKind::Punct(Punct::RBrace)))
             .unwrap()
             + 1;
-        f.file.tree.expressions[body.0 as usize].origin.tokens = TokenRange {
+        f.tree.expressions[body.0 as usize].origin.tokens = TokenRange {
             start: body_start as u32,
             end: body_end as u32,
         };
-        f.file.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
+        f.tree.expressions[e.0 as usize].origin.tokens = TokenRange {
             start: closure_start as u32,
             end: closure_end as u32,
         };
@@ -1516,16 +1540,21 @@ fn error_patterns_types_and_missing_ids_leave_source_intact() {
     );
     for case in 0..3 {
         let mut file = f.file.clone();
+        let syntax = Arc::make_mut(&mut file.items[0]);
         match case {
-            0 => file.tree.patterns.push(Pattern {
+            0 => syntax.tree.patterns.push(Pattern {
                 origin: f.origin(),
                 kind: PatternKind::Error,
             }),
-            1 => file.tree.types.push(TypeExpr {
+            1 => syntax.tree.types.push(TypeExpr {
                 origin: f.origin(),
                 kind: TypeExprKind::Error,
             }),
-            _ => file.roots = vec![ItemId(99)],
+            _ => {
+                if let ItemKind::Function { body, .. } = &mut syntax.item.kind {
+                    *body = Some(ExprId(99));
+                }
+            }
         };
         let r = format(&file, &f.sources);
         assert!(r.unchanged);
@@ -1577,13 +1606,13 @@ fn capability_keyword_payload_and_remaining_qualifier_pattern_forms() {
             drop: None,
         },
     );
-    f.file.tree.items[0].visibility = Visibility::PublicOpaque;
+    f.built(0).visibility = Visibility::PublicOpaque;
     let attribute = Attribute {
         name: f.s("capability"),
         arguments: vec![AttributeArgument::Keyword(Keyword::Global)],
         origin: f.origin(),
     };
-    f.file.tree.items[0].attributes.push(attribute);
+    f.built(0).attributes.push(attribute);
     f.check("@capability(global)\npub opaque type Cap: inert uses {}\n");
     let mut f = Fixture::new("fn main() -> T of arena in env");
     let base = f.named("T");
@@ -1684,13 +1713,17 @@ fn hand_tree_comment_layout_is_a_fixed_point() {
         .sources
         .add("formatted.hir", first.source.clone())
         .unwrap();
+    // The same item, now owning the formatted file's tape.
     f.file.file = file;
-    f.file.tokens = tape(&first.source, file);
+    f.anchor = f.sources.file_anchor(file);
+    f.tokens = tape(&first.source, f.anchor);
+    f.file.tokens = f.tokens.last().cloned().into_iter().collect();
     let origin = f.origin();
-    for item in &mut f.file.tree.items {
-        item.origin = origin;
-        item.owned_tokens = origin.tokens;
-    }
+    let tokens = f.tokens[..f.tokens.len() - 1].to_vec();
+    let syntax = Arc::make_mut(&mut f.file.items[0]);
+    syntax.item.origin = origin;
+    syntax.tree.tokens = tokens;
+    syntax.anchor = f.anchor;
     let second = format(&f.file, &f.sources);
     assert!(!second.unchanged);
     assert_eq!(first.source, second.source);

@@ -22,7 +22,7 @@ fn closure_proofs_at(counts: &'static [u64]) {
                 hirsel_intern::work::Counter::CopiedGenericDeclarationRows,
             );
             let result = engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(result.diagnostics.is_empty());
             let rows = hirsel_intern::work::read(

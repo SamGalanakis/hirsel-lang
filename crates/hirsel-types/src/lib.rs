@@ -29,7 +29,7 @@ mod properties;
 pub use authority::*;
 use hirsel_intern::Symbol;
 use hirsel_syntax::FileContext;
-pub use hirsel_syntax::{Bound, PassingMode};
+pub use hirsel_syntax::{Bound, LexicalOwner, NameSite, PassingMode, SiteRef};
 use hirsel_syntax::{ContentHash, ContractKind, DefPath, ExprId, PatternId, TypeExprId};
 pub use metadata::*;
 pub use properties::*;
@@ -126,13 +126,15 @@ pub enum GenericArgument {
 }
 /// A parameter reference names its declaring binder, independently of storage.
 /// Every callable introduces a binder, including nongeneric callables. Signature
-/// depth zero is the nearest binder; checked free references name a source scope.
+/// depth zero is the nearest binder; checked free references name a source scope
+/// qualified by its owning definition occurrence, so a row means the same thing
+/// in every definition that holds it.
 #[derive(
     serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
 )]
 pub enum BinderRef<P> {
     Bound { depth: u32, parameter: P },
-    Body { scope: NameSite, parameter: P },
+    Body { scope: SiteRef, parameter: P },
 }
 pub type ParameterRef = BinderRef<ParamId>;
 pub type TypeParameterRef = BinderRef<TypeParamId>;
@@ -144,7 +146,7 @@ impl<P: Copy> BinderRef<P> {
             parameter,
         }
     }
-    pub const fn body(scope: NameSite, parameter: P) -> Self {
+    pub const fn body(scope: SiteRef, parameter: P) -> Self {
         Self::Body { scope, parameter }
     }
     pub const fn parameter(self) -> P {
@@ -164,7 +166,7 @@ impl<P: Copy> BinderRef<P> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum GenericBinder {
     Bound(u32),
-    Body(NameSite),
+    Body(SiteRef),
 }
 /// Origin root; parameter references survive separate checking (PROV-1/2).
 #[derive(
@@ -174,10 +176,10 @@ pub enum OriginRoot {
     /// A declared operation selects the retained brand of this argument, rather
     /// than the identity of the wrapper value itself (for example PositionView).
     ArgumentBrand(ParameterRef),
-    /// Identity of a materialized source expression within its retained syntax snapshot.
-    Expression(ExprId),
+    /// Identity of a materialized source expression of the owner's syntax.
+    Expression(LexicalOwner, ExprId),
     Parameter(ParameterRef),
-    Local(LocalId),
+    Local(LexicalOwner, LocalId),
     Definition(DefPath),
     Sibling(FieldId),
 }
@@ -1020,6 +1022,9 @@ pub struct CheckedTail {
 /// Typechecked body tables keyed by source expression; mode checking enriches these tables (MODE-7).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckedBody {
+    /// The definition occurrence whose syntax these tables are keyed by; rows
+    /// qualify the body's lexical sites with it.
+    pub lexical: LexicalOwner,
     pub places: Vec<SourcePlace>,
     pub calls: Vec<CheckedCall>,
     pub tails: Vec<CheckedTail>,
@@ -1137,6 +1142,14 @@ pub trait SignatureProvider {
         _stage: GroupStage,
     ) -> Result<RecursiveGroup, QueryError> {
         Ok(RecursiveGroup::default())
+    }
+    /// The name site of `definition`'s first declaration in the checked
+    /// definition's own source file, for a secondary label. A citation of
+    /// another item: the span is relative to that item's anchor, and the
+    /// provider records the read so a change to the cited text invalidates it.
+    fn cite_name(&mut self, definition: &DefPath) -> Option<hirsel_span::Span> {
+        let _ = definition;
+        None
     }
 }
 

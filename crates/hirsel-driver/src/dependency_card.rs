@@ -32,8 +32,8 @@ pub fn cards(
             .parse_file(file, &context)
             .map_err(|e| program.error(e))?
             .value;
-        for id in &parsed.roots {
-            let path = &parsed.tree.items[id.0 as usize].definition;
+        for syntax in &parsed.items {
+            let path = &syntax.item.definition;
             if wanted.contains(path.to_string().as_str()) {
                 roots.push(path.clone());
             }

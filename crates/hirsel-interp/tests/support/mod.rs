@@ -1,5 +1,5 @@
 use hirsel_interp::{Execution, Limits, Value, run};
-use hirsel_span::{FileId, SourceMap, Span};
+use hirsel_span::{Anchor, SourceMap, Span};
 use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PackageId};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
@@ -15,16 +15,30 @@ pub fn path(name: &str) -> DefPath {
         name: name.into(),
     })
 }
+/// The anchor fixture sites name; [`sources`] places it at the fixture file.
+fn fixture() -> Anchor {
+    static ANCHOR: std::sync::OnceLock<Anchor> = std::sync::OnceLock::new();
+    *ANCHOR.get_or_init(Anchor::fresh)
+}
 pub fn site(line: u32) -> Span {
     Span {
-        file: FileId(0),
+        anchor: fixture(),
         start: line - 1,
         end: line - 1,
     }
 }
+/// The test definition's own binder.
+pub fn item_scope() -> SiteRef {
+    hirsel_syntax::LexicalOwner::first(&path("main")).site(NameSite::Item)
+}
 pub fn sources() -> SourceMap {
+    sources_of("fixture.hir", "\n".repeat(100))
+}
+/// A map holding `text` as the file fixture sites name.
+pub fn sources_of(path: &str, text: String) -> SourceMap {
     let mut sources = SourceMap::default();
-    sources.add("fixture.hir", "\n".repeat(100)).unwrap();
+    let file = sources.add(path, text).unwrap();
+    sources.move_anchor(fixture(), file, 0);
     sources
 }
 pub fn ty(kind: TypeKind) -> Type {
@@ -46,7 +60,7 @@ impl Builder {
         Self {
             types,
             body: Body {
-                parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+                parameter_scope: item_scope(),
                 locals: vec![],
                 places: vec![],
                 scopes: vec![Scope {

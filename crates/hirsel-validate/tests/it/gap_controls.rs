@@ -586,7 +586,7 @@ fn sequence(size: Size, fields: u32) -> Fixture {
 fn an_inline_literal_has_exactly_its_constant_length() {
     let n = || {
         Size::Parameter(SizeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(0)),
+            scoped(NameSite::Item),
             SizeParamId(0),
         ))
     };

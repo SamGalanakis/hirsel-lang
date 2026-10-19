@@ -34,16 +34,16 @@ fn comparison_range_assignment_and_return_binding_follow_the_table() {
     assert!(output.diagnostics.is_empty());
     let returned = output
         .syntax
-        .tree
-        .expressions
+        .items
         .iter()
+        .flat_map(|i| &i.tree.expressions)
         .find_map(|e| match e.kind {
             ExprKind::Return(Some(e)) => Some(e),
             _ => None,
         })
         .unwrap();
     assert!(matches!(
-        output.syntax.tree.expressions[returned.0 as usize].kind,
+        output.syntax.items[0].tree.expressions[returned.0 as usize].kind,
         ExprKind::Binary {
             op: BinaryOp::Range,
             ..
@@ -57,22 +57,27 @@ fn function_type_modifiers_cover_what_follows_and_relations_bind_the_nearest_typ
         "type A = fn() -> once T\ntype B = once fn() -> T\ntype C = fn() -> T in x\ntype D = fn() -> T uses {} in x",
     );
     assert!(output.diagnostics.is_empty());
-    let tree = output.syntax.tree;
-    let alias = |i: usize| match tree.items[i].kind {
-        ItemKind::Type {
-            body: TypeBody::Alias(ty),
-            ..
-        } => ty,
-        _ => panic!(),
+    // Each alias's type, in its own item's arenas.
+    let alias = |i: usize| {
+        let syntax = &output.syntax.items[i];
+        match syntax.item.kind {
+            ItemKind::Type {
+                body: TypeBody::Alias(ty),
+                ..
+            } => (&syntax.tree, ty),
+            _ => panic!(),
+        }
     };
-    let TypeExprKind::Function(sig) = &tree.types[alias(0).0 as usize].kind else {
+    let (tree, ty) = alias(0);
+    let TypeExprKind::Function(sig) = &tree.types[ty.0 as usize].kind else {
         panic!()
     };
     assert!(matches!(
         tree.types[sig.result.unwrap().0 as usize].kind,
         TypeExprKind::Qualified { .. }
     ));
-    let TypeExprKind::Qualified { base, .. } = tree.types[alias(1).0 as usize].kind else {
+    let (tree, ty) = alias(1);
+    let TypeExprKind::Qualified { base, .. } = tree.types[ty.0 as usize].kind else {
         panic!()
     };
     let TypeExprKind::Function(sig) = &tree.types[base.0 as usize].kind else {
@@ -83,14 +88,16 @@ fn function_type_modifiers_cover_what_follows_and_relations_bind_the_nearest_typ
         TypeExprKind::Named { .. }
     ));
     // A relation after a result binds the result; after `uses`, the function.
-    let TypeExprKind::Function(sig) = &tree.types[alias(2).0 as usize].kind else {
+    let (tree, ty) = alias(2);
+    let TypeExprKind::Function(sig) = &tree.types[ty.0 as usize].kind else {
         panic!()
     };
     assert!(matches!(
         tree.types[sig.result.unwrap().0 as usize].kind,
         TypeExprKind::Qualified { .. }
     ));
-    let TypeExprKind::Qualified { base, .. } = tree.types[alias(3).0 as usize].kind else {
+    let (tree, ty) = alias(3);
+    let TypeExprKind::Qualified { base, .. } = tree.types[ty.0 as usize].kind else {
         panic!()
     };
     assert!(matches!(
@@ -136,19 +143,26 @@ fn numeric_size_arguments_are_unsuffixed_u64_literals_without_arithmetic() {
 fn package_paths_are_adjacent_and_unversioned_slash_is_division() {
     let (output, _) = support::parse("fn f() { a/b }\nfn g() { json@1/value.parse(x) }");
     assert!(output.diagnostics.is_empty());
-    assert!(output.syntax.tree.expressions.iter().any(|e| matches!(
-        e.kind,
-        ExprKind::Binary {
-            op: BinaryOp::Div,
-            ..
-        }
-    )));
     assert!(
         output
             .syntax
-            .tree
-            .expressions
+            .items
             .iter()
+            .flat_map(|i| &i.tree.expressions)
+            .any(|e| matches!(
+                e.kind,
+                ExprKind::Binary {
+                    op: BinaryOp::Div,
+                    ..
+                }
+            ))
+    );
+    assert!(
+        output
+            .syntax
+            .items
+            .iter()
+            .flat_map(|i| &i.tree.expressions)
             .any(|e| matches!(&e.kind, ExprKind::Path(path) if path.package.is_some()))
     );
     for expression in [

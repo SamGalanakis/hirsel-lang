@@ -38,10 +38,10 @@ fn run(source: &str, seed: &[String], reverse: bool, noise: u8) -> QueryOutput<C
     assert!(ds.is_empty());
     let mut registry = support::registry(&file);
     support::normalize_file(&file, &mut registry).unwrap();
-    let id = *file.roots.last().unwrap();
+    let id = file.items.last().unwrap();
     let r = hirsel_resolve::resolve_item(&file, id, &registry.index.clone(), &mut registry);
     assert!(r.query.diagnostics.is_empty(), "{:?}", r.query.diagnostics);
-    let signature = registry.signatures[&file.tree.items[id.0 as usize].definition].clone();
+    let signature = registry.signatures[&id.item.definition].clone();
     let mut loaded: Vec<_> = registry.signatures.into_iter().collect();
     if reverse {
         loaded.reverse();
@@ -53,8 +53,7 @@ fn run(source: &str, seed: &[String], reverse: bool, noise: u8) -> QueryOutput<C
     check_with_loop_protocols(
         LoopInput {
             body: Input {
-                tree: &file.tree,
-                item: id,
+                syntax: id,
                 context: &support::context(),
                 resolution: &r,
                 signature: &signature,

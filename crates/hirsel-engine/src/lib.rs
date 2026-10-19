@@ -46,8 +46,8 @@ use hirsel_intern::Symbol;
 pub use hirsel_interp::library::SimulationConfig;
 use hirsel_span::{FileId, SourceMap};
 pub use hirsel_syntax::DefPath;
-use hirsel_syntax::{ContentHash, ItemId, SyntaxFile, Token};
-pub use hirsel_syntax::{DefinitionSource, FileContext};
+pub use hirsel_syntax::FileContext;
+use hirsel_syntax::{ContentHash, ItemSyntax, SyntaxFile, Token};
 pub use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
 use hirsel_types::{CheckedBody, Resolution, Signature};
 pub use hirsel_types::{QueryError, QueryOutput, SignatureDependency, SignatureProvider};
@@ -231,14 +231,15 @@ pub trait LexerPhase {
     fn lex(&self, file: FileId, sources: &SourceMap)
     -> Result<QueryOutput<Vec<Token>>, QueryError>;
 }
-/// Parsing receives tokens and file naming context; it does not resolve types (LANG-1/2).
+/// Parsing receives tokens and file naming context; it does not resolve types
+/// (LANG-1/2). It places one anchor per item in `sources`.
 pub trait ParserPhase {
     fn parse(
         &self,
         file: FileId,
         tokens: Vec<Token>,
         context: &FileContext,
-        sources: &SourceMap,
+        sources: &mut SourceMap,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError>;
 }
 /// Formatting uses the complete token tape including error recovery and comments (LANG-1).
@@ -253,8 +254,7 @@ pub trait FormatterPhase {
 pub trait ResolverPhase {
     fn resolve(
         &self,
-        file: std::sync::Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: std::sync::Arc<ItemSyntax>,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError>;
 }
@@ -262,8 +262,7 @@ pub trait ResolverPhase {
 pub trait CheckerPhase {
     fn check(
         &self,
-        file: std::sync::Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: std::sync::Arc<ItemSyntax>,
         resolution: Resolution,
         signature: &Signature,
         signatures: &mut dyn SignatureProvider,

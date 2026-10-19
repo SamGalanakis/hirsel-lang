@@ -82,7 +82,7 @@ fn real_signature_phase_reports_duplicate_at_exact_later_name_on_compiler_thread
     assert_eq!(errors[0].rule.as_str(), "LANG-7");
     assert_eq!(engine.sources.slice(errors[0].primary), Some("value"));
     assert_eq!(engine.sources.location(errors[0].primary).unwrap().line, 2);
-    assert_eq!(errors[0].primary.file, file);
+    assert_eq!(engine.sources.resolve(errors[0].primary).file, file);
 }
 #[test]
 fn self_nominal_signature_probes_are_recorded_without_recomputing_forever() {
@@ -365,10 +365,10 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
     );
     for name in ["main", "c", "Token", "Positive"] {
         engine.item_signature(&path(name)).unwrap();
-        let original = engine.parse_definition(&path(name)).unwrap().value.0;
+        let original = engine.parse_definition(&path(name)).unwrap().value;
         let state = engine.adapters.compiler_state.as_ref().unwrap().borrow();
         let header = &state.signature_resolutions[&path(name)];
-        assert!(std::sync::Arc::ptr_eq(&original, &header.file));
+        assert!(std::sync::Arc::ptr_eq(&original, &header.syntax));
         assert!(!header.reads.iter().any(|read| matches!(
             read,
             hirsel_types::DependencyRead::Lookup { segments, .. }
@@ -390,11 +390,11 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
         engine.resolve_definition(&path("main")),
         Err(QueryError::Diagnostics(_))
     ));
-    let original = engine.parse_definition(&path("main")).unwrap().value.0;
+    let original = engine.parse_definition(&path("main")).unwrap().value;
     let state = engine.adapters.compiler_state.as_ref().unwrap().borrow();
     assert!(std::sync::Arc::ptr_eq(
         &original,
-        &state.resolver_outputs[&path("main")].file
+        &state.resolver_outputs[&path("main")].syntax
     ));
 }
 

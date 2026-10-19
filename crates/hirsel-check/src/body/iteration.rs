@@ -12,7 +12,7 @@ impl Checker<'_, '_> {
             return Ok(None);
         }
         let written_take = matches!(
-            self.input.tree.expressions[source.0 as usize].kind,
+            self.input.syntax.tree.expressions[source.0 as usize].kind,
             ast::ExprKind::Unary {
                 op: ast::UnaryOp::Take,
                 ..
@@ -287,7 +287,7 @@ impl Checker<'_, '_> {
             }
             ForProtocol::Map(kind) => {
                 if matches!(
-                    self.input.tree.expressions[source.0 as usize].kind,
+                    self.input.syntax.tree.expressions[source.0 as usize].kind,
                     ast::ExprKind::Unary {
                         op: ast::UnaryOp::Take,
                         ..

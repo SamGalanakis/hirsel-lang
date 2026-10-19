@@ -899,7 +899,11 @@ impl BindingKey {
     }
 }
 impl InitialStorage {
-    pub(super) fn new(tree: &SyntaxTree, body: &CheckedBody, properties: &[Properties]) -> Self {
+    pub(super) fn new(
+        tree: &hirsel_syntax::SyntaxTree,
+        body: &CheckedBody,
+        properties: &[Properties],
+    ) -> Self {
         let count = body.bindings.len();
         let mut storage = Self {
             inactive: hirsel_types::rows::Rows::new(Slot::default(), count)
@@ -987,15 +991,16 @@ impl InitialStorage {
     }
     pub(super) fn postcondition_inputs(
         &mut self,
-        tree: &SyntaxTree,
+        syntax: &ItemSyntax,
         owner: NameSite,
         body: &mut CheckedBody,
         properties: &mut Vec<Properties>,
         uniqueness: &BTreeMap<ParamId, bool>,
         sendability: &BTreeMap<ParamId, bool>,
     ) {
+        let tree = &syntax.tree;
         let syntax = match owner {
-            NameSite::Item(item) => match &tree.items[item.0 as usize].kind {
+            NameSite::Item => match &syntax.item.kind {
                 hirsel_syntax::ItemKind::Function { signature, .. } => signature,
                 _ => return,
             },
@@ -1060,7 +1065,7 @@ impl InitialStorage {
         &self.environment_frames
     }
     fn initial(&self, checker: &Checker<'_>) -> State {
-        let mut slots = if matches!(checker.graph.owner, NameSite::Item(_)) {
+        let mut slots = if matches!(checker.graph.owner, NameSite::Item) {
             self.inactive.clone()
         } else if checker.graph.scoped {
             self.scoped.clone()
@@ -1104,7 +1109,7 @@ impl InitialStorage {
                     slot.value.modes.relation =
                         Relation::environment().union(&slot.value.modes.relation);
                 } else if !checker.arenas.global(&slot.value.modes.relation)
-                    && matches!(checker.graph.owner, NameSite::Item(_))
+                    && matches!(checker.graph.owner, NameSite::Item)
                 {
                     // A taken Local argument bounds its content by that
                     // argument, through every part that keeps its value. A
@@ -1199,7 +1204,8 @@ impl InitialStorage {
 
 struct Checker<'a> {
     proof_error: std::cell::RefCell<Option<QueryError>>,
-    tree: &'a SyntaxTree,
+    syntax: &'a ItemSyntax,
+    tree: &'a hirsel_syntax::SyntaxTree,
     /// Diagnostics of this graph awaiting their causes (R1).
     explanations: Vec<(usize, causes::Pending)>,
     /// Sites logged by the trace pass of a graph that reported a diagnostic.
@@ -1561,7 +1567,7 @@ pub(super) fn capture_crossing_uses(
 }
 
 pub(super) fn check(
-    tree: &SyntaxTree,
+    syntax: &ItemSyntax,
     own: &Signature,
     body: &mut CheckedBody,
     signatures: &super::properties::Signatures,
@@ -1580,6 +1586,7 @@ pub(super) fn check(
     introductions: &BTreeMap<NameSite, Vec<(NameSite, Origin, usize)>>,
     proof: Option<ParamId>,
 ) -> Result<FlowOutput, QueryError> {
+    let tree = &syntax.tree;
     let live = super::liveness::Liveness {
         tree,
         body,
@@ -1627,6 +1634,7 @@ pub(super) fn check(
     let mut checker = Checker {
         arenas,
         source_rows,
+        syntax,
         tree,
         explanations: vec![],
         trace: None,
@@ -1691,8 +1699,11 @@ pub(super) fn check(
         .map(|(_, statement)| *statement)
         .collect();
     let initial = checker.proof_entry(initial_storage.initial(&checker));
-    let finalizer = matches!(graph.owner, NameSite::Item(item)
-        if matches!(tree.items[item.0 as usize].kind, hirsel_syntax::ItemKind::Type { drop: Some(_), .. }));
+    let finalizer = graph.owner == NameSite::Item
+        && matches!(
+            syntax.item.kind,
+            hirsel_syntax::ItemKind::Type { drop: Some(_), .. }
+        );
     for &index in initial_storage
         .owners
         .get(&graph.owner)
@@ -1925,12 +1936,14 @@ impl Checker<'_> {
         let binding = &self.body.bindings[index];
         binding.site == binding.owner
             && matches!(binding.binding, ResolvedName::Local(_))
-            && matches!(binding.owner, NameSite::Item(item)
-                if matches!(self.tree.items[item.0 as usize].kind,
-                    hirsel_syntax::ItemKind::Type { drop: Some(_), .. }))
+            && binding.owner == NameSite::Item
+            && matches!(
+                self.syntax.item.kind,
+                hirsel_syntax::ItemKind::Type { drop: Some(_), .. }
+            )
     }
     fn parameter_passing(&self, owner: &NameSite, parameter: ParamId) -> PassingMode {
-        if let NameSite::Item(_) = owner {
+        if let NameSite::Item = owner {
             if let SignatureKind::Function(f) = &self.own.kind {
                 return f
                     .parameters
@@ -4110,12 +4123,12 @@ impl Checker<'_> {
                         binding.owner == self.graph.owner
                             && matches!(binding.binding,
                             ResolvedName::Parameter(parameter) if !self.arenas.arena(&Origin {
-                                root: OriginRoot::Parameter(ParameterRef::body(binding.owner, parameter)),
+                                root: OriginRoot::Parameter(ParameterRef::body(self.body.lexical.site(binding.owner), parameter)),
                                 fields: vec![].into(),
                             }) && matches!(&result,
                                 Some(sources) if sources.iter().any(|source|
                                     matches!(source, ParameterRef::Bound { depth: 0, parameter: p } if *p == parameter)
-                                    || matches!(source, ParameterRef::Body { scope, parameter: p } if *scope == self.graph.owner && *p == parameter))))
+                                    || matches!(source, ParameterRef::Body { scope, parameter: p } if *scope == self.body.lexical.site(self.graph.owner) && *p == parameter))))
                     };
                     if !roots.is_empty() && roots.iter().all(selected) {
                         property.copyable = true;
@@ -6385,7 +6398,7 @@ impl Checker<'_> {
                     for parameter in &parameters {
                         if let ParameterRef::Body { scope, parameter } = parameter {
                             if let Some(index) = self.body.bindings.iter().position(|b| {
-                                b.owner == *scope
+                                self.body.lexical.site(b.owner) == *scope
                                     && b.binding == ResolvedName::Parameter(*parameter)
                             }) {
                                 let part = &state.slots[index].value;
@@ -7220,7 +7233,9 @@ impl Checker<'_> {
                         depth: 0,
                         parameter,
                     } => (self.graph.owner, *parameter),
-                    ParameterRef::Body { scope, parameter } => (*scope, *parameter),
+                    ParameterRef::Body { scope, parameter } if scope.owner == self.body.lexical => {
+                        (scope.site, *parameter)
+                    }
                     _ => return None,
                 };
                 self.body.bindings.iter().position(|b| {

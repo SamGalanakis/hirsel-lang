@@ -15,7 +15,7 @@ pub(crate) fn concrete(
 }
 
 /// Nongeneric frames carry no incidental signature-store snapshot.
-pub(crate) fn bind(bindings: &mut Bindings, scope: NameSite, actuals: Actuals) {
+pub(crate) fn bind(bindings: &mut Bindings, scope: SiteRef, actuals: Actuals) {
     if !actuals.arguments.is_empty() {
         bindings.insert(scope, actuals);
     }

@@ -153,8 +153,8 @@ impl ManifestFixture {
         let definitions = files
             .into_iter()
             .flat_map(|file| {
-                file.roots.iter().map(|id| {
-                    let item = &file.tree.items[id.0 as usize];
+                file.items.iter().map(|syntax| {
+                    let item = &syntax.item;
                     DefinitionEntry {
                         definition: item.definition.clone(),
                         namespace: if matches!(item.kind, ItemKind::Type { .. }) {
@@ -179,11 +179,13 @@ impl ManifestFixture {
 
 impl ManifestIndex {
     /// Duplicate identity is an error, never repaired using a source position.
+    /// A path's first entry is its earliest site: parsing allocates anchors in
+    /// source order, so (anchor, offsets) orders one parse's sites.
     pub fn new(mut fixture: ManifestFixture) -> (Self, Vec<Diagnostic>) {
         fixture.definitions.sort_by(|a, b| {
             a.definition.cmp(&b.definition).then_with(|| {
-                (a.span.file, a.span.start, a.span.end).cmp(&(
-                    b.span.file,
+                (a.span.anchor, a.span.start, a.span.end).cmp(&(
+                    b.span.anchor,
                     b.span.start,
                     b.span.end,
                 ))

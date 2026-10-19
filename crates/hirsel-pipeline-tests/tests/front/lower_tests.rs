@@ -22,7 +22,7 @@ impl Fixture {
         ordinals: Vec<u32>,
     ) {
         let ExprKind::Call { callee, arguments } =
-            &self.tree.expressions[expression.0 as usize].kind
+            &self.syntax.tree.expressions[expression.0 as usize].kind
         else {
             panic!("call fixture")
         };
@@ -70,7 +70,8 @@ impl Fixture {
         self.checked.calls.push(row);
     }
     pub fn indirect_call_plan(&mut self, expression: ExprId, ordinals: Vec<u32>) {
-        let ExprKind::Call { callee, .. } = self.tree.expressions[expression.0 as usize].kind
+        let ExprKind::Call { callee, .. } =
+            self.syntax.tree.expressions[expression.0 as usize].kind
         else {
             panic!("call fixture")
         };
@@ -149,7 +150,8 @@ impl TirProvider for Provider {
 
 pub fn execute(definitions: Vec<Definition>, arguments: Vec<hirsel_interp::Value>) -> Execution {
     let mut sources = SourceMap::default();
-    sources.add("fixture.hir", "x\n".repeat(100)).unwrap();
+    let file = sources.add("fixture.hir", "x\n".repeat(100)).unwrap();
+    sources.move_anchor(fixture_anchor(), file, 0);
     run(
         &mut Provider(definitions),
         &sources,
@@ -441,8 +443,8 @@ fn guarded_moving_pattern_commits_only_after_true_guard() {
         let (p, b) = f.binding(f.scalar, U::Take);
         let guard = f.bool_(matches);
         let body = f.read(b, f.scalar, U::Take);
-        let q = PatternId(f.tree.patterns.len() as u32);
-        f.tree.patterns.push(Pattern {
+        let q = PatternId(f.syntax.tree.patterns.len() as u32);
+        f.syntax.tree.patterns.push(Pattern {
             origin: origin(1),
             kind: PatternKind::Wildcard,
         });

@@ -51,8 +51,9 @@ fn a_broken_dependency_association_is_reported_before_client_body_planning() {
                 assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
             } else {
                 assert_eq!(output.diagnostics[0].rule.as_str(), "SEM-4");
-                assert_eq!(output.diagnostics[0].primary.file, association_file);
-                assert_eq!(output.diagnostics[0].primary.start, 0);
+                let at = output.sources.resolve(output.diagnostics[0].primary);
+                assert_eq!(at.file, association_file);
+                assert_eq!(at.start, 0);
             }
         }
     });

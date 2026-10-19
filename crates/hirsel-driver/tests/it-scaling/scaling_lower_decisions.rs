@@ -21,7 +21,7 @@ fn lowering_reads_checked_decisions_with_bounded_work() {
                 let before =
                     hirsel_intern::work::read(hirsel_intern::work::Counter::LoweringDecisionRows);
                 let result = engine
-                    .lower_to_tir(&parsed.value.tree.items[0].definition)
+                    .lower_to_tir(&parsed.value.items[0].item.definition)
                     .unwrap();
                 assert!(result.diagnostics.is_empty());
                 let rows =

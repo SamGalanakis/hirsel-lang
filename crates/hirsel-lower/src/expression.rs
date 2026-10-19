@@ -17,7 +17,9 @@ impl Builder<'_, '_> {
             .next()
             .cloned()
             .ok_or_else(|| LowerError {
-                site: self.input.tree.expressions[id.0 as usize].origin.span,
+                site: self.input.syntax.tree.expressions[id.0 as usize]
+                    .origin
+                    .span,
                 message: "missing checked source place".into(),
             })
     }
@@ -50,12 +52,14 @@ impl Builder<'_, '_> {
                     variant: variant.0,
                     field: field.0,
                 },
-                SourceProjectionKind::Index(_) => {
-                    Projection::Index(index.ok_or_else(|| LowerError {
-                        site: self.input.tree.expressions[id.0 as usize].origin.span,
+                SourceProjectionKind::Index(_) => Projection::Index(index.ok_or_else(|| {
+                    LowerError {
+                        site: self.input.syntax.tree.expressions[id.0 as usize]
+                            .origin
+                            .span,
                         message: "checked field has index step".into(),
-                    })?)
-                }
+                    }
+                })?),
             };
             parent.projection.push(projection);
             parent.binding = parent.binding.and_then(|mut origin| {
@@ -88,7 +92,7 @@ impl Builder<'_, '_> {
             label: None,
             tail: Some(tail),
             ..
-        } = &self.input.tree.expressions[id.0 as usize].kind
+        } = &self.input.syntax.tree.expressions[id.0 as usize].kind
         {
             id = *tail;
         }
@@ -100,12 +104,12 @@ impl Builder<'_, '_> {
             label: None,
             statements,
             tail: Some(tail),
-        } = &self.input.tree.expressions[id.0 as usize].kind
+        } = &self.input.syntax.tree.expressions[id.0 as usize].kind
         else {
             return false;
         };
         if matches!(
-            self.input.tree.expressions[tail.0 as usize].kind,
+            self.input.syntax.tree.expressions[tail.0 as usize].kind,
             ExprKind::Block { .. }
         ) {
             return self.names_outer_storage(*tail);
@@ -117,7 +121,7 @@ impl Builder<'_, '_> {
             return false;
         };
         let local = statements.iter().any(|s| {
-            matches!(self.input.tree.statements[s.0 as usize].kind,
+            matches!(self.input.syntax.tree.statements[s.0 as usize].kind,
             hirsel_syntax::StmtKind::Let { pattern, .. }
                 if self.decisions.bindings.get(&NameSite::Pattern(pattern)).iter().copied().any(|b| {
                     b.site == NameSite::Pattern(pattern) && b.binding == *binding
@@ -145,7 +149,7 @@ impl Builder<'_, '_> {
         // Only a call's own destination can be the kept result; `mut` names
         // that destination itself.
         if !matches!(
-            self.input.tree.expressions[id.0 as usize].kind,
+            self.input.syntax.tree.expressions[id.0 as usize].kind,
             hirsel_syntax::ExprKind::Call { .. }
                 | hirsel_syntax::ExprKind::Unary {
                     op: hirsel_syntax::UnaryOp::Mut,
@@ -175,7 +179,7 @@ impl Builder<'_, '_> {
             let lent_tail = self.names_outer_storage(id);
             if !lent_tail
                 && !matches!(
-                    self.input.tree.expressions[id.0 as usize].kind,
+                    self.input.syntax.tree.expressions[id.0 as usize].kind,
                     ExprKind::Path(_)
                         | ExprKind::Field { .. }
                         | ExprKind::Unary {
@@ -187,7 +191,7 @@ impl Builder<'_, '_> {
                 value.place = self.bind_origin(
                     value.place,
                     hirsel_types::Origin {
-                        root: hirsel_types::OriginRoot::Expression(id),
+                        root: hirsel_types::OriginRoot::Expression(self.decisions.lexical, id),
                         fields: vec![].into(),
                     },
                     OriginBindingKind::Fresh,
@@ -205,7 +209,7 @@ impl Builder<'_, '_> {
         let span = self.span(id)?;
         let row = self.decision(id)?.clone();
         if matches!(
-            self.input.tree.expressions[id.0 as usize].kind,
+            self.input.syntax.tree.expressions[id.0 as usize].kind,
             ExprKind::Path(_)
         ) {
             if let Some((_, ResolvedName::Definition(definition))) =
@@ -248,7 +252,9 @@ impl Builder<'_, '_> {
                 .materialized_value(&value.types, &value.root, id, span)
                 .map(Some);
         }
-        let kind = self.input.tree.expressions[id.0 as usize].kind.clone();
+        let kind = self.input.syntax.tree.expressions[id.0 as usize]
+            .kind
+            .clone();
         let value = match kind {
             ExprKind::Literal(literal) => {
                 let constant = super::literal::constant(
@@ -363,7 +369,7 @@ impl Builder<'_, '_> {
             }
             ExprKind::Tuple(values) | ExprKind::Sequence(values) => {
                 let sequence = matches!(
-                    self.input.tree.expressions[id.0 as usize].kind,
+                    self.input.syntax.tree.expressions[id.0 as usize].kind,
                     ExprKind::Sequence(_)
                 );
                 let mut fields = vec![];
@@ -423,7 +429,7 @@ impl Builder<'_, '_> {
                 // positive scalar followed by negation.
                 if op == UnaryOp::Neg
                     && let ExprKind::Literal(Literal::Integer(ref spelling)) =
-                        self.input.tree.expressions[value.0 as usize].kind
+                        self.input.syntax.tree.expressions[value.0 as usize].kind
                 {
                     if let Some(bits) =
                         super::literal::signed_min(spelling, &self.types.get(row.ty).unwrap().kind)
@@ -640,12 +646,12 @@ impl Builder<'_, '_> {
             }
             ExprKind::Break { label, .. } | ExprKind::Continue(label) => {
                 let is_break = matches!(
-                    self.input.tree.expressions[id.0 as usize].kind,
+                    self.input.syntax.tree.expressions[id.0 as usize].kind,
                     ExprKind::Break { .. }
                 );
                 let Some(target) = self.loops.iter().rposition(|lp| {
                     label.is_none()
-                        || self.input.tree.statements[lp.statement.0 as usize]
+                        || self.input.syntax.tree.statements[lp.statement.0 as usize]
                             .kind
                             .loop_label()
                             == label
@@ -711,7 +717,7 @@ impl Builder<'_, '_> {
             }
             ExprKind::Comptime(_) => {
                 let inputs = hirsel_check_protocol::body::comptime_inputs(
-                    self.input.tree,
+                    self.input.syntax,
                     self.input.checked,
                     id,
                 );
@@ -1108,7 +1114,7 @@ impl Builder<'_, '_> {
             // A copied or moved arena value keeps only its arena bound: the
             // read loan on its temporary ends at return (P2).
             let computed = matches!(
-                self.input.tree.expressions[a.value.0 as usize].kind,
+                self.input.syntax.tree.expressions[a.value.0 as usize].kind,
                 ExprKind::Unary {
                     op: UnaryOp::Copy | UnaryOp::Take,
                     ..
@@ -1633,7 +1639,7 @@ impl Builder<'_, '_> {
             let slot = child.slot(capture.ty, Storage::Capture, span, owned);
             child.state.live.insert(child.root(slot).0);
             child.body.places[slot.0 as usize].binding =
-                Self::binding_origin(owner, &capture.binding);
+                Self::binding_origin(self.decisions.lexical, owner, &capture.binding);
             child.bindings.push((owner, capture.binding, slot));
         }
         child.entry_checks(bodies)?;

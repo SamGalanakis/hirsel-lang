@@ -30,7 +30,9 @@ impl ParameterParts {
                     depth: 0,
                     parameter,
                 } => (graph.owner, *parameter),
-                ParameterRef::Body { scope, parameter } => (*scope, *parameter),
+                ParameterRef::Body { scope, parameter } if scope.owner == body.lexical => {
+                    (scope.site, *parameter)
+                }
                 _ => continue,
             };
             let Some(root) = rows.binding(body, Some(scope), &ResolvedName::Parameter(parameter))

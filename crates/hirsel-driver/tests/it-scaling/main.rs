@@ -20,6 +20,7 @@ mod scaling_generic_instances;
 mod scaling_h_places;
 mod scaling_headers;
 mod scaling_interp_values;
+mod scaling_item_syntax;
 mod scaling_lower_bindings;
 mod scaling_lower_decisions;
 mod scaling_nested_generics;

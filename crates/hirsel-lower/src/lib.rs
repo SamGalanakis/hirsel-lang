@@ -23,7 +23,7 @@ pub mod print;
 mod stability;
 
 use hirsel_span::Span;
-use hirsel_syntax::{ContentHash, DefPath, ExprId, StmtId, SyntaxTree, TypeExprId};
+use hirsel_syntax::{ContentHash, DefPath, ExprId, ItemSyntax, StmtId, TypeExprId};
 use hirsel_tir::{Constant, Constructor, Definition, Materialized};
 use hirsel_types::{CheckedBody, NameSite, OwnershipFacts, TypeId};
 
@@ -85,7 +85,7 @@ pub enum ErrorMapper {
 }
 pub struct Input<'a> {
     pub track_caller: bool,
-    pub tree: &'a SyntaxTree,
+    pub syntax: &'a ItemSyntax,
     pub checked: &'a CheckedBody,
     pub plans: &'a Plans,
     pub ownership: &'a OwnershipFacts,
@@ -149,7 +149,10 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
                 while let Some(original) = decisions.cloned_scopes.borrow().get(&scope) {
                     scope = *original;
                 }
-                scope == NameSite::Expression(clause.expression)
+                scope
+                    == decisions
+                        .lexical
+                        .site(NameSite::Expression(clause.expression))
             }) {
                 found = true;
                 let body = hirsel_tir::BodyId(index as u32);
@@ -172,7 +175,7 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
             continue;
         };
         let before = protocol_associations.len();
-        let span = input.tree.statements[cursor.statement.0 as usize]
+        let span = input.syntax.tree.statements[cursor.statement.0 as usize]
             .origin
             .span;
         for (body_index, body) in bodies.iter().enumerate() {

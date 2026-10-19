@@ -13,7 +13,7 @@ fn parse(source: &str) -> (SyntaxFile, SourceMap, bool) {
         },
         modules: vec![],
     };
-    let parsed = hirsel_parser::parse(file, lex.tokens, &context, &sources);
+    let parsed = hirsel_parser::parse(file, lex.tokens, &context, &mut sources);
     (
         parsed.syntax,
         sources,
@@ -21,8 +21,7 @@ fn parse(source: &str) -> (SyntaxFile, SourceMap, bool) {
     )
 }
 fn comments(file: &SyntaxFile, sources: &SourceMap) -> Vec<String> {
-    file.tokens
-        .iter()
+    file.tape()
         .filter(|t| {
             matches!(
                 t.kind,
@@ -37,7 +36,16 @@ fn comments(file: &SyntaxFile, sources: &SourceMap) -> Vec<String> {
         .map(|t| sources.slice(t.span).unwrap().into())
         .collect()
 }
-fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
+/// Each item with its source coordinates, tokens and hash erased.
+fn normalized(file: &SyntaxFile) -> Vec<(Item, SyntaxTree)> {
+    file.items
+        .iter()
+        .map(|syntax| normalized_item(syntax))
+        .collect()
+}
+fn normalized_item(syntax: &ItemSyntax) -> (Item, SyntaxTree) {
+    let mut item = syntax.item.clone();
+    let mut tree = syntax.tree.clone();
     let origin = Origin {
         span: Span::default(),
         tokens: TokenRange::default(),
@@ -61,11 +69,10 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     for a in &mut tree.analyses {
         a.origin = origin;
     }
-    for item in &mut tree.items {
+    tree.tokens.clear();
+    {
         item.origin = origin;
         item.name_span = Span::default();
-        item.owned_tokens = TokenRange::default();
-        item.text_hash = ContentHash::default();
         attrs(&mut item.attributes, origin);
         match &mut item.kind {
             ItemKind::Function { signature, .. } => sig(signature, origin),
@@ -110,7 +117,7 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
             _ => {}
         }
     }
-    tree
+    (item, tree)
 }
 #[test]
 fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
@@ -158,8 +165,8 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
         assert!(!errors, "{}", first.source);
         let before_comments = comments(&original, &sources);
         assert_eq!(
-            normalized(original.tree),
-            normalized(reparsed.tree.clone()),
+            normalized(&original),
+            normalized(&reparsed),
             "{}",
             first.source
         );
@@ -190,7 +197,7 @@ fn real_spec_examples_reparse_to_equal_trees_and_match_the_hand_built_goldens() 
         comments(&original, &sources),
         comments(&reparsed, &new_sources)
     );
-    assert_eq!(normalized(original.tree), normalized(reparsed.tree.clone()));
+    assert_eq!(normalized(&original), normalized(&reparsed));
     let again = hirsel_fmt::format(&reparsed, &new_sources);
     assert!(!again.unchanged);
     assert_eq!(formatted.source, again.source);
@@ -215,8 +222,8 @@ fn outer_uses_survives_function_typed_results() {
         let (reparsed, new_sources, errors) = parse(&first.source);
         assert!(!errors, "{}", first.source);
         assert_eq!(
-            normalized(original.tree),
-            normalized(reparsed.tree.clone()),
+            normalized(&original),
+            normalized(&reparsed),
             "{}",
             first.source
         );

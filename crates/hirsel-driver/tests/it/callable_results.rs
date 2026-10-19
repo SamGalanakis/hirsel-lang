@@ -49,7 +49,7 @@ fn callable_header_modes_and_complete_literal_bounds_follow_their_variance() {
                 rule,
                 "{source}: {diagnostics:?}"
             );
-            let line = source[..diagnostics[0].primary.start as usize]
+            let line = source[..engine.sources.resolve(diagnostics[0].primary).start as usize]
                 .bytes()
                 .filter(|b| *b == b'\n')
                 .count()

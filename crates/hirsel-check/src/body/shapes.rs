@@ -25,6 +25,7 @@ impl Checker<'_, '_> {
         // A `comptime` result crossing into run-time code is CT-2's data judgment.
         let regions: Vec<Span> = self
             .input
+            .syntax
             .tree
             .expressions
             .iter()
@@ -40,13 +41,13 @@ impl Checker<'_, '_> {
             .filter(|site| {
                 !regions
                     .iter()
-                    .any(|r| r.file == site.file && r.start <= site.start && site.end <= r.end)
+                    .any(|r| r.anchor == site.anchor && r.start <= site.start && site.end <= r.end)
             })
             .collect();
         sites.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
         let mut outer: Option<Span> = None;
         for site in sites {
-            if outer.is_some_and(|o| o.file == site.file && site.end <= o.end) {
+            if outer.is_some_and(|o| o.anchor == site.anchor && site.end <= o.end) {
                 continue;
             }
             outer = Some(site);
@@ -65,16 +66,20 @@ impl Checker<'_, '_> {
         subject: TypeId,
     ) -> Result<Option<TypeId>, QueryError> {
         let site = self.span(id);
-        let compile_time = matches!(
-            self.input.tree.items[self.input.item.0 as usize].kind,
-            ast::ItemKind::Const { .. }
-        ) || self.input.tree.expressions.iter().any(|e| match e.kind {
-            ast::ExprKind::Comptime(child) => {
-                let region = self.span(child);
-                region.start <= site.start && site.end <= region.end
-            }
-            _ => false,
-        });
+        let compile_time = matches!(self.input.syntax.item.kind, ast::ItemKind::Const { .. })
+            || self
+                .input
+                .syntax
+                .tree
+                .expressions
+                .iter()
+                .any(|e| match e.kind {
+                    ast::ExprKind::Comptime(child) => {
+                        let region = self.span(child);
+                        region.start <= site.start && site.end <= region.end
+                    }
+                    _ => false,
+                });
         if !compile_time {
             self.report(
                 const { RuleId::of("CT-3") },

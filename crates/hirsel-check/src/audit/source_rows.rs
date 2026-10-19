@@ -115,7 +115,7 @@ impl<'a, 'p> Audit<'a, 'p> {
             .flatten()
             .map(|i| {
                 work::count(Counter::AuditSourceRows);
-                &self.input.tree.statements[*i]
+                &self.input.syntax.tree.statements[*i]
             })
     }
 }

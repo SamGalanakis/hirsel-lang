@@ -313,20 +313,20 @@ pub(super) fn identity_projections(
         return Ok(());
     }
     let declarations = body.resolution.generic_declarations.clone();
-    let bindings: BTreeMap<_, _> = body
-        .bindings
-        .iter()
-        .filter_map(|row| {
-            let root = match row.binding {
-                ResolvedName::Local(local) => OriginRoot::Local(local),
-                ResolvedName::Parameter(parameter) => {
-                    OriginRoot::Parameter(ParameterRef::body(row.owner, parameter))
-                }
-                _ => return None,
-            };
-            Some(((row.owner, root), row.ty))
-        })
-        .collect();
+    let bindings: BTreeMap<_, _> =
+        body.bindings
+            .iter()
+            .filter_map(|row| {
+                let root = match row.binding {
+                    ResolvedName::Local(local) => OriginRoot::Local(body.lexical, local),
+                    ResolvedName::Parameter(parameter) => OriginRoot::Parameter(
+                        ParameterRef::body(body.lexical.site(row.owner), parameter),
+                    ),
+                    _ => return None,
+                };
+                Some(((row.owner, root), row.ty))
+            })
+            .collect();
     for (_, owner, origin, projections) in fields {
         let Some(&root) = bindings.get(&(*owner, origin.root.clone())) else {
             continue;

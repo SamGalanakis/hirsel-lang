@@ -6,25 +6,29 @@ impl Checker<'_, '_> {
             .body
             .expressions
             .iter()
-            .filter_map(
-                |row| match self.input.tree.expressions[row.expression.0 as usize].kind {
+            .filter_map(|row| {
+                match self.input.syntax.tree.expressions[row.expression.0 as usize].kind {
                     ast::ExprKind::Comptime(child) => {
                         Some((self.span(child), self.span(row.expression)))
                     }
                     _ => None,
-                },
-            )
+                }
+            })
             .collect();
         if regions.is_empty() {
             return Ok(());
         }
         regions.sort_by_key(|(child, _)| (child.start, std::cmp::Reverse(child.end)));
         let span = |site| match site {
-            NameSite::Expression(id) => self.input.tree.expressions[id.0 as usize].origin.span,
-            NameSite::Pattern(id) => self.input.tree.patterns[id.0 as usize].origin.span,
-            NameSite::Statement(id) => self.input.tree.statements[id.0 as usize].origin.span,
-            NameSite::Item(id) => self.input.tree.items[id.0 as usize].origin.span,
-            NameSite::Type(id) => self.input.tree.types[id.0 as usize].origin.span,
+            NameSite::Expression(id) => {
+                self.input.syntax.tree.expressions[id.0 as usize]
+                    .origin
+                    .span
+            }
+            NameSite::Pattern(id) => self.input.syntax.tree.patterns[id.0 as usize].origin.span,
+            NameSite::Statement(id) => self.input.syntax.tree.statements[id.0 as usize].origin.span,
+            NameSite::Item => self.input.syntax.item.origin.span,
+            NameSite::Type(id) => self.input.syntax.tree.types[id.0 as usize].origin.span,
         };
         let scopes: BTreeMap<_, _> = self
             .body
@@ -119,7 +123,9 @@ impl Checker<'_, '_> {
                     .and_then(|owner| parameters.get(&(*owner, id)))
                     .copied(),
                 ResolvedName::TypeParameter(parameter) => match parameter.binder() {
-                    GenericBinder::Body(owner) => Some(span(owner)),
+                    GenericBinder::Body(owner) if owner.owner == self.lexical => {
+                        Some(span(owner.site))
+                    }
                     _ => None,
                 },
                 ResolvedName::Size(_) => continue,
@@ -132,12 +138,12 @@ impl Checker<'_, '_> {
             }
             let path = match site {
                 NameSite::Expression(id) => {
-                    match &self.input.tree.expressions[id.0 as usize].kind {
+                    match &self.input.syntax.tree.expressions[id.0 as usize].kind {
                         ast::ExprKind::Path(path) => Some(path),
                         _ => None,
                     }
                 }
-                NameSite::Type(id) => match &self.input.tree.types[id.0 as usize].kind {
+                NameSite::Type(id) => match &self.input.syntax.tree.types[id.0 as usize].kind {
                     ast::TypeExprKind::Named { path, .. } => Some(path),
                     _ => None,
                 },
@@ -164,7 +170,7 @@ impl Checker<'_, '_> {
             .iter()
             .filter_map(|row| {
                 if let ast::ExprKind::Comptime(child) =
-                    self.input.tree.expressions[row.expression.0 as usize].kind
+                    self.input.syntax.tree.expressions[row.expression.0 as usize].kind
                 {
                     Some((row.ty, self.span(child), self.span(row.expression)))
                 } else {
@@ -176,13 +182,13 @@ impl Checker<'_, '_> {
             if diagnosed.contains(&(wrapper.start, wrapper.end)) {
                 continue;
             }
-            let unknown = |binder| {
-                if let GenericBinder::Body(owner) = binder {
-                    let declaration = span(owner);
+            let unknown = |binder| match binder {
+                GenericBinder::Body(owner) if owner.owner == self.lexical => {
+                    let declaration = span(owner.site);
                     declaration.start < child.start || declaration.end > child.end
-                } else {
-                    false
                 }
+                GenericBinder::Body(_) => true,
+                GenericBinder::Bound(_) => false,
             };
             let mut pending = vec![ty];
             let mut seen = BTreeSet::new();

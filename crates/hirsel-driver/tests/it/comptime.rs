@@ -542,7 +542,11 @@ fn generated_body_diagnostics_name_the_literal_parameter_on_compiler_thread() {
         .iter()
         .find(|l| l.message.starts_with("provided"))
         .unwrap_or_else(|| panic!("{own:?}"));
-    assert_eq!(provided.span.file, generated, "{own:?}");
+    assert_eq!(
+        engine.sources.resolve(provided.span).file,
+        generated,
+        "{own:?}"
+    );
     assert_eq!(engine.sources.slice(provided.span), Some("tag"), "{own:?}");
 }
 

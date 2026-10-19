@@ -94,9 +94,12 @@ impl QueryEngine {
             let Ok(items) = self.definition_items(path) else {
                 continue;
             };
-            for (file, item) in items {
-                modules.insert(file.file, module_identity(path));
-                for a in file.tree.analyses.iter().filter(|a| a.item == item) {
+            for syntax in items {
+                modules.insert(self.item_file(&syntax), module_identity(path));
+                // A FACT-2 helper shares its owner's tree; the annotations
+                // are the owner declaration's alone.
+                let own = hirsel_check_protocol::fact::fact_owner(path).is_none();
+                for a in syntax.tree.analyses.iter().filter(|_| own) {
                     let anchor = match a.site {
                         AnalysisSite::Item => Anchor::Item,
                         AnalysisSite::Parameter(i) => Anchor::Parameter(i),
@@ -107,8 +110,8 @@ impl QueryEngine {
                     };
                     annotated.push((path.clone(), anchor, a.clone()));
                 }
-                match &file.tree.items[item.0 as usize].kind {
-                    _ if crate::queries::generation::executable(&file, item) => {
+                match &syntax.item.kind {
+                    _ if crate::queries::generation::executable(&syntax) => {
                         executable.insert(path.clone());
                     }
                     ItemKind::Type {
@@ -176,6 +179,7 @@ impl QueryEngine {
         }
         let sources = Rc::new(self.sources.clone());
         let locator: Locator = Rc::new(move |span| {
+            let span = sources.resolve(span);
             let file = sources.file(span.file);
             let start = file.and_then(|f| f.location(span.start));
             let end = file.and_then(|f| f.location(span.end));

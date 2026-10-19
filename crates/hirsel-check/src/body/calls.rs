@@ -173,8 +173,10 @@ impl Checker<'_, '_> {
         frame: usize,
         checked: usize,
     ) -> Result<(), QueryError> {
-        let ast::ExprKind::Call { callee, arguments } =
-            self.input.tree.expressions[id.0 as usize].kind.clone()
+        let ast::ExprKind::Call { callee, arguments } = self.input.syntax.tree.expressions
+            [id.0 as usize]
+            .kind
+            .clone()
         else {
             unreachable!()
         };
@@ -232,7 +234,7 @@ impl Checker<'_, '_> {
                             )
                     })
                     .map(|(_, c)| c.clone());
-                let name = match &self.input.tree.expressions[callee.0 as usize].kind {
+                let name = match &self.input.syntax.tree.expressions[callee.0 as usize].kind {
                     ast::ExprKind::Path(p) => {
                         p.segments.last().map(|s| self.name(*s)).unwrap_or_default()
                     }
@@ -465,7 +467,8 @@ impl Checker<'_, '_> {
         arguments: Vec<ast::Argument>,
     ) -> Result<(), QueryError> {
         let e = self.error();
-        let ast::ExprKind::Call { callee, .. } = self.input.tree.expressions[id.0 as usize].kind
+        let ast::ExprKind::Call { callee, .. } =
+            self.input.syntax.tree.expressions[id.0 as usize].kind
         else {
             unreachable!()
         };
@@ -558,7 +561,7 @@ impl Checker<'_, '_> {
                     ),
                     (None, _) => {
                         let variable = TypeParameterRef::body(
-                            NameSite::Expression(arg),
+                            self.site(NameSite::Expression(arg)),
                             TypeParamId(i as u32),
                         );
                         self.inference_variables.insert(variable);
@@ -594,7 +597,7 @@ impl Checker<'_, '_> {
             });
         if !creation
             || !matches!(
-                self.input.tree.expressions[c.arguments[index].value.0 as usize].kind,
+                self.input.syntax.tree.expressions[c.arguments[index].value.0 as usize].kind,
                 ast::ExprKind::Closure { .. }
             )
         {

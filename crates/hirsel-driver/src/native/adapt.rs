@@ -119,7 +119,7 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
         binders: input
             .source_owners
             .iter()
-            .map(|(p, o)| (p.clone(), NameSite::Item(o.item)))
+            .map(|(p, o)| (p.clone(), o.syntax.owner().site(NameSite::Item)))
             .collect(),
         operations: input
             .operations

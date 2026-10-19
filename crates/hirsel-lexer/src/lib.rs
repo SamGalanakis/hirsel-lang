@@ -6,7 +6,7 @@ hirsel_guard::install!();
 
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
-use hirsel_span::{FileId, SourceMap, Span};
+use hirsel_span::{Anchor, FileId, SourceMap, Span};
 use hirsel_syntax::{FormatPiece, Keyword, Punct, Token, TokenKind, TriviaKind};
 
 /// Complete source-order tape, including invalid text and an empty EOF token.
@@ -16,13 +16,15 @@ pub struct LexOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Tokenize an immutable UTF-8 source snapshot. A stale FileId yields an empty
-/// EOF tape and a LANG-1 diagnostic, rather than indexing another snapshot.
+/// Tokenize an immutable UTF-8 source snapshot; spans are relative to the
+/// file's anchor. A stale FileId yields an empty EOF tape and a LANG-1
+/// diagnostic, rather than indexing another snapshot.
 pub fn lex(file: FileId, sources: &SourceMap) -> LexOutput {
+    let anchor = sources.file_anchor(file);
     match sources.file(file) {
-        Some(source) => scan(file, source.text().as_bytes()),
+        Some(source) => scan(anchor, source.text().as_bytes()),
         None => {
-            let mut scanner = Scanner::new(file, &[]);
+            let mut scanner = Scanner::new(anchor, &[]);
             scanner.error(
                 const { RuleId::of("LANG-1") },
                 0,
@@ -36,8 +38,8 @@ pub fn lex(file: FileId, sources: &SourceMap) -> LexOutput {
 
 // The same byte scanner is exercised on arbitrary bytes by fuzz tests. Production
 // rejects invalid UTF-8/oversize files before SourceMap creation (SEM-3, #21).
-fn scan(file: FileId, bytes: &[u8]) -> LexOutput {
-    let mut scanner = Scanner::new(file, bytes);
+fn scan(anchor: Anchor, bytes: &[u8]) -> LexOutput {
+    let mut scanner = Scanner::new(anchor, bytes);
     while scanner.pos < bytes.len() {
         scanner.next();
     }
@@ -45,7 +47,7 @@ fn scan(file: FileId, bytes: &[u8]) -> LexOutput {
 }
 
 struct Scanner<'a> {
-    file: FileId,
+    anchor: Anchor,
     bytes: &'a [u8],
     pos: usize,
     output: LexOutput,
@@ -60,9 +62,9 @@ struct Hole {
     groups: u32,
 }
 impl<'a> Scanner<'a> {
-    fn new(file: FileId, bytes: &'a [u8]) -> Self {
+    fn new(anchor: Anchor, bytes: &'a [u8]) -> Self {
         Self {
-            file,
+            anchor,
             bytes,
             pos: 0,
             output: LexOutput::default(),
@@ -71,7 +73,7 @@ impl<'a> Scanner<'a> {
     }
     fn span(&self, start: usize, end: usize) -> Span {
         Span {
-            file: self.file,
+            anchor: self.anchor,
             start: start as u32,
             end: end as u32,
         }

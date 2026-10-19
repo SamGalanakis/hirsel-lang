@@ -831,13 +831,14 @@ impl Explanation {
                 )
             {
                 let name = sites
+                    .syntax
                     .tree
                     .expressions
                     .iter()
                     .enumerate()
                     .find_map(|(i, e)| {
                         (e.origin.span == fact.span)
-                            .then(|| spell(sites.tree, ExprId(i as u32)))
+                            .then(|| spell(&sites.syntax.tree, ExprId(i as u32)))
                             .flatten()
                     });
                 fact.names.push(name.unwrap_or_else(|| prose("the value")));
@@ -904,7 +905,9 @@ impl Explanation {
                 root.hash(&mut hasher);
                 if let Some(fact) = self.cause() {
                     std::mem::discriminant(&fact.kind).hash(&mut hasher);
-                    fact.span.hash(&mut hasher);
+                    // Anchor-relative offsets: the root already names the
+                    // definition, and an anchor differs between loads.
+                    (fact.span.start, fact.span.end).hash(&mut hasher);
                     fact.names.hash(&mut hasher);
                 }
                 hasher.finish()
@@ -1035,7 +1038,7 @@ pub fn root_key(definition: &DefPath, root: impl Hash) -> u64 {
 /// syntax (a hand-built checker fixture) has no sites; its labels fall back to
 /// an empty span instead of failing the check.
 pub struct Sites<'a> {
-    pub tree: &'a SyntaxTree,
+    pub syntax: &'a hirsel_syntax::ItemSyntax,
 }
 impl Sites<'_> {
     pub fn name(&self, symbol: hirsel_intern::Symbol) -> String {
@@ -1043,18 +1046,24 @@ impl Sites<'_> {
     }
     pub fn signature(&self, owner: NameSite) -> Option<&hirsel_syntax::FunctionSyntax> {
         match owner {
-            NameSite::Item(item) => match &self.tree.items.get(item.0 as usize)?.kind {
+            NameSite::Item => match &self.syntax.item.kind {
                 hirsel_syntax::ItemKind::Function { signature, .. } => Some(signature),
                 _ => None,
             },
             NameSite::Statement(statement) => {
-                match &self.tree.statements.get(statement.0 as usize)?.kind {
+                match &self.syntax.tree.statements.get(statement.0 as usize)?.kind {
                     hirsel_syntax::StmtKind::Function { signature, .. } => Some(signature),
                     _ => None,
                 }
             }
             NameSite::Expression(expression) => {
-                match &self.tree.expressions.get(expression.0 as usize)?.kind {
+                match &self
+                    .syntax
+                    .tree
+                    .expressions
+                    .get(expression.0 as usize)?
+                    .kind
+                {
                     ExprKind::Closure { signature, .. } => Some(signature),
                     _ => None,
                 }
@@ -1063,9 +1072,9 @@ impl Sites<'_> {
         }
     }
     pub fn owner_span(&self, owner: NameSite) -> Span {
-        let tree = self.tree;
+        let tree = &self.syntax.tree;
         match owner {
-            NameSite::Item(item) => tree.items.get(item.0 as usize).map(|n| n.name_span),
+            NameSite::Item => Some(self.syntax.item.name_span),
             NameSite::Statement(statement) => tree
                 .statements
                 .get(statement.0 as usize)
@@ -1082,14 +1091,17 @@ impl Sites<'_> {
         .unwrap_or_default()
     }
     fn type_span(&self, ty: hirsel_syntax::TypeExprId) -> Option<Span> {
-        self.tree.types.get(ty.0 as usize).map(|n| n.origin.span)
+        self.syntax
+            .tree
+            .types
+            .get(ty.0 as usize)
+            .map(|n| n.origin.span)
     }
     /// A parameter's name and its written type's site. A generated body (CT-5)
     /// binds the parameter by its function literal's name, at that name's site.
     pub fn parameter(&self, owner: NameSite, parameter: ParamId) -> Option<(String, Span)> {
-        if let NameSite::Item(item) = owner
-            && let Some(hirsel_syntax::Generated::Body(names)) =
-                &self.tree.items.get(item.0 as usize)?.generated
+        if let NameSite::Item = owner
+            && let Some(hirsel_syntax::Generated::Body(names)) = &self.syntax.item.generated
         {
             let &(name, span) = names.get(parameter.0 as usize)?;
             return Some((name.map_or_else(|| "_".into(), |s| self.name(s)), span));
@@ -1111,8 +1123,10 @@ impl Sites<'_> {
             }
         }
         match binding.site {
-            NameSite::Pattern(pattern) if (pattern.0 as usize) < self.tree.patterns.len() => {
-                let node = &self.tree.patterns[pattern.0 as usize];
+            NameSite::Pattern(pattern)
+                if (pattern.0 as usize) < self.syntax.tree.patterns.len() =>
+            {
+                let node = &self.syntax.tree.patterns[pattern.0 as usize];
                 let name = match node.kind {
                     hirsel_syntax::PatternKind::Binding(symbol) => self.name(symbol),
                     _ => "_".into(),
@@ -1120,9 +1134,9 @@ impl Sites<'_> {
                 (name, node.origin.span)
             }
             NameSite::Statement(statement)
-                if (statement.0 as usize) < self.tree.statements.len() =>
+                if (statement.0 as usize) < self.syntax.tree.statements.len() =>
             {
-                let node = &self.tree.statements[statement.0 as usize];
+                let node = &self.syntax.tree.statements[statement.0 as usize];
                 let name = match node.kind {
                     hirsel_syntax::StmtKind::Function { name, .. } => self.name(name),
                     _ => "_".into(),
@@ -1212,10 +1226,10 @@ pub fn spell(tree: &SyntaxTree, expression: ExprId) -> Option<String> {
 mod tests {
     use super::*;
     use hirsel_diag::RuleId;
-    use hirsel_span::FileId;
+    use hirsel_span::Anchor;
 
     fn span(start: u32) -> Span {
-        Span::new(FileId(0), start, start + 1).unwrap()
+        Span::new(Anchor(0), start, start + 1).unwrap()
     }
     /// The spec's cause vocabulary table as plain text, one string per side.
     fn spec_table() -> (String, String) {

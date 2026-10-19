@@ -25,10 +25,11 @@ impl Arenas {
             .iter()
             .filter(|b| is_arena_type(&body.types, b.ty, &heap.arena))
             .filter_map(|b| match b.binding {
-                ResolvedName::Local(l) => Some(OriginRoot::Local(l)),
-                ResolvedName::Parameter(p) => {
-                    Some(OriginRoot::Parameter(ParameterRef::body(b.owner, p)))
-                }
+                ResolvedName::Local(l) => Some(OriginRoot::Local(body.lexical, l)),
+                ResolvedName::Parameter(p) => Some(OriginRoot::Parameter(ParameterRef::body(
+                    body.lexical.site(b.owner),
+                    p,
+                ))),
                 _ => None,
             })
             .collect();

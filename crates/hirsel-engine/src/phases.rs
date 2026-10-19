@@ -11,8 +11,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 /// H's complete definition-local result. Every TypeId belongs to checked.types.
 #[derive(Clone, Debug)]
 pub struct TypedBody {
-    pub file: Arc<SyntaxFile>,
-    pub item: ItemId,
+    pub syntax: Arc<ItemSyntax>,
     pub checked: CheckedBody,
     pub plans: hirsel_check_protocol::body::Plans,
     pub unit: TypeId,

@@ -881,7 +881,7 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
         let handle_owner = if control == 3 { 1 } else { 0 };
         f.signatures
             .insert(path("Dir"), capability_signature("Dir"));
-        let scope = hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0));
+        let scope = scoped(hirsel_types::NameSite::Item);
         let d = param(
             &mut f,
             TypeKind::Named {
@@ -1266,7 +1266,7 @@ fn p6_arena_destination_with_unplaced_type_is_returned() {
         }
         s
     });
-    let scope = hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0));
+    let scope = scoped(hirsel_types::NameSite::Item);
     let a = param(
         &mut f,
         TypeKind::Named {
@@ -2369,7 +2369,7 @@ fn capture_alias_names_are_proved_at_their_binding_instruction() {
         let nested = &mut f.definition.bodies[1];
         let mut place = nested.places[1].clone();
         place.binding = Some(Origin {
-            root: OriginRoot::Local(hirsel_types::LocalId(99)),
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(99)),
             fields: vec![].into(),
         });
         let alias = PlaceId(nested.places.len() as u32);
@@ -4793,7 +4793,7 @@ fn schema_and_instantiation_evidence_cannot_name_an_unrelated_binder() {
     )];
     f.valid();
     f.signatures.get_mut(&callee).unwrap().metadata.schema = vec![SchemaConstraint::NoallocDrop(
-        TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(99)), TypeParamId(0)),
+        TypeParameterRef::body(scoped(NameSite::Item), TypeParamId(0)),
     )];
     assert!(
         f.kinds()
@@ -4809,7 +4809,7 @@ fn schema_and_instantiation_evidence_cannot_name_an_unrelated_binder() {
         .definition
         .types
         .push(ty(TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(99)),
+            scoped(NameSite::Item),
             TypeParamId(0),
         ))));
     let Terminator::Call {
@@ -4885,7 +4885,7 @@ fn intrinsic_bound_constraints_use_actual_types_and_exact_declarations() {
         }
         for reference in [
             TypeParameterRef::Body {
-                scope: NameSite::Item(hirsel_syntax::ItemId(0)),
+                scope: scoped(NameSite::Item),
                 parameter: TypeParamId(0),
             },
             TypeParameterRef::Bound {
@@ -8383,7 +8383,7 @@ fn literal_body_fixture(
     parameters: Vec<Parameter>,
     allocation: Allocation,
 ) {
-    child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(901));
+    child.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(901)));
     let mut header = fn_type(parameters, child.result);
     header.allocation = allocation;
     f.definition.bodies.push(child);
@@ -10188,7 +10188,7 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
                 0 => vec![Size::Constant(2)],
                 1 => vec![],
                 _ => vec![Size::Parameter(SizeParameterRef::body(
-                    NameSite::Item(hirsel_syntax::ItemId(99)),
+                    scoped(NameSite::Item),
                     SizeParamId(0),
                 ))],
             },

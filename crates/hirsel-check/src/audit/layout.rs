@@ -2,7 +2,7 @@ use super::*;
 
 impl Audit<'_, '_> {
     pub(super) fn inline_layout(&mut self) -> Result<(), QueryError> {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let item = &self.input.syntax.item;
         let SignatureKind::Type(definition) = &self.input.signature.kind else {
             return Ok(());
         };
@@ -43,7 +43,10 @@ impl Audit<'_, '_> {
                         .iter()
                         .zip(variant.fields)
                         .map(|((_, syntax), (_, ty))| {
-                            (self.input.tree.types[syntax.0 as usize].origin.span, ty)
+                            (
+                                self.input.syntax.tree.types[syntax.0 as usize].origin.span,
+                                ty,
+                            )
                         })
                 })
                 .collect(),

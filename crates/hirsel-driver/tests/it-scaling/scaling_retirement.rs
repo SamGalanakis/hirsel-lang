@@ -21,7 +21,7 @@ fn statement_retirement_visits_new_slots_and_ending_scopes() {
                 let before =
                     hirsel_intern::work::read(hirsel_intern::work::Counter::LoweringRetirementRows);
                 let output = engine
-                    .lower_to_tir(&parsed.value.tree.items[0].definition)
+                    .lower_to_tir(&parsed.value.items[0].item.definition)
                     .unwrap();
                 assert!(output.diagnostics.is_empty());
                 let rows =

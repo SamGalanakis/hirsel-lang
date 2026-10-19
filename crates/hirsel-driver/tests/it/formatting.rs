@@ -12,9 +12,9 @@ impl ParserPhase for EmptyFunction {
         file: FileId,
         tokens: Vec<Token>,
         context: &FileContext,
-        sources: &SourceMap,
+        sources: &mut SourceMap,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
-        let source = sources.file(file).unwrap().text();
+        let source = sources.file(file).unwrap().text().to_owned();
         let name = tokens
             .iter()
             .find_map(|t| {
@@ -25,25 +25,30 @@ impl ParserPhase for EmptyFunction {
                 }
             })
             .unwrap();
+        // The one item owns every token but EOF, at an anchor on the file start.
+        let anchor = sources.item_anchor(file, 0);
+        let mut tokens = tokens;
+        let eof = tokens.pop().unwrap();
+        for token in &mut tokens {
+            token.span.anchor = anchor;
+        }
         let origin = Origin {
-            span: Span::new(file, 0, source.len() as u32).unwrap(),
+            span: Span::new(anchor, 0, source.len() as u32).unwrap(),
             tokens: TokenRange {
                 start: 0,
-                end: tokens.len() as u32 - 1,
+                end: tokens.len() as u32,
             },
         };
         let item = Item {
             name_span: Default::default(),
 
             origin,
-            owned_tokens: origin.tokens,
             name,
             definition: DefPath(ItemPath {
                 package: context.package.clone(),
                 modules: context.modules.clone(),
                 name: "main".into(),
             }),
-            text_hash: ContentHash::of_bytes(source.as_bytes()),
             visibility: Visibility::Private,
             attributes: vec![],
             kind: ItemKind::Function {
@@ -64,15 +69,19 @@ impl ParserPhase for EmptyFunction {
         Ok(QueryOutput {
             value: SyntaxFile {
                 has_syntax_errors: false,
-
                 file,
-                tokens,
-                tree: SyntaxTree {
-                    items: vec![item],
-                    expressions: vec![expression],
-                    ..Default::default()
-                },
-                roots: vec![ItemId(0)],
+                items: vec![std::sync::Arc::new(ItemSyntax {
+                    item,
+                    tree: SyntaxTree {
+                        tokens,
+                        expressions: vec![expression],
+                        ..Default::default()
+                    },
+                    anchor,
+                    text_hash: ContentHash::of_bytes(source.as_bytes()),
+                    occurrence: 0,
+                })],
+                tokens: vec![eof],
             },
             diagnostics: vec![],
             dependencies: vec![],
@@ -104,16 +113,16 @@ fn real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser_on_compile
         .parse_file(first, &default_context())
         .unwrap()
         .value
-        .tree
         .items[0]
+        .item
         .definition
         .clone();
     let b = engine
         .parse_file(second, &default_context())
         .unwrap()
         .value
-        .tree
         .items[0]
+        .item
         .definition
         .clone();
     assert_eq!(a, b);
@@ -131,9 +140,8 @@ fn formatter_fallback_is_unavailable_and_never_a_clean_format_check_on_compiler_
         has_syntax_errors: false,
 
         file,
+        items: vec![],
         tokens: vec![],
-        tree: SyntaxTree::default(),
-        roots: vec![],
     };
     assert!(matches!(
         FormatterAdapter.format_query(&damaged, &sources),

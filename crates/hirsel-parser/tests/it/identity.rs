@@ -2,24 +2,24 @@ use crate::support;
 use hirsel_intern::Symbol;
 use hirsel_span::SourceMap;
 use hirsel_syntax::*;
+use std::sync::Arc;
 
 #[test]
 fn identity_ignores_file_positions_and_symbol_order_while_hashes_include_comments() {
-    fn item(source: &str, path: &str, prefix_symbols: &[&str]) -> Item {
+    fn item(source: &str, path: &str, prefix_symbols: &[&str]) -> Arc<ItemSyntax> {
         let mut sources = SourceMap::default();
         let file = sources.add(path, source.into()).unwrap();
         for name in prefix_symbols {
             Symbol::intern(name);
         }
-        let tokens = support::tokenize(file, source);
-        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources);
+        let tokens = support::tokenize(sources.file_anchor(file), source);
+        let output = hirsel_parser::parse(file, tokens, &support::context(), &mut sources);
         assert!(output.diagnostics.is_empty());
         output
             .syntax
-            .tree
             .items
             .into_iter()
-            .find(|i| i.definition.0.name == "same")
+            .find(|i| i.item.definition.0.name == "same")
             .unwrap()
     }
     let a = item("fn same() {}", "a.hir", &[]);
@@ -28,8 +28,21 @@ fn identity_ignores_file_positions_and_symbol_order_while_hashes_include_comment
         "moved/b.hir",
         &["other", "symbols"],
     );
-    assert_eq!(a.definition, b.definition);
-    assert_eq!(a.definition.fingerprint(), b.definition.fingerprint());
+    assert_eq!(a.item.definition, b.item.definition);
+    assert_eq!(
+        a.item.definition.fingerprint(),
+        b.item.definition.fingerprint()
+    );
+    // Item-local syntax: the same item text after another item has the ids
+    // and offsets it has alone; only its anchor differs.
+    let local = |syntax: &ItemSyntax| {
+        let mut syntax = syntax.clone();
+        syntax.reanchor(hirsel_span::Anchor(0));
+        (syntax.item, syntax.tree)
+    };
+    assert_ne!(a.anchor, b.anchor);
+    assert_eq!(local(&a), local(&b));
+    assert_eq!(a.text_hash, b.text_hash);
     let c = item("fn same() {} // comment\n", "a.hir", &[]);
     assert_ne!(a.text_hash, c.text_hash);
     assert_eq!(a.text_hash, ContentHash::of_bytes(b"fn same() {}"));
@@ -45,37 +58,34 @@ fn trivia_attaches_to_items_and_final_orphan_trivia_stays_with_file() {
     let (output, sources) = support::parse(source);
     assert!(output.diagnostics.is_empty());
     let file = output.syntax;
-    let owned = |range: TokenRange| {
-        file.tokens[range.start as usize..range.end as usize]
+    let text = |tokens: &[Token]| {
+        tokens
             .iter()
             .map(|t| sources.slice(t.span).unwrap())
             .collect::<String>()
     };
     assert_eq!(
-        owned(file.tree.items[0].owned_tokens),
+        text(&file.items[0].tree.tokens),
         "// initial\r\nfn a() {} // a\r\n"
     );
     assert_eq!(
-        owned(file.tree.items[1].owned_tokens),
-        "\r\n/// docs for b\r\n@noalloc\r\nfn b() {}"
+        text(&file.items[1].tree.tokens),
+        "\r\n/// docs for b\r\n@noalloc\r\nfn b() {}\r\n"
     );
-    assert_eq!(
-        owned(TokenRange {
-            start: file.tree.items[1].owned_tokens.end,
-            end: file.tokens.len() as u32
-        }),
-        "\r\n// final file trivia\r\n"
-    );
-    for item in &file.tree.items {
+    assert_eq!(text(&file.tokens), "// final file trivia\r\n");
+    assert_eq!(text(&file.tape().cloned().collect::<Vec<_>>()), source);
+    for syntax in &file.items {
         assert_eq!(
-            item.text_hash,
-            ContentHash::of_bytes(owned(item.owned_tokens).as_bytes())
+            syntax.text_hash,
+            ContentHash::of_bytes(text(&syntax.tree.tokens).as_bytes())
         );
-        assert!(item.origin.tokens.start >= item.owned_tokens.start);
-        assert!(item.origin.tokens.end <= item.owned_tokens.end);
+        // Each item's tokens start at its anchor.
+        assert_eq!(syntax.tree.tokens[0].span.anchor, syntax.anchor);
+        assert_eq!(syntax.tree.tokens[0].span.start, 0);
+        assert!(syntax.item.origin.tokens.end as usize <= syntax.tree.tokens.len());
     }
     let (out, _) = support::parse("// orphan only\n");
-    assert!(out.syntax.roots.is_empty());
+    assert!(out.syntax.items.is_empty());
     assert_eq!(out.syntax.tokens.len(), 3);
 }
 
@@ -84,21 +94,19 @@ fn changing_manifest_context_changes_identity_without_changing_text_hash() {
     let source = "fn f() {}";
     let mut sources = SourceMap::default();
     let file = sources.add("f.hir", source.into()).unwrap();
-    let tokens = support::tokenize(file, source);
+    let tokens = support::tokenize(sources.file_anchor(file), source);
     let mut context = support::context();
-    let a = hirsel_parser::parse(file, tokens.clone(), &context, &sources)
+    let a = hirsel_parser::parse(file, tokens.clone(), &context, &mut sources)
         .syntax
-        .tree
         .items
         .remove(0);
     context.package.version = "2".into();
     context.modules.push("nested".into());
-    let b = hirsel_parser::parse(file, tokens, &context, &sources)
+    let b = hirsel_parser::parse(file, tokens, &context, &mut sources)
         .syntax
-        .tree
         .items
         .remove(0);
-    assert_ne!(a.definition, b.definition);
+    assert_ne!(a.item.definition, b.item.definition);
     assert_eq!(a.text_hash, b.text_hash);
 }
 
@@ -107,18 +115,17 @@ fn explicit_item_terminators_do_not_detach_trailing_comments() {
     let source = "fn a() {}; // trailing a\n/// b\nfn b() {}; // trailing b";
     let (output, sources) = support::parse(source);
     assert!(output.diagnostics.is_empty());
-    let text = |item: &Item| {
-        output.syntax.tokens[item.owned_tokens.start as usize..item.owned_tokens.end as usize]
+    let text = |syntax: &ItemSyntax| {
+        syntax
+            .tree
+            .tokens
             .iter()
             .map(|t| sources.slice(t.span).unwrap())
             .collect::<String>()
     };
+    assert_eq!(text(&output.syntax.items[0]), "fn a() {}; // trailing a\n");
     assert_eq!(
-        text(&output.syntax.tree.items[0]),
-        "fn a() {}; // trailing a\n"
-    );
-    assert_eq!(
-        text(&output.syntax.tree.items[1]),
+        text(&output.syntax.items[1]),
         "/// b\nfn b() {}; // trailing b"
     );
 }

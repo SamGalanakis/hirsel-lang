@@ -50,8 +50,8 @@ fn main() {
         let mut roots = vec![];
         for (file, context) in program.files.clone() {
             let parsed = program.engine.parse_file(file, &context).unwrap();
-            roots.extend(parsed.value.roots.iter().map(|id| {
-                let item = &parsed.value.tree.items[id.0 as usize];
+            roots.extend(parsed.value.items.iter().map(|syntax| {
+                let item = &syntax.item;
                 let executable = matches!(
                     item.kind,
                     ItemKind::Function { body: Some(_), .. }

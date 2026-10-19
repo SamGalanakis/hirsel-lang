@@ -143,11 +143,9 @@ impl QueryEngine {
             if has_errors(&analyzed.diagnostics) {
                 return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
             }
-            let file = &analyzed.value.typed.file;
-            let id = analyzed.value.typed.item;
-            let item = &file.tree.items[id.0 as usize];
-            content.extend(self.semantic_tokens(file, item)?);
-            if generation::executable(file, analyzed.value.typed.item) {
+            let syntax = &analyzed.value.typed.syntax;
+            content.extend(self.semantic_tokens(syntax)?);
+            if generation::executable(syntax) {
                 let lowered = self.lower_to_tir(path)?;
                 if has_errors(&lowered.diagnostics) {
                     return Err(QueryError::Diagnostics(lowered.diagnostics));
@@ -255,21 +253,19 @@ impl QueryEngine {
         Ok(foreign)
     }
 
-    pub(crate) fn semantic_tokens(
-        &self,
-        file: &SyntaxFile,
-        item: &hirsel_syntax::Item,
-    ) -> Result<Vec<Vec<u8>>, QueryError> {
+    pub(crate) fn semantic_tokens(&self, syntax: &ItemSyntax) -> Result<Vec<Vec<u8>>, QueryError> {
+        let item = &syntax.item;
         let mut content = vec![b"hirsel.semantic-source.v1".to_vec()];
         let mut newline = false;
         let start = item.origin.tokens.start as usize;
-        let tokens = file
+        let tokens = syntax
+            .tree
             .tokens
             .get(start..item.origin.tokens.end as usize)
             .ok_or_else(|| operational("invalid source token range"))?;
         // PS-19: an analysis annotation is not program content. By token
         // range: an adapted item (a FACT-2 predicate) shares its owner's tokens.
-        let annotations: Vec<_> = file
+        let annotations: Vec<_> = syntax
             .tree
             .analyses
             .iter()

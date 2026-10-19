@@ -1,32 +1,59 @@
 //! Align generated syntax tokens with the tape and retain every comment in order.
 use crate::doc::PrintedToken;
-use hirsel_span::SourceMap;
+use hirsel_span::{FileSpan, SourceMap};
 use hirsel_syntax::*;
 
-pub(crate) fn valid_tape(file: &SyntaxFile, sources: &SourceMap) -> bool {
+/// The file's whole tape in its own offsets, and where each item's tokens start.
+pub(crate) struct Tape<'a> {
+    tokens: Vec<(&'a TokenKind, FileSpan)>,
+    bases: Vec<usize>,
+}
+impl<'a> Tape<'a> {
+    pub(crate) fn new(file: &'a SyntaxFile, sources: &SourceMap) -> Self {
+        let mut tokens = vec![];
+        let mut bases = vec![];
+        for item in &file.items {
+            bases.push(tokens.len());
+            tokens.extend(
+                item.tree
+                    .tokens
+                    .iter()
+                    .map(|t| (&t.kind, sources.resolve(t.span))),
+            );
+        }
+        tokens.extend(
+            file.tokens
+                .iter()
+                .map(|t| (&t.kind, sources.resolve(t.span))),
+        );
+        Self { tokens, bases }
+    }
+}
+
+pub(crate) fn valid_tape(file: &SyntaxFile, tape: &Tape<'_>, sources: &SourceMap) -> bool {
     let Some(source) = sources.file(file.file) else {
         return false;
     };
     let mut offset = 0;
     let mut delimiters = Vec::new();
-    for (i, t) in file.tokens.iter().enumerate() {
-        if t.span.file != file.file || t.span.start != offset || sources.slice(t.span).is_none() {
+    for (i, (kind, span)) in tape.tokens.iter().enumerate() {
+        if span.file != file.file || span.start != offset || sources.file_slice(*span).is_none() {
             return false;
         }
-        if matches!(t.kind, TokenKind::Eof) {
-            if t.span.start != t.span.end || i + 1 != file.tokens.len() {
+        if matches!(kind, TokenKind::Eof) {
+            if span.start != span.end || i + 1 != tape.tokens.len() {
                 return false;
             }
-        } else if t.span.start == t.span.end {
+        } else if span.start == span.end {
             return false;
         }
-        offset = t.span.end;
-        if let TokenKind::Punct(p) = t.kind {
+        offset = span.end;
+        if let TokenKind::Punct(p) = kind {
             match p {
                 Punct::LParen => delimiters.push(Punct::RParen),
                 Punct::LBracket => delimiters.push(Punct::RBracket),
                 Punct::LBrace => delimiters.push(Punct::RBrace),
-                Punct::RParen | Punct::RBracket | Punct::RBrace if delimiters.pop() != Some(p) => {
+                Punct::RParen | Punct::RBracket | Punct::RBrace if delimiters.pop() != Some(*p) => {
                     return false;
                 }
                 _ => {}
@@ -35,7 +62,7 @@ pub(crate) fn valid_tape(file: &SyntaxFile, sources: &SourceMap) -> bool {
     }
     offset as usize == source.text().len()
         && delimiters.is_empty()
-        && matches!(file.tokens.last().map(|t| &t.kind), Some(TokenKind::Eof))
+        && matches!(tape.tokens.last().map(|t| t.0), Some(TokenKind::Eof))
 }
 fn optional(s: &str) -> bool {
     matches!(s, "(" | ")" | "," | ";")
@@ -48,29 +75,28 @@ struct Comment<'a> {
 }
 pub(crate) fn merge(
     file: &SyntaxFile,
+    tape: &Tape<'_>,
     sources: &SourceMap,
     printed: Vec<PrintedToken>,
 ) -> Option<String> {
-    let mut original: Vec<_> = file
+    let mut original: Vec<_> = tape
         .tokens
         .iter()
         .enumerate()
-        .filter(|(_, t)| !matches!(t.kind, TokenKind::Trivia(_) | TokenKind::Eof))
+        .filter(|(_, (kind, _))| !matches!(kind, TokenKind::Trivia(_) | TokenKind::Eof))
+        .map(|(index, (kind, span))| (index, *kind, *span))
         .collect();
     // Recovery may omit entire declarations without producing an Error node.
     // An item's leading analysis annotations precede its span (PS-19).
-    let within = |origin: Origin, index: usize| {
-        origin.tokens.start as usize <= index && index < origin.tokens.end as usize
-    };
-    for &(index, t) in &original {
-        if !matches!(t.kind, TokenKind::Punct(Punct::Semicolon))
-            && !file.roots.iter().any(|id| {
-                file.tree
-                    .items
-                    .get(id.0 as usize)
-                    .is_some_and(|item| within(item.origin, index))
+    for &(index, kind, _) in &original {
+        if !matches!(kind, TokenKind::Punct(Punct::Semicolon))
+            && !file.items.iter().zip(&tape.bases).any(|(item, &base)| {
+                let within = |origin: Origin| {
+                    base + origin.tokens.start as usize <= index
+                        && index < base + origin.tokens.end as usize
+                };
+                within(item.item.origin) || item.tree.analyses.iter().any(|a| within(a.origin))
             })
-            && !file.tree.analyses.iter().any(|a| within(a.origin, index))
         {
             return None;
         }
@@ -78,31 +104,35 @@ pub(crate) fn merge(
     // Prefix authority is canonical. A trailing authority clause may move only
     // when the affected body/clause contains no comments; otherwise retain its
     // source slot so documentation attachment and comment order both survive.
-    for e in &file.tree.expressions {
-        if let ExprKind::Closure { body, .. } = e.kind {
-            if let Some((start, end, false)) = trailing_uses(file, e.origin, body) {
-                let body_start = file
-                    .tree
-                    .expressions
-                    .get(body.0 as usize)?
-                    .origin
-                    .tokens
-                    .start as usize;
-                let moved: Vec<_> = original
-                    .iter()
-                    .copied()
-                    .filter(|(i, _)| start <= *i && *i < end)
-                    .collect();
-                original.retain(|(i, _)| !(start <= *i && *i < end));
-                let insertion = original.iter().position(|(i, _)| *i == body_start)?;
-                original.splice(insertion..insertion, moved);
+    for (item, &base) in file.items.iter().zip(&tape.bases) {
+        for e in &item.tree.expressions {
+            if let ExprKind::Closure { body, .. } = e.kind {
+                if let Some((start, end, false)) = trailing_uses(&item.tree, e.origin, body) {
+                    let (start, end) = (base + start, base + end);
+                    let body_start = base
+                        + item
+                            .tree
+                            .expressions
+                            .get(body.0 as usize)?
+                            .origin
+                            .tokens
+                            .start as usize;
+                    let moved: Vec<_> = original
+                        .iter()
+                        .copied()
+                        .filter(|(i, _, _)| start <= *i && *i < end)
+                        .collect();
+                    original.retain(|(i, _, _)| !(start <= *i && *i < end));
+                    let insertion = original.iter().position(|(i, _, _)| *i == body_start)?;
+                    original.splice(insertion..insertion, moved);
+                }
             }
         }
     }
-    let mut anchors = vec![None; file.tokens.len()];
+    let mut anchors = vec![None; tape.tokens.len()];
     let (mut i, mut j) = (0, 0);
     while i < original.len() && j < printed.len() {
-        let s = sources.slice(original[i].1.span)?;
+        let s = sources.file_slice(original[i].2)?;
         if equivalent(s, &printed[j].text) {
             anchors[original[i].0] = Some(j);
             i += 1;
@@ -117,7 +147,7 @@ pub(crate) fn merge(
     }
     if original[i..]
         .iter()
-        .any(|(_, t)| !optional(sources.slice(t.span).unwrap_or("")))
+        .any(|(_, _, span)| !optional(sources.file_slice(*span).unwrap_or("")))
         || printed[j..].iter().any(|t| !optional(&t.text))
     {
         return None;
@@ -128,8 +158,8 @@ pub(crate) fn merge(
     let mut last_boundary = 0;
     let mut header_end = None;
     let mut header_gap_after = false;
-    for (index, t) in file.tokens.iter().enumerate() {
-        match t.kind {
+    for (index, &(kind, span)) in tape.tokens.iter().enumerate() {
+        match kind {
             TokenKind::Trivia(
                 k @ (TriviaKind::LineComment
                 | TriviaKind::DocLine
@@ -142,7 +172,7 @@ pub(crate) fn merge(
                         .file(file.file)
                         .unwrap()
                         .text()
-                        .get(end as usize..t.span.start as usize)
+                        .get(end as usize..span.start as usize)
                         .is_some_and(|s| !s.contains('\n'))
                 });
                 let mut boundary = anchors[index + 1..]
@@ -154,22 +184,22 @@ pub(crate) fn merge(
                 boundary = boundary.max(last_boundary);
                 last_boundary = boundary;
                 comments[boundary].push(Comment {
-                    text: sources.slice(t.span)?,
+                    text: sources.file_slice(span)?,
                     trailing,
                     header_gap: previous_significant.is_none()
                         && header_end.is_some_and(|end: u32| {
                             sources.file(file.file).unwrap().text()
-                                [end as usize..t.span.start as usize]
+                                [end as usize..span.start as usize]
                                 .bytes()
                                 .filter(|b| *b == b'\n')
                                 .count()
                                 >= 2
                         }),
-                    line: matches!(k, TriviaKind::LineComment | TriviaKind::DocLine),
+                    line: matches!(*k, TriviaKind::LineComment | TriviaKind::DocLine),
                 });
-                previous_comment = Some(t.span.end);
-                header_end = if previous_significant.is_none() && k == TriviaKind::LineComment {
-                    Some(t.span.end)
+                previous_comment = Some(span.end);
+                header_end = if previous_significant.is_none() && *k == TriviaKind::LineComment {
+                    Some(span.end)
                 } else {
                     None
                 };
@@ -179,14 +209,14 @@ pub(crate) fn merge(
             _ => {
                 if previous_significant.is_none() {
                     header_gap_after = header_end.is_some_and(|end| {
-                        sources.file(file.file).unwrap().text()[end as usize..t.span.start as usize]
+                        sources.file(file.file).unwrap().text()[end as usize..span.start as usize]
                             .bytes()
                             .filter(|b| *b == b'\n')
                             .count()
                             >= 2
                     });
                 }
-                previous_significant = Some(t.span.end);
+                previous_significant = Some(span.end);
                 previous_comment = None;
             }
         }
@@ -287,24 +317,24 @@ fn append_gap(out: &mut String, gap: &str) {
 
 /// Returns the trailing authority range and whether trivia prevents moving it.
 pub(crate) fn trailing_uses(
-    file: &SyntaxFile,
+    tree: &SyntaxTree,
     origin: Origin,
     body: ExprId,
 ) -> Option<(usize, usize, bool)> {
-    let b = file.tree.expressions.get(body.0 as usize)?.origin.tokens;
+    let b = tree.expressions.get(body.0 as usize)?.origin.tokens;
     let end = origin.tokens.end as usize;
     let start = (b.end as usize..end).find(|i| {
-        file.tokens
+        tree.tokens
             .get(*i)
             .is_some_and(|t| !matches!(t.kind, TokenKind::Trivia(_)))
     })?;
     if !matches!(
-        file.tokens.get(start)?.kind,
+        tree.tokens.get(start)?.kind,
         TokenKind::Keyword(Keyword::Uses)
     ) {
         return None;
     }
-    let preserve = file.tokens.get(b.start as usize..end)?.iter().any(|t| {
+    let preserve = tree.tokens.get(b.start as usize..end)?.iter().any(|t| {
         matches!(
             t.kind,
             TokenKind::Trivia(

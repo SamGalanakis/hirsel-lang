@@ -143,7 +143,7 @@ impl QueryEngine {
             return Err(QueryError::Diagnostics(analyzed.diagnostics));
         }
         let typed = &analyzed.value.typed;
-        let revision = typed.file.tree.items[typed.item.0 as usize].text_hash;
+        let revision = typed.syntax.text_hash;
         let audit = SourceAudit::completed(
             &signature,
             revision,

@@ -44,7 +44,7 @@ fn ownership_and_audit_use_indexed_source_rows() {
                     )
                     .unwrap();
                 let parsed = engine.parse_file(file, &default_context()).unwrap();
-                let path = &parsed.value.tree.items[1].definition;
+                let path = &parsed.value.items[1].item.definition;
                 let h = hirsel_intern::work::read(hirsel_intern::work::Counter::AuditSourceRows);
                 let j =
                     hirsel_intern::work::read(hirsel_intern::work::Counter::OwnershipSourceRows);

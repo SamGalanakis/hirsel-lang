@@ -56,7 +56,7 @@ impl Checker<'_, '_> {
             body: Some(root),
             signature,
             ..
-        } = &self.input.tree.items[self.input.item.0 as usize].kind
+        } = &self.input.syntax.item.kind
         else {
             return Ok(());
         };
@@ -68,7 +68,7 @@ impl Checker<'_, '_> {
             return Ok(());
         }
         if !self.body.calls.iter().any(|c|matches!(&c.target,CallTarget::Definition(p) if p == &self.input.signature.definition)) {return Ok(());}
-        let owner = NameSite::Item(self.input.item);
+        let owner = NameSite::Item;
         let initial = State {
             live: self
                 .body
@@ -83,7 +83,7 @@ impl Checker<'_, '_> {
             ..State::default()
         };
         let mut states = vec![initial];
-        let exits = self.input.tree.block_exits(*root);
+        let exits = self.input.syntax.tree.block_exits(*root);
         let mut breaks: BTreeMap<ast::ExprId, Vec<State>> = BTreeMap::new();
         let mut todo = vec![Visit::Expression(*root, true, false, 0)];
         while let Some(visit) = todo.pop() {
@@ -93,7 +93,10 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     use ast::ExprKind as E;
-                    match self.input.tree.expressions[id.0 as usize].kind.clone() {
+                    match self.input.syntax.tree.expressions[id.0 as usize]
+                        .kind
+                        .clone()
+                    {
                         E::Block {
                             label,
                             statements,
@@ -231,7 +234,10 @@ impl Checker<'_, '_> {
                     if states[state].terminated {
                         continue;
                     }
-                    match self.input.tree.statements[id.0 as usize].kind.clone() {
+                    match self.input.syntax.tree.statements[id.0 as usize]
+                        .kind
+                        .clone()
+                    {
                         ast::StmtKind::Let {
                             pattern,
                             value,

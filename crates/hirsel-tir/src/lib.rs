@@ -12,8 +12,9 @@ use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
 /// v3 adds diverging calls; v4 retains named-entry caller attribution;
 /// v5 adds the order-bearing SortedMap constructor;
-/// v6 adds size actuals to constant reads.
-pub const TIR_VERSION: u32 = 6;
+/// v6 adds size actuals to constant reads;
+/// v7 qualifies body binders and origins with their owning definition occurrence.
+pub const TIR_VERSION: u32 = 7;
 
 pub mod representation;
 
@@ -433,7 +434,7 @@ pub struct TailSite {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Body {
     /// Declaring source scope for value-parameter references, separate from storage scopes.
-    pub parameter_scope: hirsel_types::NameSite,
+    pub parameter_scope: hirsel_types::SiteRef,
     pub locals: Vec<Local>,
     pub places: Vec<Place>,
     pub scopes: Vec<Scope>,
@@ -558,7 +559,10 @@ mod tests {
         });
         let span = Span::default();
         let body = Body {
-            parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+            parameter_scope: hirsel_types::LexicalOwner::first(&hirsel_syntax::DefPath::core(
+                "main",
+            ))
+            .site(hirsel_types::NameSite::Item),
             locals: vec![Local {
                 ty: unit,
                 storage: Storage::ReturnSlot,

@@ -1,5 +1,5 @@
 use super::*;
-use hirsel_syntax::{ItemId, StmtId};
+use hirsel_syntax::{LexicalOwner, SiteRef, StmtId};
 fn scalar() -> Type {
     Type::with_kind(TypeKind::Primitive(Primitive::U32))
 }
@@ -20,6 +20,13 @@ fn function(result: TypeId, generics: Vec<GenericParameter>) -> Type {
         }),
         ..scalar()
     }
+}
+/// The lexical owner of the sites these tests name.
+fn owner() -> LexicalOwner {
+    LexicalOwner::first(&path("f"))
+}
+fn site(site: NameSite) -> SiteRef {
+    owner().site(site)
 }
 fn path(name: &str) -> DefPath {
     DefPath(hirsel_syntax::ItemPath {
@@ -165,6 +172,7 @@ fn unused_nested_reordered_patterns_keep_types_and_binding_modes() {
         },
     ];
     let body = CheckedBody {
+        lexical: LexicalOwner::first(&path("f")),
         tails: vec![],
         places: vec![],
         calls: vec![],
@@ -191,7 +199,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         manifest: ContentHash::of_bytes(b"manifest-2"),
         result: Err(QueryError::NotImplemented),
     };
-    let owner = NameSite::Item(ItemId(0));
+    let owner = NameSite::Item;
     let resolution = Resolution {
         reads: vec![
             DependencyRead::ProviderLookup {
@@ -396,7 +404,7 @@ fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
         .into(),
     ));
     let callback = types.push(callback);
-    let scope = NameSite::Statement(StmtId(7));
+    let scope = site(NameSite::Statement(StmtId(7)));
     let bound = bind_parameter_scopes(&mut types, callback, &[scope]).unwrap();
     let row = types.get(bound).unwrap();
     let body = ParameterRef::body(scope, ParamId(0));
@@ -419,8 +427,12 @@ fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
             .collect::<Vec<_>>(),
         vec![OriginRoot::Parameter(own), OriginRoot::Parameter(body)]
     );
-    let sibling =
-        bind_parameter_scopes(&mut types, callback, &[NameSite::Statement(StmtId(8))]).unwrap();
+    let sibling = bind_parameter_scopes(
+        &mut types,
+        callback,
+        &[site(NameSite::Statement(StmtId(8)))],
+    )
+    .unwrap();
     assert!(!semantic_equal(&types, bound, &types, sibling).unwrap());
     assert!(matches!(
         bind_parameter_scopes(&mut types, callback, &[]),
@@ -454,7 +466,7 @@ fn call_origin_substitution_reaches_outer_references_inside_callbacks() {
     let result = types.push(result);
     let callback = types.push(function(result, vec![]));
     let source = Origin {
-        root: OriginRoot::Parameter(ParameterRef::body(NameSite::Item(ItemId(42)), ParamId(3))),
+        root: OriginRoot::Parameter(ParameterRef::body(site(NameSite::Item), ParamId(3))),
         fields: vec![FieldId(1)].into(),
     };
     let instantiated = instantiate_parameter_origins(
@@ -559,18 +571,18 @@ fn argument_brand_selection_preserves_all_origins_and_inner_binders() {
     });
     let selected = store.push(selected);
     let source = Origin {
-        root: OriginRoot::Local(LocalId(7)),
+        root: OriginRoot::Local(owner(), LocalId(7)),
         fields: vec![FieldId(1)].into(),
     };
     let other = Origin {
-        root: OriginRoot::Local(LocalId(8)),
+        root: OriginRoot::Local(owner(), LocalId(8)),
         fields: vec![].into(),
     };
     let arguments = BTreeMap::from([(
         parameter,
         OriginArgument {
             identity: Origin {
-                root: OriginRoot::Expression(ExprId(13)),
+                root: OriginRoot::Expression(owner(), ExprId(13)),
                 fields: vec![].into(),
             },
             brand: Brand {
@@ -721,7 +733,7 @@ fn dependent_sources_keep_field_paths_and_nested_call_binders() {
         p,
         OriginArgument {
             identity: Origin {
-                root: OriginRoot::Expression(ExprId(4)),
+                root: OriginRoot::Expression(owner(), ExprId(4)),
                 fields: vec![].into(),
             },
             brand: Brand::default(),
@@ -772,7 +784,7 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
         ..scalar()
     });
     let arena = Relation::place(Origin {
-        root: OriginRoot::Local(LocalId(8)),
+        root: OriginRoot::Local(owner(), LocalId(8)),
         fields: vec![].into(),
     });
     let owner = store.push(Type {
@@ -932,8 +944,8 @@ fn complete_graph_view_covers_every_edge_and_preserves_import_ownership() {
 #[test]
 fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
     let mut types = TypeStore::default();
-    let outer = NameSite::Item(ItemId(0));
-    let inner = NameSite::Statement(StmtId(0));
+    let outer = site(NameSite::Item);
+    let inner = site(NameSite::Statement(StmtId(0)));
     let t = types.push(Type {
         kind: TypeKind::Parameter(TypeParameterRef::body(outer, TypeParamId(0))),
         ..scalar()
@@ -982,6 +994,81 @@ fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
     )
     .unwrap();
     assert!(semantic_equal(&types, t, &types, substituted).unwrap());
+}
+
+#[test]
+fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
+    // Two items, and two occurrences of one path, number their sites from
+    // zero: the same local binder ordinal names a different binder in each.
+    let mut types = TypeStore::default();
+    let first = LexicalOwner::first(&path("a")).site(NameSite::Statement(StmtId(0)));
+    let second = LexicalOwner::first(&path("b")).site(NameSite::Statement(StmtId(0)));
+    let duplicate = LexicalOwner {
+        occurrence: 1,
+        ..LexicalOwner::first(&path("a"))
+    }
+    .site(NameSite::Statement(StmtId(0)));
+    let mut declarations = GenericDeclarations::default();
+    let parameters: Vec<_> = [first, second, duplicate]
+        .into_iter()
+        .map(|scope| {
+            declarations.insert(
+                scope,
+                vec![GenericParameter::Type {
+                    name: "P".into(),
+                    bounds: vec![Bound::Plain].into(),
+                }],
+            );
+            types.push(Type {
+                kind: TypeKind::Parameter(TypeParameterRef::body(scope, TypeParamId(0))),
+                ..scalar()
+            })
+        })
+        .collect();
+    let t = parameters[0];
+    for &u in &parameters[1..] {
+        assert!(!semantic_equal(&types, t, &types, u).unwrap());
+        for relation in [
+            TypeRelation::Exact,
+            TypeRelation::Parameter,
+            TypeRelation::Value,
+        ] {
+            assert!(
+                !compatible_type(&types, t, u, relation, &declarations, &mut |_| Ok::<
+                    _,
+                    QueryError,
+                >(
+                    None
+                ))
+                .unwrap()
+            );
+        }
+    }
+    // Substituting the other item's binder leaves this item's parameter alone;
+    // substituting its own replaces it.
+    let actual = types.push(scalar());
+    for (scope, replaced) in [(second, false), (duplicate, false), (first, true)] {
+        let source = types.clone();
+        let substituted = substitute_type(
+            &source,
+            t,
+            &mut types,
+            Substitution {
+                binder: Some(GenericBinder::Body(scope)),
+                arguments: &[GenericArgument::Type(actual)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            semantic_equal(&types, t, &types, substituted).unwrap(),
+            !replaced
+        );
+        assert_eq!(
+            types.get(substituted).unwrap().kind == TypeKind::Primitive(Primitive::U32),
+            replaced
+        );
+    }
 }
 
 #[test]
@@ -1333,7 +1420,7 @@ fn state_selector_transport_preserves_nested_binders_and_field_paths() {
     .into();
     let inner = store.push(inner);
     let outer = store.push(function(inner, vec![]));
-    let mapped = bind_parameter_scopes(&mut store, outer, &[NameSite::Item(ItemId(4))]).unwrap();
+    let mapped = bind_parameter_scopes(&mut store, outer, &[site(NameSite::Item)]).unwrap();
     let TypeKind::Function(outer) = &store.get(mapped).unwrap().kind else {
         panic!()
     };
@@ -1593,8 +1680,8 @@ fn private_capability_ceiling_is_not_a_public_signature_hash_input() {
 #[test]
 fn cleanup_bound_instantiation_retains_exact_scopes_and_nested_binders() {
     let mut types = TypeStore::default();
-    let owner = NameSite::Item(ItemId(10));
-    let sibling = NameSite::Statement(StmtId(10));
+    let owner = site(NameSite::Item);
+    let sibling = site(NameSite::Statement(StmtId(10)));
     let bounded = GenericParameter::Type {
         name: "T".into(),
         bounds: vec![Bound::NoallocDrop].into(),

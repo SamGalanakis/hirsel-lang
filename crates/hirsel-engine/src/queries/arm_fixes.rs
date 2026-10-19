@@ -12,7 +12,7 @@ impl QueryEngine {
         representations: &mut BTreeMap<DefPath, ContentHash>,
     ) {
         for fix in std::mem::take(&mut output.value.plans.arm_fixes) {
-            let Some(span) = self.arm_insertion(&fix.owner, fix.site.file) else {
+            let Some(span) = self.arm_insertion(&fix.owner, fix.site) else {
                 continue;
             };
             let Some(diagnostic) = output
@@ -45,13 +45,15 @@ impl QueryEngine {
         }
     }
     /// The empty span just after the last arm of `owner`'s variant
-    /// declaration, when that declaration is in `file` and ends with its arms.
-    fn arm_insertion(&self, owner: &DefPath, file: FileId) -> Option<Span> {
+    /// declaration, when that declaration is in the file of `site` and ends
+    /// with its arms.
+    fn arm_insertion(&self, owner: &DefPath, site: Span) -> Option<Span> {
         let snapshot = self.snapshot(owner).ok()?;
-        if snapshot.file.file != file {
+        let file = self.sources.resolve(site).file;
+        if self.item_file(&snapshot) != file {
             return None;
         }
-        let item = &snapshot.file.tree.items[snapshot.item.0 as usize];
+        let item = &snapshot.item;
         let ItemKind::Type {
             body: TypeBody::Variants(arms),
             drop: None,
@@ -60,11 +62,12 @@ impl QueryEngine {
         else {
             return None;
         };
-        let end = item.origin.span.end;
+        let origin = item.origin.span;
+        let end = self.sources.resolve(origin).end;
         let text = self.sources.file(file)?.text();
         let last = text.get(..end as usize)?.chars().next_back()?;
         (!arms.is_empty() && (last == ')' || last.is_alphanumeric() || last == '_'))
-            .then(|| Span::new(file, end, end))
+            .then(|| Span::new(origin.anchor, origin.end, origin.end))
             .flatten()
     }
 }

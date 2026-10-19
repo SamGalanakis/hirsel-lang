@@ -14,7 +14,7 @@ fn flow_snapshots_copy_only_changed_rows() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("flow-state.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path = &parsed.value.tree.items[0].definition;
+            let path = &parsed.value.items[0].item.definition;
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateCopiedRows);
             let output = engine.lower_to_tir(path).unwrap();

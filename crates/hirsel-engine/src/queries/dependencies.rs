@@ -182,7 +182,7 @@ impl QueryEngine {
     }
     pub(crate) fn implementation_hash(&self, path: &DefPath) -> Option<ContentHash> {
         let snapshot = self.items.get(path)?.first()?;
-        Some(snapshot.file.tree.items[snapshot.item.0 as usize].text_hash)
+        Some(snapshot.text_hash)
     }
     pub(crate) fn executions_valid(&mut self, reads: &ExecutionReads) -> bool {
         reads

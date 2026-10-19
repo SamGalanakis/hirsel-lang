@@ -12,19 +12,23 @@ fn annotations_parse_beside_the_tree_at_every_site() {
          distinct type D(@analysis(unit: m) v: u64)\n",
     );
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-    let tree = &output.syntax.tree;
-    let written: Vec<_> = tree
-        .analyses
+    // Each item keeps its own annotations, beside its own tree.
+    let written: Vec<_> = output
+        .syntax
+        .items
         .iter()
-        .map(|a| {
-            format!(
-                "{} {:?} {} [{}] {:?}",
-                a.item.0,
-                a.site,
-                a.name,
-                a.payload.join(" "),
-                a.spaced
-            )
+        .enumerate()
+        .flat_map(|(index, syntax)| {
+            syntax.tree.analyses.iter().map(move |a| {
+                format!(
+                    "{} {:?} {} [{}] {:?}",
+                    index,
+                    a.site,
+                    a.name,
+                    a.payload.join(" "),
+                    a.spaced
+                )
+            })
         })
         .collect();
     assert_eq!(
@@ -40,22 +44,21 @@ fn annotations_parse_beside_the_tree_at_every_site() {
         ]
     );
     // The item keeps its own attributes and name; nothing of the annotation enters it.
-    let item = &tree.items[0];
+    let item = &output.syntax.items[0].item;
     assert_eq!(item.attributes.len(), 1);
     assert_eq!(item.name.as_str(), "f");
 }
 
 #[test]
 fn an_item_begins_after_its_leading_annotations() {
-    let (output, _) =
+    let (output, sources) =
         support::parse("@analysis(taint) fn f() {}\n@noalloc @analysis(taint) fn g() {}\n");
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     let starts: Vec<_> = output
         .syntax
-        .tree
         .items
         .iter()
-        .map(|item| item.origin.span.start)
+        .map(|syntax| sources.resolve(syntax.item.origin.span).start)
         .collect();
     // A trailing annotation stays inside the item that an attribute begins.
     assert_eq!(starts, [17, 27]);

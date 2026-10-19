@@ -58,8 +58,9 @@ impl Builder<'_, '_> {
             let body = bodies
                 .iter()
                 .position(|body| {
-                    body.as_ref()
-                        .is_some_and(|body| body.parameter_scope == binding.site)
+                    body.as_ref().is_some_and(|body| {
+                        body.parameter_scope == self.decisions.lexical.site(binding.site)
+                    })
                 })
                 .ok_or_else(|| LowerError {
                     site: span,
@@ -72,7 +73,8 @@ impl Builder<'_, '_> {
                     BodyId(body as u32),
                     binding.ty,
                     span,
-                    self.input.tree.expressions.len(),
+                    self.decisions.lexical,
+                    self.input.syntax.tree.expressions.len(),
                     &mut self.decisions.cloned_scopes.borrow_mut(),
                 )?;
                 (None, ty, UseKind::Borrow, Some(body))
@@ -101,11 +103,15 @@ impl Builder<'_, '_> {
         let mut child = Builder::new(self.input, self.decisions, owner, result, self.types)?;
         let mut parameters = vec![];
         for (ordinal, parameter) in function.parameters.iter().enumerate() {
-            let ty = hirsel_types::bind_parameter_scopes(child.types, parameter.ty, &[owner])
-                .map_err(|e| LowerError {
-                    site: span,
-                    message: format!("lexical callable parameter: {e:?}"),
-                })?;
+            let ty = hirsel_types::bind_parameter_scopes(
+                child.types,
+                parameter.ty,
+                &[self.decisions.lexical.site(owner)],
+            )
+            .map_err(|e| LowerError {
+                site: span,
+                message: format!("lexical callable parameter: {e:?}"),
+            })?;
             let usage = match parameter.passing {
                 hirsel_syntax::PassingMode::Borrow => UseKind::Borrow,
                 hirsel_syntax::PassingMode::Mut => UseKind::Mut,
@@ -121,7 +127,7 @@ impl Builder<'_, '_> {
             ));
             child.body.places[place.0 as usize].binding = Some(hirsel_types::Origin {
                 root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::body(
-                    owner,
+                    self.decisions.lexical.site(owner),
                     hirsel_types::ParamId(ordinal as u32),
                 )),
                 fields: vec![].into(),
@@ -285,8 +291,9 @@ fn clone_static(
     root: BodyId,
     root_ty: TypeId,
     span: Span,
+    lexical: hirsel_types::LexicalOwner,
     syntax_expressions: usize,
-    cloned_scopes: &mut std::collections::BTreeMap<NameSite, NameSite>,
+    cloned_scopes: &mut std::collections::BTreeMap<hirsel_types::SiteRef, hirsel_types::SiteRef>,
 ) -> Result<(BodyId, TypeId)> {
     use hirsel_types::{BinderRef, GenericArgument, GenericBinder, OriginRoot, ParameterRef, Size};
     use std::collections::BTreeMap;
@@ -312,7 +319,7 @@ fn clone_static(
                 })?;
             scopes.insert(
                 body.parameter_scope,
-                NameSite::Expression(ExprId(expression)),
+                lexical.site(NameSite::Expression(ExprId(expression))),
             );
         }
         for instruction in body.blocks.iter().flat_map(|block| &block.instructions) {

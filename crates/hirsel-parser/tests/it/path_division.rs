@@ -17,19 +17,19 @@ fn versioned_value_paths_stop_before_unambiguous_division() {
         );
         let ItemKind::Function {
             body: Some(body), ..
-        } = output.syntax.tree.items[output.syntax.roots[0].0 as usize].kind
+        } = output.syntax.items[0].item.kind
         else {
             panic!()
         };
         let ExprKind::Block {
             tail: Some(tail), ..
-        } = output.syntax.tree.expressions[body.0 as usize].kind
+        } = output.syntax.items[0].tree.expressions[body.0 as usize].kind
         else {
             panic!()
         };
         assert!(
             matches!(
-                output.syntax.tree.expressions[tail.0 as usize].kind,
+                output.syntax.items[0].tree.expressions[tail.0 as usize].kind,
                 ExprKind::Binary {
                     op: BinaryOp::Div,
                     ..
@@ -49,12 +49,19 @@ fn type_paths_and_ambiguous_versioned_value_paths_keep_their_separators() {
             "{source}: {:?}",
             output.diagnostics
         );
-        assert!(!output.syntax.tree.expressions.iter().any(|e| matches!(
-            e.kind,
-            ExprKind::Binary {
-                op: BinaryOp::Div,
-                ..
-            }
-        )));
+        assert!(
+            !output
+                .syntax
+                .items
+                .iter()
+                .flat_map(|i| &i.tree.expressions)
+                .any(|e| matches!(
+                    e.kind,
+                    ExprKind::Binary {
+                        op: BinaryOp::Div,
+                        ..
+                    }
+                ))
+        );
     }
 }

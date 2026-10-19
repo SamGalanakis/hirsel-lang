@@ -83,7 +83,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             let file = sources.add("catalogue.hir", source).unwrap();
             let lexed = hirsel_lexer::lex(file, &sources);
             assert!(lexed.diagnostics.is_empty());
-            let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources);
+            let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &mut sources);
             assert!(
                 parsed.diagnostics.is_empty(),
                 "{qualified}: {:?}",
@@ -91,8 +91,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             );
             let expected = normalize(
                 Input {
-                    tree: &parsed.syntax.tree,
-                    item: parsed.syntax.roots[0],
+                    syntax: &parsed.syntax.items[0],
                     context: &context,
                     resolution: &Resolution::default(),
                     metadata: &metadata,
@@ -186,7 +185,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         let file = sources.add("ledger.hir", source).unwrap();
         let lexed = hirsel_lexer::lex(file, &sources);
         assert!(lexed.diagnostics.is_empty());
-        let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources);
+        let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &mut sources);
         assert!(
             parsed.diagnostics.is_empty(),
             "{name}: {:?}",
@@ -212,8 +211,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         let mut provider = registry.clone();
         let mut normalized = normalize(
             Input {
-                tree: &parsed.syntax.tree,
-                item: parsed.syntax.roots[0],
+                syntax: &parsed.syntax.items[0],
                 context: &context,
                 resolution: &Resolution::default(),
                 metadata: &metadata,

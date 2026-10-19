@@ -7,16 +7,16 @@ fn damaged_statements_and_items_keep_later_definitions() {
     let (output, _) = support::parse(
         "fn broken(x) { 0 }\nfn usable() {\nlet x = ;\nlet y = 2\ny\n}\nconst Z: u32 = 3\n",
     );
-    assert_eq!(output.syntax.roots.len(), 2);
-    assert_eq!(output.syntax.tree.items[0].definition.0.name, "usable");
-    assert_eq!(output.syntax.tree.items[1].definition.0.name, "Z");
+    assert_eq!(output.syntax.items.len(), 2);
+    assert_eq!(output.syntax.items[0].item.definition.0.name, "usable");
+    assert_eq!(output.syntax.items[1].item.definition.0.name, "Z");
     assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-6");
     assert!(
         output
             .syntax
-            .tree
-            .expressions
+            .items
             .iter()
+            .flat_map(|i| &i.tree.expressions)
             .any(|e| e.kind == ExprKind::Error)
     );
 }
@@ -59,18 +59,19 @@ fn nesting_is_an_incomplete_tooling_outcome() {
 #[test]
 fn stale_spans_are_diagnosed_and_hand_built_keyword_members_parse() {
     use hirsel_intern::Symbol;
-    use hirsel_span::{FileId, SourceMap, Span};
+    use hirsel_span::{Anchor, SourceMap, Span};
     let mut sources = SourceMap::default();
     let file = sources
         .add("stale.hir", "fn f() { x.type }".into())
         .unwrap();
-    let mut tokens = support::tokenize(file, sources.file(file).unwrap().text());
+    let anchor = sources.file_anchor(file);
+    let mut tokens = support::tokenize(anchor, sources.file(file).unwrap().text());
     for token in &mut tokens {
-        token.span.file = FileId(u32::MAX);
+        token.span.anchor = Anchor(u32::MAX);
         token.span.start = u32::MAX;
         token.span.end = 0;
     }
-    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources);
+    let out = hirsel_parser::parse(file, tokens, &support::context(), &mut sources);
     assert!(!out.diagnostics.is_empty());
     let f = Symbol::intern("f");
     let x = Symbol::intern("x");
@@ -101,11 +102,11 @@ fn stale_spans_are_diagnosed_and_hand_built_keyword_members_parse() {
         .zip(ranges)
         .map(|(kind, (start, end))| Token {
             kind,
-            span: Span { file, start, end },
+            span: Span { anchor, start, end },
         })
         .collect();
     // No lexer ran, so nothing interned `type`: the parser interns the member.
-    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources);
+    let out = hirsel_parser::parse(file, tokens, &support::context(), &mut sources);
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
 }
 
@@ -113,7 +114,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
     #[test]
     fn arbitrary_token_sequences_never_panic(words in prop::collection::vec(0usize..99, 0..512), corrupt in any::<bool>()) {
-        use hirsel_span::{FileId, SourceMap};
+        use hirsel_span::{Anchor, SourceMap};
         // Covers every punctuation/keyword category, trivia, invalids, literals,
         // identifiers and EOF at arbitrary positions, independent of lexical validity.
         const WORDS: &[&str] = &["fn", "let", "mut", "match", "if", "else", "for", "in", "while", "break",
@@ -127,27 +128,35 @@ proptest! {
         let source = words.iter().map(|&i| WORDS[i]).collect::<Vec<_>>().join(" ");
         let mut sources = SourceMap::default();
         let file = sources.add("random.hir", source.clone()).unwrap();
+        let anchor = sources.file_anchor(file);
         // Build each entry individually so concatenation cannot change token categories.
         let mut tokens = vec![];
         let mut offset = 0u32;
         for &i in &words {
-            let mut entry = support::tokenize(file, WORDS[i]);
+            let mut entry = support::tokenize(anchor, WORDS[i]);
             if !WORDS[i].is_empty() { entry.pop(); }
             for mut token in entry {
                 token.span.start += offset; token.span.end += offset;
                 if corrupt {
-                    token.span.file = FileId(u32::MAX);
+                    token.span.anchor = Anchor(u32::MAX);
                 }
                 tokens.push(token);
             }
             offset += WORDS[i].len() as u32 + 1;
         }
         let original = tokens.clone();
-        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources);
-        prop_assert_eq!(&output.syntax.tokens, &original);
-        for expr in &output.syntax.tree.expressions {
-            prop_assert!(expr.origin.tokens.start <= expr.origin.tokens.end);
-            prop_assert!(expr.origin.tokens.end as usize <= original.len());
+        let output = hirsel_parser::parse(file, tokens, &support::context(), &mut sources);
+        // The tape keeps every token, each at its original place.
+        let placed = |t: &Token| (t.kind.clone(), sources.resolve(t.span));
+        prop_assert_eq!(
+            output.syntax.tape().map(placed).collect::<Vec<_>>(),
+            original.iter().map(placed).collect::<Vec<_>>()
+        );
+        for syntax in &output.syntax.items {
+            for expr in &syntax.tree.expressions {
+                prop_assert!(expr.origin.tokens.start <= expr.origin.tokens.end);
+                prop_assert!(expr.origin.tokens.end as usize <= syntax.tree.tokens.len());
+            }
         }
     }
 }
@@ -169,8 +178,8 @@ fn recovery_consumes_inner_braces_and_preserves_the_enclosing_block() {
             "{source}: {:?}",
             output.diagnostics
         );
-        assert_eq!(output.syntax.roots.len(), 2, "{source}");
-        assert_eq!(output.syntax.tree.items[1].definition.0.name, "usable");
+        assert_eq!(output.syntax.items.len(), 2, "{source}");
+        assert_eq!(output.syntax.items[1].item.definition.0.name, "usable");
     }
 }
 
@@ -179,8 +188,8 @@ fn item_recovery_does_not_publish_nested_definitions_from_a_bad_header() {
     let (output, _) = support::parse("fn broken(x) {\nfn inner() {}\n}\nfn usable() {}\n");
     assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
     assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-6");
-    assert_eq!(output.syntax.roots.len(), 1);
-    assert_eq!(output.syntax.tree.items[0].definition.0.name, "usable");
+    assert_eq!(output.syntax.items.len(), 1);
+    assert_eq!(output.syntax.items[0].item.definition.0.name, "usable");
 }
 
 #[test]
@@ -216,14 +225,14 @@ fn reserved_binding_names_recover_without_followup_syntax_errors() {
         );
         assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-14");
         assert!(output.diagnostics[0].message.contains("reserved for"));
-        assert_eq!(output.syntax.roots.len(), 2);
+        assert_eq!(output.syntax.items.len(), 2);
         assert!(output.syntax.has_syntax_errors);
         assert!(
             !output
                 .syntax
-                .tree
-                .expressions
+                .items
                 .iter()
+                .flat_map(|i| &i.tree.expressions)
                 .any(|e| matches!(e.kind, ExprKind::Error))
         );
     }

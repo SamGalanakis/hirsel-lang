@@ -134,9 +134,9 @@ fn measure(source: String) -> Size {
     let parsed = engine.parse_file(file, &default_context()).unwrap();
     let definition = parsed
         .value
-        .roots
+        .items
         .iter()
-        .map(|id| &parsed.value.tree.items[id.0 as usize])
+        .map(|id| &id.item)
         .find(|item| item.definition.0.name == "f")
         .unwrap()
         .definition

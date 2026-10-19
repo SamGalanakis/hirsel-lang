@@ -106,7 +106,7 @@ fn graph_source_order_does_not_depend_on_file_discovery_on_compiler_thread() {
         assert_eq!(
             output
                 .sources
-                .file(output.diagnostics[0].primary.file)
+                .file(output.sources.resolve(output.diagnostics[0].primary).file)
                 .unwrap()
                 .path
                 .to_str(),
@@ -152,7 +152,12 @@ fn exported_instance_edges_keep_owner_store_binder_and_round_trip_on_compiler_th
     use hirsel_types::{BinderRef, GenericArgument, NameSite, Size, TypeKind};
     let mut engine = native_engine(EDGES);
     let input = engine.export_native_input().unwrap();
-    let item = |name: &str| NameSite::Item(input.source_owners[&path(name)].item);
+    let item = |name: &str| {
+        input.source_owners[&path(name)]
+            .syntax
+            .owner()
+            .site(NameSite::Item)
+    };
     for edge in &input.instances.edges {
         assert_eq!(edge.binder, item(&edge.callee.0.name), "{edge:?}");
     }
@@ -237,7 +242,7 @@ fn native_import_rejects_forged_and_dropped_instance_edges_on_compiler_thread() 
     // A forged binder, kind and owner.
     let at = index(&base, "outer", InstanceKind::Call, "keep");
     let forgeries: [fn(&mut InstanceEdge); 3] = [
-        |e| e.binder = NameSite::Item(hirsel_syntax::ItemId(u32::MAX)),
+        |e| e.binder = hirsel_types::LexicalOwner::first(&path("absent")).site(NameSite::Item),
         |e| e.kind = InstanceKind::Reference,
         |e| e.owner.0.name = "pairs".into(),
     ];

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 /// A malformed hand-built semantic graph cannot have a canonical fingerprint.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EncodingError {
-    BodyGeneric(NameSite),
+    BodyGeneric(SiteRef),
     InvalidSchemaParameter(TypeParameterRef),
     BodyParameter(ParameterRef),
     BodyOrigin(Origin),
@@ -419,7 +419,7 @@ impl Encoder {
     }
     fn origin(&mut self, o: &Origin) {
         match &o.root {
-            OriginRoot::Expression(_) => {
+            OriginRoot::Expression(..) => {
                 self.error
                     .get_or_insert(EncodingError::BodyOrigin(o.clone()));
             }
@@ -431,7 +431,8 @@ impl Encoder {
                 self.tag("parameter");
                 self.parameter(*p);
             }
-            OriginRoot::Local(p) => {
+            // A signature's locals are its own definition's: the owner is implicit.
+            OriginRoot::Local(_, p) => {
                 self.tag("local");
                 self.number(p.0 as u64);
             }

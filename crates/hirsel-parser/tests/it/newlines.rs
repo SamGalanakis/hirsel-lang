@@ -1,7 +1,7 @@
 use crate::support;
 use hirsel_syntax::*;
 
-fn body(source: &str) -> (SyntaxFile, ExprId) {
+fn body(source: &str) -> (std::sync::Arc<ItemSyntax>, ExprId) {
     let (output, sources) = support::parse(source);
     assert!(
         output.diagnostics.is_empty(),
@@ -14,13 +14,13 @@ fn body(source: &str) -> (SyntaxFile, ExprId) {
     );
     let ItemKind::Function {
         body: Some(body), ..
-    } = output.syntax.tree.items[0].kind
+    } = output.syntax.items[0].item.kind
     else {
         panic!("function body")
     };
-    (output.syntax, body)
+    (output.syntax.items[0].clone(), body)
 }
-fn block(file: &SyntaxFile, id: ExprId) -> (&[StmtId], Option<ExprId>) {
+fn block(file: &ItemSyntax, id: ExprId) -> (&[StmtId], Option<ExprId>) {
     let ExprKind::Block {
         statements, tail, ..
     } = &file.tree.expressions[id.0 as usize].kind
@@ -120,7 +120,7 @@ fn exceptional_continuations_cross_blank_lines_and_comments() {
         "@noalloc\n// waits\npub\nfn f()\n=\ncomptime 1 + 2\nresource type R {}\n// drop belongs to R\ndrop(r) {}\ndistinct type P(x: u8)\nwhere x < 10\n",
     );
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-    assert_eq!(output.syntax.roots.len(), 3);
+    assert_eq!(output.syntax.items.len(), 3);
     let (file, _) = body("fn f() { call(fn() {}\nuses {}) }");
     assert!(file.tree.expressions.iter().any(
         |e| matches!(&e.kind, ExprKind::Closure { signature, .. } if signature.uses == Some(vec![]))

@@ -120,7 +120,7 @@ impl QueryEngine {
             }
         } else if let Some(source) = self.items.get(path).and_then(|items| items.first()) {
             match () {
-                _ if generation::executable(&source.file, source.item) => Form::Tir,
+                _ if generation::executable(source) => Form::Tir,
                 _ if is_type => Form::Type,
                 _ => {
                     let (content, reads) = self.semantic_node(path)?;

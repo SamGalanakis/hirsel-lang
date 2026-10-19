@@ -14,9 +14,9 @@ fn headers_compose_module_declarations_once() {
             let file = engine.sources.add("headers.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             assert!(parsed.diagnostics.is_empty());
-            assert_eq!(parsed.value.roots.len(), count as usize);
-            for id in &parsed.value.roots {
-                let path = &parsed.value.tree.items[id.0 as usize].definition;
+            assert_eq!(parsed.value.items.len(), count as usize);
+            for id in &parsed.value.items {
+                let path = &id.item.definition;
                 let resolved = engine.resolve_definition(path).unwrap();
                 assert!(resolved.diagnostics.is_empty());
                 let signature = engine.item_signature(path).unwrap();

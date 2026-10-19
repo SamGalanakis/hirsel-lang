@@ -104,6 +104,18 @@ fn fold_root_causes(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
     }
     folded
 }
+/// Where a diagnostic's primary site stands. Without sources, an anchor stands
+/// for its own file.
+fn site(sources: Option<&SourceMap>, d: &Diagnostic) -> hirsel_span::FileSpan {
+    sources.map_or(
+        hirsel_span::FileSpan {
+            file: hirsel_span::FileId(d.primary.anchor.0),
+            start: d.primary.start,
+            end: d.primary.end,
+        },
+        |s| s.resolve(d.primary),
+    )
+}
 pub fn select_diagnostics(
     mut diagnostics: Vec<Diagnostic>,
     sources: Option<&SourceMap>,
@@ -116,30 +128,33 @@ pub fn select_diagnostics(
     let original = diagnostics.clone();
     diagnostics.retain(|d| {
         !original.iter().any(|other| {
-            other.primary == d.primary && specialized(other.rule.as_str(), d.rule.as_str())
+            site(sources, other) == site(sources, d)
+                && specialized(other.rule.as_str(), d.rule.as_str())
         })
     });
     let selected = diagnostics.clone();
     diagnostics.retain(|d| {
         !selected.iter().any(|prerequisite| {
+            let (p, d_at) = (site(sources, prerequisite), site(sources, d));
             stage(prerequisite) == 0
                 && stage(d) > 0
-                && prerequisite.primary.file == d.primary.file
-                && d.primary.start <= prerequisite.primary.start
-                && d.primary.end >= prerequisite.primary.end
+                && p.file == d_at.file
+                && d_at.start <= p.start
+                && d_at.end >= p.end
         })
     });
     diagnostics.sort_by(|a, b| {
         let path = |d: &Diagnostic| {
             sources
-                .and_then(|s| s.file(d.primary.file))
+                .and_then(|s| s.file(s.resolve(d.primary).file))
                 .map(|f| f.path.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
+        let (a_at, b_at) = (site(sources, a), site(sources, b));
         // Warnings never change which error is reported first.
         let warning = |d: &Diagnostic| d.severity != Severity::Error;
-        (warning(a), path(a), a.primary.start, a.primary.end)
-            .cmp(&(warning(b), path(b), b.primary.start, b.primary.end))
+        (warning(a), path(a), a_at.start, a_at.end)
+            .cmp(&(warning(b), path(b), b_at.start, b_at.end))
             .then_with(|| stage(a).cmp(&stage(b)))
             .then_with(|| a.rule.prefix().cmp(b.rule.prefix()))
             .then_with(|| {
@@ -168,13 +183,13 @@ pub fn select_diagnostics(
 mod tests {
     use super::*;
     use hirsel_diag::{RuleId, Severity};
-    use hirsel_span::{FileId, Span};
+    use hirsel_span::{Anchor, FileId, Span};
     fn diag(rule: &str, start: u32) -> Diagnostic {
         Diagnostic {
             rule: RuleId::new(rule).unwrap(),
             severity: Severity::Error,
             message: rule.into(),
-            primary: Span::new(FileId(0), start, start + 1).unwrap(),
+            primary: Span::new(Anchor(0), start, start + 1).unwrap(),
             secondary: vec![],
             notes: vec![],
             fix: None,
@@ -221,15 +236,12 @@ mod tests {
         let mut sources = SourceMap::default();
         sources.add("z.hir", "x".into());
         sources.add("a.hir", "x".into());
-        let a = diag("MEM-10", 0);
+        let mut a = diag("MEM-10", 0);
         let mut b = diag("MEM-2", 0);
-        b.primary.file = FileId(1);
-        assert_eq!(
-            select_diagnostics(vec![a, b], Some(&sources))[0]
-                .primary
-                .file,
-            FileId(1)
-        );
+        a.primary.anchor = sources.file_anchor(FileId(0));
+        b.primary.anchor = sources.file_anchor(FileId(1));
+        let first = select_diagnostics(vec![a, b], Some(&sources))[0].primary;
+        assert_eq!(sources.resolve(first).file, FileId(1));
         assert_eq!(
             select_diagnostics(vec![diag("MEM-10", 0), diag("MEM-2", 0)], None)[0]
                 .rule
@@ -243,17 +255,17 @@ mod tests {
 mod obligation_tests {
     use super::*;
     use hirsel_diag::{Diagnostic, RuleId};
-    use hirsel_span::{FileId, Span};
+    use hirsel_span::{Anchor, Span};
     #[test]
     fn section_23_operand_read_precedes_enclosing_call_properties() {
         let call = Diagnostic::error(
             const { RuleId::of("CLO-3") },
-            Span::new(FileId(0), 1, 20).unwrap(),
+            Span::new(Anchor(0), 1, 20).unwrap(),
             "crossing",
         );
         let read = Diagnostic::error(
             const { RuleId::of("OWN-2") },
-            Span::new(FileId(0), 8, 9).unwrap(),
+            Span::new(Anchor(0), 8, 9).unwrap(),
             "use after move",
         );
         assert_eq!(
@@ -263,7 +275,7 @@ mod obligation_tests {
     }
     #[test]
     fn section_23_required_modes_follow_identity_and_mode_order() {
-        let site = Span::new(FileId(0), 1, 2).unwrap();
+        let site = Span::new(Anchor(0), 1, 2).unwrap();
         let multiplicity = Diagnostic::error(const { RuleId::of("MODE-3") }, site, "any text")
             .with_obligation(Obligation::Multiplicity);
         for rule in ["PROV-1", "MODE-1", "MODE-2"] {
@@ -282,11 +294,11 @@ mod obligation_tests {
 mod instantiation_tests {
     use super::*;
     use hirsel_diag::RuleId;
-    use hirsel_span::{FileId, Span};
+    use hirsel_span::{Anchor, Span};
     #[test]
     fn failed_generic_bounds_suppress_dependent_modes_but_preserve_operand_errors() {
-        let call = Span::new(FileId(0), 0, 30).unwrap();
-        let argument = Span::new(FileId(0), 5, 10).unwrap();
+        let call = Span::new(Anchor(0), 0, 30).unwrap();
+        let argument = Span::new(Anchor(0), 5, 10).unwrap();
         for rule in ["MODE-4", "CAP-2", "GEN-1"] {
             let bound = Diagnostic::error(RuleId::new(rule).unwrap(), call, "failed bound")
                 .with_obligation(Obligation::GenericBound {
@@ -301,7 +313,7 @@ mod instantiation_tests {
                     vec![bound.clone()]
                 );
                 // Another argument's mode requirement is independent of the failed bound.
-                let other = Span::new(FileId(0), 12, 14).unwrap();
+                let other = Span::new(Anchor(0), 12, 14).unwrap();
                 // A required multiplicity carries its obligation, as the checker reports it.
                 let mut independent =
                     Diagnostic::error(RuleId::new(mode).unwrap(), call, "required mode")
@@ -327,11 +339,11 @@ mod instantiation_tests {
 mod fold_tests {
     use super::*;
     use hirsel_diag::RuleId;
-    use hirsel_span::{FileId, Span};
+    use hirsel_span::{Anchor, Span};
     fn rooted(rule: &str, start: u32, root: Option<u64>) -> Diagnostic {
         let mut d = Diagnostic::error(
             RuleId::new(rule).unwrap(),
-            Span::new(FileId(0), start, start + 1).unwrap(),
+            Span::new(Anchor(0), start, start + 1).unwrap(),
             format!("{rule} message"),
         );
         d.root_cause = root;
@@ -363,7 +375,7 @@ mod fold_tests {
         let first = rooted("MODE-1", 10, Some(7));
         let mut later = rooted("CLO-4", 20, Some(7));
         later.secondary.push(hirsel_diag::Label {
-            span: Span::new(FileId(0), 30, 31).unwrap(),
+            span: Span::new(Anchor(0), 30, 31).unwrap(),
             message: "required: an escaping closure owns global captures".into(),
         });
         let ds = select_diagnostics(vec![later.clone(), first.clone()], None);

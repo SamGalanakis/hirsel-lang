@@ -7,8 +7,7 @@ use hirsel_types::{SignatureKind, SignatureRef};
 use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct NativeSource {
-    pub syntax: Arc<SyntaxFile>,
-    pub item: ItemId,
+    pub syntax: Arc<ItemSyntax>,
     pub implementation_revision: ContentHash,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,15 +126,13 @@ impl QueryEngine {
                 };
                 representations.insert(path.clone(), record);
             }
-            let (file, item) = self.parse_definition(&path)?.value;
-            let source = &file.tree.items[item.0 as usize];
-            let executable = crate::queries::generation::executable(&file, item);
+            let syntax = self.parse_definition(&path)?.value;
+            let executable = crate::queries::generation::executable(&syntax);
             source_owners.insert(
                 path.clone(),
                 NativeSource {
-                    syntax: file.clone(),
-                    item,
-                    implementation_revision: source.text_hash,
+                    syntax: syntax.clone(),
+                    implementation_revision: syntax.text_hash,
                 },
             );
             if executable {
@@ -256,23 +253,21 @@ impl QueryEngine {
         }
         for (path, owner) in &input.source_owners {
             let expected = &current.source_owners[path];
-            let Some(item) = owner.syntax.tree.items.get(owner.item.0 as usize) else {
-                return Err(invalid("foreign source item"));
-            };
+            let item = &owner.syntax.item;
             if &item.definition != path
                 || owner.implementation_revision != expected.implementation_revision
-                || item.text_hash != owner.implementation_revision
+                || owner.syntax.text_hash != owner.implementation_revision
                 || owner.syntax.as_ref() != expected.syntax.as_ref()
             {
                 return Err(invalid("stale or forged source owner"));
             }
             let expected_file = current
                 .sources
-                .file(item.origin.span.file)
+                .file(current.sources.resolve(item.origin.span).file)
                 .ok_or_else(|| invalid("missing selected source"))?;
             if input
                 .sources
-                .file(item.origin.span.file)
+                .file(input.sources.resolve(item.origin.span).file)
                 .is_none_or(|f| f.text() != expected_file.text())
             {
                 return Err(invalid("source snapshot mismatch"));

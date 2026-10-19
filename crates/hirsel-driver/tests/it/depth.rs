@@ -87,7 +87,7 @@ fn ordinary_generated_chains_above_the_old_guard_elaborate() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("depth.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path = &parsed.value.tree.items[0].definition;
+            let path = &parsed.value.items[0].item.definition;
             let analyzed = engine.mode_definition(path).unwrap();
             assert!(
                 analyzed.diagnostics.is_empty(),

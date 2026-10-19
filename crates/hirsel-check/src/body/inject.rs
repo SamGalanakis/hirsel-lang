@@ -48,7 +48,7 @@ impl Checker<'_, '_> {
     fn question_mark(&self, id: ast::ExprId) -> Span {
         let span = self.span(id);
         Span::new(
-            span.file,
+            span.anchor,
             span.end.saturating_sub(1).max(span.start),
             span.end,
         )

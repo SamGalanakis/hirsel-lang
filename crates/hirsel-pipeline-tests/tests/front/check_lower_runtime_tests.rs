@@ -53,8 +53,8 @@ fn run_source(program: &str, fail: Option<&str>) -> Execution {
     let parsed = engine.parse_file(file, &context).unwrap();
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
     let mut definitions = vec![];
-    for id in &parsed.value.roots {
-        let item = &parsed.value.tree.items[id.0 as usize];
+    for id in &parsed.value.items {
+        let item = &id.item;
         if matches!(
             &item.kind,
             ItemKind::Function { body: Some(_), .. } | ItemKind::Type { drop: Some(_), .. }

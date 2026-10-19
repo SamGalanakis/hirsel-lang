@@ -42,9 +42,9 @@ fn full_gate_deepest_supported_sources_lower_and_validate_successfully() {
                 "{shape}: {:?}",
                 parsed.diagnostics
             );
-            assert!(!parsed.value.roots.is_empty(), "{shape}");
-            for root in &parsed.value.roots {
-                let path = &parsed.value.tree.items[root.0 as usize].definition;
+            assert!(!parsed.value.items.is_empty(), "{shape}");
+            for root in &parsed.value.items {
+                let path = &root.item.definition;
                 let output = engine.lower_to_tir(path).unwrap();
                 assert!(
                     output.diagnostics.is_empty(),

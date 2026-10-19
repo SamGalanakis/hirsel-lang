@@ -59,7 +59,8 @@ impl LexerPhase for Fake {
         }
         let mut result = out(vec![]);
         if self.reject == Some("lex") {
-            let QueryError::Diagnostics(d) = error(Span::new(file, 0, 1).unwrap()) else {
+            let anchor = sources.file_anchor(file);
+            let QueryError::Diagnostics(d) = error(Span::new(anchor, 0, 1).unwrap()) else {
                 unreachable!()
             };
             result.diagnostics = d;
@@ -73,39 +74,39 @@ impl ParserPhase for Fake {
         file: FileId,
         tokens: Vec<Token>,
         context: &FileContext,
-        sources: &SourceMap,
+        sources: &mut SourceMap,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
         self.event("parse");
-        let text = sources.file(file).unwrap().text();
-        let mut tree = SyntaxTree::default();
+        let text = sources.file(file).unwrap().text().to_owned();
+        let mut items = vec![];
         let mut offset = 0;
         for line in text.split_inclusive('\n') {
+            // Each line is one item, anchored at its start.
+            let anchor = sources.item_anchor(file, offset as u32);
             let name = line.split_whitespace().nth(1).unwrap();
-            let body_start = offset + line.find('{').unwrap();
-            let body = ExprId(tree.expressions.len() as u32);
+            let body_start = line.find('{').unwrap();
+            let mut tree = SyntaxTree::default();
+            let body = ExprId(0);
             let origin = Origin {
-                span: Span::new(file, offset as u32, (offset + line.len()) as u32).unwrap(),
+                span: Span::new(anchor, 0, line.len() as u32).unwrap(),
                 tokens: TokenRange::default(),
             };
             tree.expressions.push(Expr {
                 origin: Origin {
-                    span: Span::new(file, body_start as u32, origin.span.end).unwrap(),
+                    span: Span::new(anchor, body_start as u32, origin.span.end).unwrap(),
                     tokens: TokenRange::default(),
                 },
                 kind: ExprKind::Literal(Literal::Bool(true)),
             });
-            tree.items.push(Item {
+            let item = Item {
                 name_span: Default::default(),
-
                 origin,
-                owned_tokens: TokenRange::default(),
                 name: Symbol::intern("item"),
                 definition: DefPath(ItemPath {
                     package: context.package.clone(),
                     modules: context.modules.clone(),
                     name: name.into(),
                 }),
-                text_hash: ContentHash::of_bytes(line.as_bytes()),
                 visibility: Visibility::Private,
                 attributes: vec![],
                 kind: ItemKind::Function {
@@ -117,20 +118,25 @@ impl ParserPhase for Fake {
                     }),
                 },
                 generated: None,
-            });
+            };
+            items.push(Arc::new(ItemSyntax {
+                item,
+                tree,
+                anchor,
+                text_hash: ContentHash::of_bytes(line.as_bytes()),
+                occurrence: 0,
+            }));
             offset += line.len();
         }
-        let roots = (0..tree.items.len()).map(|n| ItemId(n as u32)).collect();
         let mut result = out(SyntaxFile {
             has_syntax_errors: false,
-
             file,
-            tree,
+            items,
             tokens,
-            roots,
         });
         if self.reject == Some("parse") {
-            let QueryError::Diagnostics(d) = error(Span::new(file, 0, 1).unwrap()) else {
+            let anchor = sources.file_anchor(file);
+            let QueryError::Diagnostics(d) = error(Span::new(anchor, 0, 1).unwrap()) else {
                 unreachable!()
             };
             result.diagnostics = d;
@@ -141,11 +147,10 @@ impl ParserPhase for Fake {
 impl ResolverPhase for Fake {
     fn resolve(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
-        let item = &file.tree.items[item.0 as usize];
+        let item = &syntax.item;
         self.fail("resolve", item.origin.span)?;
         if item.definition == path("b") {
             provider.signature(&path("a"))?;
@@ -168,11 +173,10 @@ impl ResolverPhase for Fake {
 impl SignaturePhase for Fake {
     fn signature(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        let item = &file.tree.items[item.0 as usize];
+        let item = &syntax.item;
         self.fail("signature", item.origin.span)?;
         // A declared fixture signature depends on the header, never the body.
         let fingerprint = match &item.kind {
@@ -198,13 +202,12 @@ impl SignaturePhase for Fake {
 impl CheckerPhase for Fake {
     fn check(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         resolution: Resolution,
         _signature: &Signature,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
-        self.fail("check", file.tree.items[item.0 as usize].origin.span)?;
+        self.fail("check", syntax.item.origin.span)?;
         let mut types = _signature.types.clone();
         let unit = match _signature.kind {
             SignatureKind::Const { ty: unit, .. } => unit,
@@ -216,9 +219,8 @@ impl CheckerPhase for Fake {
             ..types.get(unit).unwrap().clone()
         });
         Ok(out(TypedBody {
-            file,
-            item,
             checked: CheckedBody {
+                lexical: syntax.owner(),
                 tails: vec![],
                 places: vec![],
                 calls: vec![],
@@ -231,6 +233,7 @@ impl CheckerPhase for Fake {
                 instantiations: vec![],
                 closures: vec![],
             },
+            syntax,
             plans: Default::default(),
             unit,
             boolean,
@@ -244,10 +247,7 @@ impl ModesPhase for Fake {
         _signature: &Signature,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
-        self.fail(
-            "modes",
-            body.file.tree.items[body.item.0 as usize].origin.span,
-        )?;
+        self.fail("modes", body.syntax.item.origin.span)?;
         Ok(out(AnalyzedBody {
             typed: body,
             ownership: Default::default(),
@@ -264,9 +264,8 @@ impl LoweringPhase for Fake {
         body: AnalyzedBody,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
-        let file = &body.typed.file;
-        let item = body.typed.item;
-        self.fail("lower", file.tree.items[item.0 as usize].origin.span)?;
+        let syntax = &body.typed.syntax;
+        self.fail("lower", syntax.item.origin.span)?;
         Ok(out(hirsel_tir::Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
@@ -276,11 +275,7 @@ impl LoweringPhase for Fake {
             bodies: if self.reject == Some("invalid-tir") {
                 vec![]
             } else {
-                vec![unit_body(
-                    signature,
-                    item,
-                    file.tree.items[item.0 as usize].origin.span,
-                )]
+                vec![unit_body(signature, syntax, syntax.item.origin.span)]
             },
             entry: hirsel_tir::BodyId(0),
             contracts: vec![],
@@ -300,7 +295,7 @@ impl LoweringPhase for Fake {
         hirsel_tir::BodyId(0)
     }
 }
-fn unit_body(signature: &Signature, item: ItemId, span: Span) -> hirsel_tir::Body {
+fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_tir::Body {
     use hirsel_tir::*;
     let unit = match &signature.kind {
         SignatureKind::Const { ty: unit, .. } => *unit,
@@ -311,7 +306,7 @@ fn unit_body(signature: &Signature, item: ItemId, span: Span) -> hirsel_tir::Bod
         _ => unreachable!(),
     };
     Body {
-        parameter_scope: NameSite::Item(item),
+        parameter_scope: syntax.owner().site(NameSite::Item),
         locals: vec![Local {
             ty: unit,
             storage: Storage::ReturnSlot,
@@ -591,11 +586,10 @@ struct ContractSignatures;
 impl SignaturePhase for ContractSignatures {
     fn signature(
         &self,
-        file: Arc<SyntaxFile>,
-        item: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        let item = &file.tree.items[item.0 as usize];
+        let item = &syntax.item;
         let ItemKind::Function {
             abi: Some(header), ..
         } = &item.kind
@@ -705,22 +699,22 @@ struct ObserveDuplicates;
 impl SignaturePhase for ObserveDuplicates {
     fn signature(
         &self,
-        _file: Arc<SyntaxFile>,
-        _item: ItemId,
+        _syntax: Arc<ItemSyntax>,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         unreachable!("candidate-aware entry point must be used")
     }
     fn signature_items(
         &self,
-        candidates: &[(Arc<SyntaxFile>, ItemId)],
+        candidates: &[Arc<ItemSyntax>],
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         assert_eq!(candidates.len(), 2);
-        let (later, item) = &candidates[1];
+        let later = &candidates[1];
+        assert_eq!(later.occurrence, 1);
         Err(QueryError::Diagnostics(vec![Diagnostic::error(
             const { RuleId::of("LANG-7") },
-            later.tree.items[item.0 as usize].origin.span,
+            later.item.origin.span,
             "fixture overloading",
         )]))
     }
@@ -741,16 +735,18 @@ fn duplicate_items_keep_one_identity_and_reach_the_signature_phase_on_compiler_t
     engine.parse_file(duplicate, &default_context()).unwrap();
     let candidates = engine.definition_items(&path("a")).unwrap();
     assert_eq!(candidates.len(), 2);
-    assert_ne!(candidates[0].0.file, candidates[1].0.file);
-    for (file, item) in candidates {
-        assert_eq!(file.tree.items[item.0 as usize].definition, path("a"));
+    let file = |syntax: &ItemSyntax| engine.sources.anchor(syntax.anchor).unwrap().0;
+    assert_ne!(file(&candidates[0]), file(&candidates[1]));
+    for (occurrence, syntax) in candidates.iter().enumerate() {
+        assert_eq!(syntax.item.definition, path("a"));
+        assert_eq!(syntax.occurrence, occurrence as u32);
     }
     engine.adapters.signature = Some(Rc::new(ObserveDuplicates));
     let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
         panic!("signature phase owns overloading");
     };
     assert_eq!(errors[0].rule.as_str(), "LANG-7");
-    assert_eq!(errors[0].primary.file, duplicate);
+    assert_eq!(engine.sources.resolve(errors[0].primary).file, duplicate);
 }
 
 #[test]
@@ -817,8 +813,7 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
     impl SignaturePhase for Flaky {
         fn signature(
             &self,
-            file: Arc<SyntaxFile>,
-            item: ItemId,
+            syntax: Arc<ItemSyntax>,
             provider: &mut dyn SignatureProvider,
         ) -> Result<QueryOutput<Signature>, QueryError> {
             self.calls.set(self.calls.get() + 1);
@@ -828,7 +823,7 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
                     message: "temporarily offline".into(),
                 }));
             }
-            self.original.signature(file, item, provider)
+            self.original.signature(syntax, provider)
         }
     }
     let (mut engine, _) = make_engine(None, false);

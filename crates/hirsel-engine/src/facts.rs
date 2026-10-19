@@ -2,8 +2,10 @@
 use crate::*;
 use hirsel_syntax::*;
 use std::sync::Arc;
-pub(crate) fn snapshot(file: &SyntaxFile, id: ItemId) -> Option<(Arc<SyntaxFile>, ItemId)> {
-    let source = &file.tree.items[id.0 as usize];
+/// The fact helper of a distinct type with a fact: a private function over the
+/// source's own arenas and anchor, at the same occurrence.
+pub(crate) fn snapshot(syntax: &ItemSyntax) -> Option<Arc<ItemSyntax>> {
+    let source = &syntax.item;
     let ItemKind::Type {
         generics,
         body: TypeBody::Distinct {
@@ -18,7 +20,7 @@ pub(crate) fn snapshot(file: &SyntaxFile, id: ItemId) -> Option<(Arc<SyntaxFile>
     let path = hirsel_check_protocol::fact::fact_path(&source.definition);
     let name = Symbol::intern(&path.0.name);
     let boolean = Symbol::intern("bool");
-    let mut adapted = file.clone();
+    let mut adapted = syntax.clone();
     let result = TypeExprId(adapted.tree.types.len() as u32);
     adapted.tree.types.push(TypeExpr {
         origin: field.origin,
@@ -51,7 +53,6 @@ pub(crate) fn snapshot(file: &SyntaxFile, id: ItemId) -> Option<(Arc<SyntaxFile>
             ..Default::default()
         },
     };
-    let helper = ItemId(adapted.tree.items.len() as u32);
-    adapted.tree.items.push(item);
-    Some((Arc::new(adapted), helper))
+    adapted.item = item;
+    Some(Arc::new(adapted))
 }

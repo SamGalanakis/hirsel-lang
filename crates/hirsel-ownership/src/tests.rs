@@ -184,7 +184,7 @@ fn guarded_moving_patterns_test_borrows_and_commit_takes() {
         };
         let pattern = PatternId(0);
         let symbol = Symbol::intern("payload");
-        f.tree.patterns.push(Pattern {
+        f.syntax.tree.patterns.push(Pattern {
             origin: origin(300),
             kind: PatternKind::Binding(symbol),
         });
@@ -197,7 +197,7 @@ fn guarded_moving_patterns_test_borrows_and_commit_takes() {
             annotation: None,
         });
         f.body.bindings.push(BindingDecision {
-            owner: NameSite::Item(hirsel_syntax::ItemId(0)),
+            owner: NameSite::Item,
             binding: ResolvedName::Local(LocalId(0)),
             site: NameSite::Pattern(pattern),
             ty: f.bytes,
@@ -499,13 +499,13 @@ fn plain_pattern_payload_retains_its_declared_modes() {
     let NameSite::Pattern(root) = f.body.bindings[index].site else {
         unreachable!()
     };
-    let child = hirsel_syntax::PatternId(f.tree.patterns.len() as u32);
+    let child = hirsel_syntax::PatternId(f.syntax.tree.patterns.len() as u32);
     let name = Symbol::intern("payload");
-    f.tree.patterns.push(hirsel_syntax::Pattern {
-        origin: f.tree.patterns[root.0 as usize].origin.clone(),
+    f.syntax.tree.patterns.push(hirsel_syntax::Pattern {
+        origin: f.syntax.tree.patterns[root.0 as usize].origin.clone(),
         kind: hirsel_syntax::PatternKind::Binding(name),
     });
-    f.tree.patterns[root.0 as usize].kind = hirsel_syntax::PatternKind::Tuple(vec![child]);
+    f.syntax.tree.patterns[root.0 as usize].kind = hirsel_syntax::PatternKind::Tuple(vec![child]);
     f.body.patterns[0].kind = PatternDecisionKind::Tuple;
     f.body.patterns[0].fields = vec![(FieldId(0), child)];
     let ResolvedName::Local(local) = f.body.bindings[index].binding else {

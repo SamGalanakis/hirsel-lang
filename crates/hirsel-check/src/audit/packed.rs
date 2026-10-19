@@ -6,6 +6,7 @@ impl Audit<'_, '_> {
             if self.ordinary_payload(row.expression)? {
                 let span = self
                     .input
+                    .syntax
                     .tree
                     .statements
                     .iter()
@@ -16,7 +17,7 @@ impl Audit<'_, '_> {
                         _ => None,
                     })
                     .unwrap_or(
-                        self.input.tree.expressions[row.expression.0 as usize]
+                        self.input.syntax.tree.expressions[row.expression.0 as usize]
                             .origin
                             .span,
                     );
@@ -27,7 +28,7 @@ impl Audit<'_, '_> {
                 );
             }
         }
-        for statement in &self.input.tree.statements {
+        for statement in &self.input.syntax.tree.statements {
             let ast::StmtKind::Assign { place, .. } = statement.kind else {
                 continue;
             };

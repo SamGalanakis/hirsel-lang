@@ -45,9 +45,9 @@ use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
-use hirsel_syntax::{ContentHash, DefPath, ItemId};
+use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir as tir;
-use hirsel_types::{GenericArgument, NameSite, SignatureKind, Type, TypeId, TypeKind};
+use hirsel_types::{GenericArgument, NameSite, SignatureKind, SiteRef, Type, TypeId, TypeKind};
 
 pub use builder::Cx;
 pub use owners::{LibraryOwners, owners};
@@ -269,10 +269,11 @@ pub fn revision(path: &DefPath) -> ContentHash {
     )
 }
 
-/// The binder of a library body's generic parameters. A registry operation
-/// has no lexical item; the instance key also names the path, so one site
-/// serves every body.
-pub const BINDER: NameSite = NameSite::Item(ItemId(0));
+/// The binder of a library body's generic parameters: the item site of the
+/// operation's own path, since a registry operation has no lexical item.
+pub fn binder(path: &DefPath) -> SiteRef {
+    hirsel_syntax::LexicalOwner::first(path).site(NameSite::Item)
+}
 
 /// One required library instance: the body, its complete actuals and its
 /// callable type (a `Function` row of `actuals.store`).
@@ -310,7 +311,7 @@ impl Request {
             )));
         };
         let mut actuals = Actuals {
-            binder: (!arguments.is_empty()).then_some(BINDER),
+            binder: (!arguments.is_empty()).then(|| binder(path)),
             store,
             arguments,
             outer: Vec::new(),
@@ -360,7 +361,7 @@ impl Request {
             body,
             path: path.clone(),
             actuals: Actuals {
-                binder: (!arguments.is_empty()).then_some(BINDER),
+                binder: (!arguments.is_empty()).then(|| binder(path)),
                 store,
                 arguments,
                 outer: Vec::new(),

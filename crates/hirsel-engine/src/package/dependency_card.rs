@@ -382,8 +382,9 @@ impl LoadedProgram {
                 .unwrap()
                 .borrow();
             let index = state.index(context.package.clone());
-            for id in &parsed.roots {
-                let item = &parsed.tree.items[id.0 as usize];
+            for syntax in &parsed.items {
+                // One item's spans share its anchor, so they compare directly.
+                let (item, tree) = (&syntax.item, &syntax.tree);
                 if context.package == root
                     && index.access(&viewer, &item.definition).is_ok()
                     && !item.attributes.iter().any(|a| a.name.as_str() == "test")
@@ -391,16 +392,16 @@ impl LoadedProgram {
                     let end = match &item.kind {
                         ItemKind::Function {
                             body: Some(body), ..
-                        } => parsed.tree.expressions[body.0 as usize].origin.span.start,
+                        } => tree.expressions[body.0 as usize].origin.span.start,
                         ItemKind::Type { .. } if item.visibility == Visibility::PublicOpaque => {
                             item.name_span.end
                         }
                         ItemKind::Const { value, .. } => {
-                            parsed.tree.expressions[value.0 as usize].origin.span.start
+                            tree.expressions[value.0 as usize].origin.span.start
                         }
                         _ => item.origin.span.end,
                     };
-                    for ty in &parsed.tree.types {
+                    for ty in &tree.types {
                         if ty.origin.span.start < item.origin.span.start || ty.origin.span.end > end
                         {
                             continue;
@@ -422,7 +423,7 @@ impl LoadedProgram {
                         public: index.access(&viewer, &item.definition).is_ok(),
                         function: matches!(item.kind, ItemKind::Function { .. }),
                         test: item.attributes.iter().any(|a| a.name.as_str() == "test"),
-                        tokens: parsed
+                        tokens: tree
                             .tokens
                             .get(item.origin.tokens.start as usize..item.origin.tokens.end as usize)
                             .unwrap_or_default()

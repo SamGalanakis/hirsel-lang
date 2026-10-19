@@ -1,6 +1,6 @@
 //! Recover declaration sites from the lossless tape without adding AST fields.
 use crate::*;
-impl SyntaxFile {
+impl SyntaxTree {
     fn origin_tokens(&self, origin: Origin) -> impl DoubleEndedIterator<Item = (usize, &Token)> {
         self.tokens
             .get(origin.tokens.start as usize..origin.tokens.end as usize)
@@ -11,13 +11,7 @@ impl SyntaxFile {
             .filter(|(_, t)| !matches!(t.kind, TokenKind::Trivia(_) | TokenKind::Eof))
     }
     fn parameter_token(&self, origin: Origin, parameter: &Parameter) -> Option<(usize, &Token)> {
-        let anchor = self
-            .tree
-            .types
-            .get(parameter.ty.0 as usize)?
-            .origin
-            .tokens
-            .start as usize;
+        let anchor = self.types.get(parameter.ty.0 as usize)?.origin.tokens.start as usize;
         let name = parameter.name?;
         self.origin_tokens(origin)
             .rev()

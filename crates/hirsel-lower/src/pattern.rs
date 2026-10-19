@@ -5,7 +5,7 @@ use hirsel_tir::*;
 use hirsel_types::{ContextualName, PatternDecision, PatternDecisionKind, ResolvedName, UseKind};
 impl Builder<'_, '_> {
     fn pattern(&self, id: PatternId) -> Result<PatternDecision> {
-        let Some(node) = self.input.tree.patterns.get(id.0 as usize) else {
+        let Some(node) = self.input.syntax.tree.patterns.get(id.0 as usize) else {
             return self.error(Span::default(), "pattern index out of range");
         };
         let mut rows = self.decisions.patterns.get(&id).iter().copied();
@@ -77,7 +77,7 @@ impl Builder<'_, '_> {
     ) -> Result<()> {
         let row = self.pattern(id)?;
         let place = self.inspected_pattern_place(&row, place);
-        let span = self.input.tree.patterns[id.0 as usize].origin.span;
+        let span = self.input.syntax.tree.patterns[id.0 as usize].origin.span;
         match row.kind {
             PatternDecisionKind::Or(_) => {
                 let Some(alternative) = choice.get(&id) else {
@@ -183,7 +183,12 @@ impl Builder<'_, '_> {
                         usage,
                     };
                     let _ = self.loan(&mut value, span);
-                    let origin = Self::binding_origin(binding.owner, &binding.binding).unwrap();
+                    let origin = Self::binding_origin(
+                        self.decisions.lexical,
+                        binding.owner,
+                        &binding.binding,
+                    )
+                    .unwrap();
                     let place = self.bind_origin(
                         value.place,
                         origin,
@@ -208,7 +213,9 @@ impl Builder<'_, '_> {
                     Storage::Local,
                     span,
                 );
-                let origin = Self::binding_origin(binding.owner, &binding.binding).unwrap();
+                let origin =
+                    Self::binding_origin(self.decisions.lexical, binding.owner, &binding.binding)
+                        .unwrap();
                 value.place = self.bind_origin(
                     value.place,
                     origin,
@@ -271,9 +278,12 @@ impl Builder<'_, '_> {
                     let projected = self.project(place, projection, child_row.ty);
                     if staging {
                         if let PatternDecisionKind::Binding(local) = child_row.kind {
-                            let origin =
-                                Self::binding_origin(self.owner, &ResolvedName::Local(local))
-                                    .unwrap();
+                            let origin = Self::binding_origin(
+                                self.decisions.lexical,
+                                self.owner,
+                                &ResolvedName::Local(local),
+                            )
+                            .unwrap();
                             self.body.places[projected.0 as usize].binding = Some(origin);
                             fields.push(projected);
                         }
@@ -388,7 +398,7 @@ impl Builder<'_, '_> {
     ) -> Result<MatchPatternId> {
         let row = self.pattern(id)?;
         let place = self.inspected_pattern_place(&row, place);
-        let span = self.input.tree.patterns[id.0 as usize].origin.span;
+        let span = self.input.syntax.tree.patterns[id.0 as usize].origin.span;
         if let PatternDecisionKind::Or(_) = row.kind {
             let Some(alternative) = choice.get(&id) else {
                 return self.error(span, "or-pattern without a chosen alternative");
@@ -461,7 +471,7 @@ impl Builder<'_, '_> {
             }
             PatternDecisionKind::Range => {
                 let hirsel_syntax::PatternKind::Range { start, end } =
-                    &self.input.tree.patterns[id.0 as usize].kind
+                    &self.input.syntax.tree.patterns[id.0 as usize].kind
                 else {
                     return self.error(span, "range decision on a non-range pattern");
                 };
@@ -508,7 +518,7 @@ impl Builder<'_, '_> {
         span: Span,
         bodies: &mut Vec<Option<Body>>,
     ) -> Result<()> {
-        let Some(choices) = self.input.tree.pattern_choices(pattern) else {
+        let Some(choices) = self.input.syntax.tree.pattern_choices(pattern) else {
             return self.error(span, "unchecked or-pattern expansion");
         };
         if choices.len() == 1 && otherwise.is_none() {
@@ -521,7 +531,7 @@ impl Builder<'_, '_> {
         let joined = choices.len() > 1;
         let mut slots = std::collections::BTreeMap::new();
         if joined {
-            for id in self.input.tree.chosen_patterns(pattern, &choices[0]) {
+            for id in self.input.syntax.tree.chosen_patterns(pattern, &choices[0]) {
                 let row = self.pattern(id)?;
                 let PatternDecisionKind::Binding(local) = row.kind else {
                     continue;
@@ -594,7 +604,12 @@ impl Builder<'_, '_> {
         self.current = Some(join);
         self.state = self.merge(&states);
         for (local, slot) in slots {
-            let origin = Self::binding_origin(self.owner, &ResolvedName::Local(local)).unwrap();
+            let origin = Self::binding_origin(
+                self.decisions.lexical,
+                self.owner,
+                &ResolvedName::Local(local),
+            )
+            .unwrap();
             let kind = if fresh {
                 OriginBindingKind::Fresh
             } else {

@@ -17,6 +17,14 @@ pub fn path(name: &str) -> DefPath {
         name: name.into(),
     })
 }
+/// The lexical owner of the fixture item's sites.
+pub fn lexical() -> hirsel_syntax::LexicalOwner {
+    hirsel_syntax::LexicalOwner::first(&path("example"))
+}
+/// A site of the fixture item, qualified by its owner.
+pub fn scoped(site: NameSite) -> hirsel_syntax::SiteRef {
+    lexical().site(site)
+}
 pub fn origin(root: OriginRoot) -> Origin {
     Origin {
         root,
@@ -31,7 +39,7 @@ pub fn brand(root: OriginRoot) -> Brand {
 pub fn node_origin(n: u32) -> hirsel_syntax::Origin {
     hirsel_syntax::Origin {
         span: Span {
-            file: hirsel_span::FileId(0),
+            anchor: hirsel_span::Anchor(0),
             start: n,
             end: n + 1,
         },
@@ -108,6 +116,7 @@ impl Fixture {
         };
         let tree = SyntaxTree::default();
         let body = CheckedBody {
+            lexical: lexical(),
             tails: vec![],
             places: vec![],
             calls: vec![],
@@ -126,6 +135,29 @@ impl Fixture {
             provider: Provider::default(),
             intrinsics: Intrinsics::new(),
             unit,
+        }
+    }
+    /// The fixture item: a function with `body`, over the arenas built so far.
+    pub fn syntax(&self, body: Option<ExprId>) -> hirsel_syntax::ItemSyntax {
+        hirsel_syntax::ItemSyntax {
+            item: Item {
+                name: Symbol::intern("example"),
+                name_span: node_origin(1).span,
+                origin: node_origin(1),
+                definition: self.signature.definition.clone(),
+                visibility: Visibility::Private,
+                attributes: vec![],
+                kind: ItemKind::Function {
+                    signature: syntax_function(),
+                    body,
+                    abi: None,
+                },
+                generated: None,
+            },
+            tree: self.tree.clone(),
+            anchor: hirsel_span::Anchor(0),
+            text_hash: ContentHash([0; 32]),
+            occurrence: 0,
         }
     }
     pub fn ty(&mut self, kind: TypeKind) -> TypeId {
@@ -158,7 +190,7 @@ impl Fixture {
         usage: UseKind,
         mutable: bool,
     ) -> ExprId {
-        let ty = bind_parameter_scopes(&mut self.body.types, ty, &[owner]).unwrap();
+        let ty = bind_parameter_scopes(&mut self.body.types, ty, &[scoped(owner)]).unwrap();
         let symbol = Symbol::intern(&format!("binding{}", self.body.bindings.len()));
         let p = hirsel_syntax::PatternId(self.tree.patterns.len() as u32);
         self.tree.patterns.push(Pattern {
@@ -234,11 +266,7 @@ impl Fixture {
             self.intrinsics.insert(definition.clone(), role);
         }
         let fty = self.ty(TypeKind::Function(f.clone()));
-        let callee = self.reference(
-            ResolvedName::Definition(definition),
-            fty,
-            NameSite::Item(ItemId(0)),
-        );
+        let callee = self.reference(ResolvedName::Definition(definition), fty, NameSite::Item);
         self.expr(
             ExprKind::Call {
                 callee,
@@ -402,33 +430,9 @@ impl Fixture {
             });
         }
         publish_places(&self.tree, &mut self.body);
-        let name = Symbol::intern("example");
-        self.tree.items.push(Item {
-            name,
-            name_span: node_origin(1).span,
-            origin: node_origin(1),
-            owned_tokens: TokenRange { start: 0, end: 0 },
-            definition: self.signature.definition.clone(),
-            text_hash: ContentHash([0; 32]),
-            visibility: Visibility::Private,
-            attributes: vec![],
-            kind: ItemKind::Function {
-                signature: syntax_function(),
-                body: Some(root),
-                abi: None,
-            },
-            generated: None,
-        });
-        let file = hirsel_syntax::SyntaxFile {
-            has_syntax_errors: false,
-            file: hirsel_span::FileId(0),
-            tokens: vec![],
-            tree: self.tree,
-            roots: vec![ItemId(0)],
-        };
+        let syntax = self.syntax(Some(root));
         check_file_with_clauses(
-            &file,
-            ItemId(0),
+            &syntax,
             &self.signature,
             self.body,
             &mut self.provider,

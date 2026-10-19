@@ -36,19 +36,15 @@ fn projected_paths_preserve_elaborated_scalar_types_without_symbols() {
     let root = f.binding(
         ResolvedName::Parameter(ParamId(0)),
         rec,
-        NameSite::Item(ItemId(0)),
+        NameSite::Item,
         UseKind::Mut,
         true,
     );
-    let projected = f.reference(
-        ResolvedName::Parameter(ParamId(0)),
-        scalar,
-        NameSite::Item(ItemId(0)),
-    );
+    let projected = f.reference(ResolvedName::Parameter(ParamId(0)), scalar, NameSite::Item);
     f.body.places.push(SourcePlace {
         expression: projected,
         root: SourceRoot::Binding {
-            owner: NameSite::Item(ItemId(0)),
+            owner: NameSite::Item,
             binding: ResolvedName::Parameter(ParamId(0)),
         },
         projections: vec![SourceProjection {
@@ -132,7 +128,7 @@ fn brand_families_share_the_same_rule_and_keep_field_paths() {
         let t = f.adjusted(t, |t| {
             t.brand = Brand {
                 alternatives: vec![Origin {
-                    root: OriginRoot::Local(LocalId(4)),
+                    root: OriginRoot::Local(lexical(), LocalId(4)),
                     fields: vec![FieldId(2)].into(),
                 }]
                 .into(),
@@ -164,14 +160,14 @@ fn every_repeated_generic_occurrence_is_checked_before_weakening() {
         let first = f.binding(
             ResolvedName::Parameter(ParamId(0)),
             unique,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Take,
             false,
         );
         let second = f.binding(
             ResolvedName::Parameter(ParamId(1)),
             if second_unique { unique } else { receiver },
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Take,
             false,
         );
@@ -226,7 +222,7 @@ fn provider_failures_are_preserved_outside_the_result() {
 proptest! {
     #[test]
     fn brand_joins_are_canonical_and_deterministic(a in prop::collection::vec(0u32..12, 0..30), b in prop::collection::vec(0u32..12, 0..30)) {
-        let make = |ids: &[u32]| Brand { alternatives: ids.iter().map(|id| origin(OriginRoot::Local(LocalId(*id)))).collect() };
+        let make = |ids: &[u32]| Brand { alternatives: ids.iter().map(|id| origin(OriginRoot::Local(lexical(), LocalId(*id)))).collect() };
         let first = brand_join(&make(&a), &make(&b)); let mut reversed = a.clone(); reversed.reverse();
         prop_assert_eq!(&first, &brand_join(&make(&b), &make(&reversed)));
         prop_assert_eq!(&first, &brand_join(&first, &first));
@@ -235,7 +231,7 @@ proptest! {
     fn complete_pass_is_deterministic_across_table_order(unique in any::<bool>(), reverse in any::<bool>()) {
         let build = |reorder: bool| {
             let mut f = Fixture::new(); let bytes = f.ty(TypeKind::Primitive(Primitive::Bytes)); let bytes = f.adjusted(bytes, |t| if unique { t.modes.uniqueness = Uniqueness::Unique });
-            let arg = f.binding(ResolvedName::Local(LocalId(0)), bytes, NameSite::Item(ItemId(0)), UseKind::Take, false); let root = cross(&mut f, arg);
+            let arg = f.binding(ResolvedName::Local(LocalId(0)), bytes, NameSite::Item, UseKind::Take, false); let root = cross(&mut f, arg);
             if reorder { f.body.expressions.reverse(); f.body.bindings.reverse(); f.body.resolution.expressions.reverse(); }
             f.finish(root)
         };
@@ -330,7 +326,7 @@ fn task_handle_consumption_is_required_on_every_reachable_branch() {
         let local = f.binding(
             ResolvedName::Local(LocalId(0)),
             ty,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Take,
             false,
         );
@@ -405,7 +401,7 @@ proptest! {
         let build = |reverse: bool| {
             let mut f = Fixture::new();
             let scalar = f.ty(TypeKind::Primitive(Primitive::U64));
-            let value = f.binding(ResolvedName::Parameter(ParamId(0)), scalar, NameSite::Item(ItemId(0)), UseKind::Borrow, false);
+            let value = f.binding(ResolvedName::Parameter(ParamId(0)), scalar, NameSite::Item, UseKind::Borrow, false);
             let body = if take {f.expr(ExprKind::Unary {op: UnaryOp::Take, value}, scalar)} else {value};
             let mut cb = function(scalar); cb.parameters = vec![parameter(scalar, PassingMode::Borrow)].into();
             let closure = f.closure(body, cb);
@@ -428,7 +424,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
         let outer = f.binding(
             ResolvedName::Parameter(ParamId(0)),
             scalar,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Borrow,
             false,
         );
@@ -455,7 +451,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
         callback.parameters = vec![parameter(scalar, PassingMode::Borrow)].into();
         let function_type = f.ty(TypeKind::Function(callback));
         f.body.bindings.push(BindingDecision {
-            owner: NameSite::Item(ItemId(0)),
+            owner: NameSite::Item,
             binding: ResolvedName::Local(LocalId(7)),
             site: NameSite::Statement(statement),
             ty: function_type,
@@ -509,10 +505,10 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
                     .iter()
                     .map(|r| (r.expression, r.ordinal, r.owner))
                     .collect::<Vec<_>>(),
-                vec![(body, 0, NameSite::Item(ItemId(0)))]
+                vec![(body, 0, NameSite::Item)]
             );
         }
-        for owner in [NameSite::Item(ItemId(0)), NameSite::Statement(statement)] {
+        for owner in [NameSite::Item, NameSite::Statement(statement)] {
             assert!(
                 out.body
                     .bindings
@@ -532,7 +528,7 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
             let local = f.binding(
                 ResolvedName::Local(LocalId(0)),
                 ty,
-                NameSite::Item(ItemId(0)),
+                NameSite::Item,
                 UseKind::Take,
                 false,
             );
@@ -598,7 +594,7 @@ fn scoped_callback_uses_parameters_substitute_the_actual_authority() {
         let argument = f.binding(
             ResolvedName::Parameter(ParamId(0)),
             clock,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Borrow,
             false,
         );
@@ -612,7 +608,7 @@ fn scoped_callback_uses_parameters_substitute_the_actual_authority() {
         let callee = f.binding(
             ResolvedName::Local(LocalId(0)),
             callback,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Borrow,
             false,
         );
@@ -654,7 +650,7 @@ fn function_uses_parameter_limits_resolve_its_declared_authority() {
         let argument = f.binding(
             ResolvedName::Parameter(ParamId(0)),
             selected,
-            NameSite::Item(ItemId(0)),
+            NameSite::Item,
             UseKind::Borrow,
             false,
         );
@@ -758,7 +754,7 @@ fn ownership_markers_preserve_instantiated_nested_provenance() {
             let owner = f.binding(
                 ResolvedName::Local(LocalId(8)),
                 scalar,
-                NameSite::Item(ItemId(0)),
+                NameSite::Item,
                 UseKind::Copy,
                 false,
             );
@@ -801,7 +797,7 @@ fn ownership_markers_preserve_instantiated_nested_provenance() {
             };
             assert_eq!(
                 out.body.types.get(payload).unwrap().brand,
-                brand(OriginRoot::Local(LocalId(8)))
+                brand(OriginRoot::Local(lexical(), LocalId(8)))
             );
         }
     }
@@ -809,8 +805,8 @@ fn ownership_markers_preserve_instantiated_nested_provenance() {
 
 fn dependent_callable_receipt(actual_sendability: Sendability) -> AuthorityOutput {
     let mut f = Fixture::new();
-    let scope = NameSite::Item(ItemId(0));
-    let dependency = TypeParameterRef::body(scope, TypeParamId(0));
+    let scope = NameSite::Item;
+    let dependency = TypeParameterRef::body(scoped(scope), TypeParamId(0));
     let declaration = GenericParameter::Type {
         name: "T".into(),
         bounds: vec![].into(),
@@ -821,7 +817,7 @@ fn dependent_callable_receipt(actual_sendability: Sendability) -> AuthorityOutpu
     f.body
         .resolution
         .generic_declarations
-        .insert(scope, vec![declaration].into());
+        .insert(scoped(scope), vec![declaration].into());
     let callback = f.ty(TypeKind::Function(function(f.unit)));
     let actual = f.adjusted(callback, |t| t.modes.sendability = actual_sendability);
     let expected = f.adjusted(callback, |t| {
@@ -842,7 +838,7 @@ fn dependent_callable_receipt(actual_sendability: Sendability) -> AuthorityOutpu
 
 #[test]
 fn a_dependent_callable_receives_the_same_capture_obligation() {
-    let dependency = TypeParameterRef::body(NameSite::Item(ItemId(0)), TypeParamId(0));
+    let dependency = TypeParameterRef::body(scoped(NameSite::Item), TypeParamId(0));
     clean(&dependent_callable_receipt(Sendability::DependsOn(
         vec![dependency].into(),
     )));

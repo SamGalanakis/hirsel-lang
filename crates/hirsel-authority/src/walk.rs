@@ -39,7 +39,7 @@ struct Frame {
     restriction: RuleId,
 }
 impl Frame {
-    fn parameter_receipts(uses: &Uses, owner: NameSite) -> BTreeSet<ParamId> {
+    fn parameter_receipts(uses: &Uses, owner: SiteRef) -> BTreeSet<ParamId> {
         let Uses::Only(AuthoritySummary::Known(terms)) = uses else {
             return BTreeSet::new();
         };
@@ -102,8 +102,10 @@ struct Verdict {
 }
 
 pub(super) struct Checker<'a> {
+    syntax: &'a ItemSyntax,
     tree: &'a SyntaxTree,
-    item: ItemId,
+    /// The owner rows qualify this item's lexical sites with.
+    lexical: LexicalOwner,
     signature: &'a Signature,
     provider: &'a mut dyn SignatureProvider,
     intrinsics: &'a Intrinsics,
@@ -157,7 +159,7 @@ pub(super) struct Checker<'a> {
     /// the ended owner at its own branded use.
     ended_reads: Vec<Diagnostic>,
     verdicts: Vec<Verdict>,
-    reported: BTreeSet<(hirsel_span::FileId, u32, u32, String)>,
+    reported: BTreeSet<(hirsel_span::Anchor, u32, u32, String)>,
     /// Temporaries that lent their identity to a brand in the current statement.
     temporaries: Vec<OriginRoot>,
     /// Mut parameters already reported as handed back with an ended brand.
@@ -259,8 +261,7 @@ impl Identity {
 }
 impl<'a> Checker<'a> {
     pub(super) fn new(
-        tree: &'a SyntaxTree,
-        item: ItemId,
+        syntax: &'a ItemSyntax,
         signature: &'a Signature,
         mut body: CheckedBody,
         provider: &'a mut dyn SignatureProvider,
@@ -351,8 +352,9 @@ impl<'a> Checker<'a> {
             }
         }
         Self {
-            tree,
-            item,
+            syntax,
+            tree: &syntax.tree,
+            lexical: syntax.owner(),
             signature,
             provider,
             intrinsics,
@@ -422,7 +424,7 @@ impl<'a> Checker<'a> {
         self
     }
     pub(super) fn run(mut self) -> AuthorityOutput {
-        let item = &self.tree.items[self.item.0 as usize];
+        let item = &self.syntax.item;
         let (body, allowed, result) = match (&item.kind, &self.signature.kind) {
             (ItemKind::Function { body, .. }, SignatureKind::Function(f)) => {
                 let result = import_type(&self.signature.types, f.result, &mut self.out.body.types)
@@ -431,7 +433,7 @@ impl<'a> Checker<'a> {
                         bind_parameter_scopes(
                             &mut self.out.body.types,
                             t,
-                            &[NameSite::Item(self.item)],
+                            &[self.lexical.site(NameSite::Item)],
                         )
                         .ok()
                     });
@@ -498,11 +500,11 @@ impl<'a> Checker<'a> {
             _ => (None, Uses::Unrestricted, None),
         };
         self.frames.push(Frame {
-            owner: NameSite::Item(self.item),
+            owner: NameSite::Item,
             allowed,
             receipts: match &self.signature.kind {
                 SignatureKind::Function(f) => {
-                    Frame::parameter_receipts(&f.uses, NameSite::Item(self.item))
+                    Frame::parameter_receipts(&f.uses, self.lexical.site(NameSite::Item))
                 }
                 _ => BTreeSet::new(),
             },
@@ -511,9 +513,7 @@ impl<'a> Checker<'a> {
         });
 
         if let Some(result) = result {
-            self.out
-                .result_types
-                .push((NameSite::Item(self.item), result));
+            self.out.result_types.push((NameSite::Item, result));
         }
         if let Some(body) = body {
             self.parameter_tasks();
@@ -634,7 +634,7 @@ impl<'a> Checker<'a> {
         }
         let span = diagnostic.primary;
         self.reported.insert((
-            span.file,
+            span.anchor,
             span.start,
             span.end,
             diagnostic.rule.as_str().to_owned(),
@@ -729,10 +729,9 @@ impl<'a> Checker<'a> {
     /// CONC-2: a parameter taking a `Task` or `TaskSet` holds its caller's obligation, keyed
     /// by an expression identity past the body's own.
     fn parameter_tasks(&mut self) {
-        let (ItemKind::Function { signature, .. }, SignatureKind::Function(f)) = (
-            &self.tree.items[self.item.0 as usize].kind,
-            &self.signature.kind,
-        ) else {
+        let (ItemKind::Function { signature, .. }, SignatureKind::Function(f)) =
+            (&self.syntax.item.kind, &self.signature.kind)
+        else {
             return;
         };
         for (i, (p, syntax)) in f.parameters.iter().zip(&signature.parameters).enumerate() {
@@ -744,10 +743,8 @@ impl<'a> Checker<'a> {
             let task = ExprId(u32::MAX - i as u32);
             self.pending_tasks
                 .insert(task, self.tree.types[syntax.ty.0 as usize].origin.span);
-            self.task_bindings.insert(
-                (NameSite::Item(self.item), 0, i as u32),
-                BTreeSet::from([task]),
-            );
+            self.task_bindings
+                .insert((NameSite::Item, 0, i as u32), BTreeSet::from([task]));
         }
     }
     fn check_pending_tasks(&mut self) {
@@ -1152,12 +1149,12 @@ impl<'a> Checker<'a> {
                         .get(&binding_key(b))
                         .into_iter()
                         .flat_map(Identity::roots)
-                        .filter(|root| matches!(root, OriginRoot::Expression(_)))
+                        .filter(|root| matches!(root, OriginRoot::Expression(..)))
                         .filter(|root| !self.identities.held_outside(root, &keys))
                         .cloned()
                         .collect();
                     let own = match b.binding {
-                        ResolvedName::Local(l) => Some(OriginRoot::Local(l)),
+                        ResolvedName::Local(l) => Some(OriginRoot::Local(self.lexical, l)),
                         _ => None,
                     };
                     for root in own.into_iter().chain(held) {
@@ -2375,10 +2372,10 @@ impl<'a> Checker<'a> {
                     // owner. Projected writes retain the enclosing identity.
                     if b.usage == UseKind::Take {
                         let root = match b.binding {
-                            ResolvedName::Local(local) => OriginRoot::Local(local),
-                            ResolvedName::Parameter(parameter) => {
-                                OriginRoot::Parameter(ParameterRef::body(b.owner, parameter))
-                            }
+                            ResolvedName::Local(local) => OriginRoot::Local(self.lexical, local),
+                            ResolvedName::Parameter(parameter) => OriginRoot::Parameter(
+                                ParameterRef::body(self.lexical.site(b.owner), parameter),
+                            ),
                             _ => unreachable!("checked binding storage"),
                         };
                         let fresh = Origin {
@@ -2609,7 +2606,7 @@ impl<'a> Checker<'a> {
                 _ => None,
             }) {
                 if matches!(frame.owner, NameSite::Expression(_))
-                    && matches!(origin.root, OriginRoot::Parameter(ParameterRef::Body { scope, .. }) if scope == frame.owner)
+                    && matches!(origin.root, OriginRoot::Parameter(ParameterRef::Body { scope, .. }) if scope == self.lexical.site(frame.owner))
                 {
                     let (arena, site) = self.origin_site(origin);
                     let x = self.value_name(Some(value));
@@ -2698,9 +2695,9 @@ mod limit_tests {
                     })
                     .collect::<Vec<_>>();
                 let root = f.ty(TypeKind::Tuple(fields.into()));
+                let syntax = f.syntax(None);
                 let mut c = Checker::new(
-                    &f.tree,
-                    ItemId(0),
+                    &syntax,
                     &f.signature,
                     f.body,
                     &mut f.provider,
@@ -2727,9 +2724,9 @@ mod limit_tests {
                     false,
                 );
             }
+            let syntax = f.syntax(None);
             let mut c = Checker::new(
-                &f.tree,
-                ItemId(0),
+                &syntax,
                 &f.signature,
                 f.body,
                 &mut f.provider,

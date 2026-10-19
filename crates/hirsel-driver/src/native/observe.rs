@@ -8,7 +8,7 @@
 use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_engine::NativeInput;
 use hirsel_lir::ir::SiteRange;
-use hirsel_span::{FileId, Span};
+use hirsel_span::Span;
 use hirsel_syntax::DefPath;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -144,23 +144,20 @@ impl Observation {
 }
 
 /// Source positions of the snapshot's definitions: a failure site is a byte
-/// range in its definition's file.
+/// range relative to its definition's anchor.
 pub struct Sites<'a> {
     input: &'a NativeInput,
-    files: BTreeMap<&'a DefPath, FileId>,
+    anchors: BTreeMap<&'a DefPath, hirsel_span::Anchor>,
 }
 
 impl<'a> Sites<'a> {
     pub fn new(input: &'a NativeInput) -> Self {
-        let files = input
+        let anchors = input
             .source_owners
             .iter()
-            .filter_map(|(path, owner)| {
-                let item = owner.syntax.tree.items.get(owner.item.0 as usize)?;
-                Some((path, item.origin.span.file))
-            })
+            .map(|(path, owner)| (path, owner.syntax.anchor))
             .collect();
-        Self { input, files }
+        Self { input, anchors }
     }
 
     pub fn failure(
@@ -184,11 +181,13 @@ impl<'a> Sites<'a> {
         })
     }
 
+    /// The file a definition's source stands in.
+    fn file(&self, definition: &DefPath) -> Option<&hirsel_span::SourceFile> {
+        let (file, _) = self.input.sources.anchor(*self.anchors.get(definition)?)?;
+        self.input.sources.file(file)
+    }
     pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
-        let file = self
-            .input
-            .sources
-            .file(*self.files.get(&failure.definition)?)?;
+        let file = self.file(&failure.definition)?;
         Some(hirsel_run_schema::Site {
             definition: failure.definition.to_string(),
             file: file.path.to_string_lossy().into_owned(),
@@ -212,10 +211,7 @@ impl<'a> Sites<'a> {
         &self,
         source: &hirsel_interp::observation::SourceSite,
     ) -> Option<hirsel_run_schema::Site> {
-        let file = self
-            .input
-            .sources
-            .file(*self.files.get(&source.definition)?)?;
+        let file = self.file(&source.definition)?;
         Some(hirsel_run_schema::Site {
             definition: source.definition.to_string(),
             file: file.path.to_string_lossy().into_owned(),
@@ -225,8 +221,8 @@ impl<'a> Sites<'a> {
     }
     /// The one-based line and column a failure site starts at.
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
-        let file = self.files.get(definition)?;
-        let span = Span::new(*file, site.start, site.end)?;
+        let anchor = self.anchors.get(definition)?;
+        let span = Span::new(*anchor, site.start, site.end)?;
         let location = self.input.sources.location(span)?;
         Some((location.line, location.column))
     }
@@ -322,9 +318,7 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
                 // A site inside a library body has no source position: line and column 0.
                 let (line, column) = sites.position(&definition, range).unwrap_or((0, 0));
                 let file = sites
-                    .files
-                    .get(&definition)
-                    .and_then(|id| sites.input.sources.file(*id))
+                    .file(&definition)
                     .map(|f| f.logical_path().to_string_lossy().into_owned())
                     .unwrap_or_else(|| "<core>".into());
                 (code, definition.to_string(), line, column, file)

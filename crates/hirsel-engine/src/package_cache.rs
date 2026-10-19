@@ -92,9 +92,14 @@ pub(crate) struct CachedPackage {
     pub lowerings: SharedLowerings,
 }
 pub(crate) type SharedLowerings = Arc<Mutex<BTreeMap<DefPath, Arc<PublishedLowering>>>>;
+/// Where one publishing engine's anchor stands: in the package closure's
+/// source (package, manifest ordinal), at a base offset. A receiving engine
+/// places the anchor at its own FileId for that source, so published spans
+/// keep their meaning without being rewritten.
+pub(crate) type AnchorSite = (hirsel_span::Anchor, PackageId, usize, u32);
 pub(crate) struct PublishedLowering {
     pub snapshot: crate::queries::PackageSnapshot,
-    pub sites: Arc<[(FileId, PackageId, usize, u32)]>,
+    pub sites: Arc<[AnchorSite]>,
 }
 impl Storage {
     fn reserve(&mut self, key: ContentHash) {
@@ -226,7 +231,7 @@ impl PackageCache {
 }
 pub(crate) struct Artifact {
     pub snapshot: crate::queries::PackageSnapshot,
-    pub sites: Vec<(FileId, PackageId, usize, u32)>,
+    pub sites: Arc<[AnchorSite]>,
     pub preflight: Vec<Vec<Diagnostic>>,
     pub files: Vec<Vec<Diagnostic>>,
     /// The widest check-time lowering this package's queries satisfy.

@@ -1,15 +1,15 @@
 //! Canonical `hirsel-codec` encodings of TIR, its type graphs and signatures.
 //! Every impl is under the export context [`Cx`],
 //! which owns the per-definition interned tables; nothing session-local
-//! (`FileId`, byte offsets, `TypeId` provenance, file-arena syntax ids) reaches
-//! the text.
+//! (anchors, byte offsets, `TypeId` provenance, raw syntax ids, `DefId`s)
+//! reaches the text; lexical owners are written as (DefPath, occurrence).
 use crate::Location;
 use hirsel_codec::{DecodeError, Reader, Snapshot, Writer, snapshot_enum, snapshot_struct};
 use hirsel_diag::RuleId;
-use hirsel_span::{FileId, Span};
+use hirsel_span::{Anchor, Span};
 use hirsel_syntax::{
-    BinaryOp, Bound, ContentHash, ContractKind, ExprId, ItemId, PassingMode, PatternId, StmtId,
-    TypeExprId, UnaryOp, Visibility,
+    BinaryOp, Bound, ContentHash, ContractKind, DefPath, ExprId, LexicalOwner, PassingMode,
+    PatternId, SiteRef, StmtId, TypeExprId, UnaryOp, Visibility,
 };
 use hirsel_tir::{
     Block, BlockId, Body, BodyId, CallArgument, CallReturn, Callee, Cleanup, CleanupAction,
@@ -58,12 +58,11 @@ pub struct Cx {
     pub(crate) content: Option<crate::content::Naming>,
 }
 
-const SYNTAX_KINDS: usize = 5;
+const SYNTAX_KINDS: usize = 4;
 const EXPR: usize = 0;
 const PATTERN: usize = 1;
 const TYPE_EXPR: usize = 2;
 const STMT: usize = 3;
-const ITEM: usize = 4;
 
 impl Cx {
     pub fn new(locator: Locator) -> Self {
@@ -185,7 +184,7 @@ impl Snapshot<Cx> for Span {
             return Err(r.error(format!("location {id} is outside the location table")));
         }
         Ok(Span {
-            file: FileId(r.context.section),
+            anchor: Anchor(r.context.section),
             start: id,
             end: id,
         })
@@ -260,7 +259,6 @@ syntax_index!(
     PatternId => PATTERN,
     TypeExprId => TYPE_EXPR,
     StmtId => STMT,
-    ItemId => ITEM,
 );
 
 impl Snapshot<Cx> for TypeId {
@@ -367,7 +365,7 @@ impl<P: Snapshot<Cx>> Snapshot<Cx> for BinderRef<P> {
                 parameter: P::read(r)?,
             },
             "Body" => Self::Body {
-                scope: NameSite::read(r)?,
+                scope: SiteRef::read(r)?,
                 parameter: P::read(r)?,
             },
             other => return Err(r.error(format!("unknown BinderRef variant {other}"))),
@@ -449,15 +447,35 @@ snapshot_enum!(NameSite {
     Pattern(p),
     Type(t),
     Statement(s),
-    Item(i)
+    Item
 } in Cx);
+/// An owner is written as its DefPath and occurrence, never its session id.
+impl Snapshot<Cx> for LexicalOwner {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("LexicalOwner");
+        self.def.path().write(w);
+        self.occurrence.write(w);
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("LexicalOwner")?;
+        let path = DefPath::read(r)?;
+        let occurrence = u32::read(r)?;
+        r.close()?;
+        Ok(LexicalOwner {
+            def: hirsel_syntax::DefId::intern(&path),
+            occurrence,
+        })
+    }
+}
+snapshot_struct!(SiteRef { owner, site } in Cx);
 snapshot_enum!(Size { Constant(n), Parameter(p) } in Cx);
 snapshot_enum!(GenericArgument { Type(t), Size(s) } in Cx);
 snapshot_enum!(OriginRoot {
     ArgumentBrand(p),
-    Expression(e),
+    Expression(o, e),
     Parameter(p),
-    Local(l),
+    Local(o, l),
     Definition(d),
     Sibling(f)
 } in Cx);

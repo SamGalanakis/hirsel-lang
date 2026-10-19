@@ -37,14 +37,15 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
     });
     let mut sources = SourceMap::default();
     let file = sources.add("runtime.hir", "\n\nfixture\n".into()).unwrap();
-    let span = Span::new(file, 2, 9).unwrap();
+    let span = Span::new(sources.file_anchor(file), 2, 9).unwrap();
     let mut types = TypeStore::default();
     let unit = types.push(Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
         ..Type::with_kind(TypeKind::Tuple(vec![].into()))
     });
     let body = Body {
-        parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+        parameter_scope: hirsel_types::LexicalOwner::first(&path)
+            .site(hirsel_types::NameSite::Item),
         locals: vec![Local {
             ty: unit,
             storage: Storage::Temporary,
@@ -181,7 +182,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
     let GenericArgument::Type(stdout) = arguments[0] else {
         panic!()
     };
-    let span = Span::new(file, 0, 1).unwrap();
+    let span = Span::new(engine.sources.file_anchor(file), 0, 1).unwrap();
     let local_types = [owner.parameters[0].ty, text, projected, owner.result];
     let argument = |index: u32, usage| CallArgument {
         parameter: ParamId(index),
@@ -199,7 +200,8 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
         entry: BodyId(0),
         contracts: vec![],
         bodies: vec![Body {
-            parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+            parameter_scope: hirsel_types::LexicalOwner::first(&signature.definition)
+                .site(hirsel_types::NameSite::Item),
             locals: local_types
                 .iter()
                 .enumerate()

@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hirsel-intern = { path = "../hirsel-intern" }
 serde = { version = "1", features = ["derive", "rc"] }
 
 [dev-dependencies]

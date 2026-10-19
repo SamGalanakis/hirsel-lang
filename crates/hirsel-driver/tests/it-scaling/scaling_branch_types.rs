@@ -25,7 +25,7 @@ fn unchanged_branch_bindings_do_not_multiply_type_rows() {
                 )
                 .unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let path = &parsed.value.tree.items[0].definition;
+            let path = &parsed.value.items[0].item.definition;
             let output = engine.mode_definition(path).unwrap();
             assert!(output.diagnostics.is_empty());
             let rows = output.value.typed.checked.types.len();

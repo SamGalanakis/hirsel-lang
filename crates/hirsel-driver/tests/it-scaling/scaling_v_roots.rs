@@ -16,7 +16,7 @@ fn temporary_ordering_visits_current_live_temporaries() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateCleanupRootRows);
             let output = engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             let rows =

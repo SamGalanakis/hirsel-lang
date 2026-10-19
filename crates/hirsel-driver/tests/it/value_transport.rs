@@ -8,7 +8,22 @@ fn checked(source: &str, name: &str) -> Result<(), QueryError> {
     engine.parse_file(file, &context).unwrap();
     let mut path = entry_path(&context);
     path.0.name = name.into();
-    engine.lower_to_tir(&path).map(|_| ())
+    // Diagnostics come back at file offsets so callers can index the source.
+    engine
+        .lower_to_tir(&path)
+        .map(|_| ())
+        .map_err(|error| match error {
+            QueryError::Diagnostics(mut diagnostics) => {
+                for d in &mut diagnostics {
+                    let at = engine.sources.resolve(d.primary);
+                    d.primary =
+                        hirsel_span::Span::new(engine.sources.file_anchor(file), at.start, at.end)
+                            .unwrap();
+                }
+                QueryError::Diagnostics(diagnostics)
+            }
+            other => other,
+        })
 }
 
 #[test]

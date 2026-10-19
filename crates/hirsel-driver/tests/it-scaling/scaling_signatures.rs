@@ -14,8 +14,8 @@ fn publications_validate_one_complete_signature_input() {
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateSignatureRows);
-            for id in &parsed.value.roots {
-                let path = &parsed.value.tree.items[id.0 as usize].definition;
+            for id in &parsed.value.items {
+                let path = &id.item.definition;
                 let output = engine.lower_to_tir(path).unwrap();
                 assert!(output.diagnostics.is_empty());
             }
@@ -37,10 +37,7 @@ struct MalformedUnrelated(std::rc::Rc<dyn SignaturePhase>);
 impl SignaturePhase for MalformedUnrelated {
     fn signature_items(
         &self,
-        items: &[(
-            std::sync::Arc<hirsel_syntax::SyntaxFile>,
-            hirsel_syntax::ItemId,
-        )],
+        items: &[std::sync::Arc<hirsel_syntax::ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
         let mut output = self.0.signature_items(items, provider)?;
@@ -55,11 +52,10 @@ impl SignaturePhase for MalformedUnrelated {
     }
     fn signature(
         &self,
-        file: std::sync::Arc<hirsel_syntax::SyntaxFile>,
-        item: hirsel_syntax::ItemId,
+        syntax: std::sync::Arc<hirsel_syntax::ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        self.signature_items(&[(file, item)], provider)
+        self.signature_items(&[syntax], provider)
     }
 }
 fn poisoned_engine() -> QueryEngine {
@@ -78,9 +74,9 @@ fn publish(
     let parsed = engine.parse_file(file, &default_context()).unwrap();
     let path = parsed
         .value
-        .tree
         .items
         .iter()
+        .map(|i| &i.item)
         .find(|item| item.definition.0.name == name)
         .unwrap()
         .definition

@@ -28,33 +28,27 @@ fn check_all(engine: &mut QueryEngine) {
 // Syntax IDs are snapshot-local; compare sites relative to the retained owner.
 // TypeId's Debug omits ephemeral provenance, while complete row content is compared.
 fn normalize_sites(typed: &TypedBody, mut view: String) -> String {
-    let file = &typed.file;
-    let owner = typed.item;
-    let base = file.tree.items[owner.0 as usize].origin.span.start;
+    let tree = &typed.syntax.tree;
+    let base = typed.syntax.item.origin.span.start;
     for (prefix, sites) in [
         (
             "ExprId(",
-            file.tree
-                .expressions
+            tree.expressions
                 .iter()
                 .map(|e| e.origin.span)
                 .collect::<Vec<_>>(),
         ),
         (
             "StmtId(",
-            file.tree.statements.iter().map(|e| e.origin.span).collect(),
+            tree.statements.iter().map(|e| e.origin.span).collect(),
         ),
         (
             "PatternId(",
-            file.tree.patterns.iter().map(|e| e.origin.span).collect(),
+            tree.patterns.iter().map(|e| e.origin.span).collect(),
         ),
         (
             "TypeExprId(",
-            file.tree.types.iter().map(|e| e.origin.span).collect(),
-        ),
-        (
-            "ItemId(",
-            file.tree.items.iter().map(|e| e.origin.span).collect(),
+            tree.types.iter().map(|e| e.origin.span).collect(),
         ),
     ] {
         let mut normalized = String::new();
@@ -127,16 +121,16 @@ fn equal_fresh(engine: &mut QueryEngine, source: &str) {
         assert_eq!(a.value.signature_hash, b.value.signature_hash);
         assert_eq!(a.value.bodies.len(), b.value.bodies.len());
         let normalize = |engine: &mut QueryEngine, d: &hirsel_tir::Definition| {
-            let (file, item) = engine.parse_definition(&p).unwrap().value;
-            let base = file.tree.items[item.0 as usize].origin.span.start;
+            // Spans are item-relative; only the process-unique anchor differs.
+            let anchor = engine.parse_definition(&p).unwrap().value.anchor;
             let mut d = d.clone();
             for body in &mut d.bodies {
                 for block in &mut body.blocks {
-                    block.span.start -= base;
-                    block.span.end -= base;
+                    assert_eq!(block.span.anchor, anchor);
+                    block.span.anchor = hirsel_span::Anchor(0);
                     for i in &mut block.instructions {
-                        i.span.start -= base;
-                        i.span.end -= base;
+                        assert_eq!(i.span.anchor, anchor);
+                        i.span.anchor = hirsel_span::Anchor(0);
                     }
                 }
             }
@@ -963,7 +957,7 @@ fn destructuring_derives_sibling_brands_instead_of_trusting_field_types_on_compi
     {
         *ty = hirsel_types::map_type_origins(&mut changed.types, *ty, |origin, _| {
             let mut origin = origin.clone();
-            if matches!(origin.root, OriginRoot::Local(_)) {
+            if matches!(origin.root, OriginRoot::Local(..)) {
                 origin.root =
                     OriginRoot::Parameter(ParameterRef::body(body.parameter_scope, ParamId(1)));
             }
@@ -1493,7 +1487,7 @@ fn moved_aliases_have_no_join_identity_introduction() {
             let checked = &analyzed.value.typed.checked;
             let root = checked.bindings.iter().find_map(|b| {
                 matches!(checked.types.get(b.ty).unwrap().kind, hirsel_types::TypeKind::Named { ref definition, .. } if *definition == path("R"))
-                    .then(|| match b.binding { hirsel_types::ResolvedName::Local(l) => Some(hirsel_types::OriginRoot::Local(l)), _ => None }).flatten()
+                    .then(|| match b.binding { hirsel_types::ResolvedName::Local(l) => Some(hirsel_types::OriginRoot::Local(analyzed.value.typed.syntax.owner(), l)), _ => None }).flatten()
             }).expect("local r");
             assert!(
                 analyzed

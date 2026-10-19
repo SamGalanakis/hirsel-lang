@@ -64,8 +64,8 @@ fn published_index_matches_every_core_and_std_export() {
                 continue;
             }
             let syntax = engine.parse_file(file, &context).unwrap().value;
-            for id in &syntax.roots {
-                let item = &syntax.tree.items[id.0 as usize];
+            for id in &syntax.items {
+                let item = &id.item;
                 if item.visibility == Visibility::Private {
                     continue;
                 }

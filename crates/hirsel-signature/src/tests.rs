@@ -58,8 +58,7 @@ impl SignatureProvider for Fake {
     }
 }
 struct Fixture {
-    item: ast::ItemId,
-    tree: ast::SyntaxTree,
+    syntax: ast::ItemSyntax,
     resolution: Resolution,
     metadata: Metadata,
     provider: Fake,
@@ -69,16 +68,12 @@ impl Fixture {
     fn new() -> Self {
         let name = Symbol::intern("example");
         Self {
-            item: ast::ItemId(0),
-            tree: ast::SyntaxTree {
-                items: vec![ast::Item {
+            syntax: ast::ItemSyntax {
+                item: ast::Item {
                     name_span: Default::default(),
-
                     origin: origin(),
-                    owned_tokens: Default::default(),
                     name,
                     definition: def("example"),
-                    text_hash: ast::ContentHash::default(),
                     visibility: ast::Visibility::Private,
                     attributes: vec![],
                     kind: ast::ItemKind::Function {
@@ -87,8 +82,11 @@ impl Fixture {
                         abi: None,
                     },
                     generated: None,
-                }],
-                ..Default::default()
+                },
+                tree: Default::default(),
+                anchor: Default::default(),
+                text_hash: ast::ContentHash::default(),
+                occurrence: 0,
             },
             resolution: Default::default(),
             metadata: Default::default(),
@@ -100,8 +98,8 @@ impl Fixture {
         }
     }
     fn ty(&mut self, kind: ast::TypeExprKind) -> ast::TypeExprId {
-        let id = ast::TypeExprId(self.tree.types.len() as u32);
-        self.tree.types.push(ast::TypeExpr {
+        let id = ast::TypeExprId(self.syntax.tree.types.len() as u32);
+        self.syntax.tree.types.push(ast::TypeExpr {
             origin: origin(),
             kind,
         });
@@ -145,7 +143,7 @@ impl Fixture {
         })
     }
     fn f(&mut self) -> &mut ast::FunctionSyntax {
-        match &mut self.tree.items[0].kind {
+        match &mut self.syntax.item.kind {
             ast::ItemKind::Function { signature, .. } => signature,
             _ => panic!(),
         }
@@ -161,7 +159,7 @@ impl Fixture {
     }
     fn attr(&mut self, n: &str) {
         let n = Symbol::intern(n);
-        self.tree.items[0].attributes.push(ast::Attribute {
+        self.syntax.item.attributes.push(ast::Attribute {
             name: n,
             arguments: vec![],
             origin: origin(),
@@ -173,8 +171,7 @@ impl Fixture {
     fn run(&mut self) -> Result<QueryOutput<Signature>, QueryError> {
         normalize(
             Input {
-                tree: &self.tree,
-                item: self.item,
+                syntax: &self.syntax,
                 context: &self.context,
                 resolution: &self.resolution,
                 metadata: &self.metadata,
@@ -188,7 +185,7 @@ impl Fixture {
         self.run().unwrap().value
     }
     fn declaration(&mut self, body: ast::TypeBody, flavor: ast::TypeFlavor) {
-        self.tree.items[0].kind = ast::ItemKind::Type {
+        self.syntax.item.kind = ast::ItemKind::Type {
             flavor,
             generics: vec![],
             bounds: None,
@@ -198,8 +195,8 @@ impl Fixture {
         };
     }
     fn expression(&mut self, kind: ast::ExprKind) -> ast::ExprId {
-        let id = ast::ExprId(self.tree.expressions.len() as u32);
-        self.tree.expressions.push(ast::Expr {
+        let id = ast::ExprId(self.syntax.tree.expressions.len() as u32);
+        self.syntax.tree.expressions.push(ast::Expr {
             origin: origin(),
             kind,
         });
@@ -341,8 +338,8 @@ fn diagnostic_lang7_repeated_modifier_cites_type_span() {
             vec![ast::TypeModifier::Unique]
         };
         let ty = f.qualified(ty, modifiers, None, None);
-        let span = Span::new(hirsel_span::FileId(1), 10, 15).unwrap();
-        f.tree.types[ty.0 as usize].origin.span = span;
+        let span = Span::new(hirsel_span::Anchor(1), 10, 15).unwrap();
+        f.syntax.tree.types[ty.0 as usize].origin.span = span;
         f.result(ty);
         if repeated {
             error(&mut f, "LANG-7", span);
@@ -360,8 +357,8 @@ fn diagnostic_gen1_size_as_type_cites_type_span() {
         name,
         kind: ast::GenericKind::Size,
     });
-    let span = Span::new(hirsel_span::FileId(3), 4, 9).unwrap();
-    f.tree.types[ty.0 as usize].origin.span = span;
+    let span = Span::new(hirsel_span::Anchor(3), 4, 9).unwrap();
+    f.syntax.tree.types[ty.0 as usize].origin.span = span;
     f.result(ty);
     error(&mut f, "GEN-1", span);
 }
@@ -373,27 +370,27 @@ fn diagnostic_gen4_generic_ffi_cites_header_span() {
         name,
         kind: ast::GenericKind::Type(vec![]),
     });
-    if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Function { abi, .. } = &mut f.syntax.item.kind {
         *abi = Some(ast::ForeignAbi {
             literal: "\"c\"".into(),
             contract: None,
         });
     }
-    let span = Span::new(hirsel_span::FileId(3), 10, 20).unwrap();
-    f.tree.items[0].origin.span = span;
+    let span = Span::new(hirsel_span::Anchor(3), 10, 20).unwrap();
+    f.syntax.item.origin.span = span;
     error(&mut f, "GEN-4", span);
 }
 #[test]
 fn diagnostic_prog4_extern_requires_package_metadata() {
     let mut f = Fixture::new();
-    if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Function { abi, .. } = &mut f.syntax.item.kind {
         *abi = Some(ast::ForeignAbi {
             literal: "\"c\"".into(),
             contract: None,
         });
     }
-    let span = Span::new(hirsel_span::FileId(4), 10, 12).unwrap();
-    f.tree.items[0].origin.span = span;
+    let span = Span::new(hirsel_span::Anchor(4), 10, 12).unwrap();
+    f.syntax.item.origin.span = span;
     error(&mut f, "PROG-4", span);
 }
 #[test]
@@ -427,18 +424,18 @@ fn diagnostics_validate_variant_labels_and_generic_bounds() {
 fn opaque_public_signatures_require_authority_and_hide_representation() {
     let mut f = Fixture::new();
     f.declaration(ast::TypeBody::Opaque, ast::TypeFlavor::Ordinary);
-    f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
+    f.syntax.item.visibility = ast::Visibility::PublicOpaque;
     error(&mut f, "LANG-6", Span::default());
     if let ast::ItemKind::Type {
         authority, bounds, ..
-    } = &mut f.tree.items[0].kind
+    } = &mut f.syntax.item.kind
     {
         *authority = Some(vec![]);
         *bounds = Some(vec![]);
     }
     let a = f.sig();
     let ty = f.named("u32");
-    if let ast::ItemKind::Type { body, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Type { body, .. } = &mut f.syntax.item.kind {
         *body = ast::TypeBody::Alias(ty);
     }
     let b = f.sig();
@@ -447,7 +444,7 @@ fn opaque_public_signatures_require_authority_and_hide_representation() {
 }
 fn foreign_fixture() -> Fixture {
     let mut f = Fixture::new();
-    if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Function { abi, .. } = &mut f.syntax.item.kind {
         *abi = Some(ast::ForeignAbi {
             literal: "\"c\"".into(),
             contract: None,
@@ -456,11 +453,11 @@ fn foreign_fixture() -> Fixture {
     f
 }
 fn unsafe_ffi_package(f: &mut Fixture) {
-    let package = f.tree.items[0].definition.0.package.clone();
+    let package = f.syntax.item.definition.0.package.clone();
     f.metadata.unsafe_ffi.insert(package, UnsafeFfi::default());
 }
 fn foreign_contract(f: &mut Fixture, text: &str) {
-    if let ast::ItemKind::Function { abi: Some(abi), .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Function { abi: Some(abi), .. } = &mut f.syntax.item.kind {
         abi.contract = Some(text.into());
     }
 }
@@ -598,11 +595,11 @@ fn hash_ignores_locations_whitespace_comments_and_text_hash() {
         expression: c,
     });
     let before = f.sig();
-    f.tree.items[0].text_hash =
+    f.syntax.text_hash =
         ast::ContentHash::of_bytes(b"\n// comment\nfn example() requires true { () }\n");
-    f.tree.items[0].origin.span = Span::new(hirsel_span::FileId(5), 100, 120).unwrap();
-    f.tree.items[0].owned_tokens = ast::TokenRange { start: 9, end: 27 };
-    f.tree.expressions[0].origin.span = Span::new(hirsel_span::FileId(9), 0, 100).unwrap();
+    f.syntax.anchor = hirsel_span::Anchor(7);
+    f.syntax.item.origin.span = Span::new(hirsel_span::Anchor(5), 100, 120).unwrap();
+    f.syntax.tree.expressions[0].origin.span = Span::new(hirsel_span::Anchor(9), 0, 100).unwrap();
     assert_eq!(before.fingerprint, f.sig().fingerprint);
 }
 #[test]
@@ -672,7 +669,7 @@ fn hash_changes_with_contract_code_and_kind() {
     });
     let a = f.sig();
     assert_ne!(before.fingerprint, a.fingerprint);
-    f.tree.expressions[0].kind = ast::ExprKind::Literal(ast::Literal::Bool(false));
+    f.syntax.tree.expressions[0].kind = ast::ExprKind::Literal(ast::Literal::Bool(false));
     let b = f.sig();
     assert_ne!(a.fingerprint, b.fingerprint);
     f.f().contracts[0].kind = ast::ContractKind::Ensures;
@@ -728,12 +725,12 @@ fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
     let mut f = Fixture::new();
     let symbol = Symbol::intern("x");
     let bind = ast::PatternId(0);
-    f.tree.patterns.push(ast::Pattern {
+    f.syntax.tree.patterns.push(ast::Pattern {
         origin: origin(),
         kind: ast::PatternKind::Binding(symbol),
     });
     let value = f.expression(ast::ExprKind::Literal(ast::Literal::Bool(true)));
-    f.tree.statements.push(ast::Stmt {
+    f.syntax.tree.statements.push(ast::Stmt {
         origin: origin(),
         kind: ast::StmtKind::Let {
             mutable: false,
@@ -758,7 +755,8 @@ fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
     });
     let a = f.run().unwrap();
     assert!(a.dependencies.is_empty());
-    f.tree.expressions[value.0 as usize].kind = ast::ExprKind::Literal(ast::Literal::Bool(false));
+    f.syntax.tree.expressions[value.0 as usize].kind =
+        ast::ExprKind::Literal(ast::Literal::Bool(false));
     assert_ne!(a.value.fingerprint, f.sig().fingerprint);
 }
 #[test]
@@ -1004,11 +1002,11 @@ fn opaque_private_representation_dependencies_are_not_public_hash_inputs() {
     let d = f.dependency("Hidden", None, false);
     let t = f.named("Hidden");
     f.declaration(ast::TypeBody::Alias(t), ast::TypeFlavor::Ordinary);
-    f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
-    if let ast::ItemKind::Type { bounds, .. } = &mut f.tree.items[0].kind {
+    f.syntax.item.visibility = ast::Visibility::PublicOpaque;
+    if let ast::ItemKind::Type { bounds, .. } = &mut f.syntax.item.kind {
         *bounds = Some(vec![]);
     }
-    if let ast::ItemKind::Type { authority, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Type { authority, .. } = &mut f.syntax.item.kind {
         *authority = Some(vec![]);
     }
     let a = f.run().unwrap();
@@ -1021,9 +1019,9 @@ fn opaque_private_representation_dependencies_are_not_public_hash_inputs() {
 #[test]
 fn duplicate_module_names_are_rejected_at_the_later_name_across_files() {
     let mut f = Fixture::new();
-    let first = Span::new(hirsel_span::FileId(0), 50, 55).unwrap();
-    let second = Span::new(hirsel_span::FileId(1), 70, 75).unwrap();
-    f.tree.items[0].name_span = second;
+    let first = Span::new(hirsel_span::Anchor(0), 50, 55).unwrap();
+    let second = Span::new(hirsel_span::Anchor(1), 70, 75).unwrap();
+    f.syntax.item.name_span = second;
     f.metadata.declarations = vec![
         DeclarationSite {
             definition: def("example"),
@@ -1035,7 +1033,7 @@ fn duplicate_module_names_are_rejected_at_the_later_name_across_files() {
         },
     ];
     error(&mut f, "LANG-7", second);
-    f.tree.items[0].name_span = first;
+    f.syntax.item.name_span = first;
     f.sig();
 }
 #[test]
@@ -1044,11 +1042,11 @@ fn public_opaque_authority_cannot_expose_a_private_capability() {
     f.dependency("PrivateCap", Some(CapabilityKind::Global), false);
     let symbol = Symbol::intern("PrivateCap");
     f.declaration(ast::TypeBody::Opaque, ast::TypeFlavor::Ordinary);
-    f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
-    if let ast::ItemKind::Type { bounds, .. } = &mut f.tree.items[0].kind {
+    f.syntax.item.visibility = ast::Visibility::PublicOpaque;
+    if let ast::ItemKind::Type { bounds, .. } = &mut f.syntax.item.kind {
         *bounds = Some(vec![]);
     }
-    if let ast::ItemKind::Type { authority, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Type { authority, .. } = &mut f.syntax.item.kind {
         *authority = Some(vec![ast::Path {
             package: None,
             segments: vec![symbol],
@@ -1130,7 +1128,7 @@ fn hash_changes_with_growable_field_metadata() {
     if let ast::ItemKind::Type {
         body: ast::TypeBody::Record(fs),
         ..
-    } = &mut f.tree.items[0].kind
+    } = &mut f.syntax.item.kind
     {
         fs[0].growable = true;
     }
@@ -1163,16 +1161,16 @@ fn hash_changes_with_destructor_allocation_promise() {
 fn hash_changes_with_noalloc_drop_bound() {
     let mut f = Fixture::new();
     f.declaration(ast::TypeBody::Opaque, ast::TypeFlavor::Ordinary);
-    f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
+    f.syntax.item.visibility = ast::Visibility::PublicOpaque;
     if let ast::ItemKind::Type {
         bounds, authority, ..
-    } = &mut f.tree.items[0].kind
+    } = &mut f.syntax.item.kind
     {
         *bounds = Some(vec![]);
         *authority = Some(vec![]);
     }
     let original = f.sig().fingerprint;
-    if let ast::ItemKind::Type { bounds, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Type { bounds, .. } = &mut f.syntax.item.kind {
         *bounds = Some(vec![Bound::NoallocDrop]);
     }
     let signature = f.sig();
@@ -1195,7 +1193,7 @@ fn hash_changes_with_declared_resource_authority() {
         package: None,
         segments: vec![Symbol::intern("Dir")],
     };
-    if let ast::ItemKind::Type { authority, .. } = &mut f.tree.items[0].kind {
+    if let ast::ItemKind::Type { authority, .. } = &mut f.syntax.item.kind {
         *authority = Some(vec![path]);
     }
     assert_ne!(original, f.sig().fingerprint);
@@ -1265,18 +1263,17 @@ fn ordinary_opaque_self_references_keep_the_exported_plain_cleanup_proof() {
         ast::TypeBody::Record(vec![field]),
         ast::TypeFlavor::Ordinary,
     );
-    f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
+    f.syntax.item.visibility = ast::Visibility::PublicOpaque;
     if let ast::ItemKind::Type {
         bounds, authority, ..
-    } = &mut f.tree.items[0].kind
+    } = &mut f.syntax.item.kind
     {
         *bounds = Some(vec![Bound::Plain, Bound::Inert]);
         *authority = Some(vec![]);
     }
     let output = normalize_owned(
         Input {
-            tree: &f.tree,
-            item: f.item,
+            syntax: &f.syntax,
             context: &f.context,
             resolution: &f.resolution,
             metadata: &f.metadata,
@@ -1324,7 +1321,7 @@ fn recursive_nominal_cleanup_includes_the_nonrecursive_owned_leaves() {
             .all(|(_, t)| t.drop_allocation == DropAllocation::NoAlloc)
     );
     let mut inner = Fixture::new();
-    inner.tree.items[0].definition = def("Allocating");
+    inner.syntax.item.definition = def("Allocating");
     inner.declaration(ast::TypeBody::Record(vec![]), ast::TypeFlavor::Resource);
     f.provider.signatures.insert(def("Allocating"), inner.sig());
     let resource = f.named("Allocating");
@@ -1332,7 +1329,7 @@ fn recursive_nominal_cleanup_includes_the_nonrecursive_owned_leaves() {
     if let ast::ItemKind::Type {
         body: ast::TypeBody::Record(fs),
         ..
-    } = &mut f.tree.items[0].kind
+    } = &mut f.syntax.item.kind
     {
         fs.push(resource);
     }
@@ -1569,7 +1566,10 @@ fn signature_encoding_rejects_body_parameter_references() {
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
-    let reference = ParameterRef::body(NameSite::Item(ast::ItemId(42)), ParamId(0));
+    let reference = ParameterRef::body(
+        LexicalOwner::first(&def("example")).site(NameSite::Item),
+        ParamId(0),
+    );
     function.authority = AuthoritySummary::Known(vec![AuthorityTerm::Parameter(reference)].into());
     assert_eq!(
         canonical_encoding(&signature, &[]),
@@ -1601,8 +1601,7 @@ fn builtin_handle_authority_follows_the_supplied_nominal_roles() {
 impl Fixture {
     fn held_authority(&mut self, types: TypeStore, root: TypeId) -> AuthoritySummary {
         let input = Input {
-            tree: &self.tree,
-            item: self.item,
+            syntax: &self.syntax,
             context: &self.context,
             resolution: &self.resolution,
             metadata: &self.metadata,
@@ -1728,7 +1727,7 @@ fn instantiation_bound_schema_fingerprints_and_scoped_references() {
     assert_ne!(before, canonical_encoding(&signature, &[]).unwrap());
     for parameter in [
         TypeParameterRef::Body {
-            scope: NameSite::Item(hirsel_syntax::ItemId(99)),
+            scope: LexicalOwner::first(&def("example")).site(NameSite::Item),
             parameter: TypeParamId(0),
         },
         TypeParameterRef::Bound {

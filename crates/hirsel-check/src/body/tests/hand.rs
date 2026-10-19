@@ -22,14 +22,14 @@ impl SignatureProvider for Provider {
     }
 }
 struct Fixture {
-    tree: ast::SyntaxTree,
+    syntax: ast::ItemSyntax,
     resolution: Resolution,
     signature: Signature,
     provider: Provider,
 }
 fn origin(n: u32) -> ast::Origin {
     ast::Origin {
-        span: Span::new(hirsel_span::FileId(0), n * 10, n * 10 + 5).unwrap(),
+        span: Span::new(hirsel_span::Anchor(0), n * 10, n * 10 + 5).unwrap(),
         tokens: Default::default(),
     }
 }
@@ -56,14 +56,12 @@ impl Fixture {
         let mut store = TypeStore::default();
         let result = store.push(row(kind));
         let name = Symbol::intern("main");
-        let tree = ast::SyntaxTree {
-            items: vec![ast::Item {
+        let syntax = ast::ItemSyntax {
+            item: ast::Item {
                 name_span: origin(0).span,
                 origin: origin(0),
-                owned_tokens: Default::default(),
                 name,
                 definition: super::support::path("main"),
-                text_hash: Default::default(),
                 visibility: ast::Visibility::Private,
                 attributes: vec![],
                 kind: ast::ItemKind::Function {
@@ -72,11 +70,14 @@ impl Fixture {
                     abi: None,
                 },
                 generated: None,
-            }],
-            ..Default::default()
+            },
+            tree: Default::default(),
+            anchor: hirsel_span::Anchor(0),
+            text_hash: Default::default(),
+            occurrence: 0,
         };
         Self {
-            tree,
+            syntax,
             resolution: Resolution::default(),
             signature: Signature {
                 metadata: Default::default(),
@@ -96,24 +97,24 @@ impl Fixture {
         self.signature.types.push(row(kind))
     }
     fn expr(&mut self, kind: ast::ExprKind) -> ast::ExprId {
-        let id = ast::ExprId(self.tree.expressions.len() as u32);
-        self.tree.expressions.push(ast::Expr {
+        let id = ast::ExprId(self.syntax.tree.expressions.len() as u32);
+        self.syntax.tree.expressions.push(ast::Expr {
             origin: origin(id.0 + 1),
             kind,
         });
         id
     }
     fn stmt(&mut self, kind: ast::StmtKind) -> ast::StmtId {
-        let id = ast::StmtId(self.tree.statements.len() as u32);
-        self.tree.statements.push(ast::Stmt {
+        let id = ast::StmtId(self.syntax.tree.statements.len() as u32);
+        self.syntax.tree.statements.push(ast::Stmt {
             origin: origin(id.0 + 50),
             kind,
         });
         id
     }
     fn pattern(&mut self, kind: ast::PatternKind) -> ast::PatternId {
-        let id = ast::PatternId(self.tree.patterns.len() as u32);
-        self.tree.patterns.push(ast::Pattern {
+        let id = ast::PatternId(self.syntax.tree.patterns.len() as u32);
+        self.syntax.tree.patterns.push(ast::Pattern {
             origin: origin(id.0 + 100),
             kind,
         });
@@ -136,8 +137,8 @@ impl Fixture {
     }
     fn parameter(&mut self, name: &str, ty: TypeId, passing: ast::PassingMode) {
         let symbol = Symbol::intern(name);
-        let syntax_id = ast::TypeExprId(self.tree.types.len() as u32);
-        self.tree.types.push(ast::TypeExpr {
+        let syntax_id = ast::TypeExprId(self.syntax.tree.types.len() as u32);
+        self.syntax.tree.types.push(ast::TypeExpr {
             origin: origin(200),
             kind: ast::TypeExprKind::Error,
         });
@@ -149,7 +150,7 @@ impl Fixture {
                 ty,
             });
         }
-        if let ast::ItemKind::Function { signature, .. } = &mut self.tree.items[0].kind {
+        if let ast::ItemKind::Function { signature, .. } = &mut self.syntax.item.kind {
             signature.parameters.push(ast::Parameter {
                 name: Some(symbol),
                 label: None,
@@ -159,14 +160,13 @@ impl Fixture {
         }
     }
     fn finish(mut self, root: ast::ExprId) -> (Output, Vec<ast::DefPath>) {
-        if let ast::ItemKind::Function { body, .. } = &mut self.tree.items[0].kind {
+        if let ast::ItemKind::Function { body, .. } = &mut self.syntax.item.kind {
             *body = Some(root);
         }
         let out = check_with_loop_protocols(
             LoopInput {
                 body: Input {
-                    tree: &self.tree,
-                    item: ast::ItemId(0),
+                    syntax: &self.syntax,
                     context: &super::support::context(),
                     resolution: &self.resolution,
                     signature: &self.signature,
@@ -461,7 +461,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
     let mut f = Fixture::new(TypeKind::Tuple(vec![].into()));
     let binder = Symbol::intern("self_value");
     let root = f.block(vec![], None);
-    f.tree.items[0].kind = ast::ItemKind::Type {
+    f.syntax.item.kind = ast::ItemKind::Type {
         flavor: ast::TypeFlavor::Resource,
         generics: vec![],
         bounds: None,
@@ -510,7 +510,7 @@ fn heap_requires_its_complete_private_producer_contract() {
         let heap = fixture.expr(ast::ExprKind::Heap);
         let statement = fixture.stmt(ast::StmtKind::Expr(heap));
         let root = fixture.block(vec![statement], None);
-        if let ast::ItemKind::Function { body, .. } = &mut fixture.tree.items[0].kind {
+        if let ast::ItemKind::Function { body, .. } = &mut fixture.syntax.item.kind {
             *body = Some(root);
         }
         for mut signature in super::support::heap_signatures() {
@@ -534,8 +534,7 @@ fn heap_requires_its_complete_private_producer_contract() {
         let result = check_with_loop_protocols(
             LoopInput {
                 body: Input {
-                    tree: &fixture.tree,
-                    item: ast::ItemId(0),
+                    syntax: &fixture.syntax,
                     context: &super::support::context(),
                     resolution: &fixture.resolution,
                     signature: &fixture.signature,

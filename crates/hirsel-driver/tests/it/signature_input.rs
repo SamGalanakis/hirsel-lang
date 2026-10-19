@@ -2,7 +2,6 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_span::Span;
-use hirsel_syntax::ItemId;
 use hirsel_tir::*;
 use hirsel_types::{Destination, Primitive, SignatureKind, Type, TypeKind, TypeStore, UseKind};
 use hirsel_validate::Signatures;
@@ -43,13 +42,14 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
         let definition = Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            path: build,
+            path: build.clone(),
             signature_hash: function.fingerprint,
             types,
             entry: BodyId(0),
             contracts: vec![],
             bodies: vec![Body {
-                parameter_scope: hirsel_types::NameSite::Item(ItemId(1)),
+                parameter_scope: hirsel_types::LexicalOwner::first(&build)
+                    .site(hirsel_types::NameSite::Item),
                 locals: vec![
                     Local {
                         ty: number,

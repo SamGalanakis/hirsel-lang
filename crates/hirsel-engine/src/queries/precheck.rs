@@ -17,12 +17,15 @@ use hirsel_types::{DecodedTypes, EncodedTypes};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, ops::Range, path::Path, sync::Mutex};
 
-const MAGIC: &[u8; 8] = b"HIRPCHK2";
+const MAGIC: &[u8; 8] = b"HIRPCHK3";
 
 #[derive(Serialize, Deserialize)]
 struct Header {
     key: ContentHash,
     package: PackageId,
+    /// Where each anchor its spans name stands, by number from 1: the
+    /// package source's manifest ordinal and the anchor's base in it.
+    anchors: Vec<(u32, u32)>,
     /// Each definition's record, as a byte range after the header.
     definitions: Vec<(DefPath, u64, u64)>,
 }
@@ -35,8 +38,6 @@ pub(crate) struct PrecheckedNode {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PrecheckedLowering {
-    /// Spans name the package's sources by manifest ordinal plus one; zero
-    /// stays the synthetic-site sentinel.
     definition: Definition,
     dependencies: Vec<SignatureDependency>,
     execution: ExecutionReads,
@@ -56,6 +57,9 @@ pub struct Precheck {
     key: ContentHash,
     package: PackageId,
     records: BTreeMap<DefPath, Range<usize>>,
+    /// The anchors decoded spans name, each standing in a package source
+    /// (manifest ordinal) at a base; an adopting engine places them.
+    anchors: Vec<(hirsel_span::Anchor, u32, u32)>,
     bytes: Vec<u8>,
     decoded: Mutex<(DecodedTypes, BTreeMap<DefPath, Arc<PrecheckedDefinition>>)>,
 }
@@ -134,6 +138,11 @@ impl Precheck {
             key: header.key,
             package: header.package,
             records,
+            anchors: header
+                .anchors
+                .into_iter()
+                .map(|(ordinal, base)| (hirsel_span::Anchor::fresh(), ordinal, base))
+                .collect(),
             bytes,
             decoded: Mutex::default(),
         })
@@ -147,8 +156,12 @@ impl Precheck {
             return Ok(Some(record.clone()));
         }
         let (provenance, records) = &mut *decoded;
+        let mut anchors =
+            hirsel_span::AnchorCodec::Decode(self.anchors.iter().map(|a| a.0).collect());
         let record: PrecheckedDefinition = hirsel_types::decode_types(provenance, || {
-            bincode::deserialize(&self.bytes[range.clone()])
+            hirsel_span::with_anchor_codec(&mut anchors, || {
+                bincode::deserialize(&self.bytes[range.clone()])
+            })
         })
         .map_err(corrupt)?;
         let record = Arc::new(record);
@@ -164,28 +177,15 @@ pub(crate) struct AdoptedPrecheck {
     lowered: BTreeMap<DefPath, hirsel_tir::DefinitionRef>,
 }
 
-/// Each TIR span that names a source, in the fields source rebasing moves.
-pub(super) fn tir_spans(definition: &mut Definition, mut span: impl FnMut(&mut Span)) {
-    for body in &mut definition.bodies {
-        for local in &mut body.locals {
-            span(&mut local.span);
-        }
-        for scope in &mut body.scopes {
-            span(&mut scope.span);
-        }
-        for block in &mut body.blocks {
-            span(&mut block.span);
-            for instruction in &mut block.instructions {
-                span(&mut instruction.span);
-            }
-        }
-    }
-}
-
 impl QueryEngine {
     /// Use `precheck` for `package`, whose sources are `files` in manifest order.
     pub(crate) fn adopt_precheck(&mut self, precheck: Arc<Precheck>, files: Vec<FileId>) {
         self.comptime_runtime = None;
+        for &(anchor, ordinal, base) in &precheck.anchors {
+            if let Some(file) = files.get(ordinal as usize) {
+                self.sources.move_anchor(anchor, *file, base);
+            }
+        }
         self.prechecks.insert(
             precheck.package.clone(),
             AdoptedPrecheck {
@@ -255,14 +255,7 @@ impl QueryEngine {
         let value = match adopted.lowered.get(path) {
             Some(definition) => definition.clone(),
             None => {
-                let mut definition = lowering.definition.clone();
-                let files = &adopted.files;
-                tir_spans(&mut definition, |span| {
-                    if *span != Span::default() {
-                        span.file = files[span.file.0 as usize - 1];
-                    }
-                });
-                let definition = Arc::new(definition);
+                let definition = Arc::new(lowering.definition.clone());
                 adopted.lowered.insert(path.clone(), definition.clone());
                 definition
             }
@@ -280,14 +273,13 @@ impl QueryEngine {
     fn precheck_record(
         &mut self,
         path: &DefPath,
-        ordinal: &BTreeMap<FileId, u32>,
     ) -> Result<Option<PrecheckedDefinition>, QueryError> {
         let Ok((content, dependencies)) = self.semantic_node(path) else {
             return Ok(None);
         };
         let executable = self.items[path]
             .first()
-            .is_some_and(|item| generation::executable(&item.file, item.item));
+            .is_some_and(|item| generation::executable(item));
         let audit = if executable {
             Some(self.source_audit_products(path)?)
         } else {
@@ -314,21 +306,8 @@ impl QueryEngine {
             if !lowered.diagnostics.is_empty() {
                 return Ok(None);
             }
-            let mut definition = (*lowered.value).clone();
-            let mut foreign = false;
-            tir_spans(&mut definition, |span| {
-                if *span != Span::default() {
-                    match ordinal.get(&span.file) {
-                        Some(index) => span.file = FileId(*index),
-                        None => foreign = true,
-                    }
-                }
-            });
-            if foreign {
-                return Ok(None);
-            }
             Some(PrecheckedLowering {
-                definition,
+                definition: (*lowered.value).clone(),
                 dependencies: lowered.dependencies,
                 execution,
             })
@@ -358,8 +337,8 @@ impl QueryEngine {
             .filter(|path| path.0.package == writer.package && writer.seen.insert(path.clone()))
             .collect();
         for path in &paths {
-            if let Some(record) = self.precheck_record(path, &writer.ordinal)? {
-                writer.write(path, &record)?;
+            if let Some(record) = self.precheck_record(path)? {
+                writer.write(path, record, &self.sources)?;
             }
         }
         writer.closed &= self.release_bodies(&paths, &writer.closure);
@@ -406,6 +385,11 @@ impl QueryEngine {
             &Header {
                 key,
                 package: writer.package,
+                anchors: writer
+                    .anchors
+                    .iter()
+                    .map(|&(_, ordinal, base)| (ordinal, base))
+                    .collect(),
                 definitions: writer.definitions,
             },
         )
@@ -420,8 +404,12 @@ impl QueryEngine {
 pub(crate) struct PrecheckWriter<W> {
     package: PackageId,
     closure: BTreeSet<PackageId>,
-    /// Each package source's manifest ordinal plus one; spans name sources by it.
+    /// Each package source's manifest ordinal.
     ordinal: BTreeMap<FileId, u32>,
+    /// The anchors spans name, numbered from 1 in order, each with its
+    /// source's ordinal and its base there; the header's table.
+    anchors: Vec<(hirsel_span::Anchor, u32, u32)>,
+    codec: hirsel_span::AnchorCodec,
     body: W,
     len: u64,
     types: EncodedTypes,
@@ -448,8 +436,10 @@ impl<W: Write> PrecheckWriter<W> {
             ordinal: files
                 .iter()
                 .enumerate()
-                .map(|(index, file)| (*file, index as u32 + 1))
+                .map(|(index, file)| (*file, index as u32))
                 .collect(),
+            anchors: vec![],
+            codec: hirsel_span::AnchorCodec::Encode(BTreeMap::new()),
             body,
             len: 0,
             types: EncodedTypes::default(),
@@ -462,12 +452,55 @@ impl<W: Write> PrecheckWriter<W> {
     pub(crate) fn has_file(&self, file: FileId) -> bool {
         self.ordinal.contains_key(&file)
     }
-    fn write(&mut self, path: &DefPath, record: &PrecheckedDefinition) -> Result<(), QueryError> {
+    /// Number the anchors `sources` places in the package's sources that have
+    /// no number yet. Parsing places them as the program checks.
+    fn number_anchors(&mut self, sources: &hirsel_span::SourceMap) {
+        let hirsel_span::AnchorCodec::Encode(numbers) = &mut self.codec else {
+            unreachable!("a precheck writer encodes");
+        };
+        for (anchor, file, base) in sources.anchors() {
+            if let Some(ordinal) = self.ordinal.get(&file)
+                && !numbers.contains_key(&anchor)
+            {
+                self.anchors.push((anchor, *ordinal, base));
+                numbers.insert(anchor, self.anchors.len() as u32);
+            }
+        }
+    }
+    fn encode(&mut self, record: &PrecheckedDefinition) -> Option<Vec<u8>> {
         let mut bytes = vec![];
+        let codec = &mut self.codec;
         hirsel_types::encode_types(&mut self.types, || {
-            bincode::serialize_into(&mut bytes, record)
+            hirsel_span::with_anchor_codec(codec, || bincode::serialize_into(&mut bytes, record))
         })
-        .map_err(corrupt)?;
+        .ok()
+        .map(|()| bytes)
+    }
+    /// Write `record`. TIR with a span outside the package's sources (a
+    /// generated source) is left out, as is a record that still has one.
+    fn write(
+        &mut self,
+        path: &DefPath,
+        mut record: PrecheckedDefinition,
+        sources: &hirsel_span::SourceMap,
+    ) -> Result<(), QueryError> {
+        let bytes = match self.encode(&record) {
+            Some(bytes) => bytes,
+            None => {
+                self.number_anchors(sources);
+                match self.encode(&record) {
+                    Some(bytes) => bytes,
+                    None if record.lowering.is_some() => {
+                        record.lowering = None;
+                        match self.encode(&record) {
+                            Some(bytes) => bytes,
+                            None => return Ok(()),
+                        }
+                    }
+                    None => return Ok(()),
+                }
+            }
+        };
         self.body.write_all(&bytes).map_err(corrupt)?;
         self.definitions
             .push((path.clone(), self.len, bytes.len() as u64));

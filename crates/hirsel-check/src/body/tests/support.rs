@@ -120,7 +120,7 @@ pub(super) fn parse(
         Symbol::intern(s);
     }
     let lex = hirsel_lexer::lex(file, &map);
-    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &map);
+    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &mut map);
     let mut ds = lex.diagnostics;
     ds.extend(parsed.diagnostics);
     (parsed.syntax, map, ds)
@@ -302,11 +302,12 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     // Bootstrap nominal headers so recursive graphs need no guessed callee bodies.
     let declarations = "type SlotId[T] { value: u64 }\ntype Array[T] { value: T }\ntype List[T] { value: T }\ntype Inline[T,n:size] { value: T }\ntype Iter[T] { value: T }\ntype Map[K:key,V] { key: K, value: V }\ntype Set[T:key] { value: T }\ntype SortedMap[K,V] { key: K, value: V }\ntype Ptr[T] { value: T }\ntype Option[T] = None | Some(T)\ntype Result[T,E] = Ok(T) | Error(E)\ntype CliError = Usage(ArgError) | Files(FileError) | Output(OutputError)\ntype GrantError = NotGranted()\ntype ArgError = MissingArgument()\ntype CancelCause = Requested | Parent | ChildFailed\ntype CancelError = Canceled(CancelCause)\ntype ChannelError = Closed | Canceled(CancelCause)\ntype FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted()\ntype OutputError = OutputFault(u32) | Canceled(CancelCause)\ntype FloatIntError = NotFinite | OutOfRange\ntype OutOfSpace = OutOfSpace()\ntype Eq[T] { equal: fn(T,T) -> bool uses {} }\ntype Order[T] { compare: fn(T,T) -> i32 uses {} }\ntype Hasher[T] { hash: fn(T,u64) -> u64 uses {} }\n";
     let (mut types, _, ds) = parse(declarations, &[]);
-    for item in &mut types.tree.items {
+    for syntax in &mut types.items {
+        let item = &mut Arc::make_mut(syntax).item;
         item.definition = core(&item.definition.0.name);
     }
     assert!(ds.is_empty(), "{ds:?}");
-    for item in &types.tree.items {
+    for item in types.items.iter().map(|s| &s.item) {
         let mut s = type_signature(&item.definition.0.name, vec![], None, None);
         if let ast::ItemKind::Type { generics, .. } = &item.kind {
             if let SignatureKind::Type(td) = &mut s.kind {
@@ -360,7 +361,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         };
         let (mut library, _, ds) = parse(&code, &[]);
         assert!(ds.is_empty(), "{code}: {ds:?}");
-        library.tree.items[0].definition = p.clone();
+        Arc::make_mut(&mut library.items[0]).item.definition = p.clone();
         // Library module namespace is represented by the canonical DefPath.
         if let Err(reason) = normalize_file(&library, &mut registry) {
             panic!("library {name}: {reason}");
@@ -449,7 +450,7 @@ pub(super) fn normalize_file(
                     },
                 )
             })
-            .chain(file.tree.items.iter().map(|i| {
+            .chain(file.items.iter().map(|s| &s.item).map(|i| {
                 (
                     i.definition.clone(),
                     DefinitionMetadata {
@@ -467,21 +468,20 @@ pub(super) fn normalize_file(
             .collect(),
         ..Default::default()
     };
-    let mut pending = file.roots.clone();
+    let mut pending: Vec<_> = file.items.iter().collect();
     let mut last = String::new();
-    for _ in 0..file.roots.len() + 1 {
+    for _ in 0..file.items.len() + 1 {
         let mut next = vec![];
-        for id in pending {
-            let r = hirsel_resolve::resolve_item(file, id, &registry.index.clone(), registry);
-            let item = &file.tree.items[id.0 as usize];
+        for syntax in pending {
+            let r = hirsel_resolve::resolve_item(file, syntax, &registry.index.clone(), registry);
+            let item = &syntax.item;
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
                 modules: item.definition.0.modules.clone(),
             };
             match hirsel_signature::normalize(
                 hirsel_check_protocol::header::Input {
-                    tree: &file.tree,
-                    item: id,
+                    syntax,
                     context: &ctx,
                     resolution: &r,
                     metadata: &metadata,
@@ -498,7 +498,7 @@ pub(super) fn normalize_file(
                         .insert(item.definition.clone(), Arc::new(out.value));
                 }
                 Err(e) => {
-                    next.push(id);
+                    next.push(syntax);
                     last = format!("{e:?}");
                 }
             }
@@ -520,20 +520,19 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
         panic!("normalizing {source}: {e}");
     }
     let mut outputs = vec![];
-    for id in &file.roots {
+    for syntax in &file.items {
         let resolution =
-            hirsel_resolve::resolve_item(&file, *id, &registry.index.clone(), &mut registry);
+            hirsel_resolve::resolve_item(&file, syntax, &registry.index.clone(), &mut registry);
         assert!(
             resolution.query.diagnostics.is_empty(),
             "resolver {source}: {:?}",
             resolution.query.diagnostics
         );
-        let sig = registry.signatures[&file.tree.items[id.0 as usize].definition].clone();
+        let sig = registry.signatures[&syntax.item.definition].clone();
         let out = check_with_loop_protocols(
             LoopInput {
                 body: Input {
-                    tree: &file.tree,
-                    item: *id,
+                    syntax,
                     context: &context(),
                     resolution: &resolution,
                     signature: &sig,
@@ -546,7 +545,10 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
         ds.extend(out.checked.diagnostics.clone());
         outputs.push(out);
     }
-    ds.sort_by_key(|d| (d.primary.start, d.primary.end, d.rule.as_str().to_string()));
+    ds.sort_by_key(|d| {
+        let at = map.resolve(d.primary);
+        (at.start, at.end, d.rule.as_str().to_string())
+    });
     (ds, outputs, map)
 }
 

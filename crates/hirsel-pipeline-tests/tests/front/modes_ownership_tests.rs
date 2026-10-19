@@ -90,7 +90,7 @@ fn a_value_borrowed_on_any_path_is_published_as_a_borrow() {
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let typed = &out.value.typed;
     let uses: Vec<_> = typed
-        .file
+        .syntax
         .tree
         .expressions
         .iter()

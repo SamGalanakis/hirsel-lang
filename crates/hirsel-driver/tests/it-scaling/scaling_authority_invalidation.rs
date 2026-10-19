@@ -17,7 +17,7 @@ fn expiry_queries_only_brand_rows_of_its_owner() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::AuthorityInvalidationRows);
             let output = engine
-                .mode_definition(&parsed.value.tree.items[0].definition)
+                .mode_definition(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             let rows =

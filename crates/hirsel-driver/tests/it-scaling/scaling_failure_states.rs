@@ -17,7 +17,7 @@ fn nonfailing_assignments_prepare_no_unused_failure_states() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateFailureStateRows);
             let output = engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             assert_eq!(
@@ -36,7 +36,7 @@ fn nonfailing_assignments_prepare_no_unused_failure_states() {
             hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateFailureStateRows);
         assert!(
             engine
-                .lower_to_tir(&parsed.value.tree.items[0].definition)
+                .lower_to_tir(&parsed.value.items[0].item.definition)
                 .unwrap()
                 .diagnostics
                 .is_empty()

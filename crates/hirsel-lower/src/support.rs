@@ -1,7 +1,7 @@
 //! Isolated lowering fixtures with explicit declarations and analyzed facts.
 use super::*;
 use hirsel_intern::Symbol;
-use hirsel_span::FileId;
+use hirsel_span::Anchor;
 use hirsel_syntax::*;
 use hirsel_types::*;
 pub fn path(name: &str) -> DefPath {
@@ -14,8 +14,13 @@ pub fn path(name: &str) -> DefPath {
         name: name.into(),
     })
 }
+/// The anchor fixture sites name; the fixture's sources place it.
+pub fn fixture_anchor() -> Anchor {
+    static ANCHOR: std::sync::OnceLock<Anchor> = std::sync::OnceLock::new();
+    *ANCHOR.get_or_init(Anchor::fresh)
+}
 pub fn site(line: u32) -> Span {
-    Span::new(FileId(0), (line - 1) * 2, (line - 1) * 2 + 1).unwrap()
+    Span::new(fixture_anchor(), (line - 1) * 2, (line - 1) * 2 + 1).unwrap()
 }
 pub fn origin(line: u32) -> hirsel_syntax::Origin {
     hirsel_syntax::Origin {
@@ -24,7 +29,8 @@ pub fn origin(line: u32) -> hirsel_syntax::Origin {
     }
 }
 pub struct Fixture {
-    pub tree: SyntaxTree,
+    /// The lowered item: its tree holds the fixture's syntax.
+    pub syntax: ItemSyntax,
     pub checked: CheckedBody,
     pub plans: Plans,
     pub ownership: OwnershipFacts,
@@ -39,14 +45,38 @@ pub struct Fixture {
     pub parameters: Vec<hirsel_types::Parameter>,
 }
 impl Fixture {
+    /// A site of the lowered item, qualified by its owner.
+    pub fn scope(&self, site: NameSite) -> SiteRef {
+        self.syntax.owner().site(site)
+    }
     pub fn new(primitive: Primitive) -> Self {
         let mut types = TypeStore::default();
         let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
         let boolean = types.push(ty(TypeKind::Primitive(Primitive::Bool)));
         let scalar = types.push(ty(TypeKind::Primitive(primitive)));
-        Self {
+        let syntax = ItemSyntax {
+            item: Item {
+                name_span: Span::default(),
+                origin: origin(1),
+                name: Symbol::intern("fixture"),
+                definition: path("fixture"),
+                visibility: Visibility::Private,
+                attributes: vec![],
+                kind: ItemKind::Function {
+                    signature: FunctionSyntax::default(),
+                    body: None,
+                    abi: None,
+                },
+                generated: None,
+            },
             tree: SyntaxTree::default(),
+            anchor: fixture_anchor(),
+            text_hash: ContentHash::default(),
+            occurrence: 0,
+        };
+        Self {
             checked: CheckedBody {
+                lexical: syntax.owner(),
                 tails: vec![],
                 places: vec![],
                 calls: vec![],
@@ -65,7 +95,8 @@ impl Fixture {
             unit,
             boolean,
             scalar,
-            owner: NameSite::Item(ItemId(0)),
+            owner: NameSite::Item,
+            syntax,
             next_local: 0,
             declarations: Default::default(),
             parameters: vec![],
@@ -75,8 +106,8 @@ impl Fixture {
         self.checked.types.push(ty(kind))
     }
     pub fn expr(&mut self, kind: ExprKind, ty: TypeId, usage: UseKind, line: u32) -> ExprId {
-        let id = ExprId(self.tree.expressions.len() as u32);
-        self.tree.expressions.push(Expr {
+        let id = ExprId(self.syntax.tree.expressions.len() as u32);
+        self.syntax.tree.expressions.push(Expr {
             origin: origin(line),
             kind,
         });
@@ -93,7 +124,7 @@ impl Fixture {
             projections: vec![].into(),
             access: hirsel_types::SourceAccess::Read,
         };
-        match &self.tree.expressions[id.0 as usize].kind {
+        match &self.syntax.tree.expressions[id.0 as usize].kind {
             ExprKind::Field { base, field } => {
                 place = self
                     .checked
@@ -207,18 +238,18 @@ impl Fixture {
         )
     }
     pub fn stmt(&mut self, kind: StmtKind, line: u32) -> StmtId {
-        let id = StmtId(self.tree.statements.len() as u32);
-        self.tree.statements.push(Stmt {
+        let id = StmtId(self.syntax.tree.statements.len() as u32);
+        self.syntax.tree.statements.push(Stmt {
             origin: origin(line),
             kind,
         });
         id
     }
     pub fn binding(&mut self, ty: TypeId, usage: UseKind) -> (PatternId, ResolvedName) {
-        let pattern = PatternId(self.tree.patterns.len() as u32);
+        let pattern = PatternId(self.syntax.tree.patterns.len() as u32);
         let local = hirsel_types::LocalId(self.next_local);
         self.next_local += 1;
-        self.tree.patterns.push(Pattern {
+        self.syntax.tree.patterns.push(Pattern {
             origin: origin(1),
             kind: PatternKind::Binding(Symbol::intern(&format!("local{}", local.0))),
         });
@@ -454,7 +485,7 @@ impl Fixture {
     ) -> Input<'a> {
         Input {
             track_caller: false,
-            tree: &self.tree,
+            syntax: &self.syntax,
             checked: &self.checked,
             plans: &self.plans,
             ownership: &self.ownership,

@@ -1151,7 +1151,7 @@ mod semantic_events {
         let mut sim = Simulation::new(&run, Default::default()).unwrap();
         let mut sources = SourceMap::default();
         let file = sources.add("effect.hir", "operation\n".into()).unwrap();
-        let site = Span::new(file, 0, 9).unwrap();
+        let site = Span::new(sources.file_anchor(file), 0, 9).unwrap();
         let anchor = Anchor {
             definition: run.entry.clone(),
             body: BodyId(77),

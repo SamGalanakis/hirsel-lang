@@ -8,7 +8,9 @@ use hirsel_modes::explain::{
 
 impl Checker<'_> {
     pub(super) fn sites(&self) -> Sites<'_> {
-        Sites { tree: self.tree }
+        Sites {
+            syntax: self.syntax,
+        }
     }
     pub(super) fn spelled(&self, e: ExprId) -> Option<String> {
         hirsel_modes::explain::spell(self.tree, e)
@@ -137,8 +139,10 @@ impl Checker<'_> {
             ParameterRef::Bound {
                 depth: 0,
                 parameter,
-            } => sites.parameter(NameSite::Item(self.item), *parameter),
-            ParameterRef::Body { scope, parameter } => sites.parameter(*scope, *parameter),
+            } => sites.parameter(NameSite::Item, *parameter),
+            ParameterRef::Body { scope, parameter } if scope.owner == self.lexical => {
+                sites.parameter(scope.site, *parameter)
+            }
             _ => None,
         };
         let (name, span) = match &origin.root {
@@ -146,7 +150,7 @@ impl Checker<'_> {
                 Some((name, span)) => (name, Some(span)),
                 None => (hirsel_modes::explain::prose("a parameter"), None),
             },
-            OriginRoot::Local(local) => match self
+            OriginRoot::Local(_, local) => match self
                 .out
                 .body
                 .bindings
@@ -159,7 +163,7 @@ impl Checker<'_> {
                 }
                 None => (hirsel_modes::explain::prose("a local"), None),
             },
-            OriginRoot::Expression(e) => {
+            OriginRoot::Expression(_, e) => {
                 // Fresh value identities are rooted at their initializer, even
                 // after a let names the value. Recover that declared owner for
                 // diagnostics instead of calling its literal/call a temporary.

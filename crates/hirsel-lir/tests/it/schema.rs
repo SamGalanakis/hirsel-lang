@@ -1719,7 +1719,8 @@ mod instance_keys {
                 plain,
                 4,
                 TypeParameterRef::body(
-                    hirsel_types::NameSite::Item(hirsel_syntax::ItemId(3)),
+                    hirsel_syntax::LexicalOwner::first(&path("f"))
+                        .site(hirsel_types::NameSite::Item),
                     TypeParamId(0)
                 )
             ),
@@ -1737,7 +1738,7 @@ mod instance_keys {
         let mut store = TypeStore::default();
         let open = store.push(Type {
             kind: TypeKind::Parameter(TypeParameterRef::body(
-                hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+                hirsel_syntax::LexicalOwner::first(&path("f")).site(hirsel_types::NameSite::Item),
                 TypeParamId(0),
             )),
             ..Type::unit()
@@ -1833,7 +1834,8 @@ mod instance_keys {
 
 fn tir_coverage_body() -> hirsel_tir::Body {
     hirsel_tir::Body {
-        parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
+        parameter_scope: hirsel_syntax::LexicalOwner::first(&path("f"))
+            .site(hirsel_types::NameSite::Item),
         locals: Vec::new(),
         places: Vec::new(),
         scopes: Vec::new(),

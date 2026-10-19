@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct ResolverSnapshot {
-    pub file: Arc<SyntaxFile>,
+    pub syntax: Arc<ItemSyntax>,
     pub output: QueryOutput<Resolution>,
 }
 impl std::ops::Deref for ResolverSnapshot {
@@ -30,6 +30,9 @@ pub struct CompilerState {
         crate::layered::Layered<DefPath, crate::representation::OwnerRecord>,
     pub mode_diagnostics: Vec<(Diagnostic, String)>,
     module_declarations: BTreeMap<DefPath, ModuleDeclaration>,
+    /// The items of each indexed item's file, in position order, by item
+    /// anchor: the same-file fallbacks resolution reads.
+    siblings: BTreeMap<hirsel_span::Anchor, Arc<[Arc<ItemSyntax>]>>,
     module_input: RefCell<Option<Rc<ModuleInput>>>,
     pub manifest_revision: ContentHash,
     pub resolver_outputs: crate::layered::Layered<DefPath, ResolverSnapshot>,
@@ -52,21 +55,18 @@ struct ModuleInput {
     package_indexes: BTreeMap<hirsel_syntax::PackageId, ManifestIndex>,
 }
 impl CompilerState {
-    pub(crate) fn set_declarations(
-        &mut self,
-        declarations: impl IntoIterator<Item = (Arc<SyntaxFile>, ItemId)>,
-    ) {
-        let mut declarations: Vec<_> = declarations.into_iter().collect();
-        declarations.sort_by_key(|(file, id)| {
-            (file.file, file.tree.items[id.0 as usize].origin.span.start)
-        });
+    /// `files` holds every indexed item, by file, each file's in position
+    /// order; a definition's candidates come in occurrence order.
+    pub(crate) fn set_declarations(&mut self, files: Vec<Vec<Arc<ItemSyntax>>>) {
+        let mut declarations: Vec<_> = files.iter().flatten().collect();
+        declarations.sort_by_key(|syntax| (&syntax.item.definition, syntax.occurrence));
         let mut rows: BTreeMap<
             DefPath,
             (DefinitionEntry, DefinitionMetadata, Vec<DeclarationSite>),
         > = BTreeMap::new();
-        for (file, id) in declarations {
+        for syntax in declarations {
             hirsel_intern::work::count(hirsel_intern::work::Counter::ModuleDeclarationRows);
-            let item = &file.tree.items[id.0 as usize];
+            let item = &syntax.item;
             let metadata = DefinitionMetadata {
                 public: item.visibility != Visibility::Private,
                 alias: matches!(
@@ -100,6 +100,15 @@ impl CompilerState {
                 name_span: item.name_span,
             });
         }
+        self.siblings = files
+            .into_iter()
+            .flat_map(|file| {
+                let file: Arc<[Arc<ItemSyntax>]> = file.into();
+                file.iter()
+                    .map(|syntax| (syntax.anchor, file.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         self.module_declarations = rows
             .into_iter()
             .map(|(path, (entry, metadata, sites))| {
@@ -221,6 +230,13 @@ impl CompilerState {
             .unwrap_or(&input.index)
             .for_package(package)
     }
+    /// The items of `syntax`'s file; a derived item reads its source's.
+    pub(crate) fn siblings(&self, syntax: &ItemSyntax) -> Arc<[Arc<ItemSyntax>]> {
+        self.siblings
+            .get(&syntax.anchor)
+            .cloned()
+            .unwrap_or_else(|| Arc::from([]))
+    }
     fn declaration_sites(&self, path: &DefPath) -> Rc<[DeclarationSite]> {
         self.module_declarations
             .get(path)
@@ -251,15 +267,21 @@ pub struct ResolverAdapter {
 impl ResolverPhase for ResolverAdapter {
     fn resolve(
         &self,
-        file: Arc<SyntaxFile>,
-        id: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
-        let item = &file.tree.items[id.0 as usize];
-        let index = self.state.borrow().index(item.definition.0.package.clone());
+        let item = &syntax.item;
+        let (index, siblings) = {
+            let state = self.state.borrow();
+            (
+                state.index(item.definition.0.package.clone()),
+                state.siblings(&syntax),
+            )
+        };
         let result = hirsel_resolve::resolve_view(
-            &file,
-            hirsel_resolve::ResolveView::Item(id),
+            &syntax,
+            &siblings,
+            hirsel_resolve::ResolveView::Item,
             &index,
             provider,
             &resolver_expected(),
@@ -267,7 +289,7 @@ impl ResolverPhase for ResolverAdapter {
         self.state.borrow_mut().resolver_outputs.insert(
             item.definition.clone(),
             ResolverSnapshot {
-                file: file.clone(),
+                syntax: syntax.clone(),
                 output: result.query.clone(),
             },
         );
@@ -284,46 +306,44 @@ pub struct SignatureAdapter {
 impl SignaturePhase for SignatureAdapter {
     fn signature_items(
         &self,
-        candidates: &[(Arc<SyntaxFile>, ItemId)],
+        candidates: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         // Visit the later duplicate first so normalization reports overloading before
         // trying unavailable library types in the first declaration's header.
-        let (file, id) = candidates
+        let syntax = candidates
             .get(1)
             .or_else(|| candidates.first())
             .ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates), None)
+        self.signature_with_candidates(syntax.clone(), provider, Some(candidates), None)
     }
     fn signature(
         &self,
-        file: Arc<SyntaxFile>,
-        id: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        self.signature_with_candidates(file, id, provider, None, None)
+        self.signature_with_candidates(syntax, provider, None, None)
     }
     fn staged_signature(
         &self,
-        candidates: &[(Arc<SyntaxFile>, ItemId)],
+        candidates: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
         stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
-        let (file, id) = candidates.first().ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates), Some(stage))
+        let syntax = candidates.first().ok_or(QueryError::NotImplemented)?;
+        self.signature_with_candidates(syntax.clone(), provider, Some(candidates), Some(stage))
             .map(|output| output.value)
     }
 }
 impl SignatureAdapter {
     fn signature_with_candidates(
         &self,
-        file: Arc<SyntaxFile>,
-        id: ItemId,
+        syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
-        candidates: Option<&[(Arc<SyntaxFile>, ItemId)]>,
+        candidates: Option<&[Arc<ItemSyntax>]>,
         stage: Option<hirsel_types::GroupStage>,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        let item = &file.tree.items[id.0 as usize];
+        let item = &syntax.item;
         if let Some(owner) = hirsel_check_protocol::fact::fact_owner(&item.definition) {
             let owner = provider.signature(&owner)?;
             return Ok(QueryOutput {
@@ -336,12 +356,13 @@ impl SignatureAdapter {
             package: item.definition.0.package.clone(),
             modules: item.definition.0.modules.clone(),
         };
-        let (index, module, declaration_sites) = {
+        let (index, module, declaration_sites, siblings) = {
             let state = self.state.borrow();
             (
                 state.index(context.package.clone()),
                 state.module_input(),
                 state.declaration_sites(&item.definition),
+                state.siblings(&syntax),
             )
         };
         // Retained snapshots can be older than edited peers; candidates are in
@@ -350,12 +371,9 @@ impl SignatureAdapter {
             candidates.map_or(declaration_sites, |candidates| {
                 candidates
                     .iter()
-                    .map(|(file, id)| {
-                        let item = &file.tree.items[id.0 as usize];
-                        DeclarationSite {
-                            definition: item.definition.clone(),
-                            name_span: item.name_span,
-                        }
+                    .map(|candidate| DeclarationSite {
+                        definition: candidate.item.definition.clone(),
+                        name_span: candidate.item.name_span,
                     })
                     .collect::<Vec<_>>()
                     .into()
@@ -366,8 +384,9 @@ impl SignatureAdapter {
             None
         } else {
             Some(hirsel_resolve::resolve_view(
-                &file,
-                hirsel_resolve::ResolveView::Header(id),
+                &syntax,
+                &siblings,
+                hirsel_resolve::ResolveView::Header,
                 &index,
                 provider,
                 &resolver_expected(),
@@ -387,7 +406,7 @@ impl SignatureAdapter {
                 self.state.borrow_mut().signature_resolutions.insert(
                     item.definition.clone(),
                     ResolverSnapshot {
-                        file: file.clone(),
+                        syntax: syntax.clone(),
                         output: resolved.query,
                     },
                 );
@@ -398,8 +417,7 @@ impl SignatureAdapter {
         }
         let output = self.phases.normalize_signature(
             hirsel_check_protocol::header::Input {
-                tree: &file.tree,
-                item: id,
+                syntax: &syntax,
                 context: &context,
                 resolution: &resolution,
                 metadata: &module.metadata,
@@ -415,7 +433,7 @@ impl SignatureAdapter {
             self.state.borrow_mut().representations.insert(
                 item.definition.clone(),
                 crate::representation::OwnerRecord {
-                    text_hash: item.text_hash,
+                    text_hash: syntax.text_hash,
                     representation: owner,
                     dependencies: output.public.dependencies.clone(),
                 },

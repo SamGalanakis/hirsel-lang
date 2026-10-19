@@ -1,6 +1,6 @@
 use crate::*;
 use hirsel_span::Span;
-use hirsel_syntax::{ItemId, PackageId, StmtId};
+use hirsel_syntax::PackageId;
 
 /// Every attempted manifest lookup is retained, including misses. The explicit
 /// manifest revision closes the gap in SignatureDependency (spec issue #4).
@@ -44,17 +44,6 @@ pub enum ContextualName {
         variant: Option<VariantId>,
         field: FieldId,
     },
-}
-
-#[derive(
-    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
-)]
-pub enum NameSite {
-    Expression(ExprId),
-    Pattern(PatternId),
-    Type(TypeExprId),
-    Statement(StmtId),
-    Item(ItemId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

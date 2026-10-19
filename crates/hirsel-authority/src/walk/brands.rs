@@ -43,11 +43,11 @@ impl Checker<'_> {
             .bindings
             .iter()
             .find(|b| match (&origin.root, &b.binding) {
-                (OriginRoot::Local(l), ResolvedName::Local(m)) => l == m,
+                (OriginRoot::Local(o, l), ResolvedName::Local(m)) => *o == self.lexical && l == m,
                 (
                     OriginRoot::Parameter(ParameterRef::Body { scope, parameter }),
                     ResolvedName::Parameter(p),
-                ) => *scope == b.owner && parameter == p,
+                ) => *scope == self.lexical.site(b.owner) && parameter == p,
                 _ => false,
             })
     }
@@ -89,7 +89,7 @@ impl Checker<'_> {
             fields: vec![].into(),
         }) && matches!(
             origin.root,
-            OriginRoot::Local(_) | OriginRoot::Parameter(ParameterRef::Body { .. })
+            OriginRoot::Local(..) | OriginRoot::Parameter(ParameterRef::Body { .. })
         )
     }
     /// Whether a body relation place names an Arena-typed binding: such a
@@ -98,11 +98,13 @@ impl Checker<'_> {
         origin.fields.is_empty()
             && self.out.body.bindings.iter().any(|b| {
                 let root = match (&origin.root, &b.binding) {
-                    (OriginRoot::Local(l), ResolvedName::Local(m)) => l == m,
+                    (OriginRoot::Local(o, l), ResolvedName::Local(m)) => {
+                        *o == self.lexical && l == m
+                    }
                     (
                         OriginRoot::Parameter(ParameterRef::Body { scope, parameter }),
                         ResolvedName::Parameter(p),
-                    ) => *scope == b.owner && parameter == p,
+                    ) => *scope == self.lexical.site(b.owner) && parameter == p,
                     _ => false,
                 };
                 root && self.arena_type(b.ty)
@@ -190,9 +192,9 @@ impl Checker<'_> {
                     return Some(o.whole.clone());
                 }
                 let root = match binding {
-                    ResolvedName::Local(l) => OriginRoot::Local(*l),
+                    ResolvedName::Local(l) => OriginRoot::Local(self.lexical, *l),
                     ResolvedName::Parameter(p) => {
-                        OriginRoot::Parameter(ParameterRef::body(owner.clone(), *p))
+                        OriginRoot::Parameter(ParameterRef::body(self.lexical.site(*owner), *p))
                     }
                     _ => unreachable!("checked binding root"),
                 };
@@ -207,7 +209,7 @@ impl Checker<'_> {
             }),
             SourceRoot::Value(v) => {
                 Some(self.expression_origins.get(v).cloned().unwrap_or(Origin {
-                    root: OriginRoot::Expression(*v),
+                    root: OriginRoot::Expression(self.lexical, *v),
                     fields: vec![].into(),
                 }))
             }
@@ -297,7 +299,7 @@ impl Checker<'_> {
         let place = self.source_place(e);
         if place.access == SourceAccess::Unique {
             return Some(Origin {
-                root: OriginRoot::Expression(e),
+                root: OriginRoot::Expression(self.lexical, e),
                 fields: vec![].into(),
             });
         }
@@ -317,7 +319,7 @@ impl Checker<'_> {
                 // storage identity; mutation expiry has its own interpretation.
                 SourceProjectionKind::Index(_) => {
                     origin = Origin {
-                        root: OriginRoot::Expression(step.expression),
+                        root: OriginRoot::Expression(self.lexical, step.expression),
                         fields: vec![].into(),
                     }
                 }
@@ -634,9 +636,9 @@ impl Checker<'_> {
                 continue;
             };
             let root = match binding.binding {
-                ResolvedName::Local(l) => OriginRoot::Local(l),
+                ResolvedName::Local(l) => OriginRoot::Local(self.lexical, l),
                 ResolvedName::Parameter(p) => {
-                    OriginRoot::Parameter(ParameterRef::body(binding.owner.clone(), p))
+                    OriginRoot::Parameter(ParameterRef::body(self.lexical.site(binding.owner), p))
                 }
                 _ => continue,
             };
@@ -1017,9 +1019,9 @@ impl Checker<'_> {
             };
             if let Some(b) = binding {
                 let own_root = match b.binding {
-                    ResolvedName::Local(l) => OriginRoot::Local(l),
+                    ResolvedName::Local(l) => OriginRoot::Local(self.lexical, l),
                     ResolvedName::Parameter(p) => {
-                        OriginRoot::Parameter(ParameterRef::body(b.owner, p))
+                        OriginRoot::Parameter(ParameterRef::body(self.lexical.site(b.owner), p))
                     }
                     _ => o.root.clone(),
                 };
@@ -1424,15 +1426,10 @@ impl Checker<'_> {
                     .find(|b| match &b.binding {
                         ResolvedName::Parameter(p) => {
                             let syntax = match b.owner {
-                                NameSite::Item(i) => {
-                                    self.tree
-                                        .items
-                                        .get(i.0 as usize)
-                                        .and_then(|i| match &i.kind {
-                                            ItemKind::Function { signature, .. } => Some(signature),
-                                            _ => None,
-                                        })
-                                }
+                                NameSite::Item => match &self.syntax.item.kind {
+                                    ItemKind::Function { signature, .. } => Some(signature),
+                                    _ => None,
+                                },
                                 NameSite::Expression(e) => {
                                     self.tree.expressions.get(e.0 as usize).and_then(|e| {
                                         match &e.kind {
@@ -1475,8 +1472,10 @@ impl Checker<'_> {
             });
         let (partition, mut ty) = if let Some(b) = binding {
             let root = match b.binding {
-                ResolvedName::Parameter(p) => OriginRoot::Parameter(ParameterRef::body(b.owner, p)),
-                ResolvedName::Local(l) => OriginRoot::Local(l),
+                ResolvedName::Parameter(p) => {
+                    OriginRoot::Parameter(ParameterRef::body(self.lexical.site(b.owner), p))
+                }
+                ResolvedName::Local(l) => OriginRoot::Local(self.lexical, l),
                 _ => return None,
             };
             (
@@ -1883,9 +1882,9 @@ impl Checker<'_> {
             .find(|b| b.binding == name.1 && b.owner == owner)?;
         let root = match binding.binding {
             ResolvedName::Parameter(p) => {
-                OriginRoot::Parameter(ParameterRef::body(binding.owner, p))
+                OriginRoot::Parameter(ParameterRef::body(self.lexical.site(binding.owner), p))
             }
-            ResolvedName::Local(l) => OriginRoot::Local(l),
+            ResolvedName::Local(l) => OriginRoot::Local(self.lexical, l),
             _ => return None,
         };
         Some(Origin {

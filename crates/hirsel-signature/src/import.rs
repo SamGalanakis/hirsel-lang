@@ -46,7 +46,7 @@ impl Normalizer<'_, '_> {
                 "invalid imported signature type graph or substitution",
             )
         })?;
-        let owner = &self.input.tree.items[self.input.item.0 as usize].definition;
+        let owner = &self.input.syntax.item.definition;
         let dependencies: BTreeSet<_> = self
             .types
             .iter()

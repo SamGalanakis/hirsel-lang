@@ -55,7 +55,7 @@ fn error(text: &str, rule: &str, start: u32, end: u32) {
     assert_eq!(
         diagnostic.primary,
         Span {
-            file: FileId(0),
+            anchor: sources.file_anchor(FileId(0)),
             start,
             end
         },
@@ -308,7 +308,7 @@ fn empty_input_and_stale_file_id_do_not_panic() {
         vec![Token {
             kind: TokenKind::Eof,
             span: Span {
-                file: FileId(42),
+                anchor: Anchor(0),
                 start: 0,
                 end: 0
             }
@@ -328,7 +328,7 @@ fn deterministic_fuzz_arbitrary_bytes_never_panics_and_round_trips() {
             state ^= state << 17;
             bytes.push((state >> 24) as u8);
         }
-        let output = scan(FileId(0), &bytes);
+        let output = scan(Anchor(0), &bytes);
         round_trip(&bytes, &output);
         for diagnostic in &output.diagnostics {
             assert!(diagnostic.primary.end as usize <= bytes.len());

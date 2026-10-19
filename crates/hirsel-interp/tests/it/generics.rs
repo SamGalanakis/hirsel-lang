@@ -11,10 +11,7 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
         let result = reader.local(TypeKind::Primitive(Primitive::U64), Storage::Temporary);
         reader.assign(
             result,
-            Rvalue::Size(SizeParameterRef::body(
-                NameSite::Item(hirsel_syntax::ItemId(0)),
-                SizeParamId(1),
-            )),
+            Rvalue::Size(SizeParameterRef::body(item_scope(), SizeParamId(1))),
             1,
             CleanupId(0),
         );

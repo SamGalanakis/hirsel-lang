@@ -310,10 +310,10 @@ impl Parser<'_> {
     fn token_origin(&self, position: usize) -> Origin {
         let index = self.significant[position];
         Origin {
-            span: self.tokens[index].span,
+            span: self.local_span(self.tokens[index].span),
             tokens: TokenRange {
-                start: index as u32,
-                end: index as u32 + 1,
+                start: self.local_token(index),
+                end: self.local_token(index) + 1,
             },
         }
     }

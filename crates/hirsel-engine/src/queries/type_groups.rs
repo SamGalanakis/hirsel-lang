@@ -68,10 +68,7 @@ impl Recorder<'_> {
                     .items
                     .get(&nodes[*m])
                     .and_then(|items| items.first())
-                    .and_then(|source| {
-                        let item = &source.file.tree.items[source.item.0 as usize];
-                        self.engine.semantic_tokens(&source.file, item).ok()
-                    })
+                    .and_then(|syntax| self.engine.semantic_tokens(syntax).ok())
                     .unwrap_or_default();
                 (*m, tokens)
             })
@@ -109,7 +106,7 @@ impl Recorder<'_> {
             .and_then(|items| items.first())
             .is_some_and(|snapshot| {
                 matches!(
-                    &snapshot.file.tree.items[snapshot.item.0 as usize].kind,
+                    &snapshot.item.kind,
                     ItemKind::Type {
                         body: TypeBody::Alias(_),
                         ..
@@ -122,8 +119,7 @@ impl Recorder<'_> {
     /// session. A path naming one of its generic parameters names no type.
     fn type_references(&mut self, definition: &DefPath) -> Option<Vec<DefPath>> {
         let snapshot = self.engine.items.get(definition)?.first()?.clone();
-        let file = snapshot.file.clone();
-        let item = &file.tree.items[snapshot.item.0 as usize];
+        let item = &snapshot.item;
         let ItemKind::Type { generics, body, .. } = &item.kind else {
             return None;
         };
@@ -145,7 +141,7 @@ impl Recorder<'_> {
         let mut references = vec![];
         while let Some(id) = pending.pop() {
             let mut children = vec![];
-            match &file.tree.types[id.0 as usize].kind {
+            match &snapshot.tree.types[id.0 as usize].kind {
                 TypeExprKind::Named { path, arguments } => {
                     children.extend(arguments.iter().filter_map(|a| match a {
                         TypeArgument::Type(t) => Some(*t),
@@ -158,12 +154,9 @@ impl Recorder<'_> {
                         && let Ok(target) = self.lookup(&context, path).result
                         && target.0.package == definition.0.package
                         && self.engine.items.get(&target).is_some_and(|items| {
-                            items.first().is_some_and(|s| {
-                                matches!(
-                                    s.file.tree.items[s.item.0 as usize].kind,
-                                    ItemKind::Type { .. }
-                                )
-                            })
+                            items
+                                .first()
+                                .is_some_and(|s| matches!(s.item.kind, ItemKind::Type { .. }))
                         })
                     {
                         references.push(target);

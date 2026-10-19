@@ -791,7 +791,7 @@ fn claimed_sendability(claim: Sendability) -> Fixture {
 /// crosses only when `T` does is not the proved mode.
 #[test]
 fn a_closure_type_claims_the_crossing_mode_of_its_captures() {
-    let t = TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(0)), TypeParamId(0));
+    let t = TypeParameterRef::body(scoped(NameSite::Item), TypeParamId(0));
     claimed_sendability(Sendability::Sendable).valid();
     claimed_sendability(Sendability::DependsOn(vec![t].into()))
         .broken(mismatch("closure sendability"));

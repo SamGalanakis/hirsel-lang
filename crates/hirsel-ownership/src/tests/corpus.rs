@@ -68,9 +68,9 @@ fn run_with_authority(
         .map_err(|e| format!("dependency-owned signature: {e}"))?;
     let mut diagnostics = vec![];
     let mut authority_diagnostics = vec![];
-    for item in &file.roots {
+    for syntax in &file.items {
         let resolution =
-            hirsel_resolve::resolve_item(&file, *item, &registry.index.clone(), &mut registry);
+            hirsel_resolve::resolve_item(&file, syntax, &registry.index.clone(), &mut registry);
         if let Some(d) = resolution.query.diagnostics.first() {
             return Err(format!(
                 "dependency-owned resolver: {} line {}",
@@ -78,12 +78,11 @@ fn run_with_authority(
                 map.location(d.primary).unwrap().line
             ));
         }
-        let signature = registry.signatures[&file.tree.items[item.0 as usize].definition].clone();
+        let signature = registry.signatures[&syntax.item.definition].clone();
         let output = hirsel_check::body::check_with_loop_protocols(
             hirsel_check::body::LoopInput {
                 body: hirsel_check::body::Input {
-                    tree: &file.tree,
-                    item: *item,
+                    syntax,
                     context: &support::context(),
                     resolution: &resolution,
                     signature: &signature,
@@ -118,8 +117,7 @@ fn run_with_authority(
             .into_iter()
             .collect::<hirsel_authority::Intrinsics>();
         let mut authority = hirsel_authority::check_file_with_clauses(
-            &file,
-            *item,
+            syntax,
             &signature,
             output.checked.value,
             &mut registry,
@@ -140,7 +138,7 @@ fn run_with_authority(
                 .iter()
                 .filter(|diagnostic| {
                     diagnostic.rule.as_str() == "MODE-2"
-                        && file.tree.expressions.iter().any(|expression| {
+                        && syntax.tree.expressions.iter().any(|expression| {
                             expression.origin.span == diagnostic.primary
                                 && matches!(
                                     expression.kind,
@@ -177,8 +175,7 @@ fn run_with_authority(
         authority_diagnostics.extend(authority.diagnostics);
         let mut checked = authority.body;
         let output = check_ownership_with_clauses(
-            &file.tree,
-            *item,
+            syntax,
             &signature,
             &mut checked,
             &rows,
@@ -192,15 +189,16 @@ fn run_with_authority(
         diagnostics.extend(output.diagnostics);
     }
     diagnostics.sort_by(|a, b| {
+        let (a_at, b_at) = (map.resolve(a.primary), map.resolve(b.primary));
         (
-            a.primary.start,
-            a.primary.end,
+            a_at.start,
+            a_at.end,
             a.rule.prefix(),
             suffix(a.rule.as_str()),
         )
             .cmp(&(
-                b.primary.start,
-                b.primary.end,
+                b_at.start,
+                b_at.end,
                 b.rule.prefix(),
                 suffix(b.rule.as_str()),
             ))
@@ -359,14 +357,14 @@ pub(super) fn source_diagnostics(source: &str) -> Vec<Diagnostic> {
 #[test]
 fn call_mode_obligations_identify_their_independent_arguments() {
     let source = "fn need(take x:Bytes, take y:Bytes) {}\nfn example(take x:Bytes in x, take y:Bytes in y) { need(take x, take y) }";
-    let diagnostics = source_diagnostics(source);
+    let (empty, _, _) = support::parse("", &[]);
+    let (diagnostics, map) = run(source, &support::registry(&empty)).unwrap();
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     let arguments: Vec<_> = diagnostics
         .iter()
         .map(|d| {
             assert_eq!(d.rule.as_str(), "MODE-1");
-            let span = d.secondary[0].span;
-            &source[span.start as usize..span.end as usize]
+            map.slice(d.secondary[0].span).unwrap()
         })
         .collect();
     assert_eq!(arguments, vec!["take x", "take y"]);

@@ -49,9 +49,9 @@ fn wide_record_match_arms_check_in_linear_work() {
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             let fill = &parsed
                 .value
-                .tree
                 .items
                 .iter()
+                .map(|syntax| &syntax.item)
                 .find(|item| item.definition.0.name == "fill")
                 .unwrap()
                 .definition;

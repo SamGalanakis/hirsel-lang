@@ -5,8 +5,9 @@
 hirsel_guard::install!();
 
 use hirsel_intern::Symbol;
-use hirsel_span::{FileId, Span};
+use hirsel_span::{Anchor, FileId, Span};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 mod ids;
 mod origins;
 
@@ -130,8 +131,8 @@ macro_rules! ids { ($($name:ident),* $(,)?) => {$(
     #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
     pub struct $name(pub u32);
 )*}; }
-ids!(TokenId, ItemId, ExprId, PatternId, TypeExprId, StmtId);
-/// Half-open indices into a file's complete token tape (LANG-1).
+ids!(TokenId, ExprId, PatternId, TypeExprId, StmtId);
+/// Half-open indices into one item's token tape (LANG-1).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TokenRange {
     pub start: u32,
@@ -960,11 +961,10 @@ pub enum AnalysisSite {
 }
 /// `@analysis(name: payload)` (PS-17): a fact owned by an out-of-process
 /// analysis. The compiler parses, formats and exports it and reads it for
-/// nothing else, so it lives beside the tree, never inside a declaration node
-/// (PS-19).
+/// nothing else, so it lives beside its item's tree, never inside a declaration
+/// node (PS-19).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisAnnotation {
-    pub item: ItemId,
     pub site: AnalysisSite,
     /// The analysis's dotted name, such as `taint` or `acme.units`.
     pub name: String,
@@ -974,16 +974,14 @@ pub struct AnalysisAnnotation {
     pub spaced: Vec<bool>,
     pub origin: Origin,
 }
-/// Item text hash covers owned trivia and exact text; identity is a manifest-qualified path (PROG-5).
+/// A top-level declaration; identity is a manifest-qualified path (PROG-5).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
     /// Exact declaration name, including for duplicate diagnostics (LANG-7).
     pub name_span: Span,
     pub origin: Origin,
-    pub owned_tokens: TokenRange,
     pub name: Symbol,
     pub definition: DefPath,
-    pub text_hash: ContentHash,
     pub visibility: Visibility,
     pub attributes: Vec<Attribute>,
     pub kind: ItemKind,
@@ -1012,10 +1010,13 @@ pub struct RepeatLiteral {
     pub count: ExprId,
     pub evaluated_count: ExprId,
 }
-/// Owning AST arenas. All IDs address these Vecs; no AST node borrows source storage (LANG-1).
+/// One top-level item's owning AST arenas and token tape. All IDs address these
+/// Vecs, so they are item-local; no AST node borrows source storage (LANG-1).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SyntaxTree {
-    pub items: Vec<Item>,
+    /// The tokens the item owns, leading trivia and trailing same-line comment
+    /// included, with spans relative to the item's anchor.
+    pub tokens: Vec<Token>,
     pub expressions: Vec<Expr>,
     pub statements: Vec<Stmt>,
     pub patterns: Vec<Pattern>,
@@ -1250,15 +1251,181 @@ impl SyntaxTree {
         out
     }
 }
+/// One top-level item occurrence with its own arenas. Nothing in it depends on
+/// where the item stands: its IDs are item-local and its spans are relative to
+/// its anchor, so inserting other items or moving it between files keeps it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemSyntax {
+    pub item: Item,
+    pub tree: SyntaxTree,
+    pub anchor: Anchor,
+    /// Hashes the exact bytes of the item's owned tokens, including attributes,
+    /// contracts and drop; no newline normalization.
+    pub text_hash: ContentHash,
+    /// Ordinal among this DefPath's candidates, in (file path, position) order.
+    pub occurrence: u32,
+}
+impl ItemSyntax {
+    /// The owner of the lexical sites in this item.
+    pub fn owner(&self) -> LexicalOwner {
+        LexicalOwner {
+            def: DefId::intern(&self.item.definition),
+            occurrence: self.occurrence,
+        }
+    }
+    /// Make every span relative to `anchor` instead of this item's own: a
+    /// re-parsed item takes over its predecessor's anchor, so results that
+    /// survive the edit keep naming the same place.
+    pub fn reanchor(&mut self, anchor: Anchor) {
+        let from = self.anchor;
+        let span = &mut |s: &mut Span| {
+            if s.anchor == from {
+                s.anchor = anchor;
+            }
+        };
+        fn attributes(attributes: &mut [Attribute], span: &mut impl FnMut(&mut Span)) {
+            for attribute in attributes {
+                span(&mut attribute.origin.span);
+                for argument in &mut attribute.arguments {
+                    match argument {
+                        AttributeArgument::LoopSource(s) => span(&mut s.origin.span),
+                        AttributeArgument::Format(s) => span(&mut s.origin.span),
+                        AttributeArgument::StatePromise(s) => span(&mut s.origin.span),
+                        _ => (),
+                    }
+                }
+            }
+        }
+        let tree = &mut self.tree;
+        for token in &mut tree.tokens {
+            span(&mut token.span);
+        }
+        for e in &mut tree.expressions {
+            span(&mut e.origin.span);
+            if let ExprKind::Closure { signature, .. } = &mut e.kind {
+                attributes(&mut signature.attributes, span);
+            }
+        }
+        for s in &mut tree.statements {
+            span(&mut s.origin.span);
+            if let StmtKind::Function { signature, .. } = &mut s.kind {
+                attributes(&mut signature.attributes, span);
+            }
+        }
+        for p in &mut tree.patterns {
+            span(&mut p.origin.span);
+        }
+        for t in &mut tree.types {
+            span(&mut t.origin.span);
+            match &mut t.kind {
+                TypeExprKind::Function(signature) => attributes(&mut signature.attributes, span),
+                TypeExprKind::Qualified {
+                    relation: Some(relation),
+                    ..
+                } => span(&mut relation.origin.span),
+                _ => (),
+            }
+        }
+        for g in &mut tree.groups {
+            span(&mut g.origin.span);
+        }
+        let item = &mut self.item;
+        span(&mut item.name_span);
+        span(&mut item.origin.span);
+        attributes(&mut item.attributes, span);
+        match &mut item.kind {
+            ItemKind::Function { signature, .. } => attributes(&mut signature.attributes, span),
+            ItemKind::Type { body, .. } => match body {
+                TypeBody::Record(fields) => {
+                    for field in fields {
+                        span(&mut field.origin.span);
+                    }
+                }
+                TypeBody::Distinct { field, .. } => span(&mut field.origin.span),
+                _ => (),
+            },
+            ItemKind::Const { .. } => (),
+        }
+        if let Some(Generated::Body(names)) = &mut item.generated {
+            for (_, site) in names {
+                span(site);
+            }
+        }
+        self.anchor = anchor;
+    }
+}
+/// The definition occurrence whose item-local syntax a lexical site belongs to.
+/// Persisted as (DefPath, occurrence).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct LexicalOwner {
+    pub def: DefId,
+    pub occurrence: u32,
+}
+impl serde::Serialize for LexicalOwner {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&(self.def.path(), self.occurrence), s)
+    }
+}
+impl<'de> serde::Deserialize<'de> for LexicalOwner {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let (path, occurrence): (DefPath, u32) = serde::Deserialize::deserialize(d)?;
+        Ok(Self {
+            def: DefId::intern(&path),
+            occurrence,
+        })
+    }
+}
+/// A lexical site inside one item's arenas. `Item` is the item itself.
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
+pub enum NameSite {
+    Expression(ExprId),
+    Pattern(PatternId),
+    Type(TypeExprId),
+    Statement(StmtId),
+    Item,
+}
+/// A lexical site qualified by its owner: how type rows and anything crossing a
+/// definition boundary name a site.
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
+pub struct SiteRef {
+    pub owner: LexicalOwner,
+    pub site: NameSite,
+}
+impl LexicalOwner {
+    /// The first, and unless LANG-7 rejects duplicates the only, occurrence of `path`.
+    pub fn first(path: &DefPath) -> Self {
+        Self {
+            def: DefId::intern(path),
+            occurrence: 0,
+        }
+    }
+    pub const fn site(self, site: NameSite) -> SiteRef {
+        SiteRef { owner: self, site }
+    }
+}
 /// Parser output retains invalid tokens and orphan/EOF trivia for round-trip formatting (LANG-1).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyntaxFile {
     /// Includes recovery diagnostics which have no Error node.
     pub has_syntax_errors: bool,
     pub file: FileId,
+    /// Top-level items in source order; their owned tokens tile the tape's start.
+    pub items: Vec<Arc<ItemSyntax>>,
+    /// The tokens after the last item's: trailing trivia and EOF, file-anchored.
     pub tokens: Vec<Token>,
-    pub tree: SyntaxTree,
-    pub roots: Vec<ItemId>,
+}
+impl SyntaxFile {
+    /// The complete token tape, in source order: every source byte once (LANG-1).
+    pub fn tape(&self) -> impl Iterator<Item = &Token> {
+        self.items
+            .iter()
+            .flat_map(|item| &item.tree.tokens)
+            .chain(&self.tokens)
+    }
 }
 
 #[cfg(test)]
@@ -1320,14 +1487,11 @@ mod tests {
                 tail: Some(ExprId(0)),
             },
         });
-        tree.items.push(Item {
+        let item = Item {
             name_span: Default::default(),
-
             origin,
-            owned_tokens: TokenRange::default(),
             name: Symbol::intern("main"),
             definition: path("main"),
-            text_hash: ContentHash::of_bytes(b"fn main() { () }"),
             visibility: Visibility::Public,
             attributes: vec![],
             kind: ItemKind::Function {
@@ -1336,7 +1500,14 @@ mod tests {
                 abi: None,
             },
             generated: None,
-        });
+        };
+        assert!(matches!(
+            item.kind,
+            ItemKind::Function {
+                body: Some(ExprId(1)),
+                ..
+            }
+        ));
         assert_eq!(tree.expressions.len(), 2);
         assert_ne!(path("a").fingerprint(), path("b").fingerprint());
         assert_ne!(
@@ -1352,14 +1523,6 @@ pub struct FileContext {
     pub package: PackageId,
     pub modules: Vec<String>,
 }
-/// One item in an immutable parsed file snapshot (PROG-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DefinitionSource {
-    pub definition: DefPath,
-    pub file: FileId,
-    pub item: ItemId,
-    pub text_hash: ContentHash,
-}
 
 #[cfg(test)]
 mod revision_tests {
@@ -1367,17 +1530,15 @@ mod revision_tests {
     #[test]
     fn v20_header_facts_and_parse_status_survive_snapshot_transport() {
         let name = Symbol::intern("Marker");
-        let span = Span::new(FileId(0), 16, 22).unwrap();
+        let span = Span::new(Anchor(1), 16, 22).unwrap();
         let mut item = Item {
             name_span: span,
             origin: Origin {
                 span,
                 tokens: TokenRange::default(),
             },
-            owned_tokens: TokenRange::default(),
             name,
             definition: super::tests::path("Marker"),
-            text_hash: ContentHash::default(),
             visibility: Visibility::PublicOpaque,
             attributes: vec![],
             kind: ItemKind::Type {
@@ -1415,14 +1576,16 @@ mod revision_tests {
             has_syntax_errors: true,
             file: FileId(0),
             tokens: vec![],
-            roots: vec![ItemId(0)],
-            tree: SyntaxTree {
-                items: vec![stated],
-                ..Default::default()
-            },
+            items: vec![Arc::new(ItemSyntax {
+                item: stated,
+                tree: SyntaxTree::default(),
+                anchor: Anchor(1),
+                text_hash: ContentHash::default(),
+                occurrence: 0,
+            })],
         };
-        assert_eq!(file.tree.items[0].name.as_str(), "Marker");
-        assert_eq!(file.tree.items[0].name_span, span);
+        assert_eq!(file.items[0].item.name.as_str(), "Marker");
+        assert_eq!(file.items[0].item.name_span, span);
         assert!(file.has_syntax_errors);
         assert_eq!(file, file.clone());
     }

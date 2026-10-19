@@ -118,8 +118,8 @@ impl QueryEngine {
                 executed: Default::default(),
             });
         }
-        let (file, item) = self.parse_definition(path)?.value;
-        self.constant_at(path, file.tree.items[item.0 as usize].name_span)
+        let syntax = self.parse_definition(path)?.value;
+        self.constant_at(path, syntax.item.name_span)
     }
     fn constant_at(
         &mut self,
@@ -179,20 +179,15 @@ impl QueryEngine {
         self.execution_stack.push(Default::default());
         self.read_implementation(path);
         let result = (|| {
-            let (file, item) = self.parse_definition(path)?.value;
-            if !matches!(
-                file.tree.items[item.0 as usize].kind,
-                hirsel_syntax::ItemKind::Const { .. }
-            ) {
+            let syntax = self.parse_definition(path)?.value;
+            if !matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. }) {
                 return Err(operational("materialization requested for a non-constant"));
             }
             let signature = self.item_signature(path)?.value;
             let body = self.mode_query(path)?;
             self.read_execution_signatures(&body.dependencies);
             let body = &body.value;
-            let hirsel_syntax::ItemKind::Const { value, .. } =
-                body.typed.file.tree.items[body.typed.item.0 as usize].kind
-            else {
+            let hirsel_syntax::ItemKind::Const { value, .. } = body.typed.syntax.item.kind else {
                 return Err(operational("constant artifact has a non-constant owner"));
             };
             let constants = self.prepare_values(body, &signature)?;
@@ -255,7 +250,7 @@ impl QueryEngine {
         analyzed: &AnalyzedBody,
         signature: &Signature,
     ) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
-        let file = &analyzed.typed.file;
+        let file = &analyzed.typed.syntax;
         let checked = &analyzed.typed.checked;
         let mut constants = vec![];
         self.register_staged(analyzed)?;
@@ -301,9 +296,7 @@ impl QueryEngine {
             (s.end - s.start, s.start)
         });
         for (expression, child, ty) in expressions {
-            if !hirsel_check_protocol::body::comptime_inputs(&file.tree, checked, expression)
-                .is_empty()
-            {
+            if !hirsel_check_protocol::body::comptime_inputs(file, checked, expression).is_empty() {
                 continue;
             }
             let value =
@@ -385,7 +378,7 @@ impl QueryEngine {
             value,
             &types,
             ty,
-            analyzed.typed.file.tree.expressions[expression.0 as usize]
+            analyzed.typed.syntax.tree.expressions[expression.0 as usize]
                 .origin
                 .span,
         )
@@ -408,7 +401,7 @@ impl QueryEngine {
             .compiler_state
             .as_ref()
             .ok_or(QueryError::NotImplemented)?;
-        let file = &analyzed.typed.file;
+        let file = &analyzed.typed.syntax;
         let lowering = self
             .adapters
             .lowering
@@ -537,10 +530,10 @@ impl QueryEngine {
             .iter()
             .filter(|row| {
                 matches!(
-                    analyzed.typed.file.tree.expressions[row.expression.0 as usize].kind,
+                    analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
                     ExprKind::Comptime(_)
                 ) && !hirsel_check_protocol::body::comptime_inputs(
-                    &analyzed.typed.file.tree,
+                    &analyzed.typed.syntax,
                     checked,
                     row.expression,
                 )
@@ -588,22 +581,20 @@ impl QueryEngine {
         let typed = &analyzed.typed;
         for row in &typed.checked.expressions {
             if !matches!(
-                typed.file.tree.expressions[row.expression.0 as usize].kind,
+                typed.syntax.tree.expressions[row.expression.0 as usize].kind,
                 ExprKind::Comptime(_)
             ) {
                 continue;
             }
             let inputs = hirsel_check_protocol::body::comptime_inputs(
-                &typed.file.tree,
+                &typed.syntax,
                 &typed.checked,
                 row.expression,
             );
             if inputs.is_empty() {
                 continue;
             }
-            let owner = typed.file.tree.items[typed.item.0 as usize]
-                .definition
-                .clone();
+            let owner = typed.syntax.item.definition.clone();
             let path =
                 hirsel_check_protocol::body::comptime_path(&owner, &typed.checked, row.expression);
             let mut signature = self.item_signature(&owner)?.value.as_ref().clone();
@@ -684,7 +675,7 @@ impl QueryEngine {
         }
         let mut body = (*self.mode_query(&constant.owner)?).clone();
         self.prepare_staged_types(&mut body.value)?;
-        let file = &body.value.typed.file;
+        let file = &body.value.typed.syntax;
         let site = file.tree.expressions[constant.expression.0 as usize]
             .origin
             .span;
@@ -899,9 +890,10 @@ fn specialize_sizes(
     Ok(())
 }
 
-fn source_site(tree: &hirsel_syntax::SyntaxTree, site: NameSite) -> Span {
+fn source_site(syntax: &hirsel_syntax::ItemSyntax, site: NameSite) -> Span {
+    let tree = &syntax.tree;
     match site {
-        NameSite::Item(id) => tree.items[id.0 as usize].origin.span,
+        NameSite::Item => syntax.item.origin.span,
         NameSite::Statement(id) => tree.statements[id.0 as usize].origin.span,
         NameSite::Expression(id) => tree.expressions[id.0 as usize].origin.span,
         NameSite::Pattern(id) => tree.patterns[id.0 as usize].origin.span,
@@ -925,12 +917,12 @@ impl QueryEngine {
             if signature.generics().is_empty()
                 && !matches!(signature.kind, SignatureKind::Const { .. })
             {
-                let scope = NameSite::Item(body.value.item);
+                let scope = NameSite::Item;
                 pending.push_back((
                     path.clone(),
                     scope,
                     BTreeMap::<SizeParameterRef, u64>::new(),
-                    source_site(&body.value.file.tree, scope),
+                    source_site(&body.value.syntax, scope),
                 ));
             }
         }
@@ -945,14 +937,15 @@ impl QueryEngine {
             let analyzed = self.mode_query(&path)?;
             let typed = &analyzed.value.typed;
             self.register_staged(&analyzed.value)?;
-            let tree = &typed.file.tree;
+            let tree = &typed.syntax.tree;
+            let syntax = &*typed.syntax;
             let checked = &typed.checked;
             let frames: BTreeSet<_> = typed
                 .plans
                 .functions
                 .iter()
                 .map(|frame| frame.owner)
-                .chain([NameSite::Item(typed.item)])
+                .chain([NameSite::Item])
                 .collect();
             let contains =
                 |outer: Span, inner: Span| outer.start <= inner.start && outer.end >= inner.end;
@@ -961,10 +954,10 @@ impl QueryEngine {
                     .iter()
                     .copied()
                     .filter(|frame| {
-                        Some(*frame) != exclude && contains(source_site(tree, *frame), at)
+                        Some(*frame) != exclude && contains(source_site(syntax, *frame), at)
                     })
                     .min_by_key(|frame| {
-                        let span = source_site(tree, *frame);
+                        let span = source_site(syntax, *frame);
                         span.end - span.start
                     })
             };
@@ -977,14 +970,14 @@ impl QueryEngine {
                         ExprKind::Comptime(_)
                     )
                 })
-                .map(|row| source_site(tree, NameSite::Expression(row.expression)))
+                .map(|row| source_site(syntax, NameSite::Expression(row.expression)))
                 .collect();
             let staged_at = |at| staged_regions.iter().any(|region| contains(*region, at));
             for frame in &frames {
                 if *frame == scope {
                     continue;
                 }
-                let at = source_site(tree, *frame);
+                let at = source_site(syntax, *frame);
                 if frame_at(at, Some(*frame)) == Some(scope)
                     && !staged_at(at)
                     && !checked
@@ -1002,7 +995,7 @@ impl QueryEngine {
                 .filter(|(_, constant)| {
                     constant.owner == path
                         && frame_at(
-                            source_site(tree, NameSite::Expression(constant.expression)),
+                            source_site(syntax, NameSite::Expression(constant.expression)),
                             None,
                         ) == Some(scope)
                 })
@@ -1045,11 +1038,13 @@ impl QueryEngine {
                 )
             }));
             for (expression, target, arguments) in calls {
-                let at = source_site(tree, NameSite::Expression(expression));
+                let at = source_site(syntax, NameSite::Expression(expression));
                 if frame_at(at, None) != Some(scope) || staged_at(at) {
                     continue;
                 }
-                let (callee, binder, mut actuals) = match target {
+                // The binder's owner: the callee's item, or this body's for
+                // a local function.
+                let (callee, owner, binder, mut actuals) = match target {
                     hirsel_types::CallTarget::Definition(callee) => {
                         if self.definition_items(&callee).is_err() {
                             continue;
@@ -1067,7 +1062,8 @@ impl QueryEngine {
                         let body = self.mode_query(&callee)?;
                         (
                             callee,
-                            NameSite::Item(body.value.typed.item),
+                            body.value.typed.syntax.owner(),
+                            NameSite::Item,
                             BTreeMap::new(),
                         )
                     }
@@ -1102,7 +1098,7 @@ impl QueryEngine {
                                     .then_some(NameSite::Expression(value))
                             });
                         let Some(binder) = binder else { continue };
-                        (path.clone(), binder, bindings.clone())
+                        (path.clone(), syntax.owner(), binder, bindings.clone())
                     }
                     _ => continue,
                 };
@@ -1115,7 +1111,7 @@ impl QueryEngine {
                         .ok_or_else(|| operational("selected call has an unbound size"))?;
                         actuals.insert(
                             SizeParameterRef::body(
-                                binder,
+                                owner.site(binder),
                                 hirsel_types::SizeParamId(ordinal as u32),
                             ),
                             value,

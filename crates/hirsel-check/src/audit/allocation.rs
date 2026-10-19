@@ -212,8 +212,8 @@ impl<'a> Audit<'a, '_> {
         Ok(false)
     }
     pub(super) fn allocations(&mut self) -> Result<(), QueryError> {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
-        let owner = NameSite::Item(self.input.item);
+        let item = &self.input.syntax.item;
+        let owner = NameSite::Item;
         let mut proofs = LocalProofs::new();
         let mut result = EffectResult::default();
         match (&item.kind, &self.input.signature.kind) {
@@ -277,7 +277,7 @@ impl<'a> Audit<'a, '_> {
                             != DropAllocation::NoAlloc
                     {
                         result.add(
-                            self.input.tree.expressions[drop.body.0 as usize]
+                            self.input.syntax.tree.expressions[drop.body.0 as usize]
                                 .origin
                                 .span,
                             AllocationReasonKind::Fields,
@@ -323,15 +323,16 @@ impl<'a> Audit<'a, '_> {
     }
     fn function_syntax(&self, owner: &NameSite) -> Option<&'a ast::FunctionSyntax> {
         match owner {
-            NameSite::Item(i) => match &self.input.tree.items[i.0 as usize].kind {
+            NameSite::Item => match &self.input.syntax.item.kind {
                 ast::ItemKind::Function { signature, .. } => Some(signature),
                 _ => None,
             },
-            NameSite::Statement(s) => match &self.input.tree.statements[s.0 as usize].kind {
+            NameSite::Statement(s) => match &self.input.syntax.tree.statements[s.0 as usize].kind {
                 ast::StmtKind::Function { signature, .. } => Some(signature),
                 _ => None,
             },
-            NameSite::Expression(e) => match &self.input.tree.expressions[e.0 as usize].kind {
+            NameSite::Expression(e) => match &self.input.syntax.tree.expressions[e.0 as usize].kind
+            {
                 ast::ExprKind::Closure { signature, .. } => Some(signature),
                 _ => None,
             },
@@ -408,7 +409,7 @@ impl<'a> Audit<'a, '_> {
         let can_fail_contract = self.function_syntax(owner).is_some_and(|s| {
             s.contracts.iter().any(|c| {
                 !matches!(
-                    self.input.tree.expressions[c.expression.0 as usize].kind,
+                    self.input.syntax.tree.expressions[c.expression.0 as usize].kind,
                     ast::ExprKind::Literal(ast::Literal::Bool(true))
                 )
             })
@@ -450,7 +451,9 @@ impl<'a> Audit<'a, '_> {
                             Some(&(block, index)) => {
                                 let ast::ExprKind::Block {
                                     statements, tail, ..
-                                } = self.input.tree.expressions[block.0 as usize].kind.clone()
+                                } = self.input.syntax.tree.expressions[block.0 as usize]
+                                    .kind
+                                    .clone()
                                 else {
                                     unreachable!()
                                 };
@@ -480,16 +483,20 @@ impl<'a> Audit<'a, '_> {
                 let syntax = self.function_syntax(owner);
                 syntax
                     .and_then(|s| s.parameters.get(p.0 as usize))
-                    .map(|p| self.input.tree.types[p.ty.0 as usize].origin.span)
+                    .map(|p| self.input.syntax.tree.types[p.ty.0 as usize].origin.span)
             } else {
                 None
             };
             let span = parameter_type.unwrap_or_else(|| match binding.site {
-                NameSite::Pattern(p) => self.input.tree.patterns[p.0 as usize].origin.span,
-                NameSite::Type(t) => self.input.tree.types[t.0 as usize].origin.span,
-                NameSite::Item(i) => self.input.tree.items[i.0 as usize].name_span,
-                NameSite::Expression(e) => self.input.tree.expressions[e.0 as usize].origin.span,
-                NameSite::Statement(s) => self.input.tree.statements[s.0 as usize].origin.span,
+                NameSite::Pattern(p) => self.input.syntax.tree.patterns[p.0 as usize].origin.span,
+                NameSite::Type(t) => self.input.syntax.tree.types[t.0 as usize].origin.span,
+                NameSite::Item => self.input.syntax.item.name_span,
+                NameSite::Expression(e) => {
+                    self.input.syntax.tree.expressions[e.0 as usize].origin.span
+                }
+                NameSite::Statement(s) => {
+                    self.input.syntax.tree.statements[s.0 as usize].origin.span
+                }
             });
             let summary = ty.drop_allocation.clone();
             result.add(
@@ -511,11 +518,11 @@ impl<'a> Audit<'a, '_> {
         let mut lets = BTreeMap::new();
         let mut todo = vec![root];
         while let Some(e) = todo.pop() {
-            let kind = &self.input.tree.expressions[e.0 as usize].kind;
+            let kind = &self.input.syntax.tree.expressions[e.0 as usize].kind;
             match kind {
                 ast::ExprKind::Block { statements, .. } => {
                     for (index, statement) in statements.iter().enumerate() {
-                        match &self.input.tree.statements[statement.0 as usize].kind {
+                        match &self.input.syntax.tree.statements[statement.0 as usize].kind {
                             ast::StmtKind::Let {
                                 pattern,
                                 value,
@@ -525,7 +532,7 @@ impl<'a> Audit<'a, '_> {
                                 let mut patterns = vec![*pattern];
                                 while let Some(p) = patterns.pop() {
                                     lets.insert(p, (e, index));
-                                    patterns.extend(self.input.tree.pattern_children(p));
+                                    patterns.extend(self.input.syntax.tree.pattern_children(p));
                                 }
                                 todo.push(*value);
                                 todo.extend(*otherwise);
@@ -556,7 +563,10 @@ impl<'a> Audit<'a, '_> {
         if self.transferred_name(e).as_ref() == Some(name) {
             return Ownership::Yielded;
         }
-        match self.input.tree.expressions[e.0 as usize].kind.clone() {
+        match self.input.syntax.tree.expressions[e.0 as usize]
+            .kind
+            .clone()
+        {
             // A labelled block's breaks leave from inside its statements:
             // not followed here (LANG-11).
             ast::ExprKind::Block { label: Some(_), .. } => Ownership::Exposed,
@@ -633,7 +643,7 @@ impl<'a> Audit<'a, '_> {
         tail: Option<ExprId>,
     ) -> Ownership {
         for statement in statements {
-            let step = match &self.input.tree.statements[statement.0 as usize].kind {
+            let step = match &self.input.syntax.tree.statements[statement.0 as usize].kind {
                 ast::StmtKind::Expr(value) => self.ownership(name, *value).discarded(),
                 // A pattern that binds every part owns what it receives.
                 ast::StmtKind::Let { pattern, value, .. } => {
@@ -709,10 +719,12 @@ impl<'a> Audit<'a, '_> {
         let mut result = EffectResult::default();
         let mut todo = vec![(root, can_fail)];
         // A break value is destroyed exactly when its labelled block's value is (LANG-11).
-        let exits = self.input.tree.block_exits(root);
+        let exits = self.input.syntax.tree.block_exits(root);
         let mut destroyed_blocks = BTreeMap::new();
         while let Some((e, destroyed)) = todo.pop() {
-            let kind = self.input.tree.expressions[e.0 as usize].kind.clone();
+            let kind = self.input.syntax.tree.expressions[e.0 as usize]
+                .kind
+                .clone();
             // A read of a binding's storage or of a constant destroys nothing.
             let storage = self.source_place(e).is_some_and(|place| match place.root {
                 SourceRoot::Binding { .. } => matches!(
@@ -758,7 +770,7 @@ impl<'a> Audit<'a, '_> {
                     };
                     if !self.summary_allowed(&summary) {
                         result.add(
-                            self.input.tree.expressions[e.0 as usize].origin.span,
+                            self.input.syntax.tree.expressions[e.0 as usize].origin.span,
                             AllocationReasonKind::Cleanup {
                                 summary,
                                 notes: self.destruction_notes(ty)?,
@@ -780,7 +792,7 @@ impl<'a> Audit<'a, '_> {
                         todo.push((tail, destroyed));
                     }
                     for statement in statements {
-                        match &self.input.tree.statements[statement.0 as usize].kind {
+                        match &self.input.syntax.tree.statements[statement.0 as usize].kind {
                             ast::StmtKind::Expr(value) => todo.push((*value, true)),
                             ast::StmtKind::Let {
                                 pattern,
@@ -899,7 +911,7 @@ impl<'a> Audit<'a, '_> {
     fn discards(&self, pattern: ast::PatternId) -> bool {
         let mut todo = vec![pattern];
         while let Some(p) = todo.pop() {
-            match &self.input.tree.patterns[p.0 as usize].kind {
+            match &self.input.syntax.tree.patterns[p.0 as usize].kind {
                 ast::PatternKind::Wildcard => return true,
                 ast::PatternKind::Tuple(parts) | ast::PatternKind::Or(parts) => todo.extend(parts),
                 ast::PatternKind::Constructor { fields, rest, .. } => {
@@ -916,7 +928,10 @@ impl<'a> Audit<'a, '_> {
     /// Whether evaluating an expression may fail. Only reads, literals,
     /// closures and constructions of types that check no fact never fail.
     fn may_fail(&mut self, e: ExprId) -> bool {
-        match self.input.tree.expressions[e.0 as usize].kind.clone() {
+        match self.input.syntax.tree.expressions[e.0 as usize]
+            .kind
+            .clone()
+        {
             ast::ExprKind::Literal(_) | ast::ExprKind::Path(_) | ast::ExprKind::Closure { .. } => {
                 false
             }
@@ -946,7 +961,7 @@ impl<'a> Audit<'a, '_> {
         // resolve contract calls through declarations, never through implementations.
         let mut todo = vec![root];
         while let Some(e) = todo.pop() {
-            let expression = &self.input.tree.expressions[e.0 as usize];
+            let expression = &self.input.syntax.tree.expressions[e.0 as usize];
             if let ast::ExprKind::Call { callee, .. } = expression.kind {
                 let resolved = self.source_name(callee).map(|(_, n)| n.clone());
                 let allocation = match resolved {
@@ -1011,7 +1026,7 @@ impl<'a> Audit<'a, '_> {
         proofs: &mut LocalProofs,
     ) -> Result<FrameProof, QueryError> {
         let ast::ExprKind::Closure { body, .. } =
-            self.input.tree.expressions[literal.0 as usize].kind
+            self.input.syntax.tree.expressions[literal.0 as usize].kind
         else {
             unreachable!("local inference requires an immediate closure literal");
         };
@@ -1037,7 +1052,9 @@ impl<'a> Audit<'a, '_> {
         else {
             return Ok(());
         };
-        let span = self.input.tree.expressions[source.0 as usize].origin.span;
+        let span = self.input.syntax.tree.expressions[source.0 as usize]
+            .origin
+            .span;
         let (calls, cursor) = match plan.kind {
             ForPlanKind::Cursor { cursor } => (vec![cursor.open, cursor.next], Some(cursor.cursor)),
             ForPlanKind::Direct { execution, .. } => match execution {
@@ -1045,7 +1062,7 @@ impl<'a> Audit<'a, '_> {
                     // Taking an iterator transfers the existing state into
                     // loop storage; this protocol creates no separate cursor.
                     let taken = matches!(
-                        self.input.tree.expressions[source.0 as usize].kind,
+                        self.input.syntax.tree.expressions[source.0 as usize].kind,
                         ast::ExprKind::Unary {
                             op: ast::UnaryOp::Take,
                             ..
@@ -1104,7 +1121,7 @@ impl<'a> Audit<'a, '_> {
             if !seen.insert((e, prohibited, escaping)) {
                 continue;
             }
-            let expression = &self.input.tree.expressions[e.0 as usize];
+            let expression = &self.input.syntax.tree.expressions[e.0 as usize];
             let Some(ty) = self.expression_type(e) else {
                 continue;
             };
@@ -1182,7 +1199,7 @@ impl<'a> Audit<'a, '_> {
                         todo.push((*tail, prohibited, escaping));
                     }
                     for s in statements {
-                        let statement = &self.input.tree.statements[s.0 as usize];
+                        let statement = &self.input.syntax.tree.statements[s.0 as usize];
                         match &statement.kind {
                             // A binding written `in heap` receives a global value
                             // that may outlive this frame (MEM-5, MEM-10).

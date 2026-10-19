@@ -25,7 +25,7 @@ fn expiration_visits_only_dependencies_of_the_ended_owner() {
                     hirsel_intern::work::Counter::ValidateOriginDependencyRows,
                 );
                 let output = engine
-                    .lower_to_tir(&parsed.value.tree.items[0].definition)
+                    .lower_to_tir(&parsed.value.items[0].item.definition)
                     .unwrap();
                 assert!(output.diagnostics.is_empty());
                 let rows = hirsel_intern::work::read(

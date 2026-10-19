@@ -71,7 +71,7 @@ pub fn local_result_generics(types: &TypeStore, function: &FunctionType) -> Vec<
 pub fn local_result_permissions(
     types: &TypeStore,
     function: &FunctionType,
-    scope: NameSite,
+    scope: SiteRef,
 ) -> BTreeSet<TypeParameterRef> {
     local_result_generics(types, function)
         .iter()

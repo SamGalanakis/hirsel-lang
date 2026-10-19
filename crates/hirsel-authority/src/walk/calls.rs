@@ -189,7 +189,7 @@ impl Checker<'_> {
         let TypeKind::Function(f) = self.out.body.types.get(ty).unwrap().kind.clone() else {
             return;
         };
-        let scope = NameSite::Expression(e);
+        let scope = self.lexical.site(NameSite::Expression(e));
         let mut allocation_targets = BTreeMap::new();
         let mut origins = BTreeMap::new();
         let mut actuals = BTreeMap::new();
@@ -263,7 +263,7 @@ impl Checker<'_> {
         if !matches!(self.resolved.get(&e), Some(ResolvedName::Definition(_))) {
             let formal = bind_parameter_scopes(&mut self.out.body.types, f.result, &[scope])
                 .expect("checked forwarding result scope");
-            self.out.result_types.push((scope, formal));
+            self.out.result_types.push((scope.site, formal));
         }
         if let Some(mut closure) = self.closures.get_mut(&e) {
             closure.result_evidence = Some(result);
@@ -1066,7 +1066,7 @@ impl Checker<'_> {
                 .get(&ParameterRef::bound(ParamId(i)))
                 .map(|o| (a, o.identity.root.clone()))
         }) {
-            if matches!(&origin, OriginRoot::Expression(x) if *x == a.value
+            if matches!(&origin, OriginRoot::Expression(_, x) if *x == a.value
                 || self.source_place(a.value).root == SourceRoot::Value(*x))
                 && !self.temporaries.contains(&origin)
             {
@@ -1403,7 +1403,7 @@ impl Checker<'_> {
                     // capability values inside it; their operation's input
                     // authority is checked by provision, not as ambient uses.
                     let ambient = if self.in_clause
-                        || matches!(frame.owner, NameSite::Item(_))
+                        || matches!(frame.owner, NameSite::Item)
                         || transparent && receipt_required == AuthoritySummary::Unknown
                     {
                         receipt_required.clone()
@@ -1437,7 +1437,7 @@ impl Checker<'_> {
                     // authority required beyond those inputs remains ambient.
                     let derived_inputs = !self.in_clause
                         && required != AuthoritySummary::Unknown
-                        && matches!(frame.owner, NameSite::Item(_))
+                        && matches!(frame.owner, NameSite::Item)
                         && arguments
                             .iter()
                             .all(|a| subset(&self.used(a.value), allowed))
@@ -2245,7 +2245,8 @@ impl Checker<'_> {
                             ResolvedName::Parameter(parameter) if b.owner == site => {
                                 AuthoritySummary::Known(
                                     vec![AuthorityTerm::Parameter(ParameterRef::body(
-                                        site, parameter,
+                                        self.lexical.site(site),
+                                        parameter,
                                     ))]
                                     .into(),
                                 )
@@ -2774,6 +2775,7 @@ impl Checker<'_> {
             && syntax.as_ref().is_some_and(|s| s.result.is_none());
         let scopes: Vec<_> = std::iter::once(owner)
             .chain(self.frames.iter().rev().map(|f| f.owner))
+            .map(|site| self.lexical.site(site))
             .collect();
         for p in &mut f.parameters {
             p.ty = bind_parameter_scopes(&mut self.out.body.types, p.ty, &scopes)
@@ -2835,7 +2837,7 @@ impl Checker<'_> {
             .as_ref()
             .map(|f| f.uses.clone())
             .unwrap_or_else(|| f.uses.clone());
-        let receipts = Frame::parameter_receipts(&capture_limit, owner);
+        let receipts = Frame::parameter_receipts(&capture_limit, self.lexical.site(owner));
         // Own parameters remain substitution selectors. Outer parameters are
         // captured values: publish their actual authority, as the body does.
         if let Uses::Only(summary) = &capture_limit {
@@ -2847,7 +2849,7 @@ impl Checker<'_> {
                         .fold(AuthoritySummary::inert(), |authority, term| {
                             let own = matches!(term, AuthorityTerm::Parameter(
                             ParameterRef::Body { scope, .. }
-                        ) if scope == owner);
+                        ) if scope == self.lexical.site(owner));
                             let selected = AuthoritySummary::Known(vec![term].into());
                             authority.join(if own {
                                 selected
@@ -2986,15 +2988,14 @@ impl Checker<'_> {
                     );
                     if self.out.diagnostics.len() > before {
                         if let Some(path) = seal {
+                            let declaration = self.provider.cite_name(&path);
                             let diagnostic = self.out.diagnostics.last_mut().unwrap();
                             diagnostic
                                 .notes
                                 .push(format!("capability declaration: {path}"));
-                            if let Some(declaration) =
-                                self.tree.items.iter().find(|item| item.definition == path)
-                            {
+                            if let Some(span) = declaration {
                                 diagnostic.secondary.push(Label {
-                                    span: declaration.name_span,
+                                    span,
                                     message: "declared capability".into(),
                                 });
                             }
@@ -3136,8 +3137,9 @@ impl Checker<'_> {
                 });
         }
         let refined = self.out.body.types.push(ty);
-        let refined = abstract_parameter_scope(&mut self.out.body.types, refined, owner)
-            .expect("checked callable binder");
+        let refined =
+            abstract_parameter_scope(&mut self.out.body.types, refined, self.lexical.site(owner))
+                .expect("checked callable binder");
         self.set_function_type(e, &owner, refined);
 
         self.closures.insert(
@@ -3302,14 +3304,18 @@ impl Checker<'_> {
             let mut row = self.out.body.types.get(refined).unwrap().clone();
             row.kind = TypeKind::Function(f.clone());
             let updated = self.out.body.types.push(row);
-            let updated = abstract_parameter_scope(&mut self.out.body.types, updated, owner)
-                .expect("checked inferred callable binder");
+            let updated = abstract_parameter_scope(
+                &mut self.out.body.types,
+                updated,
+                self.lexical.site(owner),
+            )
+            .expect("checked inferred callable binder");
             self.set_function_type(e, &owner, updated);
             if let Some(mut c) = self.closures.get_mut(&e) {
                 c.ty = updated;
             }
         }
-        let owner_site = owner.clone();
+        let owner_site = self.lexical.site(owner);
         let mut owned_brand = false;
         let mut stack = vec![f.result];
         let mut seen = BTreeSet::new();

@@ -40,21 +40,10 @@ fn normalize_inner(
     provider: &mut dyn SignatureProvider,
     failure: &std::cell::RefCell<Option<QueryError>>,
 ) -> Result<NormalizedDeclaration, QueryError> {
-    let item = input.tree.items.get(input.item.0 as usize).ok_or_else(|| {
-        diagnostic(
-            const { RuleId::of("LANG-6") },
-            Span::default(),
-            "missing item header",
-        )
-    })?;
+    let item = &input.syntax.item;
     let name_span = item.name_span;
     let duplicate = if input.declaration_sites.is_empty() {
-        input
-            .tree
-            .items
-            .iter()
-            .take(input.item.0 as usize)
-            .any(|previous| previous.definition == item.definition)
+        input.syntax.occurrence > 0
     } else {
         let index = input
             .declaration_sites
@@ -1224,19 +1213,24 @@ impl Normalizer<'_, '_> {
                 .modes
                 .relation
                 .has_environment()
-                || s.result.and_then(|t| written_local(self.input.tree, t)) == Some(true))
+                || s.result
+                    .and_then(|t| written_local(&self.input.syntax.tree, t))
+                    == Some(true))
         {
             return Err(diagnostic(
                 const { RuleId::of("MODE-1") },
                 s.result.map_or(self.span, |t| {
-                    self.input.tree.types[t.0 as usize].origin.span
+                    self.input.syntax.tree.types[t.0 as usize].origin.span
                 }),
                 "a named function has no environment: its local result names its sources, `in x`",
             ));
         }
         // MODE-1 (#72): a function type's `in env` alone may not narrow a
         // non-Plain parameter out of its result.
-        if closure && let Some(span) = s.result.and_then(|t| environment_alone(self.input.tree, t))
+        if closure
+            && let Some(span) = s
+                .result
+                .and_then(|t| environment_alone(&self.input.syntax.tree, t))
         {
             let candidates: Vec<String> = parameters
                 .iter()
@@ -1453,7 +1447,7 @@ impl Normalizer<'_, '_> {
         &mut self,
         path: &ast::DefPath,
     ) -> Result<Option<SignatureRef>, QueryError> {
-        if *path == self.input.tree.items[self.input.item.0 as usize].definition {
+        if *path == self.input.syntax.item.definition {
             // The current declaration is not published yet. Recursive nominal
             // proofs remain conservative until its representation is complete.
             return Ok(self.snapshots.get(path).cloned());
@@ -1493,9 +1487,7 @@ impl Normalizer<'_, '_> {
     /// only the declarations this item names, so load (and depend on) those first.
     /// A declaration that cannot be read stays absent and the proof conservative.
     fn load_schema_nominals(&mut self, root: TypeId) -> Result<(), QueryError> {
-        let own = self.input.tree.items[self.input.item.0 as usize]
-            .definition
-            .clone();
+        let own = self.input.syntax.item.definition.clone();
         let mut seen = BTreeSet::new();
         let mut pending: Vec<(Option<SignatureRef>, TypeId)> = vec![(None, root)];
         while let Some((owner, id)) = pending.pop() {
@@ -1556,6 +1548,7 @@ impl Normalizer<'_, '_> {
     fn ty(&mut self, id: ast::TypeExprId, pos: Position) -> Result<TypeId, QueryError> {
         let t = self
             .input
+            .syntax
             .tree
             .types
             .get(id.0 as usize)
@@ -1704,7 +1697,7 @@ impl Normalizer<'_, '_> {
                         id
                     } else {
                         let d = self.definition(path, Some(id))?;
-                        let own = &self.input.tree.items[self.input.item.0 as usize];
+                        let own = &self.input.syntax.item;
                         let s = if own.definition == d {
                             None
                         } else {
@@ -1831,7 +1824,7 @@ impl Normalizer<'_, '_> {
         {
             return Err(diagnostic(
                 const { RuleId::of("LANG-7") },
-                self.input.tree.types[id.0 as usize].origin.span,
+                self.input.syntax.tree.types[id.0 as usize].origin.span,
                 PART_LOCALITY,
             ));
         }
@@ -1844,7 +1837,7 @@ impl Normalizer<'_, '_> {
                 if let Some(ast::TypeExpr {
                     kind: ast::TypeExprKind::Named { path, arguments },
                     ..
-                }) = self.input.tree.types.get(id.0 as usize)
+                }) = self.input.syntax.tree.types.get(id.0 as usize)
                 {
                     if arguments.is_empty() {
                         if let Some(name) = self.path_name(path) {
@@ -2104,7 +2097,7 @@ impl Normalizer<'_, '_> {
                 Some(self.ty(syntax, Position::Field)?)
             }
             OriginRoot::Sibling(i) => {
-                let item = &self.input.tree.items[self.input.item.0 as usize];
+                let item = &self.input.syntax.item;
                 if let ast::ItemKind::Type {
                     body: ast::TypeBody::Record(fs),
                     ..
@@ -2357,12 +2350,12 @@ impl Normalizer<'_, '_> {
     /// judged on its syntax so a relation naming it never lowers it again.
     fn arena_syntax(&mut self, mut id: ast::TypeExprId) -> bool {
         while let ast::TypeExprKind::Qualified { base, .. } =
-            &self.input.tree.types[id.0 as usize].kind
+            &self.input.syntax.tree.types[id.0 as usize].kind
         {
             id = *base;
         }
         let ast::TypeExprKind::Named { path, arguments } =
-            &self.input.tree.types[id.0 as usize].kind
+            &self.input.syntax.tree.types[id.0 as usize].kind
         else {
             return false;
         };
@@ -2397,7 +2390,7 @@ impl Normalizer<'_, '_> {
                 }
             }
             let d = self.definition(p, None)?;
-            let item = &self.input.tree.items[self.input.item.0 as usize];
+            let item = &self.input.syntax.item;
             if d == item.definition
                 && item
                     .attributes
@@ -2411,10 +2404,12 @@ impl Normalizer<'_, '_> {
                 continue;
             }
             let signature = self.snapshot(&d)?;
-            if self.input.tree.items[self.input.item.0 as usize].visibility
-                != ast::Visibility::Private
+            if self.input.syntax.item.visibility != ast::Visibility::Private
                 && signature.metadata.visibility == ast::Visibility::Private
-                && !self.input.tree.items[self.input.item.0 as usize]
+                && !self
+                    .input
+                    .syntax
+                    .item
                     .attributes
                     .iter()
                     .any(|a| a.name.as_str() == "capability")
@@ -2513,7 +2508,7 @@ impl Normalizer<'_, '_> {
         let Some(root) = t else {
             return AuthoritySummary::inert();
         };
-        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let item = &self.input.syntax.item;
         if item
             .attributes
             .iter()
@@ -2656,9 +2651,7 @@ impl Normalizer<'_, '_> {
         }
     }
     fn own_definition(&self) -> ast::DefPath {
-        self.input.tree.items[self.input.item.0 as usize]
-            .definition
-            .clone()
+        self.input.syntax.item.definition.clone()
     }
     /// This declaration as its recursive references read it while its own
     /// authority summary is still a fixed-point estimate.
@@ -2690,7 +2683,7 @@ impl Normalizer<'_, '_> {
         })
     }
     fn authority_proof(&self, root: TypeId, own: &AuthoritySummary) -> AuthoritySummary {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let item = &self.input.syntax.item;
         let roles = self.roles();
         structural_authority(
             &self.types,
@@ -2900,7 +2893,7 @@ impl Normalizer<'_, '_> {
         root: TypeId,
         declarations: &GenericDeclarations,
     ) -> Result<bool, QueryError> {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let item = &self.input.syntax.item;
         structural_serializable(&self.types, root, declarations, &mut |path| {
             if path != &item.definition {
                 return Ok(self.snapshots.get(path).cloned());

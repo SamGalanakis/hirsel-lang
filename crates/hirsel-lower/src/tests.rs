@@ -152,7 +152,7 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
     let mut f = Fixture::new(P::U8);
     let origin = hirsel_types::Origin {
         root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::body(
-            f.owner,
+            f.scope(f.owner),
             hirsel_types::ParamId(0),
         )),
         fields: vec![].into(),
@@ -227,36 +227,47 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
             owner: f.owner.clone(),
             result: h_result,
         });
-    f.plans = Plans::from_body(&f.tree, &f.checked, &producer, read).unwrap();
+    f.plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, read).unwrap();
     let definition = f.lower(read, "main", value_type).unwrap();
     assert_eq!(definition.types, f.checked.types);
-    // A different declaring owner with the same declaration ordinal cannot
-    // silently resolve to this function's Parameter(0).
-    let wrong = hirsel_types::map_parameter_references(&mut f.checked.types, value_type, |p, _| {
-        Ok(match p {
-            hirsel_types::ParameterRef::Body { parameter, .. } => {
-                hirsel_types::ParameterRef::body(NameSite::Expression(ExprId(99)), parameter)
+    // A different declaring site with the same declaration ordinal cannot
+    // silently resolve to this function's Parameter(0): neither another site
+    // of this item nor the same site of another item.
+    for (other, message) in [
+        (
+            f.scope(NameSite::Expression(ExprId(99))),
+            "missing scoped binding",
+        ),
+        (
+            LexicalOwner::first(&path("other")).site(f.owner),
+            "another definition's parameter",
+        ),
+    ] {
+        let checked = f.checked.clone();
+        let wrong =
+            hirsel_types::map_parameter_references(&mut f.checked.types, value_type, |p, _| {
+                Ok(match p {
+                    hirsel_types::ParameterRef::Body { parameter, .. } => {
+                        hirsel_types::ParameterRef::body(other, parameter)
+                    }
+                    p => p,
+                })
+            })
+            .unwrap();
+        for b in &mut f.checked.bindings {
+            if b.ty == value_type {
+                b.ty = wrong;
             }
-            p => p,
-        })
-    })
-    .unwrap();
-    for b in &mut f.checked.bindings {
-        if b.ty == value_type {
-            b.ty = wrong;
         }
-    }
-    for e in &mut f.checked.expressions {
-        if e.ty == value_type {
-            e.ty = wrong;
+        for e in &mut f.checked.expressions {
+            if e.ty == value_type {
+                e.ty = wrong;
+            }
         }
+        let error = f.lower(read, "main", value_type).unwrap_err().message;
+        assert!(error.contains(message), "{error}");
+        f.checked = checked;
     }
-    assert!(
-        f.lower(read, "main", value_type)
-            .unwrap_err()
-            .message
-            .contains("missing scoped binding")
-    );
 }
 
 #[test]
@@ -301,7 +312,7 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
         error_type: f.scalar,
         propagated_result: target_result,
     });
-    let plans = Plans::from_body(&f.tree, &f.checked, &producer, expression).unwrap();
+    let plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, expression).unwrap();
     let propagation = &plans.propagation[0].1;
     assert_eq!(propagation.success_type, f.scalar);
     assert_eq!(propagation.error_type, source_error);
@@ -533,7 +544,7 @@ fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
         }],
         ..Default::default()
     };
-    let output = Plans::from_body(&f.tree, &f.checked, &producer, root).unwrap();
+    let output = Plans::from_body(&f.syntax.tree, &f.checked, &producer, root).unwrap();
     let hirsel_check_protocol::body::ForExecution::Indexed {
         read: hirsel_check_protocol::body::LoopRead::Index { result },
         ..
@@ -544,7 +555,7 @@ fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
     assert_eq!(*result, refined);
     f.checked.patterns.clear();
     assert!(
-        Plans::from_body(&f.tree, &f.checked, &producer, root)
+        Plans::from_body(&f.syntax.tree, &f.checked, &producer, root)
             .unwrap_err()
             .message
             .contains("pattern")

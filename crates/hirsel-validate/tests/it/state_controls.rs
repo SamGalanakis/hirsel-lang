@@ -238,7 +238,7 @@ fn captured_state(mutable: bool) -> Fixture {
         fun.parameters[1].passing = PassingMode::Take;
     }
     let mut nested = f.body().clone();
-    nested.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(0));
+    nested.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
     nested.parameters.clear();
     nested.locals[1].storage = Storage::Capture;
     let mut captured = f.definition.types.get(nested.locals[1].ty).unwrap().clone();
@@ -1030,7 +1030,7 @@ fn closure_creation(hidden: bool) -> Fixture {
     let mut f = creation_return(hidden);
     let mut nested = f.body().clone();
     let item = nested.parameter_scope;
-    let scope = NameSite::Expression(hirsel_syntax::ExprId(0));
+    let scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
     nested.parameter_scope = scope;
     nested.result = map_parameter_references(&mut f.definition.types, nested.result, |p, _| {
         Ok(match p {

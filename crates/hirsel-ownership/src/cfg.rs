@@ -413,8 +413,7 @@ pub(super) fn place(
 }
 
 pub(super) fn build(
-    tree: &SyntaxTree,
-    item: ItemId,
+    syntax: &ItemSyntax,
     own: &Signature,
     body: &mut CheckedBody,
     capture_modes: &[CaptureMode],
@@ -422,7 +421,9 @@ pub(super) fn build(
     results: &[(NameSite, TypeId)],
     rows: &super::source_rows::SourceRows,
 ) -> Result<Vec<Graph>, QueryError> {
-    let root = match &tree.items[item.0 as usize].kind {
+    let tree = &syntax.tree;
+    let lexical = syntax.owner();
+    let root = match &syntax.item.kind {
         ItemKind::Function {
             body: Some(root), ..
         } => *root,
@@ -449,7 +450,7 @@ pub(super) fn build(
         }
         _ => Modes::global(),
     };
-    let mut todo = vec![(root, NameSite::Item(item), root_modes, false, vec![])];
+    let mut todo = vec![(root, NameSite::Item, root_modes, false, vec![])];
     todo.extend(clauses.iter().map(|(root, _)| {
         (
             *root,
@@ -473,17 +474,21 @@ pub(super) fn build(
             .map(|(_, ty)| *ty)
             .or_else(|| {
                 let root = match &own.kind {
-                    SignatureKind::Function(f) if owner == NameSite::Item(item) => f.result,
-                    SignatureKind::Const { ty: root, .. } if owner == NameSite::Item(item) => *root,
+                    SignatureKind::Function(f) if owner == NameSite::Item => f.result,
+                    SignatureKind::Const { ty: root, .. } if owner == NameSite::Item => *root,
                     _ => return None,
                 };
                 import_type(&own.types, root, &mut body.types)
                     .ok()
-                    .and_then(|root| bind_parameter_scopes(&mut body.types, root, &[owner]).ok())
+                    .and_then(|root| {
+                        bind_parameter_scopes(&mut body.types, root, &[lexical.site(owner)]).ok()
+                    })
             });
-        let result_shareable = if owner == NameSite::Item(item) {
+        let result_shareable = if owner == NameSite::Item {
             match &own.kind {
-                SignatureKind::Function(f) => local_result_permissions(&own.types, f, owner),
+                SignatureKind::Function(f) => {
+                    local_result_permissions(&own.types, f, lexical.site(owner))
+                }
                 _ => BTreeSet::new(),
             }
         } else {
@@ -560,7 +565,7 @@ pub(super) fn build(
         // H keeps snapshot children in the declaring frame, while the clause
         // reads only their plain saved results. Check those children in the
         // frame's entry state, before the body can weaken parameter modes.
-        for snapshot in entry_snapshots(tree, owner).into_iter().rev() {
+        for snapshot in entry_snapshots(syntax, owner).into_iter().rev() {
             let next = entry;
             entry = reserve(
                 &mut nodes,
@@ -1933,9 +1938,10 @@ pub(super) fn build(
     Ok(graphs)
 }
 
-fn entry_snapshots(tree: &SyntaxTree, owner: NameSite) -> Vec<ExprId> {
+fn entry_snapshots(syntax: &ItemSyntax, owner: NameSite) -> Vec<ExprId> {
+    let tree = &syntax.tree;
     let signature = match owner {
-        NameSite::Item(id) => match &tree.items[id.0 as usize].kind {
+        NameSite::Item => match &syntax.item.kind {
             ItemKind::Function { signature, .. } => Some(signature),
             _ => None,
         },
@@ -2057,7 +2063,9 @@ fn callable_result_permissions(
             .map(|b| b.ty),
     };
     match ty.and_then(|ty| body.types.get(ty)).map(|ty| &ty.kind) {
-        Some(TypeKind::Function(f)) => local_result_permissions(&body.types, f, owner),
+        Some(TypeKind::Function(f)) => {
+            local_result_permissions(&body.types, f, body.lexical.site(owner))
+        }
         _ => BTreeSet::new(),
     }
 }

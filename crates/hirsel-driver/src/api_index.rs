@@ -248,10 +248,9 @@ fn source_entries(
                 &engine.sources,
             ));
         }
-        let syntax = parsed.value;
         let engine = &package.engine;
-        for id in &syntax.roots {
-            let item = &syntax.tree.items[id.0 as usize];
+        for syntax in &parsed.value.items {
+            let item = &syntax.item;
             if !package.is_exported(&item.definition) {
                 continue;
             }
@@ -264,7 +263,7 @@ fn source_entries(
                 ItemKind::Const { value, .. } => {
                     end = syntax.tree.expressions[value.0 as usize].origin.span.start;
                     // Exclude the initializer's equals sign as well.
-                    if let Some(token) = syntax.tokens.iter().rev().find(|t| {
+                    if let Some(token) = syntax.tree.tokens.iter().rev().find(|t| {
                         t.span.end <= end
                             && t.span.start >= item.name_span.end
                             && t.kind == TokenKind::Punct(ast::Punct::Eq)
@@ -285,7 +284,7 @@ fn source_entries(
             if item.visibility == Visibility::PublicOpaque {
                 let mut depth = 0usize;
                 let mut uses = false;
-                for token in &syntax.tokens {
+                for token in &syntax.tree.tokens {
                     if token.span.start < item.name_span.end || token.span.start >= end {
                         continue;
                     }
@@ -314,21 +313,14 @@ fn source_entries(
                     }
                 }
             }
-            let declaration = source_declaration(&syntax, item, end, &engine.sources, &name);
-            let comments = source_comments(&syntax, item, &engine.sources);
+            let declaration = source_declaration(syntax, item, end, &engine.sources, &name);
+            let comments = source_comments(syntax, &engine.sources);
             let description = if comments.is_empty() {
                 catalogue_sentence(catalogue, &name)
             } else {
                 comments
             };
-            let links = source_links(
-                package,
-                &context,
-                &syntax,
-                item,
-                item.origin.span.start,
-                end,
-            );
+            let links = source_links(package, &context, syntax, item, item.origin.span.start, end);
             out.push(Entry {
                 identity: item.definition.to_string(),
                 name: name.clone(),
@@ -357,12 +349,12 @@ fn source_entries(
                             .join(", ")
                     )
                 };
-                let spans = syntax.variant_name_spans(item.origin);
+                let spans = syntax.tree.variant_name_spans(item.origin);
                 for (i, variant) in variants.iter().enumerate() {
                     let variant_name = variant.name.as_str();
                     let start = spans[i].start;
                     let end = spans.get(i + 1).map_or(end, |s| s.start);
-                    let text = token_text(&syntax, start, end, &engine.sources)
+                    let text = token_text(syntax, start, end, &engine.sources)
                         .trim_end_matches([' ', '|'])
                         .to_owned();
                     out.push(Entry {
@@ -370,7 +362,7 @@ fn source_entries(
                         name: format!("{name}.{variant_name}"),
                         declaration: format!("{text} -> {name}{args}"),
                         description: format!("Variant of {name}."),
-                        links: source_links(package, &context, &syntax, item, start, end),
+                        links: source_links(package, &context, syntax, item, start, end),
                     });
                 }
             }
@@ -382,7 +374,7 @@ fn source_entries(
 fn source_links(
     package: &PackageDeclarations,
     context: &FileContext,
-    syntax: &ast::SyntaxFile,
+    syntax: &ast::ItemSyntax,
     item: &ast::Item,
     start: u32,
     end: u32,
@@ -476,10 +468,10 @@ fn source_links(
     links.into_values().collect()
 }
 
-fn token_text(syntax: &ast::SyntaxFile, start: u32, end: u32, sources: &SourceMap) -> String {
+fn token_text(syntax: &ast::ItemSyntax, start: u32, end: u32, sources: &SourceMap) -> String {
     let mut text = String::new();
     let mut space = false;
-    for token in &syntax.tokens {
+    for token in &syntax.tree.tokens {
         if token.span.start < start || token.span.end > end {
             continue;
         }
@@ -498,7 +490,7 @@ fn token_text(syntax: &ast::SyntaxFile, start: u32, end: u32, sources: &SourceMa
     text
 }
 fn source_declaration(
-    syntax: &ast::SyntaxFile,
+    syntax: &ast::ItemSyntax,
     item: &ast::Item,
     end: u32,
     sources: &SourceMap,
@@ -518,10 +510,11 @@ fn source_declaration(
     };
     format!("{before} {name}{after}").trim().to_owned()
 }
-fn source_comments(syntax: &ast::SyntaxFile, item: &ast::Item, sources: &SourceMap) -> String {
+fn source_comments(syntax: &ast::ItemSyntax, sources: &SourceMap) -> String {
+    let item = &syntax.item;
     let mut comments = Vec::new();
     // Owned trivia contains only the comments attached to this declaration.
-    for token in &syntax.tokens[item.owned_tokens.start as usize..item.owned_tokens.end as usize] {
+    for token in &syntax.tree.tokens {
         if token.span.start >= item.name_span.start {
             break;
         }

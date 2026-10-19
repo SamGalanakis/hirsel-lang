@@ -27,8 +27,7 @@ struct Harness {
 impl Harness {
     fn new(config: SimulationConfig) -> Self {
         let run = run_config();
-        let mut sources = SourceMap::default();
-        sources.add("library.hir", "\n".repeat(20)).unwrap();
+        let sources = support::sources_of("library.hir", "\n".repeat(20));
         Self {
             library: Library::new(&run, config).unwrap(),
             types: TypeStore::default(),

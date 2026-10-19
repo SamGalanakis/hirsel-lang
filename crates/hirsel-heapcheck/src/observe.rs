@@ -38,7 +38,7 @@ pub enum Observed {
 pub struct ObservedFailure {
     pub rule: String,
     pub definition: DefPath,
-    /// Byte range of the failing site within its definition's source.
+    /// Byte range of the failing site, relative to its definition's item anchor.
     pub site: (u32, u32),
     /// Original operation definition and byte range when attribution differs.
     pub operation: Option<(DefPath, (u32, u32))>,

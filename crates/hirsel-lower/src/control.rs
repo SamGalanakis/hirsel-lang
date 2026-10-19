@@ -43,7 +43,7 @@ impl Builder<'_, '_> {
                     continue;
                 }
                 let ExprKind::Before(expression) =
-                    self.input.tree.expressions[before.0 as usize].kind
+                    self.input.syntax.tree.expressions[before.0 as usize].kind
                 else {
                     return self.error(self.span(before)?, "snapshot plan refers to non-before");
                 };
@@ -409,7 +409,14 @@ impl Builder<'_, '_> {
         Ok(None)
     }
     pub fn statement(&mut self, id: StmtId, bodies: &mut Vec<Option<Body>>) -> Result<()> {
-        let Some(statement) = self.input.tree.statements.get(id.0 as usize).cloned() else {
+        let Some(statement) = self
+            .input
+            .syntax
+            .tree
+            .statements
+            .get(id.0 as usize)
+            .cloned()
+        else {
             return self.error(Span::default(), "statement index out of range");
         };
         let span = statement.origin.span;
@@ -423,7 +430,7 @@ impl Builder<'_, '_> {
                 // A taken value, and a copy of a computed value that ends
                 // with this statement, make the binding a new owner (PROV-1).
                 // Blocks are transparent (spec #50): `{take x}` is `take x`.
-                let fresh = match self.input.tree.expressions
+                let fresh = match self.input.syntax.tree.expressions
                     [self.transparent_value(value).0 as usize]
                     .kind
                 {
@@ -451,7 +458,7 @@ impl Builder<'_, '_> {
                 };
                 let loans_before = self.loan_count;
                 let discarded = matches!(
-                    self.input.tree.patterns[pattern.0 as usize].kind,
+                    self.input.syntax.tree.patterns[pattern.0 as usize].kind,
                     hirsel_syntax::PatternKind::Wildcard
                 );
                 let outer = std::mem::replace(&mut self.keeping, !discarded);
@@ -471,7 +478,7 @@ impl Builder<'_, '_> {
                     }
                     self.bind_refutable(pattern, value.place, fresh, otherwise, span, bodies)?;
                     if matches!(
-                        self.input.tree.patterns[pattern.0 as usize].kind,
+                        self.input.syntax.tree.patterns[pattern.0 as usize].kind,
                         hirsel_syntax::PatternKind::Wildcard
                     ) {
                         // A discarded value has no consumer beyond this statement.
@@ -675,7 +682,9 @@ impl Builder<'_, '_> {
                     return self.error(span, "missing local function binding row");
                 };
                 let mut value = self.transport(value, Storage::Local, span);
-                if let Some(origin) = Self::binding_origin(binding.owner, &binding.binding) {
+                if let Some(origin) =
+                    Self::binding_origin(self.decisions.lexical, binding.owner, &binding.binding)
+                {
                     value.place =
                         self.bind_origin(value.place, origin, OriginBindingKind::Alias, span);
                 }
@@ -857,7 +866,7 @@ impl Builder<'_, '_> {
         let span = self.span(id)?;
         let ty = self.decision(id)?.ty;
         let is_and = matches!(
-            self.input.tree.expressions[id.0 as usize].kind,
+            self.input.syntax.tree.expressions[id.0 as usize].kind,
             ExprKind::Binary {
                 op: BinaryOp::And,
                 ..
@@ -1040,7 +1049,7 @@ impl Builder<'_, '_> {
             span,
         );
         for arm in arms {
-            let Some(choices) = self.input.tree.pattern_choices(arm.pattern) else {
+            let Some(choices) = self.input.syntax.tree.pattern_choices(arm.pattern) else {
                 return self.error(span, "unchecked or-pattern expansion");
             };
             // LANG-13: each way the arm's alternatives match is its own table

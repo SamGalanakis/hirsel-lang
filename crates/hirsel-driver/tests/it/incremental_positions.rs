@@ -32,11 +32,23 @@ fn json_diagnostics(output: &CheckOutput) -> Vec<String> {
 fn diagnostics(engine: &mut QueryEngine, source: &str) -> Vec<String> {
     json_diagnostics(&checked(engine, source).1)
 }
+/// Each lowered site's file offsets and position; synthesized sites
+/// (`Span::default()`) have no anchor and no position.
 fn spans(engine: &mut QueryEngine, name: &str) -> Vec<(u32, u32, u32, u32)> {
     let definition = engine.lower_to_tir(&path(name)).unwrap().value;
     let site = |span: hirsel_span::Span| {
-        let loc = engine.sources.location(span).unwrap();
-        (span.start, span.end, loc.line, loc.column)
+        let at = engine.sources.resolve(span);
+        let loc = engine.sources.location(span);
+        assert!(
+            loc.is_some() || span == hirsel_span::Span::default(),
+            "{span:?}"
+        );
+        (
+            at.start,
+            at.end,
+            loc.map_or(0, |l| l.line),
+            loc.map_or(0, |l| l.column),
+        )
     };
     definition
         .bodies
@@ -83,7 +95,7 @@ fn moved_reused_diagnostics_and_lowered_sites_equal_a_fresh_session() {
     });
 }
 #[test]
-fn moving_an_item_rebases_cached_sites_without_semantic_recomputation() {
+fn moving_an_item_keeps_cached_sites_without_semantic_recomputation() {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let original = "fn a() -> u8 { 1u8 }\nfn b() -> u8 { a() }\n";
@@ -116,31 +128,31 @@ fn moving_an_item_rebases_cached_sites_without_semantic_recomputation() {
     });
 }
 
-fn normalized_sites(file: &hirsel_syntax::SyntaxFile, mut view: String) -> String {
+fn normalized_sites(
+    sources: &hirsel_span::SourceMap,
+    owner: &hirsel_syntax::ItemSyntax,
+    mut view: String,
+) -> String {
+    let tree = &owner.tree;
     for (prefix, sites) in [
         (
             "ExprId(",
-            file.tree
-                .expressions
+            tree.expressions
                 .iter()
                 .map(|n| n.origin.span)
                 .collect::<Vec<_>>(),
         ),
         (
             "StmtId(",
-            file.tree.statements.iter().map(|n| n.origin.span).collect(),
+            tree.statements.iter().map(|n| n.origin.span).collect(),
         ),
         (
             "PatternId(",
-            file.tree.patterns.iter().map(|n| n.origin.span).collect(),
+            tree.patterns.iter().map(|n| n.origin.span).collect(),
         ),
         (
             "TypeExprId(",
-            file.tree.types.iter().map(|n| n.origin.span).collect(),
-        ),
-        (
-            "ItemId(",
-            file.tree.items.iter().map(|n| n.origin.span).collect(),
+            tree.types.iter().map(|n| n.origin.span).collect(),
         ),
     ] {
         let mut normalized = String::new();
@@ -153,7 +165,7 @@ fn normalized_sites(file: &hirsel_syntax::SyntaxFile, mut view: String) -> Strin
             remaining = &remaining[start + prefix.len()..];
             let end = remaining.find(')').unwrap();
             let id: usize = remaining[..end].parse().unwrap();
-            let span = sites[id];
+            let span = sources.resolve(sites[id]);
             normalized.push_str(&format!("{prefix}{}:{})", span.start, span.end));
             remaining = &remaining[end + 1..];
         }
@@ -176,8 +188,8 @@ fn observation(
     let mut bodies = vec![];
     if ds.is_empty() && output.completion == CheckCompletion::Complete {
         let parsed = engine.parse_file(file, &default_context()).unwrap().value;
-        for id in parsed.roots {
-            let item = &parsed.tree.items[id.0 as usize];
+        for syntax in &parsed.items {
+            let item = &syntax.item;
             if !matches!(
                 item.kind,
                 hirsel_syntax::ItemKind::Function { body: Some(_), .. }
@@ -187,8 +199,12 @@ fn observation(
                 continue;
             }
             let definition = engine.lower_to_tir(&item.definition).unwrap().value;
-            let (owner, _) = engine.parse_definition(&item.definition).unwrap().value;
-            let printed = normalized_sites(&owner, hirsel_lower::print::definition(&definition));
+            let owner = engine.parse_definition(&item.definition).unwrap().value;
+            let printed = normalized_sites(
+                &engine.sources,
+                &owner,
+                hirsel_lower::print::definition(&definition),
+            );
             bodies.push((
                 item.definition.0.name.clone(),
                 printed,
@@ -205,29 +221,28 @@ fn edit_sequence(source: &str) -> Vec<String> {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
     let file = engine.sources.add("seed.hir", source.into()).unwrap();
     let parsed = engine.parse_file(file, &default_context()).unwrap().value;
-    let items: Vec<_> = parsed
-        .roots
+    // Item-relative spans resolve to the seed's absolute offsets.
+    let at = |span| engine.sources.resolve(span);
+    let syntaxes: Vec<_> = parsed.items.iter().collect();
+    let items: Vec<_> = syntaxes.iter().map(|s| &s.item).collect();
+    let target_syntax = syntaxes
         .iter()
-        .map(|id| &parsed.tree.items[id.0 as usize])
-        .collect();
-    let target = items
-        .iter()
-        .copied()
-        .find(|item| {
-            item.definition.0.name != "main"
-                && matches!(item.kind, ItemKind::Function { body: Some(_), .. })
+        .find(|syntax| {
+            syntax.item.definition.0.name != "main"
+                && matches!(syntax.item.kind, ItemKind::Function { body: Some(_), .. })
         })
         .unwrap();
+    let target = &target_syntax.item;
     let ItemKind::Function {
         body: Some(body), ..
     } = target.kind
     else {
         unreachable!()
     };
-    let body = parsed.tree.expressions[body.0 as usize].origin.span.start as usize;
-    let start = target.origin.span.start as usize;
-    let end = target.origin.span.end as usize;
-    let ne = target.name_span.end as usize;
+    let body = at(target_syntax.tree.expressions[body.0 as usize].origin.span).start as usize;
+    let start = at(target.origin.span).start as usize;
+    let end = at(target.origin.span).end as usize;
+    let ne = at(target.name_span).end as usize;
     let insert = |at, text| format!("{}{}{}", &source[..at], text, &source[at..]);
     let extra = ne + source[ne..].find('(').unwrap() + 1;
     let bad = format!(
@@ -235,16 +250,20 @@ fn edit_sequence(source: &str) -> Vec<String> {
         source.trim_end_matches('\n')
     );
     let body_error = insert(body + 1, " let zz_e: u64 = zz_missing;");
+    let text = |item: &Item| {
+        let span = at(item.origin.span);
+        &source[span.start as usize..span.end as usize]
+    };
     let reversed = format!(
         "{}{}{}",
-        &source[..items[0].origin.span.start as usize],
+        &source[..at(items[0].origin.span).start as usize],
         items
             .iter()
             .rev()
-            .map(|i| &source[i.origin.span.start as usize..i.origin.span.end as usize])
+            .map(|i| text(i))
             .collect::<Vec<_>>()
             .join("\n"),
-        &source[items.last().unwrap().origin.span.end as usize..]
+        &source[at(items.last().unwrap().origin.span).end as usize..]
     );
     let other = items
         .iter()
@@ -274,11 +293,7 @@ fn edit_sequence(source: &str) -> Vec<String> {
         body_error.clone(),
         format!("\n\n{body_error}"),
         source.into(),
-        format!(
-            "{}\n{}\n",
-            source.trim_end_matches('\n'),
-            &source[other.origin.span.start as usize..other.origin.span.end as usize]
-        ),
+        format!("{}\n{}\n", source.trim_end_matches('\n'), text(other)),
         source.into(),
     ]
 }
@@ -329,6 +344,192 @@ fn restoring_a_renamed_definition_cannot_revive_old_positions() {
             let actual = observation(&mut engine, source);
             let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
             assert_eq!(actual, observation(&mut fresh, source), "{source}");
+        }
+    });
+}
+
+const SEMANTIC: [QueryKind; 5] = [
+    QueryKind::Resolve,
+    QueryKind::Signature,
+    QueryKind::Check,
+    QueryKind::Modes,
+    QueryKind::Lower,
+];
+fn recomputes(engine: &QueryEngine, name: &str) -> [usize; 5] {
+    SEMANTIC.map(|kind| engine.recompute_count(&path(name), kind))
+}
+
+/// Checks every file in order and observes each executable item, as `observation` does for one.
+fn observe_files(
+    engine: &mut QueryEngine,
+    files: &[(&str, &str)],
+) -> (
+    Vec<String>,
+    Vec<(String, String, Vec<(u32, u32, u32, u32)>)>,
+) {
+    let ids: Vec<_> = files
+        .iter()
+        .map(|(name, text)| engine.sources.add(name, (*text).into()).unwrap())
+        .collect();
+    for id in &ids {
+        engine.parse_file(*id, &default_context()).unwrap();
+    }
+    let mut ds = vec![];
+    let mut complete = true;
+    for id in &ids {
+        let output = check_progress(engine, *id, &default_context()).unwrap();
+        complete &= output.completion == CheckCompletion::Complete;
+        ds.extend(json_diagnostics(&output));
+    }
+    let mut bodies = vec![];
+    if ds.is_empty() && complete {
+        for id in &ids {
+            let parsed = engine.parse_file(*id, &default_context()).unwrap().value;
+            for syntax in &parsed.items {
+                let item = &syntax.item;
+                if !matches!(
+                    item.kind,
+                    hirsel_syntax::ItemKind::Function { body: Some(_), .. }
+                ) {
+                    continue;
+                }
+                let definition = engine.lower_to_tir(&item.definition).unwrap().value;
+                let printed = normalized_sites(
+                    &engine.sources,
+                    syntax,
+                    hirsel_lower::print::definition(&definition),
+                );
+                bodies.push((
+                    item.definition.0.name.clone(),
+                    printed,
+                    spans(engine, &item.definition.0.name),
+                ));
+            }
+        }
+        bodies.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    (ds, bodies)
+}
+
+#[test]
+fn inserting_an_item_above_keeps_the_other_items_syntax_ids_and_memos() {
+    with_compiler_stack(|| {
+        let original = "fn a() -> u8 { 1u8 }\nfn b() -> u8 { let x = a()\n x }\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        assert!(diagnostics(&mut engine, original).is_empty());
+        let syntax = |engine: &mut QueryEngine, name: &str| {
+            engine.parse_definition(&path(name)).unwrap().value
+        };
+        let before = ["a", "b"].map(|name| (syntax(&mut engine, name), recomputes(&engine, name)));
+        let lowered = engine.lower_to_tir(&path("b")).unwrap().value;
+        for inserted in [
+            format!("fn z() -> u8 {{ 2u8 }}\n{original}"),
+            format!("// a comment\n\nfn z() -> u8 {{ 2u8 }} // trailing\n{original}"),
+        ] {
+            assert!(diagnostics(&mut engine, &inserted).is_empty());
+            for (name, (old, counts)) in ["a", "b"].iter().zip(&before) {
+                let new = syntax(&mut engine, name);
+                assert!(std::sync::Arc::ptr_eq(old, &new), "{name}: {inserted}");
+                assert_eq!(new.owner(), old.owner());
+                assert_eq!(recomputes(&engine, name), *counts, "{name}: {inserted}");
+            }
+            // The retained TIR is the very same value, at item-relative sites.
+            assert_eq!(engine.lower_to_tir(&path("b")).unwrap().value, lowered);
+            let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+            assert_eq!(
+                observation(&mut engine, &inserted),
+                observation(&mut fresh, &inserted),
+                "{inserted}"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_cross_file_move_keeps_ids_and_memos_and_changes_only_the_anchor() {
+    with_compiler_stack(|| {
+        let a = "fn a() -> u8 { 1u8 }\n";
+        let b = "fn b() -> u8 { let x = a()\n x }\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let first = format!("{a}{b}");
+        observe_files(
+            &mut engine,
+            &[("one.hir", &first), ("two.hir", "fn c() {}\n")],
+        );
+        let old = engine.parse_definition(&path("b")).unwrap().value;
+        let (old_file, _) = engine.sources.anchor(old.anchor).unwrap();
+        let counts = recomputes(&engine, "b");
+        let second = format!("fn c() {{}}\n{b}");
+        let moved = [("one.hir", a), ("two.hir", second.as_str())];
+        let warm = observe_files(&mut engine, &moved);
+        let new = engine.parse_definition(&path("b")).unwrap().value;
+        assert!(std::sync::Arc::ptr_eq(&old, &new));
+        let (new_file, base) = engine.sources.anchor(new.anchor).unwrap();
+        assert_ne!(new_file, old_file);
+        assert_eq!(
+            engine.sources.file(new_file).unwrap().path.to_str(),
+            Some("two.hir")
+        );
+        assert_eq!(base as usize, "fn c() {}\n".len());
+        assert_eq!(recomputes(&engine, "b"), counts);
+        let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+        assert_eq!(warm, observe_files(&mut fresh, &moved));
+    });
+}
+
+#[test]
+fn duplicate_definitions_report_at_the_later_name_warm_and_cold() {
+    with_compiler_stack(|| {
+        let a = "fn a() -> u8 { 1u8 }\n";
+        let dup = "fn a() -> u8 { 2u8 }\n";
+        let b = "fn b() -> u8 { a() }\n";
+        let one_a_b = format!("{a}{b}");
+        let one_a_dup_b = format!("{a}{dup}{b}");
+        let one_dup_a_b = format!("{dup}{a}{b}");
+        let two_dup = format!("// two\n{dup}");
+        // (one.hir, two.hir) per step: insert, remove and move, in one file and across.
+        let steps: [(&str, &str); 8] = [
+            (&one_a_b, ""),
+            (&one_a_dup_b, ""),
+            (&one_dup_a_b, ""),
+            (&one_a_b, ""),
+            (&one_a_b, &two_dup),
+            (b, &two_dup),
+            (&one_a_b, &two_dup),
+            (&one_a_b, ""),
+        ];
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        for (step, (one, two)) in steps.into_iter().enumerate() {
+            let files = [("one.hir", one), ("two.hir", two)];
+            let warm = observe_files(&mut engine, &files);
+            let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+            assert_eq!(warm, observe_files(&mut fresh, &files), "step {step}");
+            let duplicates: Vec<serde_json::Value> = warm
+                .0
+                .iter()
+                .map(|d| serde_json::from_str(d).unwrap())
+                .filter(|d: &serde_json::Value| d["rule"] == "LANG-7")
+                .collect();
+            let expected = match step {
+                1 => Some(("one.hir", 2)),
+                2 => Some(("one.hir", 2)),
+                4 | 6 => Some(("two.hir", 2)),
+                _ => None,
+            };
+            assert_eq!(
+                duplicates.first().map(|d| (
+                    d["primary"]["file"].as_str().unwrap().to_owned(),
+                    d["primary"]["line"].as_u64().unwrap()
+                )),
+                expected.map(|(file, line)| (file.to_owned(), line)),
+                "step {step}: {warm:?}"
+            );
+            if let Some(d) = duplicates.first() {
+                assert_eq!(
+                    d["primary"]["end"].as_u64().unwrap() - d["primary"]["start"].as_u64().unwrap(),
+                    1
+                );
+            }
         }
     });
 }

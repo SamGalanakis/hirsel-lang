@@ -235,9 +235,9 @@ pub fn expand_path(path: &Path) -> Result<String, ToolError> {
         let mut generated: Vec<_> = program
             .engine
             .generated_sources()
-            .filter(|(_, g)| g.site.file == program.primary)
+            .filter(|(_, g)| program.engine.sources.resolve(g.site).file == program.primary)
             .collect();
-        generated.sort_by_key(|(_, g)| g.site.start);
+        generated.sort_by_key(|(_, g)| program.engine.sources.resolve(g.site).start);
         let mut out = String::new();
         for (definition, g) in generated {
             if !out.is_empty() {

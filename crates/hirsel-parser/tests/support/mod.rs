@@ -1,6 +1,6 @@
 //! Deliberately small corpus fixture; product parsing never imports this tokenizer.
 use hirsel_intern::Symbol;
-use hirsel_span::{FileId, SourceMap, Span};
+use hirsel_span::{Anchor, SourceMap, Span};
 use hirsel_syntax::*;
 
 /// An apostrophe followed by a name that no apostrophe closes is a label, as
@@ -21,7 +21,8 @@ fn label_len(rest: &str) -> Option<usize> {
     (bytes.get(end) != Some(&b'\'')).then_some(end)
 }
 
-pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
+/// The tape of `source`, its spans relative to `file` (a file anchor).
+pub fn tokenize(file: Anchor, source: &str) -> Vec<Token> {
     let mut tokens = vec![];
     let mut pos = 0;
     // Braces each open f-string hole has opened, innermost last.
@@ -285,7 +286,7 @@ pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
         tokens.push(Token {
             kind,
             span: Span {
-                file,
+                anchor: file,
                 start: start as u32,
                 end: pos as u32,
             },
@@ -294,7 +295,7 @@ pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
     tokens.push(Token {
         kind: TokenKind::Eof,
         span: Span {
-            file,
+            anchor: file,
             start: pos as u32,
             end: pos as u32,
         },
@@ -314,9 +315,9 @@ pub fn context() -> FileContext {
 pub fn parse(source: &str) -> (hirsel_parser::ParseOutput, SourceMap) {
     let mut sources = SourceMap::default();
     let file = sources.add("fixture.hir", source.into()).unwrap();
-    let tokens = tokenize(file, source);
+    let tokens = tokenize(sources.file_anchor(file), source);
     (
-        hirsel_parser::parse(file, tokens, &context(), &sources),
+        hirsel_parser::parse(file, tokens, &context(), &mut sources),
         sources,
     )
 }

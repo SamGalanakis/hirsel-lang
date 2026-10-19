@@ -14,7 +14,7 @@ mod tests;
 use hirsel_diag::Diagnostic;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
-use hirsel_syntax::{ExprId, ItemId, SyntaxTree};
+use hirsel_syntax::{ExprId, ItemSyntax};
 use hirsel_types::*;
 
 /// A binding row is the storage identity; nested parameter ordinals are scoped.
@@ -57,8 +57,7 @@ impl Place {
 /// `results` are the authority pass's formal frame results: they are derived
 /// summaries of the same rows as the callable types, and are normalised with them.
 pub fn check_ownership_with_clauses(
-    tree: &SyntaxTree,
-    item: ItemId,
+    syntax: &ItemSyntax,
     signature: &Signature,
     body: &mut CheckedBody,
     captures: &[CaptureMode],
@@ -68,13 +67,14 @@ pub fn check_ownership_with_clauses(
     identity_fields: &[(NameSite, NameSite, Origin, Vec<(FieldId, TypeId)>)],
     provider: &mut dyn SignatureProvider,
 ) -> Result<QueryOutput<OwnershipFacts>, QueryError> {
+    let tree = &syntax.tree;
     let rows = source_rows::SourceRows::new(body);
     let arenas = crate::arenas::Arenas::new(body, signature);
     let mut introductions: std::collections::BTreeMap<NameSite, Vec<(NameSite, Origin, usize)>> =
         std::collections::BTreeMap::new();
     for (site, owner, origin) in identity_joins {
         let binding = match origin.root {
-            OriginRoot::Local(local) => ResolvedName::Local(local),
+            OriginRoot::Local(_, local) => ResolvedName::Local(local),
             OriginRoot::Parameter(ParameterRef::Body { parameter, .. }) => {
                 ResolvedName::Parameter(parameter)
             }
@@ -88,9 +88,7 @@ pub fn check_ownership_with_clauses(
         }
     }
     let mut signatures = properties::Signatures::default();
-    let mut graphs = cfg::build(
-        tree, item, signature, body, captures, clauses, results, &rows,
-    )?;
+    let mut graphs = cfg::build(syntax, signature, body, captures, clauses, results, &rows)?;
     let projection_lifetimes =
         properties::projection_lifetimes(body, signature, &mut signatures, provider)?;
     let pattern_declarations =
@@ -166,7 +164,7 @@ pub fn check_ownership_with_clauses(
     for parameter in promised {
         for graph in graphs
             .iter()
-            .filter(|g| g.owner == NameSite::Item(item) && g.clause.is_none())
+            .filter(|g| g.owner == NameSite::Item && g.clause.is_none())
         {
             let mut proof_body = body.clone();
             let mut proof_properties = properties.clone();
@@ -174,7 +172,7 @@ pub fn check_ownership_with_clauses(
             let mut proof_facts = facts.clone();
             let mut proof_diagnostics = Vec::new();
             flow::check(
-                tree,
+                syntax,
                 signature,
                 &mut proof_body,
                 &signatures,
@@ -199,7 +197,7 @@ pub fn check_ownership_with_clauses(
                     .filter(|d| d.message.starts_with(flow::UNIQUE_PROOF_FAILED))
                     .map(|mut d| {
                         if let Some(nominal) = &association {
-                            d.primary = tree.items[item.0 as usize].name_span;
+                            d.primary = syntax.item.name_span;
                             d.notes.push(format!(
                                 "the @format association on {nominal} implies @preserves_unique on the output builder"
                             ));
@@ -211,7 +209,7 @@ pub fn check_ownership_with_clauses(
     }
     for graph in &graphs {
         let checked = flow::check(
-            tree,
+            syntax,
             signature,
             body,
             &signatures,
@@ -231,7 +229,7 @@ pub fn check_ownership_with_clauses(
             None,
         )?;
         initial_storage.postcondition_inputs(
-            tree,
+            syntax,
             graph.owner,
             body,
             &mut properties,
@@ -451,7 +449,7 @@ pub fn checked_clause_types(
             }
             function.parameters = parameters.into();
             let row = body.types.push(row);
-            abstract_parameter_scope(&mut body.types, row, scope)
+            abstract_parameter_scope(&mut body.types, row, body.lexical.site(scope))
         })
         .collect()
 }

@@ -474,7 +474,8 @@ impl Checker<'_> {
                     return true;
                 };
                 let Some(binding) = self.out.body.bindings.iter().find(|binding| {
-                    binding.owner == scope && binding.binding == ResolvedName::Parameter(parameter)
+                    self.lexical.site(binding.owner) == scope
+                        && binding.binding == ResolvedName::Parameter(parameter)
                 }) else {
                     return true;
                 };

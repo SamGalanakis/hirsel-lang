@@ -64,7 +64,7 @@ fn source_creation_proof_rejects_hidden_inputs_before_lowering_or_v() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("creation-source.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let item = &parsed.value.tree.items[parsed.value.roots[1].0 as usize];
+            let item = &parsed.value.items[1].item;
             let diagnostics = match engine.mode_definition(&item.definition) {
                 Ok(output) => output.diagnostics,
                 Err(hirsel_types::QueryError::Diagnostics(diagnostics)) => diagnostics,

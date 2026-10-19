@@ -25,13 +25,16 @@ fn header_diagnostics_point_to_the_offending_name_and_earlier_binding() {
             let start = source.rfind(primary).unwrap() as u32;
             let name = primary.split([':', ' ', ']']).next().unwrap();
             assert_eq!(
-                (diagnostic.primary.start, diagnostic.primary.end),
+                {
+                    let at = output.sources.resolve(diagnostic.primary);
+                    (at.start, at.end)
+                },
                 (start, start + name.len() as u32),
                 "{source}"
             );
             if let Some(previous) = secondary {
                 assert_eq!(diagnostic.secondary.len(), 1, "{source}");
-                let span = diagnostic.secondary[0].span;
+                let span = output.sources.resolve(diagnostic.secondary[0].span);
                 assert_eq!(
                     (span.start, span.end),
                     (

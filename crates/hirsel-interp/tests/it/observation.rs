@@ -11,7 +11,7 @@ fn fixture() -> (SourceMap, Execution) {
         definition: path,
         body: BodyId(7),
         cleanup: Some((CleanupId(8), 3)),
-        site: Span::new(file, 4, 7).unwrap(),
+        site: Span::new(sources.file_anchor(file), 4, 7).unwrap(),
     };
     let failures = ["primary", "drop-one", "drop-two"]
         .into_iter()
@@ -206,7 +206,11 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
     use hirsel_types::*;
     let mut types = TypeStore::default();
     let root = types.push(Type::with_kind(TypeKind::Parameter(
-        TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(7)), TypeParamId(0)),
+        TypeParameterRef::body(
+            hirsel_syntax::LexicalOwner::first(&hirsel_syntax::DefPath::core("source"))
+                .site(NameSite::Item),
+            TypeParamId(0),
+        ),
     )));
     let definition = hirsel_syntax::DefPath::core("target");
     let value = Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
@@ -236,6 +240,7 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
 fn operation_sites_are_independent_semantic_failure_locations() {
     let (mut sources, mut execution) = fixture();
     let helper = sources.add("helper.hir", "operation\n".into()).unwrap();
+    let helper = sources.file_anchor(helper);
     let mut operation = execution.failures[0].anchor.clone();
     operation.definition = hirsel_syntax::DefPath::core("helper");
     operation.site = Span::new(helper, 0, 9).unwrap();

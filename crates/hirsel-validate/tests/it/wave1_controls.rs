@@ -101,7 +101,7 @@ fn nested_once_callback(selected: Option<bool>) -> Fixture {
         other
     });
     f.body().parameters = std::iter::once(input).chain(other).map(LocalId).collect();
-    f.body().parameter_scope = NameSite::Statement(hirsel_syntax::StmtId(1));
+    f.body().parameter_scope = scoped(NameSite::Statement(hirsel_syntax::StmtId(1)));
     let staged = f.slot(TypeKind::Function(callback.clone()), Storage::Temporary);
     f.body().locals[staged as usize].ty = once;
     f.body().places[staged as usize].ty = once;
@@ -439,7 +439,7 @@ fn absent_payload_retains_no_identity_after_its_contract_owner_ends() {
 fn captured_inactive_payload(present: bool) -> Fixture {
     let mut f = inactive_expiry(present);
     let choice = f.body().places[3].ty;
-    let scope = NameSite::Statement(hirsel_syntax::StmtId(8));
+    let scope = scoped(NameSite::Statement(hirsel_syntax::StmtId(8)));
     let child = Body {
         parameter_scope: scope,
         locals: vec![

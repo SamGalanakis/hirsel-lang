@@ -515,25 +515,53 @@ struct Binding {
     mutable: bool,
 }
 struct Catalogue<'a> {
-    file: &'a SyntaxFile,
+    /// The program, for the records other items declare.
+    file: &'a Parsed,
+    program: &'a str,
+    item: &'a ItemSyntax,
+    /// The item's anchor base in the program; edits are program offsets.
+    base: u32,
+    /// The program from the item's base, so item-relative spans index it.
     source: &'a str,
     edits: &'a mut dyn FnMut(Edit),
     /// The enclosing function returns unit, so `return ()` is an early exit.
     unit_result: bool,
 }
 impl Catalogue<'_> {
+    /// The fields, with their written types, of the records named `ty`.
+    fn record_fields(&self, ty: &str) -> Vec<(String, String)> {
+        let mut fields = vec![];
+        for (syntax, base) in &self.file.items {
+            if syntax.item.name.as_str() != ty.trim() {
+                continue;
+            }
+            let ItemKind::Type {
+                body: TypeBody::Record(record),
+                ..
+            } = &syntax.item.kind
+            else {
+                continue;
+            };
+            for field in record {
+                let span = syntax.tree.types[field.ty.0 as usize].origin.span;
+                let text = &self.program[(base + span.start) as usize..(base + span.end) as usize];
+                fields.push((field.name.as_str().to_owned(), text.to_owned()));
+            }
+        }
+        fields
+    }
     fn text(&self, span: Span) -> &str {
         &self.source[span.start as usize..span.end as usize]
     }
     fn expr_text(&self, id: ExprId) -> &str {
-        self.text(self.file.tree.expressions[id.0 as usize].origin.span)
+        self.text(self.item.tree.expressions[id.0 as usize].origin.span)
     }
     fn type_text(&self, id: TypeExprId) -> String {
-        self.text(self.file.tree.types[id.0 as usize].origin.span)
+        self.text(self.item.tree.types[id.0 as usize].origin.span)
             .into()
     }
     fn base_type_text(&self, id: TypeExprId) -> String {
-        match self.file.tree.types[id.0 as usize].kind {
+        match self.item.tree.types[id.0 as usize].kind {
             TypeExprKind::Qualified { base, .. } => self.type_text(base),
             _ => self.type_text(id),
         }
@@ -542,8 +570,8 @@ impl Catalogue<'_> {
         if self.text(span) != replacement {
             (self.edits)(Edit {
                 kind,
-                start: span.start as usize,
-                end: span.end as usize,
+                start: (self.base + span.start) as usize,
+                end: (self.base + span.end) as usize,
                 replacement,
             });
         }
@@ -552,7 +580,7 @@ impl Catalogue<'_> {
         self.add(
             kind,
             Span {
-                file: self.file.file,
+                anchor: self.item.anchor,
                 start: at,
                 end: at,
             },
@@ -560,7 +588,7 @@ impl Catalogue<'_> {
         );
     }
     fn annotations(&mut self, ty: TypeExprId, scope: &[Binding]) {
-        let node = &self.file.tree.types[ty.0 as usize];
+        let node = &self.item.tree.types[ty.0 as usize];
         let span = node.origin.span;
         let original = self.type_text(ty);
         let base = if let TypeExprKind::Qualified { base, .. } = node.kind {
@@ -590,7 +618,7 @@ impl Catalogue<'_> {
         // a type argument, promises no authority (CLO-2, spec #92).
         let mut pending = vec![ty];
         while let Some(t) = pending.pop() {
-            let node = &self.file.tree.types[t.0 as usize];
+            let node = &self.item.tree.types[t.0 as usize];
             match &node.kind {
                 TypeExprKind::Named { arguments, .. } => {
                     pending.extend(arguments.iter().filter_map(|a| match a {
@@ -627,24 +655,25 @@ impl Catalogue<'_> {
         for p in &sig.parameters {
             self.annotations(p.ty, &scope);
             let Some(name) = p.name else { continue };
-            let ty_start = self.file.tree.types[p.ty.0 as usize].origin.span.start;
+            let ty_start = self.item.tree.types[p.ty.0 as usize].origin.span.start;
             let Some(index) = self
-                .file
+                .item
+                .tree
                 .tokens
                 .iter()
                 .rposition(|t| t.span.end <= ty_start && t.kind == TokenKind::Ident(name))
             else {
                 continue;
             };
-            let token = &self.file.tokens[index];
-            let previous = self.file.tokens[..index]
+            let token = &self.item.tree.tokens[index];
+            let previous = self.item.tree.tokens[..index]
                 .iter()
                 .rfind(|t| !matches!(t.kind, TokenKind::Trivia(_)));
             let start = previous
                 .filter(|t| matches!(t.kind, TokenKind::Keyword(Keyword::Take | Keyword::Mut)))
                 .map_or(token.span.start, |t| t.span.start);
             let span = Span {
-                file: self.file.file,
+                anchor: self.item.anchor,
                 start,
                 end: token.span.start,
             };
@@ -664,7 +693,7 @@ impl Catalogue<'_> {
         mutable: bool,
         scope: &mut Vec<Binding>,
     ) {
-        match &self.file.tree.patterns[id.0 as usize].kind {
+        match &self.item.tree.patterns[id.0 as usize].kind {
             PatternKind::Binding(n) => scope.push(Binding {
                 name: n.as_str().into(),
                 ty: ty.map(|t| self.type_text(t)),
@@ -717,7 +746,7 @@ impl Catalogue<'_> {
             self.add(
                 "last-use/view-live",
                 Span {
-                    file: self.file.file,
+                    anchor: self.item.anchor,
                     start: at,
                     end: rest_end,
                 },
@@ -739,22 +768,7 @@ impl Catalogue<'_> {
             let Some(ty) = &target.ty else { continue };
             // Written nominal records and sequence elements are the only shapes
             // this finite syntactic catalogue knows. Checking decides legality.
-            let fields: Vec<_> = self
-                .file
-                .tree
-                .items
-                .iter()
-                .filter(|i| i.name.as_str() == ty.trim())
-                .filter_map(|i| match &i.kind {
-                    ItemKind::Type {
-                        body: TypeBody::Record(f),
-                        ..
-                    } => Some(f),
-                    _ => None,
-                })
-                .flatten()
-                .map(|f| (f.name.as_str().to_owned(), self.type_text(f.ty)))
-                .collect();
+            let fields = self.record_fields(ty);
             for (field, field_ty) in fields {
                 for value in scope.iter().filter(|v| v.ty.as_ref() == Some(&field_ty)) {
                     self.insert(
@@ -806,9 +820,9 @@ impl Catalogue<'_> {
         // (list type, binding type, the list type also carrying the binding's
         // written relation, when it has one).
         let (list, binding, related) = ty.map_or(Default::default(), |ty| {
-            let span = self.file.tree.types[ty.0 as usize].origin.span;
+            let span = self.item.tree.types[ty.0 as usize].origin.span;
             let TypeExprKind::Qualified { base, relation, .. } =
-                &self.file.tree.types[ty.0 as usize].kind
+                &self.item.tree.types[ty.0 as usize].kind
             else {
                 return (
                     format!(": List[({}, u64)]", self.text(span)),
@@ -816,7 +830,7 @@ impl Catalogue<'_> {
                     None,
                 );
             };
-            let base = self.file.tree.types[base.0 as usize].origin.span;
+            let base = self.item.tree.types[base.0 as usize].origin.span;
             let suffix = &self.source[base.end as usize..span.end as usize];
             (
                 format!(": List[({}, u64)]", self.text(base)),
@@ -830,9 +844,9 @@ impl Catalogue<'_> {
                     .then(|| format!(": List[({}, u64)]{suffix}", self.text(base))),
             )
         });
-        let pattern = self.file.tree.patterns[pattern.0 as usize].origin.span;
+        let pattern = self.item.tree.patterns[pattern.0 as usize].origin.span;
         // The statement's own terminator, if any, follows the initializer.
-        let end = self.file.tree.expressions[value.0 as usize].origin.span.end;
+        let end = self.item.tree.expressions[value.0 as usize].origin.span.end;
         let replacement = |list: &str| {
             format!(
                 "let {held}{list} = [({}, 0u64)]\nlet {}({}, _){binding} = {held}[0]",
@@ -858,7 +872,7 @@ impl Catalogue<'_> {
             // The same initializer as the whole result of a called closure:
             // the binding's written type, at every depth, receives a row
             // that no expected type shaped.
-            let value = self.file.tree.expressions[value.0 as usize].origin.span;
+            let value = self.item.tree.expressions[value.0 as usize].origin.span;
             self.add(
                 "holder/closure-value",
                 value,
@@ -881,7 +895,7 @@ impl Catalogue<'_> {
     /// `{ let agree_tail: List[T] = [v]; agree_tail[0] }`, so the block
     /// yields a part of storage it ends (LANG-11). Checking decides legality.
     fn tail_holder(&mut self, tail: ExprId, scope: &[Binding]) {
-        let ExprKind::Path(path) = &self.file.tree.expressions[tail.0 as usize].kind else {
+        let ExprKind::Path(path) = &self.item.tree.expressions[tail.0 as usize].kind else {
             return;
         };
         let ([segment], None) = (&path.segments[..], &path.package) else {
@@ -897,7 +911,7 @@ impl Catalogue<'_> {
         else {
             return;
         };
-        let span = self.file.tree.expressions[tail.0 as usize].origin.span;
+        let span = self.item.tree.expressions[tail.0 as usize].origin.span;
         self.add(
             "holder/tail-element",
             span,
@@ -944,7 +958,7 @@ impl Catalogue<'_> {
     /// a let whose relation names the new binding itself (its frame bound)
     /// or the innermost binding in scope. Checking decides legality.
     fn related_argument(&mut self, argument: ExprId, scope: &[Binding]) {
-        let node = &self.file.tree.expressions[argument.0 as usize];
+        let node = &self.item.tree.expressions[argument.0 as usize];
         let ExprKind::Unary {
             op: op @ (UnaryOp::Take | UnaryOp::Copy),
             value,
@@ -952,7 +966,7 @@ impl Catalogue<'_> {
         else {
             return;
         };
-        let ExprKind::Path(path) = &self.file.tree.expressions[value.0 as usize].kind else {
+        let ExprKind::Path(path) = &self.item.tree.expressions[value.0 as usize].kind else {
             return;
         };
         let [segment] = path.segments[..] else {
@@ -994,7 +1008,7 @@ impl Catalogue<'_> {
     /// The holes of the f-string `id` desugars, whose other nodes have no
     /// source text of their own to edit (SEM-3).
     fn format_holes(&self, id: ExprId) -> Option<&[ExprId]> {
-        let format = self.file.tree.formats.iter().find(|f| f.expression == id)?;
+        let format = self.item.tree.formats.iter().find(|f| f.expression == id)?;
         Some(&format.holes)
     }
     fn expr(&mut self, id: ExprId, scope: &[Binding]) {
@@ -1004,7 +1018,7 @@ impl Catalogue<'_> {
             }
             return;
         }
-        let node = self.file.tree.expressions[id.0 as usize].clone();
+        let node = self.item.tree.expressions[id.0 as usize].clone();
         let span = node.origin.span;
         let text = self.expr_text(id).to_owned();
         match node.kind {
@@ -1025,7 +1039,7 @@ impl Catalogue<'_> {
             ExprKind::Call { callee, arguments } => {
                 self.expr(callee, scope);
                 for arg in arguments {
-                    let arg_node = &self.file.tree.expressions[arg.value.0 as usize];
+                    let arg_node = &self.item.tree.expressions[arg.value.0 as usize];
                     let base = match arg_node.kind {
                         ExprKind::Unary {
                             op: UnaryOp::Take | UnaryOp::Mut | UnaryOp::Copy,
@@ -1048,7 +1062,7 @@ impl Catalogue<'_> {
             ExprKind::Unary { op, value } => {
                 if matches!(op, UnaryOp::Take)
                     && matches!(
-                        self.file.tree.expressions[value.0 as usize].kind,
+                        self.item.tree.expressions[value.0 as usize].kind,
                         ExprKind::Path(_)
                     )
                 {
@@ -1120,29 +1134,29 @@ impl Catalogue<'_> {
                 // Later statements end here: before the tail, else after the last one.
                 let rest_end = match (tail, statements.last()) {
                     (Some(tail), _) => {
-                        self.file.tree.expressions[tail.0 as usize]
+                        self.item.tree.expressions[tail.0 as usize]
                             .origin
                             .span
                             .start
                     }
                     (None, Some(last)) => {
-                        self.file.tree.statements[last.0 as usize].origin.span.end
+                        self.item.tree.statements[last.0 as usize].origin.span.end
                     }
                     (None, None) => 0,
                 };
                 for pair in statements.windows(2) {
-                    let a = self.file.tree.statements[pair[0].0 as usize].origin.span;
-                    let b = self.file.tree.statements[pair[1].0 as usize].origin.span;
+                    let a = self.item.tree.statements[pair[0].0 as usize].origin.span;
+                    let b = self.item.tree.statements[pair[1].0 as usize].origin.span;
                     self.add(
                         "statement/swap",
                         Span { end: b.end, ..a },
                         format!("{}\n{}\n", self.text(b), self.text(a)),
                     );
-                    let (inner, label) = match self.file.tree.statements[pair[1].0 as usize].kind {
+                    let (inner, label) = match self.item.tree.statements[pair[1].0 as usize].kind {
                         StmtKind::For { body, .. } | StmtKind::While { body, .. } => {
                             (Some(body), "statement/into-loop")
                         }
-                        StmtKind::Expr(e) => match self.file.tree.expressions[e.0 as usize].kind {
+                        StmtKind::Expr(e) => match self.item.tree.expressions[e.0 as usize].kind {
                             ExprKind::If { then_branch, .. } => {
                                 (Some(then_branch), "statement/into-branch")
                             }
@@ -1151,9 +1165,9 @@ impl Catalogue<'_> {
                         _ => (None, ""),
                     };
                     if let Some(inner) = inner {
-                        let block = self.file.tree.expressions[inner.0 as usize].origin.span;
+                        let block = self.item.tree.expressions[inner.0 as usize].origin.span;
                         if matches!(
-                            self.file.tree.expressions[inner.0 as usize].kind,
+                            self.item.tree.expressions[inner.0 as usize].kind,
                             ExprKind::Block { .. }
                         ) {
                             // One semantic relocation, represented as one enclosing-range edit.
@@ -1169,8 +1183,8 @@ impl Catalogue<'_> {
                 for pair in statements.windows(2) {
                     let (a_roots, a_moves) = self.statement_parts(pair[0]);
                     let (b_roots, b_moves) = self.statement_parts(pair[1]);
-                    let a = self.file.tree.statements[pair[0].0 as usize].origin.span;
-                    let b = self.file.tree.statements[pair[1].0 as usize].origin.span;
+                    let a = self.item.tree.statements[pair[0].0 as usize].origin.span;
+                    let b = self.item.tree.statements[pair[1].0 as usize].origin.span;
                     if a_moves {
                         self.into_argument(pair[0], b, &b_roots, true);
                     }
@@ -1182,10 +1196,10 @@ impl Catalogue<'_> {
                 // frame destroys (MEM-5).
                 if let Some(tail) = tail {
                     if matches!(
-                        self.file.tree.expressions[tail.0 as usize].kind,
+                        self.item.tree.expressions[tail.0 as usize].kind,
                         ExprKind::Call { .. }
                     ) {
-                        let target = self.file.tree.expressions[tail.0 as usize].origin.span;
+                        let target = self.item.tree.expressions[tail.0 as usize].origin.span;
                         self.insert(
                             "statement/discard",
                             target.start,
@@ -1195,12 +1209,12 @@ impl Catalogue<'_> {
                 }
                 if let (Some(tail), Some(last)) = (tail, statements.last()) {
                     if self.statement_parts(*last).1 {
-                        let target = self.file.tree.expressions[tail.0 as usize].origin.span;
+                        let target = self.item.tree.expressions[tail.0 as usize].origin.span;
                         self.into_argument(*last, target, &[tail], true);
                     }
                 }
                 for stmt_id in statements {
-                    let stmt = self.file.tree.statements[stmt_id.0 as usize].clone();
+                    let stmt = self.item.tree.statements[stmt_id.0 as usize].clone();
                     let at = stmt.origin.span.end;
                     let introduced = nested.len();
                     match stmt.kind {
@@ -1217,7 +1231,7 @@ impl Catalogue<'_> {
                             }
                             self.sequence_holder(stmt.origin.span, mutable, pattern, ty, value);
                             let pattern_span =
-                                self.file.tree.patterns[pattern.0 as usize].origin.span;
+                                self.item.tree.patterns[pattern.0 as usize].origin.span;
                             let prefix = Span {
                                 end: pattern_span.start,
                                 ..stmt.origin.span
@@ -1281,27 +1295,12 @@ impl Catalogue<'_> {
                 if let Some(tail) = tail {
                     self.expr(tail, &nested);
                     self.tail_holder(tail, &nested);
-                    let tail_span = self.file.tree.expressions[tail.0 as usize].origin.span;
+                    let tail_span = self.item.tree.expressions[tail.0 as usize].origin.span;
                     for binding in &nested {
                         self.add("return/local", tail_span, binding.name.clone());
                         if let Some(ty) = &binding.ty {
-                            let fields: Vec<_> = self
-                                .file
-                                .tree
-                                .items
-                                .iter()
-                                .filter(|i| i.name.as_str() == ty.trim())
-                                .filter_map(|i| match &i.kind {
-                                    ItemKind::Type {
-                                        body: TypeBody::Record(f),
-                                        ..
-                                    } => Some(f),
-                                    _ => None,
-                                })
-                                .flatten()
-                                .map(|f| f.name.as_str().to_owned())
-                                .collect();
-                            for field in fields {
+                            let fields = self.record_fields(ty);
+                            for (field, _) in fields {
                                 self.add(
                                     "return/field",
                                     tail_span,
@@ -1315,7 +1314,7 @@ impl Catalogue<'_> {
             _ => {}
         }
         if matches!(
-            self.file.tree.expressions[id.0 as usize].kind,
+            self.item.tree.expressions[id.0 as usize].kind,
             ExprKind::Path(_)
                 | ExprKind::Literal(_)
                 | ExprKind::Call { .. }
@@ -1332,7 +1331,7 @@ impl Catalogue<'_> {
                 format!("(fn() {{ {text} }})()"),
             );
         }
-        if let ExprKind::If { then_branch, .. } = self.file.tree.expressions[id.0 as usize].kind {
+        if let ExprKind::If { then_branch, .. } = self.item.tree.expressions[id.0 as usize].kind {
             self.move_out(span, then_branch, "statement/out-of-branch");
         }
     }
@@ -1345,7 +1344,7 @@ impl Catalogue<'_> {
             }
             return;
         }
-        match &self.file.tree.expressions[id.0 as usize].kind {
+        match &self.item.tree.expressions[id.0 as usize].kind {
             ExprKind::Call { callee, arguments } => {
                 out.push(id);
                 self.calls(*callee, out);
@@ -1376,13 +1375,13 @@ impl Catalogue<'_> {
     /// statement is a write (an assignment or a call statement) that may move
     /// into a call argument.
     fn statement_parts(&self, id: StmtId) -> (Vec<ExprId>, bool) {
-        match self.file.tree.statements[id.0 as usize].kind {
+        match self.item.tree.statements[id.0 as usize].kind {
             StmtKind::Let { value, .. } => (vec![value], false),
             StmtKind::Assign { place, value, .. } => (vec![place, value], true),
             StmtKind::Expr(e) => (
                 vec![e],
                 matches!(
-                    self.file.tree.expressions[e.0 as usize].kind,
+                    self.item.tree.expressions[e.0 as usize].kind,
                     ExprKind::Call { .. }
                 ),
             ),
@@ -1392,13 +1391,13 @@ impl Catalogue<'_> {
     /// The binding an assignment writes through an index, if any: its list
     /// may be shared, so the write detaches it (OWN-4).
     fn indexed_root(&self, id: StmtId) -> Option<String> {
-        let StmtKind::Assign { place, .. } = self.file.tree.statements[id.0 as usize].kind else {
+        let StmtKind::Assign { place, .. } = self.item.tree.statements[id.0 as usize].kind else {
             return None;
         };
         let mut place = place;
         let mut indexed = false;
         loop {
-            match &self.file.tree.expressions[place.0 as usize].kind {
+            match &self.item.tree.expressions[place.0 as usize].kind {
                 ExprKind::Field { base, .. } => place = *base,
                 ExprKind::Index { base, .. } => {
                     indexed = true;
@@ -1417,7 +1416,7 @@ impl Catalogue<'_> {
     /// is also moved after a copy of the indexed list, so it detaches a shared
     /// list (OWN-4). `before` says the write precedes `target` in the source.
     fn into_argument(&mut self, moved: StmtId, target: Span, roots: &[ExprId], before: bool) {
-        let moved_span = self.file.tree.statements[moved.0 as usize].origin.span;
+        let moved_span = self.item.tree.statements[moved.0 as usize].origin.span;
         let write = self.text(moved_span).to_owned();
         let shared = self
             .indexed_root(moved)
@@ -1439,12 +1438,12 @@ impl Catalogue<'_> {
         }
         for call in calls {
             let ExprKind::Call { arguments, .. } =
-                &self.file.tree.expressions[call.0 as usize].kind
+                &self.item.tree.expressions[call.0 as usize].kind
             else {
                 continue;
             };
             for argument in arguments.iter().skip(1) {
-                let at = self.file.tree.expressions[argument.value.0 as usize]
+                let at = self.item.tree.expressions[argument.value.0 as usize]
                     .origin
                     .span;
                 let value = self.text(at).to_owned();
@@ -1465,10 +1464,10 @@ impl Catalogue<'_> {
     }
     fn move_out(&mut self, outer: Span, body: ExprId, kind: &'static str) {
         if let ExprKind::Block { statements, .. } =
-            &self.file.tree.expressions[body.0 as usize].kind
+            &self.item.tree.expressions[body.0 as usize].kind
         {
             for stmt in statements {
-                let span = self.file.tree.statements[stmt.0 as usize].origin.span;
+                let span = self.item.tree.statements[stmt.0 as usize].origin.span;
                 let mut replacement = self.text(outer).to_owned();
                 let moved = self.text(span).to_owned();
                 replacement.replace_range(
@@ -1482,22 +1481,25 @@ impl Catalogue<'_> {
 }
 /// Edits address AST node spans, preserving all bytes outside the edited syntax.
 /// No formatter, phase internals, type inference or random token corruption.
-pub fn catalogue(file: &SyntaxFile, source: &str) -> Vec<Edit> {
+pub fn catalogue(file: &Parsed, source: &str) -> Vec<Edit> {
     let mut edits = BTreeSet::new();
     enumerate(file, source, &mut |edit| {
         edits.insert(edit);
     });
     edits.into_iter().collect()
 }
-fn enumerate(file: &SyntaxFile, source: &str, edits: &mut dyn FnMut(Edit)) {
-    let mut c = Catalogue {
-        file,
-        source,
-        edits,
-        unit_result: false,
-    };
-    for item in &file.tree.items {
-        match &item.kind {
+fn enumerate(file: &Parsed, source: &str, edits: &mut dyn FnMut(Edit)) {
+    for (syntax, base) in &file.items {
+        let mut c = Catalogue {
+            file,
+            program: source,
+            item: syntax,
+            base: *base,
+            source: &source[*base as usize..],
+            edits: &mut *edits,
+            unit_result: false,
+        };
+        match &syntax.item.kind {
             ItemKind::Function {
                 signature, body, ..
             } => {
@@ -1521,7 +1523,11 @@ fn enumerate(file: &SyntaxFile, source: &str, edits: &mut dyn FnMut(Edit)) {
         }
     }
 }
-fn parse(source: &str) -> Result<SyntaxFile, String> {
+/// A parsed program: each item with its anchor's base offset.
+pub struct Parsed {
+    items: Vec<(std::sync::Arc<ItemSyntax>, u32)>,
+}
+fn parse(source: &str) -> Result<Parsed, String> {
     let mut engine = engine();
     let file = engine
         .sources
@@ -1533,7 +1539,15 @@ fn parse(source: &str) -> Result<SyntaxFile, String> {
     if parsed.value.has_syntax_errors {
         return Err("syntax errors".into());
     }
-    Ok(parsed.value)
+    let base = |syntax: &ItemSyntax| engine.sources.anchor(syntax.anchor).map_or(0, |a| a.1);
+    Ok(Parsed {
+        items: parsed
+            .value
+            .items
+            .iter()
+            .map(|syntax| (syntax.clone(), base(syntax)))
+            .collect(),
+    })
 }
 /// Count syntax mutations without checking, interpreting or compiling them.
 pub fn catalogue_count(source: &str) -> Result<usize, String> {
@@ -1580,11 +1594,23 @@ fn shrink_package_native(
     loop {
         let Ok(file) = parse(&current) else { break };
         let mut ranges: Vec<_> = file
-            .tree
             .items
             .iter()
-            .map(|i| i.origin.span)
-            .chain(file.tree.statements.iter().map(|s| s.origin.span))
+            .flat_map(|(syntax, base)| {
+                let base = *base;
+                let at = move |s: Span| Span {
+                    start: base + s.start,
+                    end: base + s.end,
+                    ..s
+                };
+                std::iter::once(at(syntax.item.origin.span)).chain(
+                    syntax
+                        .tree
+                        .statements
+                        .iter()
+                        .map(move |s| at(s.origin.span)),
+                )
+            })
             .collect();
         ranges.sort_by_key(|s| (std::cmp::Reverse(s.end - s.start), s.start));
         let mut changed = false;
@@ -1873,7 +1899,7 @@ fn window(
 }
 
 fn sampled_catalogue(
-    file: &SyntaxFile,
+    file: &Parsed,
     source: &str,
     seed: u64,
     budget: Option<usize>,
@@ -1914,7 +1940,7 @@ fn sampled_catalogue(
 /// one program. Preserve the exact exhaustive ranks while bounding strings in
 /// library clients that request a small global sample without a local budget.
 fn ranked_catalogue(
-    file: &SyntaxFile,
+    file: &Parsed,
     source: &str,
     path: &str,
     seed: u64,

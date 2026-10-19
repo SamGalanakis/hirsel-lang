@@ -50,12 +50,12 @@ impl Checker<'_, '_> {
         annotation: Option<WrittenModes>,
         frame: usize,
     ) -> Result<(), QueryError> {
-        let root_span = self.input.tree.patterns[root.0 as usize].origin.span;
+        let root_span = self.input.syntax.tree.patterns[root.0 as usize].origin.span;
         let mut todo = vec![(root, ty)];
         let mut refutable = false;
         let mut alternations = vec![];
         while let Some((id, ty)) = todo.pop() {
-            let p = self.input.tree.patterns[id.0 as usize].clone();
+            let p = self.input.syntax.tree.patterns[id.0 as usize].clone();
             let inspected = self.box_payload(ty);
             let usage = if usage == UseKind::Borrow && self.bound(ty, ast::Bound::Plain)? {
                 UseKind::Copy
@@ -313,7 +313,7 @@ impl Checker<'_, '_> {
         for alternation in &alternations {
             self.alternatives_agree(*alternation);
         }
-        if !alternations.is_empty() && self.input.tree.pattern_choices(root).is_none() {
+        if !alternations.is_empty() && self.input.syntax.tree.pattern_choices(root).is_none() {
             self.report(
                 const { RuleId::of("LANG-13") },
                 root_span,
@@ -350,7 +350,9 @@ impl Checker<'_, '_> {
         if !self.invalid(ty) && !self.useful(ty, vec![vec![Some(pattern)]], vec![None])? {
             self.report(
                 const { RuleId::of("LANG-13") },
-                self.input.tree.patterns[pattern.0 as usize].origin.span,
+                self.input.syntax.tree.patterns[pattern.0 as usize]
+                    .origin
+                    .span,
                 "a let-else pattern matches every value; remove the else",
             );
         }
@@ -375,7 +377,9 @@ impl Checker<'_, '_> {
         if !self.invalid(ty) && !self.useful(ty, vec![vec![Some(pattern)]], vec![None])? {
             self.report(
                 const { RuleId::of("LANG-13") },
-                self.input.tree.patterns[pattern.0 as usize].origin.span,
+                self.input.syntax.tree.patterns[pattern.0 as usize]
+                    .origin
+                    .span,
                 match condition {
                     ast::LetCondition::If { .. } => {
                         "an if-let pattern matches every value; bind it with let"
@@ -394,6 +398,7 @@ impl Checker<'_, '_> {
     pub(super) fn joined_bindings_own(&mut self, root: ast::PatternId) {
         if self
             .input
+            .syntax
             .tree
             .pattern_choices(root)
             .is_none_or(|choices| choices.len() < 2)
@@ -411,7 +416,7 @@ impl Checker<'_, '_> {
             {
                 self.report(
                     const { RuleId::of("LANG-13") },
-                    self.input.tree.patterns[id.0 as usize].origin.span,
+                    self.input.syntax.tree.patterns[id.0 as usize].origin.span,
                     "an or-pattern in let or for binds plain values or takes its payloads, \
                      but this binding borrows one of several places; take the value, or \
                      bind it with if let or match",
@@ -452,7 +457,8 @@ impl Checker<'_, '_> {
     }
     /// LANG-13: alternatives bind the same names with the same types and modes.
     fn alternatives_agree(&mut self, alternation: ast::PatternId) {
-        let ast::PatternKind::Or(alternatives) = self.input.tree.patterns[alternation.0 as usize]
+        let ast::PatternKind::Or(alternatives) = self.input.syntax.tree.patterns
+            [alternation.0 as usize]
             .kind
             .clone()
         else {
@@ -476,7 +482,9 @@ impl Checker<'_, '_> {
                         )
                         .unwrap_or(false));
                 if !same {
-                    let span = self.input.tree.patterns[alternative.0 as usize].origin.span;
+                    let span = self.input.syntax.tree.patterns[alternative.0 as usize]
+                        .origin
+                        .span;
                     self.type_mismatch(
                         const { RuleId::of("LANG-13") },
                         span,
@@ -546,7 +554,7 @@ impl Checker<'_, '_> {
     /// The key interval a checked literal or range pattern covers in a scalar column.
     fn scalar_interval(&self, cell: Cell, primitive: Primitive) -> Option<(u128, u128)> {
         let id = cell?;
-        match &self.input.tree.patterns[id.0 as usize].kind {
+        match &self.input.syntax.tree.patterns[id.0 as usize].kind {
             ast::PatternKind::Literal(l) => {
                 let key = self.scalar_key(l, primitive)?;
                 Some((key, key))
@@ -601,7 +609,9 @@ impl Checker<'_, '_> {
                 {
                     self.report(
                         const { RuleId::of("LANG-13") },
-                        self.input.tree.patterns[range.0 as usize].origin.span,
+                        self.input.syntax.tree.patterns[range.0 as usize]
+                            .origin
+                            .span,
                         "range pattern can never match: earlier arms match every value it matches",
                     );
                 }
@@ -618,7 +628,7 @@ impl Checker<'_, '_> {
                     )? {
                         self.report(
                             const { RuleId::of("LANG-13") },
-                            self.input.tree.patterns[alternative.0 as usize].origin.span,
+                            self.input.syntax.tree.patterns[alternative.0 as usize].origin.span,
                             "pattern alternative can never match: earlier patterns match every value it matches",
                         );
                     }
@@ -667,7 +677,8 @@ impl Checker<'_, '_> {
         choice: &ast::PatternChoice,
     ) -> Option<Vec<ast::PatternId>> {
         let id = cell?;
-        let ast::PatternKind::Or(alternatives) = &self.input.tree.patterns[id.0 as usize].kind
+        let ast::PatternKind::Or(alternatives) =
+            &self.input.syntax.tree.patterns[id.0 as usize].kind
         else {
             return None;
         };
@@ -793,14 +804,14 @@ impl Checker<'_, '_> {
             let Some(choices) = choices else {
                 // An open domain always has a value no literal names.
                 if !self.wild(query[0]) {
-                    let spelling = self.input.tree.patterns[query[0].unwrap().0 as usize]
+                    let spelling = self.input.syntax.tree.patterns[query[0].unwrap().0 as usize]
                         .kind
                         .clone();
                     let kept = rows
                         .into_iter()
                         .filter(|(r, _)| {
                             self.wild(r[0])
-                                || self.input.tree.patterns[r[0].unwrap().0 as usize].kind
+                                || self.input.syntax.tree.patterns[r[0].unwrap().0 as usize].kind
                                     == spelling
                         })
                         .map(|(r, c)| (r[1..].to_vec(), c))
@@ -893,10 +904,12 @@ impl Checker<'_, '_> {
             PatternDecisionKind::Constructor(ContextualName::Variant { variant, .. }) => {
                 Some(Tag::Variant(variant.0))
             }
-            PatternDecisionKind::Literal => match self.input.tree.patterns[id.0 as usize].kind {
-                ast::PatternKind::Literal(ast::Literal::Bool(v)) => Some(Tag::Bool(v)),
-                _ => None,
-            },
+            PatternDecisionKind::Literal => {
+                match self.input.syntax.tree.patterns[id.0 as usize].kind {
+                    ast::PatternKind::Literal(ast::Literal::Bool(v)) => Some(Tag::Bool(v)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

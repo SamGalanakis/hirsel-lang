@@ -16,7 +16,7 @@ fn body_place_publication_uses_expression_identity() {
             let before =
                 hirsel_intern::work::read(hirsel_intern::work::Counter::BodySourcePlaceRows);
             let output = engine
-                .check_definition(&parsed.value.tree.items[0].definition)
+                .check_definition(&parsed.value.items[0].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty());
             let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::BodySourcePlaceRows)

@@ -23,6 +23,23 @@ impl Fixture {
         path
     }
 }
+/// `Anchor(n)` in a Debug rendering, replaced by that anchor's file path and base.
+fn placed(sources: &hirsel_span::SourceMap, text: String) -> String {
+    let mut out = String::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("Anchor(") {
+        out.push_str(&rest[..at]);
+        rest = &rest[at + "Anchor(".len()..];
+        let end = rest.find(')').unwrap();
+        let anchor = hirsel_span::Anchor(rest[..end].parse().unwrap());
+        let place = sources
+            .anchor(anchor)
+            .map(|(file, base)| (sources.file(file).unwrap().path.clone(), base));
+        out.push_str(&format!("Anchor({place:?})"));
+        rest = &rest[end + 1..];
+    }
+    out + rest
+}
 
 /// Every prechecked std definition lowers to the same TIR and has the same revision
 /// node as in a fresh check, in a program that places std's sources at other
@@ -76,10 +93,11 @@ fn prechecked_std_products_equal_fresh_ones() {
                 reference.engine.source_audit(path).unwrap(),
                 "{path}"
             );
-            // Spans name this program's FileIds; TypeId's Debug omits provenance.
+            // Anchors are process-unique, so each is named by its placement;
+            // TypeId's Debug omits provenance.
             assert_eq!(
-                format!("{:?}", actual.value),
-                format!("{:?}", expected.value),
+                placed(&prechecked.engine.sources, format!("{:?}", actual.value)),
+                placed(&reference.engine.sources, format!("{:?}", expected.value)),
                 "{path}"
             );
             assert_eq!(actual.dependencies, expected.dependencies, "{path}");

@@ -181,7 +181,10 @@ fn generated_body_sources_rebase_when_only_their_file_ids_move() {
         let mut reloaded = f.load("zzz", &cache);
         reloaded.check_for_execution().unwrap();
         let new = reloaded.engine.generated_source(&generated).unwrap();
-        assert_eq!(old.site.file, new.site.file);
+        assert_eq!(
+            original.engine.sources.resolve(old.site).file,
+            reloaded.engine.sources.resolve(new.site).file
+        );
         assert_ne!(old.file, new.file);
         assert_eq!(
             reloaded
@@ -531,7 +534,7 @@ fn package_bodies_are_reused_across_engines_threads_and_client_edits() {
 }
 
 #[test]
-fn rejected_package_diagnostics_rebase_identically_and_accepted_twin_reuses() {
+fn rejected_package_diagnostics_place_identically_and_accepted_twin_reuses() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         f.write("lib.hir", "pub fn unused() -> u64 { true }\n");
@@ -770,7 +773,7 @@ fn engines_share_one_dependency_image_and_never_see_each_others_edits() {
         let cache = PackageCache::new();
         let path = definition("lib", "value");
         let syntax =
-            |program: &mut LoadedProgram| program.engine.parse_definition(&path).unwrap().value.0;
+            |program: &mut LoadedProgram| program.engine.parse_definition(&path).unwrap().value;
         let mut first = f.load("app", &cache);
         assert!(
             first

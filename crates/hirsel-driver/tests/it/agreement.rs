@@ -90,7 +90,8 @@ fn a_mixed_local_result_retains_only_its_local_argument_storage() {
         let output = check_progress(&mut engine, file, &default_context()).unwrap();
         let diagnostic = &output.diagnostics[0];
         assert_eq!(diagnostic.rule.as_str(), "MODE-1");
-        assert!(rejected[diagnostic.primary.start as usize..].starts_with("pick(xs, x)"));
+        let start = output.sources.resolve(diagnostic.primary).start as usize;
+        assert!(rejected[start..].starts_with("pick(xs, x)"));
     });
 }
 
@@ -117,7 +118,8 @@ fn an_indexed_write_detaches_a_copied_containers_identity() {
             } else {
                 let diagnostic = &output.diagnostics[0];
                 assert_eq!(diagnostic.rule.as_str(), "PROV-1");
-                assert!(source[diagnostic.primary.start as usize..].starts_with("inspect(r, old)"));
+                let start = output.sources.resolve(diagnostic.primary).start as usize;
+                assert!(source[start..].starts_with("inspect(r, old)"));
             }
         }
     });
@@ -138,8 +140,13 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
             let mut engine = QueryEngine::new(default_environment(), adapters);
             let file = engine.sources.add("forged.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let indexed = parsed
+            let probe = parsed
                 .value
+                .items
+                .iter()
+                .find(|syntax| syntax.item.definition.0.name == "probe")
+                .unwrap();
+            let indexed = probe
                 .tree
                 .expressions
                 .iter()
@@ -150,10 +157,9 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
                 })
                 .unwrap();
             let received = if receipt == "copy r0" {
-                hirsel_types::OriginRoot::Local(hirsel_types::LocalId(0))
+                hirsel_types::OriginRoot::Local(probe.owner(), hirsel_types::LocalId(0))
             } else {
-                let call = parsed
-                    .value
+                let call = probe
                     .tree
                     .expressions
                     .iter()
@@ -163,14 +169,14 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
                             .then_some(hirsel_syntax::ExprId(index as u32))
                     })
                     .unwrap();
-                hirsel_types::OriginRoot::Expression(call)
+                hirsel_types::OriginRoot::Expression(probe.owner(), call)
             };
             let mut signatures: Signatures = hirsel_engine::registry::BuiltinRegistry::new()
                 .signatures()
                 .map(|s| (s.definition.clone(), (**s).clone()))
                 .collect();
-            for root in &parsed.value.roots {
-                let path = &parsed.value.tree.items[root.0 as usize].definition;
+            for root in &parsed.value.items {
+                let path = &root.item.definition;
                 let signature = engine.item_signature(path).unwrap();
                 signatures.insert(path.clone(), (*signature.value).clone());
             }
@@ -212,7 +218,7 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
                                         ),
                                     )
                                 } else {
-                                    hirsel_types::OriginRoot::Expression(indexed)
+                                    hirsel_types::OriginRoot::Expression(probe.owner(), indexed)
                                 };
                                 if receipt != "copy r0" {
                                     origin.fields.insert(0, hirsel_types::FieldId(0));
@@ -869,7 +875,7 @@ fn a_binding_introduced_before_a_loop_continues_across_its_backedge() {
             .find(|i| {
                 matches!(&i.kind, hirsel_tir::InstructionKind::BindOrigin { place, .. }
                     if matches!(body.places[place.0 as usize].binding.as_ref().map(|o| &o.root),
-                        Some(hirsel_types::OriginRoot::Local(_))))
+                        Some(hirsel_types::OriginRoot::Local(..))))
             })
             .unwrap()
             .clone();
@@ -1113,7 +1119,7 @@ fn a_written_take_keeps_a_records_sibling_relation_but_ends_copies_outside_it() 
             .position(|i| {
                 matches!(&i.kind, hirsel_tir::InstructionKind::BindOrigin { place, .. }
                     if matches!(body.places[place.0 as usize].binding.as_ref().map(|o| &o.root),
-                        Some(hirsel_types::OriginRoot::Local(_))))
+                        Some(hirsel_types::OriginRoot::Local(..))))
             })
             .unwrap();
         let hirsel_tir::InstructionKind::BindOrigin { place: copy, .. } =

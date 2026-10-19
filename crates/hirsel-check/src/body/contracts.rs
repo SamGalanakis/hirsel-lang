@@ -4,28 +4,32 @@ impl Checker<'_, '_> {
     pub(super) fn check_contracts(&mut self) -> Result<(), QueryError> {
         for frame in 0..self.frames.len() {
             let mut syntax = match self.frames[frame].owner {
-                NameSite::Item(i) => match &self.input.tree.items[i.0 as usize].kind {
+                NameSite::Item => match &self.input.syntax.item.kind {
                     ast::ItemKind::Function { signature, .. } => signature.clone(),
                     _ => continue,
                 },
-                NameSite::Statement(i) => match &self.input.tree.statements[i.0 as usize].kind {
-                    ast::StmtKind::Function { signature, .. } => signature.clone(),
-                    _ => continue,
-                },
-                NameSite::Expression(i) => match &self.input.tree.expressions[i.0 as usize].kind {
-                    ast::ExprKind::Closure { signature, .. } => signature.clone(),
-                    _ => continue,
-                },
+                NameSite::Statement(i) => {
+                    match &self.input.syntax.tree.statements[i.0 as usize].kind {
+                        ast::StmtKind::Function { signature, .. } => signature.clone(),
+                        _ => continue,
+                    }
+                }
+                NameSite::Expression(i) => {
+                    match &self.input.syntax.tree.expressions[i.0 as usize].kind {
+                        ast::ExprKind::Closure { signature, .. } => signature.clone(),
+                        _ => continue,
+                    }
+                }
                 _ => continue,
             };
             let fact = match self.frames[frame].owner {
-                NameSite::Item(i)
+                NameSite::Item
                     if hirsel_check_protocol::fact::fact_owner(
-                        &self.input.tree.items[i.0 as usize].definition,
+                        &self.input.syntax.item.definition,
                     )
                     .is_some() =>
                 {
-                    match self.input.tree.items[i.0 as usize].kind {
+                    match self.input.syntax.item.kind {
                         ast::ItemKind::Function {
                             body: Some(body), ..
                         } => Some(body),
@@ -55,7 +59,9 @@ impl Checker<'_, '_> {
                 }
                 let mut todo = vec![(root, false)];
                 while let Some((id, before)) = todo.pop() {
-                    let kind = self.input.tree.expressions[id.0 as usize].kind.clone();
+                    let kind = self.input.syntax.tree.expressions[id.0 as usize]
+                        .kind
+                        .clone();
                     if matches!(
                         kind,
                         ast::ExprKind::Unary {
@@ -161,7 +167,7 @@ impl Checker<'_, '_> {
                             todo.extend(arguments.into_iter().map(|a| (a.value, before)));
                         }
                         _ => todo.extend(
-                            children(self.input.tree, id)
+                            children(&self.input.syntax.tree, id)
                                 .into_iter()
                                 .map(|e| (e, before)),
                         ),
@@ -201,6 +207,7 @@ impl Checker<'_, '_> {
     ) -> Result<Option<(TypeId, Vec<ContractParameter>)>, QueryError> {
         let original = self.frames[frame].owner;
         let scope = NameSite::Expression(contract.expression);
+        let (original_site, scope_site) = (self.site(original), self.site(scope));
         let mut parameters = vec![];
         let mut types = vec![];
         let mut ordinals = BTreeMap::new();
@@ -228,10 +235,10 @@ impl Checker<'_, '_> {
                 ParameterRef::Body {
                     scope: owner,
                     parameter,
-                } if owner == original => ordinals
+                } if owner == original_site => ordinals
                     .get(&parameter)
                     .copied()
-                    .map(|p| ParameterRef::body(scope, p))
+                    .map(|p| ParameterRef::body(scope_site, p))
                     .ok_or(GraphError::UnboundParameter(p)),
                 p => Ok(p),
             })
@@ -264,27 +271,27 @@ impl Checker<'_, '_> {
                 continue;
             }
             if matches!(
-                self.input.tree.expressions[id.0 as usize].kind,
+                self.input.syntax.tree.expressions[id.0 as usize].kind,
                 ast::ExprKind::Before(_)
             ) {
                 continue;
             }
             if let ast::ExprKind::Closure { body, .. } =
-                self.input.tree.expressions[id.0 as usize].kind
+                self.input.syntax.tree.expressions[id.0 as usize].kind
             {
                 todo.push(body);
             }
             if let ast::ExprKind::Block { ref statements, .. } =
-                self.input.tree.expressions[id.0 as usize].kind
+                self.input.syntax.tree.expressions[id.0 as usize].kind
             {
                 for statement in statements {
                     if let ast::StmtKind::Function { body, .. } =
-                        self.input.tree.statements[statement.0 as usize].kind
+                        self.input.syntax.tree.statements[statement.0 as usize].kind
                     {
                         todo.push(body);
                     }
                     if let ast::StmtKind::Let { pattern, .. } =
-                        self.input.tree.statements[statement.0 as usize].kind
+                        self.input.syntax.tree.statements[statement.0 as usize].kind
                     {
                         let mut pending = vec![pattern];
                         while let Some(pattern) = pending.pop() {
@@ -298,7 +305,7 @@ impl Checker<'_, '_> {
                     }
                 }
             }
-            todo.extend(children(self.input.tree, id));
+            todo.extend(children(&self.input.syntax.tree, id));
         }
         for row in &mut self.body.expressions {
             if expressions.contains(&row.expression) {
@@ -446,8 +453,8 @@ impl Checker<'_, '_> {
             incomplete: false,
             foreign: None,
         }));
-        let function =
-            abstract_parameter_scope(&mut self.body.types, function, scope).map_err(|e| {
+        let function = abstract_parameter_scope(&mut self.body.types, function, scope_site)
+            .map_err(|e| {
                 QueryError::Operational(OperationalFailure {
                     operation: "contract clause header".into(),
                     message: format!("{e:?}"),
@@ -456,13 +463,13 @@ impl Checker<'_, '_> {
         self.body
             .resolution
             .generic_declarations
-            .insert(scope, vec![]);
+            .insert(scope_site, vec![]);
         let clause_frame = self.empty_frame(scope, Some(frame), Some(boolean), None, false);
         for child in 0..clause_frame {
             let in_clause = match self.frames[child].owner {
                 NameSite::Expression(e) => expressions.contains(&e),
                 NameSite::Statement(s) => {
-                    matches!(self.input.tree.statements[s.0 as usize].kind, ast::StmtKind::Function { body, .. } if expressions.contains(&body))
+                    matches!(self.input.syntax.tree.statements[s.0 as usize].kind, ast::StmtKind::Function { body, .. } if expressions.contains(&body))
                 }
                 _ => false,
             };

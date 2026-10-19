@@ -141,7 +141,7 @@ pub struct Actuals {
     pub arguments: Vec<GenericArgument>,
 }
 /// The actuals bound to each enclosing generic binder of an invocation.
-pub type ActualBindings = BTreeMap<NameSite, Actuals>;
+pub type ActualBindings = BTreeMap<SiteRef, Actuals>;
 /// `arguments`, rows of `source`, with every parameter of a binder in
 /// `bindings` replaced by that binder's actuals.
 pub fn close_arguments(

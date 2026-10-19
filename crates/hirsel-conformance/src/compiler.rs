@@ -167,7 +167,8 @@ fn evaluate_on_compiler_thread(
     };
     let output = match checked {
         Ok((comptime, reachable))
-            if comptime.diagnostics != reachable.diagnostics
+            if located(&comptime.diagnostics, &comptime.sources)
+                != located(&reachable.diagnostics, &reachable.sources)
                 || comptime.completion != reachable.completion =>
         {
             observation.actual = format!(
@@ -190,7 +191,7 @@ fn evaluate_on_compiler_thread(
         .iter()
         .find(|d| d.severity == Severity::Error)
     {
-        observation.primary_external = d.primary.file != primary_file;
+        observation.primary_external = output.sources.resolve(d.primary).file != primary_file;
         observation.primary =
             crate::corpus_format::primary_at_span(&mut engine, d.rule.as_str(), d.primary);
         let line = output
@@ -267,7 +268,8 @@ fn evaluate_on_compiler_thread(
         if let Some(file) = engine
             .definition_items(&failure.stable_site.definition)
             .ok()
-            .and_then(|items| items.first().map(|(syntax, _)| syntax.file))
+            .and_then(|items| engine.sources.anchor(items.first()?.anchor))
+            .map(|(file, _)| file)
         {
             observation.primary_external = file != primary_file;
             observation.primary = crate::corpus_format::primary_at_site(
@@ -373,6 +375,52 @@ pub(crate) fn checked_divergence(
         return Some("checked execution diverged: observation differs".into());
     }
     None
+}
+
+/// Each diagnostic with its spans resolved to a file path and byte range, so a
+/// fresh load's diagnostics, whose anchors are its own, compare by position.
+fn located(
+    diagnostics: &[hirsel_diag::Diagnostic],
+    sources: &hirsel_span::SourceMap,
+) -> Vec<(
+    hirsel_diag::Diagnostic,
+    Vec<Option<(std::path::PathBuf, u32, u32)>>,
+)> {
+    use hirsel_diag::Obligation;
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let mut diagnostic = diagnostic.clone();
+            let mut sites = Vec::new();
+            let mut locate = |span: &mut hirsel_span::Span| {
+                let at = sources.resolve(*span);
+                sites.push(
+                    sources
+                        .file(at.file)
+                        .map(|file| (file.path.clone(), at.start, at.end)),
+                );
+                *span = hirsel_span::Span::default();
+            };
+            locate(&mut diagnostic.primary);
+            diagnostic
+                .secondary
+                .iter_mut()
+                .for_each(|label| locate(&mut label.span));
+            if let Some(fix) = &mut diagnostic.fix {
+                locate(&mut fix.span);
+            }
+            for obligation in &mut diagnostic.obligations {
+                match obligation {
+                    Obligation::GenericBound { arguments } => {
+                        arguments.iter_mut().for_each(&mut locate)
+                    }
+                    Obligation::ParameterMode { argument } => locate(argument),
+                    Obligation::Multiplicity | Obligation::CopyProof => {}
+                }
+            }
+            (diagnostic, sites)
+        })
+        .collect()
 }
 
 #[cfg(test)]
