@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The scheduled compiler benchmark on main (never on the merge path): build the
+# Run compiler benchmarks against main by hand: build the
 # release bundle of a fresh origin/main on the Buck2 pool, run the suite one
 # capped process at a time, and compare it with the baseline. Results
 # go to $HIRSEL_MAIN_RUNS/compiler-bench/; a regression or a failed run appends
@@ -52,7 +52,7 @@ tools/compiler-bench/run --toolchain "$toolchain" --work "$out/work" --output "$
 rm -rf "$toolchain"
 stage="comparison"
 compare=0
-# A committed baseline wins; otherwise the first run on this host is the baseline.
+# A committed baseline wins; otherwise the first manual run records the host baseline.
 baseline=tools/compiler-bench/baseline.json
 [[ -f $baseline ]] || baseline="$out/baseline.json"
 if [[ ! -f $baseline ]]; then

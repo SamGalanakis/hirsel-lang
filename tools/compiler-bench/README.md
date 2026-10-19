@@ -3,8 +3,8 @@
 This suite measures how fast Hirsel compiles: the whole compiler, each of its
 phases, and Hirsel against Rust on equivalent programs. (`bench/native`
 measures the speed of the generated code instead.) It records a result file,
-compares it with a stored baseline within noise bounds, and runs on a schedule
-against main. It is never part of the merge path.
+compares it with a stored baseline within noise bounds, and runs only when
+invoked by hand.
 
 ```sh
 # The release CLI bundle: hirsel plus its sibling hirsel-std.precheck.
@@ -176,25 +176,27 @@ host does not raise false alarms. The suite is for catching big regressions. To
 evaluate one change, run the affected cells before and after with `--repeat 5`
 on a quiet host.
 
-The baseline is the result of an earlier run on main, on the same host. The
-scheduled job keeps it as `$HIRSEL_MAIN_RUNS/compiler-bench/baseline.json`: its
-first run records itself as the baseline, and later runs compare with it. A
-committed `tools/compiler-bench/baseline.json` takes precedence. After a change
-that intends to move the numbers, replace the baseline with the next run's
-result (copy `latest.json` over it).
+The baseline is the result of an explicit manual run on main, on the same
+host. `run-main` records the first run as
+`$HIRSEL_MAIN_RUNS/compiler-bench/baseline.json`; later manual runs compare
+with it. A committed `tools/compiler-bench/baseline.json` takes precedence.
+After a change that intends to move the numbers, replace the baseline with
+the next manual run's result (copy `latest.json` over it).
 
-## Schedule
-
-`scheduled` is the job definition for a run against main. It is not on the
-merge path, and the owner installs it. It fetches `origin/main` into a detached
-worktree and builds the release bundle on the Buck2 pool. It then runs the
-suite (one capped process at a time) and compares the result with the
-baseline. Each result and comparison is kept under
-`$HIRSEL_MAIN_RUNS/compiler-bench/`, and a regression appends one line to
-`$HIRSEL_MAIN_RUNS/alarms.log`, the file `tools/main-stall-alarm` writes.
-`systemd/` has a user timer and service that run it nightly:
+## Run against main by hand
 
 ```sh
-cp tools/compiler-bench/systemd/hirsel-compiler-bench.* ~/.config/systemd/user/
-systemctl --user enable --now hirsel-compiler-bench.timer
+tools/compiler-bench/run-main
+# Extra arguments select cells, for example:
+tools/compiler-bench/run-main --groups examples --modes check
 ```
+
+`run-main` fetches `origin/main` into a detached worktree and builds the
+release bundle on the Buck2 pool. It runs the suite (one capped process at a
+time) and compares the result with the baseline. Each result and comparison
+is kept under `$HIRSEL_MAIN_RUNS/compiler-bench/`, and a regression appends
+one line to `$HIRSEL_MAIN_RUNS/alarms.log`, the file `tools/main-stall-alarm`
+writes. `HIRSEL_MAIN_RUNS` defaults to
+`${XDG_STATE_HOME:-$HOME/.local/state}/hirsel/main-runs`. Timestamped results
+are named `<UTC timestamp>-<commit>.json`; `latest.json` holds the most recent
+result. Nothing is installed or enabled by these commands.
