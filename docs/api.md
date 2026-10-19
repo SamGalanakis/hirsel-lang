@@ -224,7 +224,7 @@ Variant of ClockError.
 
 <a id="def-core_401_2fCommand"></a>
 
-- `type Command uses {Dir} = { program: Path, args: List[String], dir: Option[Dir], env: Option[List[(String, String)]] }`
+- `type Command uses {Dir} = { program: Path, args: List[String], dir: Option[Dir], env: Option[List[(String, String)]], own_group: bool }`
 
 <a id="def-core_401_2fDb"></a>
 

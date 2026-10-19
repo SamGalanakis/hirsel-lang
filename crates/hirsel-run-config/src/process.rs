@@ -264,14 +264,23 @@ pub fn canonical_program(path: &str) -> bool {
 }
 
 /// One `Command` (docs/spec/core-library.md#processes): a program, its arguments, the
-/// working directory's Dir handle (`None` is `/`) and an exact environment (`None`
-/// inherits the granting rule's names from the launcher).
+/// working directory's Dir handle (`None` is `/`), an exact environment (`None`
+/// inherits the granting rule's names from the launcher) and whether it runs in a process
+/// group of its own.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Command {
     pub program: String,
     pub args: Vec<String>,
     pub directory: Option<u64>,
     pub env: Option<Vec<(String, String)>>,
+    pub own_group: bool,
+}
+
+/// The checks of a pipeline's stage list, before any stage's own: an empty list, or
+/// stages whose `own_group` differ (they share one group or none), is `InvalidInput`.
+pub fn stages_error(stages: &[Command]) -> Option<ProcessFailure> {
+    (stages.is_empty() || stages.iter().any(|s| s.own_group != stages[0].own_group))
+        .then_some(ProcessFailure::InvalidInput)
 }
 
 impl Command {

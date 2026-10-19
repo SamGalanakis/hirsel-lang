@@ -3,7 +3,13 @@
 // A Dir names the child's working directory; it is not authority to spawn a program.
 pub fn started(d: Dir) -> bool {
   match proc.spawn(
-    Command(program: path.of("/bin/cat"), args: [], dir: Some(d), env: None())
+    Command(
+      program: path.of("/bin/cat"),
+      args: [],
+      dir: Some(d),
+      env: None(),
+      own_group: false
+    )
   ) {
     Ok(_) => true,
     Error(_) => false,

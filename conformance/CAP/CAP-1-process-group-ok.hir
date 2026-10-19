@@ -4,7 +4,15 @@
 pub fn started(p: Proc, d: Dir) -> bool {
   match proc.spawn_pipeline(
     p,
-    [Command(program: path.of("/bin/cat"), args: [], dir: Some(d), env: None())],
+    [
+      Command(
+        program: path.of("/bin/cat"),
+        args: [],
+        dir: Some(d),
+        env: None(),
+        own_group: false
+      )
+    ],
     64u64
   ) {
     Ok(_) => true,

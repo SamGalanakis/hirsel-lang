@@ -23,8 +23,9 @@ fn deadline_word(deadline: Option<crate::process::Deadline>) -> String {
     deadline.map_or_else(|| "none".into(), |d| format!("{}:{}", d.clock, d.ticks))
 }
 /// A Command's words: program, directory, the argument count and each argument, then
-/// `inherit` or the variable count and each name and value. Each count leads the words it
-/// counts.
+/// `inherit` or the variable count and each name and value, then `own_group` only when it
+/// is set, so a recording made before the field keeps its bytes. Each count leads the
+/// words it counts.
 fn command_words(command: &hirsel_run_config::Command) -> String {
     let mut text = format!(
         "{} {} {}",
@@ -50,6 +51,9 @@ fn command_words(command: &hirsel_run_config::Command) -> String {
                 ));
             }
         }
+    }
+    if command.own_group {
+        text.push_str(" own_group");
     }
     text
 }
@@ -329,7 +333,7 @@ fn parse_deadline(word: &str) -> Result<Option<crate::process::Deadline>, String
 }
 /// One Command from the front of `words`, as [`command_words`] writes it.
 fn parse_command<'a>(
-    words: &mut impl Iterator<Item = &'a str>,
+    words: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
 ) -> Result<(hirsel_run_config::Command, usize), String> {
     let mut used = 0;
     let mut next = || {
@@ -354,14 +358,17 @@ fn parse_command<'a>(
                 .collect::<Result<_, String>>()?,
         ),
     };
+    // A program word is hexadecimal, so it is never `own_group`.
+    let own_group = words.next_if_eq(&"own_group").is_some();
     Ok((
         hirsel_run_config::Command {
             program,
             args,
             directory,
             env,
+            own_group,
         },
-        used,
+        used + usize::from(own_group),
     ))
 }
 /// A command that used every remaining word.
@@ -450,7 +457,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             stdin: bytes(stdin)?,
             max_output: number(max_output)?,
             deadline: parse_deadline(deadline)?,
-            command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
+            command: parse_command(&mut rest.iter().copied().peekable()).and_then(ended(rest))?,
         },
         [
             "process_pipeline",
@@ -461,7 +468,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             count,
             rest @ ..,
         ] => {
-            let mut words = rest.iter().copied();
+            let mut words = rest.iter().copied().peekable();
             let mut used = 0;
             let mut stages = vec![];
             for _ in 0..number::<usize>(count)? {
@@ -487,7 +494,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             count,
             rest @ ..,
         ] => {
-            let mut words = rest.iter().copied();
+            let mut words = rest.iter().copied().peekable();
             let mut used = 0;
             let mut stages = vec![];
             for _ in 0..number::<usize>(count)? {
@@ -511,7 +518,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         },
         ["process_spawn", process, rest @ ..] => Request::ProcessSpawn {
             process: number(process)?,
-            command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
+            command: parse_command(&mut rest.iter().copied().peekable()).and_then(ended(rest))?,
         },
         ["child_write", process, child, b] => Request::ChildWrite {
             process: number(process)?,

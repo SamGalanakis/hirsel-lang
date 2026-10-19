@@ -550,7 +550,9 @@ and a well-formed exact environment, InvalidInput; the exact rule and its enviro
 names, NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
 serves the first unused `process.script@1` or `test.process` entry with equal program
 and args (none: NotFound), bounding each stream by `max_output` (OutputLimit).
-`proc.pipeline` checks every stage, then takes one entry per stage, all or none, with
+`proc.pipeline` checks its stage list (`hirsel_run_config::stages_error`: empty, or
+stages whose `own_group` differ, InvalidInput), then every stage, then takes one entry per
+stage, all or none, with
 `hirsel_run_config::script_pipeline`; `proc.run` is its one-stage case. It never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
 Replay takes the recorded completion and re-derives the checks; a contradiction
 refuses. `proc.spawn` makes the same checks and plays the first unused scripted child

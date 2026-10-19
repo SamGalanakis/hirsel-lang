@@ -44,7 +44,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     outcome(
       proc.run(
         p,
-        Command(program: test, args: [], dir: None(), env: None()),
+        Command(program: test, args: [], dir: None(), env: None(), own_group: false),
         b"",
         64u64,
         Some(after(c, start, 1000u64))
@@ -56,7 +56,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     outcome(
       proc.run(
         p,
-        Command(program: test, args: [], dir: None(), env: None()),
+        Command(program: test, args: [], dir: None(), env: None(), own_group: false),
         b"",
         64u64,
         Some(Deadline(clock: c, at: start))
@@ -68,7 +68,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     outcome(
       proc.run(
         p,
-        Command(program: test, args: [], dir: None(), env: None()),
+        Command(program: test, args: [], dir: None(), env: None(), own_group: false),
         b"",
         64u64,
         None()
@@ -80,7 +80,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     outcome(
       proc.run(
         p,
-        Command(program: test, args: [], dir: None(), env: None()),
+        Command(program: test, args: [], dir: None(), env: None(), own_group: false),
         b"",
         64u64,
         None()

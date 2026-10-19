@@ -4,7 +4,13 @@
 // A test.process Proc's rules list no environment names, so an empty exact environment
 // runs and any named variable is not granted, for runs and spawns alike.
 fn echo(take env: Option[List[(String, String)]]) -> Command {
-  Command(program: path.of("/bin/echo"), args: ["hi"], dir: None(), env: env)
+  Command(
+    program: path.of("/bin/echo"),
+    args: ["hi"],
+    dir: None(),
+    env: env,
+    own_group: false
+  )
 }
 
 pub fn exercise(t: Test) -> Result[(), ProcessError] {

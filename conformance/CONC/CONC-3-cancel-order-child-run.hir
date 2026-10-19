@@ -8,7 +8,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let p = io.process(rt)?
   let opened_child = match proc.spawn(
     p,
-    Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+    Command(
+      program: path.of("/bin/test"),
+      args: [],
+      dir: None(),
+      env: None(),
+      own_group: false
+    )
   ) {
     Ok(child) => take child,
     Error(_) => {
@@ -52,7 +58,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
       failure.check(
         proc.run(
           p,
-          Command(program: path.of("/bin/test"), args: [], dir: None(), env: None()),
+          Command(
+            program: path.of("/bin/test"),
+            args: [],
+            dir: None(),
+            env: None(),
+            own_group: false
+          ),
           b"",
           64u64,
           Some(Deadline(clock: c, at: now))

@@ -342,7 +342,9 @@ InDoubt; continuing from an InDoubt write never retries it.
 ### Process recording
 
 A process run is recorded at the call: the request (the `Proc` handle, the command's
-program, arguments, working-directory handle or none and exact environment or none, every
+program, arguments, working-directory handle or none, exact environment or none and
+`own_group`, which a recording holds only when it is `true`, so recordings made before the
+field existed keep their bytes, every
 stdin byte, `max_output`, and the deadline's clock handle and ticks or none) and the completion (the exit status with exactly the
 captured stdout and stderr bytes, or the error, `TimedOut()` included). Elapsed time and the
 order in which the child's streams were drained are never recorded. A `proc.pipeline` is

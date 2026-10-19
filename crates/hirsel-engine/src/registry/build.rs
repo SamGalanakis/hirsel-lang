@@ -367,7 +367,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "Command",
             "",
-            "program: Path,args: List[String],dir: Option[Dir],env: Option[List[(String, String)]]",
+            "program: Path,args: List[String],dir: Option[Dir],env: Option[List[(String, String)]],own_group: bool",
         ),
         (
             "UdpReceived",

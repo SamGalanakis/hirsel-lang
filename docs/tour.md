@@ -1457,8 +1457,10 @@ expired: canceled
 
 ## Processes
 
-A `Command` names a program, its arguments, an optional working `Dir` and an optional
-exact environment (`None()` passes through only the names the grant lists).
+A `Command` names a program, its arguments, an optional working `Dir`, an optional
+exact environment (`None()` passes through only the names the grant lists) and
+`own_group`: `true` starts the child in a process group of its own, so a kill, deadline
+or drop also stops whatever it started.
 `proc.run` runs one to completion with its stdin, an output bound and an
 optional `Deadline`: past it the child is stopped and the run returns `TimedOut()`.
 `proc.pipeline` runs a `List[Command]` as a shell pipeline, each stage's output feeding
@@ -1497,7 +1499,13 @@ pub fn main(t: Test) -> Result[(), ProcessError] {
   )
   let version = proc.run(
     p,
-    Command(program: bc, args: ["--version"], dir: None(), env: None()),
+    Command(
+      program: bc,
+      args: ["--version"],
+      dir: None(),
+      env: None(),
+      own_group: false
+    ),
     b"",
     4096u64,
     None()
@@ -1505,7 +1513,7 @@ pub fn main(t: Test) -> Result[(), ProcessError] {
   test.check(t, version.status == Exited(0) && version.stdout == b"bc 1.07\n")
   let mut calc = proc.spawn(
     p,
-    Command(program: bc, args: ["-q"], dir: None(), env: None())
+    Command(program: bc, args: ["-q"], dir: None(), env: None(), own_group: false)
   )?
   child.write(p, mut calc, b"6*7\n")?
   child.close_stdin(p, mut calc)

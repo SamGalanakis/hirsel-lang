@@ -1,14 +1,14 @@
 // rule: PROV-5
 // expect: accept
 // A Deadline's instant belongs to the clock stored beside it.
-fn bounded(p: Proc, c: MonotonicClock) -> Result[ProcessOutput, ProcessError] {
+fn bounded(p: Proc, t: Path, c: MonotonicClock) -> Result[ProcessOutput, ProcessError] {
   let now = match clock.monotonic(c) {
     Ok(now) => now,
     Error(_) => return Error(Fault(0)),
   }
   proc.run(
     p,
-    Command(program: path.of("/bin/true"), args: [], dir: None(), env: None()),
+    Command(program: t, args: [], dir: None(), env: None(), own_group: false),
     b"",
     64,
     Some(Deadline(clock: c, at: now))

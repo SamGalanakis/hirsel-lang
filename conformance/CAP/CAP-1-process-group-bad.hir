@@ -3,7 +3,15 @@
 // A Dir names a stage's working directory; it is not authority to spawn a pipeline.
 pub fn started(d: Dir) -> bool {
   match proc.spawn_pipeline(
-    [Command(program: path.of("/bin/cat"), args: [], dir: Some(d), env: None())],
+    [
+      Command(
+        program: path.of("/bin/cat"),
+        args: [],
+        dir: Some(d),
+        env: None(),
+        own_group: false
+      )
+    ],
     64u64
   ) {
     Ok(_) => true,

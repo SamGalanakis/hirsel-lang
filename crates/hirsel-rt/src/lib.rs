@@ -19,6 +19,7 @@ pub mod host_launch;
 pub mod exit_report;
 mod host_io_tape;
 pub mod host_paths;
+mod host_stages;
 pub mod host_stdin;
 mod host_waits;
 pub mod io;

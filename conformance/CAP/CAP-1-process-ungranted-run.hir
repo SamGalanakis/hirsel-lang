@@ -6,7 +6,13 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   failure.check(
     proc.run(
       p,
-      Command(program: path.of("/bin/echo"), args: ["hello"], dir: None(), env: None()),
+      Command(
+        program: path.of("/bin/echo"),
+        args: ["hello"],
+        dir: None(),
+        env: None(),
+        own_group: false
+      ),
       b"",
       64,
       None()
@@ -15,7 +21,13 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   )
   let spawned: bool = match proc.spawn(
     p,
-    Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None())
+    Command(
+      program: path.of("/bin/cat"),
+      args: [],
+      dir: None(),
+      env: None(),
+      own_group: false
+    )
   ) {
     Error(NotGranted()) => true,
     _ => false,

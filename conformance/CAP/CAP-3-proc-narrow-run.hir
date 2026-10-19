@@ -4,7 +4,7 @@
 // A narrowed Proc runs only its own rules: another program, or a name its rule no longer
 // passes through, is not granted, and it cannot be narrowed back to its parent's rules.
 fn command(program: String, take env: Option[List[(String, String)]]) -> Command {
-  Command(program: path.of(program), args: [], dir: None(), env: env)
+  Command(program: path.of(program), args: [], dir: None(), env: env, own_group: false)
 }
 
 fn denied(r: Result[Proc, ProcessError]) -> bool {

@@ -39,7 +39,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: path.of("git"), args: ["status"], dir: None(), env: None()),
+      Command(
+        program: path.of("git"),
+        args: ["status"],
+        dir: None(),
+        env: None(),
+        own_group: false
+      ),
       b"",
       64,
       None()
@@ -53,7 +59,8 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
         program: path.of("/usr/bin/../bin/git"),
         args: ["status"],
         dir: None(),
-        env: None()
+        env: None(),
+        own_group: false
       ),
       b"",
       64,
@@ -68,7 +75,8 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
         program: path.of("/usr/bin/gti"),
         args: ["status"],
         dir: None(),
-        env: None()
+        env: None(),
+        own_group: false
       ),
       b"",
       64,
@@ -79,7 +87,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["sta\u{0}tus"], dir: None(), env: None()),
+      Command(
+        program: git,
+        args: ["sta\u{0}tus"],
+        dir: None(),
+        env: None(),
+        own_group: false
+      ),
       b"",
       64,
       None()
@@ -88,7 +102,7 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   // Granted: entries serve in order, and a nonzero exit is an ordinary Ok.
   let first = proc.run(
     p,
-    Command(program: git, args: ["status"], dir: None(), env: None()),
+    Command(program: git, args: ["status"], dir: None(), env: None(), own_group: false),
     b"input",
     64,
     None()
@@ -98,7 +112,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["status"], dir: None(), env: None()),
+      Command(
+        program: git,
+        args: ["status"],
+        dir: None(),
+        env: None(),
+        own_group: false
+      ),
       b"",
       64,
       None()
@@ -108,7 +128,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["status"], dir: None(), env: None()),
+      Command(
+        program: git,
+        args: ["status"],
+        dir: None(),
+        env: None(),
+        own_group: false
+      ),
       b"",
       64,
       None()
@@ -119,7 +145,7 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["log"], dir: None(), env: None()),
+      Command(program: git, args: ["log"], dir: None(), env: None(), own_group: false),
       b"",
       9,
       None()
@@ -129,7 +155,7 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["log"], dir: None(), env: None()),
+      Command(program: git, args: ["log"], dir: None(), env: None(), own_group: false),
       b"",
       10,
       None()
@@ -139,7 +165,7 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     proc.run(
       p,
-      Command(program: git, args: ["gc"], dir: None(), env: None()),
+      Command(program: git, args: ["gc"], dir: None(), env: None(), own_group: false),
       b"",
       0,
       None()

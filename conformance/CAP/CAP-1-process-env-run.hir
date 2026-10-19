@@ -9,7 +9,13 @@
 // is not granted, and a malformed or repeated name is invalid input; neither takes the
 // script's one run.
 fn sort(take env: List[(String, String)]) -> Command {
-  Command(program: path.of("/usr/bin/sort"), args: [], dir: None(), env: Some(env))
+  Command(
+    program: path.of("/usr/bin/sort"),
+    args: [],
+    dir: None(),
+    env: Some(env),
+    own_group: false
+  )
 }
 
 fn report(r: Result[ProcessOutput, ProcessError]) -> String {

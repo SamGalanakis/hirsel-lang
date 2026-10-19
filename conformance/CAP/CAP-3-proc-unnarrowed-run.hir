@@ -4,7 +4,7 @@
 // The twin of CAP-3-proc-narrow-run: the unnarrowed Proc, and a narrowing to all of its
 // rules, run each program with each name its rules pass through.
 fn command(program: String, take env: Option[List[(String, String)]]) -> Command {
-  Command(program: path.of(program), args: [], dir: None(), env: env)
+  Command(program: path.of(program), args: [], dir: None(), env: env, own_group: false)
 }
 
 pub fn main(rt: Io) -> Result[(), ProcessError] {

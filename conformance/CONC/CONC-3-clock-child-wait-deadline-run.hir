@@ -27,7 +27,13 @@ fn outcome(r: Result[ExitStatus, ProcessError]) -> String {
 fn spawn(p: Proc) -> Result[Child of p, ProcessError] {
   proc.spawn(
     p,
-    Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+    Command(
+      program: path.of("/bin/test"),
+      args: [],
+      dir: None(),
+      env: None(),
+      own_group: false
+    )
   )
 }
 

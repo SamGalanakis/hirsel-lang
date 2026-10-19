@@ -73,6 +73,7 @@ fn command(program: &str, args: &[&str]) -> Command {
         args: args.iter().map(|a| (*a).into()).collect(),
         directory: None,
         env: None,
+        own_group: false,
     }
 }
 
@@ -1482,6 +1483,159 @@ fn a_group_kill_and_a_wait_deadline_stop_every_stage() {
         Ok(Completion::Unit(Ok(())))
     );
     assert!(begun.elapsed() < std::time::Duration::from_secs(1));
+}
+
+/// The read end of a FIFO that a grandchild holds open: it hangs up exactly when that
+/// process is gone.
+struct Witness {
+    path: String,
+    read: std::fs::File,
+}
+impl Witness {
+    fn new(temp: &Disposable, name: &str) -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = temp.0.join(name).to_str().unwrap().to_owned();
+        let c = std::ffi::CString::new(path.clone()).unwrap();
+        // SAFETY: mkfifo(3) on a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let read = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .unwrap();
+        Self { path, read }
+    }
+    /// A command whose shell, ignoring SIGTERM, starts a `sleep` (which inherits that) as
+    /// the FIFO's only writer, prints `ready` and then runs `then`.
+    fn command(&self, then: &str) -> Command {
+        let script =
+            format!("trap '' TERM; exec 3>\"$0\"; sleep 30 & exec 3>&-; echo ready; {then}");
+        Command {
+            own_group: true,
+            ..command(SH, &["-c", &script, &self.path])
+        }
+    }
+    /// Whether the writer is gone within ten seconds.
+    fn hung_up(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut row = libc::pollfd {
+            fd: self.read.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: row holds the live read end.
+        let polled = unsafe { libc::poll(&mut row, 1, 10_000) };
+        polled == 1 && row.revents & libc::POLLHUP != 0
+    }
+}
+
+/// With `own_group` every way the provider stops a child or a group also stops what its
+/// stages started, even a process that ignores SIGTERM: a deadline's SIGKILL goes to the
+/// group, as do a drop's and the stderr bound's, and a run's deadline.
+#[test]
+fn an_own_group_stops_what_its_stages_started() {
+    let (temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
+    let ready = |io: &mut RealIo, child| {
+        assert_eq!(
+            io.call(read(p, child, 64)),
+            Ok(Completion::ChildBytes(Ok(b"ready\n".to_vec())))
+        );
+    };
+    let soon = |io: &mut RealIo| {
+        let (clock, now) = clock(io);
+        Some(Deadline {
+            clock,
+            ticks: now + 100_000_000,
+        })
+    };
+    let w = Witness::new(&temp, "deadline");
+    let c = spawned(
+        &mut io,
+        Request::ProcessSpawn {
+            process: p,
+            command: w.command("wait"),
+        },
+    );
+    ready(&mut io, c);
+    let deadline = soon(&mut io);
+    assert_eq!(
+        io.call(Request::ChildWait {
+            process: p,
+            child: c,
+            deadline,
+        }),
+        Ok(Completion::ChildExit(Err(ProcessFailure::TimedOut)))
+    );
+    assert!(w.hung_up(), "a child's deadline");
+    let w = Witness::new(&temp, "drop");
+    let c = spawned(
+        &mut io,
+        Request::ProcessSpawn {
+            process: p,
+            command: w.command("wait"),
+        },
+    );
+    ready(&mut io, c);
+    assert_eq!(
+        io.call(Request::Close { handle: c }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert!(w.hung_up(), "a dropped child");
+    let w = Witness::new(&temp, "group-deadline");
+    let g = spawned(
+        &mut io,
+        Request::ProcessSpawnPipeline {
+            process: p,
+            stages: vec![
+                w.command("exec cat"),
+                Command {
+                    own_group: true,
+                    ..command("/bin/cat", &[])
+                },
+            ],
+            max_stderr: 64,
+        },
+    );
+    ready(&mut io, g);
+    let deadline = soon(&mut io);
+    assert_eq!(
+        io.call(wait_group(p, g, deadline)),
+        Ok(Completion::GroupExit(Err(ProcessFailure::TimedOut)))
+    );
+    assert!(w.hung_up(), "a group's deadline");
+    let w = Witness::new(&temp, "bound");
+    let g = spawned(
+        &mut io,
+        Request::ProcessSpawnPipeline {
+            process: p,
+            stages: vec![
+                w.command("exec cat >&2"),
+                Command {
+                    own_group: true,
+                    ..command("/bin/cat", &[])
+                },
+            ],
+            max_stderr: 4096,
+        },
+    );
+    assert_eq!(io.call(write(p, g, &[b'x'; 8192])), Ok(UNIT));
+    assert_eq!(
+        io.call(wait_group(p, g, None)),
+        Ok(Completion::GroupExit(Err(ProcessFailure::OutputLimit)))
+    );
+    assert!(w.hung_up(), "a group past its stderr bound");
+    // A run's deadline: the script's writer has opened the FIFO long before it.
+    let w = Witness::new(&temp, "run");
+    let run = Request::ProcessRun {
+        process: p,
+        command: w.command("wait"),
+        stdin: vec![],
+        max_output: 64,
+        deadline: None,
+    };
+    let run = until(run, clock(&mut io), 500_000_000);
+    assert_eq!(io.call(run), Ok(TIMED_OUT));
+    assert!(w.hung_up(), "a run's deadline");
 }
 
 #[test]

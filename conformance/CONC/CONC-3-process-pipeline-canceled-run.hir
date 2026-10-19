@@ -4,7 +4,13 @@
 // A pipeline's program errors, in every stage, precede cancellation; a pipeline that
 // passes its checks in a cancelled task returns Canceled without running.
 fn stage(program: String) -> Command {
-  Command(program: path.of(program), args: [], dir: None(), env: None())
+  Command(
+    program: path.of(program),
+    args: [],
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {

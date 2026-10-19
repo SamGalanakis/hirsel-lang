@@ -187,7 +187,17 @@ impl Io {
         let OpValue::Aggregate(fields) = v else {
             return None;
         };
-        let [OpValue::Handle(path), argv, dir, env] = fields.as_slice() else {
+        let [
+            OpValue::Handle(path),
+            argv,
+            dir,
+            env,
+            OpValue::Bits {
+                scalar: ScalarKind::Bool,
+                bits: own_group,
+            },
+        ] = fields.as_slice()
+        else {
             return None;
         };
         match variant(dir)? {
@@ -215,6 +225,7 @@ impl Io {
             args: strings(argv)?,
             directory: None,
             env,
+            own_group: *own_group != 0,
         }))
     }
     pub(super) fn process(

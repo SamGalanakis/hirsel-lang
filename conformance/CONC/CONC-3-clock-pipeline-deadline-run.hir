@@ -16,8 +16,20 @@ fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
 
 fn stages() -> List[Command] {
   [
-    Command(program: path.of("/usr/bin/sort"), args: [], dir: None(), env: None()),
-    Command(program: path.of("/usr/bin/uniq"), args: [], dir: None(), env: None())
+    Command(
+      program: path.of("/usr/bin/sort"),
+      args: [],
+      dir: None(),
+      env: None(),
+      own_group: false
+    ),
+    Command(
+      program: path.of("/usr/bin/uniq"),
+      args: [],
+      dir: None(),
+      env: None(),
+      own_group: false
+    )
   ]
 }
 

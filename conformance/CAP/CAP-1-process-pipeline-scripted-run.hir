@@ -20,7 +20,13 @@ fn run(
 }
 
 fn stage(program: String, take args: List[String]) -> Command {
-  Command(program: path.of(program), args: args, dir: None(), env: None())
+  Command(
+    program: path.of(program),
+    args: args,
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
 }
 
 fn sort_uniq() -> List[Command] {

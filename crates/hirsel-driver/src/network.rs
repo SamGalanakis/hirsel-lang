@@ -985,6 +985,10 @@ impl HostLibrary {
                 .collect::<Result<_, _>>()?,
             directory,
             env,
+            own_group: match f.get(4) {
+                Some(Value::Bool(own_group)) => *own_group,
+                _ => return Err(invalid()),
+            },
         }))
     }
     /// An `Option[Deadline]` value: its clock handle and the Instant's ticks.
@@ -2069,6 +2073,7 @@ mod tests {
                 Some(sequence(BuiltinType::List, [])),
                 Some(variant(1, vec![directory])),
                 Some(variant(0, vec![])),
+                Some(Value::Bool(false)),
             ],
         };
         let arguments = [

@@ -7,7 +7,13 @@
 // stage first and take all their entries or none; a kill or the stderr bound ends every
 // stage.
 fn stage(program: String, take args: List[String]) -> Command {
-  Command(program: path.of(program), args: args, dir: None(), env: None())
+  Command(
+    program: path.of(program),
+    args: args,
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
 }
 
 fn cat_sort() -> List[Command] {

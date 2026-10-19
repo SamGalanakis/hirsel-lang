@@ -57,7 +57,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     fn(s: Scope) -> String {
       let mut test = match proc.spawn(
         p,
-        Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+        Command(
+          program: path.of("/bin/test"),
+          args: [],
+          dir: None(),
+          env: None(),
+          own_group: false
+        )
       ) {
         Ok(child) => take child,
         Error(_) => return "not spawned",

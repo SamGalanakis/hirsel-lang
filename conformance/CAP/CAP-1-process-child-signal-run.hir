@@ -8,7 +8,13 @@ fn cat() -> ChildScript {
 }
 
 fn plain() -> Command {
-  Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None())
+  Command(
+    program: path.of("/bin/cat"),
+    args: [],
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
 }
 
 pub fn exercise(t: Test) -> Result[(), ProcessError] {

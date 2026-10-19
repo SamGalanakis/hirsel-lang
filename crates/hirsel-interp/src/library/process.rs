@@ -451,7 +451,7 @@ fn deadline(v: &Value) -> Result<Option<(&Value, u64)>, Error> {
 impl Simulation {
     /// A `Command` value, its Dir checked to be one.
     fn command(&self, v: &Value) -> Result<Command, Error> {
-        let f = record_fields(v, "Command", 4)?;
+        let f = record_fields(v, "Command", 5)?;
         let directory = match variant_fields(f[2])? {
             (0, d) if d.is_empty() => None,
             (1, d) if d.len() == 1 => Some(self.id(d[0], "Dir")?),
@@ -480,6 +480,10 @@ impl Simulation {
             args: strings(f[1])?,
             directory,
             env,
+            own_group: match f[4] {
+                Value::Bool(own_group) => *own_group,
+                _ => return Err(invalid("own_group requires bool")),
+            },
         })
     }
     fn process_grant(&self, v: &Value) -> Result<(u64, Vec<ProcessRule>), Error> {
@@ -587,8 +591,8 @@ impl Simulation {
                 }
                 let deadline = deadline.map(|(_, ticks)| ticks);
                 // Every stage's checks, in stage order, precede cancellation.
-                let checked = if stages.is_empty() {
-                    Err(ProcessFailure::InvalidInput)
+                let checked = if let Some(failure) = hirsel_run_config::stages_error(&stages) {
+                    Err(failure)
                 } else {
                     stages
                         .iter()
@@ -823,8 +827,8 @@ impl Simulation {
                     _ => return Err(invalid("max_stderr requires u64")),
                 };
                 // Every stage's checks, in stage order, precede cancellation.
-                let checked = if stages.is_empty() {
-                    Err(ProcessFailure::InvalidInput)
+                let checked = if let Some(failure) = hirsel_run_config::stages_error(&stages) {
+                    Err(failure)
                 } else {
                     stages
                         .iter()

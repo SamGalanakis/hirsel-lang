@@ -33,7 +33,7 @@ fn print_line(out: Stdout, take line: List[u8]) -> () {
 fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
   let mut test = match proc.spawn(
     p,
-    Command(program: program, args: [], dir: None(), env: None())
+    Command(program: program, args: [], dir: None(), env: None(), own_group: false)
   ) {
     Ok(c) => take c,
     Error(e) => return NotRun(e),

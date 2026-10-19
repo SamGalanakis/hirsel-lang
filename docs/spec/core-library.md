@@ -910,7 +910,7 @@ ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
               | InputClosed()
 Deadline      = { clock: MonotonicClock, at: Instant of .clock }
 Command       = { program: Path, args: List[String], dir: Option[Dir],
-                  env: Option[List[(String, String)]] }
+                  env: Option[List[(String, String)]], own_group: bool }
 ProcessScript = { program: String, args: List[String],
                   outcome: Result[ProcessOutput, ProcessError] }
 ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
@@ -919,15 +919,16 @@ ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus
 ```
 
 `ExitStatus`, `ProcessOutput`, `PipelineOutput` and `ProcessError` are `serializable`;
-`Deadline` holds a clock and `Command` a `Dir`, so neither is. A `Command` describes one child: the program to run, its arguments, its working directory
-and its environment. `proc.run(p, cmd, stdin, max_output, deadline)` runs one child to
+`Deadline` holds a clock and `Command` a `Dir`, so neither is. A `Command` describes one child: the program to run, its arguments, its working directory,
+its environment and whether it runs in a process group of its own. `proc.run(p, cmd, stdin, max_output, deadline)` runs one child to
 completion and returns its exit status and everything it wrote to standard output and
 standard error. `proc.pipeline(p, stages, stdin, max_output, deadline)` runs commands
 connected as a shell pipeline. `proc.spawn(p, cmd)` starts a streaming child that the
 program talks to while it runs, and `proc.spawn_pipeline(p, stages, max_stderr)` a streaming
 pipeline. Each makes these checks of each command in this order, each before any host
 effect; a pipeline checks every stage in stage order before anything is spawned, and an
-empty `stages` is `InvalidInput()`:
+empty `stages`, or one whose stages' `own_group` differ, is `InvalidInput()` before any
+stage's checks:
 
 1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
    `..` component and no trailing `/`, and no argument contains a NUL byte. With `env`
@@ -961,8 +962,23 @@ A missing executable is `NotFound()`, one the host refuses to execute `Permissio
 and any other spawn, stream or wait failure `Fault(code)`, a capability input like other
 fault codes. A child that exits has status `Exited(code)`, one ended by a signal
 `Signaled(number)`; a nonzero status is an ordinary `Ok`, not an error. A child starts with
-the default disposition of SIGINT and SIGTERM, whatever the launcher's. The host provider
-signals only the child itself, never processes it started.
+the default disposition of SIGINT and SIGTERM, whatever the launcher's. With `own_group`
+`false` the host provider signals only the child itself, never processes it started.
+
+**Process groups.** With `own_group` `true` the child starts as the leader of a new host
+process group, and every stage of a pipeline joins the first stage's group, as a shell's
+job does. Every signal the provider sends then goes to each stage, the last first, and then
+to the whole group, so it also reaches every process a stage started that is still in the
+group: a kill, the SIGTERM and SIGKILL of a deadline, the SIGKILL of an output bound or a
+cancellation, and the SIGKILL of a drop. A timed-out group gets its SIGKILL once every
+stage has exited or the grace has passed, whichever comes first, so a process a stage
+started that ignored SIGTERM ends with its stages. The group's leader is reaped after every
+other stage, so the group signalled is always the child's own. A process that leaves the
+group (by `setsid` or `setpgid`) is beyond its reach. A wait that ends normally signals
+nothing: a process a stage started that closed its pipes may outlive the wait. A child in a
+group of its own receives no signal its launcher's terminal sends the launcher's group.
+Scripted worlds start no host processes, so there `own_group` has only its check and is
+recorded with the command.
 
 **One-shot runs.** `proc.run` writes `stdin` to the child's standard input, which is then
 closed; standard output and standard error are captured separately and concurrently, so
@@ -1064,7 +1080,8 @@ then `OutputLimit()`. A stage that cannot start (`NotFound()`, `PermissionDenied
   child, the last stage first: every stage has its signal before an earlier stage can end,
   so a stage that would exit on end of input is still reported `Signaled(n)` unless it
   handles or ignores the signal. Every signal the provider sends a group's stages (the
-  `max_stderr` bound, a deadline, a drop) goes in the same order.
+  `max_stderr` bound, a deadline, a drop) goes in the same order, and with `own_group` to
+  the process group after the stages.
 
 Dropping a `ChildGroup` closes its standard input, sends every stage SIGKILL, reaps them all,
 then closes its pipes, discarding unread output and captured standard error. The finalizer

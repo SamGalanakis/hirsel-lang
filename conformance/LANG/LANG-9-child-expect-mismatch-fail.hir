@@ -14,5 +14,5 @@ pub fn trial(t: Test) -> Result[(), ProcessError] {
 }
 
 fn plain(program: Path) -> Command {
-  Command(program: program, args: [], dir: None(), env: None())
+  Command(program: program, args: [], dir: None(), env: None(), own_group: false)
 }

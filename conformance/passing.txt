@@ -68,6 +68,7 @@ conformance/CAP/CAP-1-process-env-scripted-run.hir
 conformance/CAP/CAP-1-process-group-bad.hir
 conformance/CAP/CAP-1-process-group-ok.hir
 conformance/CAP/CAP-1-process-group-scripted-run.hir
+conformance/CAP/CAP-1-process-own-group-scripted-run.hir
 conformance/CAP/CAP-1-process-pipeline-bad.hir
 conformance/CAP/CAP-1-process-pipeline-ok.hir
 conformance/CAP/CAP-1-process-pipeline-scripted-run.hir

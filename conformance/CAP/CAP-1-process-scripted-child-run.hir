@@ -38,7 +38,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
       p,
       proc.spawn(
         p,
-        Command(program: path.of("bc"), args: ["-q"], dir: None(), env: None())
+        Command(
+          program: path.of("bc"),
+          args: ["-q"],
+          dir: None(),
+          env: None(),
+          own_group: false
+        )
       ),
       InvalidInput()
     )
@@ -49,7 +55,13 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
       p,
       proc.spawn(
         p,
-        Command(program: path.of("/usr/bin/dc"), args: [], dir: None(), env: None())
+        Command(
+          program: path.of("/usr/bin/dc"),
+          args: [],
+          dir: None(),
+          env: None(),
+          own_group: false
+        )
       ),
       NotGranted()
     )
@@ -58,13 +70,16 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     refused(
       p,
-      proc.spawn(p, Command(program: path, args: [], dir: None(), env: None())),
+      proc.spawn(
+        p,
+        Command(program: path, args: [], dir: None(), env: None(), own_group: false)
+      ),
       NotFound()
     )
   )
   let mut c = proc.spawn(
     p,
-    Command(program: path, args: ["-q"], dir: None(), env: None())
+    Command(program: path, args: ["-q"], dir: None(), env: None(), own_group: false)
   )?
   let mut out: List[u8] = []
   test.check(t, child.read_stdout(p, mut c, mut out, 64u64)? == 6u64)
@@ -86,7 +101,7 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   // A kill ends the script without checking its Expect.
   let mut second = proc.spawn(
     p,
-    Command(program: path, args: ["-q"], dir: None(), env: None())
+    Command(program: path, args: ["-q"], dir: None(), env: None(), own_group: false)
   )?
   child.kill(p, mut second, Kill())
   test.check(t, child.wait(p, take second, None()) == Ok(Signaled(9)))
@@ -94,7 +109,10 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
     t,
     refused(
       p,
-      proc.spawn(p, Command(program: path, args: ["-q"], dir: None(), env: None())),
+      proc.spawn(
+        p,
+        Command(program: path, args: ["-q"], dir: None(), env: None(), own_group: false)
+      ),
       NotFound()
     )
   )

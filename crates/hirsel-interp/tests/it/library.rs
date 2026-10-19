@@ -1439,7 +1439,13 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
                 p,
                 Value::Record {
                     definition: hirsel_syntax::DefPath::core("Command"),
-                    fields: vec![Some(path(program)), Some(args), Some(none()), Some(none())],
+                    fields: vec![
+                        Some(path(program)),
+                        Some(args),
+                        Some(none()),
+                        Some(none()),
+                        Some(Value::Bool(false)),
+                    ],
                 },
                 Value::Bytes(vec![]),
                 u64_value(64),

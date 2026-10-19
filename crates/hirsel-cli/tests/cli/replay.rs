@@ -265,7 +265,7 @@ const PROCESS_PROGRAM: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), G
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  match proc.run(p, Command(program: program, args: ["recorded"], dir: None(), env: None()), b"", 64, None()) {
+  match proc.run(p, Command(program: program, args: ["recorded"], dir: None(), env: None(), own_group: false), b"", 64, None()) {
     Ok(o) => {
       if o.status == Exited(0) && o.stdout == b"recorded\n" {
         let _ = out.print(out, "echo ran\n")
@@ -352,7 +352,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(at) => at,
     None() => now,
   }
-  match proc.run(p, Command(program: sleep, args: ["infinity"], dir: None(), env: None()), b"", 64, Some(Deadline(clock: c, at: soon))) {
+  match proc.run(p, Command(program: sleep, args: ["infinity"], dir: None(), env: None(), own_group: false), b"", 64, Some(Deadline(clock: c, at: soon))) {
     Error(TimedOut()) => {
       let _ = out.print(out, "timed out\n")
     },
@@ -365,7 +365,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(at) => at,
     None() => fresh,
   }
-  match proc.run(p, Command(program: sleep, args: ["0"], dir: None(), env: None()), b"", 64, Some(Deadline(clock: c, at: later))) {
+  match proc.run(p, Command(program: sleep, args: ["0"], dir: None(), env: None(), own_group: false), b"", 64, Some(Deadline(clock: c, at: later))) {
     Ok(o) => {
       if o.status == Exited(0) {
         let _ = out.print(out, "in time\n")
@@ -398,7 +398,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
       let h = task.async(
         s,
         fn() -> bool {
-          proc.run(p, Command(program: script, args: [], dir: None(), env: None()), b"", 64, None()) == Error(Canceled(Requested))
+          proc.run(p, Command(program: script, args: [], dir: None(), env: None(), own_group: false), b"", 64, None()) == Error(Canceled(Requested))
         }
       )
       let mut signal: List[u8] = []
@@ -447,7 +447,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  let mut c = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None())) ? failed
+  let mut c = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None(), own_group: false)) ? failed
   show(out, echo(p, mut c, b"ping\n") ? failed)
   show(out, echo(p, mut c, b"pong\n") ? failed)
   child.close_stdin(p, mut c)
@@ -458,12 +458,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   if child.wait(p, take c, None()) == Ok(Exited(0)) {
     let _ = out.print(out, "exited 0\n")
   }
-  let mut killed = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None())) ? failed
+  let mut killed = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None(), own_group: false)) ? failed
   child.kill(p, mut killed, Kill())
   if child.wait(p, take killed, None()) == Ok(Signaled(9)) {
     let _ = out.print(out, "killed\n")
   }
-  let _ = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None()))
+  let _ = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None(), own_group: false))
   Ok(())
 }
 "#;
@@ -478,7 +478,7 @@ fn stage(args: Args, index: u64, take words: List[String]) -> Command {
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  Command(program: program, args: words, dir: None(), env: None())
+  Command(program: program, args: words, dir: None(), env: None(), own_group: false)
 }
 
 fn status(s: ExitStatus) -> String {
@@ -533,7 +533,7 @@ fn stage(args: Args, index: u64, take words: List[String]) -> Command {
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  Command(program: program, args: words, dir: None(), env: None())
+  Command(program: program, args: words, dir: None(), env: None(), own_group: false)
 }
 
 fn drain(p: Proc, mut g: ChildGroup of p) -> Result[Bytes, ProcessError] {
@@ -600,6 +600,69 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     _ => {},
   }
   let _ = proc.spawn_pipeline(p, [stage(args, 0u64, []), stage(args, 1u64, [])], 64u64)
+  Ok(())
+}
+"#;
+
+/// A child and a group in process groups of their own, each with a `sleep` its shell
+/// started in the background holding its output: a kill stops the sleep too, so each wait
+/// sees its output end and returns long before its deadline.
+const OWN_GROUP_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn failed(take e: ProcessError) -> () {}
+
+fn granted(args: Args, index: u64) -> Path {
+  match arg.path(args, index) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+}
+
+fn grouped(exe: Path, take args: List[String]) -> Command {
+  Command(program: exe, args: args, dir: None(), env: None(), own_group: true)
+}
+
+fn holder(args: Args) -> Command {
+  grouped(granted(args, 0u64), ["-c", "sleep 30 & echo ready; wait"])
+}
+
+fn show(out: Stdout, ready: bool, take what: String) -> () {
+  if ready {
+    let _ = out.print(out, what)
+  }
+}
+
+fn after(c: MonotonicClock, ns: u64) -> Option[Deadline] {
+  match clock.monotonic(c) {
+    Ok(now) => match instant.checked_add(c, now, ns) {
+      Some(at) => Some(Deadline(clock: c, at: at)),
+      None() => None(),
+    },
+    Error(_) => None(),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let c = io.monotonic_clock(rt) ? grant
+  let mut k = proc.spawn(p, holder(args)) ? failed
+  let mut got: List[u8] = []
+  let _ = child.read_stdout(p, mut k, mut got, 64u64) ? failed
+  show(out, got == [114u8, 101u8, 97u8, 100u8, 121u8, 10u8], "child ready\n")
+  child.kill(p, mut k, Kill())
+  let killed = child.wait(p, take k, after(c, 10000000000u64)) == Ok(Signaled(9))
+  show(out, killed, "child killed with what it started\n")
+  let mut g = proc.spawn_pipeline(p, [holder(args), grouped(granted(args, 1u64), [])], 64u64) ? failed
+  let mut read: List[u8] = []
+  let _ = group.read_stdout(p, mut g, mut read, 64u64) ? failed
+  show(out, read == [114u8, 101u8, 97u8, 100u8, 121u8, 10u8], "group ready\n")
+  group.kill(p, mut g, Kill())
+  match proc.wait_group(p, take g, after(c, 10000000000u64)) {
+    Ok(done) if done.statuses == [Signaled(9), Signaled(9)] => {
+      let _ = out.print(out, "group killed with what it started\n")
+    },
+    _ => {},
+  }
   Ok(())
 }
 "#;
@@ -894,6 +957,23 @@ fn a_streaming_group_round_trips_and_replays_without_spawning() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn an_own_group_kill_stops_what_its_stages_started_and_replays_without_spawning() {
+    let root = process_root("replay-own-group");
+    let [sh, cat] = ["sh", "cat"].map(|name| root.join(name));
+    for (from, to) in [("/bin/sh", &sh), ("/bin/cat", &cat)] {
+        std::fs::copy(from, to).unwrap();
+    }
+    process_round_trip(
+        "owngroup",
+        OWN_GROUP_PROGRAM,
+        &[&sh, &cat],
+        b"child ready\nchild killed with what it started\ngroup ready\ngroup killed with what it started\n",
+        None,
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// Each narrowing on a host: a read-only Dir over the granted root, an Env of one name and
 /// a Proc of one rule, each refusing what it narrowed away.
 const NARROWING_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
@@ -916,7 +996,7 @@ pub fn main(rt: Io, e: Env, args: Args) -> Result[(), ()] {
   let program = arg.text(args, 0u64) ? argument
   let p = io.process(rt) ? grant
   let one = proc.narrow(p, [ProcessRule(program: copy program, env: [])]) ? process
-  let echo = Command(program: path.of(program), args: ["narrowed"], dir: None(), env: None())
+  let echo = Command(program: path.of(program), args: ["narrowed"], dir: None(), env: None(), own_group: false)
   let ran = proc.run(one, echo, b"", 64u64, None()) ? process
   failure.check(ran.stdout == b"narrowed\n", Bounds())
   let wider = proc.narrow(one, [ProcessRule(program: copy program, env: ["HOME"])])

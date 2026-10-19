@@ -7,7 +7,8 @@ pub fn status(d: Dir) -> Result[ProcessOutput, ProcessError] {
       program: path.of("/usr/bin/git"),
       args: ["status"],
       dir: Some(d),
-      env: None()
+      env: None(),
+      own_group: false
     ),
     b"",
     65536,

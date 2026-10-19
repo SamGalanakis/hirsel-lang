@@ -30,7 +30,7 @@ pub use process::{
     ChildRun, ChildStep, Command, ExitStatus, GroupOutput, PipelineOutcome, ProcessFailure,
     ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, canonical_program, decode_child_runs,
     decode_process_runs, encode_child_runs, encode_process_runs, script_pipeline, scriptable,
-    take_children, validate_process_grant,
+    stages_error, take_children, validate_process_grant,
 };
 
 /// A host-supplied, immutable admission snapshot. Its revision hashes the exact file.

@@ -4,10 +4,10 @@
 //! child operation that would block polls its one descriptor. Under one it records that
 //! descriptor as the entered token's interest and parks, and a wait runs on a
 //! [`HostJob`](crate::process::HostJob), so the task parks instead of blocking the thread.
+use crate::host_stages::{Ended, Stages, Targets};
 use crate::io::{AdapterError, Completion};
 use crate::process::{
-    ChildStream, Ended, ExitStatus, GroupOutput, HostCall, JobOutcome, PipelineOutcome,
-    ProcessFailure,
+    ChildStream, ExitStatus, GroupOutput, HostCall, JobOutcome, PipelineOutcome, ProcessFailure,
 };
 use crate::readiness::Readiness;
 use std::collections::BTreeMap;
@@ -17,8 +17,9 @@ use std::os::fd::{AsRawFd, RawFd};
 /// One running child, or the stages of one spawned pipeline, and the program's ends of
 /// their pipes: the first stage's input and the last stage's output.
 struct HostChild {
-    /// Every stage in stage order; a spawned child is one.
-    children: Vec<std::process::Child>,
+    /// Every stage in stage order; a spawned child is one. No stage is reaped before its
+    /// wait or drop.
+    children: Stages,
     stdin: Option<std::process::ChildStdin>,
     stdout: std::process::ChildStdout,
     stderr: Errors,
@@ -28,33 +29,34 @@ enum Errors {
     Pipe(std::process::ChildStderr),
     Captured(Capture),
 }
-/// Dropping a Child or ChildGroup closes its input, stops its capture, sends every stage
-/// SIGKILL, the last first, reaps them, then closes its outputs (the fields drop after
-/// this body).
+/// Dropping a Child or ChildGroup closes its input and stops its capture; then its
+/// stages drop, which SIGKILLs and reaps them, then its outputs close (the fields drop
+/// after this body, in order).
 impl Drop for HostChild {
     fn drop(&mut self) {
         self.stdin = None;
         if let Errors::Captured(capture) = &mut self.stderr {
             capture.stop();
         }
-        crate::process::kill(&mut self.children);
     }
 }
 
 /// The standard error of every stage of a spawned pipeline, drained on a thread of its own
 /// from the spawn until each stage closes it, so no stage waits on it. A stage past the
-/// bound makes the thread SIGKILL every stage. A stage is reaped only after the thread
-/// ended (its `done` end reads end of file), so every pid it signals still names its stage.
+/// bound makes the thread SIGKILL every stage and the group. A stage is reaped only after
+/// the thread ended (its `done` end reads end of file), so every pid it signals still
+/// names its stage.
 struct Capture {
     stop: std::os::unix::net::UnixStream,
     done: std::os::unix::net::UnixStream,
     thread: Option<std::thread::JoinHandle<(Vec<Vec<u8>>, bool)>>,
 }
 impl Capture {
-    /// Drain `pipes`, one per stage, each bounded by `max` bytes; past it, SIGKILL `pids`.
+    /// Drain `pipes`, one per stage, each bounded by `max` bytes; past it, SIGKILL
+    /// `targets`.
     fn start(
         pipes: Vec<std::process::ChildStderr>,
-        pids: Vec<libc::pid_t>,
+        targets: Targets,
         max: u64,
     ) -> std::io::Result<Self> {
         use std::os::unix::net::UnixStream;
@@ -66,7 +68,7 @@ impl Capture {
         let thread = std::thread::Builder::new()
             .name("hirsel-stderr".into())
             .spawn(move || {
-                let captured = drain_stages(pipes, &pids, max, stopped.as_raw_fd());
+                let captured = drain_stages(pipes, &targets, max, stopped.as_raw_fd());
                 drop(ended);
                 captured
             })?;
@@ -91,11 +93,11 @@ impl Capture {
 }
 
 /// Read every pipe to end of file, or until `stop` is readable, each into its own buffer;
-/// once one passes `max` bytes every stage gets SIGKILL, the last first, and draining
-/// stops, since a process a stage started may hold its pipe open.
+/// once one passes `max` bytes every stage gets SIGKILL and draining stops, since a
+/// process a stage started may hold its pipe open.
 fn drain_stages(
     mut pipes: Vec<std::process::ChildStderr>,
-    pids: &[libc::pid_t],
+    targets: &Targets,
     max: u64,
     stop: RawFd,
 ) -> (Vec<Vec<u8>>, bool) {
@@ -136,10 +138,8 @@ fn drain_stages(
                 Ok(n) => {
                     buffers[i].extend_from_slice(&chunk[..n]);
                     if buffers[i].len() as u64 > max {
-                        for &pid in pids.iter().rev() {
-                            // SAFETY: no stage is reaped before this thread ends.
-                            unsafe { libc::kill(pid, libc::SIGKILL) };
-                        }
+                        // No stage is reaped before this thread ends.
+                        targets.signal(libc::SIGKILL);
                         return (buffers, true);
                     }
                 }
@@ -266,14 +266,8 @@ impl HostChildren {
                     JobOutcome::Run(_) => Err(ProcessFailure::Fault(1)),
                 })
             }
-            // Every stage is unreaped until its wait or drop, so its pid still names it.
-            // The last stage is signalled first, so no stage outlives its signal to read
-            // an earlier stage's death as end of input.
             HostCall::Kill { child, signal } => {
-                for stage in self.child(child)?.children.iter().rev() {
-                    // SAFETY: kill(2) on a live child's pid with a valid signal number.
-                    unsafe { libc::kill(stage.id() as libc::pid_t, signal.number()) };
-                }
+                self.child(child)?.children.signal(signal.number());
                 Completion::ChildUnit(Ok(()))
             }
             // A child a cancelled wait took was dropped with its job already.
@@ -314,18 +308,23 @@ impl HostChildren {
         spec: &crate::process::ProcessSpec<'_>,
         cwd: Option<RawFd>,
     ) -> Result<(), ProcessFailure> {
-        let mut child = crate::process::host_command(spec, cwd)
-            .spawn()
+        let mut children = Stages::new(spec.own_group);
+        let child = children
+            .spawn(&mut crate::process::host_command(spec, cwd))
             .map_err(|e| crate::process::spawn_failure(&e))?;
+        let (stdin, stdout) = (
+            child.stdin.take(),
+            child.stdout.take().expect("piped stdout"),
+        );
         let stderr = child.stderr.take().expect("piped stderr");
         if nonblocking(stderr.as_raw_fd()).is_err() {
             return Err(ProcessFailure::Fault(1));
         }
         let child = HostChild {
-            stdin: child.stdin.take(),
-            stdout: child.stdout.take().expect("piped stdout"),
+            children,
+            stdin,
+            stdout,
             stderr: Errors::Pipe(stderr),
-            children: vec![child],
         };
         self.insert(id, child)
     }
@@ -343,7 +342,7 @@ impl HostChildren {
     /// Spawn checked stages as ChildGroup `id`, stage `i` starting in `cwds[i]` or `/`:
     /// each stage's standard output feeds the next through a pipe the program never sees,
     /// and each stage's standard error goes to its own pipe, which a [`Capture`] drains. A
-    /// stage that cannot start kills and reaps the stages before it.
+    /// stage that cannot start kills and reaps the stages before it (they drop).
     fn spawn_pipeline(
         &mut self,
         id: u64,
@@ -351,36 +350,26 @@ impl HostChildren {
         cwds: &[Option<RawFd>],
         max_stderr: u64,
     ) -> Result<(), ProcessFailure> {
-        let mut children: Vec<std::process::Child> = vec![];
+        let mut children = Stages::new(stages[0].own_group);
         let mut stdin = None;
         let mut pipes = vec![];
         let mut previous: Option<std::process::ChildStdout> = None;
-        let killed = |children: &mut Vec<std::process::Child>, failure| {
-            crate::process::kill(children);
-            Err(failure)
-        };
         for (spec, cwd) in stages.iter().zip(cwds) {
             let mut command = crate::process::host_command(spec, *cwd);
             if let Some(output) = previous.take() {
                 command.stdin(std::process::Stdio::from(output));
             }
-            match command.spawn() {
-                Ok(mut child) => {
-                    if children.is_empty() {
-                        stdin = child.stdin.take();
-                    }
-                    previous = child.stdout.take();
-                    pipes.push(child.stderr.take().expect("piped stderr"));
-                    children.push(child);
-                }
-                Err(error) => {
-                    return killed(&mut children, crate::process::spawn_failure(&error));
-                }
+            let child = children
+                .spawn(&mut command)
+                .map_err(|e| crate::process::spawn_failure(&e))?;
+            if stdin.is_none() {
+                stdin = child.stdin.take();
             }
+            previous = child.stdout.take();
+            pipes.push(child.stderr.take().expect("piped stderr"));
         }
-        let pids = children.iter().map(|c| c.id() as libc::pid_t).collect();
-        let Ok(capture) = Capture::start(pipes, pids, max_stderr) else {
-            return killed(&mut children, ProcessFailure::Fault(1));
+        let Ok(capture) = Capture::start(pipes, children.targets(), max_stderr) else {
+            return Err(ProcessFailure::Fault(1));
         };
         self.insert(
             id,
@@ -498,7 +487,7 @@ impl HostChildren {
 /// SIGTERM, then SIGKILL after the grace, and is reaped: `TimedOut`.
 fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) -> PipelineOutcome {
     let timed_out = |child: &mut HostChild| {
-        crate::process::terminate(&mut child.children, cancel);
+        child.children.terminate(cancel);
         PipelineOutcome::Error(ProcessFailure::TimedOut)
     };
     let Errors::Pipe(stderr) = &child.stderr else {
@@ -571,9 +560,9 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) ->
             }
         }
     }
-    // A reaped child's Drop signals nothing: std keeps its status.
-    match crate::process::wait_child(&mut child.children[0], deadline, cancel) {
-        Ok(Ended::Exited(status)) => match exit_status(status) {
+    // Reaped stages' Drop signals nothing.
+    match child.children.wait(deadline, cancel) {
+        Ok(Ended::Exited(statuses)) => match exit_status(statuses[0]) {
             Some(status) => PipelineOutcome::Output {
                 statuses: vec![status],
                 stdout: vec![],
@@ -604,7 +593,7 @@ fn finish_group(
         if let Errors::Captured(capture) = &mut child.stderr {
             capture.stop();
         }
-        crate::process::terminate(&mut child.children, cancel);
+        child.children.terminate(cancel);
         Err(ProcessFailure::TimedOut)
     };
     child.stdin = None;
@@ -674,17 +663,15 @@ fn finish_group(
         }
     }
     let stderr = captured.unwrap_or_default();
-    let mut statuses = vec![];
-    for index in 0..child.children.len() {
-        match crate::process::wait_child(&mut child.children[index], deadline, cancel) {
-            Ok(Ended::Exited(status)) => match exit_status(status) {
-                Some(status) => statuses.push(status),
-                None => return Err(ProcessFailure::Fault(1)),
-            },
-            Ok(Ended::Canceled) => return Err(ProcessFailure::Canceled(0)),
-            Ok(Ended::Expired) => return timed_out(&mut child),
-            Err(_) => return Err(ProcessFailure::Fault(1)),
-        }
+    match child.children.wait(deadline, cancel) {
+        Ok(Ended::Exited(statuses)) => Ok(GroupOutput {
+            statuses: (statuses.into_iter().map(exit_status))
+                .collect::<Option<_>>()
+                .ok_or(ProcessFailure::Fault(1))?,
+            stderr,
+        }),
+        Ok(Ended::Canceled) => Err(ProcessFailure::Canceled(0)),
+        Ok(Ended::Expired) => timed_out(&mut child),
+        Err(_) => Err(ProcessFailure::Fault(1)),
     }
-    Ok(GroupOutput { statuses, stderr })
 }

@@ -4,12 +4,19 @@
 pub fn counted(d: Dir) -> Result[PipelineOutput, ProcessError] {
   proc.pipeline(
     [
-      Command(program: path.of("/usr/bin/sort"), args: [], dir: Some(d), env: None()),
+      Command(
+        program: path.of("/usr/bin/sort"),
+        args: [],
+        dir: Some(d),
+        env: None(),
+        own_group: false
+      ),
       Command(
         program: path.of("/usr/bin/uniq"),
         args: ["-c"],
         dir: Some(d),
-        env: None()
+        env: None(),
+        own_group: false
       )
     ],
     b"b\na\nb\n",

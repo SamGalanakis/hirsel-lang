@@ -10,6 +10,7 @@
 //! whose completion wakes a descriptor the scheduler polls, so the task parks instead of
 //! blocking the thread.
 use crate::handles::Grant;
+use crate::host_stages::{Ended, Stages};
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
@@ -63,6 +64,9 @@ pub struct ProcessSpec<'a> {
     pub env: ChildEnv,
     /// The working directory's Dir handle, always host-backed here; `None` is `/`.
     pub directory: Option<u64>,
+    /// Whether the child (every stage of a pipeline, which agree) runs in a process group
+    /// of its own, which every signal the provider sends it reaches.
+    pub own_group: bool,
 }
 impl<'a> ProcessSpec<'a> {
     /// The checked `command` under its granting `rule`.
@@ -72,6 +76,7 @@ impl<'a> ProcessSpec<'a> {
             args: &command.args,
             env: ChildEnv::of(command, rule),
             directory: command.directory,
+            own_group: command.own_group,
         }
     }
 }
@@ -307,8 +312,8 @@ impl State {
                 {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
-                if stages.is_empty() {
-                    Some(ProcessFailure::InvalidInput)
+                if let Some(failure) = hirsel_run_config::stages_error(stages) {
+                    Some(failure)
                 } else {
                     let mut failure = None;
                     for stage in stages {
@@ -964,7 +969,7 @@ pub(crate) fn poll_timeout(deadline: Option<u64>) -> libc::c_int {
 }
 
 /// Whether `fd` (a cancellation descriptor) is readable now.
-fn signaled(fd: Option<RawFd>) -> bool {
+pub(crate) fn signaled(fd: Option<RawFd>) -> bool {
     let Some(fd) = fd else { return false };
     let mut row = libc::pollfd {
         fd,
@@ -973,84 +978,6 @@ fn signaled(fd: Option<RawFd>) -> bool {
     };
     // SAFETY: row holds a live descriptor owned by the caller.
     unsafe { libc::poll(&mut row, 1, 0) > 0 }
-}
-
-/// How a bounded wait for the child ended.
-pub(crate) enum Ended {
-    Exited(std::process::ExitStatus),
-    Expired,
-    Canceled,
-}
-
-/// Wait for `child` to exit, until `deadline` or until `cancel` is readable.
-pub(crate) fn wait_child(
-    child: &mut std::process::Child,
-    deadline: Option<u64>,
-    cancel: Option<RawFd>,
-) -> std::io::Result<Ended> {
-    if deadline.is_none() && cancel.is_none() {
-        loop {
-            match child.wait() {
-                Ok(status) => return Ok(Ended::Exited(status)),
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Ended::Exited(status));
-        }
-        if signaled(cancel) {
-            return Ok(Ended::Canceled);
-        }
-        if deadline.is_some_and(|d| monotonic_now() >= d) {
-            return Ok(Ended::Expired);
-        }
-        // No descriptor reports a child's exit portably; recheck every 10 ms.
-        let mut row = libc::pollfd {
-            fd: cancel.unwrap_or(-1),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let timeout = match poll_timeout(deadline) {
-            -1 => 10,
-            t => t.min(10),
-        };
-        // SAFETY: row holds a live descriptor or -1, which poll ignores.
-        unsafe { libc::poll(&mut row, 1, timeout) };
-    }
-}
-
-/// Kill and reap children that are not trusted to stop: every one gets SIGKILL, the last
-/// stage first, before any is reaped.
-pub(crate) fn kill(children: &mut [std::process::Child]) {
-    for child in children.iter_mut().rev() {
-        let _ = child.kill();
-    }
-    for child in children {
-        let _ = child.wait();
-    }
-}
-
-/// Timed-out children: SIGTERM to each, the last stage first, then SIGKILL to any still
-/// running once [`TERMINATION_GRACE`] passes, then reap them all. Signalling downstream
-/// first means no stage can read an earlier stage's death as end of input before its own
-/// signal arrives.
-pub(crate) fn terminate(children: &mut [std::process::Child], cancel: Option<RawFd>) {
-    for child in children.iter_mut().rev() {
-        // A stage already reaped keeps its status, and its pid may name another process.
-        if matches!(child.try_wait(), Ok(None)) {
-            // SAFETY: the child is unreaped, so its pid still names it.
-            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-        }
-    }
-    let grace = monotonic_now() + TERMINATION_GRACE.as_nanos() as u64;
-    for child in children {
-        if !matches!(wait_child(child, Some(grace), cancel), Ok(Ended::Exited(_))) {
-            kill(std::slice::from_mut(child));
-        }
-    }
 }
 
 /// The host command for one checked spec: its program and arguments, its exact or
@@ -1129,31 +1056,27 @@ pub fn run_host(
     let Ok((errors, error_input)) = pipe() else {
         return PipelineOutcome::Error(ProcessFailure::Fault(1));
     };
-    let mut children: Vec<std::process::Child> = vec![];
+    let mut children = Stages::new(run.stages[0].own_group);
     let mut input = None;
     let mut previous: Option<std::process::ChildStdout> = None;
+    // Every early return drops `children`, which kills and reaps every stage.
     for (spec, cwd) in run.stages.iter().zip(cwds) {
         let mut command = host_command(spec, *cwd);
         if let Some(output) = previous.take() {
             command.stdin(Stdio::from(output));
         }
         let Ok(stderr) = error_input.try_clone() else {
-            kill(&mut children);
             return PipelineOutcome::Error(ProcessFailure::Fault(1));
         };
         command.stderr(Stdio::from(stderr));
-        match command.spawn() {
-            Ok(mut child) => {
-                if children.is_empty() {
+        match children.spawn(&mut command) {
+            Ok(child) => {
+                if input.is_none() {
                     input = child.stdin.take();
                 }
                 previous = child.stdout.take();
-                children.push(child);
             }
-            Err(error) => {
-                kill(&mut children);
-                return PipelineOutcome::Error(spawn_failure(&error));
-            }
+            Err(error) => return PipelineOutcome::Error(spawn_failure(&error)),
         }
     }
     // Only the children hold the shared error pipe's write end now.
@@ -1172,51 +1095,33 @@ pub fn run_host(
     let (stdout, stderr) = match streams {
         Ok(Drained::Done(stdout, stderr)) => (stdout, stderr),
         // Over the bound: the children are not trusted to stop writing.
-        Ok(Drained::OverLimit) => {
-            kill(&mut children);
-            return PipelineOutcome::Error(ProcessFailure::OutputLimit);
-        }
+        Ok(Drained::OverLimit) => return PipelineOutcome::Error(ProcessFailure::OutputLimit),
         Ok(Drained::Expired) => {
-            terminate(&mut children, cancel);
+            children.terminate(cancel);
             return PipelineOutcome::Error(ProcessFailure::TimedOut);
         }
-        Ok(Drained::Canceled) => {
-            kill(&mut children);
-            return PipelineOutcome::Error(ProcessFailure::Canceled(0));
-        }
-        Err(_) => {
-            kill(&mut children);
-            return PipelineOutcome::Error(ProcessFailure::Fault(1));
-        }
+        Ok(Drained::Canceled) => return PipelineOutcome::Error(ProcessFailure::Canceled(0)),
+        Err(_) => return PipelineOutcome::Error(ProcessFailure::Fault(1)),
     };
-    let mut statuses = vec![];
-    for index in 0..children.len() {
-        let status = match wait_child(&mut children[index], run.deadline, cancel) {
-            Ok(Ended::Exited(status)) => status,
-            Ok(Ended::Expired) => {
-                terminate(&mut children, cancel);
-                return PipelineOutcome::Error(ProcessFailure::TimedOut);
-            }
-            Ok(Ended::Canceled) => {
-                kill(&mut children);
-                return PipelineOutcome::Error(ProcessFailure::Canceled(0));
-            }
-            Err(_) => {
-                kill(&mut children);
-                return PipelineOutcome::Error(ProcessFailure::Fault(1));
-            }
-        };
-        statuses.push(match (status.code(), status.signal()) {
+    let statuses = match children.wait(run.deadline, cancel) {
+        Ok(Ended::Exited(statuses)) => statuses,
+        Ok(Ended::Expired) => {
+            children.terminate(cancel);
+            return PipelineOutcome::Error(ProcessFailure::TimedOut);
+        }
+        Ok(Ended::Canceled) => return PipelineOutcome::Error(ProcessFailure::Canceled(0)),
+        Err(_) => return PipelineOutcome::Error(ProcessFailure::Fault(1)),
+    };
+    let mut reported = vec![];
+    for status in statuses {
+        reported.push(match (status.code(), status.signal()) {
             (Some(code), _) => ExitStatus::Exited(code),
             (None, Some(signal)) => ExitStatus::Signaled(signal),
-            (None, None) => {
-                kill(&mut children);
-                return PipelineOutcome::Error(ProcessFailure::Fault(1));
-            }
+            (None, None) => return PipelineOutcome::Error(ProcessFailure::Fault(1)),
         });
     }
     PipelineOutcome::Output {
-        statuses,
+        statuses: reported,
         stdout,
         stderr,
     }
@@ -1317,6 +1222,7 @@ pub(crate) fn run_cooperative(
                     s.args.to_vec(),
                     s.env.clone(),
                     s.directory,
+                    s.own_group,
                 )
             })
             .collect();
@@ -1337,11 +1243,12 @@ pub(crate) fn run_cooperative(
         Some(Box::new(move |cancel| {
             let specs: Vec<ProcessSpec<'_>> = stages
                 .iter()
-                .map(|(program, args, env, directory)| ProcessSpec {
+                .map(|(program, args, env, directory, own_group)| ProcessSpec {
                     program,
                     args,
                     env: env.clone(),
                     directory: *directory,
+                    own_group: *own_group,
                 })
                 .collect();
             let run = HostRun {
@@ -1652,9 +1559,12 @@ unsafe fn child_script(at: *const u8) -> ChildRun {
     }
 }
 
-/// One borrowed `Command` (40 bytes): program Path at 0, args List at 8, `Option[Dir]`
-/// (u32 tag, Dir at 24) at 16, and `Option[List[(String, String)]]` at 32, a null-niche
-/// block pointer whose elements are 48-byte name and value Strings.
+/// The size of a `Command`, a `List[Command]`'s element stride.
+const COMMAND_SIZE: usize = 48;
+/// One borrowed `Command` ([`COMMAND_SIZE`] bytes): program Path at 0, args List at 8,
+/// `Option[Dir]` (u32 tag, Dir at 24) at 16, `Option[List[(String, String)]]` at 32, a
+/// null-niche block pointer whose elements are 48-byte name and value Strings, and the
+/// `own_group` bool at 40.
 unsafe fn command(ctx: *mut crate::RunCtx, at: *const u8) -> Command {
     let env = unsafe { at.add(32).cast::<*mut crate::Header>().read() };
     Command {
@@ -1670,6 +1580,7 @@ unsafe fn command(ctx: *mut crate::RunCtx, at: *const u8) -> Command {
         },
         env: (!env.is_null())
             .then(|| unsafe { list(env, 48, |var| (text(var), text(var.add(24)))) }),
+        own_group: unsafe { at.add(40).read() } != 0,
     }
 }
 
@@ -1769,7 +1680,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
 ) -> u8 {
     let request = Request::ProcessPipeline {
         process: unsafe { process.read() },
-        stages: unsafe { list(stages, 40, |at| command(ctx, at)) },
+        stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },
         stdin: unsafe { crate::io::slice_bytes(stdin_owner, stdin_start, stdin_length) }.to_vec(),
         max_output,
         deadline: unsafe { deadline_of(deadline) },
@@ -2125,7 +2036,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
 ) -> u8 {
     let request = Request::ProcessSpawnPipeline {
         process: unsafe { process.read() },
-        stages: unsafe { list(stages, 40, |at| command(ctx, at)) },
+        stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },
         max_stderr,
     };
     let Some(Completion::Spawned(value)) =

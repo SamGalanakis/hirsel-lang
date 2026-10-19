@@ -1,0 +1,80 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A Command's own_group asks for a process group of its own, and a pipeline's stages
+// share one group or none: stages whose own_group differ are invalid input before any
+// stage's own checks, and take no entry, under proc.pipeline and proc.spawn_pipeline
+// alike. A scripted world starts no host process, so a child or stages that agree play
+// their entries as they do without a group.
+fn stage(program: String, own_group: bool) -> Command {
+  Command(
+    program: path.of(program),
+    args: [],
+    dir: None(),
+    env: None(),
+    own_group: own_group
+  )
+}
+
+fn printed(take stdout: Bytes) -> ProcessScript {
+  ProcessScript(
+    program: "/bin/cat",
+    args: [],
+    outcome: Ok(ProcessOutput(status: Exited(0), stdout: stdout, stderr: b""))
+  )
+}
+
+fn cat(take steps: List[ChildStep]) -> ChildScript {
+  ChildScript(program: "/bin/cat", args: [], steps: steps)
+}
+
+fn refused(p: Proc, r: Result[ChildGroup of p, ProcessError], e: ProcessError) -> bool {
+  match r {
+    Error(found) => found == e,
+    Ok(_) => false,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [printed(b"one\n"), printed(b"two\n")],
+    [cat([Print(b"x\n")]), cat([Expect(b"x\n"), Print(b"x\n")]), cat([Expect(b"y")])]
+  )
+  // Disagreeing stages come before the second stage's own check: "/bin/sh" is not
+  // granted, yet the result is InvalidInput().
+  let mixed: List[Command] = [stage("/bin/cat", true), stage("/bin/sh", false)]
+  test.check(t, proc.pipeline(p, mixed, b"", 64u64, None()) == Error(InvalidInput()))
+  test.check(t, refused(p, proc.spawn_pipeline(p, mixed, 64u64), InvalidInput()))
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn_pipeline(p, [stage("/bin/cat", false), stage("/bin/cat", true)], 64u64),
+      InvalidInput()
+    )
+  )
+  // Stages that agree take their entries, which the refusals left unused.
+  let ran = proc.pipeline(
+    p,
+    [stage("/bin/cat", true), stage("/bin/cat", true)],
+    b"",
+    64u64,
+    None()
+  )?
+  test.check(t, ran.statuses == [Exited(0), Exited(0)] && ran.stdout == b"two\n")
+  let mut g = proc.spawn_pipeline(
+    p,
+    [stage("/bin/cat", true), stage("/bin/cat", true)],
+    64u64
+  )?
+  let mut out: List[u8] = []
+  test.check(t, group.read_stdout(p, mut g, mut out, 64u64)? == 2u64)
+  let done = proc.wait_group(p, take g, None())?
+  test.check(t, done.statuses == [Exited(0), Exited(0)])
+  // A child in its own group is killed as any child is.
+  let mut c = proc.spawn(p, stage("/bin/cat", true))?
+  child.kill(p, mut c, Kill())
+  test.check(t, child.wait(p, take c, None()) == Ok(Signaled(9)))
+  Ok(())
+}

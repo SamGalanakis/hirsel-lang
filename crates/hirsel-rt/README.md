@@ -275,7 +275,15 @@ with a cleared environment plus the rule's pass-through names (`ChildEnv::Inheri
 exactly the command's variables (`ChildEnv::Exact`), `/` or the pinned Dir as working
 directory. Each stage's stdout is the next stage's stdin, every stage's stderr is a
 clone of one `O_CLOEXEC` pipe, and a stage that fails to spawn kills and reaps those
-before it. One `poll` loop feeds the first stage's stdin and drains the last stage's
+before it. Every host run, child and group keeps its children in `host_stages::Stages`,
+which spawns them (a command with `own_group` makes the first stage lead a new process
+group that every later stage joins), signals them (each unreaped stage, the last first,
+then the group with killpg(2)), waits for them and reaps them (the last first, so the
+group's leader, whose pid is its id, is reaped last), records each reaped status so no
+reaped pid is signalled, and kills and reaps whatever is left when dropped.
+`Stages::terminate` sends SIGTERM, polls with `waitid(WNOWAIT)` until every stage has
+exited or `TERMINATION_GRACE` passed, then sends SIGKILL, which in a group reaches what
+the stages started, and reaps. One `poll` loop feeds the first stage's stdin and drains the last stage's
 stdout and the shared stderr, killing every child past `max_output` on either stream. A `Deadline` is the Instant's CLOCK_MONOTONIC ticks: a reached one is
 `TimedOut` before spawning, and at expiry the child gets SIGTERM, then SIGKILL after
 `TERMINATION_GRACE` (1 s), and is reaped before `TimedOut` returns. Under cooperative
@@ -294,7 +302,8 @@ names) mints a Proc of the merged requested rules in its parent's world when
 `hirsel_run_config::process_rule_within` covers each. Tape forms are `process`, `test_process` (runs and
 children), `process_run` (with its deadline as `clock:ticks` or `none`, then its
 command: program, directory, counted arguments, and `inherit` or counted variables) and
-`process_pipeline` (a stage count, then each stage's command) requests and `process`
+`process_pipeline` (a stage count, then each stage's command, which ends with the word
+`own_group` only when it is set) requests and `process`
 and `pipeline` (stdout, stderr, then counted statuses) completions (`host_io_tape.rs`). A recorded `TimedOut` needs a deadline, and
 raises the latest monotonic reading to it as a completed timer wait does; a scripted
 world times out only a deadline that reading already reached.
@@ -327,10 +336,11 @@ standard error per stage. A scripted world plays the entries with
 `hirsel_run_config::ScriptGroup`, its stages connected. A host group (`host_child.rs`) is a
 `HostChild` of several stages: the program holds the first stage's input and the last
 stage's output, and a `Capture` thread drains every stage's standard error into its own
-buffer from the spawn, SIGKILLing every stage once one passes the bound; no stage is reaped
-before that thread ends, so every pid it signals still names its stage. Every per-stage
-signal (a kill, the bound, a deadline's SIGTERM, a drop) goes to the last stage first, so no
-stage can read an earlier stage's death as end of input before its own signal arrives. The wait discards
+buffer from the spawn, SIGKILLing every stage (a copy of the `Stages` targets) once one
+passes the bound; no stage is reaped before that thread ends, so every pid it signals still
+names its stage. Every per-stage signal (a kill, the bound, a deadline's SIGTERM, a drop)
+goes to the last stage first, so no stage can read an earlier stage's death as end of input
+before its own signal arrives. The wait discards
 the last stage's output, waits for the capture, reaps every stage and returns
 `GroupOutput`, its stderr a runtime `List[Bytes]`. Tape forms are `process_spawn_pipeline`
 (`max_stderr`, the stage count, then each command) and `group_wait` requests and
