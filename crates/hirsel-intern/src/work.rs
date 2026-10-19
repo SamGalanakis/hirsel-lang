@@ -70,6 +70,8 @@ pub enum Counter {
     BodySourceRows,
     /// H's source-place publication lookups.
     BodySourcePlaceRows,
+    /// H's pattern matrices examined by usefulness and exhaustiveness.
+    BodyUsefulnessMatrices,
     /// Allocation/representation audit source-index candidates.
     AuditSourceRows,
     /// Source declaration inspections while composing module inputs.
