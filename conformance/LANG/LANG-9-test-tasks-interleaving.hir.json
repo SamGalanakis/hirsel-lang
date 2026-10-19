@@ -1,5 +1,9 @@
 {
   "schema": 1,
+  "entry": {
+    "module": [],
+    "name": "interleaving"
+  },
   "package": {
     "name": "standalone",
     "version": "0"
