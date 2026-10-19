@@ -165,9 +165,7 @@ impl State {
             | R::Mkdir { path, .. }
             | R::RemoveDir { path, .. }
             | R::CreateAtomic { path, .. }
-            | R::PutNew { path, .. } => {
-                hirsel_run_config::confined_relative(&root, path).is_none()
-            }
+            | R::PutNew { path, .. } => hirsel_run_config::confined_relative(&root, path).is_none(),
             R::Rename { from, to, .. } => {
                 hirsel_run_config::confined_relative(&root, from).is_none()
                     || hirsel_run_config::confined_relative(&root, to).is_none()

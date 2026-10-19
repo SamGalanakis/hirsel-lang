@@ -495,6 +495,13 @@ fn file_request(kind: usize, directory: u64, file: u64, invalid: bool, round: us
             bytes,
         },
         20 => Request::Commit { directory, file },
+        21 => Request::Sync { directory, file },
+        22 => Request::PutNew {
+            directory,
+            path,
+            bytes,
+            durable: round % 2 == 0,
+        },
         _ => unreachable!(),
     }
 }
@@ -537,7 +544,7 @@ fn granted_id(completion: Completion) -> u64 {
 fn precedence_file_matrix(rounds: usize) {
     let mut count = 0;
     for round in 0..rounds {
-        for kind in 0..21 {
+        for kind in 0..23 {
             // All subsets: bad directory, denied write, bad path/argument,
             // bad secondary handle, cancellation rather than provider fault.
             for conditions in 0..32 {
@@ -556,8 +563,8 @@ fn precedence_file_matrix(rounds: usize) {
                     "io.dir",
                     vec![handle("Io", 1), reference::path("")],
                 ));
-                let mut file = if matches!(kind, 2..=5 | 19 | 20) {
-                    let request = if kind >= 19 {
+                let mut file = if matches!(kind, 2..=5 | 19 | 20 | 21) {
+                    let request = if matches!(kind, 19 | 20) {
                         Request::CreateAtomic {
                             directory,
                             path: "new".into(),
@@ -586,7 +593,7 @@ fn precedence_file_matrix(rounds: usize) {
                         "dir.read_only",
                         vec![handle("Dir", directory)],
                     ));
-                    if matches!(kind, 2..=5) {
+                    if matches!(kind, 2..=5 | 21) {
                         file = granted_id(setup_call(
                             &mut real,
                             &mut reference,
@@ -1569,6 +1576,9 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::CreateAtomic { .. } => true,
             Request::WriteAll { .. } => true,
             Request::Commit { .. } => true,
+            Request::Sync { .. } => true,
+            Request::PutNew { .. } => true,
+            Request::TestCrash { .. } => false,
             Request::Close { .. } => false,
             Request::NetNarrow { .. } => false,
             Request::Resolve { .. } => true,

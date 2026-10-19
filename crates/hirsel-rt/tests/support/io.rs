@@ -925,27 +925,27 @@ pub(crate) fn file_arguments(
             "file.commit",
             vec![handle("Dir", *directory), handle("AtomicFile", *file)],
         ),
-                Request::Sync { directory, file } => (
-                    "file.sync",
-                    vec![handle("Dir", *directory), handle("File", *file)],
-                ),
-                Request::PutNew {
-                    directory,
-                    path,
-                    bytes,
-                    durable,
-                } => (
-                    "file.put_new",
-                    vec![
-                        handle("Dir", *directory),
-                        reference::path(path),
-                        Value::Bytes(bytes.clone()),
-                        Value::Variant {
-                            variant: u32::from(!*durable),
-                            fields: vec![],
-                        },
-                    ],
-                ),
+        Request::Sync { directory, file } => (
+            "file.sync",
+            vec![handle("Dir", *directory), handle("File", *file)],
+        ),
+        Request::PutNew {
+            directory,
+            path,
+            bytes,
+            durable,
+        } => (
+            "file.put_new",
+            vec![
+                handle("Dir", *directory),
+                reference::path(path),
+                Value::Bytes(bytes.clone()),
+                Value::Variant {
+                    variant: u32::from(!*durable),
+                    fields: vec![],
+                },
+            ],
+        ),
         _ => return None,
     })
 }

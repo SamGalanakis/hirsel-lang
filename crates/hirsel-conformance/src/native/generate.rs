@@ -146,15 +146,15 @@ fn small(a: u64) -> u64
         ));
     }
     text.push_str(
-        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let s = io.stdout(rt)?\n",
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let s = io.stdout(rt)?\n  let salt = arg.len(args) % 2u64\n",
     );
     text.push_str(&format!(
         "  let g = Guard(out: s, id: {}u64)\n",
         rng.below(100)
     ));
     // B2: parity-only output hides wrong answers that keep the same low bit.
-    // Keep full-width inputs in function parameters so folding cannot replace the
-    // operations whose native lowering this campaign exercises.
+    // An admitted Args observation keeps native operands dynamic through O2,
+    // even when the harness supplies the empty argument snapshot.
     for signed in [false, true] {
         for width in [8, 16, 32, 64, 128] {
             let ty = format!("{}{width}", if signed { 'i' } else { 'u' });
@@ -179,7 +179,7 @@ fn small(a: u64) -> u64
                 _ => value,
             };
             text.push_str(&format!(
-                "  let x_{ty}: {ty} = {value}\n  print_{ty}(s, x_{ty})\n  let _ = out.print(s, \" \")\n  let y_{ty} = calc_{ty}(x_{ty})\n  print_{ty}(s, y_{ty})\n  let _ = out.print(s, \"\\n\")\n"
+                "  let x_{ty}: {ty} = {value} ^ (if salt == 0u64 {{ 0{ty} }} else {{ 1{ty} }})\n  print_{ty}(s, x_{ty})\n  let _ = out.print(s, \" \")\n  let y_{ty} = calc_{ty}(x_{ty})\n  print_{ty}(s, y_{ty})\n  let _ = out.print(s, \"\\n\")\n"
             ));
         }
     }
@@ -187,7 +187,7 @@ fn small(a: u64) -> u64
         // Dyadic operands make exact, finite float arithmetic at both widths.
         let value = rng.below(10000);
         text.push_str(&format!(
-            "  let x_{ty}: {ty} = {value}.25{ty}\n  print_u64(s, int.widen({ty}.bits(calc_{ty}(x_{ty}))))\n  let _ = out.print(s, \"\\n\")\n"
+            "  let x_{ty}: {ty} = {value}.25{ty} + (if salt == 0u64 {{ 0.0{ty} }} else {{ 0.5{ty} }})\n  print_u64(s, int.widen({ty}.bits(calc_{ty}(x_{ty}))))\n  let _ = out.print(s, \"\\n\")\n"
         ));
     }
     let mut names: Vec<String> = Vec::new();

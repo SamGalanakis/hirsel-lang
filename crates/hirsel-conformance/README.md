@@ -519,6 +519,7 @@ those same generated programs on Cranelift as well as LLVM and the interpreter.
 The default seed follows the compiler identity unless the test runner supplies
 `PROPTEST_RNG_SEED`. Every program exercises u8/u16/u32/u64/u128,
 i8/i16/i32/i64/i128, f32 and f64, including signed minima and unsigned maxima.
+An explicit Args observation keeps native operands dynamic through optimization.
 Integer inputs and computed values are printed; float results print their exact
 bits. This catches narrowing, signedness and arithmetic errors that parity-only
 output can hide. The full generated matrix includes Cranelift parity too.
