@@ -5,6 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
 
+mod path;
+pub use path::confined_relative;
+
 mod grants;
 pub use grants::{
     grants_within, mount_within, net_operation_within, net_rule_within, process_rule_within,

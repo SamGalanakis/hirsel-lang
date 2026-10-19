@@ -1,6 +1,8 @@
 # hirsel-run-config
 
-Closed tooling data for PROG-3/6 and DET-1. Allowed dependencies: std, serde,
+Closed tooling data for PROG-3/6 and DET-1.
+`confined_relative` is the shared portable lexical path normalization: parent
+components cannot cross a pinned root; physical symlink traversal follows it. Allowed dependencies: std, serde,
 serde_json, sha2, pinned pure rustls-pki-types/webpki parsers, and rustls (ring) only to load
 server identity keys and verify client certificates. No compiler or execution implementation dependency.
 `tls` parses verification names, PEM trust anchors and PEM server identities (certificate
