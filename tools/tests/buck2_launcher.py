@@ -41,7 +41,7 @@ if args.list:
     for name in selected: print(name + ': test')
 else:
     with open(os.environ['OBSERVED'], 'w') as output:
-        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), cases=[name for name in selected
+        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), threads=os.environ.get('RUST_TEST_THREADS'), jobs=os.environ.get('HIRSEL_JOBS'), cases=[name for name in selected
                   if args.ignored or args.include_ignored or not cases[name]]), output)
     for name in selected:
         status = 'ok' if args.ignored or args.include_ignored or not cases[name] else 'ignored'
@@ -66,7 +66,7 @@ class LauncherFixture(unittest.TestCase):
             HIRSEL_TEST_TMPDIR=str(self.root / 'tmp'), HIRSEL_TEST_CWD=str(self.root),
             LLVM_SYS_211_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
             OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
-        for key in ('HIRSEL_TEST_POOL', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
+        for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
             self.env.pop(key, None)
 
 
@@ -103,6 +103,54 @@ class LauncherSelection(LauncherFixture):
         self.assertEqual(target.parent, scratch)
         self.assertTrue(target.name.startswith('hirsel-test-'))
         self.assertEqual(list(target.iterdir()), [])
+
+    def test_two_cpu_reservation_bounds_threads_and_workers(self):
+        self.env.update(HIRSEL_TEST_CPUS='2', RUST_TEST_THREADS='8', HIRSEL_JOBS='8')
+        result, _ = self.run_cases()
+        self.assertEqual(result['threads'], '2')
+        self.assertEqual(result['jobs'], '2')
+
+    def test_pool_without_a_reservation_fails_before_running_the_harness(self):
+        run = subprocess.run(['sh', str(LAUNCHER), 'harness'], cwd=self.root,
+                             env=self.env | {'HIRSEL_TEST_POOL': '1'}, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn('pool action requires HIRSEL_TEST_CPUS', run.stderr)
+        self.assertFalse(self.observed.exists())
+
+    def test_caller_can_choose_less_than_the_reservation(self):
+        self.env.update(HIRSEL_TEST_CPUS='2', RUST_TEST_THREADS='1', HIRSEL_JOBS='1')
+        result, _ = self.run_cases('--test-threads=1')
+        self.assertEqual((result['threads'], result['jobs']), ('1', '1'))
+        self.assertIn('1', result['argv'])
+
+    def test_reservation_also_sets_defaults_without_caller_settings(self):
+        self.env.update(HIRSEL_TEST_CPUS='2')
+        for key in ('RUST_TEST_THREADS', 'HIRSEL_JOBS'):
+            self.env.pop(key, None)
+        result, _ = self.run_cases()
+        self.assertEqual((result['threads'], result['jobs']), ('2', '2'))
+
+    def test_thread_arguments_cannot_exceed_the_reservation(self):
+        self.env.update(HIRSEL_TEST_CPUS='2')
+        for args in [('--test-threads', '8'), ('--test-threads=8',)]:
+            for shard in ['', '1/2']:
+                result, _ = self.run_cases(*args, shard=shard)
+                argv = result['argv']
+                threads = (argv[argv.index('--test-threads') + 1] if '--test-threads' in argv
+                           else next(a.split('=')[1] for a in argv if a.startswith('--test-threads=')))
+                self.assertEqual(threads, '2')
+
+    def test_flag_shaped_values_remain_values(self):
+        self.env['HIRSEL_TEST_CPUS'] = '2'
+        probe = self.root / 'probe'
+        probe.write_text('#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')
+        probe.chmod(0o755)
+        for args in [('--logfile', '--test-threads=8'), ('--skip', '--test-threads=8'),
+                     ('--', '--test-threads=8')]:
+            run = subprocess.run(['sh', str(LAUNCHER), 'probe', *args], cwd=self.root,
+                                 env=self.env, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout), list(args))
 
     def test_every_native_case_runs_on_the_pool_even_under_exact(self):
         for case in CASES:

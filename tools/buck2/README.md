@@ -218,7 +218,12 @@ the old copy.
   with an existing `CARGO_TARGET_TMPDIR`, the pinned LLVM as
   `LLVM_SYS_211_PREFIX` (its `bin/` first on `PATH`, its `lib/` on the loader
   path), insta's workspace root, and test threads and `HIRSEL_JOBS` set to the
-  action's CPU share, at most 4. It also runs one shard of a sharded binary,
+  action's effective CPU reservation (`HIRSEL_TEST_CPUS`, passed from the same
+  request as the executor, including focus mode), at most 4. A visible cgroup
+  quota or a smaller caller setting can reduce it; command-line
+  `--test-threads` cannot exceed it. Pool actions require the explicit
+  reservation, since their sandbox need not expose `cpu.max`.
+  It also runs one shard of a sharded binary,
   by exact names: cases go longest first to the least loaded shard, weighted
   by the binary's measured cost table. It asks the compiled harness to apply
   caller filters, then applies sharding.

@@ -84,11 +84,20 @@ if [ -n "${HIRSEL_NATIVE_SELECTION:-}" ]; then
   export HIRSEL_NATIVE_SELECTION
 fi
 export INSTA_WORKSPACE_ROOT="$root"
-# A pool action's reservation is its cgroup's cpu.max (the worker's action
-# supervisor), which nproc does not read; on the host, a scope's CPUQuota is.
-# The tightest quota on the way to the root bounds the threads, as in Rust's
-# available_parallelism, and so does a caller's own setting.
-jobs="$(nproc 2>/dev/null || echo 4)"
+# defs.bzl passes the executor's effective CPU reservation explicitly: a
+# worker's cgroup files need not be visible inside its action sandbox. Never
+# infer a pool reservation from the worker host's CPU count.
+jobs="${HIRSEL_TEST_CPUS:-}"
+case "$jobs" in
+  "")
+    if [ -n "${HIRSEL_TEST_POOL:-}" ]; then
+      echo "test_launcher.sh: pool action requires HIRSEL_TEST_CPUS" >&2
+      exit 2
+    fi
+    jobs="$(nproc 2>/dev/null || echo 1)" ;;
+  *[!0-9]* | 0) echo "test_launcher.sh: invalid HIRSEL_TEST_CPUS=$jobs" >&2; exit 2 ;;
+esac
+# A visible, tighter cgroup quota and caller settings can only reduce it.
 [ "$jobs" -le 4 ] || jobs=4
 cgroup="$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)" || cgroup=""
 while :; do
@@ -130,6 +139,42 @@ if [ -n "${HIRSEL_TEST_RELOCATE:-}" ] && [ -n "${HIRSEL_TEST_POOL:-}" ]; then
   harness="$moved/$1"
 fi
 shift
+# Value-taking options from the pinned libtest --help. Keep values quoted,
+# even when they contain spaces or look like flags.
+takes_value() {
+  case "$1" in
+    --logfile | --test-threads | --skip | --color | --format | --shuffle-seed | -Z) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# libtest's command-line setting overrides RUST_TEST_THREADS. Bound both
+# spellings too, preserving all other arguments and literal filters after --.
+remaining=$#
+literal=false
+while [ "$remaining" -gt 0 ]; do
+  argument=$1; shift; remaining=$((remaining - 1))
+  if "$literal"; then set -- "$@" "$argument"; continue; fi
+  case "$argument" in
+    --) literal=true ;;
+    --test-threads | --test-threads=*)
+      case "$argument" in
+        --test-threads)
+          [ "$remaining" -gt 0 ] || { echo "$argument requires a value" >&2; exit 2; }
+          threads=$1; shift; remaining=$((remaining - 1)) ;;
+        *) threads=${argument#*=} ;;
+      esac
+      case "$threads" in
+        "" | *[!0-9]* | 0) echo "test_launcher.sh: invalid --test-threads=$threads" >&2; exit 2 ;;
+      esac
+      [ "$threads" -le "$jobs" ] || threads=$jobs
+      set -- "$@" --test-threads "$threads"
+      continue ;;
+  esac
+  set -- "$@" "$argument"
+  if takes_value "$argument" && [ "$remaining" -gt 0 ]; then
+    value=$1; shift; remaining=$((remaining - 1)); set -- "$@" "$value"
+  fi
+done
 if [ -n "${HIRSEL_TEST_BIN_EXES:-}" ]; then
   # The harness names the package's binaries (CARGO_BIN_EXE_<name>) under
   # HIRSEL_TEST_BIN_EXE_DIR, so its compile never waits for them
@@ -170,14 +215,6 @@ inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
 if [ -z "$shard" ] && ! "$inventory"; then exec "$harness" "$@"; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
-# Value-taking options from the pinned libtest --help. Keep values quoted,
-# even when they contain spaces or look like flags.
-takes_value() {
-  case "$1" in
-    --logfile | --test-threads | --skip | --color | --format | --shuffle-seed | -Z) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 list_cases() (
   remaining=$#
   set -- "$@" --list --format terse --color never

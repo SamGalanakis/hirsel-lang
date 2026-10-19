@@ -263,6 +263,8 @@ def _rust_test_impl(ctx):
     env = {
         "HIRSEL_TEST_CWD": ctx.attrs.cwd,
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
+        # The same effective request as the executor, including focus mode.
+        "HIRSEL_TEST_CPUS": ctx.attrs.request[0],
         "LLVM_SYS_211_PREFIX": cmd_args(llvm),
         # A pool worker's action supervisor can attribute a test run's CPU to
         # these Bazel test variables. They are stable per
