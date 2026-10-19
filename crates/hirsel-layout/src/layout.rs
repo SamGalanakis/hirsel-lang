@@ -1194,8 +1194,22 @@ impl<'o> LayoutBuilder<'o> {
             // A deferred Box payload is derived now when held inline.
             Some(id) if !through_block => self.settle(walk, id).map(|()| id),
             Some(id) => Ok(id),
+            // A block reference reaches its payload only once the inline
+            // layouts the payload may read are complete, as a Box does:
+            // `Value = Items(List[Member])` with `Member { value: Value }`.
             None => self.reserve(&key, through_block).and_then(|(id, fresh)| {
-                if fresh {
+                if fresh && through_block {
+                    let frames = walk.frames.clone();
+                    walk.deferred.insert(
+                        id,
+                        Deferred {
+                            key: key.clone(),
+                            ty,
+                            frames,
+                            frame: f,
+                        },
+                    );
+                } else if fresh {
                     self.derive_reserved(walk, id, &key, ty, f)?;
                 }
                 Ok(id)

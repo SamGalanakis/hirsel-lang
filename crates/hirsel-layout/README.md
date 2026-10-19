@@ -14,7 +14,9 @@ Backends and validators consume physical schemas without front-end types.
 Layout keys erase relations, brands, uniqueness and sendability; callable
 multiplicity remains. Owner revisions participate in containing keys. Failed
 requests roll back the table, recursive payloads are reserved before deriving
-children, and inline cycles fail. The independent validator stays in hirsel-lir.
+children, and inline cycles fail. A payload first reached through a block (a Box,
+or the element of a List, Array or Shared) is derived once the inline layouts under
+way are complete, so it may hold one of them inline in any request order. The independent validator stays in hirsel-lir.
 Instance identity retains complete type structure, binders, size actuals,
 callable convention and environment layout, excluding implementation revisions.
 Operation schema tags convert exhaustively in both directions and preserve the

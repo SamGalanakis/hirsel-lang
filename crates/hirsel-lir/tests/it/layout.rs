@@ -2547,3 +2547,40 @@ fn foreign_pointer_options_use_one_word_without_nested_option_collapse() {
         checked(b);
     }
 }
+
+/// `Value = Null | Number(i64) | Items(List[Member])` with `Member { i64, Value }`:
+/// a sequence reaches Member while Value is under way, so Member waits for it
+/// as a Box payload would, whichever type is requested first.
+#[test]
+fn a_sequence_element_holding_its_owner_inline_waits_for_it() {
+    let mut owners = Owners::default();
+    let value = owner(&mut owners, "Value", OwnerSpec::default(), |t| {
+        let n = t.p(Primitive::I64);
+        let member = t.named(&path("Member"), vec![]);
+        let items = t.list(member);
+        t.variant(&[&[], &[n], &[items]])
+    });
+    let member = owner(&mut owners, "Member", OwnerSpec::default(), |t| {
+        let n = t.p(Primitive::I64);
+        let value = t.named(&path("Value"), vec![]);
+        t.record(&[n, value])
+    });
+    let mut keys = vec![];
+    for value_first in [true, false] {
+        let mut b = LayoutBuilder::new(&x86(), &owners);
+        let mut t = Ty::default();
+        let (v, m) = (t.named(&value, vec![]), t.named(&member, vec![]));
+        let (vid, mid) = if value_first {
+            let vid = b.layout(&t.store, v).unwrap();
+            (vid, b.layout(&t.store, m).unwrap())
+        } else {
+            let mid = b.layout(&t.store, m).unwrap();
+            (b.layout(&t.store, v).unwrap(), mid)
+        };
+        let table = checked(b);
+        // Member holds Value inline after its i64.
+        assert_eq!(rec(&table, mid).fields[1].layout, vid);
+        keys.push((rec(&table, vid).key.clone(), rec(&table, mid).key.clone()));
+    }
+    assert_eq!(keys[0], keys[1]);
+}
