@@ -11,7 +11,7 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
             std::env::temp_dir().join(format!("hirsel-source-profile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("known.hir");
-        std::fs::write(&source, "fn first(b: Bytes) -> () { let x = copy b }\nfn second(b: Bytes) -> () { let y = copy b }\npub fn main(rt: Io) -> Result[(), GrantError] {\n  for i in 0u64..3u64 { first(b\"a\") }\n  for j in 0u64..5u64 { second(b\"b\") }\n  let tasks = io.tasks(rt)?\n  let stdout = io.stdout(rt)?\n  task.scope(tasks, fn(s: Scope) {\n    let mut set: TaskSet[u64] of s = task.set(s)\n    for i in 0u64..6u64 {\n      task.add(s, mut set, task.async(s, fn() -> u64 { i + 1u64 }))\n    }\n    let _ = task.all(s, take set)\n  })\n  let _ = out.print(stdout, \"done\\n\")\n  Ok(())\n}\n").unwrap();
+        std::fs::write(&source, "fn first(b: Bytes) -> () { let x = copy b }\nfn second(b: Bytes) -> () { let y = copy b }\npub fn main(rt: Io) -> Result[(), GrantError] {\n  for i in 0u64..3u64 { first(b\"a\") }\n  for j in 0u64..5u64 { second(b\"b\") }\n  let tasks = io.tasks(rt)?\n  let stdout = io.stdout(rt)?\n  task.scope(tasks, fn(s: Scope) {\n    let mut set: TaskSet[u64] of s = task.set(s)\n    for i in 0u64..6u64 {\n      task.add(s, mut set, task.async(s, fn() -> u64 { i + 1u64 }))\n    }\n    task.cancel_all(s, take set)\n  })\n  let _ = out.print(stdout, \"done\\n\")\n  Ok(())\n}\n").unwrap();
         let mut loaded = hirsel_driver::load_program(&source).unwrap();
         loaded.check_for_execution().unwrap();
         let snapshot = loaded.engine.export_native_input().unwrap();
