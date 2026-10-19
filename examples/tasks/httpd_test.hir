@@ -1,12 +1,25 @@
 fn small() -> Limits uses {} {
-  Limits(head: 2048, body: 64)
+  Limits(
+    head: 2048,
+    body: 64,
+    headers: 64,
+    request: time.Duration(nanoseconds: 1000000000),
+    idle: time.Duration(nanoseconds: 1000000000)
+  )
 }
 
-fn status_of(raw: String) -> u16 uses {} {
-  match parse(string.as_bytes(raw), small()) {
-    Ok(Some(_)) => 0,
-    Ok(None()) => 1,
-    Error(status) => status,
+fn parsed(raw: String) -> Result[Option[http.ServerRequest], http.HttpError] uses {} {
+  match http.parse_server_request(string.as_bytes(raw), config(small(), false)) {
+    Ok(Some((request, _))) => Ok(Some(take request)),
+    Ok(None()) => Ok(None()),
+    Error(e) => Error(e),
+  }
+}
+
+fn rejected(raw: String) -> Option[u16] uses {} {
+  match parsed(raw) {
+    Error(e) => rejection(e),
+    _ => None(),
   }
 }
 
@@ -21,77 +34,102 @@ fn with_headers(count: u64) -> unique String uses {} {
 }
 
 @test
-fn parse_reads_one_request_and_reports_its_length(t: Test) {
-  let first = "POST /tasks/3?x=1 HTTP/1.1\r\nHost: a\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 19\r\n\r\ntitle=Hay+%26+oats&"
-  let raw = f"{first}GET / HTTP/1.1\r\n\r\n"
-  let Ok(Some((request, used))) = parse(string.as_bytes(raw), small()) else {
+fn requests_give_their_path_query_and_form(t: Test) {
+  let Ok(Some(request)) = parsed(
+    "POST /tasks/3?x=1 HTTP/1.1\r\nHost: a\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 19\r\n\r\ntitle=Hay+%26+oats&"
+  ) else {
     test.fail(t)
   }
-  test.check(t, used == string.byte_len(first))
-  test.check(
-    t,
-    request.method == "POST" && request.target == "/tasks/3?x=1" && route_path(request) == "/tasks/3"
-  )
-  test.check(t, request.keep_alive && http.header(request.headers, "host") == Some("a"))
+  test.check(t, route_path(request) == "/tasks/3")
   test.check(t, form(request) == Ok([("title", "Hay & oats")]))
   test.check(
     t,
     param(query(request), "x") == Some("1") && param(query(request), "y") == None()
   )
-}
-
-@test
-fn parse_waits_for_the_whole_head_and_body(t: Test) {
-  test.check(t, status_of("GET / HTTP/1.1\r\nHost: a\r\n") == 1)
-  test.check(t, status_of("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nabc") == 1)
-  test.check(t, status_of("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nabcde") == 0)
-}
-
-@test
-fn parse_takes_more_headers_than_std_and_rejects_bad_requests(t: Test) {
-  test.check(t, status_of(with_headers(40)) == 0)
-  test.check(t, status_of(with_headers(65)) == 431)
-  test.check(t, status_of("GET / HTTP/1.1\r\nX: y\r\n\r\n") == 0)
-  test.check(t, status_of("GET /\r\n\r\n") == 400)
-  test.check(
-    t,
-    status_of("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n") == 411
-  )
-  test.check(t, status_of("POST / HTTP/1.1\r\nContent-Length: 65\r\n\r\n") == 413)
-}
-
-@test
-fn form_needs_the_urlencoded_media_type(t: Test) {
-  let Ok(Some((request, _))) = parse(
-    string.as_bytes(
-      "POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
-    ),
-    small()
+  let Ok(Some(json_post)) = parsed(
+    "POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
   ) else {
     test.fail(t)
   }
-  test.check(t, form(request) == Error(415))
+  test.check(t, form(json_post) == Error(415))
 }
 
 @test
-fn encode_frames_bodies_except_for_head_and_no_content(t: Test) {
-  let ok = text_reply(200, "hi")
+fn limits_take_browser_sized_heads_and_reject_larger_requests(t: Test) {
+  test.check(t, results.is_ok(parsed(with_headers(40))))
+  test.check(t, rejected(with_headers(65)) != None())
+  test.check(t, rejected("POST / HTTP/1.1\r\nContent-Length: 65\r\n\r\n") == Some(413))
+  test.check(t, rejected("GET /\r\n\r\n") == Some(400))
+  let c = config(small(), false)
   test.check(
     t,
-    string.from_bytes(encode(ok, true, false)) == Ok(
-      "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nhi"
+    c.max_head_bytes == 2048 && c.max_body_bytes == 64 && c.max_headers == 64
+  )
+  test.check(
+    t,
+    c.read_timeout == None() && c.idle_timeout == Some(
+      time.Duration(nanoseconds: 1000000000)
     )
   )
   test.check(
     t,
-    string.from_bytes(encode(ok, false, true)) == Ok(
-      "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"
-    )
+    config(small(), true).read_timeout == Some(time.Duration(nanoseconds: 1000000000))
   )
-  test.check(
+}
+
+// A HEAD request and a 204 get the head alone; another reply its body and length.
+@test
+fn send_frames_each_reply(t: Test) {
+  let requests = "HEAD / HTTP/1.1\r\nHost: a\r\n\r\nDELETE /x HTTP/1.1\r\nHost: a\r\n\r\nGET /y HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n"
+  let n = test.net(
     t,
-    string.from_bytes(encode(empty(204), true, false)) == Ok(
-      "HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n"
-    )
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 7332,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 50001),
+            tls: Plain(),
+            steps: [
+              Send(string.as_bytes(requests)),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 204 \r\nConnection: keep-alive\r\n\r\n"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"
+              )
+            ]
+          )
+        ]
+      )
+    ]
   )
+  let Ok(listener) = net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 7332)
+  ) else {
+    test.fail(t)
+  }
+  let mut accepting = take listener
+  let Ok((stream, _)) = net.accept(n, mut accepting) else {
+    test.fail(t)
+  }
+  let mut connection = http.server_connection(n, take stream, config(small(), false))
+  for _ in 0u64..3 {
+    let Ok(request) = http.receive_request(mut connection, None()) else {
+      test.fail(t)
+    }
+    let response = if request.method == "DELETE" {
+      empty(204)
+    } else {
+      text_reply(200, "hi")
+    }
+    test.check(
+      t,
+      results.is_ok(send(mut connection, response, request.method == "HEAD"))
+    )
+  }
 }

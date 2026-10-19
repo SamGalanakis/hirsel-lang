@@ -1,5 +1,6 @@
 // Tasks and the board that holds them: validation, the mutations a request can make,
 // and the filtered, sorted view a browser asks for. Everything here is pure.
+
 @serializable
 pub type Status = Todo | Doing | Done
 

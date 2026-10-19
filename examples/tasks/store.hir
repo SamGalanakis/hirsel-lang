@@ -6,6 +6,7 @@
 // which never leaves a partial file. With `Durable()` the write returns once the
 // file and its directory survive a crash. Loading takes the newest snapshot that
 // parses, sets aside newer ones that do not, and removes all but the newest two.
+
 pub type StoreError = Files(FileError) | Corrupt(String)
 
 const PREFIX: String = "board-"

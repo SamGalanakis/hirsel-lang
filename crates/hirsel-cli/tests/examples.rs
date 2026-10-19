@@ -2156,10 +2156,11 @@ impl Drop for Running {
     }
 }
 
-/// examples/tasks over HTTP: the real server, interpreted or built with LLVM, driven
-/// by the Hirsel client in examples/tasks/e2e, which knows only the routes. The client
-/// runs its `first` phase, holds a stream open while the server stops on stdin EOF
-/// (`watch`), and runs `second` after a restart over the same data directory.
+/// examples/tasks over HTTP: the real server, interpreted or built with LLVM, driven by
+/// the interpreted Hirsel client in examples/tasks/e2e, which knows only the routes.
+/// The client runs its `first` phase, holds a stream open while the server stops on
+/// stdin EOF (`watch`), and runs `second` after a restart on the same port over the
+/// same data directory.
 fn tasks_end_to_end(native: bool) {
     let dir = std::env::temp_dir().join(format!(
         "hirsel-example-{}-{}-tasks-e2e",
@@ -2170,19 +2171,19 @@ fn tasks_end_to_end(native: bool) {
     std::fs::create_dir_all(&data).unwrap();
     let server = repository_manifest("examples/tasks/hirsel.json");
     let client = repository_manifest("examples/tasks/e2e/hirsel.json");
-    // Built once each, then launched directly; interpreted runs go through `hirsel run`.
-    let built: Option<(PathBuf, PathBuf)> = native.then(|| {
-        for (manifest, exe) in [(&server, "tasks"), (&client, "tasks_e2e")] {
-            let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-                .args(["build", "--backend", "llvm"])
-                .arg(manifest)
-                .arg("-o")
-                .arg(dir.join(exe))
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "build {exe}: {output:?}");
-        }
-        (dir.join("tasks"), dir.join("tasks_e2e"))
+    // The server is built once and launched directly; the client always runs
+    // interpreted, since natively it would build std's HTTP client too.
+    let built: Option<PathBuf> = native.then(|| {
+        let exe = dir.join("tasks");
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--backend", "llvm"])
+            .arg(&server)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "build tasks: {output:?}");
+        exe
     });
     let launch =
         |manifest: &PathBuf, exe: Option<&PathBuf>, grants: &serde_json::Value, args: &[&str]| {
@@ -2211,24 +2212,23 @@ fn tasks_end_to_end(native: bool) {
             command.args(args);
             command
         };
-    // Two free ports, held together so they differ: the restarted server cannot reuse
-    // the first one's port while its closed connections linger.
-    let listeners: Vec<_> = (0..2)
-        .map(|_| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap())
-        .collect();
-    let ports: Vec<String> = listeners
-        .iter()
-        .map(|l| l.local_addr().unwrap().port().to_string())
-        .collect();
-    drop(listeners);
+    // A free port; the restarted server binds it again at once.
+    let port = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
     let start = |port: &str| {
-        // No wall clock: due dates read as dates, and log lines carry no time.
+        // The monotonic clock times requests; without the wall clock log lines carry
+        // no time.
         let grants = serde_json::json!({
             "io": {
                 "stdout": "stdout.bytes@1",
                 "stderr": "stderr.bytes@1",
                 "stdin": "stdin.bytes@1",
                 "tasks": "tasks.cooperative@1",
+                "monotonic_clock": "clock.monotonic.ns@1",
                 "dirs": [
                     {"path": "data", "host": data.canonicalize().unwrap(), "access": "read_write"},
                     {"path": "static", "host": repository_manifest("examples/tasks/static"), "access": "read"},
@@ -2238,12 +2238,7 @@ fn tasks_end_to_end(native: bool) {
             "args": [],
             "env": {"TASKS_HOST": null, "TASKS_PORT": null, "TASKS_DURABILITY": null, "TASKS_LOG_LEVEL": null},
         });
-        let command = launch(
-            &server,
-            built.as_ref().map(|b| &b.0),
-            &grants,
-            &["--port", port],
-        );
+        let command = launch(&server, built.as_ref(), &grants, &["--port", port]);
         let running = Running::spawn(command, &dir.join(format!("server-{port}.log")));
         assert_eq!(
             running.line("server readiness"),
@@ -2261,12 +2256,7 @@ fn tasks_end_to_end(native: bool) {
             },
             "args": [],
         });
-        launch(
-            &client,
-            built.as_ref().map(|b| &b.1),
-            &grants,
-            &[phase, port],
-        )
+        launch(&client, None, &grants, &[phase, port])
     };
     let run_client = |phase: &str, port: &str, expected: &str| {
         let output = client_command(phase, port).output().unwrap();
@@ -2290,9 +2280,9 @@ fn tasks_end_to_end(native: bool) {
         names.sort();
         names
     };
-    let first = start(&ports[0]);
-    run_client("first", &ports[0], "ok: 96 checks\n");
-    let watching = Running::spawn(client_command("watch", &ports[0]), &dir.join("watch.log"));
+    let first = start(&port);
+    run_client("first", &port, "ok: 96 checks\n");
+    let watching = Running::spawn(client_command("watch", &port), &dir.join("watch.log"));
     assert_eq!(watching.line("watch"), "watching");
     assert!(first.finish("first server").success(), "native={native}");
     assert_eq!(watching.line("watch"), "ended");
@@ -2306,8 +2296,8 @@ fn tasks_end_to_end(native: bool) {
             "board-00000000000000000007.json"
         ]
     );
-    let second = start(&ports[1]);
-    run_client("second", &ports[1], "ok: 14 checks\n");
+    let second = start(&port);
+    run_client("second", &port, "ok: 14 checks\n");
     assert!(second.finish("second server").success(), "native={native}");
     assert_eq!(
         snapshots(),

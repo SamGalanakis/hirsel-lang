@@ -91,3 +91,74 @@ fn changes_save_a_snapshot_only_when_the_board_changes(t: Test) {
   let dropped = apply(mut board, Drop(1))
   test.check(t, dropped.found && board.revision == 4 && list.len(board.tasks) == 1)
 }
+
+fn services(tasks: Tasks) -> Services {
+  Services(
+    tasks: tasks,
+    logger: Logger(sink: None(), minimum: Error()),
+    wall: None(),
+    clock: None(),
+    limits: httpd.Limits(
+      head: 16384,
+      body: 65536,
+      headers: 64,
+      request: time.Duration(nanoseconds: 1000000000),
+      idle: time.Duration(nanoseconds: 1000000000)
+    ),
+    state: mutex.create(tasks, model.empty_board()),
+    assets: shared.freeze(map.empty())
+  )
+}
+
+fn on_disk(d: Dir, revision: u64) -> bool {
+  results.is_ok(file.metadata(d, path.of(store.snapshot_name(revision))))
+}
+
+// A change is on disk before any stream hears of it; a change that alters nothing
+// saves and publishes nothing.
+@test
+fn changes_are_saved_before_they_are_published(t: Test) {
+  let tasks = test.tasks(t)
+  let d = test.dir(t, [])
+  let svc = services(tasks)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(tasks)
+      let (updates, commands): (Sender[hub.Command], Receiver[hub.Command]) = channel.open(
+        tasks
+      )
+      let writer = task.async(
+        s,
+        fn() -> () {
+          write_loop(tasks, d, Durable(), svc.logger, take jobs)
+        }
+      )
+      let broadcaster = task.async(
+        s,
+        fn() -> () {
+          hub.run(tasks, take commands)
+        }
+      )
+      let mut to_writer = take saves
+      let mut to_hub = take updates
+      let Some(subscription) = hub.subscribe(tasks, mut to_hub) else {
+        test.fail(t)
+      }
+      let mut wakeups = take subscription
+      test.check(t, commit(svc, mut to_writer, mut to_hub, Add(item_of("a"))) == Ok(1))
+      test.check(t, channel.receive(tasks, mut wakeups) == Ok(1) && on_disk(d, 1))
+      test.check(t, commit(svc, mut to_writer, mut to_hub, Next(9)) == Error(404))
+      test.check(t, commit(svc, mut to_writer, mut to_hub, Shift(1, Up())) == Ok(1))
+      test.check(t, commit(svc, mut to_writer, mut to_hub, Next(1)) == Ok(1))
+      // The move changed nothing, so the next wakeup is the advance's revision.
+      test.check(t, channel.receive(tasks, mut wakeups) == Ok(2) && on_disk(d, 2))
+      test.check(t, board_snapshot(svc).tasks[0].status == Doing())
+      hub.stop(tasks, mut to_hub)
+      close_sender(take to_hub)
+      close_sender(take to_writer)
+      task.await(s, take broadcaster)
+      task.await(s, take writer)
+    }
+  )
+}

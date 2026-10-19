@@ -28,7 +28,9 @@ examples/tasks/run 8080 --native   # compiled with LLVM first
 
 `run` writes `data/grants.json` from `grants.json` and starts
 `hirsel run hirsel.json --grants data/grants.json`. The grants bind the port, the
-`data` directory (read-write, the snapshots) and `static` (read-only). Type `quit`
+`data` directory (read-write, the snapshots) and `static` (read-only). With the
+monotonic clock granted, a request must arrive within 30 s; an idle keep-alive
+connection closes after 120 s either way. Type `quit`
 or press Ctrl-D to stop the server. It stops accepting and closes its
 connections, which ends every event stream. Then it waits for the writer to save
 every snapshot it was given, and exits.
@@ -56,8 +58,8 @@ are.
 |---|---|
 | `model.hir` | Tasks and the board: validation, mutations and the filtered, sorted view. All of it is pure. |
 | `store.hir` | Persistence, the one module that knows the storage format. Each change is a new `board-<revision>.json` written with `file.put_new`; loading takes the newest snapshot that parses. |
-| `view.hir`, `html.hir` | Server-rendered HTML. Every text from a task goes through `html.esc`. |
-| `httpd.hir` | A minimal HTTP/1.1 server over a raw stream (see GAPS.md). |
+| `view.hir` | Server-rendered HTML. Every text from a task goes through std's `html.esc`. |
+| `httpd.hir` | Replies, limits and request helpers over std's HTTP/1.1 server connection. |
 | `hub.hir` | The broadcast: a task that tells every open event stream about each new revision. |
 | `app.hir` | Routing, handlers, the writer task and `serve`. |
 | `main.hir` | Grants and configuration. |
@@ -113,11 +115,12 @@ hirsel test examples/tasks/hirsel.json            # 22 unit tests; add --native 
 ```
 
 They cover validation, mutations and sorting; snapshots across simulated crashes
-(`test.crash`) and corrupt files; HTML escaping and the live patch; the HTTP
-parser and encoder; routing; and configuration.
+(`test.crash`) and corrupt files; HTML escaping and the live patch; request limits, forms and
+reply framing; routing; configuration; and, on simulated tasks (`test.tasks`),
+the hub's broadcast and a change being saved before any stream hears of it.
 
 `e2e/` is the end-to-end suite: a Hirsel client that knows only the routes above
-and talks to a running server over plain sockets. Its phases are:
+and talks to a running server through std's HTTP client. Its phases are:
 
 - `first <port>`, against an empty board: CRUD through HTTP, the events each
   action sends on its reply and on the stream, and a broadcast reaching a second,
@@ -127,9 +130,9 @@ and talks to a running server over plain sockets. Its phases are:
   revisions as the first run left them.
 
 `crates/hirsel-cli/tests/examples.rs` (`tasks_end_to_end_*`) starts the server
-process, runs the three phases, stops it with stdin EOF, restarts it on another
-port and checks the snapshot files. It does this interpreted and with the server
-and the client built with LLVM. It also runs the unit tests on both native
+process, runs the three phases, stops it with stdin EOF, restarts it on the same
+port and checks the snapshot files. It does this with the server interpreted and
+built with LLVM; the client runs interpreted. It also runs the unit tests on both native
 backends. By hand:
 
 ```sh

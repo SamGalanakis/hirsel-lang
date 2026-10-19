@@ -5,6 +5,7 @@
 // A stream whose browser has gone drops its Receiver; the next publish finds its
 // Sender closed and forgets it. `Stop` closes every stream's channel, which ends
 // the streams.
+
 pub type Command = Subscribe(Sender[u64]) | Publish(u64) | Stop
 
 pub fn run(tasks: Tasks, take commands: Receiver[Command]) -> () {

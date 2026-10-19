@@ -1,0 +1,48 @@
+fn forget(take receiver: Receiver[u64]) -> () {}
+
+fn next(tasks: Tasks, mut receiver: Receiver[u64]) -> u64 {
+  match channel.receive(tasks, mut receiver) {
+    Ok(revision) => revision,
+    Error(_) => 0,
+  }
+}
+
+@test
+fn every_open_stream_hears_each_revision_until_the_hub_stops(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let (control, commands): (Sender[Command], Receiver[Command]) = channel.open(
+        tasks
+      )
+      let hub = task.async(
+        s,
+        fn() -> () {
+          run(tasks, take commands)
+        }
+      )
+      let mut to_hub = take control
+      let Some(first) = subscribe(tasks, mut to_hub) else {
+        test.fail(t)
+      }
+      let Some(second) = subscribe(tasks, mut to_hub) else {
+        test.fail(t)
+      }
+      let mut a = take first
+      let mut b = take second
+      publish(tasks, mut to_hub, 1)
+      publish(tasks, mut to_hub, 2)
+      test.check(t, next(tasks, mut a) == 1 && next(tasks, mut a) == 2)
+      test.check(t, next(tasks, mut b) == 1 && next(tasks, mut b) == 2)
+      // A stream whose browser left is forgotten; the others still hear.
+      forget(take b)
+      publish(tasks, mut to_hub, 3)
+      test.check(t, next(tasks, mut a) == 3)
+      // Stopping the hub closes every stream's channel.
+      stop(tasks, mut to_hub)
+      test.check(t, results.is_error(channel.receive(tasks, mut a)))
+      task.await(s, take hub)
+    }
+  )
+}

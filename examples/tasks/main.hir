@@ -5,6 +5,7 @@
 // (read_write) and the `static` directory (read). Optional: stdout announces the
 // address, stderr receives JSON log lines, the wall clock dates log lines and
 // "due in 3 days", and stdin stops the server when it ends or reads `quit`.
+
 pub type StartError = Grant(GrantError) | Files(FileError) | Store(store.StoreError) | Network(
   NetError
 ) | Usage(String)
@@ -168,13 +169,7 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), StartError] {
   let data = io.dir(rt, path.of("data")) ? Files
   let static_files = io.dir(rt, path.of("static")) ? Files
   let logger = app.Logger(sink: results.ok(io.stderr(rt)), minimum: config.level)
-  let svc = app.Services(
-    tasks: tasks,
-    logger: logger,
-    wall: results.ok(io.wall_clock(rt)),
-    limits: httpd.Limits(head: 16384, body: 65536),
-    idle: Nanos(120000000000)
-  )
+  let wall = results.ok(io.wall_clock(rt))
   let board = store.load(data) ? Store
   let files = app.load_assets(static_files) ? Files
   app.note(
@@ -185,24 +180,30 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), StartError] {
       ("tasks", u64.to_string(list.len(board.tasks))),
       ("revision", u64.to_string(board.revision))
     ],
-    svc.wall
+    wall
   )
-  app.serve(
-    n,
-    svc,
-    SocketAddr(ip: ip, port: config.port),
-    match stdout {
-      Some(out) => Print(out),
-      None() => Quiet(),
-    },
-    data,
-    config.durability,
-    take board,
-    take files,
-    match io.stdin(rt) {
-      Ok(input) => Input(input),
-      Error(_) => Never(),
-    }
-  ) ? Network
+  let svc = app.Services(
+    tasks: tasks,
+    logger: logger,
+    wall: wall,
+    clock: results.ok(io.monotonic_clock(rt)),
+    limits: httpd.Limits(
+      head: 16384,
+      body: 65536,
+      headers: 64,
+      request: time.Duration(nanoseconds: 30000000000),
+      idle: time.Duration(nanoseconds: 120000000000)
+    ),
+    state: mutex.create(tasks, take board),
+    assets: shared.freeze(take files)
+  )
+  let listener = net.listen(n, SocketAddr(ip: ip, port: config.port)) ? Network
+  let bound = net.local_addr(n, listener) ? Network
+  let shown = net.socket_addr_to_string(bound)
+  app.note(logger, Info(), "listening", [("address", copy shown)], wall)
+  if let Some(out) = stdout {
+    let _ = out.print(out, f"listening on http://{shown}/\n")
+  }
+  app.serve(n, svc, take listener, data, config.durability, results.ok(io.stdin(rt)))
   Ok(())
 }

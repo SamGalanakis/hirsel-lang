@@ -49,6 +49,26 @@ fn overdue(item: model.Item, today: Option[time.Date]) -> bool uses {} {
   item.status != Done() && date.compare(when, day) < 0
 }
 
+// ---- attributes ----
+/// A JavaScript string literal for `value`, safe inside a double-quoted HTML attribute
+/// once escaped: JSON's escaping, with `<` written as `\u003c`.
+fn js_string(value: String) -> unique String uses {} {
+  let quoted = match json.stringify(Text(unique value)) {
+    Ok(s) => take s,
+    Error(_) => "\"\"",
+  }
+  string.replace(quoted, "<", "\\u003c")
+}
+
+/// ` selected` when `on`, for an `<option>`.
+fn selected_attr(on: bool) -> String uses {} {
+  if on {
+    " selected"
+  } else {
+    ""
+  }
+}
+
 // ---- fragments ----
 @preserves_unique(out)
 fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
@@ -56,7 +76,7 @@ fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
     text.append(
       mut out,
       f"<button class=\"tag\" type=\"button\" data-on:click=\"$filter.tag = {html.esc(
-        html.js_string(tag)
+        js_string(tag)
       )}\">#{html.esc(tag)}</button>"
     )
   }
@@ -66,7 +86,7 @@ fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
 fn option_html(mut out: List[u8], value: String, label: String, current: String) -> () uses {} {
   text.append(
     mut out,
-    f"<option value=\"{html.esc(value)}\"{html.selected(value == current)}>{html.esc(
+    f"<option value=\"{html.esc(value)}\"{selected_attr(value == current)}>{html.esc(
       label
     )}</option>"
   )

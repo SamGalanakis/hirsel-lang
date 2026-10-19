@@ -22,12 +22,6 @@
       ]
     },
     {
-      "path": "html.hir",
-      "module": [
-        "html"
-      ]
-    },
-    {
       "path": "httpd.hir",
       "module": [
         "httpd"
@@ -84,6 +78,12 @@
     {
       "path": "main_test.hir",
       "module": []
+    },
+    {
+      "path": "hub_test.hir",
+      "module": [
+        "hub"
+      ]
     }
   ],
   "dependencies": [

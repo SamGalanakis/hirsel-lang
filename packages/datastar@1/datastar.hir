@@ -56,8 +56,8 @@ pub type SignalsError = Missing | Query(uri.QueryError) | Utf8 | Json(json.JsonE
   String
 )
 
-/// Why an event could not be sent: the stream failed, so the browser has gone.
-pub type SseError = Write(NetError)
+/// Why an event could not be sent: the connection failed, so the browser has gone.
+pub type SseError = Http(http.HttpError)
 
 /// The defaults: target by id, morph the outer element, no view transition, HTML.
 pub fn elements_options() -> ElementsOptions uses {} {
@@ -273,7 +273,7 @@ pub fn execute_script_event(script: String, options: ScriptOptions) -> unique St
     text.append(mut tag, " ")
     text.append(mut tag, name)
     text.append(mut tag, "=\"")
-    escape_into(value, mut tag)
+    html.escape_into(mut tag, value)
     text.append(mut tag, "\"")
   }
   if options.auto_remove {
@@ -297,29 +297,6 @@ pub fn redirect_event(url: String) -> unique String uses {} {
   js_string_into(url, mut js)
   text.append(mut js, ")")
   execute_script_event(text.finish_valid(take js), script_options())
-}
-
-/// Appends `value` with `&`, `<`, `>`, `"` and `'` written as character references,
-/// so it is safe as HTML text or as a quoted attribute value.
-@preserves_unique(out)
-pub fn escape_into(value: String, mut out: List[u8]) -> () uses {} {
-  for b in string.as_bytes(value) {
-    match b {
-      b'&' => text.append(mut out, "&amp;"),
-      b'<' => text.append(mut out, "&lt;"),
-      b'>' => text.append(mut out, "&gt;"),
-      b'"' => text.append(mut out, "&#34;"),
-      b'\'' => text.append(mut out, "&#39;"),
-      _ => list.push(mut out, b),
-    }
-  }
-}
-
-/// `value` HTML-escaped as `escape_into` writes it.
-pub fn escape(value: String) -> unique String uses {} {
-  let mut out: List[u8] = []
-  escape_into(value, mut out)
-  text.finish_valid(take out)
 }
 
 // A JavaScript string literal for `value` (JSON's escaping, which is valid JS),
@@ -374,44 +351,39 @@ pub fn read_signals[T](
 }
 
 // ---- the generator ----
-/// An open `text/event-stream` response. Each operation writes one complete event and
-/// returns once it is on the stream, so events arrive in call order. A failed write
-/// means the browser has gone; the generator is then of no further use. Dropping it
-/// closes the stream.
+/// An open `text/event-stream` response on an HTTP connection. Each operation writes
+/// one complete event and returns once it is flushed, so events arrive in call
+/// order. A failed write means the browser has gone; the generator is then of no
+/// further use. Dropping it closes the connection.
 pub opaque resource type ServerSentEventGenerator: noalloc_drop uses {Net} {
-  net: Net,
-  stream: Stream of .net,
+  connection: http.ServerConnection,
 }
 @noalloc drop(self) {}
 
-/// Starts the SSE response to `request` on `stream`: status 200 with
-/// `Cache-Control: no-cache`, `Content-Type: text/event-stream` and, for HTTP/1.1,
-/// `Connection: keep-alive`, written at once so the browser does not time out.
-/// The body runs until the generator is dropped or closed.
-// GAP: std http has no streaming server response, so the head is written to the stream here.
-pub fn new_sse(n: Net, take stream: Stream of n, request: http.ServerRequest) -> Result[
+/// Starts the SSE response to the request `connection` has just received: status
+/// 200 with `Cache-Control: no-cache` and `Content-Type: text/event-stream`, sent at
+/// once so the browser does not time out. HTTP/1.1 frames the body in chunks and
+/// keeps the connection; HTTP/1.0 ends it by closing.
+pub fn new_sse(take connection: http.ServerConnection) -> Result[
   ServerSentEventGenerator,
   SseError
 ] {
-  let mut out = take stream
-  let mut head: List[u8] = []
-  text.append(
-    mut head,
-    "HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: text/event-stream\r\n"
-  )
-  if request.version == Http11() {
-    text.append(mut head, "Connection: keep-alive\r\n")
-  }
-  text.append(mut head, "\r\n")
-  net.write_all(n, mut out, bytes.from_list(take head)) ? Write
-  Ok(ServerSentEventGenerator(net: n, stream: take out))
+  let mut c = take connection
+  http.respond_head(
+    mut c,
+    200,
+    [
+      http.Header(name: "Cache-Control", value: "no-cache"),
+      http.Header(name: "Content-Type", value: "text/event-stream")
+    ]
+  ) ? Http
+  Ok(ServerSentEventGenerator(connection: take c))
 }
 
 /// Writes `event`, complete event text from one of the `_event` functions. Rendering
 /// once and sending the same text to many generators is how a server broadcasts.
 pub fn send(mut sse: ServerSentEventGenerator, text: String) -> Result[(), SseError] {
-  let n = sse.net
-  Ok(net.write_all(n, mut sse.stream, string.as_bytes(text)) ? Write)
+  Ok(http.write_response_body(mut sse.connection, string.as_bytes(text)) ? Http)
 }
 
 /// Writes `patch_elements_event(elements, options)`.
@@ -455,10 +427,14 @@ pub fn redirect(mut sse: ServerSentEventGenerator, url: String) -> Result[(), Ss
   send(mut sse, redirect_event(url))
 }
 
-/// Ends the response: the browser sees the stream close.
-pub fn close(take sse: ServerSentEventGenerator) -> () {
-  let ServerSentEventGenerator(net: n, stream: stream) = take sse
-  let mut s = take stream
-  let _ = net.shutdown(n, mut s, Both())
-  net.close(n, take s)
+/// Ends the response, which the browser sees as the stream closing, and returns the
+/// connection: after HTTP/1.1 it can receive the next request.
+pub fn close(take sse: ServerSentEventGenerator) -> Result[
+  http.ServerConnection,
+  SseError
+] {
+  let ServerSentEventGenerator(connection: connection) = take sse
+  let mut c = take connection
+  http.end_response_body(mut c) ? Http
+  Ok(take c)
 }

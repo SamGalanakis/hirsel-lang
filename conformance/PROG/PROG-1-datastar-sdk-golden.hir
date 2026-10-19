@@ -135,7 +135,7 @@ fn suite_request(post: bool, input: String) -> Result[http.ServerRequest, CaseEr
       f"GET /test?{query} HTTP/1.1\r\nHost: localhost:7331\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\n\r\n"
     )
   }
-  match http.parse_server_request(bytes.from_list(take raw), 65536, 65536) {
+  match http.parse_server_request(bytes.from_list(take raw), http.default_config()) {
     Ok(Some((parsed, _))) => Ok(take parsed),
     _ => Error(Bad("request did not parse")),
   }

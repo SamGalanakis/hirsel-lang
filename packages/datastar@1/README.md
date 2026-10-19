@@ -34,19 +34,23 @@ fn search_from_json(v: json.Value) -> Result[unique Search, String] uses {} = co
   shape(Search)
 )
 
-// GET /search?datastar={"query":"hay"}: answer with one patch, then close.
-fn search(n: Net, take stream: Stream of n, request: http.ServerRequest) -> Result[(), datastar.SseError] {
+// GET /search?datastar={"query":"hay"}, just received on `connection`: answer with
+// two events, then end the response.
+fn search(take connection: http.ServerConnection, request: http.ServerRequest) -> Result[
+  (),
+  datastar.SseError
+] {
   let found = match datastar.read_signals(request, search_from_json) {
     Ok(Search(query: query)) => take query,
     Error(_) => "",
   }
-  let mut sse = datastar.new_sse(n, take stream, request)?
+  let mut sse = datastar.new_sse(take connection)?
   let mut options = datastar.elements_options()
   options.selector = Some("#results")
   options.mode = Inner()
-  datastar.patch_elements(mut sse, f"<li>{datastar.escape(found)}</li>", options)?
+  datastar.patch_elements(mut sse, f"<li>{html.esc(found)}</li>", options)?
   datastar.patch_signals(mut sse, r#"{"searching":false}"#, datastar.signals_options())?
-  datastar.close(take sse)
+  let _ = datastar.close(take sse)?
   Ok(())
 }
 ```
@@ -66,11 +70,14 @@ fn search(n: Net, take stream: Stream of n, request: http.ServerRequest) -> Resu
   `view_transition_selector`, `namespace: Namespace`, `event_id`, `retry_ms`),
   `SignalsOptions` (`only_if_missing`, `event_id`, `retry_ms`) and
   `ScriptOptions` (`auto_remove`, `attributes`, `event_id`, `retry_ms`).
-- **The generator.** `new_sse(n, take stream, request)` writes the stream's
-  response head (`Content-Type: text/event-stream`, `Cache-Control: no-cache`,
-  and `Connection: keep-alive` on HTTP/1.1). `ServerSentEventGenerator` then
-  writes events with `patch_elements`, `remove_elements`, `patch_signals`,
-  `execute_script`, `redirect` and `send`, and `close` ends the stream.
+- **The generator.** `new_sse(take connection)` starts the event stream on an
+  `http.ServerConnection` that has just received its request (`http.receive_request`).
+  It sends status 200 with `Content-Type: text/event-stream` and
+  `Cache-Control: no-cache` at once. HTTP/1.1 frames the body in chunks; HTTP/1.0
+  ends it by closing. `ServerSentEventGenerator` then writes events with
+  `patch_elements`, `remove_elements`, `patch_signals`, `execute_script`,
+  `redirect` and `send`. `close` ends the response and returns the connection,
+  which can take the next request after HTTP/1.1.
 - **Signals.** `read_signals_value(request)` reads the `datastar` query parameter
   of a GET or DELETE request, or else the JSON body. `read_signals(request,
   decode)` also decodes the result, typically with a derived
@@ -79,9 +86,9 @@ fn search(n: Net, take stream: Stream of n, request: http.ServerRequest) -> Resu
 
 ## Limits
 
-std has no streaming server response yet, so `new_sse` writes the head itself on a
-raw `Stream`. The stream is plain HTTP/1.1 with no chunked encoding, and it ends
-when the connection closes. The SDK writes events and does not compress them.
+The SDK writes events uncompressed. Text in elements is the caller's to escape:
+`std@1/html` provides `esc` for f-string holes. Script attributes are escaped by
+the SDK.
 
 ## Tests
 

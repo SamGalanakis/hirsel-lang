@@ -4,6 +4,7 @@
 // applied under the lock, its snapshot is saved by the single writer task before the
 // reply, and its revision is published to the hub, which wakes every open event
 // stream to re-render what its browser shows.
+
 pub type Logger {
   sink: Option[Stderr],
   minimum: log.Level,
@@ -16,17 +17,17 @@ pub type Asset {
   body: Bytes,
 }
 
-/// What every connection shares besides the board and the static files. All
-/// fields are copyable capabilities and settings, so a connection task captures a
-/// copy.
-// GAP: a record holding a Mutex or Shared handle is not sendable, so `state` and
-// `assets` travel as separate parameters.
+/// What every connection shares: capabilities, settings, the board and the static
+/// files. Every field is a copyable handle or plain data, so a connection task
+/// captures a copy.
 pub type Services {
   tasks: Tasks,
   logger: Logger,
   wall: Option[WallClock],
+  clock: Option[MonotonicClock],
   limits: httpd.Limits,
-  idle: NetTimeout,
+  state: Mutex[model.Board],
+  assets: Shared[Map[String, Asset]],
 }
 
 /// A board snapshot for the writer task, and where to say whether it was saved.
@@ -76,16 +77,6 @@ fn create_signals_from_json(value: json.Value) -> Result[unique CreateSignals, S
 fn screen_signals_from_json(value: json.Value) -> Result[unique ScreenSignals, String] uses {} = comptime derive.from_json(
   shape(ScreenSignals)
 )
-
-// GAP: derive.from_json looks for a nested record's decoder in this module, so these
-// forward to model's.
-fn draft_from_json(value: json.Value) -> Result[unique model.Draft, String] uses {} {
-  model.draft_from_json(value)
-}
-
-fn query_from_json(value: json.Value) -> Result[unique model.Query, String] uses {} {
-  model.query_from_json(value)
-}
 
 // ---- logging ----
 pub fn note(
@@ -277,17 +268,12 @@ pub fn apply(mut board: unique model.Board, what: Change) -> unique Applied uses
   Applied(found: found, id: id, saved: take saved)
 }
 
-fn board_snapshot(svc: Services, state: Mutex[model.Board]) -> model.Board {
+fn board_snapshot(svc: Services) -> model.Board {
   mutex.with(
     svc.tasks,
-    state,
+    svc.state,
     fn(mut board: unique model.Board) -> unique model.Board uses {} {
-      // GAP: `unique board` is not proved sendable; a rebuilt record is.
-      model.Board(
-        next_id: board.next_id,
-        revision: board.revision,
-        tasks: unique board.tasks
-      )
+      unique board
     }
   )
 }
@@ -296,14 +282,13 @@ fn board_snapshot(svc: Services, state: Mutex[model.Board]) -> model.Board {
 /// revision. Returns whether the task existed and the change was saved.
 pub fn commit(
   svc: Services,
-  state: Mutex[model.Board],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   what: Change
 ) -> Result[u64, u16] {
   let mut applied = mutex.with(
     svc.tasks,
-    state,
+    svc.state,
     fn(mut board: unique model.Board) -> unique Applied uses {} {
       apply(mut board, what)
     }
@@ -407,7 +392,6 @@ fn failure_reply(status: u16) -> httpd.Reply uses {} {
 /// POST /tasks: the draft arrives as signals; on success the form is cleared.
 pub fn create(
   svc: Services,
-  state: Mutex[model.Board],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   request: http.ServerRequest
@@ -420,7 +404,7 @@ pub fn create(
     Ok(i) => take i,
     Error(e) => return events_reply(error_signal(model.invalid_text(e))),
   }
-  match commit(svc, state, mut saves, mut updates, Add(take item)) {
+  match commit(svc, mut saves, mut updates, Add(take item)) {
     Ok(_) => events_reply(
       datastar.patch_signals_event(
         r#"{"draft":{"title":"","description":"","priority":"medium","due":"","tags":""},"error":""}"#,
@@ -438,7 +422,6 @@ fn form_value(pairs: List[(String, String)], name: String) -> String uses {} {
 /// POST /tasks/<id>: the inline edit form arrives form-encoded.
 pub fn edit(
   svc: Services,
-  state: Mutex[model.Board],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   id: u64,
@@ -459,7 +442,7 @@ pub fn edit(
     Ok(i) => take i,
     Error(e) => return events_reply(error_signal(model.invalid_text(e))),
   }
-  match commit(svc, state, mut saves, mut updates, Replace(id, take item)) {
+  match commit(svc, mut saves, mut updates, Replace(id, take item)) {
     Ok(_) => events_reply(
       datastar.patch_signals_event(
         r#"{"editing":0,"error":""}"#,
@@ -473,12 +456,11 @@ pub fn edit(
 /// A change that needs no input: advance, delete or move.
 pub fn simple_change(
   svc: Services,
-  state: Mutex[model.Board],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   take what: Change
 ) -> httpd.Reply {
-  match commit(svc, state, mut saves, mut updates, what) {
+  match commit(svc, mut saves, mut updates, what) {
     Ok(_) => httpd.empty(204),
     Error(status) => failure_reply(status),
   }
@@ -495,8 +477,8 @@ fn html_reply(status: u16, take document: String) -> httpd.Reply uses {} {
   )
 }
 
-pub fn page(svc: Services, state: Mutex[model.Board], query: model.Query, selected: u64) -> httpd.Reply {
-  let board = board_snapshot(svc, state)
+pub fn page(svc: Services, query: model.Query, selected: u64) -> httpd.Reply {
+  let board = board_snapshot(svc)
   if selected != 0 && option.is_none(model.find(board, selected)) {
     return html_reply(404, view.not_found_page())
   }
@@ -509,13 +491,9 @@ pub fn page(svc: Services, state: Mutex[model.Board], query: model.Query, select
 }
 
 /// GET /static/<name>, with an ETag so a browser can revalidate cheaply.
-pub fn asset(
-  assets: Shared[Map[String, Asset]],
-  name: String,
-  request: http.ServerRequest
-) -> httpd.Reply {
+pub fn asset(svc: Services, name: String, request: http.ServerRequest) -> httpd.Reply {
   let found = shared.with(
-    assets,
+    svc.assets,
     fn(files: Map[String, Asset]) -> Option[Asset] {
       match map.get(files, name) {
         Some(a) => Some(unique a),
@@ -602,11 +580,9 @@ fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique vie
 /// now and again after every published revision, until the browser goes or the
 /// server stops.
 pub fn stream_updates(
-  n: Net,
   svc: Services,
-  state: Mutex[model.Board],
   mut updates: Sender[hub.Command],
-  take stream: Stream of n,
+  take connection: http.ServerConnection,
   request: http.ServerRequest
 ) -> () {
   let screen = screen_of(request, svc.wall)
@@ -614,14 +590,14 @@ pub fn stream_updates(
     return ()
   }
   let mut wakeups = take subscription
-  let Ok(generator) = datastar.new_sse(n, take stream, request) else {
+  let Ok(generator) = datastar.new_sse(take connection) else {
     return ()
   }
   let mut sse = take generator
   let mut shown: u64 = 0
   let mut first = true
   while true {
-    let board = board_snapshot(svc, state)
+    let board = board_snapshot(svc)
     if first || board.revision > shown {
       first = false
       shown = board.revision
@@ -640,7 +616,7 @@ pub fn stream_updates(
       Error(_) => break,
     }
   }
-  datastar.close(take sse)
+  let _ = datastar.close(take sse)
 }
 
 // ---- connections ----
@@ -655,24 +631,21 @@ fn method_not_allowed(allow: String) -> httpd.Reply uses {} {
 /// The reply to every request but the event stream.
 pub fn handle(
   svc: Services,
-  state: Mutex[model.Board],
-  assets: Shared[Map[String, Asset]],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   take target: Route,
   request: http.ServerRequest
 ) -> httpd.Reply {
   match take target {
-    Home(query) => page(svc, state, query, 0),
-    Detail(id) => page(svc, state, view.default_query(), id),
-    Static(name) => asset(assets, name, request),
-    Create() => create(svc, state, mut saves, mut updates, request),
-    Edit(id) => edit(svc, state, mut saves, mut updates, id, request),
-    Advance(id) => simple_change(svc, state, mut saves, mut updates, Next(id)),
-    Remove(id) => simple_change(svc, state, mut saves, mut updates, Drop(id)),
+    Home(query) => page(svc, query, 0),
+    Detail(id) => page(svc, view.default_query(), id),
+    Static(name) => asset(svc, name, request),
+    Create() => create(svc, mut saves, mut updates, request),
+    Edit(id) => edit(svc, mut saves, mut updates, id, request),
+    Advance(id) => simple_change(svc, mut saves, mut updates, Next(id)),
+    Remove(id) => simple_change(svc, mut saves, mut updates, Drop(id)),
     Move(id, direction) => simple_change(
       svc,
-      state,
       mut saves,
       mut updates,
       Shift(id, direction)
@@ -685,43 +658,30 @@ pub fn handle(
 // Serves requests in order until the connection closes, returning the request
 // that asks for the event stream, if one does.
 fn serve_requests(
-  n: Net,
   svc: Services,
-  state: Mutex[model.Board],
-  assets: Shared[Map[String, Asset]],
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
-  mut stream: Stream of n
+  mut connection: http.ServerConnection
 ) -> Option[http.ServerRequest] {
-  let mut reader = bufio.new(4096)
   while true {
-    let request = match httpd.read_request(n, mut stream, mut reader, svc.limits) {
+    let request = match http.receive_request(mut connection, svc.clock) {
       Ok(r) => take r,
-      Error(Rejected(status)) => {
-        let _ = httpd.write_reply(
-          n,
-          mut stream,
-          httpd.text_reply(status, "bad request\n"),
-          false,
-          false
-        )
+      Error(e) => {
+        if let Some(status) = httpd.rejection(e) {
+          let _ = httpd.send(
+            mut connection,
+            httpd.text_reply(status, "bad request\n"),
+            false
+          )
+        }
         return None()
       },
-      Error(_) => return None(),
     }
     let target = route(request)
     if target == Updates() {
       return Some(take request)
     }
-    let response = handle(
-      svc,
-      state,
-      assets,
-      mut saves,
-      mut updates,
-      take target,
-      request
-    )
+    let response = handle(svc, mut saves, mut updates, take target, request)
     note(
       svc.logger,
       Info(),
@@ -733,10 +693,7 @@ fn serve_requests(
       ],
       svc.wall
     )
-    let keep = request.keep_alive
-    if results.is_error(
-      httpd.write_reply(n, mut stream, response, keep, request.method == "HEAD")
-    ) || !keep {
+    if results.is_error(httpd.send(mut connection, response, request.method == "HEAD")) || !request.keep_alive {
       return None()
     }
   }
@@ -749,31 +706,24 @@ fn serve_requests(
 pub fn serve_connection(
   n: Net,
   svc: Services,
-  state: Mutex[model.Board],
-  assets: Shared[Map[String, Asset]],
   take saves: Sender[SaveJob],
   take updates: Sender[hub.Command],
   take done: Sender[()],
   take incoming: Stream of n
 ) -> () {
-  let mut stream = take incoming
+  let mut connection = http.server_connection(
+    n,
+    take incoming,
+    httpd.config(svc.limits, option.is_some(svc.clock))
+  )
   let mut save_to = take saves
   let mut notify = take updates
   let mut finished = take done
-  let _ = net.set_read_timeout(n, mut stream, svc.idle)
-  let opened = serve_requests(
-    n,
-    svc,
-    state,
-    assets,
-    mut save_to,
-    mut notify,
-    mut stream
-  )
+  let opened = serve_requests(svc, mut save_to, mut notify, mut connection)
   let _ = channel.send(svc.tasks, mut finished, ())
   if let Some(request) = opened {
     note(svc.logger, Info(), "stream", [("path", unique request.target)], svc.wall)
-    stream_updates(n, svc, state, mut notify, take stream, request)
+    stream_updates(svc, mut notify, take connection, request)
   }
 }
 
@@ -783,8 +733,6 @@ pub fn serve_connection(
 pub fn accept_loop(
   n: Net,
   svc: Services,
-  state: Mutex[model.Board],
-  assets: Shared[Map[String, Asset]],
   take listener: Listener of n,
   take saves: Sender[SaveJob],
   take updates: Sender[hub.Command]
@@ -812,8 +760,6 @@ pub fn accept_loop(
             serve_connection(
               n,
               svc,
-              state,
-              assets,
               take connection_saves,
               take connection_updates,
               take connection_done,
@@ -845,50 +791,21 @@ fn wait_for_quit(input: Stdin) -> () {
 
 fn close_sender[T](take sender: Sender[T]) -> () {}
 
-/// Where the server tells the address it bound: nowhere, as a line on stdout, or
-/// on a channel, for a program that runs the server itself.
-pub type Announce = Quiet | Print(Stdout) | Report(Sender[SocketAddr])
-
-/// What stops the server besides its listener failing: nothing, a granted stdin
-/// that ends or reads `quit`, or a message (or the sender closing) on a channel.
-pub type Stop = Never | Input(Stdin) | Signal(Receiver[()])
-
-/// Listens on `address` and serves until the listener fails or `stop` says so.
-/// Then it stops accepting, ends every event stream, waits for the writer to save
-/// what it was given and returns. The bound address, with the port chosen when
-/// `address` has port 0, goes to `announce`.
-// GAP: a listener taken as a parameter cannot move into a task, so this listens.
+/// Serves connections from `listener` until it fails or, with `stop`, until that
+/// input ends or reads `quit`. Then it stops accepting, ends every event stream,
+/// waits for the writer to save what it was given and returns.
 pub fn serve(
   n: Net,
   svc: Services,
-  address: SocketAddr,
-  take announce: Announce,
+  take listener: Listener of n,
   data: Dir,
   mode: Durability,
-  take board: unique model.Board,
-  take files: unique Map[String, Asset],
-  take stop: Stop
-) -> Result[(), NetError] {
-  let listener = net.listen(n, address)?
-  let bound = net.local_addr(n, listener)?
-  let shown = net.socket_addr_to_string(bound)
-  note(svc.logger, Info(), "listening", [("address", copy shown)], svc.wall)
-  match take announce {
-    Quiet() => {},
-    Print(out) => {
-      let _ = out.print(out, f"listening on http://{shown}/\n")
-    },
-    Report(sender) => {
-      let mut report = take sender
-      let _ = channel.send(svc.tasks, mut report, bound)
-    },
-  }
-  let assets: Shared[Map[String, Asset]] = shared.freeze(take files)
+  stop: Option[Stdin]
+) -> () {
   task.scope(
     svc.tasks,
     fn(s: Scope) -> () {
       let accepting = take listener
-      let state: Mutex[model.Board] = mutex.create(svc.tasks, take board)
       let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(svc.tasks)
       let (updates, commands): (Sender[hub.Command], Receiver[hub.Command]) = channel.open(
         svc.tasks
@@ -920,21 +837,12 @@ pub fn serve(
             task.async(
               inner,
               fn() -> () {
-                accept_loop(
-                  n,
-                  svc,
-                  state,
-                  assets,
-                  take open,
-                  take first_saves,
-                  take first_updates
-                )
+                accept_loop(n, svc, take open, take first_saves, take first_updates)
               }
             )
           )
-          match take stop {
-            Never() => {},
-            Input(input) => task.add(
+          if let Some(input) = stop {
+            task.add(
               inner,
               mut set,
               task.async(
@@ -943,18 +851,7 @@ pub fn serve(
                   wait_for_quit(input)
                 }
               )
-            ),
-            Signal(receiver) => task.add(
-              inner,
-              mut set,
-              task.async(
-                inner,
-                fn() -> () {
-                  let mut quit = take receiver
-                  let _ = channel.receive(svc.tasks, mut quit)
-                }
-              )
-            ),
+            )
           }
           let (index, _) = task.select(inner, take set)
           index
@@ -975,5 +872,4 @@ pub fn serve(
     }
   )
   note(svc.logger, Info(), "stopped", [], svc.wall)
-  Ok(())
 }

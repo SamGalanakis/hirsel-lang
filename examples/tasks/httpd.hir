@@ -1,25 +1,38 @@
-// GAP: std http's ServerConnection cannot stream a response or hand its stream
-// over, so the app reads requests and writes responses on the raw stream itself.
-//
-// Requests are parsed by `http.parse_server_request` from a `bufio.Reader` that
-// keeps bytes after one request for the next (pipelining and keep-alive). Responses
-// carry a Content-Length; the event stream is started by `datastar.new_sse` on the
-// same stream instead.
+// Replies and request helpers over std's HTTP/1.1 server connection, which reads
+// requests (keep-alive and pipelining included) and frames responses.
+
 pub type Reply {
   status: u16,
   headers: List[http.Header],
   body: Bytes,
 }
 
+/// Request size limits and timeouts. A request must arrive within `request` of its
+/// first byte when a monotonic clock is granted; an idle keep-alive connection is
+/// closed after `idle` either way.
 pub type Limits {
   head: u64,
   body: u64,
+  headers: u64,
+  request: time.Duration,
+  idle: time.Duration,
 }
 
-/// What ended a connection before a request was read: the peer closed it cleanly
-/// (`Closed`), sent something that is not a request this server accepts
-/// (`Rejected` with the status to answer), or the stream failed.
-pub type ReadError = Closed | Rejected(u16) | Stream(NetError)
+/// The std server configuration for `limits`; `timed` when a monotonic clock is
+/// granted, which std needs to time a request.
+pub fn config(limits: Limits, timed: bool) -> http.Config uses {} {
+  let mut c = http.default_config()
+  c.max_head_bytes = limits.head
+  c.max_body_bytes = limits.body
+  c.max_headers = limits.headers
+  c.idle_timeout = Some(limits.idle)
+  c.read_timeout = if timed {
+    Some(limits.request)
+  } else {
+    None()
+  }
+  take c
+}
 
 pub fn reply(status: u16, content_type: String, take body: Bytes) -> Reply uses {} {
   Reply(
@@ -37,256 +50,31 @@ pub fn text_reply(status: u16, message: String) -> Reply uses {} {
   reply(status, "text/plain; charset=utf-8", unique string.as_bytes(message))
 }
 
-// GAP: std's server parser takes at most 16 headers and browsers send more, so the
-// head is parsed here with room for 64. Bodies need a Content-Length.
-fn slice_text(buf: Bytes, start: u64, end: u64) -> Result[String, u16] uses {} {
-  match string.from_bytes(unique bytes.slice(buf, start, end)) {
-    Ok(text) => Ok(take text),
-    Error(_) => Error(400),
+/// The status that answers a request std could not read, or `None()` when the
+/// connection just ends: closed, cut short, timed out (std answers 408) or failed.
+pub fn rejection(error: http.HttpError) -> Option[u16] uses {} {
+  match error {
+    HeadTooLarge() => Some(431),
+    BodyTooLarge() => Some(413),
+    Malformed(_) | Chunk() => Some(400),
+    UnsupportedTransferEncoding() => Some(501),
+    _ => None(),
   }
 }
 
-// A complete request at the start of `buf` and the bytes it used, `None()` when
-// more bytes are needed, or the status that rejects it.
-pub fn parse(buf: Bytes, limits: Limits) -> Result[
-  Option[(http.ServerRequest, u64)],
-  u16
-] uses {} {
-  let blank = http_wire.RawHeader(
-    name_start: 0,
-    name_end: 0,
-    value_start: 0,
-    value_end: 0
-  )
-  // GAP: Inline has no `[blank; 64]` repeat literal.
-  let mut raw: Inline[http_wire.RawHeader, 64] = [
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank,
-    blank
-  ]
-  let mut line = http_wire.RequestLine(
-    method_start: 0,
-    method_end: 0,
-    target_start: 0,
-    target_end: 0,
-    version: 0
-  )
-  let mut count: u64 = 0
-  let end = match http_wire.parse_request(buf, mut line, mut raw, mut count) {
-    Ok(Partial()) => {
-      if bytes.len(buf) >= limits.head {
-        return Error(431)
-      }
-      return Ok(None())
-    },
-    Ok(Complete(end)) => end,
-    Error(TooManyHeaders()) => return Error(431),
-    Error(_) => return Error(400),
+/// Sends `response` to the request `connection` last received. A HEAD request, a
+/// 204 and a 304 get the head alone.
+// GAP: http.respond writes the body after a HEAD request and a Content-Length on a
+// 204, so those go through respond_head and end_response_body.
+pub fn send(mut connection: http.ServerConnection, response: Reply, head: bool) -> Result[
+  (),
+  http.HttpError
+] {
+  if head || response.status == 204 || response.status == 304 {
+    http.respond_head(mut connection, response.status, response.headers)?
+    return http.end_response_body(mut connection)
   }
-  if end > limits.head {
-    return Error(431)
-  }
-  let frame = match http_wire.framing(buf, line.version, raw, count) {
-    Ok(f) => f,
-    Error(_) => return Error(400),
-  }
-  if frame.chunked {
-    return Error(411)
-  }
-  let length = option.unwrap_or(frame.content_length, 0)
-  if length > limits.body {
-    return Error(413)
-  }
-  if bytes.len(buf) - end < length {
-    return Ok(None())
-  }
-  let mut headers: List[http.Header] = []
-  for i in 0u64..count {
-    list.push(
-      mut headers,
-      http.Header(
-        name: slice_text(buf, raw[i].name_start, raw[i].name_end)?,
-        value: slice_text(buf, raw[i].value_start, raw[i].value_end)?
-      )
-    )
-  }
-  let version: http.Version = if line.version == 0 {
-    Http10()
-  } else {
-    Http11()
-  }
-  let request = http.ServerRequest(
-    method: slice_text(buf, line.method_start, line.method_end)?,
-    target: slice_text(buf, line.target_start, line.target_end)?,
-    version: version,
-    headers: take headers,
-    body: unique bytes.slice(buf, end, end + length),
-    trailers: [],
-    keep_alive: frame.keep_alive
-  )
-  Ok(Some((take request, end + length)))
-}
-
-/// Reads the next request. Bytes already buffered are used first; reading stops at
-/// the end of one request, leaving any bytes after it in `reader`.
-pub fn read_request(
-  n: Net,
-  mut stream: Stream of n,
-  mut reader: bufio.Reader,
-  limits: Limits
-) -> Result[http.ServerRequest, ReadError] {
-  while true {
-    let buffered = bufio.contents(reader)
-    match parse(buffered, limits) {
-      Ok(Some((request, used))) => {
-        bufio.consume(mut reader, used)
-        return Ok(take request)
-      },
-      Ok(None()) => {},
-      Error(status) => return Error(Rejected(status)),
-    }
-    let count = match bufio.stream_read_more(n, mut stream, mut reader, 4096) {
-      Ok(c) => c,
-      Error(Source(e)) => return Error(Stream(e)),
-      Error(_) => return Error(Rejected(400)),
-    }
-    if count == 0 {
-      if bufio.buffered(reader) == 0 {
-        return Error(Closed())
-      }
-      return Error(Rejected(400))
-    }
-  }
-  Error(Closed())
-}
-
-pub fn reason(status: u16) -> String uses {} {
-  if status == 200 {
-    "OK"
-  } else if status == 201 {
-    "Created"
-  } else if status == 204 {
-    "No Content"
-  } else if status == 304 {
-    "Not Modified"
-  } else if status == 400 {
-    "Bad Request"
-  } else if status == 404 {
-    "Not Found"
-  } else if status == 405 {
-    "Method Not Allowed"
-  } else if status == 411 {
-    "Length Required"
-  } else if status == 413 {
-    "Content Too Large"
-  } else if status == 415 {
-    "Unsupported Media Type"
-  } else if status == 422 {
-    "Unprocessable Content"
-  } else if status == 431 {
-    "Request Header Fields Too Large"
-  } else if status == 500 {
-    "Internal Server Error"
-  } else if status == 503 {
-    "Service Unavailable"
-  } else {
-    ""
-  }
-}
-
-/// The response's bytes: status line, headers, framing and, unless it answers a
-/// HEAD request, the body. A 204 or 304 has no body and no Content-Length.
-pub fn encode(response: Reply, keep_alive: bool, head: bool) -> unique Bytes uses {} {
-  let mut out: List[u8] = []
-  text.append(mut out, f"HTTP/1.1 {response.status} {reason(response.status)}\r\n")
-  for h in response.headers {
-    text.append(mut out, f"{h.name}: {h.value}\r\n")
-  }
-  if response.status != 204 && response.status != 304 {
-    text.append(mut out, f"Content-Length: {bytes.len(response.body)}\r\n")
-  }
-  if keep_alive {
-    text.append(mut out, "Connection: keep-alive\r\n\r\n")
-  } else {
-    text.append(mut out, "Connection: close\r\n\r\n")
-  }
-  if !head && response.status != 204 && response.status != 304 {
-    for b in response.body {
-      list.push(mut out, b)
-    }
-  }
-  bytes.from_list(take out)
-}
-
-pub fn write_reply(
-  n: Net,
-  mut stream: Stream of n,
-  response: Reply,
-  keep_alive: bool,
-  head: bool
-) -> Result[(), NetError] {
-  net.write_all(n, mut stream, encode(response, keep_alive, head))
+  http.respond(mut connection, response.status, response.headers, response.body, false)
 }
 
 /// The request path without its query.

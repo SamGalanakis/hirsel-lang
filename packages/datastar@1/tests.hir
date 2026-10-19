@@ -1,5 +1,6 @@
 // Tests of the datastar@1 SDK beyond the official golden cases, which run in the
 // corpus (conformance/PROG/PROG-1-datastar-sdk-golden.hir).
+
 @serializable
 type Search {
   query: String,
@@ -12,7 +13,7 @@ fn search_from_json(value: json.Value) -> Result[unique Search, String] uses {} 
 )
 
 fn parsed(raw: String) -> Option[http.ServerRequest] uses {} {
-  match http.parse_server_request(string.as_bytes(raw), 65536, 65536) {
+  match http.parse_server_request(string.as_bytes(raw), http.default_config()) {
     Ok(Some((request, _))) => Some(take request),
     _ => None(),
   }
@@ -95,11 +96,6 @@ fn scripts_escape_attributes_and_redirects_quote_urls(t: Test) {
     t,
     redirect_event("/x\"</script>"),
     "event: datastar-patch-elements\ndata: selector body\ndata: mode append\ndata: elements <script data-effect=\"el.remove()\">setTimeout(() => window.location.href = \"/x\\\"\\u003c/script>\")</script>\n\n"
-  )
-  test.equal(
-    t,
-    escape("<b class=\"x\">Tom & 'Jerry'</b>"),
-    "&lt;b class=&#34;x&#34;&gt;Tom &amp; &#39;Jerry&#39;&lt;/b&gt;"
   )
 }
 
@@ -184,7 +180,8 @@ fn unreadable_signals_are_errors(t: Test) {
   )
 }
 
-// A browser opens the stream, receives two events in order, and sees it close.
+// A browser opens the stream, receives two events in order as chunks, and sees the
+// response end.
 @test
 fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
   let request = "GET /updates HTTP/1.1\r\nHost: tasks.test\r\nAccept: text/event-stream\r\nDatastar-Request: true\r\n\r\n"
@@ -202,12 +199,15 @@ fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
             steps: [
               Send(string.as_bytes(request)),
               Expect(
-                b"HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                b"HTTP/1.1 200 \r\nCache-Control: no-cache\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
               ),
               Expect(
-                b"event: datastar-patch-elements\ndata: elements <p id=\"n\">1</p>\n\n"
+                b"3f\r\nevent: datastar-patch-elements\ndata: elements <p id=\"n\">1</p>\n\n\r\n"
               ),
-              Expect(b"event: datastar-patch-signals\ndata: signals {\"n\":1}\n\n")
+              Expect(
+                b"35\r\nevent: datastar-patch-signals\ndata: signals {\"n\":1}\n\n\r\n"
+              ),
+              Expect(b"0\r\n\r\n")
             ]
           )
         ]
@@ -224,26 +224,11 @@ fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
   let Ok((stream, _)) = net.accept(n, mut accepting) else {
     test.fail(t)
   }
-  let mut incoming = take stream
-  let mut received: List[u8] = []
-  let mut parsed_request: Option[http.ServerRequest] = None()
-  while option.is_none(parsed_request) {
-    let Ok(count) = net.read(n, mut incoming, mut received, 4096) else {
-      test.fail(t)
-    }
-    test.check(t, count > 0)
-    if let Ok(Some((r, _))) = http.parse_server_request(
-      bytes.from_list(copy received),
-      65536,
-      0
-    ) {
-      parsed_request = Some(take r)
-    }
-  }
-  let Some(opened) = parsed_request else {
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let Ok(_) = http.receive_request(mut connection, None()) else {
     test.fail(t)
   }
-  let Ok(generator) = new_sse(n, take incoming, opened) else {
+  let Ok(generator) = new_sse(take connection) else {
     test.fail(t)
   }
   let mut sse = take generator
@@ -252,5 +237,5 @@ fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
     results.is_ok(patch_elements(mut sse, "<p id=\"n\">1</p>", elements_options()))
   )
   test.check(t, results.is_ok(patch_signals(mut sse, "{\"n\":1}", signals_options())))
-  close(take sse)
+  test.check(t, results.is_ok(close(take sse)))
 }
