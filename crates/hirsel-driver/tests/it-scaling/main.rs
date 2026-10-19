@@ -19,7 +19,6 @@ mod scaling_generic_declarations;
 mod scaling_generic_instances;
 mod scaling_h_places;
 mod scaling_headers;
-mod scaling_interp_keyed;
 mod scaling_interp_values;
 mod scaling_lower_bindings;
 mod scaling_lower_decisions;
