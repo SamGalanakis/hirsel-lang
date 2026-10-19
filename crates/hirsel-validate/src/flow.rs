@@ -5660,6 +5660,8 @@ impl Checker<'_> {
                     .map(|a| self.operand_unique(state, &a.value))
                     .collect();
                 for (a, unique) in arguments.iter().zip(unique_arguments) {
+                    // A `mut` argument handed back unique owns every block it
+                    // reaches, so it holds no share of any argument (MODE-2).
                     if a.value.usage == UseKind::Mut
                         && !self.callee_preserves_state(callee, a.parameter, false)
                         && !self.mut_requires_unique(callee, a.parameter)
@@ -5671,8 +5673,6 @@ impl Checker<'_> {
                             state,
                             self.body.places[a.value.place.0 as usize].root.0 as usize,
                         );
-                    }
-                    if a.value.usage == UseKind::Mut {
                         self.set_borrowed_shares(
                             state,
                             a.value.place,

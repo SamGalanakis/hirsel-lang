@@ -1,0 +1,18 @@
+// rule: SEM-5
+// expect: run
+// A borrowed loop over a unique Set that formats each element into a fresh String only
+// lends the elements: the f-string's builder comes back unique from `@preserves_unique`
+// text.append and holds no share of the set, so a later set.remove, which needs the set
+// unique, checks and updates it in place.
+pub fn main() -> Result[(), ()] {
+  let mut names: unique Set[String] = set.empty()
+  set.insert(mut names, "a")
+  set.insert(mut names, "b")
+  let mut text = ""
+  for name in names {
+    text = f"{text}{name}"
+  }
+  let removed = set.remove(mut names, "a")
+  failure.check(removed && text == "ab" && set.len(names) == 1, Arithmetic())
+  Ok(())
+}

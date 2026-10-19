@@ -377,8 +377,8 @@ parameter to be unique at each exit and at each evaluation failure edge, but not
 a release's failure edge, where source checking sees no evaluation. A root shared
 only by a related call result's counted shares is `borrow_only`. `borrowed_shares` records,
 per local, the roots whose such shares its content may hold, through every assignment,
-replacement, snapshot and call (a call's result and `mut` arguments receive every
-argument's). Before each instruction and terminator, `restore_borrowed` makes a root
+replacement, snapshot and call (a call's result, and each `mut` argument it does not
+hand back unique, receive every argument's). Before each instruction and terminator, `restore_borrowed` makes a root
 unique again once no live local holds one. A release's failure edge is exempt
 (`releasing`) only when the release has no user-visible destruction (DROP-1). A failure edge accepts `borrow_only`, and so
 does a return whose value holds none (`returning_shares`). A
