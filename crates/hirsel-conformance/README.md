@@ -14,7 +14,7 @@ Invariants and boundary:
 - Header validation applies even while the compiler is unimplemented.
 - Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
 
-Only rule, expect, stdout, exit, entry, spec, grant, net and process are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
+Only rule, expect, stdout, exit, entry, spec, grant, env, net, process and steps are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
 
 The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and

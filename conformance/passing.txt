@@ -3830,6 +3830,7 @@ conformance/PROG/PROG-3-main-mut-io-run.hir
 conformance/PROG/PROG-3-main-take-args-run.hir
 conformance/PROG/PROG-3-main-take-io-run.hir
 conformance/PROG/PROG-3-ordinary-nonentry.hir
+conformance/PROG/PROG-3-steps-header-run.hir
 conformance/PROG/PROG-3-zero-entry-error-run.hir
 conformance/PROG/PROG-3-zero-entry-run.hir
 conformance/PROG/PROG-4-callback-context-bad.hir

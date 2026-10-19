@@ -885,3 +885,76 @@ fn fixture_headers_are_explicit_validated_and_header_only() {
         assert!(header(&source).is_err(), "{source}");
     }
 }
+
+#[test]
+fn a_steps_header_raises_the_budget_and_names_its_reason() {
+    let run = |lines: &str| {
+        header(&format!(
+            "// rule: OWN-6\n// expect: run\n{lines}pub fn main() {{}}\n"
+        ))
+    };
+    for lines in [
+        "// steps: 20000000\n// a 33-limb Karatsuba product takes about 150k steps\n",
+        "// steps: 1000001\n// reason: prose may hold a colon\n",
+    ] {
+        assert!(run(lines).is_ok(), "{lines}");
+    }
+    let accepted = "// steps: 20000000\n// why\n";
+    assert_eq!(
+        hirsel_conformance::fixture(accepted).unwrap().steps,
+        Some(20_000_000)
+    );
+    assert_eq!(hirsel_conformance::fixture("").unwrap().steps, None);
+    for (lines, error) in [
+        ("// steps: 20000001\n// why\n", "at most 20000000"),
+        ("// steps: 1000000\n// why\n", "exceed the default 1000000"),
+        ("// steps: +2000000\n// why\n", "whole number"),
+        ("// steps: 2e6\n// why\n", "whole number"),
+        ("// steps: 2000000\n", "reason comment"),
+        ("// steps: 2000000\n//\n", "reason comment"),
+        ("// steps: 2000000\n// exit: 0\n", "reason comment"),
+        (
+            "// steps: 2000000\n// one\n// steps: 3000000\n// two\n",
+            "duplicate steps",
+        ),
+    ] {
+        let message = run(lines).unwrap_err();
+        assert!(message.contains(error), "{lines}: {message}");
+    }
+    // Only an executed program has a budget to raise.
+    let message =
+        header("// rule: OWN-6\n// expect: accept\n// steps: 2000000\n// why\nfn f() {}\n")
+            .unwrap_err();
+    assert!(message.contains("steps requires"), "{message}");
+}
+
+#[test]
+fn without_its_steps_header_a_long_case_stops_at_the_default_budget() {
+    // The corpus case shows every engine honouring its raised budget; the same
+    // program without the header must exhaust the default one.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        fs::read_to_string(root.join("conformance/PROG/PROG-3-steps-header-run.hir")).unwrap();
+    let fixture = hirsel_conformance::fixture(&source).unwrap();
+    assert_eq!(fixture.steps, Some(3_000_000));
+    let dir = std::env::temp_dir().join(format!("hirsel-steps-header-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("loop.hir");
+    let body: String = source
+        .lines()
+        .filter(|line| !line.starts_with("//"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&path, body).unwrap();
+    let expect = Expect::Run {
+        stdout: String::new(),
+        exit: 0,
+    };
+    let (status, observation) = Compiler.evaluate(&path, &expect);
+    assert!(
+        matches!(status, Status::Fail(_)) && observation.actual.contains("Steps"),
+        "{status:?}: {}",
+        observation.actual
+    );
+    fs::remove_dir_all(dir).unwrap();
+}

@@ -27,6 +27,7 @@ fn evaluate_on_compiler_thread(
     expect: &Expect,
     hash_seed: u64,
 ) -> (Status, Observation) {
+    let text = fs::read_to_string(path).unwrap_or_default();
     let loaded = hirsel_driver::load_program(path);
     let mut program = match loaded {
         Ok(program) => program,
@@ -58,6 +59,10 @@ fn evaluate_on_compiler_thread(
             );
         }
     };
+    match crate::interpreter(&text) {
+        Ok(interpreter) => program.engine.adapters.interpreter = Some(interpreter),
+        Err(error) => return (Status::Fail(error), Observation::default()),
+    }
     if matches!(expect, Expect::Test) {
         let mut observation = Observation {
             phase: "test execution".into(),
@@ -110,7 +115,6 @@ fn evaluate_on_compiler_thread(
         observation.actual = format!("{} tests", tests.len());
         return (Status::Pass, observation);
     }
-    let text = fs::read_to_string(path).unwrap_or_default();
     let context = program
         .files
         .iter()

@@ -313,6 +313,9 @@ pub struct Fixture {
     pub process: Option<hirsel_run_config::ProcessGrant>,
     /// The root Env's snapshot: each granted name and its value, null when unset.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// A corpus program's raised interpreter step budget (`// steps:`); H's
+    /// instruction limit rises by the same factor. None keeps both defaults.
+    pub steps: Option<u64>,
 }
 
 /// Run `entry` under each configuration and compare with `reference`.
@@ -352,6 +355,7 @@ pub fn differential_in(
         process: fixture.process.clone(),
         net: fixture.net.clone(),
         env: fixture.env.clone(),
+        steps: fixture.steps,
     };
     let sites = Sites::new(validated.snapshot());
     let mut built: Vec<(&Options, Result<ReadyProgram, NativeError>)> = Vec::new();

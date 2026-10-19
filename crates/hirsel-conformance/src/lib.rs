@@ -180,6 +180,32 @@ pub struct Header {
     pub expect: Expect,
 }
 
+/// Header directive names; other colon-bearing comments are prose.
+const DIRECTIVES: [&str; 11] = [
+    "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "env", "net", "process", "steps",
+];
+
+/// The most ordinary-interpretation steps a `// steps:` header may grant.
+pub const MAX_STEPS: u64 = 20_000_000;
+
+/// The step budget every corpus program runs under unless its header raises it.
+pub fn default_steps() -> u64 {
+    hirsel_engine::InterpreterAdapter::default()
+        .limits
+        .steps
+        .expect("the default interpreter budget is bounded")
+}
+
+/// The interpreter a corpus program runs under: the default step budget, or
+/// the larger one its `// steps:` header grants.
+pub(crate) fn interpreter(source: &str) -> Result<Box<hirsel_engine::InterpreterAdapter>, String> {
+    let mut interpreter = hirsel_engine::InterpreterAdapter::default();
+    if let Some(steps) = fixture(source)?.steps {
+        interpreter.limits.steps = Some(steps);
+    }
+    Ok(Box::new(interpreter))
+}
+
 fn known_rule(value: &str, rules: &Rules) -> Result<RuleId, String> {
     let id = RuleId::new(value).map_err(|e| e.to_string())?;
     if !rules.contains(&id) {
@@ -230,6 +256,23 @@ pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
                     return Err("net fixture must use net.script@2".into());
                 }
                 fixture.net = Some(grant);
+            }
+            "steps" => {
+                if fixture.steps.is_some() {
+                    return Err("duplicate steps directive".into());
+                }
+                let value = value.trim();
+                let steps = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+                    .then(|| value.parse::<u64>().ok())
+                    .flatten()
+                    .ok_or("steps must be a whole number")?;
+                let default = default_steps();
+                if steps <= default || steps > MAX_STEPS {
+                    return Err(format!(
+                        "steps must exceed the default {default} and be at most {MAX_STEPS}"
+                    ));
+                }
+                fixture.steps = Some(steps);
             }
             "process" => {
                 if fixture.process.is_some() {
@@ -287,12 +330,9 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             let comment = comment.trim_start();
             let Some((key, value)) = comment.split_once(':') else {
                 if in_header
-                    && [
-                        "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "env", "net",
-                        "process",
-                    ]
-                    .iter()
-                    .any(|k| comment.split_whitespace().next() == Some(k))
+                    && DIRECTIVES
+                        .iter()
+                        .any(|k| comment.split_whitespace().next() == Some(k))
                 {
                     return Err(format!(
                         "line {}: malformed directive (missing ':')",
@@ -301,19 +341,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                 }
                 continue;
             };
-            let directive = matches!(
-                key,
-                "rule"
-                    | "expect"
-                    | "stdout"
-                    | "exit"
-                    | "entry"
-                    | "spec"
-                    | "grant"
-                    | "env"
-                    | "net"
-                    | "process"
-            );
+            let directive = DIRECTIVES.contains(&key);
             if !directive {
                 continue;
             }
@@ -412,6 +440,22 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     );
                 }
                 "grant" | "env" | "net" | "process" => {}
+                // The value is checked by `fixture`; the next line must say why.
+                "steps" => {
+                    let reason = source.lines().nth(index + 1).and_then(|next| {
+                        let text = next.trim_start().strip_prefix("//")?.trim();
+                        let directive = text
+                            .split_once(':')
+                            .is_some_and(|(key, _)| DIRECTIVES.contains(&key));
+                        (!text.is_empty() && !directive).then_some(())
+                    });
+                    if reason.is_none() {
+                        return Err(format!(
+                            "line {}: steps must be followed by a one-line reason comment",
+                            index + 1
+                        ));
+                    }
+                }
                 "spec"
                     if value_trimmed.strip_prefix('#').is_some_and(|n| {
                         !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
@@ -428,6 +472,9 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         ) && (fixture.monotonic.is_some() || fixture.net.is_some() || fixture.process.is_some())
         {
             return Err("fixture directives require expect: run, fail or blocked".into());
+        }
+        if matches!(expect, Expect::Accept | Expect::Reject { .. }) && fixture.steps.is_some() {
+            return Err("steps requires expect: run, fail, blocked or test".into());
         }
         let prefix_dir = path
             .components()

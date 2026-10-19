@@ -1562,9 +1562,18 @@ pub struct HeapRun {
     pub counters: Counters,
 }
 
-fn config(inject: Option<u64>, kind: &super::link::LaunchKind) -> Config {
+fn config(inject: Option<u64>, kind: &super::link::LaunchKind, world: &HeapWorld) -> Config {
+    let default = Config::default();
+    // A raised interpreter budget raises H's instruction limit by the same factor.
+    let interpreter = hirsel_interp::Limits::default()
+        .steps
+        .expect("the default interpreter budget is bounded");
+    let step_limit = world.steps.map_or(default.step_limit, |steps| {
+        (default.step_limit.saturating_mul(steps) / interpreter).max(default.step_limit)
+    });
     Config {
         inject,
+        step_limit,
         context_handles: match kind {
             super::link::LaunchKind::Zero => vec![],
             super::link::LaunchKind::Test => vec![(IO_HANDLE, "Test".into())],
@@ -1573,7 +1582,7 @@ fn config(inject: Option<u64>, kind: &super::link::LaunchKind) -> Config {
                 .map(|root| (super::link::root_handle(*root), format!("{root:?}")))
                 .collect(),
         },
-        ..Config::default()
+        ..default
     }
 }
 
@@ -1664,6 +1673,8 @@ pub struct HeapWorld {
     pub net: Option<hirsel_run_config::NetGrant>,
     /// A Main launch's Env snapshot; absent, the root Env grants no name.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// A raised interpreter step budget; H's instruction limit scales with it.
+    pub steps: Option<u64>,
 }
 
 /// Run `entry` once and audit it.
@@ -1702,7 +1713,7 @@ pub fn run_heap_in(
         world,
     )?;
     io.positions = positions(program, sites);
-    let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind));
+    let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind, world));
     let audit = run
         .result
         .as_ref()
@@ -1758,7 +1769,7 @@ pub fn heap_campaign_in(
         entry,
         &args,
         &mut || Box::new(io.clone()),
-        &config(None, kind),
+        &config(None, kind, world),
     );
     if let Some((site, v)) = campaign.first_violation() {
         return Err(violation(entry, v, site));

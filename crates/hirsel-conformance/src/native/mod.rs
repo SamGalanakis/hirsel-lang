@@ -359,6 +359,7 @@ fn checked_with_config(
         hash_seed: launch.hash_seed,
         inputs: vec![],
     };
+    engine.adapters.interpreter = Some(crate::interpreter(source)?);
     let execution = hirsel_engine::run_observed_snapshot(
         engine,
         &config,
@@ -521,6 +522,7 @@ fn visit_test_suite(
         let mut program =
             hirsel_driver::load_program_source(path.unwrap_or(&fallback), Some(source))
                 .map_err(|e| e.to_string())?;
+        program.engine.adapters.interpreter = Some(crate::interpreter(source)?);
         let tests = hirsel_driver::testing::discover(
             &mut program,
             &[],

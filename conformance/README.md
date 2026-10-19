@@ -4,6 +4,27 @@ Each `.hir` file is one case, with a `// rule:` and `// expect:` header. The
 runner discovers these files recursively and checks their canonical formatting.
 A rejected case needs an accepted twin that isolates the rule being tested.
 
+An executed case (`expect: run`, `fail`, `blocked` or `test`) runs under a
+budget of 1,000,000 interpreter steps, in ordinary and checked interpretation
+alike. A case that needs more raises the budget for itself alone with a
+`// steps: <n>` header line, where n is a whole number above 1,000,000 and at
+most 20,000,000, immediately followed by a one-line comment saying why the case
+needs it, as in [this case](PROG/PROG-3-steps-header-run.hir):
+
+```hir
+// rule: PROG-3
+// expect: run
+// steps: 3000000
+// forty thousand loop iterations take over 1.6 million steps
+```
+
+Every engine configuration that counts steps honours it: ordinary and checked
+interpretation, the native harness's reference interpretation and H, whose
+instruction limit (8,388,608 by default) rises by the same factor n / 1,000,000.
+Compiled native executables count no steps. The runner rejects a larger or
+smaller value, a duplicate, a missing reason and the header on a case that is
+not executed.
+
 For multiple packages, put an exact `case.hir.json` sidecar beside the case.
 It is an ordinary schema-1 launch manifest: `package` fixes the importing
 package identity, `sources` assigns files to explicit modules, `dependencies`
