@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: run
+// `unique` of a borrowed Bytes part builds fresh blocks that borrow nothing,
+// so the copy may be stored in a `mut` parameter.
+fn collect(xs: List[Bytes], mut out: List[Bytes]) -> () {
+  list.push(mut out, unique xs[0])
+}
+
+pub fn main() -> Result[(), ()] {
+  let xs: List[Bytes] = [b"a"]
+  let mut out: List[Bytes] = []
+  collect(xs, mut out)
+  failure.check(list.len(out) == 1 && out[0] == b"a", Bounds())
+  Ok(())
+}

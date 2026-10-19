@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// A deep copy cannot copy a closure's borrowed captures, and a type parameter
+// may be a closure type, so `unique` of a borrowed generic part stays local.
+fn collect[T: copyable](xs: List[T], mut out: List[T]) -> () {
+  list.push(mut out, unique xs[0])
+}
+
+pub fn main() -> Result[(), ()] {
+  let xs: List[Bytes] = [b"a"]
+  let mut out: List[Bytes] = []
+  collect(xs, mut out)
+  Ok(())
+}

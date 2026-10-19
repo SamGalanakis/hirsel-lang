@@ -34,10 +34,12 @@ union of its captures' sets. A value built in a region or arena holds a bound lo
 A copy holds the set of the value it copies, less the read loan taken on the copied place
 itself, so a copy of local content stays local. A deep copy (`unique x` when `x` is not
 provably unique) builds fresh blocks where its source's content lives, so it holds the
-source's bound loans on arenas and regions and none on bindings or own roots. A borrowed or
-`mut` parameter's value holds a bound loan on its own place, its **own root**, which
-stands for its argument: a call replaces it with everything the argument reaches plus a
-read loan on the argument place. A counted share is a count, not a loan.
+source's bound loans on arenas and regions and none on bindings or own roots. A function
+value's borrowed captures are not copied, so a deep copy of a function value, or of a type
+parameter's value, keeps the loans its source holds. A borrowed or `mut` parameter's value
+holds a bound loan on its own place, its **own root**, which stands for its argument: a
+call replaces it with everything the argument reaches plus a read loan on the argument
+place. A counted share is a count, not a loan.
 
 **Last use.** A loan lasts from its creation until the last use of every value holding it,
 on every path; it does not last to the end of the holder's scope. Uses are: reading,

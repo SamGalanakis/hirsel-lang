@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+// A deep copy of a borrowed closure keeps the loans of its borrowed captures.
+fn collect(xs: List[fn() -> u64], mut out: List[fn() -> u64]) -> () {
+  list.push(mut out, unique xs[0])
+}
+
+pub fn main() -> Result[(), ()] {
+  let s = "abc"
+  let f = fn() -> u64 {
+    string.byte_len(s)
+  }
+  let xs: List[fn() -> u64] = [f]
+  let mut out: List[fn() -> u64] = []
+  collect(xs, mut out)
+  Ok(())
+}

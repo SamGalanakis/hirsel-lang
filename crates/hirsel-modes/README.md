@@ -114,6 +114,9 @@ explicit lowering action in the public protocol; this checker currently selects
 count. For example `let a = unique borrowed_bytes` records
 `UniqueDecision { expression: a_initializer, action: DeepCopy }`, while
 `unique b"fresh"` records `AlreadyUnique`.
+A deep copy of a function value or a type parameter's value keeps its source's
+loans and relation, since a closure's borrowed captures are not copied (MODE-1);
+V keeps the same sources.
 
 `OwnershipFacts.guarded_patterns` has `GuardedPatternUse { pattern, test, commit }`
 for every pattern node in a guarded arm. In

@@ -528,17 +528,22 @@ impl Value {
     }
     /// `unique x` ends every loan but the scopes its content lives in. A
     /// deep copy is made where its source lives (MEM-5): it is global unless
-    /// a join lost that placement, which bounds it by this frame.
-    fn extract_unique(&mut self) {
+    /// a join lost that placement, which bounds it by this frame. A deep copy
+    /// shares nothing, but it cannot copy a closure's borrowed captures, so
+    /// one that may hold them (`captures`: a function value or a type
+    /// parameter's) keeps the loans and relation its source has, as in V.
+    fn extract_unique(&mut self, captures: bool) {
         self.set_alias(None);
         self.content.clear_access();
         if self.unplaced() {
             self.bound_by(super::cfg::LifetimeScopes::FRAME, Site::Frame);
         } else if self.deep_copy {
-            self.crossing_parts = CrossingParts::default();
             self.shared_parts = SharedParts::default();
-            self.content = Content::default();
-            self.modes.relation = Relation::global();
+            if !captures {
+                self.crossing_parts = CrossingParts::default();
+                self.content = Content::default();
+                self.modes.relation = Relation::global();
+            }
         }
     }
     /// An acquired copy ends cursor access.
@@ -1905,6 +1910,14 @@ impl Checker<'_> {
     }
     fn ty(&self, expression: ExprId) -> Option<TypeId> {
         expression_type(self.body, expression, self.source_rows)
+    }
+    /// Whether `expression`'s value may be a closure holding borrowed
+    /// captures: a function value, or a type parameter's, which one may
+    /// instantiate. Its deep copy keeps the captures' loans.
+    fn may_capture(&self, expression: ExprId) -> bool {
+        self.ty(expression)
+            .and_then(|ty| self.body.types.get(ty))
+            .is_some_and(|row| matches!(row.kind, TypeKind::Function(_) | TypeKind::Parameter(_)))
     }
     /// The captures a closure call's result may share (#80), when each is
     /// Global or arena-only storage: the callee is a closure literal, or an immutable
@@ -4388,7 +4401,7 @@ impl Checker<'_> {
                         value.deep_copy = true;
                     }
                     value.modes.uniqueness = Uniqueness::Unique;
-                    value.extract_unique();
+                    value.extract_unique(self.may_capture(*expression));
                     // A value already unique is not copied (MEM-5), so it keeps
                     // its own relation: `unique x` of a local x stays local.
                 }
@@ -4617,7 +4630,7 @@ impl Checker<'_> {
                                     },
                                 );
                             }
-                            value.extract_unique();
+                            value.extract_unique(self.may_capture(*expression));
                         }
                         value.modes.uniqueness = Uniqueness::Unique;
                     }
