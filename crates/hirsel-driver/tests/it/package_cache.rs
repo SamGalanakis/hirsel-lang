@@ -64,7 +64,9 @@ fn rendered(output: &CheckOutput) -> (CheckCompletion, Vec<String>, Vec<String>)
     )
 }
 fn fresh(f: &Fixture, root: &str) -> CheckOutput {
-    f.load(root, &PackageCache::disabled()).check().unwrap()
+    f.load(root, &PackageCache::disabled())
+        .check(hirsel_engine::LoweringPolicy::Reachable)
+        .unwrap()
 }
 
 #[test]
@@ -82,12 +84,19 @@ fn rejected_clients_reuse_checked_dependencies_and_complete_lowering_later() {
                 f.package(root, &["lib"], true);
             }
             let cache = PackageCache::new();
-            let first = f.load("aaa", &cache).check().unwrap();
+            let first = f
+                .load("aaa", &cache)
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             assert!(!first.diagnostics.is_empty());
             assert_eq!(rendered(&first), rendered(&fresh(&f, "aaa")));
             let mut second = f.load("zzz", &cache);
             assert_eq!(
-                rendered(&second.check().unwrap()),
+                rendered(
+                    &second
+                        .check(hirsel_engine::LoweringPolicy::Reachable)
+                        .unwrap()
+                ),
                 rendered(&fresh(&f, "zzz"))
             );
             for kind in [
@@ -109,7 +118,9 @@ fn rejected_clients_reuse_checked_dependencies_and_complete_lowering_later() {
             // unreachable dependency body only for that evaluation.
             f.write("zzz.hir", "pub fn main() {}\n");
             let mut accepted_client = f.load("zzz", &cache);
-            let output = accepted_client.check().unwrap();
+            let output = accepted_client
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             assert_eq!(rendered(&output), rendered(&fresh(&f, "zzz")));
             assert_eq!(output.diagnostics.is_empty(), !library.contains("comptime"));
             assert_eq!(
@@ -127,7 +138,9 @@ fn rejected_clients_reuse_checked_dependencies_and_complete_lowering_later() {
             // A client that reaches the body lowers and validates it.
             f.write("zzz.hir", "pub fn main() { let n = lib@1/value() }\n");
             let mut reaching_client = f.load("zzz", &cache);
-            let output = reaching_client.check().unwrap();
+            let output = reaching_client
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             assert_eq!(rendered(&output), rendered(&fresh(&f, "zzz")));
             assert_eq!(
                 reaching_client
@@ -139,7 +152,11 @@ fn rejected_clients_reuse_checked_dependencies_and_complete_lowering_later() {
             // lowering diagnostic must not appear before a fresh check would
             // expose it, even after the successful client filled that query.
             assert_eq!(
-                rendered(&f.load("aaa", &cache).check().unwrap()),
+                rendered(
+                    &f.load("aaa", &cache)
+                        .check(hirsel_engine::LoweringPolicy::Reachable)
+                        .unwrap()
+                ),
                 rendered(&fresh(&f, "aaa"))
             );
         }
@@ -164,13 +181,17 @@ fn loop_source_operation_signatures_are_reused_across_engines() {
         let cache = PackageCache::new();
         let path = definition("lib", "open");
         let mut first = f.load("app", &cache);
-        let output = first.check().unwrap();
+        let output = first
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         assert!(output.diagnostics.is_empty(), "{:?}", rendered(&output));
         first.engine.lower_to_tir(&path).unwrap();
         drop(first);
         let mut second = f.load("app", &cache);
-        let output = second.check().unwrap();
+        let output = second
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         assert!(output.diagnostics.is_empty(), "{:?}", rendered(&output));
         second.engine.lower_to_tir(&path).unwrap();
@@ -211,7 +232,13 @@ fn lazy_lowerings_publish_from_engines_without_losing_other_clients_bodies() {
                 scope.spawn(move || {
                     with_compiler_stack(|| {
                         let mut program = f.load(root, cache);
-                        assert!(program.check().unwrap().diagnostics.is_empty());
+                        assert!(
+                            program
+                                .check(hirsel_engine::LoweringPolicy::Reachable)
+                                .unwrap()
+                                .diagnostics
+                                .is_empty()
+                        );
                         let mut engine = program.engine;
                         assert_eq!(engine.recompute_count(path, QueryKind::Lower), 0);
                         barrier.wait();
@@ -221,7 +248,12 @@ fn lazy_lowerings_publish_from_engines_without_losing_other_clients_bodies() {
             }
         });
         let mut warm = f.load("zzz", &cache);
-        assert!(warm.check().unwrap().diagnostics.is_empty());
+        assert!(
+            warm.check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         for path in [a, b] {
             warm.engine.lower_to_tir(&path).unwrap();
             for kind in [
@@ -252,7 +284,13 @@ fn lazy_publication_ends_on_source_environment_manifest_and_limit_edits() {
             f.package("app", &["lib"], true);
             let cache = PackageCache::new();
             let mut program = f.load("app", &cache);
-            assert!(program.check().unwrap().diagnostics.is_empty());
+            assert!(
+                program
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+                    .diagnostics
+                    .is_empty()
+            );
             let mut engine = program.engine;
             let path = definition("lib", "value");
             match edit {
@@ -289,7 +327,13 @@ fn lazy_publication_ends_on_source_environment_manifest_and_limit_edits() {
             }
             engine.lower_to_tir(&path).unwrap();
             let mut pristine = f.load("app", &cache);
-            assert!(pristine.check().unwrap().diagnostics.is_empty());
+            assert!(
+                pristine
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+                    .diagnostics
+                    .is_empty()
+            );
             pristine.engine.lower_to_tir(&path).unwrap();
             assert_eq!(
                 pristine.engine.recompute_count(&path, QueryKind::Lower),
@@ -312,7 +356,12 @@ fn package_bodies_are_reused_across_engines_threads_and_client_edits() {
     let cache = PackageCache::new();
     with_compiler_stack(|| {
         let mut cold = f.load("aaa", &cache);
-        assert!(cold.check().unwrap().diagnostics.is_empty());
+        assert!(
+            cold.check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert_eq!(
             cold.engine
                 .recompute_count(&definition("lib", "value"), QueryKind::Lower),
@@ -324,7 +373,11 @@ fn package_bodies_are_reused_across_engines_threads_and_client_edits() {
     with_compiler_stack(|| {
         let mut warm = f.load("zzz", &cache);
         assert_eq!(
-            rendered(&warm.check().unwrap()),
+            rendered(
+                &warm
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+            ),
             rendered(&fresh(&f, "zzz"))
         );
         for kind in [
@@ -361,11 +414,18 @@ fn rejected_package_diagnostics_rebase_identically_and_accepted_twin_reuses() {
             f.package(root, &["lib"], true);
         }
         let cache = PackageCache::new();
-        let before = f.load("aaa", &cache).check().unwrap();
+        let before = f
+            .load("aaa", &cache)
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert!(!before.diagnostics.is_empty());
         let mut warm = f.load("zzz", &cache);
         assert_eq!(
-            rendered(&warm.check().unwrap()),
+            rendered(
+                &warm
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+            ),
             rendered(&fresh(&f, "zzz"))
         );
         assert_eq!(
@@ -375,10 +435,20 @@ fn rejected_package_diagnostics_rebase_identically_and_accepted_twin_reuses() {
         );
         // An edit selects the accepted twin, rather than reviving a rejection by path.
         f.write("lib.hir", "pub fn unused() -> u64 { 1 }\n");
-        let accepted = f.load("zzz", &cache).check().unwrap();
+        let accepted = f
+            .load("zzz", &cache)
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert!(accepted.diagnostics.is_empty());
         assert_eq!(rendered(&accepted), rendered(&fresh(&f, "zzz")));
-        assert_eq!(f.load("aaa", &cache).check().unwrap().diagnostics.len(), 0);
+        assert_eq!(
+            f.load("aaa", &cache)
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .len(),
+            0
+        );
     });
 }
 
@@ -398,13 +468,18 @@ fn dependency_body_and_manifest_edits_invalidate_the_complete_closure() {
         let cache = PackageCache::new();
         assert!(
             f.load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
         );
         let mut warm = f.load("app", &cache);
-        assert!(warm.check().unwrap().diagnostics.is_empty());
+        assert!(
+            warm.check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert_eq!(
             warm.engine
                 .recompute_count(&definition("lib", "value"), QueryKind::Lower),
@@ -413,7 +488,11 @@ fn dependency_body_and_manifest_edits_invalidate_the_complete_closure() {
         f.write("leaf.hir", "pub fn value() -> u64 { 2 }\n");
         let mut edited = f.load("app", &cache);
         assert_eq!(
-            rendered(&edited.check().unwrap()),
+            rendered(
+                &edited
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+            ),
             rendered(&fresh(&f, "app"))
         );
         assert_eq!(
@@ -439,7 +518,13 @@ fn dependency_body_and_manifest_edits_invalidate_the_complete_closure() {
         let old = std::fs::read_to_string(f.0.join("leaf.json")).unwrap();
         f.write("leaf.json", &(old + "\n"));
         let mut manifest = f.load("app", &cache);
-        assert!(manifest.check().unwrap().diagnostics.is_empty());
+        assert!(
+            manifest
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert_eq!(
             manifest
                 .engine
@@ -460,7 +545,7 @@ fn missing_source_is_retried_after_a_package_has_been_cached() {
         let cache = PackageCache::new();
         assert!(
             f.load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
@@ -473,7 +558,7 @@ fn missing_source_is_retried_after_a_package_has_been_cached() {
         f.write("lib.hir", "pub fn value() -> u64 { 1 }\n");
         assert!(
             f.load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
@@ -496,13 +581,19 @@ fn cache_identity_survives_relocation_and_adopted_edits_preserve_old_outputs() {
         assert!(
             first
                 .load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
         );
         let mut adopted = second.load("app", &cache);
-        assert!(adopted.check().unwrap().diagnostics.is_empty());
+        assert!(
+            adopted
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         let path = definition("lib", "value");
         assert_eq!(adopted.engine.recompute_count(&path, QueryKind::Lower), 0);
         let old = adopted.engine.lower_to_tir(&path).unwrap().value;
@@ -526,7 +617,13 @@ fn cache_identity_survives_relocation_and_adopted_edits_preserve_old_outputs() {
         ));
         assert_eq!(format!("{old:?}"), old_dump);
         let mut pristine = first.load("app", &cache);
-        assert!(pristine.check().unwrap().diagnostics.is_empty());
+        assert!(
+            pristine
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert_eq!(pristine.engine.recompute_count(&path, QueryKind::Lower), 0);
         assert!(std::sync::Arc::ptr_eq(
             &old,
@@ -548,7 +645,13 @@ fn engines_share_one_dependency_image_and_never_see_each_others_edits() {
         let syntax =
             |program: &mut LoadedProgram| program.engine.parse_definition(&path).unwrap().value.0;
         let mut first = f.load("app", &cache);
-        assert!(first.check().unwrap().diagnostics.is_empty());
+        assert!(
+            first
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         let mut second = f.load("app", &cache);
         let mut third = f.load("app", &cache);
         // The dependency was parsed once; both later engines hold its syntax.
@@ -578,11 +681,23 @@ fn engines_share_one_dependency_image_and_never_see_each_others_edits() {
             second.engine.lower_to_tir(&path),
             Err(QueryError::Diagnostics(_))
         ));
-        assert!(third.check().unwrap().diagnostics.is_empty());
+        assert!(
+            third
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert_eq!(third.engine.recompute_count(&path, QueryKind::Signature), 0);
         assert!(third.engine.lower_to_tir(&path).is_ok());
         let mut fourth = f.load("app", &cache);
-        assert!(fourth.check().unwrap().diagnostics.is_empty());
+        assert!(
+            fourth
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
         assert!(std::sync::Arc::ptr_eq(
             &syntax(&mut third),
             &syntax(&mut fourth)
@@ -595,10 +710,20 @@ fn engines_share_one_dependency_image_and_never_see_each_others_edits() {
             &syntax(&mut changed)
         ));
         assert_eq!(
-            rendered(&changed.check().unwrap()),
+            rendered(
+                &changed
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap()
+            ),
             rendered(&fresh(&f, "app"))
         );
-        assert!(!changed.check().unwrap().diagnostics.is_empty());
+        assert!(
+            !changed
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
     });
 }
 
@@ -616,7 +741,7 @@ fn compile_time_limit_edits_retry_cached_package_results() {
         let cache = PackageCache::new();
         assert!(
             f.load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
@@ -624,10 +749,19 @@ fn compile_time_limit_edits_retry_cached_package_results() {
         for steps in [Some(0), None, Some(u64::MAX)] {
             let mut warm = f.load("app", &cache);
             warm.engine.comptime_limits.steps = steps;
-            let cached = warm.check().unwrap();
+            let cached = warm
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             let mut cold = f.load("app", &PackageCache::disabled());
             cold.engine.comptime_limits.steps = steps;
-            assert_eq!(rendered(&cached), rendered(&cold.check().unwrap()));
+            assert_eq!(
+                rendered(&cached),
+                rendered(
+                    &cold
+                        .check(hirsel_engine::LoweringPolicy::Reachable)
+                        .unwrap()
+                )
+            );
             if steps == Some(0) {
                 assert_eq!(cached.diagnostics[0].rule.as_str(), "CT-1");
             } else {
@@ -636,7 +770,7 @@ fn compile_time_limit_edits_retry_cached_package_results() {
         }
         assert!(
             f.load("app", &cache)
-                .check()
+                .check(hirsel_engine::LoweringPolicy::Reachable)
                 .unwrap()
                 .diagnostics
                 .is_empty()
@@ -682,7 +816,9 @@ fn full_gate_cold_and_warm_corpus_verdicts_and_diagnostics_are_identical() {
                                 let start = std::time::Instant::now();
                                 let verdict =
                                     match load_program_source_with_cache(path, None, cache) {
-                                        Ok(mut p) => match p.check() {
+                                        Ok(mut p) => match p
+                                            .check(hirsel_engine::LoweringPolicy::Reachable)
+                                        {
                                             Ok(o) => format!("{:?}", rendered(&o)),
                                             Err(e) => format!("{e:?}"),
                                         },
@@ -790,7 +926,11 @@ fn engines_sharing_images_agree_with_fresh_engines_across_random_edits() {
                         let root = ["aaa", "zzz"][next(2)];
                         trace.push(format!("check {root}"));
                         let mut warm = f.load(root, &cache);
-                        let verdict = rendered(&warm.check().unwrap());
+                        let verdict = rendered(
+                            &warm
+                                .check(hirsel_engine::LoweringPolicy::Reachable)
+                                .unwrap(),
+                        );
                         assert_eq!(
                             verdict,
                             rendered(&fresh(&f, root)),
@@ -806,7 +946,11 @@ fn engines_sharing_images_agree_with_fresh_engines_across_random_edits() {
                         trace.push(format!("recheck {which}"));
                         let (program, verdict) = &mut live[which];
                         assert_eq!(
-                            &rendered(&program.check().unwrap()),
+                            &rendered(
+                                &program
+                                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                                    .unwrap()
+                            ),
                             verdict,
                             "seed {seed}: {trace:?}"
                         );

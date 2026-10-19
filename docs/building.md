@@ -56,6 +56,43 @@ hirsel build hello.hir --target aarch64-linux -o hello-arm64
 Release builds use LLVM. Combining `--release` with `--backend cranelift`
 is refused; use Cranelift for default or debug builds.
 
+### What a native build needs
+
+`build`, `run --native` and `test --native` read their tools from absolute paths in
+the environment; nothing is searched on `PATH`. Each command needs only the tools
+of the targets it builds for:
+
+| variable | needed for | names |
+|---|---|---|
+| `LLVM_SYS_211_PREFIX` | every target | the pinned LLVM 21.1.8 tree, whose `bin/ld.lld` links every executable |
+| `HIRSEL_LINK_KIT` | every target | the link kit: every link input besides the program, its runtime archive and foreign libraries |
+| `HIRSEL_RUNTIME_ARCHIVES` | every target (optional) | prebuilt runtime archives, `<dir>/<triple>/<variant>/libhirsel_rt.a`; without it the runtime is built once with Cargo from the source checkout |
+| `HIRSEL_NATIVE_CACHE` | every target (optional) | where Cargo-built runtime archives are kept |
+| `HIRSEL_QEMU_AARCH64`, `HIRSEL_AARCH64_SYSROOT` | `aarch64-linux` | the user-mode emulator AArch64 executables launch under, and the sysroot it loads them from |
+| `HIRSEL_AARCH64_CC` | `aarch64-linux` without `HIRSEL_RUNTIME_ARCHIVES` | the cross compiler driver Cargo links the AArch64 runtime's build scripts with; no program link runs it |
+| `HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME` | memcheck runtime builds only | the pinned memcheck, its support directory and its libc |
+
+So an x86-64 build needs LLVM and the link kit alone. Install the pinned trees with
+Buck2 from the repository root, and export the paths it prints:
+
+```sh
+.buck2/bin/buck2 build //tools/buck2/native-toolchain:llvm //tools/buck2/native-toolchain:kit //:hirsel-rt-archives --show-full-simple-output
+# AArch64 targets also need:
+.buck2/bin/buck2 build //tools/buck2/native-toolchain:arm //tools/buck2/native-toolchain:qemu --show-full-simple-output
+```
+
+`LLVM_SYS_211_PREFIX` is the `llvm` directory and `HIRSEL_RUNTIME_ARCHIVES` the
+`hirsel-rt-archives` directory. `tools/buck2/native-toolchain/environment.tsv`
+lists the path of every other variable inside its toolchain directory
+(`tools/native-toolchain/README.md` installs the LLVM tree without Buck2).
+
+`build`, `run` and `test` validate every lowered body with V, the second checker,
+as checks do. `--no-verify` skips V: the program, its output and every
+diagnostic are the same, and only a compiler bug V would have reported can go
+unnoticed. `check` lowers only the bodies compile-time evaluation executes, so V
+costs it little. The conformance, agreement and native harnesses always run V
+and refuse `--no-verify`.
+
 `build` accepts a source file (and its `.hir.json` sidecar, when present) or a
 launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses its
 own runtime archive and link kit, with no cross compiler. Every executable is
@@ -462,10 +499,10 @@ table of the session's query engine as it is dropped (`engine: ...`), then the
 shared package cache (std's image) and V's retained signature inputs. A table
 still shared with the package cache frees nothing when the engine drops, so
 std's share appears under `package cache`. With `--timings=json` the same
-figures go into the JSON's `memory` object instead. Heap bytes are glibc's
-chunks in use plus mmapped blocks (`mallinfo2`), read before and after each
-measured load or drop; reading them walks the allocator's free lists, so time
-a run without `--mem-usage`.
+figures go into the JSON's `memory` object instead. Heap bytes are the bytes
+the binary's allocator (mimalloc) handed out and got back, which `--mem-usage`
+alone counts, read before and after each measured load or drop. Counting adds
+an atomic update to every allocation, so time a run without `--mem-usage`.
 
 ## Layout
 

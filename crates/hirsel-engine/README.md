@@ -36,8 +36,23 @@ Queries, V, comptime and the program check carry `hirsel_intern::timings`
 interval and phase guards and counts (docs/building.md, "Compile timings").
 Dropping a `QueryEngine` drops its tables inside the `merge` interval; with a
 heap meter installed (`--mem-usage`) it records the bytes each table frees, and
-`release_shared_caches` records and frees the process's package cache and V
-signature inputs once compiling is over.
+`release_shared_caches` records and frees the process's package caches and V
+signature inputs once compiling is over. A process that turns
+`free_sessions` off leaks its sessions' tables instead, unless a heap meter is
+installed.
+
+`LoadedProgram::check(LoweringPolicy)` selects which bodies a check lowers.
+`Comptime` (`hirsel check`) lowers exactly the bodies compile-time evaluation
+executes or materializes into: constants, bodies holding or reading a
+compile-time value, the functions evaluation calls and the generic instances
+CT-5 selects. `Reachable` (run, test, build, the harnesses) lowers every body of
+the root package and the dependency bodies it reaches. Lowering builds no source
+diagnostic except through compile-time evaluation (CT-1, CT-2, CT-4), so both
+report the same diagnostics; the conformance harness checks each corpus file
+under both and requires them equal. `Verify` is the session's one V switch:
+`Compiler::with_verify` sets it, and `QueryEngine::run_v` is the only place V
+runs or is skipped. Sessions without V use their own shared package cache, and
+`precheck_package` refuses them.
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked

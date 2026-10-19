@@ -74,7 +74,7 @@ pub fn run_path_with_simulation(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
-    run_simulation(path, simulation, None, stdout, stderr)
+    run_simulation(COMPILER, path, simulation, None, stdout, stderr)
 }
 /// Execute simulated inputs with an explicit step budget; None is unbounded.
 /// Ordinary driver/conformance entry points retain their adapter defaults.
@@ -82,10 +82,12 @@ pub fn run_path_with_step_budget(
     path: &Path,
     simulation: SimulationConfig,
     max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
     run_simulation(
+        COMPILER.with_verify(verify),
         path,
         simulation,
         Some(hirsel_interp::Limits {
@@ -97,13 +99,14 @@ pub fn run_path_with_step_budget(
     )
 }
 fn run_simulation(
+    compiler: Compiler,
     path: &Path,
     simulation: SimulationConfig,
     limits: Option<hirsel_interp::Limits>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
-    let mut program = load_program(path)?;
+    let mut program = compiler.load_program(path)?;
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
     if let Some(limits) = limits {
@@ -183,7 +186,9 @@ pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
 pub fn hash_path(path: &Path) -> Result<String, ToolError> {
     hirsel_engine::with_compiler_stack(|| {
         let mut program = load_program(path)?;
-        let output = program.check().map_err(|error| program.error(error))?;
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Comptime)
+            .map_err(|error| program.error(error))?;
         if output
             .diagnostics
             .iter()
@@ -215,7 +220,9 @@ pub fn hash_path(path: &Path) -> Result<String, ToolError> {
 pub fn expand_path(path: &Path) -> Result<String, ToolError> {
     hirsel_engine::with_compiler_stack(|| {
         let mut program = load_program(path)?;
-        let output = program.check().map_err(|error| program.error(error))?;
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Comptime)
+            .map_err(|error| program.error(error))?;
         if output
             .diagnostics
             .iter()
@@ -465,9 +472,10 @@ pub fn run_path_on_host(
     path: &Path,
     launch: HostLaunch<'_>,
     max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
-    let mut program = load_program(path)?;
+    let mut program = COMPILER.with_verify(verify).load_program(path)?;
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
     let signature = launch_signature(&mut program)?;

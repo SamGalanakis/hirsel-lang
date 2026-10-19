@@ -45,7 +45,9 @@ impl Fixture {
             &PackageCache::disabled(),
         )
         .unwrap();
-        let output = program.check().unwrap();
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         program
@@ -317,7 +319,9 @@ fn library_diagnostics(f: &Fixture, files: &[(&str, &str)], as_dependency: bool)
     };
     let mut program =
         load_program_source_with_cache(&f.0.join(root), None, &PackageCache::disabled()).unwrap();
-    let output = program.check().unwrap();
+    let output = program
+        .check(hirsel_engine::LoweringPolicy::Reachable)
+        .unwrap();
     let mut rendered = vec![format!("{:?}", output.completion)];
     rendered.extend(
         output

@@ -342,7 +342,9 @@ fn checked_with_config(
     {
         let mut program =
             hirsel_driver::load_program_source(path, Some(source)).map_err(|e| e.to_string())?;
-        let output = program.check().map_err(|e| format!("{e:?}"))?;
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .map_err(|e| format!("{e:?}"))?;
         let entry = program.entry;
         *engine = program.engine;
         (output, entry)

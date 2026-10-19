@@ -14,6 +14,7 @@ mod byte_compare_ir;
 mod callable_results;
 mod callsite_identity;
 mod canonical_tir;
+mod check_lowering;
 mod checked_execution;
 mod clause_bodies;
 mod clocks;

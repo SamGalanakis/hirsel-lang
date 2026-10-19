@@ -1,5 +1,4 @@
 //! PROG-1: explicit source packages. No directory discovery or std fallback.
-use crate::queries::Lowering;
 use crate::*;
 use hirsel_resolve::DependencyExposure;
 use hirsel_syntax::PackageId;
@@ -129,7 +128,11 @@ pub struct LoadedProgram {
     indexed_revision: u64,
 }
 impl LoadedProgram {
-    pub fn check(&mut self) -> Result<CheckOutput, QueryError> {
+    /// Check every package of the program, lowering what `lowering` selects:
+    /// the diagnostics do not depend on it. The root package lowers under
+    /// `lowering`, each dependency only what compile-time evaluation executes,
+    /// and `Reachable` then lowers the dependency bodies the root reaches.
+    pub fn check(&mut self, lowering: LoweringPolicy) -> Result<CheckOutput, QueryError> {
         // The program check's own steps; per-definition checking and
         // lowering, GEN-5 and publication below are their own intervals.
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
@@ -193,9 +196,9 @@ impl LoadedProgram {
         let root = self.entry.0.package.clone();
         let policy = |package: &PackageId| {
             if *package == root {
-                Lowering::All
+                lowering
             } else {
-                Lowering::CompileTime
+                LoweringPolicy::Comptime
             }
         };
         for (file, context) in &self.files {
@@ -241,7 +244,10 @@ impl LoadedProgram {
             }
         }
         // Dependencies lower only what the program's own package reaches.
-        if !crate::queries::has_errors(&diagnostics) && completion == CheckCompletion::Complete {
+        if lowering == LoweringPolicy::Reachable
+            && !crate::queries::has_errors(&diagnostics)
+            && completion == CheckCompletion::Complete
+        {
             let roots = self
                 .files
                 .iter()
@@ -300,7 +306,7 @@ impl LoadedProgram {
                         .collect()
                 })
                 .collect();
-            let lowered = [Lowering::All, Lowering::CompileTime]
+            let lowered = [LoweringPolicy::Reachable, LoweringPolicy::Comptime]
                 .into_iter()
                 .find(|&p| self.engine.package_lowered(&package.files, p));
             let Some(snapshot) = self
@@ -352,7 +358,7 @@ impl LoadedProgram {
         })
     }
     pub fn check_for_execution(&mut self) -> Result<(), ToolError> {
-        let result = self.check().and_then(|output| {
+        let result = self.check(LoweringPolicy::Reachable).and_then(|output| {
             if crate::queries::has_errors(&output.diagnostics) {
                 Err(QueryError::Diagnostics(output.diagnostics))
             } else if output.completion != CheckCompletion::Complete {
@@ -378,7 +384,9 @@ impl LoadedProgram {
     /// complete with no diagnostics at all (`Precheck`).
     pub fn precheck(&mut self, package: &PackageId) -> Result<Vec<u8>, ToolError> {
         let name = format!("{}@{}", package.name, package.version);
-        let output = self.check().map_err(|error| self.error(error))?;
+        let output = self
+            .check(LoweringPolicy::Comptime)
+            .map_err(|error| self.error(error))?;
         if !output.diagnostics.is_empty() {
             return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
         }
@@ -708,7 +716,7 @@ pub(crate) fn load_program_source_with_cache(
             .collect(),
     };
     let image = crate::queries::PackageImage::obtain(cache, &input, || compiler.adapters());
-    let mut engine = QueryEngine::new(environment, compiler.adapters());
+    let mut engine = compiler.engine(environment);
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
     {

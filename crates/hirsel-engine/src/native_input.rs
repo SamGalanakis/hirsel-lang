@@ -269,8 +269,9 @@ impl QueryEngine {
             {
                 return Err(invalid("definition/declaration identity mismatch"));
             }
-            let signatures = self.validated_signature_input(&path.0.package);
-            let report = signatures.validate_once(definition);
+            let report = self.run_v(&path.0.package, |signatures| {
+                signatures.validate_once(definition)
+            });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 return Err(error);
             }

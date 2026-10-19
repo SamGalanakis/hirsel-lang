@@ -201,7 +201,16 @@ pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa>
     for (name, value) in [
         ("opt_level", level),
         ("is_pic", "true"),
-        ("enable_verifier", "true"),
+        // Cranelift's own IR verifier checks this backend, not the program:
+        // debug builds, which every test runs, keep it; release builds skip it.
+        (
+            "enable_verifier",
+            if cfg!(debug_assertions) {
+                "true"
+            } else {
+                "false"
+            },
+        ),
         ("preserve_frame_pointers", "true"),
         // i128 parameters and results in register pairs, as LLVM passes them (SysV, AAPCS64).
         ("enable_llvm_abi_extensions", "true"),

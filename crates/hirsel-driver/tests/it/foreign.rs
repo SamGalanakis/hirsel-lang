@@ -463,6 +463,7 @@ fn native_c_fixture(
         backend,
         None,
         false,
+        hirsel_engine::Verify::On,
     )
     .unwrap();
     assert!(built.is_ok(), "{built:?}");

@@ -189,7 +189,7 @@ fn artifacts(path: &Path, config: &Config, cache: &PackageCache) -> Artifacts {
         program.engine.comptime_limits.steps = limits.steps;
         program.engine.comptime_limits.call_depth = limits.call_depth;
     }
-    let output = match program.check() {
+    let output = match program.check(hirsel_engine::LoweringPolicy::Reachable) {
         Ok(output) => output,
         Err(error) => {
             let error = program.error(error);

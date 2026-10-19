@@ -181,6 +181,12 @@
         },
         {
           "kind": null,
+          "name": "mimalloc",
+          "req": "=0.1.52",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
           "name": "serde_json",
           "req": "^1",
           "uses_default_features": true

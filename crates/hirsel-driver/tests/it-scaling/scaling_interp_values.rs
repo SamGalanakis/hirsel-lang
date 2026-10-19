@@ -26,6 +26,7 @@ fn copied_values(count: u64) -> u64 {
         &path,
         SimulationConfig::default(),
         None,
+        hirsel_engine::Verify::On,
         &mut vec![],
         &mut vec![],
     )

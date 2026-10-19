@@ -241,3 +241,56 @@ fn agreement_budget_and_selection_constraints_survive_parsing() {
     assert!(output.stderr.is_empty());
     assert!(output.stdout.starts_with(b"usage: native"));
 }
+
+/// Every harness entry point refuses to run without V, before any work.
+fn refuses_no_verify(binary: &str, args: &[&str]) {
+    for position in [0, args.len()] {
+        let mut args = args.to_vec();
+        args.insert(position, "--no-verify");
+        let output = Command::new(binary).args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{binary}: {args:?}");
+        assert!(output.stdout.is_empty(), "{binary}: {args:?}");
+        assert_eq!(
+            output.stderr, b"--no-verify is refused: harnesses always run V\n",
+            "{binary}: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn conformance_refuses_no_verify() {
+    refuses_no_verify(
+        env!("CARGO_BIN_EXE_hirsel-conformance"),
+        &["--check-format"],
+    );
+}
+
+#[test]
+fn agreement_refuses_no_verify() {
+    refuses_no_verify(env!("CARGO_BIN_EXE_agree"), &["--limit", "1"]);
+    refuses_no_verify(env!("CARGO_BIN_EXE_agree"), &["--native", "full"]);
+}
+
+#[test]
+fn native_smoke_refuses_no_verify() {
+    refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--smoke"]);
+    refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--cranelift"]);
+}
+
+#[test]
+fn native_full_refuses_no_verify() {
+    refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--full"]);
+    refuses_no_verify(
+        env!("CARGO_BIN_EXE_native"),
+        &["--full", "--engine", "llvm"],
+    );
+}
+
+#[test]
+fn heap_checker_refuses_no_verify() {
+    refuses_no_verify(
+        env!("CARGO_BIN_EXE_native"),
+        &["--full", "--engine", "heap"],
+    );
+    refuses_no_verify(env!("CARGO_BIN_EXE_agree"), &["--native", "heap"]);
+}

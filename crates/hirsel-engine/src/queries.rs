@@ -6,7 +6,6 @@ mod dependencies;
 pub(crate) mod generation;
 pub use generation::GeneratedSource;
 mod lowering;
-pub(crate) use lowering::Lowering;
 mod package_image;
 pub(crate) use package_image::{ImageInput, ImagePackage, PackageImage};
 mod package_snapshot;
@@ -138,6 +137,10 @@ struct ItemSnapshot {
 /// A single coherent session. Reused owners keep their arena IDs while their
 /// origins and cached artifact sites are re-spanned to the current source revision.
 pub struct QueryEngine {
+    /// Whether V validates what this session lowers; `run_v` is its only reader.
+    pub verify: Verify,
+    /// A `Compiler` opened this engine as a session (`free_sessions`).
+    pub(crate) session: bool,
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
     pub(crate) comptime_stack: Vec<(DefPath, hirsel_span::Span)>,
@@ -194,10 +197,16 @@ pub struct QueryEngine {
 /// meter (`--mem-usage`) it records the bytes each table frees; tables still
 /// shared with a package image free nothing here, and the image's bytes are
 /// recorded when the package cache is released (`release_shared_caches`).
+/// A session the process does not free (`free_sessions`) leaks its tables.
 impl Drop for QueryEngine {
     fn drop(&mut self) {
         use hirsel_intern::memory::released;
         use std::mem::take;
+        if self.session && !crate::policy::frees_sessions() {
+            let vacant = QueryEngine::new(self.environment.clone(), PhaseAdapters::default());
+            std::mem::forget(std::mem::replace(self, vacant));
+            return;
+        }
         let _timing = timings::interval(Interval::Merge);
         released("engine: lowered", take(&mut self.lowered));
         released("engine: modes", take(&mut self.modes));
@@ -317,11 +326,11 @@ impl QueryEngine {
         definition: &hirsel_tir::Definition,
         artifact: Signature,
     ) -> Result<(), QueryError> {
-        let signatures = self.validated_signature_input(&definition.path.0.package);
-        let timing = timings::phase(Phase::Verify);
-        timings::count(Count::VRuns);
-        let report = signatures.validate_with_signature(definition, &artifact);
-        drop(timing);
+        let report = self.run_v(&definition.path.0.package, |signatures| {
+            let _timing = timings::phase(Phase::Verify);
+            timings::count(Count::VRuns);
+            signatures.validate_with_signature(definition, &artifact)
+        });
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
@@ -338,6 +347,8 @@ impl QueryEngine {
         let registry = crate::registry::BuiltinRegistry::new();
         environment.builtin_signatures_hash = registry.revision();
         Self {
+            verify: Verify::On,
+            session: false,
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
             comptime_stack: vec![],
@@ -390,6 +401,14 @@ impl QueryEngine {
             environment.package_manifest_hash = *manifest;
         }
         environment
+    }
+    /// Every definition this session has computed `kind` for.
+    pub fn recomputed(&self, kind: QueryKind) -> BTreeSet<DefPath> {
+        self.recomputes
+            .keys()
+            .filter(|(_, k)| *k == kind)
+            .map(|(path, _)| path.clone())
+            .collect()
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> usize {
         self.recomputes
@@ -1507,8 +1526,9 @@ impl DefinitionQueries for QueryEngine {
         });
         let mut result = result.map(shared_output);
         if let Ok(lowered) = &result {
-            let signatures = self.validated_signature_input(&definition.0.package);
-            let report = signatures.validate_once(&lowered.value);
+            let report = self.run_v(&definition.0.package, |signatures| {
+                signatures.validate_once(&lowered.value)
+            });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);
             } else if !report.violations.is_empty() {

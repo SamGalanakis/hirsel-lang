@@ -40,7 +40,8 @@ Invariants:
   validator version, and exactly the target, layout table, manifest and input identity.
 - An instruction, layout or step this backend does not lower is `CodegenError::Unsupported`
   naming it and its definition, never a miscompile. A panic in Cranelift or here is
-  `CodegenError::Panic`. The Cranelift verifier runs on every function.
+  `CodegenError::Panic`. The Cranelift verifier runs on every function in debug builds
+  (`debug_assertions`, as every test builds); release builds skip it.
 - Values: scalars are SSA values (Bool an `i8` 0 or 1, i128 a Cranelift `i128` passed in
   register pairs as LLVM passes it); callables a code and environment pair; every other
   value lives in an immutable stack copy, so a load is always a copy. Block parameters

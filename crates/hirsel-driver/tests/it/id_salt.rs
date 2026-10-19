@@ -35,7 +35,9 @@ fn transcript() -> String {
         out.push_str(&format!("== {}\n", path.display()));
         let program = hirsel_engine::with_compiler_stack(|| {
             let mut program = load_program(&path)?;
-            let checked = program.check().map_err(|error| program.error(error))?;
+            let checked = program
+                .check(hirsel_engine::LoweringPolicy::Comptime)
+                .map_err(|error| program.error(error))?;
             let mut text = format!("completion {:?}\n", checked.completion);
             for diagnostic in &checked.diagnostics {
                 text.push_str(&diagnostic.to_json(&checked.sources).to_string());

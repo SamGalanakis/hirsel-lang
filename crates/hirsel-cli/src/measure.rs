@@ -3,32 +3,6 @@ use hirsel_intern::{memory, timings};
 use std::ffi::OsString;
 use std::time::Duration;
 
-/// The process's live heap bytes, from glibc's allocator statistics: chunks
-/// in use plus mmapped blocks. Reading them walks the free lists, so it is
-/// done only at `--mem-usage` measurement points, never per allocation.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn live_heap() -> i64 {
-    #[repr(C)]
-    struct Mallinfo2 {
-        arena: usize,
-        ordblks: usize,
-        smblks: usize,
-        hblks: usize,
-        hblkhd: usize,
-        usmblks: usize,
-        fsmblks: usize,
-        uordblks: usize,
-        fordblks: usize,
-        keepcost: usize,
-    }
-    unsafe extern "C" {
-        fn mallinfo2() -> Mallinfo2;
-    }
-    // SAFETY: mallinfo2 takes no arguments and returns its statistics by value.
-    let info = unsafe { mallinfo2() };
-    (info.uordblks + info.hblkhd) as i64
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Format {
     Table,
@@ -87,9 +61,8 @@ impl Measure {
         if self.timings.is_some() {
             timings::enable();
         }
-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
         if self.memory {
-            memory::install(live_heap);
+            memory::install(crate::allocator::count_live());
         }
     }
 

@@ -30,7 +30,9 @@ fn main() {
                     timed(name, || {
                         let mut program =
                             load_program_source_with_cache(Path::new(&path), None, &cache).unwrap();
-                        let output = program.check().unwrap();
+                        let output = program
+                            .check(hirsel_engine::LoweringPolicy::Reachable)
+                            .unwrap();
                         assert_eq!(output.completion, CheckCompletion::Complete);
                         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
                     });
@@ -106,7 +108,9 @@ fn main() {
         timed(
             "reachable dependency lowering, program audits and artifact publication",
             || {
-                let output = program.check().unwrap();
+                let output = program
+                    .check(hirsel_engine::LoweringPolicy::Reachable)
+                    .unwrap();
                 assert_eq!(output.completion, CheckCompletion::Complete);
                 assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
             },
@@ -117,7 +121,9 @@ fn main() {
             load_program_source_with_cache(Path::new(&path), None, &cache).unwrap()
         });
         timed("reused check and program audits", || {
-            let output = warm.check().unwrap();
+            let output = warm
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             assert_eq!(output.completion, CheckCompletion::Complete);
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         });

@@ -4,7 +4,10 @@ Expose check, run, build, fmt and JSON through the compiler driver.
 
 Every nonzero CLI exit includes a cause on stderr, including JSON checks (whose stdout JSON protocol is retained). Returned Error payloads use the PROG-3 host report, independently of stderr grants.
 
-Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-intern's timings and memory, and shared span/syntax types as needed, and hirsel-guard, the memory guard every binary installs; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-intern's timings and memory, and shared span/syntax types as needed, hirsel-guard, the memory guard every binary installs, and `mimalloc`, the allocator it guards; no phase internals.
+
+The binary does not free its session at exit (`hirsel_engine::free_sessions`), except under `--mem-usage`, which reports what each table frees: the
+process ends right after its command's output.
 
 Invariants and boundary:
 
@@ -51,7 +54,9 @@ Commands (arguments use the shared lexopt parser):
 - `--timings`, `--timings=json` and `--mem-usage`, anywhere before `--` on
   check, build, run and test, print the compile timings and heap report on
   stderr after the command (docs/building.md, "Compile timings"). Heap bytes
-  come from glibc's allocator statistics, read only at measurement points.
+  are the live bytes the binary's allocator counts under `--mem-usage` only.
+- `--no-verify`, anywhere before `--`, skips V for `run`, `test` and `build`
+  (docs/building.md); any other command refuses it with exit 2.
 - `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
   dependency checked from source because no precheck matched. Nothing else changes.
 - Invalid arguments exit 2. Non-executing source commands report IO failures as

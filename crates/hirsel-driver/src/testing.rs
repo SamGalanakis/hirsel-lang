@@ -318,7 +318,9 @@ pub fn discover(
     override_seed: Option<u64>,
     selection: Selection,
 ) -> Result<Vec<Test>, ToolError> {
-    let check = program.check().map_err(|e| program.error(e))?;
+    let check = program
+        .check(hirsel_engine::LoweringPolicy::Reachable)
+        .map_err(|e| program.error(e))?;
     if check
         .diagnostics
         .iter()
@@ -568,8 +570,11 @@ pub fn run_path(
     bless: bool,
     max_steps: Option<u64>,
     schedules: &Schedules,
+    verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let mut program = crate::COMPILER.load_test_package(path)?;
+    let mut program = crate::COMPILER
+        .with_verify(verify)
+        .load_test_package(path)?;
     let tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
     program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
         limits: hirsel_interp::Limits {
@@ -593,8 +598,11 @@ pub fn bench_path(
     filters: &[String],
     override_seed: Option<u64>,
     target: Duration,
+    verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let mut program = crate::COMPILER.load_test_package(path)?;
+    let mut program = crate::COMPILER
+        .with_verify(verify)
+        .load_test_package(path)?;
     let benches = discover(&mut program, filters, override_seed, Selection::Benches)?;
     program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
         limits: hirsel_interp::Limits {

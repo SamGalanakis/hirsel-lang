@@ -44,7 +44,9 @@ fn a_broken_dependency_association_is_reported_before_client_body_planning() {
                 .find(|(_, c)| c.package.name == "z_protocol")
                 .unwrap()
                 .0;
-            let output = program.check().unwrap();
+            let output = program
+                .check(hirsel_engine::LoweringPolicy::Reachable)
+                .unwrap();
             if valid {
                 assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
             } else {

@@ -506,7 +506,9 @@ impl Kinds {
 fn round_trip(path: &Path) -> Result<Option<Kinds>, String> {
     let export_once = || -> Result<Option<(String, QueryEngine)>, String> {
         let mut program = load_program(path).map_err(|e| format!("load: {e}"))?;
-        let checked = program.check().map_err(|e| format!("check: {e:?}"))?;
+        let checked = program
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .map_err(|e| format!("check: {e:?}"))?;
         if checked
             .diagnostics
             .iter()

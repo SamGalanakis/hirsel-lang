@@ -335,6 +335,7 @@ fn httpget() {
             &fixture.0.join("hirsel.json"),
             simulation,
             Some(DEFAULT_RUN_MAX_STEPS),
+            hirsel_engine::Verify::On,
             &mut output,
             &mut Vec::new(),
         )
@@ -1147,6 +1148,7 @@ impl Example {
                 &self.dir.join("hirsel.json"),
                 simulation,
                 Some(DEFAULT_RUN_MAX_STEPS),
+                hirsel_engine::Verify::On,
                 &mut stdout,
                 &mut stderr,
             )

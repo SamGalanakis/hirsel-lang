@@ -44,6 +44,7 @@ fn build(source: &Path, dir: &Path, target: &TargetSpec, profile: BuildProfile) 
             Backend::Llvm,
             None,
             false,
+            hirsel_engine::Verify::On,
         )
     })
     .unwrap();

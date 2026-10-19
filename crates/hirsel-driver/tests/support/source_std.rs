@@ -5,7 +5,9 @@ pub fn engine() -> hirsel_engine::QueryEngine {
     let mut program = hirsel_driver::load_program_source(&path, Some("")).unwrap();
     // Publish the ordinary dependency check before discarding the package
     // coordinator. Later lowerings publish through the engine's cache handle.
-    let output = program.check().unwrap();
+    let output = program
+        .check(hirsel_engine::LoweringPolicy::Reachable)
+        .unwrap();
     assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     program.engine

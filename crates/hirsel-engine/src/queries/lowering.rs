@@ -1,20 +1,11 @@
-//! Check-time lowering: complete for the checked package, reachable for its dependencies.
+//! Check-time lowering under a `LoweringPolicy`.
 use super::*;
 use hirsel_syntax::ExprKind;
 use hirsel_types::ResolvedName;
 
-/// Which executable bodies a file check lowers and validates.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum Lowering {
-    /// A dependency: only bodies whose lowering evaluates at compile time.
-    /// Every other body lowers when the program reaches it.
-    CompileTime,
-    /// The checked program's own package: every executable body.
-    All,
-}
-
 impl QueryEngine {
     /// Whether a file check under `policy` lowers this mode-checked definition.
+    /// A file's own reachable closure is every body it declares.
     ///
     /// Lowering reports source diagnostics only through compile-time
     /// evaluation (`prepare_comptime`): a constant initializer, a `comptime`
@@ -22,8 +13,8 @@ impl QueryEngine {
     /// fails only with invariants and V only with operational violations, so
     /// deferring those bodies leaves every diagnostic and its order unchanged.
     /// Registry dictionary constants materialize without evaluation.
-    pub(crate) fn lowers_at_check(&self, definition: &DefPath, policy: Lowering) -> bool {
-        if policy == Lowering::All {
+    pub(crate) fn lowers_at_check(&self, definition: &DefPath, policy: LoweringPolicy) -> bool {
+        if policy == LoweringPolicy::Reachable {
             return true;
         }
         let Some(Ok(analyzed)) = self.modes.get(definition).map(|c| c.result.as_ref()) else {
@@ -66,7 +57,7 @@ impl QueryEngine {
     pub(crate) fn package_lowered(
         &self,
         files: &[(FileId, FileContext)],
-        policy: Lowering,
+        policy: LoweringPolicy,
     ) -> bool {
         files.iter().all(|(f, _)| {
             let Some((_, _, Ok(parsed))) = self.parsed.get(f) else {

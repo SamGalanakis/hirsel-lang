@@ -32,6 +32,8 @@ pub use adapters::*;
 mod package;
 mod package_cache;
 pub use package_cache::{PackageCache, release_shared_caches, report_prechecks};
+mod policy;
+pub use policy::{LoweringPolicy, Verify, free_sessions};
 mod admission;
 mod proof_export;
 mod queries;

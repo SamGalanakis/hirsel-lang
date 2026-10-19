@@ -15,8 +15,11 @@ pub fn test_path(
     backend: Backend,
     bless: bool,
     schedules: &crate::testing::Schedules,
+    verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let mut loaded = crate::COMPILER.load_test_package(path)?;
+    let mut loaded = crate::COMPILER
+        .with_verify(verify)
+        .load_test_package(path)?;
     let tests = crate::testing::discover(&mut loaded, filters, seed, Selection::Tests)?;
     if tests.is_empty() {
         return Ok(vec![]);
@@ -33,8 +36,11 @@ pub fn bench_path(
     seed: Option<u64>,
     backend: Backend,
     target: Duration,
+    verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let mut loaded = crate::COMPILER.load_test_package(path)?;
+    let mut loaded = crate::COMPILER
+        .with_verify(verify)
+        .load_test_package(path)?;
     let benches = crate::testing::discover(&mut loaded, filters, seed, Selection::Benches)?;
     if benches.is_empty() {
         return Ok(vec![]);

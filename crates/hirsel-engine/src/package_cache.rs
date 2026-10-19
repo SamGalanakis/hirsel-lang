@@ -19,9 +19,12 @@ pub(crate) struct ToolchainPrechecks {
     /// Why there is no precheck, for `--verbose`.
     pub missing: Option<String>,
 }
-static REPORT_PRECHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Write each later load's precheck notes (`LoadedProgram::precheck_notes`) to stderr.
+static REPORT_PRECHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The process's shared package cache; sessions without V (`Verify::Off`)
+/// share `UNVERIFIED` instead, since V never validated its packages.
 static SHARED: OnceLock<PackageCache> = OnceLock::new();
+static UNVERIFIED: OnceLock<PackageCache> = OnceLock::new();
 /// With a heap meter (`--mem-usage`), drop the process's shared package
 /// cache and retained signature inputs, recording the bytes each held. Call
 /// it once compiling is over: later programs check their packages afresh.
@@ -29,9 +32,11 @@ pub fn release_shared_caches() {
     if !hirsel_intern::memory::metered() {
         return;
     }
-    if let Some(entries) = SHARED.get().and_then(|cache| cache.entries.as_ref()) {
-        let storage = std::mem::take(&mut *entries.lock().unwrap_or_else(|e| e.into_inner()));
-        hirsel_intern::memory::released("package cache", storage);
+    for shared in [&SHARED, &UNVERIFIED] {
+        if let Some(entries) = shared.get().and_then(|cache| cache.entries.as_ref()) {
+            let storage = std::mem::take(&mut *entries.lock().unwrap_or_else(|e| e.into_inner()));
+            hirsel_intern::memory::released("package cache", storage);
+        }
     }
     crate::queries::release_signature_inputs();
 }
@@ -128,11 +133,17 @@ impl PackageCache {
             prechecks: None,
         }
     }
-    pub(crate) fn shared() -> Self {
+    /// The process's cache for sessions with V `verify`: a session without V
+    /// never publishes into the cache sessions with V read.
+    pub(crate) fn shared(verify: Verify) -> Self {
         if std::env::var_os("HIRSEL_PACKAGE_CACHE").is_some_and(|value| value == "off") {
             return Self::disabled();
         }
-        SHARED
+        let cache = match verify {
+            Verify::On => &SHARED,
+            Verify::Off => &UNVERIFIED,
+        };
+        cache
             .get_or_init(|| Self {
                 prechecks: Some(toolchain_prechecks()),
                 ..Self::new()
@@ -219,13 +230,13 @@ pub(crate) struct Artifact {
     pub preflight: Vec<Vec<Diagnostic>>,
     pub files: Vec<Vec<Diagnostic>>,
     /// The widest check-time lowering this package's queries satisfy.
-    pub lowered: Option<crate::queries::Lowering>,
+    pub lowered: Option<LoweringPolicy>,
     pub last_phase: Option<QueryKind>,
     pub environment: QueryEnvironment,
     pub limits: hirsel_interp::Limits,
 }
 impl Artifact {
-    pub(crate) fn check_complete(&self, required: crate::queries::Lowering) -> bool {
+    pub(crate) fn check_complete(&self, required: LoweringPolicy) -> bool {
         // A program-wide prerequisite error can withhold lowering in a fresh
         // check. Replay rejected queries through the ordinary phase order;
         // replaying their file diagnostics could expose a cached CT-1 early.

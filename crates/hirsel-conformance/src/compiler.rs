@@ -134,7 +134,27 @@ fn evaluate_on_compiler_thread(
     } else {
         crate::selected_entry(&text, &context)
     };
-    let checked = program.check().map_err(|e| format!("{e:?}"));
+    // The verdict is `hirsel check`'s, which lowers only what compile-time
+    // evaluation executes. Run and build then lower and validate every
+    // reachable body, which must not change a single diagnostic.
+    // A rejected program is checked again from a fresh load: a second check
+    // of the same session sees the instances its first check selected.
+    let checked = (|| {
+        use hirsel_engine::LoweringPolicy::{Comptime, Reachable};
+        let comptime = program.check(Comptime).map_err(|e| format!("{e:?}"))?;
+        let reachable = if comptime
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
+        {
+            hirsel_driver::load_program(path)
+                .map_err(|e| e.to_string())?
+                .check(Reachable)
+        } else {
+            program.check(Reachable)
+        };
+        Ok::<_, String>((comptime, reachable.map_err(|e| format!("{e:?}"))?))
+    })();
     let primary_file = program.primary;
     let mut engine = program.engine;
     let mut observation = Observation {
@@ -146,7 +166,20 @@ fn evaluate_on_compiler_thread(
         ..Default::default()
     };
     let output = match checked {
-        Ok(value) => value,
+        Ok((comptime, reachable))
+            if comptime.diagnostics != reachable.diagnostics
+                || comptime.completion != reachable.completion =>
+        {
+            observation.actual = format!(
+                "check reported {:?} ({:?}), the reachable lowering {:?} ({:?})",
+                comptime.diagnostics,
+                comptime.completion,
+                reachable.diagnostics,
+                reachable.completion
+            );
+            return (Status::Fail(observation.actual.clone()), observation);
+        }
+        Ok((comptime, _)) => comptime,
         Err(error) => {
             observation.actual = format!("tool error: {error}");
             return (Status::Fail(observation.actual.clone()), observation);

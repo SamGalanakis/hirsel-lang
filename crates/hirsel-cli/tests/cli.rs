@@ -43,10 +43,56 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
+    }
+}
+
+/// `--no-verify` skips V for run, test and build only: the program's output is
+/// unchanged, and every other command refuses it as a usage error.
+#[test]
+fn no_verify_changes_no_output_and_applies_only_to_run_test_and_build() {
+    let path = file(
+        "pub fn main(rt: Io) -> Result[(), GrantError] {\n  let out = io.stdout(rt)?\n  let _ = out.print(out, \"hello\\n\")\n  Ok(())\n}\n",
+    );
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(args)
+            .arg(&path)
+            .args([
+                "--grants",
+                r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#,
+            ])
+            .output()
+            .unwrap()
+    };
+    let verified = run(&["run"]);
+    assert_eq!(verified.status.code(), Some(0), "{verified:?}");
+    assert_eq!(verified.stdout, b"hello\n");
+    for args in [&["--no-verify", "run"][..], &["run", "--no-verify"]] {
+        let unverified = run(args);
+        assert_eq!(
+            unverified.status.code(),
+            Some(0),
+            "{args:?}: {unverified:?}"
+        );
+        assert_eq!(unverified.stdout, verified.stdout, "{args:?}");
+        assert_eq!(unverified.stderr, verified.stderr, "{args:?}");
+    }
+    for command in ["check", "fmt", "hash", "expand"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args([command, "--no-verify"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{command}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .starts_with("--no-verify applies only to run, test and build\n"),
+            "{command}: {output:?}"
+        );
     }
 }
 

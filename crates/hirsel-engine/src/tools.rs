@@ -252,13 +252,13 @@ pub fn check_progress(
     file: FileId,
     context: &FileContext,
 ) -> Result<CheckOutput, QueryError> {
-    check_file_lowering(engine, file, context, crate::queries::Lowering::All)
+    check_file_lowering(engine, file, context, LoweringPolicy::Reachable)
 }
 pub(crate) fn check_file_lowering(
     engine: &mut QueryEngine,
     file: FileId,
     context: &FileContext,
-    lowering: crate::queries::Lowering,
+    lowering: LoweringPolicy,
 ) -> Result<CheckOutput, QueryError> {
     let mut diagnostics = vec![];
     let result = (|| -> Result<(), QueryError> {
@@ -293,13 +293,20 @@ pub(crate) fn check_file_lowering(
             diagnostics.extend(crate::generic_graph::check(engine)?);
         }
         if !crate::queries::has_errors(&diagnostics) {
-            for item in &parsed.value.roots {
-                let source = &parsed.value.tree.items[item.0 as usize];
-                if crate::queries::generation::executable(&parsed.value, *item)
-                    && engine.lowers_at_check(&source.definition, lowering)
-                {
-                    diagnostics.extend(engine.lower_to_tir(&source.definition)?.diagnostics);
-                }
+            // Every policy reports the diagnostics of the compile-time bodies
+            // and CT-5 selection first; only then, and only for an accepted
+            // file, does `Reachable` lower the rest, which reports none.
+            let (comptime, rest): (Vec<_>, Vec<_>) = parsed
+                .value
+                .roots
+                .iter()
+                .filter(|id| crate::queries::generation::executable(&parsed.value, **id))
+                .map(|id| parsed.value.tree.items[id.0 as usize].definition.clone())
+                .partition(|definition| {
+                    engine.lowers_at_check(definition, LoweringPolicy::Comptime)
+                });
+            for definition in comptime {
+                diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
             }
             // CT-5: each instance a body selects is generated and checked here.
             let roots = parsed
@@ -315,6 +322,11 @@ pub(crate) fn check_file_lowering(
                 }
                 Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
                 Err(error) => return Err(error),
+            }
+            if lowering == LoweringPolicy::Reachable && !crate::queries::has_errors(&diagnostics) {
+                for definition in rest {
+                    diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
+                }
             }
             engine.prepare_staged_instances()?;
         }

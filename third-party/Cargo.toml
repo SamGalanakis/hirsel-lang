@@ -23,6 +23,7 @@ insta = { version = "=1.49.0", default-features = false, features = ["colors", "
 lexopt = { version = "=0.3.2", default-features = false, features = [] }
 libc = { version = "=0.2.190", default-features = false, features = ["default", "std"] }
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["force-dynamic", "strict-versioning"] }
+mimalloc = { version = "=0.1.52", default-features = false, features = [] }
 proptest = { version = "=1.11.0", default-features = false, features = ["bit-set", "default", "fork", "regex-syntax", "rusty-fork", "std", "tempfile", "timeout"] }
 ring = { version = "=0.17.14", default-features = false, features = ["alloc", "default", "dev_urandom_fallback"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

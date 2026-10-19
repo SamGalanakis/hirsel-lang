@@ -1,11 +1,15 @@
-hirsel_guard::install!();
+// The memory guard over mimalloc, which serves the compiler's many small,
+// short-lived values faster than the system allocator, counting live bytes
+// under `--mem-usage`.
+hirsel_guard::install!(allocator::Counting: allocator::Counting);
 
 use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
-use hirsel_engine::{QueryError, RunOutcome, ToolError};
+use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
+mod allocator;
 mod execution_policy;
 mod measure;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
@@ -572,22 +576,29 @@ fn source_arg(args: &mut Parser) -> Result<OsString, lexopt::Error> {
     }
 }
 
-/// `--verbose`, anywhere before a `--` separator, reports how dependency
-/// packages were checked (a missing or mismatched precheck) on stderr.
-fn take_verbose(args: &mut Vec<OsString>) -> bool {
+/// Whether `flag` appears anywhere before a `--` separator, removing it.
+fn take_flag(args: &mut Vec<OsString>, flag: &str) -> bool {
     let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
     let before = args.len();
     let mut index = 0;
     args.retain(|arg| {
         index += 1;
-        index > end || arg != "--verbose"
+        index > end || arg != flag
     });
     args.len() != before
 }
 
 /// Run the command, then report what `--timings` and `--mem-usage` measured.
 fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
-    hirsel_engine::report_prechecks(take_verbose(&mut args));
+    // `--verbose` reports how dependency packages were checked (a missing or
+    // mismatched precheck) on stderr.
+    hirsel_engine::report_prechecks(take_flag(&mut args, "--verbose"));
+    // `--no-verify` skips V, the second checker, where it costs most.
+    let verify = if take_flag(&mut args, "--no-verify") {
+        Verify::Off
+    } else {
+        Verify::On
+    };
     let measure = match measure::Measure::take(&mut args) {
         Ok(measure) => measure,
         Err(error) => {
@@ -601,12 +612,14 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
         .and_then(|a| a.to_str())
         .unwrap_or_default()
         .to_owned();
-    let code = execute_command(args);
+    let code = execute_command(args, verify);
     measure.finish(&command, start.elapsed());
     code
 }
 
-fn execute_command(args: Vec<OsString>) -> u8 {
+fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
+    // The process exits right after its one session: leave its memory to the OS.
+    hirsel_engine::free_sessions(false);
     let command = match parse_command(args) {
         Ok(command) => command,
         Err(error) => {
@@ -614,6 +627,18 @@ fn execute_command(args: Vec<OsString>) -> u8 {
             return usage();
         }
     };
+    if verify == Verify::Off
+        && !matches!(
+            command,
+            Command::Test { .. }
+                | Command::Build { .. }
+                | Command::Run { .. }
+                | Command::Simulation { .. }
+        )
+    {
+        eprintln!("--no-verify applies only to run, test and build");
+        return usage();
+    }
     let (command, flag, file) = match command {
         Command::Test {
             manifest,
@@ -634,9 +659,16 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     seed,
                     backend,
                     target,
+                    verify,
                 )
             } else {
-                hirsel_driver::testing::bench_path(Path::new(&manifest), &filters, seed, target)
+                hirsel_driver::testing::bench_path(
+                    Path::new(&manifest),
+                    &filters,
+                    seed,
+                    target,
+                    verify,
+                )
             };
             return match results {
                 Ok(results) => {
@@ -704,6 +736,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     backend,
                     bless,
                     &schedules,
+                    verify,
                 )
             } else {
                 hirsel_driver::testing::run_path(
@@ -713,6 +746,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     bless,
                     max_steps,
                     &schedules,
+                    verify,
                 )
             };
             // The command that reruns one test under the schedule it failed in.
@@ -871,6 +905,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                 backend,
                 evidence.as_ref(),
                 fuel,
+                verify,
             ) {
                 Ok(Ok(report)) => {
                     for line in report {
@@ -923,6 +958,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     Path::new(&file),
                     simulation,
                     max_steps,
+                    verify,
                     &mut std::io::stdout().lock(),
                     &mut std::io::stderr().lock(),
                 ),
@@ -952,6 +988,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                 evidence.as_ref(),
                 backend.unwrap_or_default(),
                 hirsel_driver::native::Output::Inherit { json },
+                verify,
             ) {
                 // The native driver already wrote the complete failure chain.
                 Ok(Ok(outcome @ RunOutcome::Failed { .. })) => outcome.exit_code() as u8,
@@ -978,6 +1015,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     Path::new(&file),
                     launch.host(arguments.as_deref()),
                     max_steps,
+                    verify,
                 ),
                 json,
             );

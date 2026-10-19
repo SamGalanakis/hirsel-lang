@@ -29,6 +29,9 @@ pub enum CommonOption {
     Root,
     HashSeed,
     Shard,
+    /// The tools that take common options are bug-catching harnesses, which
+    /// always run V: they refuse `--no-verify`.
+    NoVerify,
 }
 impl CommonOption {
     pub fn from_arg(arg: &Arg<'_>) -> Option<Self> {
@@ -36,6 +39,7 @@ impl CommonOption {
             Arg::Long("root") => Some(Self::Root),
             Arg::Long("hash-seed") => Some(Self::HashSeed),
             Arg::Long("shard") => Some(Self::Shard),
+            Arg::Long("no-verify") => Some(Self::NoVerify),
             _ => None,
         }
     }
@@ -63,6 +67,9 @@ impl CommonOptions {
                         .and_then(|value| Shard::parse(value.to_str()?))
                         .ok_or("--shard requires <index>/<count>, 1 <= index <= count")?,
                 );
+            }
+            CommonOption::NoVerify => {
+                return Err("--no-verify is refused: harnesses always run V".into());
             }
         }
         Ok(())

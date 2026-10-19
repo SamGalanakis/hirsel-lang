@@ -68,6 +68,7 @@ pub fn build_path_native(
         super::Backend::Llvm,
         evidence,
         false,
+        hirsel_engine::Verify::On,
     )
 }
 
@@ -81,6 +82,7 @@ pub fn build_path_native_backend(
     backend: super::Backend,
     evidence: Option<&super::Evidence>,
     fuel: bool,
+    verify: hirsel_engine::Verify,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     if profile == BuildProfile::Release && backend == super::Backend::Cranelift {
         return Ok(Err(NativeError::new(
@@ -88,7 +90,7 @@ pub fn build_path_native_backend(
             "release builds use LLVM; select LLVM or a non-release profile",
         )));
     }
-    let mut loaded = crate::load_program(source)?;
+    let mut loaded = crate::COMPILER.with_verify(verify).load_program(source)?;
     loaded.check_for_execution()?;
     let mut engine = loaded.engine;
     let input = engine

@@ -51,7 +51,14 @@ pub fn run_path_native_with_config(
     evidence: Option<&super::Evidence>,
     output: Output<'_>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    run_path_native_backend(path, launch, evidence, super::Backend::Llvm, output)
+    run_path_native_backend(
+        path,
+        launch,
+        evidence,
+        super::Backend::Llvm,
+        output,
+        hirsel_engine::Verify::On,
+    )
 }
 
 /// `run_path_native_with_config` with `backend`: LLVM builds at O3, Cranelift
@@ -62,6 +69,7 @@ pub fn run_path_native_backend(
     evidence: Option<&super::Evidence>,
     backend: super::Backend,
     output: Output<'_>,
+    verify: hirsel_engine::Verify,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
     let (inherit, json, stdout, stderr): (bool, bool, &mut dyn Write, &mut dyn Write) = match output
@@ -69,7 +77,7 @@ pub fn run_path_native_backend(
         Output::Inherit { json } => (true, json, &mut host_stdout, &mut host_stderr),
         Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
     };
-    let mut loaded = crate::load_program(path)?;
+    let mut loaded = crate::COMPILER.with_verify(verify).load_program(path)?;
     loaded.check_for_execution()?;
     if matches!(
         launch,

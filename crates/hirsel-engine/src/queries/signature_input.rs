@@ -94,6 +94,18 @@ pub(super) struct ProgramInput {
     validated: Arc<SignatureInput>,
 }
 impl QueryEngine {
+    /// V's report from `validate` against `package`'s signature input, or no
+    /// violations under `Verify::Off`. Every V run of a session goes through here.
+    pub(crate) fn run_v(
+        &mut self,
+        package: &hirsel_syntax::PackageId,
+        validate: impl FnOnce(&SignatureInput) -> Validation,
+    ) -> Validation {
+        match self.verify {
+            Verify::On => validate(&self.validated_signature_input(package)),
+            Verify::Off => Validation::default(),
+        }
+    }
     pub(crate) fn invalidate_signature_input(&mut self) {
         self.signature_input.clear();
     }

@@ -14,7 +14,7 @@ fn recursive_shared_list_specimens_finish_complete_checking() {
                 Some(source),
             )
             .unwrap()
-            .check()
+            .check(hirsel_engine::LoweringPolicy::Reachable)
             .unwrap();
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
             assert_eq!(output.completion, CheckCompletion::Complete);

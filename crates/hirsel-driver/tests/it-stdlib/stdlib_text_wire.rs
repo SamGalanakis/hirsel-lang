@@ -94,6 +94,7 @@ fn full_gate_large_hash_native_references_on_both_backends() {
                     stdout: &mut stdout,
                     stderr: &mut stderr,
                 },
+                hirsel_engine::Verify::On,
             )
             .unwrap()
             .unwrap();
@@ -129,6 +130,7 @@ fn flate_large_vectors_execute_std_source() {
             &path,
             SimulationConfig::default(),
             Some(5_000_000),
+            hirsel_engine::Verify::On,
             &mut Vec::new(),
             &mut Vec::new(),
         )
@@ -152,6 +154,7 @@ fn zip_large_vectors_execute_std_source() {
             &path,
             SimulationConfig::default(),
             Some(5_000_000),
+            hirsel_engine::Verify::On,
             &mut Vec::new(),
             &mut Vec::new(),
         )
@@ -405,6 +408,7 @@ fn yaml_large_fixture(fixture: &str) {
             &path,
             SimulationConfig::default(),
             Some(5_000_000),
+            hirsel_engine::Verify::On,
             &mut Vec::new(),
             &mut Vec::new(),
         )

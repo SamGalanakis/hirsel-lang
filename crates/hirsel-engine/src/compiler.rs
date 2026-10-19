@@ -10,10 +10,31 @@ pub struct Compiler {
     /// Digest of the compiler's own sources; prechecks record the one they were
     /// checked under (docs/building.md, "The std precheck").
     identity: [u8; 32],
+    /// Whether the sessions this compiler starts run V.
+    verify: Verify,
 }
 impl Compiler {
+    /// A compiler whose sessions run V.
     pub const fn new(phases: fn() -> Rc<dyn Phases>, identity: [u8; 32]) -> Self {
-        Self { phases, identity }
+        Self {
+            phases,
+            identity,
+            verify: Verify::On,
+        }
+    }
+    /// This compiler with V `verify` (`--no-verify` selects `Verify::Off`).
+    pub const fn with_verify(self, verify: Verify) -> Self {
+        Self { verify, ..self }
+    }
+    pub fn verify(&self) -> Verify {
+        self.verify
+    }
+    /// A fresh session engine of this compiler.
+    pub(crate) fn engine(&self, environment: QueryEnvironment) -> QueryEngine {
+        let mut engine = QueryEngine::new(environment, self.adapters());
+        engine.verify = self.verify;
+        engine.session = true;
+        engine
     }
     pub(crate) fn identity(&self) -> ContentHash {
         ContentHash(self.identity)
@@ -24,7 +45,7 @@ impl Compiler {
     }
     pub(crate) fn load(&self, path: &Path) -> Result<(QueryEngine, FileId), ToolError> {
         let text = crate::tools::read_source(path)?;
-        let mut engine = QueryEngine::new(default_environment(), self.adapters());
+        let mut engine = self.engine(default_environment());
         let file = engine
             .sources
             .add(path, text)
@@ -50,9 +71,10 @@ impl Compiler {
         path: &Path,
         replacement: Option<&str>,
     ) -> Result<LoadedProgram, ToolError> {
-        self.load_program_source_with_cache(path, replacement, &PackageCache::shared())
+        self.load_program_source_with_cache(path, replacement, &PackageCache::shared(self.verify))
     }
     /// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
+    /// Sessions with and without V never share `cache`.
     pub fn load_program_source_with_cache(
         &self,
         path: &Path,
@@ -73,13 +95,17 @@ impl Compiler {
             self,
             manifest,
             None,
-            &PackageCache::shared(),
+            &PackageCache::shared(self.verify),
             true,
         )
     }
     /// The precheck of the package `manifest` describes, checked freshly as the only
     /// dependency of an empty program (docs/building.md, "The std precheck").
     pub fn precheck_package(&self, manifest: &Path) -> Result<Vec<u8>, ToolError> {
+        // Programs trust a precheck's TIR as validated.
+        if self.verify == Verify::Off {
+            return Err(ToolError::Runtime("precheck always runs V".into()));
+        }
         let manifest = std::fs::canonicalize(manifest)?;
         let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)
             .map_err(|e| ToolError::Runtime(format!("precheck: {}: {e}", manifest.display())))?;
@@ -129,7 +155,9 @@ impl Compiler {
     pub fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
-            program.check().map_err(|error| program.error(error))
+            program
+                .check(LoweringPolicy::Comptime)
+                .map_err(|error| program.error(error))
         })
     }
     /// `check_path`, then, when the program checks complete and accepted, the
@@ -140,7 +168,9 @@ impl Compiler {
     ) -> Result<(CheckOutput, Option<(DefPath, Option<UnsafeReach>)>), ToolError> {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
-            let output = program.check().map_err(|error| program.error(error))?;
+            let output = program
+                .check(LoweringPolicy::Comptime)
+                .map_err(|error| program.error(error))?;
             if crate::queries::has_errors(&output.diagnostics)
                 || output.completion != CheckCompletion::Complete
             {

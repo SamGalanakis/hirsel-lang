@@ -328,7 +328,7 @@ fn classify_package_native(
             let mut interpreter = hirsel_engine::InterpreterAdapter::default();
             interpreter.limits.steps = Some(STEPS);
             loaded.engine.adapters.interpreter = Some(Box::new(interpreter));
-            let checked = loaded.check();
+            let checked = loaded.check(hirsel_engine::LoweringPolicy::Reachable);
             let entry = loaded.entry.clone();
             program = Some(loaded);
             (checked, entry)

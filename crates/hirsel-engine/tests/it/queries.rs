@@ -407,6 +407,16 @@ fn invalid_tir_is_never_published_and_operational_failures_retry_on_compiler_thr
         2
     );
 }
+/// `Verify::Off` is the one switch that skips V: the same invalid TIR lowers.
+#[test]
+fn invalid_tir_lowers_without_v() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(Some("invalid-tir"), false);
+        engine.verify = Verify::Off;
+        parse(&mut engine, "fn a () { 1 }\n");
+        engine.lower_to_tir(&path("a")).unwrap();
+    });
+}
 #[test]
 fn phases_run_in_order_and_stop_at_every_error_boundary() {
     hirsel_engine::with_compiler_stack(

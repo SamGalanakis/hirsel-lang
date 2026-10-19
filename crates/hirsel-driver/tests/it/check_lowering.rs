@@ -1,0 +1,137 @@
+//! `hirsel check` lowers and validates exactly the bodies compile-time evaluation
+//! executes; run, test and build lower every reachable body.
+use hirsel_driver::*;
+use hirsel_engine::*;
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+/// The definitions lowered when `source` checks under `lowering`, by name.
+fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-check-lowering-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path: PathBuf = dir.join("main.hir");
+    std::fs::write(&path, source).unwrap();
+    let names = with_compiler_stack(|| {
+        let mut program =
+            load_program_source_with_cache(&path, None, &PackageCache::disabled()).unwrap();
+        let output = program.check(lowering).unwrap();
+        assert_eq!(output.completion, CheckCompletion::Complete);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        program
+            .engine
+            .recomputed(QueryKind::Lower)
+            .into_iter()
+            // A generic instance's path ends in its arguments' digest.
+            .map(|path| match path.to_string().split_once("$instance$") {
+                Some((declaration, _)) => format!("{declaration}$instance"),
+                None => path.to_string(),
+            })
+            .collect()
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    names
+}
+
+fn names(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|n| format!("standalone@0/{n}")).collect()
+}
+
+const UNEXECUTED: &str = r#"
+fn unused() -> u64 {
+  helper()
+}
+
+fn helper() -> u64 {
+  2
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = unused()
+  Ok(())
+}
+"#;
+
+#[test]
+fn check_lowers_no_body_of_a_program_without_compile_time_evaluation() {
+    assert_eq!(lowered(UNEXECUTED, LoweringPolicy::Comptime), names(&[]));
+    assert_eq!(
+        lowered(UNEXECUTED, LoweringPolicy::Reachable),
+        names(&["helper", "main", "unused"])
+    );
+}
+
+const COMPTIME: &str = r#"
+const LIMIT: u64 = comptime triple(2)
+
+fn triple(x: u64) -> u64 {
+  x * 3
+}
+
+fn square(x: u64) -> u64 {
+  x * x
+}
+
+fn folded() -> u64 {
+  comptime square(4)
+}
+
+fn reader() -> u64 {
+  LIMIT
+}
+
+fn runtime_only() -> u64 {
+  7
+}
+
+fn sized(limit: u64) -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x }"))
+}
+
+fn clamp(n: u64) -> u64 uses {} = comptime sized(LIMIT)
+
+type Point {
+  x: u64,
+}
+
+fn width_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {} {
+  Ok(codegen.body("fn(v: standalone@0/Point) -> u64 uses {} { v.x }"))
+}
+
+fn width[T](v: T) -> u64 uses {} = comptime width_body(shape(T))
+
+pub fn main() -> Result[(), ()] {
+  let _ = folded() + reader() + runtime_only() + clamp(1) + width(Point(x: 2))
+  Ok(())
+}
+"#;
+
+#[test]
+fn check_lowers_exactly_the_bodies_compile_time_evaluation_executes() {
+    // The constant and the function its evaluation calls, the body holding a
+    // `comptime` expression and the function it calls, the body materializing
+    // the constant, the generators and the generic instance CT-5 selects. A
+    // generated body is checked from its text, so a non-generic one (`clamp`)
+    // lowers only when the program runs.
+    let executed = names(&[
+        "LIMIT",
+        "folded",
+        "reader",
+        "sized",
+        "square",
+        "triple",
+        "width$instance",
+        "width_body",
+    ]);
+    assert_eq!(lowered(COMPTIME, LoweringPolicy::Comptime), executed);
+    let mut reachable = executed;
+    reachable.extend(names(&["clamp", "main", "runtime_only"]));
+    assert_eq!(lowered(COMPTIME, LoweringPolicy::Reachable), reachable);
+}

@@ -46,7 +46,7 @@ fn prechecked_std_products_equal_fresh_ones() {
         );
         let mut reference = load(&client, &PackageCache::disabled());
         let checked = |p: &mut LoadedProgram| {
-            let output = p.check().unwrap();
+            let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
                 .diagnostics
                 .iter()
