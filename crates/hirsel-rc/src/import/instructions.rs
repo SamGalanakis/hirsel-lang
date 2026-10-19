@@ -303,31 +303,7 @@ impl Importer<'_, '_> {
                     self.push(inst);
                 }
             }
-            K::Drop { place, .. } => {
-                let p = self.place(*place)?;
-                if !p.fixed {
-                    return unsupported("a drop of a computed place");
-                }
-                let action = Action::Release {
-                    slot: p.slot,
-                    anchor: (INSTRUCTION_DROP, self.statement_action()),
-                };
-                let step = if p.steps.is_empty() {
-                    self.action(&action)?
-                } else {
-                    self.part_drop(&p)?
-                };
-                if let Step2::Drop(drop) = step {
-                    drop.apply(self);
-                    let failure = self.fail(None)?;
-                    self.push(Inst::Drop {
-                        address: drop.address,
-                        if_live: drop.if_live,
-                        anchor: drop.anchor,
-                        failure,
-                    });
-                }
-            }
+            K::Drop { place, .. } => self.drop_place(*place)?,
             K::RunCleanup(cleanup) => {
                 let actions = self.chain_actions(*cleanup)?;
                 let tail = self.failure_actions()?;
@@ -756,6 +732,9 @@ impl Importer<'_, '_> {
                         ty,
                     );
                 }
+                if let Some(value) = self.nullary_box(constructor, fields, destination, ty)? {
+                    return Ok(value);
+                }
                 let layout = match self.record(ty).kind {
                     LayoutKind::Block { payload } | LayoutKind::Box { payload }
                         if !matches!(self.out.types[ty.index()].repr, ValueRepr::Aggregate) =>
@@ -1082,6 +1061,76 @@ impl Importer<'_, '_> {
             self.failure.before = before;
         }
         Ok((values, loans, taken))
+    }
+
+    /// Drop the value at a fixed `place` (TIR `Drop`).
+    fn drop_place(&mut self, place: tir::PlaceId) -> R<()> {
+        let p = self.place(place)?;
+        if !p.fixed {
+            return unsupported("a drop of a computed place");
+        }
+        let action = Action::Release {
+            slot: p.slot,
+            anchor: (INSTRUCTION_DROP, self.statement_action()),
+        };
+        let step = if p.steps.is_empty() {
+            self.action(&action)?
+        } else {
+            self.part_drop(&p)?
+        };
+        if let Step2::Drop(drop) = step {
+            drop.apply(self);
+            let failure = self.fail(None)?;
+            self.push(Inst::Drop {
+                address: drop.address,
+                if_live: drop.if_live,
+                anchor: drop.anchor,
+                failure,
+            });
+        }
+        Ok(())
+    }
+
+    /// `box C()` of a nullary variant `C` on the heap: the one static immortal block of
+    /// that variant at the payload's layout (MEM-7), so nothing is allocated and its release
+    /// is a count test. The variant the box would have moved out of its temporary is dropped
+    /// there instead.
+    /// A resource's variant is constructed, since its drop runs its finalizer.
+    fn nullary_box(
+        &mut self,
+        constructor: &tir::Constructor,
+        fields: &[tir::ConstructField],
+        destination: &hirsel_types::Destination,
+        ty: LirTypeId,
+    ) -> R<Option<ValueId>> {
+        let (tir::Constructor::Box, [field]) = (constructor, fields) else {
+            return Ok(None);
+        };
+        let place = &self.body.places[field.value.place.0 as usize];
+        let Some(variant) = self.nullary[place.root.0 as usize] else {
+            return Ok(None);
+        };
+        let LayoutKind::Box { payload } = self.record(ty).kind else {
+            return Ok(None);
+        };
+        if !place.projection.is_empty()
+            || self.out.types[ty.index()].repr != ValueRepr::Block
+            || !matches!(
+                self.destination_class(destination)?,
+                DestinationClass::Heap | DestinationClass::Inferred
+            )
+        {
+            return Ok(None);
+        }
+        let record = self.layouts.record(payload);
+        let Some(instance) = crate::statics::nullary_variant_instance(record, variant) else {
+            return Ok(None);
+        };
+        self.drop_place(field.value.place)?;
+        let symbol = self.symbol(SymbolKind::Constant, &nullary_variant(), Some(instance));
+        let result = self.fresh(ty);
+        self.push(Inst::ReadStatic { result, symbol });
+        Ok(Some(result))
     }
 
     /// Push a construction site and build its value; the fields are consumed

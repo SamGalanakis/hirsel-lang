@@ -60,6 +60,57 @@ pub fn encode(
     })
 }
 
+/// The instance of the static block of nullary variant `variant` boxed at payload `record`,
+/// when there is one: a fixed variant layout with no finalizer whose variant has no fields
+/// and an ordinal or niche tag.
+pub fn nullary_variant_instance(
+    record: &hirsel_lir::layout_types::LayoutRecord,
+    variant: u32,
+) -> Option<hirsel_syntax::ContentHash> {
+    let tag = record.tag.as_ref()?;
+    let SizeSpec::Fixed(_) = record.size else {
+        return None;
+    };
+    let nullary = tag
+        .variants
+        .iter()
+        .any(|v| v.ordinal == variant && v.fields.is_empty());
+    (record.kind == LayoutKind::Variant
+        && record.finalizer.is_none()
+        && nullary
+        && matches!(tag.form, TagForm::Ordinal | TagForm::Niche { .. }))
+    .then(|| {
+        let layout = hirsel_lir::snapshot::digest("nullary-variant", record);
+        hirsel_syntax::ContentHash::of_parts(
+            "hirsel.nullary-variant.v1",
+            [layout.0.as_slice(), &variant.to_le_bytes()],
+        )
+    })
+}
+
+/// The static block of the boxed nullary variant `symbol` names at `payload`, whose layout
+/// is `record`: zero bytes but the ordinal at the tag (a niche's null word is the nullary
+/// variant). `None` when no variant of the layout has the symbol's instance.
+pub fn nullary_variant(
+    record: &hirsel_lir::layout_types::LayoutRecord,
+    symbol: Symbol,
+    payload: LayoutId,
+) -> Option<StaticData> {
+    let tag = record.tag.as_ref()?;
+    let variant = tag.variants.iter().map(|v| v.ordinal).find(|&v| {
+        symbol.instance.is_some() && nullary_variant_instance(record, v) == symbol.instance
+    })?;
+    let SizeSpec::Fixed(size) = record.size else {
+        return None;
+    };
+    let mut bytes = vec![0; size as usize];
+    if tag.form == TagForm::Ordinal {
+        let at = tag.offset as usize;
+        bytes[at..at + 4].copy_from_slice(&variant.to_le_bytes());
+    }
+    Some(StaticData::plain(symbol, payload, bytes))
+}
+
 struct Encoder<'a, 'o> {
     layouts: &'a mut LayoutBuilder<'o>,
     blocks: Vec<StaticBlock>,

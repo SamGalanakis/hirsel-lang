@@ -304,13 +304,21 @@ pub fn empty_sequence() -> DefPath {
     hirsel_syntax::DefPath::core("$intrinsic.EmptySequence")
 }
 
+/// The definition of every boxed nullary variant's static block; its instance
+/// names the payload layout and the variant
+/// (`crate::statics::nullary_variant_instance`).
+pub fn nullary_variant() -> DefPath {
+    hirsel_syntax::DefPath::core("$intrinsic.NullaryVariant")
+}
+
 /// The instance of the static empty sequence of the payload `record`.
 fn empty_sequence_instance(record: &hirsel_lir::layout_types::LayoutRecord) -> ContentHash {
     hirsel_lir::snapshot::digest("empty-sequence", record)
 }
 
-/// The static data of each constant the units read, once per constant, and
-/// of each static empty sequence: its zero count, at its payload layout.
+/// The static data of each constant the units read, once per constant, of
+/// each static empty sequence (its zero count, at its payload layout) and of
+/// each boxed nullary variant (its tag, at its payload layout).
 fn statics(
     program: &Program,
     units: &[LirUnit<Value>],
@@ -318,7 +326,9 @@ fn statics(
 ) -> Result<Vec<hirsel_lir::statics::StaticData>, LowerError> {
     let mut read = BTreeMap::new();
     let mut empty = BTreeMap::new();
+    let mut nullary = BTreeMap::new();
     let empty_path = empty_sequence();
+    let nullary_path = nullary_variant();
     for unit in units {
         for inst in &unit.instructions {
             if let Inst::ReadStatic { symbol, result } = inst {
@@ -331,6 +341,14 @@ fn statics(
                         unreachable!("an empty sequence read as a block")
                     };
                     empty.insert(symbol.instance, (symbol.clone(), payload));
+                } else if symbol.definition == nullary_path {
+                    let ty = unit.values[result.index()].ty;
+                    let LayoutKind::Box { payload } =
+                        layouts.record(unit.types[ty.index()].layout).kind
+                    else {
+                        unreachable!("a nullary variant read as a box")
+                    };
+                    nullary.insert(symbol.instance, (symbol.clone(), payload));
                 } else if symbol.kind == SymbolKind::Constant {
                     read.insert(symbol.definition.clone(), symbol.clone());
                 }
@@ -353,8 +371,18 @@ fn statics(
             ))
         })
         .collect::<Vec<_>>();
+    let nullary = nullary.into_values().map(|(symbol, payload)| {
+        crate::statics::nullary_variant(layouts.record(payload), symbol, payload).ok_or_else(|| {
+            LowerError::Static(
+                nullary_variant(),
+                crate::statics::StaticError("a nullary variant its layout does not have".into()),
+            )
+        })
+    });
+    let nullary = nullary.collect::<Vec<_>>();
     empty
         .into_iter()
+        .chain(nullary)
         .chain(read.into_values().map(|symbol| {
             let definition = symbol.definition.clone();
             let static_error = |e| LowerError::Static(definition.clone(), e);
@@ -959,6 +987,7 @@ fn import_mapped(
         local_slot: Vec::new(),
         aliases: view_temporaries(body),
         observations: discarded_callable_reads(body, &def.types),
+        nullary: nullary_temporaries(body),
         node_anchors: node_anchors(body),
         joined: joined_views(body),
         views: PVec::default(),
@@ -1083,6 +1112,8 @@ struct Importer<'a, 'o> {
     aliases: Vec<Option<tir::PlaceId>>,
     /// Unread callable borrow temporaries evaluate their source without a store.
     observations: Vec<bool>,
+    /// Per TIR local, the nullary variant it only ever holds (`nullary_temporaries`).
+    nullary: Vec<Option<u32>>,
     /// Per TIR cleanup node, the `(cleanup, ordinal)` its drop anchors at.
     node_anchors: Vec<(u32, u32)>,
     /// A joined view temporary: assigned views of places under loans on
@@ -1380,6 +1411,100 @@ fn discarded_callable_reads(body: &tir::Body, types: &TypeStore) -> Vec<bool> {
         .enumerate()
         .map(|(i, yes)| yes && assigned[i] == 1 && !used[i])
         .collect()
+}
+
+/// Temporaries and bindings that only ever hold one nullary variant: assigned once, whole, by
+/// `Construct Variant` with no fields or by a move or copy of another such temporary, and
+/// never written, replaced, lent mutably or a call's destination otherwise. Per local, the
+/// variant's ordinal. A `box` of one is a static block (MEM-7).
+fn nullary_temporaries(body: &tir::Body) -> Vec<Option<u32>> {
+    use tir::InstructionKind as K;
+    let n = body.locals.len();
+    let root = |p: tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
+    let whole = |p: tir::PlaceId| body.places[p.0 as usize].projection.is_empty();
+    // Each local's assignments, and whether another write rules it out.
+    let mut assigned: Vec<Vec<&tir::Rvalue>> = vec![Vec::new(); n];
+    let mut written = vec![false; n];
+    for block in &body.blocks {
+        for i in &block.instructions {
+            match &i.kind {
+                K::Assign { destination, value } => {
+                    let r = root(*destination);
+                    if whole(*destination) {
+                        assigned[r].push(&body.rvalues[value.0 as usize]);
+                    } else {
+                        written[r] = true;
+                    }
+                }
+                K::Replace {
+                    destination,
+                    displaced,
+                    ..
+                } => {
+                    written[root(*destination)] = true;
+                    written[root(*displaced)] = true;
+                }
+                K::Snapshot { destination, .. } => written[root(*destination)] = true,
+                K::BeginLoan {
+                    place,
+                    mutable: true,
+                    ..
+                } => written[root(*place)] = true,
+                _ => {}
+            }
+        }
+        if let tir::Terminator::Call { returns, .. } = &block.terminator
+            && let Some(tir::CallReturn { destination, .. }) = returns
+        {
+            written[root(*destination)] = true;
+        }
+    }
+    for rv in &body.rvalues {
+        for o in rvalue_operands(rv) {
+            if o.usage == UseKind::Mut {
+                written[root(o.place)] = true;
+            }
+        }
+    }
+    let temporary = |l: usize| {
+        matches!(
+            body.locals[l].storage,
+            tir::Storage::Temporary | tir::Storage::Local
+        ) && !written[l]
+            && assigned[l].len() == 1
+    };
+    let mut out: Vec<Option<u32>> = (0..n)
+        .map(|l| match assigned[l].as_slice() {
+            [
+                tir::Rvalue::Construct {
+                    constructor: tir::Constructor::Variant { variant, .. },
+                    fields,
+                    ..
+                },
+            ] if temporary(l) && fields.is_empty() => Some(*variant),
+            _ => None,
+        })
+        .collect();
+    // Moves and copies of one join once their source is one; each pass adds one or stops.
+    loop {
+        let mut changed = false;
+        for l in 0..n {
+            if out[l].is_none()
+                && temporary(l)
+                && let [tir::Rvalue::Use(o)] = assigned[l].as_slice()
+                && matches!(o.usage, UseKind::Take | UseKind::Copy)
+                && whole(o.place)
+                && let Some(variant) = out[root(o.place)]
+            {
+                out[l] = Some(variant);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    out
 }
 
 /// What a borrowed whole assignment views.

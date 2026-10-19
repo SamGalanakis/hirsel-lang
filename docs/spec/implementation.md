@@ -216,6 +216,10 @@ is open. Without this optimization, the byte lists are ordinary lists with the s
 These memory paths of compiled code do no runtime interpretation; none changes a program's
 meaning, TIR or LIR, and each falls back to the general path when its condition fails.
 
+- A boxed nullary variant on the heap (`box Leaf()`, of a fixed-size variant without a
+  finalizer whose tag is an ordinal or a niche) reads one immortal static block, named by
+  the content of its layout and ordinal: it allocates nothing, and its release is a count
+  test. It is never written: the box is shared, so a write copies first.
 - The deep copy of a block whose layout has no counted children is one allocation and one
   byte copy, with no visited map; a copy of a larger graph keeps its first visited blocks
   in place before using a map.

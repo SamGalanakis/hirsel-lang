@@ -844,3 +844,56 @@ fn a_match_tag_is_tested_again_on_every_import_pass() {
         "../../../../conformance/FACT/FACT-3-match-tag-retested-each-pass-run.hir"
     ));
 }
+
+/// `box C()` of a nullary variant reads the one static block of that variant at its payload
+/// layout instead of allocating: the ordinal at an ordinal tag, a null word at a niche. A
+/// variant with fields still allocates, and every read of one variant names one static.
+#[test]
+fn a_boxed_nullary_variant_reads_one_static_block() {
+    use hirsel_lir::ir::{ConstructorKind, Inst};
+    use hirsel_lir::layout_types::TagForm;
+    let (_, lowered) = lower_valid(
+        "type Tree = Leaf | Branch(left: box Tree, right: box Tree)\ntype Shade = Red | Green | Blue(n: u64)\nfn leaf() -> box Tree { box Leaf() }\nfn branch() -> box Tree { box Branch(left: leaf(), right: box Leaf()) }\nfn green() -> box Shade { let g: Shade = Green(); box g }\nfn blue() -> box Shade { box Blue(n: 3u64) }\nfn main() -> u64 { match branch() { Leaf() => 1u64, Branch(left: l, right: r) => match green() { Green() => 2u64, _ => match blue() { Blue(n: n) => n, _ => 0u64 } } } }",
+    );
+    let boxes = |name: &str| {
+        let unit = unit_named(&lowered, name);
+        let reads = unit
+            .instructions
+            .iter()
+            .filter(|i| matches!(i, Inst::ReadStatic { .. }))
+            .count();
+        let allocations = unit
+            .tables
+            .constructs
+            .iter()
+            .filter(|c| c.constructor == ConstructorKind::Box)
+            .count();
+        (reads, allocations)
+    };
+    assert_eq!(boxes("leaf"), (1, 0));
+    assert_eq!(boxes("branch"), (1, 1));
+    assert_eq!(boxes("green"), (1, 0));
+    assert_eq!(boxes("blue"), (0, 1));
+    let nullary: Vec<_> = lowered
+        .statics
+        .iter()
+        .filter(|s| s.symbol.definition == hirsel_rc::import::nullary_variant())
+        .collect();
+    assert_eq!(nullary.len(), 2, "one static per boxed nullary variant");
+    for data in nullary {
+        let [block] = data.blocks.as_slice() else {
+            panic!("{data:?}")
+        };
+        let record = &lowered.table.layouts[block.layout.0 as usize];
+        let tag = record.tag.as_ref().unwrap();
+        let mut want = vec![0u8; block.bytes.len()];
+        if tag.form == TagForm::Ordinal {
+            let at = tag.offset as usize;
+            want[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+        } else {
+            assert!(matches!(tag.form, TagForm::Niche { .. }));
+        }
+        assert_eq!(block.bytes, want);
+        assert!(block.references.is_empty());
+    }
+}
