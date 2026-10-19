@@ -112,8 +112,8 @@ uint8_t hirsel_rt_v2_scalar_positions_next(hirsel_rt_v2_ctx*, void*, hirsel_rt_v
  * Numeric algorithms now execute in ordinary std source. */
 /* Private structural Path order; IDs name the bound run-context table. */
 int32_t hirsel_rt_v2_path_compare(hirsel_rt_v2_ctx *, uint64_t, uint64_t);
-/* Read-only byte bridges, std-wave1. */
-uint8_t hirsel_rt_v2_string_as_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+/* Bulk byte append and read-only byte intervals. */
+uint8_t hirsel_rt_v2_bytes_append(hirsel_rt_v2_ctx*, hirsel_rt_v2_header**, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_bytes_slice(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_string_position(hirsel_rt_v2_ctx*, void*, void*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_string_byte_offset(hirsel_rt_v2_ctx*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint64_t*);
