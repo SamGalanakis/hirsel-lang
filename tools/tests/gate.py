@@ -23,6 +23,7 @@ REPO = TOOLS.parent
 sys.path.insert(0, str(TOOLS / 'buck2'))
 import gating  # noqa: E402
 import impact  # noqa: E402
+import merging  # noqa: E402
 
 # Scratch gates must never contaminate the host's real timing history.
 os.environ['HIRSEL_TEST_HISTORY'] = 'none'
@@ -1243,6 +1244,45 @@ class Slots(unittest.TestCase):
                              f'gate: normal gate slots: 2 in {directory}; 0 held, 2 queued')
 
 
+class Merging(unittest.TestCase):
+    def manifest(self, *paths):
+        return merging.canonical({'schema': 1, 'sources': [{'path': path, 'module': [path[:-4]]} for path in paths]})
+
+    def test_generated_files_keep_mains_side_for_regeneration(self):
+        for path in merging.REGENERATED:
+            self.assertEqual(merging.resolve(path, 'a\n', 'main\n', 'lane\n'), 'main\n')
+
+    def test_rows_both_sides_append_are_kept_mains_first(self):
+        base = '| a |\n| b |\n'
+        self.assertEqual(merging.resolve('third-party/NOTICES.md', base, base + '| main |\n', base + '| lane |\n'),
+                         base + '| main |\n| lane |\n')
+
+    def test_a_row_both_sides_edit_stays_a_conflict(self):
+        self.assertIsNone(merging.resolve('third-party/NOTICES.md', '| a |\n', '| main |\n', '| lane |\n'))
+
+    def test_manifest_sources_both_sides_add_are_kept_and_removals_hold(self):
+        base = self.manifest('a.hir', 'b.hir')
+        ours = self.manifest('a.hir', 'b.hir', 'main.hir')
+        theirs = self.manifest('b.hir', 'lane.hir')
+        self.assertEqual(merging.resolve('stdlib/std@1/hirsel.json', base, ours, theirs),
+                         self.manifest('b.hir', 'main.hir', 'lane.hir'))
+
+    def test_manifest_edits_of_one_value_or_entry_stay_conflicts(self):
+        base = self.manifest('a.hir')
+        self.assertIsNone(merging.resolve('stdlib/std@1/hirsel.json', base, self.manifest('main.hir'),
+                                          self.manifest('lane.hir')))
+        schema = merging.canonical({'schema': 2})
+        self.assertIsNone(merging.resolve('packages/x/hirsel.json', merging.canonical({'schema': 1}), schema,
+                                          merging.canonical({'schema': 3})))
+
+    def test_a_manifest_not_in_canonical_form_and_other_files_stay_conflicts(self):
+        base = self.manifest('a.hir')
+        self.assertIsNone(merging.resolve('stdlib/std@1/hirsel.json', base, base.replace('  ', '    '),
+                                          self.manifest('a.hir', 'lane.hir')))
+        self.assertIsNone(merging.resolve('README.md', 'a\n', 'b\n', 'c\n'))
+        self.assertIsNone(merging.resolve('third-party/NOTICES.md', 'a\n', None, 'c\n'))
+
+
 class Summary(unittest.TestCase):
     def test_a_failing_case_names_the_command_that_reruns_it_alone(self):
         details = ('running 2 tests\ntest native::a ... ok\ntest native::b ... FAILED\n\nfailures:\n\n'
@@ -1334,6 +1374,10 @@ if [[ $1 == test && -n $log ]]; then
       "$argument" "$( [[ -n ${FAIL_TESTS:-} || $argument == "${FAIL_TARGET:-}" ]] && echo 2 || echo 1 )" "$details" >> "$log.results"
   done
 fi
+# A tree holding FAIL_BUILD_IF fails its workspace build (a batch member that turns main red).
+if [[ $1 == build && -n ${FAIL_BUILD_IF:-} && -e $FAIL_BUILD_IF && $* != *show-json-output* ]]; then
+  echo "error: $FAIL_BUILD_IF breaks the build" >&2; exit 1
+fi
 case $1 in
   log) [[ -f $3.results ]] && cat "$3.results"; exit 0 ;;
   uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
@@ -1363,6 +1407,10 @@ CONFORMANCE_SLICE_PROGRAMS = 20
 AGREE_SLICE_PROGRAMS = 260
 SELECTED_SLICES = 16
 if __name__ == "__main__":
+    if "{name}" == "prepare.py" and os.environ.get("FAKE_BUCK2_BIN") and not os.path.exists(".buck2/bin"):
+        # The batch worktree's Buck2 and CLI, as bootstrap would install them.
+        os.makedirs(".buck2", exist_ok=True)
+        os.symlink(os.environ["FAKE_BUCK2_BIN"], ".buck2/bin")
     if os.environ.get("LOCK_TRACE"):
         import fcntl
         from pathlib import Path
@@ -1439,7 +1487,7 @@ class Scripts(unittest.TestCase):
                  '.gitignore': (REPO / '.gitignore').read_text()}
         for name in ('gate', 'land'):
             files[f'tools/{name}'] = (TOOLS / name).read_text()
-        for name in ('gating', 'impact', 'clippy', 'agree', 'conformance', 'event_logs'):
+        for name in ('gating', 'impact', 'merging', 'clippy', 'agree', 'conformance', 'event_logs'):
             files[f'tools/buck2/{name}.py'] = (TOOLS / 'buck2' / f'{name}.py').read_text()
         for name in ('sync', 'prepare', 'fmt'):
             files[f'tools/buck2/{name}.py'] = FAKE_SCRIPT.replace('{name}', f'{name}.py').replace('{upper}', name.upper())
@@ -1470,6 +1518,7 @@ class Scripts(unittest.TestCase):
         self.env = os.environ | {'COMMANDS': str(self.commands),
                                  'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
                                  'HIRSEL_LAND_LOCK_DIR': str(top / 'land-lock'),
+                                 'FAKE_BUCK2_BIN': str(self.root / '.buck2/bin'),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not queue for the host's slots, nor acquire one
         # held by the gate running this test.
@@ -1630,7 +1679,8 @@ Local.start = traced_local_check
     def test_queued_tools_hold_no_daemon_and_restart_after_acquisition(self):
         for tool in ('gate', 'land'):
             arguments = self.daemon_change(tool)
-            for interrupt in (False, True):
+            # Interrupted first: a land that completes leaves nothing to land.
+            for interrupt in (True, False):
                 with self.subTest(tool=tool, interrupt=interrupt):
                     directory = self.root.parent / ('slots' if tool == 'gate' else 'land-lock')
                     env = {gating.GATE_SLOTS: f'{directory}:1'} if tool == 'gate' else {}
@@ -1644,7 +1694,7 @@ Local.start = traced_local_check
                                 selector.register(process.stdout, selectors.EVENT_READ)
                                 # Read bytes directly: TextIO buffering would hide lines from select.
                                 output = b''
-                                while b'; held by:' not in output:
+                                while (b'; held by:' if tool == 'gate' else b'land: waiting;') not in output:
                                     self.assertTrue(selector.select(timeout=10), output.decode())
                                     chunk = os.read(process.stdout.fileno(), 4096)
                                     self.assertTrue(chunk, output.decode())
@@ -1771,7 +1821,7 @@ Local.start = traced_local_check
         self.assertIn('after waiting', result.stdout)
         self.assertIn('held land lock for', result.stdout)
 
-    def test_land_prepares_before_the_lock_and_fetches_checks_and_pushes_inside(self):
+    def test_land_fetches_prepares_checks_and_pushes_inside_the_lock(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
         self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         real_git = shutil.which('git')
@@ -1807,12 +1857,12 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(rows.count('fetch False'), 1)
         self.assertLess(rows.index('fetch False'), rows.index('archive False'))
         self.assertIn('status False', rows)
-        self.assertEqual([row for row in rows if row.startswith('prepare.py')],
-                         ['prepare.py False', 'prepare.py True'])
+        # The batch worktree is prepared once, under the lock, before any Buck2 command.
+        self.assertEqual([row for row in rows if row.startswith('prepare.py')], ['prepare.py True'])
         self.assertIn('fmt.py True', rows)
         self.assertIn('sync.py True', rows)
         self.assertEqual(logged[0], 'prepare.py')
-        self.assertEqual(logged.count('prepare.py'), 2)
+        self.assertEqual(logged.count('prepare.py'), 1)
 
     def test_land_runs_main_s_copy_of_itself_on_the_worktree(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
@@ -1935,6 +1985,103 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('conflicts in: README.md', result.stdout)
         self.assertEqual(git(self.root, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.root, 'status', '--porcelain'), '')
+
+    def lane(self, name, files):
+        """Another lane's worktree of this clone with one gated docs commit."""
+        tree = self.root.parent / name
+        git(self.root, 'worktree', 'add', '-q', '-b', name, str(tree), 'origin/main')
+        (tree / '.buck2').mkdir()
+        (tree / '.buck2/bin').symlink_to(self.root / '.buck2/bin')
+        commit(tree, files, f'{name} change')
+        gate = subprocess.run([str(tree / 'tools/gate'), '--why', 'docs only'], cwd=tree, env=self.env,
+                              capture_output=True, text=True)
+        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        return tree
+
+    def queued_lands(self, trees):
+        """Queue each tree's land behind a held lock, in order; release it; return
+        each land's (exit status, output)."""
+        directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
+        self.commands.unlink(missing_ok=True)
+        processes = []
+        with gating.fifo_slot(directory, 1, label='land', exclusive=True), contextlib.redirect_stdout(io.StringIO()):
+            for count, tree in enumerate(trees, 1):
+                processes.append(subprocess.Popen([str(tree / 'tools/land')], cwd=tree, env=self.env,
+                                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+                for _ in range(200):
+                    if len(list((directory / 'requests').glob('*.json'))) == count:
+                        break
+                    gating.time.sleep(0.05)
+                else:
+                    self.fail(f'land {count} never queued')
+        return [(process.returncode, out) for process in processes
+                for out, _ in [process.communicate(timeout=120)]]
+
+    def landings(self):
+        return [json.loads(line) for line in (self.root / '.git/hirsel-landings.jsonl').read_text().splitlines()]
+
+    def test_queued_changes_land_as_one_batch_with_one_build_and_one_push(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        other = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
+        before = git(self.origin, 'rev-parse', 'main')
+        (first, first_out), (second, second_out) = self.queued_lands([self.root, other])
+        self.assertEqual((first, second), (0, 0), first_out + second_out)
+        self.assertIn('landing a batch of 2', first_out)
+        self.assertIn('landed', second_out)
+        self.assertIn('(batch of 2: main, grammar)', second_out)
+        logged = self.commands.read_text().splitlines()
+        self.assertEqual(sum(row.startswith('build ') and '--materializations none' in row for row in logged), 1, logged)
+        self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(),
+                         ['grammar change', 'Readme'])
+        for tree in (self.root, other):
+            self.assertEqual(git(tree, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+        rows = self.landings()
+        self.assertEqual([(row['branch'], row['batch'], row['batch_position']) for row in rows],
+                         [('grammar', ['main', 'grammar'], 2), ('main', ['main', 'grammar'], 1)]
+                         if rows[0]['branch'] == 'grammar' else
+                         [('main', ['main', 'grammar'], 1), ('grammar', ['main', 'grammar'], 2)])
+
+    def test_a_change_that_turns_the_batch_red_leaves_it_and_the_rest_lands(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        red = self.lane('poison', {'docs/poison.md': 'breaks the build\n'})
+        last = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
+        before = git(self.origin, 'rev-parse', 'main')
+        self.env['FAIL_BUILD_IF'] = 'docs/poison.md'
+        results = self.queued_lands([self.root, red, last])
+        self.assertEqual([status for status, _ in results], [0, 1, 0], ''.join(out for _, out in results))
+        self.assertIn('poison turns the batch red; it leaves the batch', results[0][1])
+        self.assertIn('error: docs/poison.md breaks the build', results[1][1])
+        self.assertIn('this change turns the checks red on top of main', results[1][1])
+        self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(),
+                         ['grammar change', 'Readme'])
+        # Bisected: the whole batch, the first change, the first two; then the rest in a new round.
+        logged = self.commands.read_text().splitlines()
+        self.assertEqual(sum(row.startswith('build ') and '--materializations none' in row for row in logged), 4, logged)
+        self.assertNotEqual(git(red, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+
+    def test_append_only_and_generated_conflicts_resolve_and_others_stop_their_change(self):
+        self.sibling_pushes({'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n',
+                             'docs/api.md': 'index v1\n'})
+        git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
+        commit(self.root, {'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n| go | BSD |\n',
+                           'docs/api.md': 'index from the first lane\n', 'README.md': 'Hirsel, a language\n'},
+               'First')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        rows = self.lane('rows', {'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n'
+                                                            '| roc | UPL |\n',
+                                  'docs/api.md': 'index from the second lane\n'})
+        clash = self.lane('clash', {'README.md': 'Hirsel, the agent language\n'})
+        results = self.queued_lands([self.root, rows, clash])
+        self.assertEqual([status for status, _ in results], [0, 0, 1], ''.join(out for _, out in results))
+        self.assertIn('resolved on the rebase: docs/api.md, third-party/NOTICES.md', results[1][1])
+        self.assertIn('conflicts in: README.md', results[2][1])
+        self.assertEqual(git(self.origin, 'show', 'main:third-party/NOTICES.md'),
+                         '| Source | License |\n|---|---|\n| zig | MIT |\n| go | BSD |\n| roc | UPL |')
+        # The index is main's side, then regenerated from the landed tree.
+        self.assertEqual(git(self.origin, 'log', '-1', '--format=%s', 'main'), 'Regenerate the API index.')
+        self.assertEqual(git(clash, 'status', '--porcelain'), '')
 
     def test_a_crate_edit_checks_that_every_ignored_test_runs_in_a_gate(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\n#[ignore]\nfn tool() {}\n'}, 'Test')

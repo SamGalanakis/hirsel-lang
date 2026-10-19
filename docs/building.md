@@ -742,33 +742,49 @@ whose kill could stop it between its push and its record; run it in the
 background with a log. `tools/land --status` prints the lock's holder and how
 long it has held it, the waiters in order and this worktree's place.
 
-Land validates the lane's green receipt and prepares its toolchain
-before joining an exclusive FIFO queue. The lock defaults to
+Land validates the lane's green receipt, then joins an exclusive FIFO queue.
+The lock defaults to
 `/workspace/code/hirsel-briefs/locks/land`; `HIRSEL_LAND_LOCK_DIR` selects
 another shared directory (all lanes landing to the same main must agree).
 Its `count` file is seeded to 1 and re-read each poll; any other count refuses
 landing. A dead holder's kernel lock is released automatically, and waiter
-tickets carry process start times so PID reuse cannot strand the queue.
+tickets carry process start times so PID reuse cannot strand the queue. Each
+waiter leaves its change (worktree, commit, identity) in `requests/`.
 
-While holding that lock, land fetches, rebases onto `origin/main`, runs the
-workspace build, Clippy, formatting and the build-file check on the rebased
-tree, regenerates the API index, and pushes. An out-of-band push that moves
-main still retries under the same lock. It never runs tests: it
-refuses a change `tools/gate` has not passed, and stops on a rebase conflict
-(resolve it, run `tools/gate --extend` on the result, land again). It prints
-the gate's recorded floor, selection and `--why`, and appends each push with
-them to `hirsel-landings.jsonl` in the clone's common git directory, so a red
-main maps back to the push and to what it chose to skip. It reports lock wait
-and held times and records them as `land_wait_seconds` and `land_held_seconds`
-in each landing's log entry.
+The lane at the head of the queue lands a batch: its own change and the gated
+changes queued behind it (up to 8, in queue order), in a batch worktree beside
+the lock (`batch-<clone>`, reused and prepared once). It fetches, rebases each
+change onto the one before, builds the workspace, runs Clippy, formatting and
+the build-file check once on the batch's tip, regenerates the API index and
+pushes once. Each waiting land reads its result from `results/`, moves its
+branch to main as pushed, and prints and logs its landing. When the batch's
+tip is red, land bisects its prefixes for the first change that turns it red,
+pushes the green prefix before it, tells that change's lane (with the failing
+check's output), and lands the rest in the next round. An out-of-band push
+that moves main repeats the round under the same lock.
 
-After those checks, land runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
+Rebase conflicts in generated and append-only files are resolved, not
+stopped on (`tools/buck2/merging.py`): `docs/api.md` and the root `BUCK` keep
+main's side and are regenerated (the index when land pushes, `BUCK` with
+`sync.py` after each change that touches it), rows both sides append to
+`third-party/NOTICES.md` are both kept, and package manifests (`hirsel.json`)
+merge their sources and dependencies structurally. Any other conflict takes
+that change out of the batch: rebase it by hand, run `tools/gate --extend` on
+the result, and land again. A rebased change must keep the identity its gate
+passed; one that does not is sent back to be gated. Land never runs tests. It
+prints the gate's recorded floor, selection and `--why`, and appends each
+landed change with them and its batch to `hirsel-landings.jsonl` in the
+clone's common git directory, so a red main maps back to the push and to what
+it chose to skip. Each entry records `land_wait_seconds` (queued until landed
+or leading), `land_held_seconds` (leading), `batch_seconds`, `batch` and
+`batch_position`.
+
+Land's index step runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
 changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
 This generated-only update needs no new gate; a push retry regenerates it
 after the next rebase. The export-count and drift test stays in the gate.
 Declarations picked up by a clean rebase therefore reach main with a current
-index without another manual refresh or gate. Resolve an existing index
-conflict by regenerating.
+index without another manual refresh or gate.
 
 Changes to native code also run the filtered native matrix for the programs
 they add or touch on the pool. Focus runs book one CPU at lane priority:

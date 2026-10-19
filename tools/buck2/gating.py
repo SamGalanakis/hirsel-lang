@@ -84,11 +84,30 @@ COMMAND_LOCK = threading.RLock()
 STOPPING = False
 
 
-def kill_command(process):
+# A helper that cleans up after itself (land's batch runner stops its own
+# commands and daemons) gets this long after SIGTERM before SIGKILL.
+STOP_GRACE_SECONDS = 10
+
+
+def signal_command(process, sig):
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(process.pid, sig)
     except ProcessLookupError:
         pass
+
+
+def stop_commands(processes):
+    """SIGTERM each command's process group, then SIGKILL what outlives the grace."""
+    for process in processes:
+        signal_command(process, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_GRACE_SECONDS
+    for process in processes:
+        try:
+            process.wait(max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+        signal_command(process, signal.SIGKILL)
+        process.wait()
 
 
 def run(command, *, capture_output=False, check=False, input=None, timeout=None, **kwargs):
@@ -107,8 +126,7 @@ def run(command, *, capture_output=False, check=False, input=None, timeout=None,
             try:
                 stdout, stderr = process.communicate(input, timeout=timeout)
             except BaseException:
-                kill_command(process)
-                process.wait()
+                stop_commands([process])
                 raise
             result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
             if check:
@@ -162,10 +180,7 @@ def daemon_lifetime():
         try:
             with COMMAND_LOCK:
                 STOPPING = True
-                for process in COMMANDS:
-                    kill_command(process)
-                for process in COMMANDS:
-                    process.wait()
+                stop_commands(list(COMMANDS))
             stop_daemons()
         finally:
             for sig, handler in previous.items():
