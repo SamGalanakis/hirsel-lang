@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1353 exported definitions; 494 variants.
+1357 exported definitions; 494 variants.
 
 ## Types and roots
 
@@ -4788,6 +4788,41 @@ Apply the peer's SETTINGS_HEADER_TABLE_SIZE. Multiple changes before the
 next block emit the smallest value followed by the final value (7541 4.2).
 
 References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Encoder`](#def-std_401_2fhpack_2fEncoder)
+
+
+## html
+
+<a id="def-std_401_2fhtml_2fEscaped"></a>
+
+- `@format(escaped_format) pub type html.Escaped { text: String, }`
+
+Text to escape when formatted.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fhtml_2fesc"></a>
+
+- `pub fn html.esc(value: String) -> Escaped uses {}`
+
+Wrap text so an f-string hole escapes it as HTML.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/html/Escaped`](#def-std_401_2fhtml_2fEscaped)
+
+<a id="def-std_401_2fhtml_2fescape"></a>
+
+- `pub fn html.escape(value: String) -> unique String uses {}`
+
+Escape &, <, >, double quote and apostrophe as HTML character references.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fhtml_2fescape_5finto"></a>
+
+- `@preserves_unique(out) pub fn html.escape_into(mut out: List[u8], value: String) -> () uses {}`
+
+Append HTML text/quoted-attribute escaping, retaining existing output bytes.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
 
 
 ## http
