@@ -1,0 +1,11 @@
+// o2: a run without verification is followed by one with it
+// before: verify=off
+// after: verify=on
+=== main.hir
+fn callee(x: u64) -> u64 {
+  x + 1
+}
+
+pub fn main() -> u64 {
+  callee(2)
+}

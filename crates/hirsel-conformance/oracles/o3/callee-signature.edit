@@ -1,0 +1,28 @@
+// o3: a callee's signature changes: only definitions that read it recompute
+// unchanged: unrelated bystander
+// recomputed: callee caller
+=== main.hir
+fn callee(x: u64) -> u64 {
+  x + 1
+}
+
+fn caller(x: u64) -> u64 {
+  callee(x) * 2
+}
+
+fn bystander(x: u64) -> u64 {
+  x * 3
+}
+
+fn unrelated() -> u64 {
+  5
+}
+
+pub fn main() -> u64 {
+  caller(1) + bystander(2) + unrelated()
+}
+~~~ main.hir
+- fn callee(x: u64) -> u64 {
++ fn callee(y: u64) -> u64 {
+-   x + 1
++   y + 1

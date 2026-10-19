@@ -1,0 +1,18 @@
+// o2: a callee's body changes; its callers and a constant that executes it are cached
+=== main.hir
+fn callee(x: u64) -> u64 {
+  x + 1
+}
+
+fn caller(x: u64) -> u64 {
+  callee(x) * 2
+}
+
+const EXECUTED: u64 = comptime callee(4)
+
+pub fn main() -> u64 {
+  caller(EXECUTED)
+}
+~~~ main.hir
+- x + 1
++ x + 3

@@ -1,0 +1,24 @@
+// o2: a constant's dependency, two steps down, changes its body
+=== main.hir
+fn base() -> u64 {
+  3
+}
+
+fn twice() -> u64 {
+  base() * 2
+}
+
+const FIRST: u64 = comptime twice()
+
+const SECOND: u64 = comptime (FIRST + 4)
+
+fn unrelated() -> u64 {
+  11
+}
+
+pub fn main() -> u64 {
+  SECOND + unrelated()
+}
+~~~ main.hir
+-   3
++   30

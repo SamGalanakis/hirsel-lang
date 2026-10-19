@@ -1,0 +1,18 @@
+// o2: the body of a helper a generator calls changes, so the generated body does
+=== main.hir
+fn source() -> String {
+  "fn(x: u64) -> u64 uses {} { x + 1 }"
+}
+
+fn body_text() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body(source()))
+}
+
+fn bumped(n: u64) -> u64 uses {} = comptime body_text()
+
+pub fn main() -> u64 {
+  bumped(4)
+}
+~~~ main.hir
+- x + 1 }"
++ x + 5 }"

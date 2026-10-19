@@ -1,0 +1,33 @@
+// o2: a real item is inserted before the others, with cached and new callers of an earlier generic
+=== main.hir
+fn wrap[T](take x: T) -> T {
+  take x
+}
+
+fn cached() -> u64 {
+  wrap(1)
+}
+
+pub fn main() -> u64 {
+  cached()
+}
++++ main.hir
+type Inserted {
+  a: u64,
+}
+
+fn first_new() -> u64 {
+  wrap(Inserted(a: 2)).a
+}
+
+fn wrap[T](take x: T) -> T {
+  take x
+}
+
+fn cached() -> u64 {
+  wrap(1)
+}
+
+pub fn main() -> u64 {
+  cached() + first_new()
+}

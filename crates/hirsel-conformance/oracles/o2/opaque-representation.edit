@@ -1,0 +1,81 @@
+// o2: an opaque type's representation changes in its package; a user in another package is cached
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "lib@1/hirsel.json",
+      "package": {
+        "name": "lib",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "lib",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+pub fn main() -> u64 {
+  lib.api.read(lib.api.build())
+}
+=== lib@1/hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "lib",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}
+=== lib@1/api.hir
+pub opaque type Secret: data + copyable uses {} {
+  value: u64,
+}
+
+pub fn build() -> Secret {
+  Secret(value: 11)
+}
+
+pub fn read(s: Secret) -> u64 {
+  s.value
+}
++++ lib@1/api.hir
+pub opaque type Secret: data + copyable uses {} {
+  value: u64,
+  extra: u64,
+}
+
+pub fn build() -> Secret {
+  Secret(value: 11, extra: 0)
+}
+
+pub fn read(s: Secret) -> u64 {
+  s.value
+}

@@ -12,6 +12,7 @@ pub mod agree;
 mod compiler;
 pub mod corpus_format;
 pub mod native;
+pub mod oracle;
 pub use compiler::Observation;
 
 pub type Rules = BTreeSet<RuleId>;

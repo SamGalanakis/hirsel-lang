@@ -1,0 +1,58 @@
+// o2: the launch manifest moves a source file into another module
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "util.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+pub fn main() -> u64 {
+  helper()
+}
+=== util.hir
+fn helper() -> u64 {
+  5
+}
++++ hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "util.hir",
+      "module": [
+        "util"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

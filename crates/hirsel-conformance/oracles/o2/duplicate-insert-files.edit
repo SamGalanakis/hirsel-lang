@@ -1,0 +1,49 @@
+// o2: an identical duplicate declaration is inserted in another file
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "other.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+fn twin() -> u64 {
+  1
+}
+
+fn user() -> u64 {
+  twin()
+}
+
+pub fn main() -> u64 {
+  user()
+}
+=== other.hir
+fn unrelated() -> u64 {
+  2
+}
++++ other.hir
+fn unrelated() -> u64 {
+  2
+}
+
+fn twin() -> u64 {
+  1
+}

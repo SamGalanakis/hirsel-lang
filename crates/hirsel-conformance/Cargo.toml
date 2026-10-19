@@ -39,6 +39,11 @@ path = "src/bin/profile.rs"
 test = false
 
 [[bin]]
+name = "oracle"
+path = "src/bin/oracle.rs"
+test = false
+
+[[bin]]
 name = "native-select"
 path = "src/bin/native-select.rs"
 test = false

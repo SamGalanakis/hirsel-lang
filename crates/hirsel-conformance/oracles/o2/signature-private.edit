@@ -1,0 +1,18 @@
+// o2: a private function's parameter is renamed; its positional caller's text does not change
+=== main.hir
+fn helper(x: u64) -> u64 {
+  x + 1
+}
+
+fn caller() -> u64 {
+  helper(4)
+}
+
+pub fn main() -> u64 {
+  caller()
+}
+~~~ main.hir
+- fn helper(x: u64) -> u64 {
++ fn helper(y: u64) -> u64 {
+-   x + 1
++   y + 1

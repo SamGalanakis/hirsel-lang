@@ -1,0 +1,40 @@
+// o2: lines are inserted above the definition a diagnostic's secondary label cites, in another file
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "decl.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== decl.hir
+fn needs_u8(x: u8) -> u8 {
+  x
+}
+=== main.hir
+pub fn main() -> u8 {
+  needs_u8(true)
+}
++++ decl.hir
+// A comment above the cited definition moves it down.
+
+// So does this one.
+fn needs_u8(x: u8) -> u8 {
+  x
+}

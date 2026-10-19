@@ -1,0 +1,28 @@
+// o3: a callee's body changes: its callers recompute nothing (a constant that executes it may)
+// unchanged: caller second_caller unrelated
+// recomputed: callee
+=== main.hir
+fn callee(x: u64) -> u64 {
+  x + 1
+}
+
+fn caller(x: u64) -> u64 {
+  callee(x) * 2
+}
+
+fn second_caller() -> u64 {
+  callee(9)
+}
+
+fn unrelated() -> u64 {
+  5
+}
+
+const EXECUTED: u64 = comptime callee(4)
+
+pub fn main() -> u64 {
+  caller(EXECUTED) + second_caller() + unrelated()
+}
+~~~ main.hir
+- x + 1
++ x + 3

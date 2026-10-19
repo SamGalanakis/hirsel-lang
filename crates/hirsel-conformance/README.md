@@ -451,3 +451,49 @@ Cranelift too, including programs outside its fixed smoke list. Unfiltered smoke
 retains that smaller control set. An empty selection fails.
 
 `// expect: test` checks and runs all `@test` functions with ordinary and checked interpretation. Native matrices run every selected test independently under every configured engine, using its stable default seed. Smoke record/replay records and replays each test independently. A suite selecting no tests fails conformance.
+
+## Architecture oracles
+
+`oracle` runs the compiler-architecture oracles (`src/oracle/`) against this
+compiler. Each check passes, fails, or is TODO: it needs a switch the compiler
+does not have yet, named with its lane (`src/oracle/switches.rs`). A TODO fails
+the oracle unless `--allow-todo` is given. The lane that lands a switch makes
+`Switch::available` return true and calls it where `Switch::needs` says, and
+those checks then run.
+
+```bash
+oracle="$(.buck2/bin/buck2 build //:hirsel-conformance-bin-oracle --show-full-simple-output)"
+tools/capped "$oracle" o1 --path conformance/CT/ --limit 20 [--native]
+tools/capped "$oracle" o2 [--scenario body-edit]...
+tools/capped "$oracle" o3
+tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
+```
+
+- **O1** compiles each selected corpus file once per cell, each cell in its own
+  process (`oracle produce`), and compares diagnostics (as `hirsel check --json`
+  prints them), the TIR export and, with `--native`, the Ready receipts and the
+  unoptimized LLVM and Cranelift objects byte for byte with the baseline (one
+  job, unsalted). The cells are a repeat of the baseline, then `--jobs`
+  (default 1,2,8) × `--salts` (default 1,2,3; `none` is unsalted).
+- **O2** runs each edit scenario of `oracles/o2/`: a cold run of the edited
+  tree against warm runs that saw the tree before the edit: `mem` (one shared
+  store; today a shared `PackageCache`, which reuses dependency packages only),
+  `resident` (one `Session`) and `disk` (two processes over one `dir@1` store).
+  Scenarios that copy std (`// with: std`) check std from source: about 270 s
+  and 2.5 GB today, so the crate's test leaves them to an explicit `--scenario`.
+- **O3** runs each scenario of `oracles/o3/` in one resident engine and checks
+  that the definitions it names `unchanged` recompute no query and those it
+  names `recomputed` do. V's recomputes, reasons by read kind and
+  `SessionStats.touched` are TODO.
+- **O4** compares a corpus file served from a warm store with a cold run: a
+  shared in-process store today, then two processes over a `dir@1` store under
+  `VerifyStore::Recompute`, and the CLI's `--verify-cache`.
+
+A scenario file (format in `src/oracle/edits.rs`) holds the tree before the
+edit as `=== <path>` sections and the edit as `+++` (replace or add), `---`
+(delete) and `~~~` (`- old` / `+ new` line) sections. Its `//` directives give
+the entry, comptime limits and verification before and after, and O3's claims.
+
+`tools/arch_deletions.py` lists what survives of the design's deletion list
+(zero at the cutover); `--present` checks that every mechanical entry finds
+something in a tree from before it.

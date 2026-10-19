@@ -1,0 +1,43 @@
+// o2: a std function a program calls changes its body
+// entry: hirsel.json
+// with: std
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+pub fn main() -> u64 {
+  let a: Option[u64] = Some(4)
+  if option.is_none(a) {
+    0
+  } else {
+    1
+  }
+}
+~~~ std@1/option.hir
+-   !is_some(value)
++   is_some(value) == false

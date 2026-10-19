@@ -1,0 +1,29 @@
+// o2: an identical duplicate declaration is inserted in the same file
+=== main.hir
+fn twin() -> u64 {
+  1
+}
+
+fn user() -> u64 {
+  twin()
+}
+
+pub fn main() -> u64 {
+  user()
+}
++++ main.hir
+fn twin() -> u64 {
+  1
+}
+
+fn user() -> u64 {
+  twin()
+}
+
+pub fn main() -> u64 {
+  user()
+}
+
+fn twin() -> u64 {
+  1
+}

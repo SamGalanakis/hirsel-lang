@@ -1,0 +1,63 @@
+// o2: a dependency's public function gains a parameter; its caller in another package does not follow
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "lib@1/hirsel.json",
+      "package": {
+        "name": "lib",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "lib",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+pub fn main() -> u64 {
+  lib.api.scale(3)
+}
+=== lib@1/hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "lib",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}
+=== lib@1/api.hir
+pub fn scale(x: u64) -> u64 {
+  x * 2
+}
+~~~ lib@1/api.hir
+- pub fn scale(x: u64) -> u64 {
++ pub fn scale(x: u64, by: u64) -> u64 {

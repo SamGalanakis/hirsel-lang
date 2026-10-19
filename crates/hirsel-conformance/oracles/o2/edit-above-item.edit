@@ -1,0 +1,26 @@
+// o2: a line is inserted above an item whose body has a diagnostic, shifting every later position
+=== main.hir
+fn fine() -> u64 {
+  1
+}
+
+fn broken() -> u64 {
+  unknown_name
+}
+
+pub fn main() -> u64 {
+  fine()
+}
++++ main.hir
+// inserted above
+fn fine() -> u64 {
+  1
+}
+
+fn broken() -> u64 {
+  unknown_name
+}
+
+pub fn main() -> u64 {
+  fine()
+}

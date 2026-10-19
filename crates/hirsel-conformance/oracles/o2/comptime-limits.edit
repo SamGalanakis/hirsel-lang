@@ -1,0 +1,17 @@
+// o2: the comptime step limit drops below what a constant needs, then nothing else changes
+// before: limits=steps=1000000,depth=64
+// after: limits=steps=50,depth=64
+=== main.hir
+fn spin(n: u64) -> u64 {
+  if n == 0 {
+    0
+  } else {
+    spin(n - 1) + 1
+  }
+}
+
+const DEEP: u64 = comptime spin(40)
+
+pub fn main() -> u64 {
+  DEEP
+}

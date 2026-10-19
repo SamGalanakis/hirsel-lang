@@ -105,7 +105,7 @@ CORPUS_DATA = ["conformance/**", "packages/**", "stdlib/**", *corpus_packages()]
 RUNTIME_DATA = {
     "hirsel-cranelift": ["crates/hirsel-rt/include/**"],
     "hirsel-cli": [*CORPUS_DATA],
-    "hirsel-conformance": [*CORPUS_DATA, "bench/native/programs/**", "docs/spec/**", "native-tests/**"],
+    "hirsel-conformance": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-conformance/oracles/**", "docs/spec/**", "native-tests/**"],
     "hirsel-driver": [*CORPUS_DATA, "docs/spec/**", "native-tests/**"],
     "hirsel-heapcheck": ["native-tests/**", "stdlib/**"],
     "hirsel-interp": [*CORPUS_DATA],

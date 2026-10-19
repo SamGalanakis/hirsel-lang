@@ -1,0 +1,29 @@
+// o2: a called definition is removed
+=== main.hir
+fn used(x: u64) -> u64 {
+  x
+}
+
+fn caller() -> u64 {
+  used(2)
+}
+
+fn other() -> u64 {
+  7
+}
+
+pub fn main() -> u64 {
+  caller() + other()
+}
++++ main.hir
+fn caller() -> u64 {
+  used(2)
+}
+
+fn other() -> u64 {
+  7
+}
+
+pub fn main() -> u64 {
+  caller() + other()
+}

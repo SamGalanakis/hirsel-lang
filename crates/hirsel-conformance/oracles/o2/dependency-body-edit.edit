@@ -1,0 +1,69 @@
+// o2: a dependency's function body changes; its callers in the program and a constant that executes it are cached
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "lib@1/hirsel.json",
+      "package": {
+        "name": "lib",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "lib",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== main.hir
+const EXECUTED: u64 = comptime lib.api.scale(4)
+
+fn caller() -> u64 {
+  lib.api.scale(3)
+}
+
+pub fn main() -> u64 {
+  caller() + EXECUTED
+}
+=== lib@1/hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "lib",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}
+=== lib@1/api.hir
+pub fn scale(x: u64) -> u64 {
+  x * 2
+}
+~~~ lib@1/api.hir
+-   x * 2
++   x * 5

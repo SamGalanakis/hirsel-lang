@@ -1,0 +1,29 @@
+// o2: a definition is added that an existing caller's failed lookup now finds
+=== main.hir
+fn caller() -> u64 {
+  missing(2)
+}
+
+fn other() -> u64 {
+  7
+}
+
+pub fn main() -> u64 {
+  caller() + other()
+}
++++ main.hir
+fn caller() -> u64 {
+  missing(2)
+}
+
+fn other() -> u64 {
+  7
+}
+
+fn missing(x: u64) -> u64 {
+  x
+}
+
+pub fn main() -> u64 {
+  caller() + other()
+}

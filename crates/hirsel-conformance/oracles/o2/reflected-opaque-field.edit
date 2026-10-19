@@ -1,0 +1,53 @@
+// o2: the private field type of an opaque type changes; a helper in another file reflects it and a constant executes the helper
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "secret.hir",
+      "module": []
+    },
+    {
+      "path": "reflect.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== secret.hir
+pub opaque type Secret: data uses {} {
+  level: u64,
+}
+=== reflect.hir
+fn field_types[T](s: TypeShape[T]) -> List[FieldShape] {
+  match type_shape.info(s).body {
+    Record(found) => found,
+    Choice(_) => [],
+  }
+}
+=== main.hir
+const FIELDS: List[FieldShape] = comptime field_types(shape(Secret))
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  for f in FIELDS {
+    let _ = out.print(out, f.ty)
+  }
+  Ok(())
+}
+~~~ secret.hir
+-   level: u64,
++   level: u32,

@@ -1,0 +1,62 @@
+// o2: a lookup inside a reflecting helper changes: a name it failed to find is added in another file
+// entry: hirsel.json
+=== hirsel.json
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "secret.hir",
+      "module": []
+    },
+    {
+      "path": "reflect.hir",
+      "module": []
+    },
+    {
+      "path": "extra.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
+=== secret.hir
+pub opaque type Secret: data uses {} {
+  level: u64,
+}
+=== reflect.hir
+fn field_count[T](s: TypeShape[T]) -> u64 {
+  match type_shape.info(s).body {
+    Record(found) => list.len(found) + bonus(),
+    Choice(_) => 0,
+  }
+}
+=== extra.hir
+fn unrelated() -> u64 {
+  0
+}
+=== main.hir
+const COUNT: u64 = comptime field_count(shape(Secret))
+
+pub fn main() -> u64 {
+  COUNT
+}
++++ extra.hir
+fn unrelated() -> u64 {
+  0
+}
+
+fn bonus() -> u64 {
+  10
+}
