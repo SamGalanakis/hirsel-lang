@@ -795,6 +795,37 @@ fn bare_run_executes_a_root_free_main_in_every_engine() {
     std::fs::remove_file(source).unwrap();
 }
 
+/// A Test entry uses test admission even when selected by the ordinary run command.
+#[test]
+fn bare_run_executes_a_test_main_in_every_engine() {
+    let source = file("pub fn main(t: Test) -> Result[(), ()] { test.check(t, true)\n Ok(()) }");
+    let record = run_record(&source, serde_json::json!({}));
+    let exported: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(exported["launch"], "test");
+    let engines: [&[&str]; 3] = [&[], &["--native"], &["--native", "--backend", "cranelift"]];
+    for flags in engines {
+        for config in [
+            vec![],
+            vec!["--grants".as_ref(), "{}".as_ref()],
+            vec!["--run".as_ref(), record.as_os_str()],
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .args(flags)
+                .arg(&source)
+                .args(config)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "{flags:?}: {output:?}");
+            assert!(output.stdout.is_empty(), "{flags:?}: {output:?}");
+            assert!(output.stderr.is_empty(), "{flags:?}: {output:?}");
+        }
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}
+
 /// Generate the real semantic binding through the public CLI, then select grants.
 fn run_record(source: &std::path::Path, grants: serde_json::Value) -> std::path::PathBuf {
     let record = source.with_extension("run.json");

@@ -262,17 +262,17 @@ pub(crate) fn launch_signature(
 pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
+    let signature = launch_signature(&mut program)?;
+    let launch = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
         .map_err(|e| program.error(e))?;
-    Ok(
-        hirsel_run_config::RunConfig::for_program(&revision, hirsel_run_config::LaunchKind::Main)
-            .validated()
-            .map_err(|e| ToolError::Runtime(e.to_string()))?
-            .canonical()
-            .to_vec(),
-    )
+    Ok(hirsel_run_config::RunConfig::for_program(&revision, launch)
+        .validated()
+        .map_err(|e| ToolError::Runtime(e.to_string()))?
+        .canonical()
+        .to_vec())
 }
 /// Explicit production launch input. Templates bind to the code selected by this launch.
 #[derive(Clone, Copy)]
@@ -287,6 +287,7 @@ impl LaunchConfig<'_> {
     fn read(
         self,
         revision: &hirsel_run_config::ProgramRevision,
+        launch: hirsel_run_config::LaunchKind,
     ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
         match self {
             Self::Record(input) => hirsel_run_config::RunConfig::record_input(input),
@@ -295,7 +296,7 @@ impl LaunchConfig<'_> {
                     input,
                     revision.digest(),
                     revision.entry().into(),
-                    hirsel_run_config::LaunchKind::Main,
+                    launch,
                 )?;
                 match arguments {
                     None => Ok(run),
@@ -374,7 +375,6 @@ pub(crate) fn bind_launch(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
 ) -> Result<BoundHostRun, ToolError> {
-    use hirsel_run_config::LaunchKind;
     if matches!(
         launch,
         HostLaunch::Replay(_)
@@ -386,6 +386,7 @@ pub(crate) fn bind_launch(
         program.refuse_unreplayable()?;
     }
     let signature = launch_signature(program)?;
+    let kind = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -397,12 +398,12 @@ pub(crate) fn bind_launch(
     match launch {
         HostLaunch::Live { config, .. } => {
             let requested = config
-                .read(&revision)
+                .read(&revision, kind)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
             let bound = hirsel_engine::bind_run(
                 &signature,
                 &revision,
-                LaunchKind::Main,
+                kind,
                 Some(&requested),
                 code,
             )
@@ -414,14 +415,10 @@ pub(crate) fn bind_launch(
                 ToolError::Runtime(format!("replay refused: {e}"))
             };
             let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
-            let roots =
-                hirsel_engine::entry_roots(&signature, LaunchKind::Main).map_err(refused)?;
+            let roots = hirsel_engine::entry_roots(&signature, kind).map_err(refused)?;
             let run = run
                 .bind(&hirsel_run_config::ProgramFacts::of(
-                    &revision,
-                    LaunchKind::Main,
-                    roots,
-                    code,
+                    &revision, kind, roots, code,
                 ))
                 .map_err(refused)?
                 .into_run();

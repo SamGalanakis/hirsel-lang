@@ -29,6 +29,8 @@ Commands (arguments use the shared lexopt parser):
   record in either engine: an entry taking a root capability is refused at launch
   (`hirsel: launch: {"kind":"not_granted","root":"Io"}`, exit 1), followed by a line
   naming `--grants` and `--simulation`.
+  A sole `Test` parameter selects test admission, including exported records and
+  explicit grants; the empty record supplies only the deterministic Test context.
 - `hirsel fmt [--check] <file>` writes canonical source to the file, or compares
   without writing with `--check`. A difference exits 1, agreement exits 0.
 - `hirsel expand <source|manifest.json>` checks the program and prints each

@@ -141,6 +141,10 @@ derived from the engine's shared `entry_roots` validation. The executable embeds
 semantic program revision and entry identity; fresh launch grants and argv are
 validated and admitted by the runtime, independently of compiler profile.
 
+A sole Test entry selects test admission through the engine's shared
+`entry_launch_kind`, for exported records, templates, live runs and replay in both
+engines. Other valid entries select main admission.
+
 `LaunchConfig` selects either a bound record or a grants template from an explicit
 OS argument: a leading `{` selects inline JSON, otherwise it selects a path. Both source
 engines resolve it against the checked semantic revision before host admission;

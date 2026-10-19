@@ -441,7 +441,7 @@ pub(crate) fn root_handle(root: hirsel_run_config::Root) -> u64 {
 }
 pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchKind> {
     use hirsel_run_config::LaunchKind as Kind;
-    if hirsel_engine::entry_roots(signature, Kind::Test).is_ok() {
+    if hirsel_engine::entry_launch_kind(signature).ok()? == Kind::Test {
         return Some(LaunchKind::Test);
     }
     let roots = hirsel_engine::entry_roots(signature, Kind::Main).ok()?;
