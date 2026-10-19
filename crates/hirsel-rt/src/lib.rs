@@ -35,6 +35,7 @@ pub mod net_host;
 pub mod net_tls;
 pub mod operations;
 pub mod process;
+pub mod program;
 pub mod readiness;
 mod standalone;
 pub mod test_net_abi;
@@ -59,6 +60,7 @@ mod memcheck;
 pub mod region;
 pub mod release;
 pub mod shared;
+pub mod stop;
 mod sync;
 pub mod tasks;
 
@@ -85,7 +87,7 @@ pub use release::{
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 19;
+pub const ABI_VERSION: u32 = 20;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

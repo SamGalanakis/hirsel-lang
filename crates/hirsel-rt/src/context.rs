@@ -131,6 +131,10 @@ pub struct RunCtx {
     pub(crate) frozen: Vec<*mut Header>,
     /// The run's tasks, from its first scope (CONC-2).
     pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
+    /// Where a stop of the run returns (`crate::stop`).
+    pub(crate) driver: crate::stop::Driver,
+    /// The running program's failure table (`crate::isolate`).
+    pub(crate) failure_table: Option<std::sync::Arc<crate::isolate::FailureTable>>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -255,6 +259,16 @@ impl RunCtx {
         audit
     }
 
+    /// A stopped run (`crate::stop`): forget its pending release work, failure chain, shield
+    /// and active region, which belonged to frames that never resume, so the exit returns all
+    /// of its storage without running anything of the program.
+    pub(crate) fn abandon(&mut self) {
+        self.work = ptr::null_mut();
+        self.shield = 0;
+        self.failure.clear();
+        self.regions.active = ptr::null_mut();
+    }
+
     /// Separately built correctness runtimes audit before forced storage reclamation.
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     #[inline(never)]
@@ -338,6 +352,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         region_owners: None,
         frozen: Vec::new(),
         tasks: None,
+        driver: crate::stop::Driver::default(),
+        failure_table: None,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

@@ -748,6 +748,125 @@ pub(crate) fn link_standalone(
     link_objects_impl(program, entry, objects, toolchain, dir, None, true)
 }
 
+/// A compiled program as a library a host process loads ([`link_host`]): its path and the
+/// runtime entries it imports, which the host provides.
+#[derive(Clone, Debug)]
+pub struct Library {
+    pub path: PathBuf,
+    pub imports: std::collections::BTreeSet<String>,
+}
+
+/// Link `objects` as a program library in `dir` (`program.so`) whose [`LIBRARY_RUN`] runs
+/// `entry` once, without a runtime of its own, bound to `run` (or the fixture run) as
+/// [`link_objects`] binds an executable; `dir/run.json` holds the bound run's record.
+pub fn link_library(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    run: Option<&hirsel_run_config::ValidatedRun>,
+) -> Result<Library, NativeError> {
+    let main = launcher_object(program, entry, objects, dir, run, false, LIBRARY_RUN)?;
+    let path = link_launcher(
+        program,
+        entry,
+        objects,
+        toolchain,
+        dir,
+        Output::Library,
+        &main,
+    )?;
+    let mut imports: std::collections::BTreeSet<String> = objects
+        .iter()
+        .flat_map(|o| &o.imports)
+        .filter(|import| import.kind == hirsel_lir::stage::ObjectSymbolKind::Runtime)
+        .map(|import| import.name.clone())
+        .collect();
+    imports.extend(["hirsel_rt_v2_main", "hirsel_rt_v2_exit_report"].map(String::from));
+    Ok(Library { path, imports })
+}
+
+/// Link a host executable in `dir` (`host`) holding one runtime, which loads each library named
+/// by its arguments in turn into its own process, runs it once with the run record beside it
+/// (`--hirsel-run <dir>/run.json`) and prints `host: run <i> exited <status>` after it. Every
+/// run ends at its host; none ends the process.
+pub fn link_host(
+    libraries: &[Library],
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> Result<PathBuf, NativeError> {
+    let archive = toolchain.archive(&target.triple).ok_or_else(|| {
+        NativeError::new(
+            StageName::Link,
+            format!(
+                "no {} runtime archive for {}",
+                toolchain.runtime_build.variant(),
+                target.triple
+            ),
+        )
+    })?;
+    let source = format!(
+        "#include <dlfcn.h>\n#include <stdio.h>\n#include <string.h>\n\
+         int main(int argc, char **argv) {{\n\
+         for (int i = 1; i < argc; i++) {{\n\
+         void *library = dlopen(argv[i], RTLD_NOW | RTLD_LOCAL);\n\
+         int (*run)(int, const char *const *) = library\n\
+           ? (int (*)(int, const char *const *))dlsym(library, \"{LIBRARY_RUN}\") : 0;\n\
+         if (!run) {{ fprintf(stderr, \"host: %s\\n\", dlerror()); return 3; }}\n\
+         char record[4096];\n\
+         const char *slash = strrchr(argv[i], '/');\n\
+         int length = slash ? (int)(slash - argv[i]) : 0;\n\
+         snprintf(record, sizeof record, \"%.*s/run.json\", length, argv[i]);\n\
+         const char *const arguments[] = {{argv[i], \"--hirsel-run\", record}};\n\
+         fflush(stdout);\n\
+         int status = run(3, arguments);\n\
+         printf(\"host: run %d exited %d\\n\", i, status);\n\
+         fflush(stdout);\n\
+         }}\n\
+         return 0;\n}}\n"
+    );
+    let source_path = dir.join("host.c");
+    std::fs::write(&source_path, source)
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    let host = dir.join("host");
+    let mut command = Command::new(if aarch64(target) {
+        &toolchain.aarch64_cc
+    } else {
+        &toolchain.clang
+    });
+    command.args(toolchain.loader_flags(target));
+    command.arg(&source_path).arg(archive);
+    // The libraries resolve their runtime imports against the host's one runtime.
+    command.arg("-Wl,--export-dynamic");
+    for import in libraries.iter().flat_map(|library| &library.imports) {
+        command.arg(format!("-Wl,--undefined={import}"));
+    }
+    command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
+    command.arg("-o").arg(&host);
+    checked(StageName::Link, &mut command)?;
+    Ok(host)
+}
+
+/// Run a [`link_host`] executable over `libraries`, bounded like every launch.
+pub fn run_host(
+    host: &Path,
+    libraries: &[Library],
+    toolchain: &Toolchain,
+) -> Result<std::process::Output, NativeError> {
+    let mut command = Command::new(host);
+    command.env_clear();
+    // Absolute, so each library's run record beside it is too.
+    for library in libraries {
+        command.arg(
+            std::fs::canonicalize(&library.path)
+                .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?,
+        );
+    }
+    bounded(&mut command, toolchain.launch_timeout)
+}
+
 fn link_objects_impl(
     program: &ReadyProgram,
     entry: &DefPath,
@@ -758,7 +877,12 @@ fn link_objects_impl(
     standalone: bool,
 ) -> Result<PathBuf, NativeError> {
     let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
-    link_launcher(program, entry, objects, toolchain, dir, standalone, &main)
+    let output = if standalone {
+        Output::Standalone
+    } else {
+        Output::Launched
+    };
+    link_launcher(program, entry, objects, toolchain, dir, output, &main)
 }
 
 fn launcher_object(
@@ -818,15 +942,7 @@ done:
  ret i8 %s
 }}"#
     );
-    // hirsel-rt's UNREPLAYABLE (PROG-4), FUELED and ESCAPES (CAP-6) bits beside the roots.
-    let mask = kind.mask()
-        | if program.foreign_unreplayable { 32 } else { 0 }
-        | if program.fuel { 64 } else { 0 }
-        | if program.escaping.contains(entry) {
-            128
-        } else {
-            0
-        };
+    let roots_mask = kind.mask();
     let registry_declaration = format!(
         "@\"{}\" = external constant [{} x ptr]",
         registry.symbol(),
@@ -880,59 +996,29 @@ done:
         std::fs::write(dir.join("run.json"), run.canonical())
             .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
     }
-    let config = run.config();
-    let identity = config
-        .run_identity()
-        .iter()
-        .map(|b| format!("i8 {b}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let launch_config = format!(
-        "@hirsel.launch.config = private constant {{i64, i64, i64, [32 x i8]}} {{i64 {}, i64 {}, i64 {}, [32 x i8] [{identity}]}}",
-        config.hash_seed(),
-        config.random_seed(),
-        config.test_seed()
-    );
-    let (launcher, call, binding) = if standalone {
-        let digest = revision
-            .digest()
-            .iter()
-            .map(|b| format!("i8 {b}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let name = revision.entry().as_bytes();
-        let name_bytes = name
-            .iter()
-            .map(|b| format!("i8 {b}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            "declare i32 @hirsel_rt_v2_launch_standalone(ptr, i64, ptr, i32, ptr, ptr, i64, i8)"
-                .to_string(),
-            format!(
-                "call i32 @hirsel_rt_v2_launch_standalone(ptr @hirsel.entry, i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.program, ptr @hirsel.entry.name, i64 {}, i8 {mask})",
-                registry.symbol(),
-                registry.external_count(),
-                name.len()
-            ),
-            format!(
-                "@hirsel.program = private constant [32 x i8] [{digest}]\n@hirsel.entry.name = private constant [{} x i8] [{name_bytes}]",
-                name.len()
-            ),
-        )
-    } else {
-        (
-            "declare i32 @hirsel_rt_v2_launch_roots(ptr, i64, ptr, i32, ptr, i8)".to_string(),
-            format!(
-                "call i32 @hirsel_rt_v2_launch_roots(ptr @hirsel.entry, i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.launch.config, i8 {mask})",
-                registry.symbol(),
-                registry.external_count()
-            ),
-            launch_config,
-        )
-    };
-    // Every source program registers its failure table before the launch.
+    // A launched executable binds the one run it was built for; a standalone one takes fresh
+    // grants at each launch.
+    let config = (!standalone).then(|| run.config());
+    let mut config_bytes = Vec::with_capacity(56);
+    for seed in config.map_or([0; 3], |c| [c.hash_seed(), c.random_seed(), c.test_seed()]) {
+        config_bytes.extend(seed.to_le_bytes());
+    }
+    config_bytes.extend(config.map_or([0; 32], |c| c.run_identity()));
+    let mut flags = 0;
+    if program.foreign_unreplayable {
+        flags |= hirsel_rt::program::UNREPLAYABLE;
+    }
+    if program.escaping.contains(entry) {
+        flags |= hirsel_rt::program::ESCAPES;
+    }
+    if program.fuel {
+        flags |= hirsel_rt::program::FUELED;
+    }
+    if standalone {
+        flags |= hirsel_rt::program::STANDALONE;
+    }
     let table = failure_table(program)?;
+    let name = revision.entry().as_bytes();
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
     let cranelift = !objects.is_empty()
@@ -942,46 +1028,22 @@ done:
                 .starts_with(hirsel_cranelift::TOOLCHAIN)
         });
     let main = if cranelift {
-        use hirsel_cranelift::LaunchArgument as A;
-        let registry_arguments = [
-            A::Symbol(registry.symbol()),
-            A::Int {
-                bits: 32,
-                value: u64::from(registry.external_count()),
-            },
+        use hirsel_cranelift::DescriptorField as F;
+        let descriptor = [
+            F::U32(hirsel_rt::ABI_VERSION),
+            F::U32(flags),
+            F::U32(u32::from(roots_mask)),
+            F::U32(registry.external_count()),
+            F::Entry,
+            F::U64(result_size),
+            F::Symbol(registry.symbol()),
+            F::Bytes(table.clone()),
+            F::U64(table.len() as u64),
+            F::Bytes(name.to_vec()),
+            F::U64(name.len() as u64),
+            F::Inline(revision.digest().to_vec()),
+            F::Inline(config_bytes),
         ];
-        let mut arguments = vec![
-            A::Entry,
-            A::Int {
-                bits: 64,
-                value: result_size,
-            },
-        ];
-        arguments.extend(registry_arguments);
-        let launcher = if standalone {
-            let name = revision.entry().as_bytes();
-            arguments.extend([
-                A::Bytes(revision.digest().to_vec()),
-                A::Bytes(name.to_vec()),
-                A::Int {
-                    bits: 64,
-                    value: name.len() as u64,
-                },
-            ]);
-            "hirsel_rt_v2_launch_standalone"
-        } else {
-            let mut bytes = Vec::with_capacity(56);
-            for seed in [config.hash_seed(), config.random_seed(), config.test_seed()] {
-                bytes.extend(seed.to_le_bytes());
-            }
-            bytes.extend(config.run_identity());
-            arguments.push(A::Bytes(bytes));
-            "hirsel_rt_v2_launch_roots"
-        };
-        arguments.push(A::Int {
-            bits: 8,
-            value: u64::from(mask),
-        });
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
         let report = hirsel_cranelift::ExitReport {
             result_index,
@@ -989,23 +1051,6 @@ done:
             root: report_root,
             nodes: report.nodes.clone(),
         };
-
-        let calls: Vec<_> = table
-            .into_iter()
-            .map(|bytes| {
-                let length = bytes.len() as u64;
-                (
-                    "hirsel_rt_v2_failure_table",
-                    vec![
-                        A::Bytes(bytes),
-                        A::Int {
-                            bits: 64,
-                            value: length,
-                        },
-                    ],
-                )
-            })
-            .collect();
         hirsel_cranelift::named_launch_object(
             main_symbol,
             target,
@@ -1013,15 +1058,36 @@ done:
             caller_site,
             &words,
             &report,
-            &calls,
-            launcher,
-            &arguments,
+            &descriptor,
         )
         .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
     } else {
-        let (table, register) = failure_table_ir(table.as_deref());
+        let bytes = |data: &[u8]| -> String {
+            data.iter()
+                .map(|b| format!("i8 {b}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let text: String = table.iter().map(|b| format!("\\{b:02X}")).collect();
+        let program_ir = format!(
+            "@hirsel.failure.table = private constant [{table_len} x i8] c\"{text}\"\n\
+             @hirsel.entry.name = private constant [{name_len} x i8] [{name_bytes}]\n\
+             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8] }} \
+             {{ i32 {abi}, i32 {flags}, i32 {roots_mask}, i32 {layout_count}, ptr @hirsel.entry, i64 {result_size}, \
+             ptr @\"{registry_symbol}\", ptr @hirsel.failure.table, i64 {table_len}, ptr @hirsel.entry.name, i64 {name_len}, \
+             [32 x i8] [{digest}], [56 x i8] [{config}] }}\n\
+             declare i32 @hirsel_rt_v2_main(ptr, i32, ptr)\n",
+            table_len = table.len(),
+            name_len = name.len(),
+            name_bytes = bytes(name),
+            abi = hirsel_rt::ABI_VERSION,
+            layout_count = registry.external_count(),
+            registry_symbol = registry.symbol(),
+            digest = bytes(&revision.digest()),
+            config = bytes(&config_bytes),
+        );
         let shim = format!(
-            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\n{table}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n{register} %r = {call}\n ret i32 %r\n}}\n",
+            "target triple = \"{}\"\n{registry_declaration}\n{declaration}\n{program_ir}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}(i32 %argc, ptr %argv) {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = call i32 @hirsel_rt_v2_main(ptr @hirsel.program, i32 %argc, ptr %argv)\n ret i32 %r\n}}\n",
             target.triple
         );
         hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
@@ -1031,15 +1097,32 @@ done:
     Ok(main)
 }
 
+/// What a link produces.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Output {
+    /// An executable run for the run the driver bound (`program`).
+    Launched,
+    /// An executable that is its own host (`hirsel build`).
+    Standalone,
+    /// A shared library a host loads (`program.so`), exporting only [`LIBRARY_RUN`].
+    Library,
+}
+
+/// The one symbol a program library exports: `int32_t hirsel_program_run(int32_t argc, const
+/// char *const *argv)`, which runs the program once, as `argv` selects, in its host's process
+/// and returns its outcome's exit status (`hirsel_rt_v2_main`).
+pub const LIBRARY_RUN: &str = "hirsel_program_run";
+
 fn link_launcher(
     program: &ReadyProgram,
     entry: &DefPath,
     objects: &[hirsel_lir::stage::ObjectArtifact],
     toolchain: &Toolchain,
     dir: &Path,
-    standalone: bool,
+    output: Output,
     main: &[u8],
 ) -> Result<PathBuf, NativeError> {
+    let standalone = output == Output::Standalone;
     let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
     let library_symbols: std::collections::BTreeSet<String> = program
@@ -1104,20 +1187,35 @@ fn link_launcher(
             .map(|()| path)
             .map_err(|e| NativeError::new(StageName::Link, format!("{name}: {e}")))
     };
-    let executable = dir.join("program");
+    let executable = dir.join(if output == Output::Library {
+        "program.so"
+    } else {
+        "program"
+    });
     let mut command = Command::new(if aarch64(target) {
         &toolchain.aarch64_cc
     } else {
         &toolchain.clang
     });
-    if !standalone {
+    if output == Output::Library {
+        // Runtime entries stay undefined: the host process supplies its one runtime.
+        let script = write(
+            "exports.map",
+            format!("{{ global: {LIBRARY_RUN}; local: *; }};\n").as_bytes(),
+        )?;
+        command
+            .arg("-shared")
+            .arg(format!("-Wl,--version-script={}", script.display()));
+    } else if !standalone {
         command.args(toolchain.loader_flags(target));
     }
     command.arg(write("main.o", main)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
     }
-    command.arg(archive);
+    if output != Output::Library {
+        command.arg(archive);
+    }
     // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
     for link in &program.foreign_links {
         match link {
@@ -1125,20 +1223,25 @@ fn link_launcher(
             hirsel_engine::LinkInput::File(path) => command.arg(path),
         };
     }
-    if standalone {
+    match output {
+        // The host process links the system libraries.
+        Output::Library => {}
         // Bundle compiler support and math objects as well as the Rust runtime.
         // On glibc Linux the remaining system interfaces are supplied by libc.
-        command.args([
-            "-static-libgcc",
-            "-Wl,--as-needed",
-            "-Wl,-Bstatic",
-            "-lm",
-            "-Wl,-Bdynamic",
-            "-ldl",
-            "-lpthread",
-        ]);
-    } else {
-        command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
+        Output::Standalone => {
+            command.args([
+                "-static-libgcc",
+                "-Wl,--as-needed",
+                "-Wl,-Bstatic",
+                "-lm",
+                "-Wl,-Bdynamic",
+                "-ldl",
+                "-lpthread",
+            ]);
+        }
+        Output::Launched => {
+            command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
+        }
     }
     command.arg("-o").arg(&executable);
     checked(StageName::Link, &mut command)?;
@@ -1165,8 +1268,9 @@ pub(crate) fn link_tests(
         std::fs::write(&path, bytes)
             .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
         adapters.push(path);
-        declarations.push_str(&format!("extern int {name}(void);\n"));
-        cases.push_str(&format!("case {index}: return {name}();\n"));
+        declarations.push_str(&format!("extern int {name}(int, char **);\n"));
+        // The test entry sees no process argument but its own name.
+        cases.push_str(&format!("case {index}: return {name}(1, argv + 1);\n"));
     }
     let source = format!(
         "#include <stdlib.h>\n{declarations}int main(int argc, char **argv) {{ if (argc != 2) return 3; char *end; unsigned long n = strtoul(argv[1], &end, 10); if (*end || !*argv[1]) return 3; switch(n) {{ {cases} default: return 3; }} }}\n"
@@ -1202,36 +1306,17 @@ pub(crate) fn link_tests(
         objects,
         toolchain,
         dir,
-        false,
+        Output::Launched,
         &bytes,
     )
 }
 
-/// The encoded failure table every source program registers before its entry runs.
-fn failure_table(program: &ReadyProgram) -> Result<Option<Vec<u8>>, NativeError> {
+/// The encoded failure table every source program's descriptor carries.
+fn failure_table(program: &ReadyProgram) -> Result<Vec<u8>, NativeError> {
     let table = program.failure_table.as_ref().ok_or_else(|| {
         NativeError::new(StageName::Link, "a program links without its failure table")
     })?;
-    Ok(Some(table.encode()))
-}
-
-/// The LLVM module text holding an encoded failure table and the call in `main` registering
-/// it; both empty without one.
-fn failure_table_ir(table: Option<&[u8]>) -> (String, String) {
-    let Some(bytes) = table else {
-        return (String::new(), String::new());
-    };
-    let text: String = bytes.iter().map(|b| format!("\\{b:02X}")).collect();
-    (
-        format!(
-            "@hirsel.failure.table = private constant [{} x i8] c\"{text}\"\ndeclare void @hirsel_rt_v2_failure_table(ptr, i64)\n",
-            bytes.len()
-        ),
-        format!(
-            " call void @hirsel_rt_v2_failure_table(ptr @hirsel.failure.table, i64 {})\n",
-            bytes.len()
-        ),
-    )
+    Ok(table.encode())
 }
 
 /// What one launched process did, before interpretation.
@@ -1654,7 +1739,7 @@ pub fn observe(
         if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent budget observation record".into()));
         }
-        if launched.exit != Some(hirsel_rt::launch::EXIT_BUDGET) {
+        if launched.exit != Some(hirsel_run_config::exit::BUDGET_EXCEEDED) {
             return Err(bad("a budget-stopped process did not exit as one".into()));
         }
         return Ok(Observation {
@@ -1669,7 +1754,7 @@ pub fn observe(
         if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent Blocked observation record".into()));
         }
-        if launched.exit != Some(hirsel_rt::launch::EXIT_BLOCKED) {
+        if launched.exit != Some(hirsel_run_config::exit::BLOCKED) {
             return Err(bad("a Blocked process did not exit as Blocked".into()));
         }
         return Ok(Observation {
@@ -1690,7 +1775,7 @@ pub fn observe(
         (Some(1), None, false) => None,
         _ => return Err(bad("an inconsistent observation record".into())),
     };
-    let expected = exit_code.unwrap_or(hirsel_rt::launch::EXIT_FAILURE);
+    let expected = exit_code.unwrap_or(hirsel_run_config::exit::FAILED);
     if launched.exit != Some(expected) {
         return Err(bad(format!("the process did not exit {expected}")));
     }

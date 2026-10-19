@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 
 use crate::RunCtx;
 use crate::io::{AdapterError, Binding, Completion, Request};
+use crate::stop::{Stop, Stopped};
 
 /// The parked requests of one run.
 #[derive(Default)]
@@ -42,10 +43,9 @@ struct Parked {
 ///
 /// # Safety
 /// `ctx` is live and its Binding bound.
-unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Completion> {
+unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Stopped<Option<Completion>> {
     let binding = unsafe { Binding::get(ctx) };
-    crate::io_checks::cancel(binding.adapter.as_mut(), request, cause)
-        .unwrap_or_else(|error| crate::io::adapter_refusal(binding, error))
+    crate::io_checks::cancel(binding.adapter.as_mut(), request, cause).map_err(Stop::refusal)
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
@@ -67,22 +67,22 @@ pub(crate) fn may_park(request: &Request) -> bool {
 
 /// Perform `request` for the running task: canceled, completed, or parked until a poll
 /// completes it. True with a parked request's outcome: its task already yielded or parked
-/// there, so the operation's own yield is spent.
+/// there, so the operation's own yield is spent. A stop is the run's while it waited.
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
 pub(crate) unsafe fn issue(
     ctx: *mut RunCtx,
     request: Request,
-) -> (Result<Completion, AdapterError>, bool) {
+) -> Stopped<(Result<Completion, AdapterError>, bool)> {
     if let Some(cause) = unsafe { crate::tasks::canceled(ctx) }
-        && let Some(completion) = unsafe { canceled(ctx, &request, cause) }
+        && let Some(completion) = unsafe { canceled(ctx, &request, cause) }?
     {
-        return (Ok(completion), false);
+        return Ok((Ok(completion), false));
     }
     let binding = unsafe { Binding::get(ctx) };
     if !may_park(&request) {
-        return (binding.adapter.call(request), false);
+        return Ok((binding.adapter.call(request), false));
     }
     let token = binding.waits.next;
     binding.waits.next += 1;
@@ -93,7 +93,7 @@ pub(crate) unsafe fn issue(
         Err(AdapterError::Blocked) => {}
         result => {
             binding.adapter.finish(token);
-            return (result, false);
+            return Ok((result, false));
         }
     }
     binding.waits.parked.insert(
@@ -104,7 +104,7 @@ pub(crate) unsafe fn issue(
         },
     );
     // SAFETY: the context is live and nothing is borrowed across the park.
-    unsafe { crate::tasks::park_host(ctx, token, yielded) };
+    unsafe { crate::tasks::park_host(ctx, token, yielded) }?;
     let binding = unsafe { Binding::get(ctx) };
     let completion = binding
         .waits
@@ -112,7 +112,7 @@ pub(crate) unsafe fn issue(
         .remove(&token)
         .and_then(|parked| parked.completion)
         .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
-    (completion, true)
+    Ok((completion, true))
 }
 
 /// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
@@ -121,7 +121,12 @@ pub(crate) unsafe fn issue(
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
-pub(crate) unsafe fn arm(ctx: *mut RunCtx, scope: u32, clock: u64, at: u64) -> Option<u64> {
+pub(crate) unsafe fn arm(
+    ctx: *mut RunCtx,
+    scope: u32,
+    clock: u64,
+    at: u64,
+) -> Stopped<Option<u64>> {
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;
     binding.waits.next += 1;
@@ -133,14 +138,14 @@ pub(crate) unsafe fn arm(ctx: *mut RunCtx, scope: u32, clock: u64, at: u64) -> O
     match binding.adapter.call(request.clone()) {
         Err(AdapterError::Blocked) => {
             binding.waits.armed.insert(token, (scope, request));
-            Some(token)
+            Ok(Some(token))
         }
         Ok(Completion::Wait(_)) => {
             binding.adapter.finish(token);
-            None
+            Ok(None)
         }
         Ok(_) => crate::fault("a scope deadline's timer completed as another request"),
-        Err(error) => crate::io::adapter_refusal(binding, error),
+        Err(error) => Err(Stop::refusal(error)),
     }
 }
 
@@ -149,14 +154,14 @@ pub(crate) unsafe fn arm(ctx: *mut RunCtx, scope: u32, clock: u64, at: u64) -> O
 ///
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is armed.
-pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Vec<u32> {
+pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Stopped<Vec<u32>> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.waits.armed.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut armed: Vec<(u64, u64)> = binding
         .waits
@@ -173,7 +178,7 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Vec<u32> {
         match binding.adapter.ready(token) {
             Ok(true) => {}
             Ok(false) => continue,
-            Err(error) => crate::io::adapter_refusal(binding, error),
+            Err(error) => return Err(Stop::refusal(error)),
         }
         let (scope, request) = binding.waits.armed[&token].clone();
         binding.adapter.enter(token);
@@ -181,13 +186,13 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Vec<u32> {
             Err(AdapterError::Blocked) => continue,
             Ok(Completion::Wait(_)) => {}
             Ok(_) => crate::fault("a scope deadline's timer completed as another request"),
-            Err(error) => crate::io::adapter_refusal(binding, error),
+            Err(error) => return Err(Stop::refusal(error)),
         }
         binding.adapter.finish(token);
         binding.waits.armed.remove(&token);
         due.push(scope);
     }
-    due
+    Ok(due)
 }
 
 /// A scope exited before its deadline: remove its timer, recording nothing.
@@ -217,7 +222,7 @@ pub(crate) unsafe fn deadline(ctx: *mut RunCtx, token: u64) -> Option<u64> {
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
-pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> bool {
+pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
@@ -228,7 +233,7 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> b
         Some(cause) => {
             binding.adapter.finish(token);
             // SAFETY: no borrow of the Binding is held across this call.
-            match unsafe { canceled(ctx, &request, cause) } {
+            match unsafe { canceled(ctx, &request, cause) }? {
                 Some(completion) => Ok(completion),
                 None => crate::fault("a parked request that is no cancellation point"),
             }
@@ -236,12 +241,12 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> b
         None => {
             match binding.adapter.ready(token) {
                 Ok(true) => {}
-                Ok(false) => return false,
-                Err(error) => crate::io::adapter_refusal(binding, error),
+                Ok(false) => return Ok(false),
+                Err(error) => return Err(Stop::refusal(error)),
             }
             binding.adapter.enter(token);
             match binding.adapter.call(request) {
-                Err(AdapterError::Blocked) => return false,
+                Err(AdapterError::Blocked) => return Ok(false),
                 result => {
                     binding.adapter.finish(token);
                     result
@@ -253,7 +258,7 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> b
     if let Some(parked) = binding.waits.parked.get_mut(&token) {
         parked.completion = Some(completion);
     }
-    true
+    Ok(true)
 }
 
 /// With no runnable task: sleep until some parked request's descriptor is ready or the
@@ -262,13 +267,10 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> b
 ///
 /// # Safety
 /// `ctx` is live and its Binding bound.
-pub(crate) unsafe fn wait(ctx: *mut RunCtx) -> bool {
+pub(crate) unsafe fn wait(ctx: *mut RunCtx) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
     if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
-        return false;
+        return Ok(false);
     }
-    match binding.adapter.wait() {
-        Ok(woke) => woke,
-        Err(error) => crate::io::adapter_refusal(binding, error),
-    }
+    binding.adapter.wait().map_err(Stop::refusal)
 }

@@ -228,7 +228,7 @@ pub struct FailureTable {
 }
 
 impl FailureTable {
-    /// The table as `hirsel_rt_v2_failure_table` reads it: little-endian u64 words, the site
+    /// The table as `hirsel_rt::isolate::FailureTable::decode` reads it: little-endian u64 words, the site
     /// count, then each site's code, line, column and definition length followed by the
     /// definition's bytes and a length-prefixed file path, then the rule count and
     /// each rule's length and bytes.

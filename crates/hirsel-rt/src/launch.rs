@@ -39,6 +39,7 @@ use crate::io::{
 use crate::io_real::RealIo;
 use crate::io_sim::SimIo;
 use crate::net::NetRule;
+use crate::program::{Code, Program, ProgramDescriptor};
 use crate::{ABI_VERSION, Layout, RunCtx, STATUS_FAILURE, STATUS_OK};
 use hirsel_run_config::hex;
 use std::cell::RefCell;
@@ -47,48 +48,7 @@ use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
 pub const OBSERVATION_VERSION: u32 = 2;
-/// Process exit code of a language failure (FAIL-1).
-pub const EXIT_FAILURE: i32 = 2;
-/// Process exit code of a refused launch: bad grants, ABI or entry contract.
-pub(crate) const EXIT_LAUNCH: i32 = 3;
-/// Process exit code of a Blocked run (CONC-8): every task waits on another and nothing
-/// outside the run can wake one. No user code, cancellation or destruction runs after it.
-pub const EXIT_BLOCKED: i32 = 4;
-/// Process exit code of a run that spent a budget (`budgets.limits@1`): as for a Blocked run,
-/// no user code, cancellation or destruction runs after the stop.
-pub const EXIT_BUDGET: i32 = hirsel_run_config::exit::BUDGET_EXCEEDED;
 
-/// What a launch does after its entry: the outputs' and tapes' last writes and the observation
-/// record. Taken by the entry's return, or by [`blocked`] when the run never returns.
-type Finish = Box<dyn FnOnce(String, i32) -> i32>;
-
-thread_local! {
-    static FINISH: RefCell<Option<Finish>> = const { RefCell::new(None) };
-}
-
-/// End a Blocked run (CONC-8) from the scheduler: the launch records `blocked` and exits with
-/// [`EXIT_BLOCKED`], with no exit audit, since the blocked tasks still hold their storage. A
-/// harness that did not launch through here ends environmentally.
-pub(crate) fn blocked() -> ! {
-    let Some(finish) = FINISH.with(|f| f.borrow_mut().take()) else {
-        crate::environmental("every task of the run is blocked (CONC-8)");
-    };
-    let record = format!("hirsel-observation {OBSERVATION_VERSION}\nblocked\naudit unavailable\n");
-    std::process::exit(finish(record, EXIT_BLOCKED))
-}
-/// End a run that spent a budget (`budgets.limits@1`) where it stands, as [`blocked`] ends a
-/// Blocked run: the launch records `budget_exceeded <kind>` and exits with [`EXIT_BUDGET`],
-/// with no exit audit. A harness that did not launch through here ends environmentally.
-pub(crate) fn budget_exceeded(kind: hirsel_run_config::BudgetKind) -> ! {
-    let Some(finish) = FINISH.with(|f| f.borrow_mut().take()) else {
-        crate::environmental("the run spent its budget");
-    };
-    let record = format!(
-        "hirsel-observation {OBSERVATION_VERSION}\nbudget_exceeded {}\naudit unavailable\n",
-        kind.name()
-    );
-    std::process::exit(finish(record, EXIT_BUDGET))
-}
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
 /// The logical identity of the launch argument-table capability.
@@ -100,40 +60,6 @@ pub type TestEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *const 
 pub type ZeroEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8) -> u8;
 /// Uniform compiler-generated adapter: roots are [Io, Args, Env, Unsafe, Test].
 pub type RootsEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *mut u64) -> u8;
-enum Launch {
-    Zero(ZeroEntry),
-    Main(Entry),
-    Test(TestEntry),
-    Roots(RootsEntry, u8),
-}
-impl Launch {
-    fn is_test(&self) -> bool {
-        matches!(
-            self,
-            Self::Test(_) | Self::Roots(_, crate::standalone::ROOT_TEST)
-        )
-    }
-    fn is_zero(&self) -> bool {
-        matches!(self, Self::Zero(_) | Self::Roots(_, 0))
-    }
-    /// The code a selected run binds to. The embedded launch configuration already binds the
-    /// run's identity to this executable, so its program and entry are the run's own.
-    fn facts(
-        &self,
-        run: &hirsel_run_config::ValidatedRun,
-        escapes: bool,
-        fueled: bool,
-    ) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
-        use crate::standalone::{ROOT_ARGS, ROOT_IO, ROOT_TEST};
-        let mask = match self {
-            Self::Zero(_) => 0,
-            Self::Main(_) => ROOT_IO | ROOT_ARGS,
-            Self::Test(_) => ROOT_TEST,
-            Self::Roots(_, mask) => *mask,
-        };
-        crate::standalone::facts(run.program(), &run.record().entry, mask, escapes, fueled)
-    }
-}
 /// The largest inline result an entry may return.
 pub const RESULT_MAX: u64 = 64;
 
@@ -1129,7 +1055,7 @@ const UNREPLAYABLE_REFUSAL: &str = "this program calls C outside a wrapper with 
 
 fn refuse(message: &str) -> i32 {
     eprintln!("hirsel-rt: launch refused: {message}");
-    EXIT_LAUNCH
+    hirsel_run_config::exit::REFUSED
 }
 
 /// Launch a zero-parameter entry without acquiring any host root or argv snapshot.
@@ -1144,15 +1070,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_zero(
     config: *const Config,
 ) -> i32 {
     unsafe {
-        launch(
-            Launch::Zero(entry),
+        harness(
+            Code::Zero(entry),
             result_size,
             layouts,
             layout_count,
             config,
-            false,
-            false,
-            false,
         )
     }
 }
@@ -1172,21 +1095,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch(
     config: *const Config,
 ) -> i32 {
     unsafe {
-        launch(
-            Launch::Main(entry),
+        harness(
+            Code::Main(entry),
             result_size,
             layouts,
             layout_count,
             config,
-            false,
-            false,
-            false,
         )
     }
 }
-/// Launch an ordinary selected Test function with explicit independent seeds.
+
+/// Launch a Test entry, whose only root is the Test capability.
 /// # Safety
-/// The entry has the TestEntry ABI and config points to a live Config.
+/// `entry` has the TestEntry ABI; config and layouts are live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
     entry: TestEntry,
@@ -1196,127 +1117,148 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
     config: *const Config,
 ) -> i32 {
     unsafe {
-        launch(
-            Launch::Test(entry),
+        harness(
+            Code::Test(entry),
             result_size,
             layouts,
             layout_count,
             config,
-            false,
-            false,
-            false,
         )
     }
 }
-/// Launch the compiler's root-order adapter with a fixed conformance/run binding.
+
+/// A harness launch of an entry with no program descriptor.
+///
 /// # Safety
-/// `entry` has RootsEntry ABI; config and layouts are live for the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
-    entry: RootsEntry,
+/// As for the harness launchers.
+unsafe fn harness(
+    code: Code,
     result_size: u64,
     layouts: *const *const Layout,
     layout_count: u32,
     config: *const Config,
-    roots: u8,
 ) -> i32 {
-    let (roots, unreplayable, escapes, fueled) = crate::standalone::split(roots);
-    unsafe {
-        launch(
-            Launch::Roots(entry, roots),
-            result_size,
-            layouts,
-            layout_count,
-            config,
-            unreplayable,
-            escapes,
-            fueled,
-        )
-    }
-}
-
-/// Launch an executable bound to semantic code, accepting fresh grants at each launch.
-/// # Safety
-/// `entry` has RootsEntry ABI. program points to 32 bytes, name to name_len UTF-8
-/// bytes, and layouts to layout_count live descriptor pointers for this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
-    entry: RootsEntry,
-    result_size: u64,
-    layouts: *const *const Layout,
-    layout_count: u32,
-    program: *const [u8; 32],
-    name: *const u8,
-    name_len: u64,
-    roots: u8,
-) -> i32 {
-    let (roots, unreplayable, escapes, fueled) = crate::standalone::split(roots);
-    let Some(program) = (unsafe { program.as_ref() }) else {
-        return refuse("missing program binding");
-    };
-    let Ok(name_len) = usize::try_from(name_len) else {
-        return refuse("invalid entry name length");
-    };
-    if name.is_null() {
-        return refuse("missing entry name");
-    }
-    let Ok(name) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(name, name_len) })
-    else {
-        return refuse("invalid entry name");
-    };
-    let selected = match crate::standalone::select(
-        std::env::args_os().skip(1).collect(),
-        *program,
-        name,
-        roots,
-        escapes,
-        fueled,
-    ) {
-        Ok(selected) => selected,
-        Err(error) => return refuse(&error.to_string()),
-    };
-    if unreplayable && selected.taped() {
-        return refuse(UNREPLAYABLE_REFUSAL);
-    }
-    let config = selected.run().config();
-    let config = Config {
-        hash_seed: config.hash_seed(),
-        random_seed: config.random_seed(),
-        test_seed: config.test_seed(),
-        run_identity: config.run_identity(),
-    };
-    unsafe {
-        execute(
-            Launch::Roots(entry, roots),
-            result_size,
-            layouts,
-            layout_count,
-            &config,
-            Some(selected),
-        )
-    }
-}
-
-unsafe fn launch(
-    entry: Launch,
-    result_size: u64,
-    layouts: *const *const Layout,
-    layout_count: u32,
-    launch_config: *const Config,
-    unreplayable: bool,
-    escapes: bool,
-    fueled: bool,
-) -> i32 {
-    let Some(launch_config) = (unsafe { launch_config.as_ref() }) else {
+    // SAFETY: caller contract.
+    let Some(config) = (unsafe { config.as_ref() }) else {
         return refuse("missing launch configuration");
     };
-    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    // Harness arguments stay ordinary Args unless a production flag selects a run.
-    let requested = if arguments.first().is_some_and(|a| a == "--hirsel-replay") {
-        match arguments.as_slice() {
+    let program = Program::harness(code, result_size, layouts, layout_count, *config);
+    // SAFETY: caller contract.
+    unsafe { launch(&program, std::env::args_os().skip(1).collect()) }
+}
+
+/// The entry of a compiled executable or program library: load its program and launch one run
+/// of it, as `argv` (its host's arguments, the first naming the program) selects, and return the
+/// exit status of its outcome. The run reads no other process arguments.
+///
+/// # Safety
+/// `descriptor` is a program descriptor whose data lives for the process, and `argv` holds
+/// `argc` NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_main(
+    descriptor: *const ProgramDescriptor,
+    argc: i32,
+    argv: *const *const std::ffi::c_char,
+) -> i32 {
+    use std::os::unix::ffi::OsStrExt;
+    let count = usize::try_from(argc).unwrap_or(0);
+    let arguments = (1..count)
+        .map(|i| {
+            // SAFETY: caller contract.
+            let argument = unsafe { std::ffi::CStr::from_ptr(*argv.add(i)) };
+            std::ffi::OsStr::from_bytes(argument.to_bytes()).to_os_string()
+        })
+        .collect();
+    // SAFETY: caller contract.
+    match unsafe { Program::load(descriptor) } {
+        // SAFETY: the program's data lives for the process.
+        Ok(program) => unsafe { launch(&program, arguments) },
+        Err(error) => refuse(&error),
+    }
+}
+
+/// The code a run selected for `program` binds to: the program's digest and entry, or, for a
+/// harness program without them, the run's own (its embedded launch configuration already binds
+/// the run's identity).
+fn facts(
+    program: &Program,
+    run: &hirsel_run_config::ValidatedRun,
+) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
+    let (digest, entry) = if program.entry_name.is_empty() {
+        (run.program(), run.record().entry.as_str())
+    } else {
+        (program.digest, program.entry_name.as_str())
+    };
+    crate::standalone::facts(
+        digest,
+        entry,
+        program.code.roots(),
+        program.escapes(),
+        program.fueled(),
+    )
+}
+
+/// Select the run `arguments` ask for, bind it to `program` and execute it.
+///
+/// # Safety
+/// The program's entry and descriptors are live for the call.
+unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> i32 {
+    let selected = if program.standalone() {
+        match crate::standalone::select(
+            arguments.clone(),
+            program.digest,
+            &program.entry_name,
+            program.code.roots(),
+            program.escapes(),
+            program.fueled(),
+        ) {
+            Ok(selected) => Some(selected),
+            Err(error) => return refuse(&error.to_string()),
+        }
+    } else {
+        match select_bound(program, &arguments) {
+            Ok(selected) => selected,
+            Err(error) => return refuse(&error),
+        }
+    };
+    if program.unreplayable() && selected.as_ref().is_some_and(|s| s.taped()) {
+        return refuse(UNREPLAYABLE_REFUSAL);
+    }
+    let config = match &selected {
+        Some(selected) if program.standalone() => {
+            let config = selected.run().config();
+            Config {
+                hash_seed: config.hash_seed(),
+                random_seed: config.random_seed(),
+                test_seed: config.test_seed(),
+                run_identity: config.run_identity(),
+            }
+        }
+        _ => program.config,
+    };
+    if let Some(run) = selected.as_ref().map(|selected| selected.run())
+        && (run.identity() != config.run_identity
+            || run.config().hash_seed() != config.hash_seed
+            || run.config().random_seed() != config.random_seed
+            || run.config().test_seed() != config.test_seed)
+    {
+        return refuse("run record binding mismatch");
+    }
+    // SAFETY: caller contract.
+    unsafe { execute(program, &config, selected, arguments) }
+}
+
+/// A launched (not standalone) executable's selection: a replay, a run record the embedded
+/// configuration binds, or nothing, when harness arguments stay ordinary Args.
+fn select_bound(
+    program: &Program,
+    arguments: &[std::ffi::OsString],
+) -> Result<Option<crate::standalone::Selected>, String> {
+    if arguments.first().is_some_and(|a| a == "--hirsel-replay") {
+        return match arguments {
             [_, path] => crate::host_launch::replay(std::path::Path::new(path))
                 .and_then(|(io, run)| {
-                    let facts = entry.facts(&run, escapes, fueled)?;
+                    let facts = facts(program, &run)?;
                     Ok(Some(crate::standalone::Selected::Replay {
                         run: run.bind(&facts)?,
                         io,
@@ -1324,71 +1266,41 @@ unsafe fn launch(
                 })
                 .map_err(|e| e.to_string()),
             _ => Err("expected only --hirsel-replay <tape>".into()),
-        }
-    } else if arguments.first().is_some_and(|a| {
+        };
+    }
+    if !arguments.first().is_some_and(|a| {
         a == "--hirsel-run" || a == "--hirsel-record" || a == "--hirsel-revocations"
     }) {
-        crate::standalone::live_options(&arguments)
-            .and_then(|options| match options.input {
-                [flag, path] if flag == "--hirsel-run" => {
-                    hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
-                        .and_then(|run| {
-                            let facts = entry.facts(&run, escapes, fueled)?;
-                            run.bind(&facts)
-                        })
-                        .map(|run| {
-                            Some(crate::standalone::Selected::Live {
-                                run,
-                                tape: options.tape,
-                                revocations: options.revocations,
-                            })
-                        })
-                }
-                _ => Err(hirsel_run_config::RunRefusal::Invalid {
-                    field: "argv".into(),
-                    detail: "expected --hirsel-run after launch options".into(),
-                }),
-            })
-            .map_err(|e| e.to_string())
-    } else {
-        Ok(None)
-    };
-    let requested = match requested {
-        Ok(requested) => requested,
-        Err(error) => return refuse(&error),
-    };
-    if unreplayable && requested.as_ref().is_some_and(|s| s.taped()) {
-        return refuse(UNREPLAYABLE_REFUSAL);
+        return Ok(None);
     }
-    if let Some(run) = requested.as_ref().map(|selected| selected.run()) {
-        if run.identity() != launch_config.run_identity
-            || run.config().hash_seed() != launch_config.hash_seed
-            || run.config().random_seed() != launch_config.random_seed
-            || run.config().test_seed() != launch_config.test_seed
-        {
-            return refuse("run record binding mismatch");
-        }
-    }
-    unsafe {
-        execute(
-            entry,
-            result_size,
-            layouts,
-            layout_count,
-            launch_config,
-            requested,
-        )
-    }
+    crate::standalone::live_options(arguments)
+        .and_then(|options| match options.input {
+            [flag, path] if flag == "--hirsel-run" => {
+                let run = hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))?;
+                let facts = facts(program, &run)?;
+                Ok(Some(crate::standalone::Selected::Live {
+                    run: run.bind(&facts)?,
+                    tape: options.tape,
+                    revocations: options.revocations,
+                }))
+            }
+            _ => Err(hirsel_run_config::RunRefusal::Invalid {
+                field: "argv".into(),
+                detail: "expected --hirsel-run after launch options".into(),
+            }),
+        })
+        .map_err(|e| e.to_string())
 }
 
 unsafe fn execute(
-    entry: Launch,
-    result_size: u64,
-    layouts: *const *const Layout,
-    layout_count: u32,
+    program: &Program,
     launch_config: &Config,
     selected: Option<crate::standalone::Selected>,
+    process_arguments: Vec<std::ffi::OsString>,
 ) -> i32 {
+    let entry = program.code;
+    let (result_size, layouts, layout_count) =
+        (program.result_size, program.layouts, program.layout_count);
     let requested = selected.as_ref().map(|selected| selected.run().clone());
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
@@ -1442,8 +1354,8 @@ unsafe fn execute(
     } else if entry.is_zero() {
         vec![]
     } else {
-        match std::env::args_os()
-            .skip(1)
+        match process_arguments
+            .into_iter()
             .enumerate()
             .map(|(i, a)| a.into_string().map_err(|_| i))
             .collect::<Result<Vec<_>, _>>()
@@ -1744,84 +1656,15 @@ unsafe fn execute(
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };
+    if let Some(table) = &program.failure_table {
+        crate::isolate::attach(unsafe { &mut *ctx }, table.clone());
+    }
     // Zeroed and 16-aligned: the entry writes a result of any supported alignment.
     let mut result = [0u128; RESULT_MAX as usize / 16];
     let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);
     let mut roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
     // The replay output already echoed to the real streams.
     let echoed = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
-    let finish: Finish = Box::new({
-        let (replay, echoed) = (replay.clone(), echoed.clone());
-        move |record: String, exit: i32| {
-            if let Some(io) = &replay {
-                // The simulated adapter holds what the program printed; every recorded event
-                // must have been consumed.
-                let io = io.borrow();
-                let (out, err) = echoed.get();
-                if let Err(error) =
-                    std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[out..])
-                {
-                    return refuse(&format!("standard output: {error}"));
-                }
-                if let Err(error) =
-                    std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[err..])
-                {
-                    return refuse(&format!("standard error: {error}"));
-                }
-                if let Err(error) = io.finish() {
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                    return refuse(&format!("the replayed tape: {error:?}"));
-                }
-            }
-            // Rust's stdout is line buffered and a C `main` returning does not flush it: output
-            // after the last newline would be lost.
-            if let Err(error) = std::io::Write::flush(&mut std::io::stdout()) {
-                return refuse(&format!("standard output: {error}"));
-            }
-            if let Some(io) = &real {
-                if let Err(error) = io.borrow_mut().finish_recording() {
-                    return refuse(&format!("the Io tape: {error}"));
-                }
-            }
-            if let Some(writer) = &mut zero_recording
-                && let Err(error) = writer.finish()
-            {
-                return refuse(&format!("the Io tape: {error}"));
-            }
-            if let Some(file) = &mut observation
-                && let Err(error) = std::io::Write::write_all(file, record.as_bytes())
-                    .and_then(|()| std::io::Write::flush(file))
-            {
-                return refuse(&format!("the observation file: {error}"));
-            }
-            exit
-        }
-    });
-    FINISH.with(|f| *f.borrow_mut() = Some(finish));
-    let mut status = unsafe {
-        match entry {
-            Launch::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
-            Launch::Main(entry) => entry(
-                ctx,
-                std::ptr::null_mut(),
-                result.as_mut_ptr().cast(),
-                &mut rt,
-                &mut args,
-            ),
-            Launch::Test(entry) => entry(
-                ctx,
-                std::ptr::null_mut(),
-                result.as_mut_ptr().cast(),
-                &TEST_HANDLE,
-            ),
-            Launch::Roots(entry, _) => entry(
-                ctx,
-                std::ptr::null_mut(),
-                result.as_mut_ptr().cast(),
-                roots.as_mut_ptr(),
-            ),
-        }
-    };
     let echo_replay = || -> Result<(), String> {
         if let Some(io) = &replay {
             let io = io.borrow();
@@ -1835,49 +1678,83 @@ unsafe fn execute(
         Ok(())
     };
     let mut report_refusal = None;
-    if status == STATUS_OK
-        && let Some(returned) = unsafe { &mut *ctx }.entry_result.take()
-    {
-        let report = (|| -> Result<(), String> {
-            echo_replay()?;
-            std::io::Write::flush(&mut std::io::stdout())
-                .map_err(|e| format!("standard output: {e}"))?;
-            let text = unsafe { crate::exit_report::render(&returned) };
-            std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes())
-                .and_then(|()| std::io::Write::flush(&mut std::io::stderr()))
-                .map_err(|e| format!("standard error: {e}"))
-        })();
-        report_refusal = report.err();
-        // Cleanup is mandatory even if the host's reporting sink failed.
-        let mut cleanup = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
-        status = unsafe {
-            crate::finalize::hirsel_rt_v2_finalize(
-                ctx,
-                returned.layout,
-                returned.value,
-                std::ptr::null(),
-                cleanup.as_mut_ptr(),
-                0,
-                0,
-            )
-        };
-    }
+    // The run: its entry, then the PROG-3 report and the cleanup of a returned value, all on
+    // the run's root fiber, so a stop anywhere in them returns here.
+    let ran = unsafe {
+        crate::stop::run_root(ctx, &mut || {
+            let mut status = match entry {
+                Code::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
+                Code::Main(entry) => entry(
+                    ctx,
+                    std::ptr::null_mut(),
+                    result.as_mut_ptr().cast(),
+                    &mut rt,
+                    &mut args,
+                ),
+                Code::Test(entry) => entry(
+                    ctx,
+                    std::ptr::null_mut(),
+                    result.as_mut_ptr().cast(),
+                    &TEST_HANDLE,
+                ),
+                Code::Roots(entry, _) => entry(
+                    ctx,
+                    std::ptr::null_mut(),
+                    result.as_mut_ptr().cast(),
+                    roots.as_mut_ptr(),
+                ),
+            };
+            if status == STATUS_OK
+                && let Some(returned) = (*ctx).entry_result.take()
+            {
+                let report = (|| -> Result<(), String> {
+                    echo_replay()?;
+                    std::io::Write::flush(&mut std::io::stdout())
+                        .map_err(|e| format!("standard output: {e}"))?;
+                    let text = crate::exit_report::render(&returned);
+                    std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes())
+                        .and_then(|()| std::io::Write::flush(&mut std::io::stderr()))
+                        .map_err(|e| format!("standard error: {e}"))
+                })();
+                report_refusal = report.err();
+                // Cleanup is mandatory even if the host's reporting sink failed.
+                let mut cleanup = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+                status = crate::finalize::hirsel_rt_v2_finalize(
+                    ctx,
+                    returned.layout,
+                    returned.value,
+                    std::ptr::null(),
+                    cleanup.as_mut_ptr(),
+                    0,
+                    0,
+                );
+            }
+            status
+        })
+    };
     let bytes: Vec<u8> = result
         .iter()
         .flat_map(|w| w.to_le_bytes())
         .take(result_size as usize)
         .collect();
-    let mut record = format!("hirsel-observation {OBSERVATION_VERSION}\nstatus {status}\n");
-    let exit = match status {
-        STATUS_OK => {
+    let mut record = format!("hirsel-observation {OBSERVATION_VERSION}\n");
+    let outcome = match ran {
+        Ok(STATUS_OK) => {
+            let _ = writeln!(record, "status {STATUS_OK}");
             record.push_str("result ");
             for b in &bytes {
                 let _ = write!(record, "{b:02x}");
             }
             record.push('\n');
-            i32::from(bytes[..4] != [0, 0, 0, 0])
+            hirsel_run_config::RunOutcome::Returned(if bytes[..4] == [0, 0, 0, 0] {
+                hirsel_run_config::Returned::Ok
+            } else {
+                hirsel_run_config::Returned::Error
+            })
         }
-        STATUS_FAILURE => {
+        Ok(STATUS_FAILURE) => {
+            let _ = writeln!(record, "status {STATUS_FAILURE}");
+            let mut records = Vec::new();
             let mut failure = FailureRecord {
                 kind: 0,
                 rule: 0,
@@ -1887,66 +1764,162 @@ unsafe fn execute(
             if unsafe { hirsel_rt_v2_failure_primary(ctx, &mut failure) } == 0 {
                 crate::fault("a failure status without a recorded failure");
             }
-            let _ = writeln!(
-                record,
-                "failure {} {} {:016x} {:016x}",
-                failure.kind, failure.rule, failure.site, failure.operation_site
-            );
-            if report_failures {
-                let _ = std::io::Write::write_all(
-                    &mut std::io::stderr(),
-                    crate::isolate::report(&failure).as_bytes(),
-                );
-            }
+            records.push(failure);
             for index in 0..unsafe { hirsel_rt_v2_failure_cause_count(ctx) } {
                 if unsafe { hirsel_rt_v2_failure_cause(ctx, index, &mut failure) } == 0 {
                     crate::fault("a failure cause out of range");
                 }
+                records.push(failure);
+            }
+            for failure in &records {
                 let _ = writeln!(
                     record,
                     "failure {} {} {:016x} {:016x}",
                     failure.kind, failure.rule, failure.site, failure.operation_site
                 );
-                if report_failures {
+            }
+            let table = program.failure_table.as_deref().unwrap_or_else(|| {
+                crate::fault("a failed run without its program's failure table")
+            });
+            let mut failures = records.iter().map(|record| table.failure(record));
+            let primary = failures.next().expect("a primary failure");
+            hirsel_run_config::RunOutcome::Failed {
+                primary,
+                causes: failures.collect(),
+            }
+        }
+        Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
+        Err(stop) => stop.outcome(),
+    };
+    let returned = matches!(
+        outcome,
+        hirsel_run_config::RunOutcome::Returned(_) | hirsel_run_config::RunOutcome::Failed { .. }
+    );
+    if returned {
+        let mut audit = Audit {
+            live_blocks: 0,
+            live_bytes: 0,
+            immortalized_blocks: 0,
+            active_regions: 0,
+            retained_bytes: 0,
+        };
+        unsafe { hirsel_rt_v2_task_exit(ctx, &mut audit) };
+        #[cfg(any(feature = "diagnostic", feature = "measurement"))]
+        let _ = writeln!(
+            record,
+            "audit {} {} {} {} {}",
+            audit.live_blocks,
+            audit.live_bytes,
+            audit.immortalized_blocks,
+            audit.active_regions,
+            audit.retained_bytes
+        );
+        #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]
+        record.push_str("audit unavailable\n");
+    } else {
+        // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
+        unsafe { (*ctx).abandon() };
+        match &outcome {
+            hirsel_run_config::RunOutcome::Blocked => record.push_str("blocked\n"),
+            hirsel_run_config::RunOutcome::BudgetExceeded(kind) => {
+                let _ = writeln!(record, "budget_exceeded {}", kind.name());
+            }
+            _ => {}
+        }
+        record.push_str("audit unavailable\n");
+    }
+    unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+    drop(binding);
+    // What the launch writes last: the replay's remaining output, the outputs' flush, the
+    // tapes' trailers and the observation record.
+    let mut finish = || -> Result<(), String> {
+        echo_replay()?;
+        if let Some(io) = &replay
+            && let Err(error) = io.borrow().finish()
+        {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            return Err(format!("the replayed tape: {error:?}"));
+        }
+        // Rust's stdout is line buffered and a C `main` returning does not flush it: output
+        // after the last newline would be lost.
+        std::io::Write::flush(&mut std::io::stdout())
+            .map_err(|e| format!("standard output: {e}"))?;
+        if let Some(io) = &real {
+            io.borrow_mut()
+                .finish_recording()
+                .map_err(|e| format!("the Io tape: {e}"))?;
+        }
+        if let Some(writer) = &mut zero_recording {
+            writer.finish().map_err(|e| format!("the Io tape: {e}"))?;
+        }
+        if let Some(file) = &mut observation {
+            std::io::Write::write_all(file, record.as_bytes())
+                .and_then(|()| std::io::Write::flush(file))
+                .map_err(|e| format!("the observation file: {e}"))?;
+        }
+        Ok(())
+    };
+    match &outcome {
+        hirsel_run_config::RunOutcome::Returned(_)
+        | hirsel_run_config::RunOutcome::Blocked
+        | hirsel_run_config::RunOutcome::BudgetExceeded(_) => {
+            if let Err(error) = finish() {
+                return refuse(&error);
+            }
+        }
+        hirsel_run_config::RunOutcome::Failed { primary, causes } => {
+            if report_failures {
+                for failure in std::iter::once(primary).chain(causes) {
                     let _ = std::io::Write::write_all(
                         &mut std::io::stderr(),
-                        crate::isolate::report(&failure).as_bytes(),
+                        crate::isolate::report(failure).as_bytes(),
                     );
                 }
             }
-            EXIT_FAILURE
+            if let Err(error) = finish() {
+                return refuse(&error);
+            }
         }
-        _ => crate::fault("an entry returned a status other than 0 or 1"),
-    };
-    let mut audit = Audit {
-        live_blocks: 0,
-        live_bytes: 0,
-        immortalized_blocks: 0,
-        active_regions: 0,
-        retained_bytes: 0,
-    };
-    unsafe { hirsel_rt_v2_task_exit(ctx, &mut audit) };
-    #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-    let _ = writeln!(
-        record,
-        "audit {} {} {} {} {}",
-        audit.live_blocks,
-        audit.live_bytes,
-        audit.immortalized_blocks,
-        audit.active_regions,
-        audit.retained_bytes
-    );
-    #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]
-    record.push_str("audit unavailable\n");
-    unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    drop(binding);
-    let finish = FINISH
-        .with(|f| f.borrow_mut().take())
-        .unwrap_or_else(|| crate::fault("a launch finished twice"));
+        // The recording stopped short of a complete run: no trailer and no observation.
+        hirsel_run_config::RunOutcome::Refused(reason)
+        | hirsel_run_config::RunOutcome::Diverged(reason)
+        | hirsel_run_config::RunOutcome::Environmental(
+            hirsel_run_config::Environmental::Recording(reason),
+        ) => {
+            stopped_output(&echo_replay);
+            eprintln!("hirsel-rt: Io refused: {reason}");
+        }
+        hirsel_run_config::RunOutcome::Environmental(cause) => {
+            stopped_output(&echo_replay);
+            eprintln!(
+                "hirsel-rt: environmental failure: {}",
+                environmental_text(cause)
+            );
+        }
+        hirsel_run_config::RunOutcome::Tooling(reason) => return refuse(reason),
+    }
     if let Some(error) = report_refusal {
         return refuse(&error);
     }
-    finish(record, exit)
+    outcome.exit_code()
+}
+
+/// A stopped run's output before its report: what the replay printed, then the flush.
+fn stopped_output(echo_replay: &dyn Fn() -> Result<(), String>) {
+    if let Err(error) = echo_replay() {
+        eprintln!("hirsel-rt: replay output: {error}");
+    }
+    if let Err(error) = std::io::Write::flush(&mut std::io::stdout()) {
+        eprintln!("hirsel-rt: replay output: {error}");
+    }
+}
+
+fn environmental_text(cause: &hirsel_run_config::Environmental) -> String {
+    match cause {
+        hirsel_run_config::Environmental::CodecLimit => "codec operational budget exhausted".into(),
+        hirsel_run_config::Environmental::Recording(reason)
+        | hirsel_run_config::Environmental::Output(reason) => reason.clone(),
+    }
 }
 
 /// Ordinary flushed streaming tape, explicitly nonresumable after interruption.

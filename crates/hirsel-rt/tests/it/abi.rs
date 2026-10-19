@@ -159,6 +159,10 @@ fn record_layouts_match_the_header() {
         ("failure", size_of::<FailureRecord>()),
         ("report_node", size_of::<hirsel_rt::exit_report::Node>()),
         ("report_field", size_of::<hirsel_rt::exit_report::Field>()),
+        (
+            "program_descriptor",
+            size_of::<hirsel_rt::program::ProgramDescriptor>(),
+        ),
     ];
     for (name, size) in sizes {
         assert_eq!(header_size(&header, name), size, "hirsel_rt_v2_{name}");
@@ -453,7 +457,7 @@ fn launch_rejects_another_abi_version_and_unknown_flags() {
         LAUNCH_OK
     );
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    assert_eq!(hirsel_rt_v2_abi_version(), 19);
+    assert_eq!(hirsel_rt_v2_abi_version(), 20);
 }
 
 #[test]

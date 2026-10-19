@@ -17,6 +17,19 @@ Invariants and boundary:
   are faults that abort with a message; host exhaustion is environmental and terminates. Neither
   is ever reported as a language failure.
 - The run context is passed explicitly and shares nothing with other contexts (OWN-6).
+- A run, not the process, is the unit of failure (`program.rs`, `stop.rs`, runtime ABI 20). The
+  generated `main` passes one `hirsel_rt_v2_program_descriptor` (entry, descriptor registry,
+  failure table, semantic digest, entry name, roots, flags `UNREPLAYABLE`, `STANDALONE`,
+  `ESCAPES` and `FUELED`, and
+  a launched executable's bound run configuration) to `hirsel_rt_v2_main`, which loads it into
+  a `Program`; a run's context reaches its own program's failure table, so runs of several
+  programs share a process. A run's root task runs on a fiber, and Blocked, an adapter refusal,
+  a replay divergence and a codec limit are `Stop`s: the runtime's internal functions return
+  `Result<_, Stop>` up to the entry compiled code called, which switches back to the launcher's
+  stack; the launcher abandons the run's fibers, destroys its context and receives a
+  `RunOutcome`. Only the standalone launcher turns an outcome into a process exit status
+  (`RunOutcome::exit_code`). Invariant faults, host exhaustion, PROG-4 violations, stack
+  overflow and a stop inside a foreign call still end the process.
 - Foreign calls push their context and source site on the calling thread, then restore
   the enclosing call when they return. Callback thunks reject null context/Ptr/FnPtr
   arguments before invoking Hirsel. A non-null boundary violation ends the process
@@ -184,8 +197,8 @@ Invariants and boundary:
   Flat reconstruction patches native byte extents separately from wire element
   counts; sequential blocks retain exact used bytes and SoA blocks retain rounded
   column capacity. Both walks are iterative. Past
-  `hirsel_types::wire::Limits::default`'s byte and value budgets the run ends
-  environmentally, as the interpreter's operational limit does.
+  `hirsel_types::wire::Limits::default`'s byte and value budgets the run stops with
+  `Environmental(CodecLimit)`, as the interpreter's operational limit ends it.
 - No numeric Depth or frame charge exists until spec #16 rules.
 
 Transitions of D's Lean model (`proofs/rc/README.md`) cited in code comments as `T<ID> <name>`;
@@ -578,10 +591,9 @@ failed callback has unwound when its cleanup reaches the `Isolate` terminator, w
 into the caught chain, the task's own failures attributed to its spawn path. The body builds
 the `Failure` value innermost first from the `isolate_*` entries: kind (from the rule:
 MEM-3 `Depth`, MEM-6 `OutOfSpace`, FAIL-4 `DeadMutex`, else `Check`), rule ID, definition path,
-line, column and spawn path, each a fresh block. A record holds compiler codes, so a program
-registers its failure table before the entry runs
-(`hirsel_rt_v2_failure_table`, called by `main` of the launcher object from either backend):
-one pointer-free byte string holding each site code's definition path and one-based position
+line, column and spawn path, each a fresh block. A record holds compiler codes, so a program's
+descriptor carries its failure table (`program.rs`, `isolate::FailureTable`), which each of its
+runs' contexts reaches: one pointer-free byte string holding each site code's definition path and one-based position
 (0 and 0 for a site inside a library body, which only a resource failure reaches), sorted by
 code, and each program rule code's rule ID.
 
@@ -590,18 +602,24 @@ code, and each program rule code's rule ID.
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds
 the linked program's immutable descriptor registry and runs one compiled
 `fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
-granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and exits 0 for `Ok`, 1 for `Error`, 2 for a
-language failure, 3 for a refused launch and 4 for a Blocked run (CONC-8: every task waits
-and none can proceed; the run stops there without cleanup, and its record says `blocked` and
-`audit unavailable`), and 5 for a run that spent a budget (`budgets.limits@1`; it stops the
-same way, recording `budget_exceeded fuel` or `budget_exceeded memory`). `src/budget.rs`
-enforces both budgets. The memory meter (`budget::Meter`, shared by the heap and the region
-pool) charges backing storage before it is taken: slabs, large and bare blocks and region
-segments. It credits that storage when released, and returns idle slabs before stopping a
-run over budget. Fuel is the context word at `HIRSEL_RT_V2_CTX_FUEL_OFFSET`. Code compiled
-with fuel checks decrements it at each fuel point and calls `hirsel_rt_v2_fuel_exhausted`
-when it goes negative. Launch-mask bit 64 marks such code; an executable without it refuses
-a fuel budget when binding its run (`ProgramFacts::fueled`; `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
+granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and
+returns the exit status of the run's outcome
+(`hirsel_run_config::RunOutcome::exit_code`): 0 for `Ok`, 1 for `Error`, 2 for a
+language failure, 3 for a refused launch or replay divergence, 4 for a Blocked run (CONC-8: every
+task waits and none can proceed; the run stops there without cleanup, and its record says
+`blocked` and `audit unavailable`), 5 for a run that spent a budget (`budgets.limits@1`; it
+stops the same way, recording `budget_exceeded fuel` or `budget_exceeded memory`) and 6 for an
+environmental stop such as the codec's operational budget. The caller (generated `main`, or a
+host running several programs) decides what to do with it; no outcome exits the process.
+`src/budget.rs` enforces both budgets. The memory meter (`budget::Meter`, shared by the heap
+and the region pool) charges backing storage before it is taken: slabs, large and bare blocks
+and region segments. It credits that storage when released, and returns idle slabs before
+stopping a run over budget. Fuel is the context word at `HIRSEL_RT_V2_CTX_FUEL_OFFSET`. Code
+compiled with fuel checks decrements it at each fuel point and calls
+`hirsel_rt_v2_fuel_exhausted` when it goes negative. A spent budget raises
+`Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
+an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
+`budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
@@ -719,10 +737,9 @@ frames between the callback and the extern call cannot run cleanup. Non-null poi
 results, callback arguments and writable pointer words are guarded by both backends;
 zero calls `hirsel_rt_v2_foreign_violation(site)`, which reports PROG-4 and the source
 location before terminating. A callback passes site zero to select the active extern.
-Nullable pointer Options use zero as None without a guard. The launchers strip
-the `standalone::UNREPLAYABLE` bit from the compiled root mask and refuse a recording or a
-replay when it is set. They also strip `standalone::ESCAPES` (CAP-6) and bind the run
-with `CodeReach::Escapes` and an empty path, so a record whose `admission.code` is
+Nullable pointer Options use zero as None without a guard. A program whose
+descriptor sets `program::UNREPLAYABLE` refuses a recording or a replay. One that sets
+`program::ESCAPES` (CAP-6) binds its run with `CodeReach::Escapes` and an empty path, so a record whose `admission.code` is
 `admit.safe@1` refuses with `unsafe_code`, live or replayed; `hirsel check --safe`
 prints the path.
 
@@ -899,7 +916,7 @@ record the failure themselves at the fixed runtime codes of
 `hirsel_core_contract::RUNTIME_RULES` (CAP-2 for a refused handle, LANG-9 for a Test
 failure), at site 0 for the caller's failure edge to anchor, or the drop's anchor.
 
-Standalone launch uses `hirsel_rt_v2_launch_standalone`, bound to semantic code
+Standalone launch (`hirsel_rt_v2_main` with a `STANDALONE` program) binds semantic code
 and the exact entry. `--hirsel-run /absolute/run.json [args...]` selects the shared
 RunConfig parser; trailing process Args replace the record snapshot before fresh
 admission. `-- [args...]` supplies only Args; no record or delimiter grants no

@@ -21,6 +21,12 @@ thread_local! {
     }) };
 }
 
+/// Whether an extern call is active on this thread: C frames sit between the running Hirsel
+/// code and its run's launcher.
+pub(crate) fn active() -> bool {
+    CURRENT.with(|c| !c.get().context.is_null())
+}
+
 /// Record this call's context and site, saving its enclosing scope without allocating.
 ///
 /// # Safety
@@ -50,14 +56,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
 /// A callback thunk passes zero to select its active extern's site.
 #[unsafe(no_mangle)]
 pub extern "C" fn hirsel_rt_v2_foreign_violation(site: u64) -> ! {
-    let site = if site == 0 {
-        CURRENT.with(|c| c.get().site)
+    let scope = CURRENT.with(Cell::get);
+    let site = if site == 0 { scope.site } else { site };
+    let ctx = if scope.context.is_null() {
+        crate::stop::running()
     } else {
-        site
+        scope.context
     };
     eprintln!(
         "hirsel-rt: PROG-4: null at a non-null foreign boundary at {}; the process ends",
-        crate::isolate::foreign_location(site)
+        crate::isolate::foreign_location(ctx, site)
     );
     std::process::abort()
 }

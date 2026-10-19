@@ -58,6 +58,7 @@ mod receiving_lifetimes;
 mod receiving_loans;
 mod registry_sources;
 mod representation;
+mod run_isolation;
 mod runtime;
 mod scalar_return_ir;
 mod seals;

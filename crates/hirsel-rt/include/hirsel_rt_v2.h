@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 19
+#define HIRSEL_RT_V2_ABI_VERSION 20
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -347,16 +347,32 @@ int32_t hirsel_rt_v2_launch(uint8_t (*entry)(hirsel_rt_v2_ctx *, uint8_t *, uint
                                              const uint64_t *, const uint64_t *),
                             uint64_t result_size, const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count, const hirsel_rt_v2_launch_config *config);
 
-/* Compiler root-order adapters receive [Io, Args, Env, Unsafe, Test].
- * roots uses bits 0..4 in that order. Standalone admission binds semantic code,
- * then acquires fresh grants selected by --hirsel-run before invoking entry. */
+/* A compiled program (src/program.rs), which the generated `main` passes to hirsel_rt_v2_main.
+ * The root-order adapter receives [Io, Args, Env, Unsafe, Test]; roots uses bits 0..4 in that
+ * order. A STANDALONE program binds its semantic digest and entry and acquires fresh grants
+ * at each launch; otherwise config binds the one run the executable was built for. The
+ * runtime keeps the failure table per program, so runs of several programs share a process. */
 typedef uint8_t (*hirsel_rt_v2_roots_entry)(hirsel_rt_v2_ctx *, uint8_t *, uint8_t *, uint64_t *);
-int32_t hirsel_rt_v2_launch_roots(hirsel_rt_v2_roots_entry entry, uint64_t result_size,
-    const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count,
-    const hirsel_rt_v2_launch_config *config, uint8_t roots);
-int32_t hirsel_rt_v2_launch_standalone(hirsel_rt_v2_roots_entry entry, uint64_t result_size,
-    const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count,
-    const uint8_t program[32], const uint8_t *name, uint64_t name_len, uint8_t roots);
+#define HIRSEL_RT_V2_PROGRAM_UNREPLAYABLE 1u
+#define HIRSEL_RT_V2_PROGRAM_STANDALONE 2u
+#define HIRSEL_RT_V2_PROGRAM_ESCAPES 4u
+#define HIRSEL_RT_V2_PROGRAM_FUELED 8u
+typedef struct {
+    uint32_t abi_version, flags, roots, layout_count;
+    hirsel_rt_v2_roots_entry entry;
+    uint64_t result_size;
+    const hirsel_rt_v2_layout *const *layouts;
+    const uint8_t *failure_table;
+    uint64_t failure_table_length;
+    const uint8_t *entry_name;
+    uint64_t entry_name_length;
+    uint8_t digest[32];
+    hirsel_rt_v2_launch_config config;
+} hirsel_rt_v2_program_descriptor;
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_program_descriptor, 160);
+/* Load the program and launch the run argv (argv[0] names the program) selects; returns the
+ * exit status of its outcome. No other process arguments are read. */
+int32_t hirsel_rt_v2_main(const hirsel_rt_v2_program_descriptor *program, int32_t argc, const char *const *argv);
 
 /* Allocation and counts. */
 hirsel_rt_v2_header *hirsel_rt_v2_alloc(hirsel_rt_v2_ctx *ctx, uint32_t index, uint64_t extent,

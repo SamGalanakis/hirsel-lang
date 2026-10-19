@@ -1989,7 +1989,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
             crate::failure::record_runtime(ctx, "LANG-9", anchor, operation_site);
             crate::STATUS_FAILURE
         }
-        Err(error) => adapter_refusal(binding, error),
+        // SAFETY: a close runs in a release, which holds nothing a stop must drop.
+        Err(error) => unsafe { crate::stop::raise(ctx, crate::stop::Stop::refusal(error)) },
         _ => crate::fault("invalid handle cleanup completion"),
     }
 }
@@ -2131,10 +2132,14 @@ fn error_word(error: IoError) -> u64 {
 }
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
     let operation = !matches!(request, Request::Close { .. });
-    let (completion, parked) = unsafe { crate::host_waits::issue(ctx, request) };
-    let completion = match completion {
-        Ok(value) => value,
-        Err(error) => adapter_refusal(unsafe { Binding::get(ctx) }, error),
+    // SAFETY: the context is live; the request moved into the issue.
+    let (completion, parked) = unsafe {
+        crate::stop::check(
+            ctx,
+            crate::host_waits::issue(ctx, request).and_then(|(completion, parked)| {
+                Ok((completion.map_err(crate::stop::Stop::refusal)?, parked))
+            }),
+        )
     };
     if operation && !parked {
         unsafe { crate::tasks::yield_now(ctx) };
@@ -2151,11 +2156,19 @@ pub(crate) unsafe fn capability_call(
     request: Request,
 ) -> Result<Completion, ()> {
     let operation = !matches!(request, Request::Close { .. });
-    let (completion, parked) = unsafe { crate::host_waits::issue(ctx, request) };
-    let completion = match completion {
-        Ok(value) => Ok(value),
-        Err(AdapterError::InvalidHandle(_)) => Err(()),
-        Err(error) => adapter_refusal(unsafe { Binding::get(ctx) }, error),
+    // SAFETY: the context is live; the request moved into the issue.
+    let (completion, parked) = unsafe {
+        crate::stop::check(
+            ctx,
+            crate::host_waits::issue(ctx, request).and_then(|(completion, parked)| {
+                let completion = match completion {
+                    Ok(value) => Ok(value),
+                    Err(AdapterError::InvalidHandle(_)) => Err(()),
+                    Err(error) => return Err(crate::stop::Stop::refusal(error)),
+                };
+                Ok((completion, parked))
+            }),
+        )
     };
     if operation && !parked {
         unsafe { crate::tasks::yield_now(ctx) };
@@ -3421,23 +3434,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_compare(ctx: *mut crate::RunCtx, a: u
         Ordering::Equal => 0,
         Ordering::Greater => 1,
     }
-}
-
-/// A replay refusal is a tool outcome, even when it happens in cleanup.
-pub(crate) fn adapter_refusal(binding: &mut Binding, error: AdapterError) -> ! {
-    use std::io::Write;
-    let mut stdout = std::io::stdout();
-    let output = binding.adapter.replay_stdout();
-    if let Err(output_error) = stdout.write_all(&output).and_then(|()| stdout.flush()) {
-        eprintln!("hirsel-rt: replay output: {output_error}");
-    }
-    let mut stderr = std::io::stderr();
-    let output = binding.adapter.replay_stderr();
-    if let Err(output_error) = stderr.write_all(&output).and_then(|()| stderr.flush()) {
-        eprintln!("hirsel-rt: replay stderr: {output_error}");
-    }
-    eprintln!("hirsel-rt: Io refused: {error:?}");
-    std::process::exit(crate::launch::EXIT_LAUNCH)
 }
 
 /// # Safety

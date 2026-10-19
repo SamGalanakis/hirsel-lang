@@ -40,9 +40,10 @@ pub use hirsel_llvm::c_call;
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{
-    Launched, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain,
-    emit_backend_objects, emit_objects, launch, launch_with, link, link_objects, link_profile,
-    observe, partition_backend_objects, partition_objects,
+    LIBRARY_RUN, Launched, Library, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape,
+    Toolchain, emit_backend_objects, emit_objects, launch, launch_with, link, link_host,
+    link_library, link_objects, link_profile, observe, partition_backend_objects,
+    partition_objects, run_host,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;

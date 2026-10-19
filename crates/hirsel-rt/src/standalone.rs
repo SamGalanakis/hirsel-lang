@@ -9,24 +9,6 @@ pub(crate) const ROOT_ARGS: u8 = 2;
 pub(crate) const ROOT_ENV: u8 = 4;
 pub(crate) const ROOT_UNSAFE: u8 = 8;
 pub(crate) const ROOT_TEST: u8 = 16;
-/// Not a root: the program calls C outside a deterministic wrapper (PROG-4).
-pub(crate) const UNREPLAYABLE: u8 = 32;
-/// Not a root: the program was compiled with fuel checks, so it can enforce a fuel budget.
-pub(crate) const FUELED: u8 = 64;
-
-/// Not a root: the entry reaches an escape from capability checking (CAP-6).
-pub(crate) const ESCAPES: u8 = 128;
-
-/// Splits the compiled selection into its roots, whether recording or replaying
-/// is refused, whether the entry reaches an escape and whether the code charges fuel.
-pub(crate) fn split(mask: u8) -> (u8, bool, bool, bool) {
-    (
-        mask & !(UNREPLAYABLE | ESCAPES | FUELED),
-        mask & UNREPLAYABLE != 0,
-        mask & ESCAPES != 0,
-        mask & FUELED != 0,
-    )
-}
 
 pub(crate) fn required_roots(mask: u8) -> Result<Vec<Root>, RunRefusal> {
     if mask & !31 != 0 || mask & ROOT_TEST != 0 && mask != ROOT_TEST {

@@ -10,7 +10,8 @@
 use crate::alloc::{
     allocate_sequence, hirsel_rt_v2_alloc, payload, sequence_elements_offset, sequence_slice_start,
 };
-use crate::{DOMAIN_HEAP, Header, RunCtx, environmental, fault};
+use crate::stop::{Stop, Stopped};
+use crate::{DOMAIN_HEAP, Header, RunCtx, fault};
 use std::collections::BTreeSet;
 use std::ffi::c_void;
 
@@ -473,8 +474,21 @@ unsafe fn write_text(ctx: *mut RunCtx, text: &Text, at: *mut u8, bytes: &[u8]) {
     }
 }
 
-fn budget() -> ! {
-    environmental("codec operational budget exhausted")
+/// The stop past `hirsel_types::wire::Limits::default`'s byte or value budget: the run ends
+/// environmentally, as the interpreter's operational limit ends it.
+fn budget() -> Stop {
+    Stop::Environmental(hirsel_run_config::Environmental::CodecLimit)
+}
+
+/// Why a payload does not decode: its first `DecodeError`, or the operational budget.
+enum Invalid {
+    Decode(DecodeError),
+    Budget,
+}
+impl From<DecodeError> for Invalid {
+    fn from(error: DecodeError) -> Self {
+        Invalid::Decode(error)
+    }
 }
 
 fn nan32(bits: u32) -> bool {
@@ -730,7 +744,7 @@ enum Put {
 }
 
 /// The SER-2 payload of the value at `value`.
-unsafe fn encode_payload(program: &Program, value: *const u8) -> Vec<u8> {
+unsafe fn encode_payload(program: &Program, value: *const u8) -> Stopped<Vec<u8>> {
     let mut out = Vec::new();
     let mut work = vec![Put::Visit(program.root, value)];
     // Open sets: where the elements begin, and each element's start.
@@ -738,7 +752,7 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Vec<u8> {
     let mut values = 0u64;
     while let Some(job) = work.pop() {
         if out.len() as u64 > LIMIT_BYTES {
-            budget();
+            return Err(budget());
         }
         match job {
             Put::Mark => sets
@@ -800,7 +814,7 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Vec<u8> {
                 if row < count {
                     values += 1;
                     if values > LIMIT_VALUES {
-                        budget();
+                        return Err(budget());
                     }
                     let fields: Vec<_> = columns
                         .iter()
@@ -842,16 +856,16 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Vec<u8> {
             Put::Visit(node, at) => {
                 values += 1;
                 if values > LIMIT_VALUES {
-                    budget();
+                    return Err(budget());
                 }
                 unsafe { encode_node(program, node, at, &mut out, &mut work, &mut sets) };
             }
         }
     }
     if out.len() as u64 > LIMIT_BYTES {
-        budget();
+        return Err(budget());
     }
-    out
+    Ok(out)
 }
 
 unsafe fn encode_node(
@@ -1038,8 +1052,8 @@ unsafe fn encode_node(
 }
 
 /// `codec.encode` (LIR schema revision 29): write a fresh Bytes slice of the SER-2 envelope of
-/// the value at `value` at `out`. It cannot fail; the reference's operational budgets terminate
-/// environmentally.
+/// the value at `value` at `out`. It cannot fail; past the reference's operational budgets the
+/// run stops environmentally.
 ///
 /// # Safety
 /// `ctx` is a live run context, `codec` a compiler-emitted codec, `value` a live value of its
@@ -1051,9 +1065,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_encode(
     value: *const c_void,
     out: *mut c_void,
 ) {
+    // SAFETY: caller contract; the encoding's own storage is dropped before a stop.
+    unsafe { crate::stop::check(ctx, encode(ctx, codec, value, out)) }
+}
+
+unsafe fn encode(
+    ctx: *mut RunCtx,
+    codec: *const Codec,
+    value: *const c_void,
+    out: *mut c_void,
+) -> Stopped<()> {
     unsafe {
         let (program, descriptor) = program(codec);
-        let payload = encode_payload(&program, value.cast());
+        let payload = encode_payload(&program, value.cast())?;
         let mut envelope = Vec::with_capacity(24 + descriptor.len() + payload.len());
         envelope.extend_from_slice(MAGIC);
         envelope.extend_from_slice(&WIRE_VERSION.to_le_bytes());
@@ -1062,7 +1086,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_encode(
         envelope.extend_from_slice(&(payload.len() as u64).to_le_bytes());
         envelope.extend_from_slice(&payload);
         if envelope.len() as u64 > LIMIT_BYTES {
-            budget();
+            return Err(budget());
         }
         let Node::Text(text) = &program.nodes[program.bytes] else {
             unreachable!("checked at parse")
@@ -1070,6 +1094,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_encode(
         std::ptr::write_bytes(out.cast::<u8>(), 0, program.out_size as usize);
         write_text(ctx, text, out.cast(), &envelope);
     }
+    Ok(())
 }
 
 // ----- Decoding --------------------------------------------------------------------------
@@ -1146,14 +1171,16 @@ struct Collection<'a> {
 }
 
 /// Validate a whole payload against the program, in the reference's reading order.
-fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
+fn validate(program: &Program, bytes: &[u8]) -> Result<(), Invalid> {
     let mut input = Input { bytes, at: 0 };
     let mut work = vec![Check::Visit(program.root)];
     let mut collections: Vec<Collection<'_>> = Vec::new();
     let mut values = 0u64;
     let reserve = |values: u64, n: u64| {
         if n > LIMIT_VALUES.saturating_sub(values) {
-            budget();
+            Err(Invalid::Budget)
+        } else {
+            Ok(())
         }
     };
     while let Some(job) = work.pop() {
@@ -1170,15 +1197,15 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                 if set {
                     if let Some(previous) = collection.previous {
                         if previous == key {
-                            return Err(DecodeError::Duplicate);
+                            return Err(DecodeError::Duplicate.into());
                         }
                         if previous > key {
-                            return Err(DecodeError::Order);
+                            return Err(DecodeError::Order.into());
                         }
                     }
                     collection.previous = Some(key);
                 } else if !collection.keys.insert(key) {
-                    return Err(DecodeError::Duplicate);
+                    return Err(DecodeError::Duplicate.into());
                 }
             }
             Check::Elements { node, count, key } => {
@@ -1217,12 +1244,12 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
             Check::Visit(node) => {
                 values += 1;
                 if values > LIMIT_VALUES {
-                    budget();
+                    return Err(Invalid::Budget);
                 }
                 match &program.nodes[node] {
                     Node::Scalar(Scalar::Bool) => {
                         if input.number(1)? > 1 {
-                            return Err(DecodeError::Scalar);
+                            return Err(DecodeError::Scalar.into());
                         }
                     }
                     Node::Scalar(Scalar::Integer(width)) => {
@@ -1231,25 +1258,25 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                     Node::Scalar(Scalar::F32) => {
                         let bits = input.number(4)? as u32;
                         if nan32(bits) && bits != 0x7fc0_0000 {
-                            return Err(DecodeError::Scalar);
+                            return Err(DecodeError::Scalar.into());
                         }
                     }
                     Node::Scalar(Scalar::Char) => {
                         if char::from_u32(input.number(4)? as u32).is_none() {
-                            return Err(DecodeError::Scalar);
+                            return Err(DecodeError::Scalar.into());
                         }
                     }
                     Node::Scalar(Scalar::F64) => {
                         let bits = input.number(8)? as u64;
                         if nan64(bits) && bits != 0x7ff8_0000_0000_0000 {
-                            return Err(DecodeError::Scalar);
+                            return Err(DecodeError::Scalar.into());
                         }
                     }
                     Node::Text(Text { utf8, .. }) | Node::FlatText { utf8 } => {
                         let n = input.length()?;
                         let bytes = input.take(n)?;
                         if *utf8 && std::str::from_utf8(bytes).is_err() {
-                            return Err(DecodeError::Utf8);
+                            return Err(DecodeError::Utf8.into());
                         }
                     }
                     Node::Fields(fields) => {
@@ -1275,7 +1302,7 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                     | Node::Sequential { element, .. }
                     | Node::Columns { element, .. } => {
                         let count = input.length()?;
-                        reserve(values, count);
+                        reserve(values, count)?;
                         work.push(Check::Elements {
                             node: *element,
                             count,
@@ -1283,7 +1310,7 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                         });
                     }
                     Node::Repeat { count, element, .. } => {
-                        reserve(values, *count);
+                        reserve(values, *count)?;
                         work.push(Check::Elements {
                             node: *element,
                             count: *count,
@@ -1295,7 +1322,7 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                         reserve(
                             values,
                             count.saturating_mul(if container.set { 1 } else { 2 }),
-                        );
+                        )?;
                         work.push(Check::CollectionEnd);
                         work.push(match container.value {
                             None => Check::Elements {
@@ -1316,7 +1343,7 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
         }
     }
     if input.at != bytes.len() {
-        return Err(DecodeError::Trailing);
+        return Err(DecodeError::Trailing.into());
     }
     Ok(())
 }
@@ -1497,7 +1524,9 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     let b = block(
                         ctx,
                         *index,
-                        offset.checked_add(used).unwrap_or_else(|| budget()),
+                        offset
+                            .checked_add(used)
+                            .unwrap_or_else(|| fault("a validated codec extent overflows")),
                         *align,
                     );
                     write(payload(b), &count.to_le_bytes());
@@ -1514,13 +1543,15 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     ..
                 } => {
                     let count = checked(input.number(8)) as u64;
-                    let capacity =
-                        count.checked_add(quantum - 1).unwrap_or_else(|| budget()) & !(quantum - 1);
+                    let capacity = count
+                        .checked_add(quantum - 1)
+                        .unwrap_or_else(|| fault("a validated codec extent overflows"))
+                        & !(quantum - 1);
                     let width: u64 = columns.iter().map(|&(_, stride, _)| stride).sum();
                     let size = capacity
                         .checked_mul(width)
                         .and_then(|n| data.checked_add(n))
-                        .unwrap_or_else(|| budget());
+                        .unwrap_or_else(|| fault("a validated codec extent overflows"));
                     let b = block(ctx, *index, size, *align);
                     write(payload(b), &count.to_le_bytes());
                     write(payload(b).add(8), &capacity.to_le_bytes());
@@ -1574,7 +1605,7 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
 
 /// `codec.decode` (LIR schema revision 29): validate the Bytes slice at `bytes` completely,
 /// then write `Ok` of fresh owned data or `Error` of its first `DecodeError` at `out`. It cannot
-/// fail; the reference's operational budgets terminate environmentally.
+/// fail; past the reference's operational budgets the run stops environmentally.
 ///
 /// # Safety
 /// `ctx` is a live run context, `codec` a compiler-emitted codec, `bytes` a live Bytes value of
@@ -1586,6 +1617,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
     bytes: *const c_void,
     out: *mut c_void,
 ) {
+    // SAFETY: caller contract; the decoder's own storage is dropped before a stop.
+    unsafe { crate::stop::check(ctx, decode(ctx, codec, bytes, out)) }
+}
+
+unsafe fn decode(
+    ctx: *mut RunCtx,
+    codec: *const Codec,
+    bytes: *const c_void,
+    out: *mut c_void,
+) -> Stopped<()> {
     unsafe {
         let (program, descriptor) = program(codec);
         let Node::Text(text) = &program.nodes[program.bytes] else {
@@ -1593,12 +1634,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
         };
         let input = text_bytes(text, bytes.cast());
         if input.len() as u64 > LIMIT_BYTES {
-            budget();
+            return Err(budget());
         }
         let out = out.cast::<u8>();
         std::ptr::write_bytes(out, 0, program.out_size as usize);
-        let checked = envelope(input, descriptor)
-            .and_then(|payload| validate(&program, payload).map(|()| payload));
+        let checked = match envelope(input, descriptor).map_err(Invalid::Decode) {
+            Ok(payload) => validate(&program, payload).map(|()| payload),
+            Err(invalid) => Err(invalid),
+        };
         match checked {
             Ok(payload) => {
                 let &[(offset, _)] = program.write_arm(program.out, out, 0) else {
@@ -1606,7 +1649,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
                 };
                 materialize(ctx, &program, payload, out.add(offset as usize));
             }
-            Err(error) => {
+            Err(Invalid::Budget) => return Err(budget()),
+            Err(Invalid::Decode(error)) => {
                 let &[(offset, error_node)] = program.write_arm(program.out, out, 1) else {
                     fault("a codec result whose Error arm is not one field");
                 };
@@ -1617,4 +1661,5 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
             }
         }
     }
+    Ok(())
 }

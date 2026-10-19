@@ -656,17 +656,20 @@ impl<'a> Emitter<'a> {
     }
 }
 
-/// One argument of the launcher call `launch_object` emits.
+/// One field of the program descriptor (`hirsel_rt_v2_program_descriptor`) a launch object
+/// emits, in order; the caller lays the fields out at their natural alignment.
 #[derive(Clone, Debug)]
-pub enum LaunchArgument {
+pub enum DescriptorField {
+    U32(u32),
+    U64(u64),
     /// The entry adapter's address.
     Entry,
-    /// An integer of `bits` bits.
-    Int { bits: u8, value: u64 },
-    /// The address of a private constant holding these bytes.
-    Bytes(Vec<u8>),
     /// The address of the external data symbol.
     Symbol(String),
+    /// The address of a private constant holding these bytes.
+    Bytes(Vec<u8>),
+    /// These bytes, in place.
+    Inline(Vec<u8>),
 }
 
 /// PROG-3's exit report of an entry's returned `Err`: the entry result's descriptor index,
@@ -691,37 +694,12 @@ pub struct ReportNode {
     pub fields: Vec<(u64, usize, Vec<u8>)>,
 }
 
-/// The launcher object: `main`, which ignores SIGPIPE, makes each of `calls` (a void function
-/// and its arguments) in order and returns what `launcher(arguments)` returns, and the private
-/// entry adapter `hirsel.entry(ctx, dest, out, roots)` that calls the
+/// The launcher object: `main_symbol(argc, argv)`, which ignores SIGPIPE and returns
+/// `hirsel_rt_v2_main(&hirsel.program, argc, argv)`, the private program descriptor of `descriptor`'s
+/// fields, and the private entry adapter `hirsel.entry(ctx, dest, out, roots)` that calls the
 /// source entry `entry(ctx, dest, out, roots + 8 * w...)` for each root word index `w`. When the
 /// entry returns normally with the `Err` tag (1) at `out`, the adapter first calls
 /// `hirsel_rt_v2_exit_report(ctx, out, result index, offset, root node)`.
-pub fn launch_object(
-    target: &TargetSpec,
-    entry: &str,
-    caller_site: bool,
-    root_words: &[u64],
-    report: &ExitReport,
-    calls: &[(&str, Vec<LaunchArgument>)],
-    launcher: &str,
-    arguments: &[LaunchArgument],
-) -> Result<Vec<u8>, CodegenError> {
-    named_launch_object(
-        "main",
-        target,
-        entry,
-        caller_site,
-        root_words,
-        report,
-        calls,
-        launcher,
-        arguments,
-    )
-}
-
-/// Emit a launch adapter with an explicit exported dispatcher symbol.
-#[allow(clippy::too_many_arguments)]
 pub fn named_launch_object(
     main_symbol: &str,
     target: &TargetSpec,
@@ -729,9 +707,7 @@ pub fn named_launch_object(
     caller_site: bool,
     root_words: &[u64],
     report: &ExitReport,
-    calls: &[(&str, Vec<LaunchArgument>)],
-    launcher: &str,
-    arguments: &[LaunchArgument],
+    descriptor: &[DescriptorField],
 ) -> Result<Vec<u8>, CodegenError> {
     let isa = isa(target, OptLevel::None)?;
     let call_conv = isa.default_call_conv();
@@ -827,57 +803,61 @@ pub fn named_launch_object(
         .define_function(adapter_id, &mut context)
         .map_err(refuse("hirsel.entry"))?;
     module.clear_context(&mut context);
-    // The calls and the launcher: their parameters are the arguments' types; the launcher
-    // returns an i32.
-    let mut callees = Vec::new();
-    for (index, (name, arguments, returns)) in calls
-        .iter()
-        .map(|(name, arguments)| (*name, arguments, false))
-        .chain([(launcher, &arguments.to_vec(), true)])
-        .enumerate()
-    {
-        let mut sig = ir::Signature::new(call_conv);
-        for argument in arguments {
-            sig.params.push(match argument {
-                LaunchArgument::Int { bits: 8, .. } => AbiParam::new(types::I8).uext(),
-                LaunchArgument::Int { bits: 32, .. } => AbiParam::new(types::I32).uext(),
-                LaunchArgument::Int { .. } => AbiParam::new(types::I64),
-                _ => AbiParam::new(PTR),
-            });
-        }
-        if returns {
-            sig.returns.push(AbiParam::new(types::I32));
-        }
-        let id = module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(refuse(name))?;
-        let mut data = Vec::new();
-        for (ordinal, argument) in arguments.iter().enumerate() {
-            match argument {
-                LaunchArgument::Bytes(bytes) => {
-                    let name = format!("hirsel.launch.{index}.{ordinal}");
-                    let id = module
-                        .declare_data(&name, Linkage::Local, false, false)
-                        .map_err(refuse(&name))?;
-                    let mut description = DataDescription::new();
-                    description.define(bytes.clone().into_boxed_slice());
-                    description.set_align(8);
-                    module
-                        .define_data(id, &description)
-                        .map_err(refuse(&name))?;
-                    data.push(Some(id));
-                }
-                LaunchArgument::Symbol(name) => {
-                    let id = module
-                        .declare_data(name, Linkage::Import, false, false)
-                        .map_err(refuse(name))?;
-                    data.push(Some(id));
-                }
-                _ => data.push(None),
+    // The program descriptor: scalars and inline bytes in place, addresses relocated.
+    let mut bytes = Vec::new();
+    let mut description = DataDescription::new();
+    for (ordinal, field) in descriptor.iter().enumerate() {
+        let at = bytes.len() as u32;
+        match field {
+            DescriptorField::U32(value) => bytes.extend(value.to_le_bytes()),
+            DescriptorField::U64(value) => bytes.extend(value.to_le_bytes()),
+            DescriptorField::Inline(inline) => bytes.extend(inline),
+            DescriptorField::Entry => {
+                let adapter = module.declare_func_in_data(adapter_id, &mut description);
+                description.write_function_addr(at, adapter);
+                bytes.extend([0; 8]);
+            }
+            DescriptorField::Symbol(name) => {
+                let id = module
+                    .declare_data(name, Linkage::Import, false, false)
+                    .map_err(refuse(name))?;
+                let gv = module.declare_data_in_data(id, &mut description);
+                description.write_data_addr(at, gv, 0);
+                bytes.extend([0; 8]);
+            }
+            DescriptorField::Bytes(data) => {
+                let name = format!("hirsel.program.{ordinal}");
+                let id = module
+                    .declare_data(&name, Linkage::Local, false, false)
+                    .map_err(refuse(&name))?;
+                let mut constant = DataDescription::new();
+                constant.define(data.clone().into_boxed_slice());
+                constant.set_align(8);
+                module.define_data(id, &constant).map_err(refuse(&name))?;
+                let gv = module.declare_data_in_data(id, &mut description);
+                description.write_data_addr(at, gv, 0);
+                bytes.extend([0; 8]);
             }
         }
-        callees.push((id, arguments.clone(), data));
     }
+    description.define(bytes.into_boxed_slice());
+    description.set_align(8);
+    let program_id = module
+        .declare_data("hirsel.program", Linkage::Local, false, false)
+        .map_err(refuse("hirsel.program"))?;
+    module
+        .define_data(program_id, &description)
+        .map_err(refuse("hirsel.program"))?;
+    let mut launcher_sig = ir::Signature::new(call_conv);
+    launcher_sig.params.extend([
+        AbiParam::new(PTR),
+        AbiParam::new(types::I32),
+        AbiParam::new(PTR),
+    ]);
+    launcher_sig.returns.push(AbiParam::new(types::I32));
+    let launcher_id = module
+        .declare_function("hirsel_rt_v2_main", Linkage::Import, &launcher_sig)
+        .map_err(refuse("hirsel_rt_v2_main"))?;
     let mut signal_sig = ir::Signature::new(call_conv);
     signal_sig.params.push(AbiParam::new(types::I32));
     signal_sig.params.push(AbiParam::new(PTR));
@@ -886,6 +866,9 @@ pub fn named_launch_object(
         .declare_function("signal", Linkage::Import, &signal_sig)
         .map_err(refuse("signal"))?;
     let mut main_sig = ir::Signature::new(call_conv);
+    main_sig
+        .params
+        .extend([AbiParam::new(types::I32), AbiParam::new(PTR)]);
     main_sig.returns.push(AbiParam::new(types::I32));
     let main_id = module
         .declare_function(main_symbol, Linkage::Export, &main_sig)
@@ -894,40 +877,18 @@ pub fn named_launch_object(
     {
         let mut b = FunctionBuilder::new(&mut context.func, &mut builder_context);
         let block = b.create_block();
+        b.append_block_params_for_function_params(block);
         b.switch_to_block(block);
+        let (argc, argv) = (b.block_params(block)[0], b.block_params(block)[1]);
         let signal = module.declare_func_in_func(signal_id, b.func);
         let sigpipe = b.ins().iconst(types::I32, 13);
         let ignore = b.ins().iconst(PTR, 1);
         b.ins().call(signal, &[sigpipe, ignore]);
-        let mut code = None;
-        for (id, arguments, data) in &callees {
-            let mut args = Vec::new();
-            for (argument, data) in arguments.iter().zip(data) {
-                args.push(match (argument, data) {
-                    (LaunchArgument::Entry, _) => {
-                        let adapter = module.declare_func_in_func(adapter_id, b.func);
-                        b.ins().func_addr(PTR, adapter)
-                    }
-                    (LaunchArgument::Int { bits, value }, _) => {
-                        let ty = match bits {
-                            8 => types::I8,
-                            32 => types::I32,
-                            _ => types::I64,
-                        };
-                        b.ins().iconst(ty, *value as i64)
-                    }
-                    (_, Some(id)) => {
-                        let gv = module.declare_data_in_func(*id, b.func);
-                        b.ins().symbol_value(PTR, gv)
-                    }
-                    (_, None) => unreachable!("data arguments have their data"),
-                });
-            }
-            let callee = module.declare_func_in_func(*id, b.func);
-            let call = b.ins().call(callee, &args);
-            code = b.inst_results(call).first().copied();
-        }
-        let code = code.expect("the launcher returns its exit code");
+        let program = module.declare_data_in_func(program_id, b.func);
+        let program = b.ins().symbol_value(PTR, program);
+        let launcher = module.declare_func_in_func(launcher_id, b.func);
+        let call = b.ins().call(launcher, &[program, argc, argv]);
+        let code = b.inst_results(call)[0];
         b.ins().return_(&[code]);
         b.seal_all_blocks();
         b.finalize(module.target_config());

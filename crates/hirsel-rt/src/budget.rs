@@ -5,8 +5,8 @@
 //! the [`Meter`] one context's heap and region pool share: every slab, large or bare block
 //! and region segment taken from the backing allocator is charged before it is taken and
 //! credited when it goes back. Without a budget the meter's limit is zero and every charge
-//! is one test on a cold path. A spent budget ends the run with BudgetExceeded, as a
-//! Blocked run ends (`crate::launch::budget_exceeded`).
+//! is one test on a cold path. A spent budget stops the run with
+//! `Stop::BudgetExceeded`, as a Blocked run stops (`crate::stop`).
 use crate::RunCtx;
 use hirsel_run_config::BudgetKind;
 use std::cell::Cell;
@@ -49,10 +49,17 @@ impl Meter {
     }
 }
 
+/// Stop the running run: the meter is shared by its context's heap and region pool, which
+/// only the running context charges.
 #[cold]
 #[inline(never)]
 fn exceeded(kind: BudgetKind) -> ! {
-    crate::launch::budget_exceeded(kind)
+    let ctx = crate::stop::running();
+    if ctx.is_null() {
+        crate::environmental("a run spent its budget outside its launcher");
+    }
+    // SAFETY: the running context is live while its run executes.
+    unsafe { crate::stop::raise(ctx, crate::stop::Stop::BudgetExceeded(kind)) }
 }
 
 /// A fuel point found the run's fuel spent: the run ends with BudgetExceeded (fuel).
@@ -60,6 +67,7 @@ fn exceeded(kind: BudgetKind) -> ! {
 /// # Safety
 /// `ctx` is the running context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_fuel_exhausted(_ctx: *mut RunCtx) {
-    exceeded(BudgetKind::Fuel)
+pub unsafe extern "C" fn hirsel_rt_v2_fuel_exhausted(ctx: *mut RunCtx) {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::raise(ctx, crate::stop::Stop::BudgetExceeded(BudgetKind::Fuel)) }
 }

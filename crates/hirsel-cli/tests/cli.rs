@@ -1569,7 +1569,7 @@ fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
     );
     let grants = file(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#);
     for backend in ["llvm", "cranelift"] {
-        // A standalone executable (`hirsel_rt_v2_launch_standalone`)...
+        // A standalone executable (a `STANDALONE` program descriptor)...
         let executable = build_executable(&source, &["--debug", "--backend", backend]);
         let output = Command::new(&executable)
             .arg("--hirsel-grants")
@@ -1579,7 +1579,7 @@ fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
         assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
         assert_eq!(output.stdout, b"backend\n", "{backend}");
         std::fs::remove_file(executable).unwrap();
-        // ...and a launched one (`hirsel_rt_v2_launch_roots`).
+        // ...and a launched one (a program descriptor bound to its run).
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["run", "--native", "--backend", backend])
             .arg(&source)

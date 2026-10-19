@@ -6,12 +6,12 @@
 //! out of the running task's failure state into the caught chain. The body then builds the
 //! `Failure` value from the caught chain, record by record, through the `isolate_*` entries.
 //!
-//! A record holds compiler codes only, so the program's failure table names their text: the
-//! launcher object registers each site code's definition path and one-based line and column,
-//! and each program rule code's rule ID, before the entry runs
-//! ([`hirsel_rt_v2_failure_table`]). Every source program registers one, also for runtime reports.
+//! A record holds compiler codes only, so the program's failure table names their text: each
+//! site code's definition path and one-based line and column, and each program rule code's rule
+//! ID. Every source program carries one in its descriptor (`crate::program`), and each run's
+//! context reaches its own program's table, so runs of different programs share a process.
 
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use crate::alloc::{allocate_sequence, payload, sequence_elements_offset};
 use crate::context::RunCtx;
@@ -29,37 +29,67 @@ struct Site {
     column: u64,
 }
 
-struct Table {
+/// A program's failure table.
+pub struct FailureTable {
     /// Sorted by code.
     sites: Vec<Site>,
     /// The rule ID of program rule code `index + 1`.
     rules: Vec<String>,
 }
 
-static TABLE: OnceLock<Table> = OnceLock::new();
-
-/// Register the program's encoded failure table, once per process: little-endian u64 words,
-/// the site count, then each site's code, line, column and definition length followed by the
-/// definition's bytes and a length-prefixed file path, in code order, then the rule
-/// count and each rule's length and bytes.
-///
-/// # Safety
-/// `table` is readable for `length` bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_failure_table(table: *const u8, length: u64) {
-    let length = usize::try_from(length).unwrap_or_else(|_| fault("a failure table overflows"));
-    // SAFETY: caller contract.
-    let bytes = unsafe { std::slice::from_raw_parts(table, length) };
-    let table = decode(bytes).unwrap_or_else(|| fault("a malformed failure table"));
-    if !table.sites.is_sorted_by_key(|s| s.code) {
-        fault("a failure table out of site order");
+impl FailureTable {
+    /// Decode an encoded table: little-endian u64 words, the site count, then each site's code,
+    /// line, column and definition length followed by the definition's bytes and a
+    /// length-prefixed file path, in code order, then the rule count and each rule's length and
+    /// bytes. `None` when malformed or out of site order.
+    pub fn decode(bytes: &[u8]) -> Option<FailureTable> {
+        decode(bytes).filter(|table| table.sites.is_sorted_by_key(|s| s.code))
     }
-    if TABLE.set(table).is_err() {
-        fault("a failure table registered twice");
+
+    fn site(&self, code: u64) -> &Site {
+        self.sites
+            .binary_search_by_key(&code, |s| s.code)
+            .map(|i| &self.sites[i])
+            .unwrap_or_else(|_| fault("a failure site the program's table does not list"))
+    }
+
+    /// The rule ID of a record's rule code.
+    fn rule(&self, code: u32) -> &str {
+        let rule = match code.checked_sub(hirsel_core_contract::RUNTIME_RULE_BASE) {
+            Some(i) => hirsel_core_contract::RUNTIME_RULES.get(i as usize).copied(),
+            None => code
+                .checked_sub(1)
+                .and_then(|i| self.rules.get(i as usize))
+                .map(String::as_str),
+        };
+        rule.unwrap_or_else(|| fault("a failure rule the program's table does not list"))
+    }
+
+    fn located(&self, code: u64) -> hirsel_run_config::Site {
+        let site = self.site(code);
+        hirsel_run_config::Site {
+            definition: site.definition.clone(),
+            file: site.file.clone(),
+            line: site.line,
+            column: site.column,
+        }
+    }
+
+    /// A failure record as its host reports it.
+    pub(crate) fn failure(
+        &self,
+        record: &crate::failure::FailureRecord,
+    ) -> hirsel_run_config::Failure {
+        hirsel_run_config::Failure {
+            rule: self.rule(record.rule).into(),
+            site: self.located(record.site),
+            operation: (record.operation_site != 0 && record.operation_site != record.site)
+                .then(|| self.located(record.operation_site)),
+        }
     }
 }
 
-fn decode(mut bytes: &[u8]) -> Option<Table> {
+fn decode(mut bytes: &[u8]) -> Option<FailureTable> {
     fn word(bytes: &mut &[u8]) -> Option<u64> {
         let (head, rest) = bytes.split_first_chunk::<8>()?;
         *bytes = rest;
@@ -86,54 +116,44 @@ fn decode(mut bytes: &[u8]) -> Option<Table> {
     let rules = (0..word(&mut bytes)?)
         .map(|_| text(&mut bytes))
         .collect::<Option<_>>()?;
-    bytes.is_empty().then_some(Table { sites, rules })
+    bytes.is_empty().then_some(FailureTable { sites, rules })
 }
 
-fn table() -> &'static Table {
-    TABLE
-        .get()
+/// The failure table of the program `ctx` runs.
+fn table(ctx: *mut RunCtx) -> &'static FailureTable {
+    // SAFETY: the context is live and keeps its table until it is destroyed.
+    unsafe { (*ctx).failure_table.as_deref() }
+        .map(|table| unsafe { &*std::ptr::from_ref::<FailureTable>(table) })
         .unwrap_or_else(|| fault("an isolated failure without the program's failure table"))
 }
 
-fn site(code: u64) -> &'static Site {
-    let sites = &table().sites;
-    sites
-        .binary_search_by_key(&code, |s| s.code)
-        .map(|i| &sites[i])
-        .unwrap_or_else(|_| fault("a failure site the program's table does not list"))
+fn site(ctx: *mut RunCtx, code: u64) -> &'static Site {
+    table(ctx).site(code)
 }
 
-/// The rule ID of a record's rule code.
-fn rule(code: u32) -> &'static str {
-    let rule = match code.checked_sub(hirsel_core_contract::RUNTIME_RULE_BASE) {
-        Some(i) => hirsel_core_contract::RUNTIME_RULES.get(i as usize).copied(),
-        None => code
-            .checked_sub(1)
-            .and_then(|i| table().rules.get(i as usize))
-            .map(String::as_str),
-    };
-    rule.unwrap_or_else(|| fault("a failure rule the program's table does not list"))
+fn rule(ctx: *mut RunCtx, code: u32) -> &'static str {
+    table(ctx).rule(code)
 }
 
 /// Human failure text for a standalone launch, outside program Io and replay tapes.
-pub(crate) fn report(record: &crate::failure::FailureRecord) -> String {
-    let source = site(record.site);
+pub fn report(failure: &hirsel_run_config::Failure) -> String {
+    let site = &failure.site;
     let mut text = format!(
         "runtime failure[{}] at {} ({}:{}:{})\n",
-        rule(record.rule),
-        source.definition,
-        source.file,
-        source.line,
-        source.column
+        failure.rule, site.definition, site.file, site.line, site.column
     );
-    if record.operation_site != 0 && record.operation_site != record.site {
-        let operation = site(record.operation_site);
+    if let Some(operation) = &failure.operation {
         text.push_str(&format!(
             "  in {} ({}:{}:{})\n",
             operation.definition, operation.file, operation.line, operation.column
         ));
     }
     text
+}
+
+/// Give `ctx` its program's failure table.
+pub(crate) fn attach(ctx: &mut RunCtx, table: Arc<FailureTable>) {
+    ctx.failure_table = Some(table);
 }
 
 /// The running task's caught chain.
@@ -210,7 +230,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_kind(
     _tasks: *const u64,
     index: u64,
 ) -> u8 {
-    let kind = hirsel_core_contract::failure_kind(rule(record(ctx, index).0.rule));
+    let kind = hirsel_core_contract::failure_kind(rule(ctx, record(ctx, index).0.rule));
     // SAFETY: caller contract.
     unsafe { out.write(kind) };
     STATUS_OK
@@ -228,7 +248,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_rule(
     _tasks: *const u64,
     index: u64,
 ) -> u8 {
-    let rule = rule(record(ctx, index).0.rule);
+    let rule = rule(ctx, record(ctx, index).0.rule);
     // SAFETY: caller contract.
     unsafe { out.write(allocate_bytes(ctx, rule.as_bytes())) };
     STATUS_OK
@@ -247,7 +267,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_definition(
     _tasks: *const u64,
     index: u64,
 ) -> u8 {
-    let site = site(record(ctx, index).0.site);
+    let site = site(ctx, record(ctx, index).0.site);
     // SAFETY: caller contract.
     unsafe { out.write(allocate_bytes(ctx, site.definition.as_bytes())) };
     STATUS_OK
@@ -265,7 +285,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_line(
     index: u64,
 ) -> u8 {
     // SAFETY: caller contract.
-    unsafe { out.write(site(record(ctx, index).0.site).line) };
+    unsafe { out.write(site(ctx, record(ctx, index).0.site).line) };
     STATUS_OK
 }
 
@@ -282,7 +302,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_column(
     index: u64,
 ) -> u8 {
     // SAFETY: caller contract.
-    unsafe { out.write(site(record(ctx, index).0.site).column) };
+    unsafe { out.write(site(ctx, record(ctx, index).0.site).column) };
     STATUS_OK
 }
 
@@ -316,8 +336,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_spawn(
 }
 
 /// Source location of a foreign contract violation, outside the language failure chain.
-pub(crate) fn foreign_location(code: u64) -> String {
-    let source = site(code);
+pub(crate) fn foreign_location(ctx: *mut RunCtx, code: u64) -> String {
+    if ctx.is_null() {
+        return format!("site {code:#x}");
+    }
+    let source = site(ctx, code);
     format!(
         "{} ({}:{}:{})",
         source.definition, source.file, source.line, source.column

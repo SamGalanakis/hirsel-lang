@@ -42,6 +42,7 @@ use crate::context::RunCtx;
 use crate::failure::{Chained, FailureState};
 use crate::fiber::{self, Stack};
 use crate::region::Region;
+use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
 
 /// A spawned task's entry: compiled closure code taking its environment.
@@ -505,10 +506,10 @@ fn recycle(ctx: *mut RunCtx) {
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn poll_parked(ctx: *mut RunCtx) {
+unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
     // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
     // SAFETY: the context is live.
-    for scope in unsafe { crate::host_waits::expired(ctx) } {
+    for scope in unsafe { crate::host_waits::expired(ctx) }? {
         scheduler(ctx).expire(scope);
     }
     let s = scheduler(ctx);
@@ -522,7 +523,7 @@ unsafe fn poll_parked(ctx: *mut RunCtx) {
     let mut waiting = Vec::with_capacity(parked.len());
     for task in parked {
         // SAFETY: the context is live and `task` is parked.
-        if unsafe { poll(ctx, task) } {
+        if unsafe { poll(ctx, task) }? {
             let s = scheduler(ctx);
             let row = s.task(task);
             row.state = State::Ready;
@@ -534,15 +535,16 @@ unsafe fn poll_parked(ctx: *mut RunCtx) {
     }
     // A poll never parks a task.
     scheduler(ctx).parked = waiting;
+    Ok(())
 }
 
 /// Whether parked `task`'s wait is over, after performing its effect if it is.
 ///
 /// # Safety
 /// `ctx` is live and `task` is parked; a join's slot is in its frame.
-unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
+unsafe fn poll(ctx: *mut RunCtx, task: u32) -> Stopped<bool> {
     let s = scheduler(ctx);
-    match s.task(task).wait {
+    Ok(match s.task(task).wait {
         Some(Wait::Join { child, slot, size }) => match s.task(child).state {
             State::Holding => {
                 let held = s.task(child).slot.take().unwrap();
@@ -569,13 +571,13 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
             let shield = s.task(task).saved.shield;
             let cause = s.canceled_task(task, shield);
             // SAFETY: the context is live and `token` is this task's parked request.
-            unsafe { crate::host_waits::poll(ctx, token, cause) }
+            unsafe { crate::host_waits::poll(ctx, token, cause) }?
         }
         Some(Wait::Any { set }) => s.first_completed(set).is_some(),
         // SAFETY: the parked task holds the set's row.
         Some(Wait::Drain { set }) => unsafe { poll_drained(s, set) },
         None => fault("a parked task without a wait"),
-    }
+    })
 }
 
 /// The running task stopped (it parked, holds its result or completed): poll the parked tasks,
@@ -583,28 +585,26 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn run_next(ctx: *mut RunCtx) {
+unsafe fn run_next(ctx: *mut RunCtx) -> Stopped<()> {
     // SAFETY: the context is live.
-    let next = unsafe { next_task(ctx) };
+    let next = unsafe { next_task(ctx) }?;
     unsafe { switch_to(ctx, next) };
+    Ok(())
 }
 
 /// Poll the parked tasks and take the front of the queue.
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn next_task(ctx: *mut RunCtx) -> u32 {
+unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
     // SAFETY: the context is live.
-    unsafe { poll_parked(ctx) };
+    unsafe { poll_parked(ctx) }?;
     // With nothing runnable, sleep until a parked host request may complete, then poll again.
-    while scheduler(ctx).runnable.is_empty() && unsafe { crate::host_waits::wait(ctx) } {
-        unsafe { poll_parked(ctx) };
+    while scheduler(ctx).runnable.is_empty() && unsafe { crate::host_waits::wait(ctx) }? {
+        unsafe { poll_parked(ctx) }?;
     }
-    let Some(next) = scheduler(ctx).runnable.pop_front() else {
-        // CONC-8: no task can run and nothing outside the run can wake one.
-        crate::launch::blocked();
-    };
-    next
+    // CONC-8: no task can run and nothing outside the run can wake one.
+    scheduler(ctx).runnable.pop_front().ok_or(Stop::Blocked)
 }
 
 /// The yield after a capability operation: the parked tasks are polled and, when another task
@@ -613,29 +613,49 @@ unsafe fn next_task(ctx: *mut RunCtx) -> u32 {
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
 pub unsafe fn yield_now(ctx: *mut RunCtx) {
+    // SAFETY: the context is live; the caller holds nothing a stop must drop.
+    unsafe { crate::stop::check(ctx, try_yield(ctx)) }
+}
+
+/// [`yield_now`], returning a stop to its caller.
+///
+/// # Safety
+/// As for [`yield_now`].
+pub(crate) unsafe fn try_yield(ctx: *mut RunCtx) -> Stopped<()> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).tasks.is_none() } {
-        return;
+        return Ok(());
     }
     // SAFETY: the context is live.
-    unsafe { poll_parked(ctx) };
+    unsafe { poll_parked(ctx) }?;
     let s = scheduler(ctx);
     let Some(next) = s.runnable.pop_front() else {
-        return;
+        return Ok(());
     };
     s.runnable.push_back(s.current);
     unsafe { switch_to(ctx, next) };
+    Ok(())
 }
 
 /// Park the running task until `wait` is over; returns once a poll performed its effect.
 /// `yielded`: the operation yields first, and the task parks when it is next at the front.
 ///
 /// # Safety
-/// `ctx` is live; whatever `wait` names outlives the wait.
+/// `ctx` is live; whatever `wait` names outlives the wait; the caller holds nothing a stop
+/// must drop.
 unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, try_block(ctx, wait, yielded)) }
+}
+
+/// [`block`], returning a stop to its caller.
+///
+/// # Safety
+/// `ctx` is live; whatever `wait` names outlives the wait.
+unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> {
     if yielded {
         // SAFETY: the context is live.
-        unsafe { poll_parked(ctx) };
+        unsafe { poll_parked(ctx) }?;
         let s = scheduler(ctx);
         if let Some(next) = s.runnable.pop_front() {
             s.runnable.push_back(s.current);
@@ -649,7 +669,7 @@ unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
     row.wait = Some(wait);
     s.parked.push(current);
     // SAFETY: the context is live; a poll makes this task runnable again.
-    unsafe { run_next(ctx) };
+    unsafe { run_next(ctx) }
 }
 
 /// Park the running task on host request `token` until a poll completes it (`crate::host_waits`).
@@ -657,9 +677,9 @@ unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
-pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) {
+pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) -> Stopped<()> {
     // SAFETY: the context is live; the request outlives the wait.
-    unsafe { block(ctx, Wait::Host { token }, yielded) };
+    unsafe { try_block(ctx, Wait::Host { token }, yielded) }
 }
 
 /// Resume `child` directly (a join delivered its result, or its result is discarded) and
@@ -707,7 +727,7 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
 /// `ctx` is live and `index` is the running child.
 unsafe fn complete(ctx: *mut RunCtx, index: u32, status: u8) -> ! {
     // This fiber is abandoned at the departure, so nothing it owns may still be live then.
-    let next = unsafe { completed(ctx, index, status) };
+    let next = unsafe { crate::stop::check(ctx, completed(ctx, index, status)) };
     // SAFETY: the context is live; this fiber is never resumed.
     unsafe { depart_to(ctx, next) }
 }
@@ -716,7 +736,7 @@ unsafe fn complete(ctx: *mut RunCtx, index: u32, status: u8) -> ! {
 ///
 /// # Safety
 /// `ctx` is live and `index` is the running child.
-unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> u32 {
+unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
     let s = scheduler(ctx);
     let path = s.task(index).path.clone();
     // SAFETY: the context is live.
@@ -755,7 +775,7 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> u32 {
     }
     match handoff {
         // A join or a discard ran the rest of a holding child: no schedule point.
-        Some(next) => next,
+        Some(next) => Ok(next),
         // SAFETY: the context is live.
         None => unsafe { next_task(ctx) },
     }
@@ -847,7 +867,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
         }),
     );
     // SAFETY: the context is live and its Io bound.
-    match unsafe { crate::host_waits::arm(ctx, index, clock, at) } {
+    match unsafe { crate::stop::check(ctx, crate::host_waits::arm(ctx, index, clock, at)) } {
         Some(token) => {
             if let Some(d) = &mut scheduler(ctx).scope(index).deadline {
                 d.token = Some(token);
@@ -915,9 +935,8 @@ unsafe fn exit_scope(ctx: *mut RunCtx, scope: *const u64, error: u8) -> (u8, boo
     }
     // SAFETY: the context is live.
     let failing = unsafe { (*ctx).failure.active() };
-    let children = s.scope(index).children.clone();
     if failing || error != 0 {
-        for &child in &children {
+        for child in s.scope(index).children.clone() {
             s.cancel(child, CANCEL_PARENT);
         }
     }
@@ -1049,7 +1068,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     row.state = State::Holding;
     s.order(current);
     // SAFETY: the context is live; a join or a discard hands control back here.
-    unsafe { run_next(ctx) };
+    unsafe { crate::stop::check(ctx, run_next(ctx)) };
     STATUS_OK
 }
 

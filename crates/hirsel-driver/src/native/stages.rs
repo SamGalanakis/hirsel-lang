@@ -180,6 +180,10 @@ pub struct ReadyProgram {
 }
 
 impl ReadyProgram {
+    /// The semantic program revision a run of `entry` binds to.
+    pub fn revision(&self, entry: &DefPath) -> Option<&hirsel_run_config::ProgramRevision> {
+        self.revisions.get(entry)
+    }
     /// Attach checked semantic code selection, independently of pass options and topology.
     /// Adapted-program clients retain and supply their validated source input here.
     pub fn bind_revisions(&mut self, input: &ValidatedNativeInput) -> Result<(), NativeError> {
