@@ -173,25 +173,40 @@ fn unix_socket() -> Result<OwnedFd, NetError> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-/// A blocking connect: a Unix connect waits only while the listener's backlog is full.
-/// A path that names no accepting socket, a missing one included, refuses.
-fn unix_connect_one(path: &str) -> Result<OwnedFd, NetError> {
-    let (addr, len) = unix_address(path)?;
-    let socket = unix_socket()?;
+/// A connect of `socket` to `addr`; a path that names no accepting socket, a missing one
+/// included, refuses. While the listener's backlog is full a blocking socket waits, and a
+/// nonblocking one returns `Ok(false)` having queued nothing: Linux then reports no
+/// readiness (the unconnected socket polls writable at once), so the caller connects again.
+fn unix_connect_on(
+    socket: libc::c_int,
+    (addr, len): &(libc::sockaddr_un, libc::socklen_t),
+) -> Result<bool, NetError> {
     loop {
         // SAFETY: addr holds a sockaddr_un of len bytes.
-        if unsafe { libc::connect(socket.as_raw_fd(), (&raw const addr).cast(), len) } == 0 {
-            return Ok(socket);
+        if unsafe { libc::connect(socket, (&raw const *addr).cast(), *len) } == 0 {
+            return Ok(true);
         }
         match errno() {
             libc::EINTR => {}
             // An interrupted connect may have completed in the meantime.
-            libc::EISCONN => return Ok(socket),
+            libc::EISCONN => return Ok(true),
+            libc::EAGAIN => return Ok(false),
             libc::ENOENT | libc::ENOTDIR | libc::ECONNREFUSED => {
                 return Err(NetError::ConnectionRefused);
             }
             code => return Err(error(code)),
         }
+    }
+}
+
+/// A blocking connect, which waits only while the listener's backlog is full.
+fn unix_connect_one(path: &str) -> Result<OwnedFd, NetError> {
+    let addr = unix_address(path)?;
+    let socket = unix_socket()?;
+    // A blocking connect reports EAGAIN only past a send timeout, which nothing sets.
+    match unix_connect_on(socket.as_raw_fd(), &addr)? {
+        true => Ok(socket),
+        false => Err(NetError::TimedOut),
     }
 }
 
@@ -207,9 +222,16 @@ fn file_identity(path: &std::ffi::CStr) -> Option<(libc::dev_t, libc::ino_t, lib
 }
 
 /// A stale socket: a socket file on which a connect is refused, so nobody accepts there.
-fn stale_socket(path: &str, name: &std::ffi::CStr) -> bool {
+/// The probe is nonblocking, so a live listener's full backlog never stalls it.
+fn stale_socket(addr: &(libc::sockaddr_un, libc::socklen_t), name: &std::ffi::CStr) -> bool {
     file_identity(name).is_some_and(|(_, _, mode)| mode & libc::S_IFMT == libc::S_IFSOCK)
-        && matches!(unix_connect_one(path), Err(NetError::ConnectionRefused))
+        && unix_socket().is_ok_and(|socket| {
+            set_nonblocking(socket.as_raw_fd(), true).is_ok()
+                && matches!(
+                    unix_connect_on(socket.as_raw_fd(), addr),
+                    Err(NetError::ConnectionRefused)
+                )
+        })
 }
 
 fn name_of(
@@ -718,18 +740,19 @@ impl NetProvider for HostNet {
     }
     fn unix_listen(&mut self, id: u64, path: &str, remove_stale: bool) -> Provided<()> {
         Ok((|| {
-            let (addr, len) = unix_address(path)?;
+            let address = unix_address(path)?;
+            let (addr, len) = &address;
             let name = std::ffi::CString::new(path).map_err(|_| NetError::InvalidInput)?;
             let socket = unix_socket()?;
             let bind = || {
                 // SAFETY: addr holds a sockaddr_un of len bytes.
-                match unsafe { libc::bind(socket.as_raw_fd(), (&raw const addr).cast(), len) } {
+                match unsafe { libc::bind(socket.as_raw_fd(), (&raw const *addr).cast(), *len) } {
                     0 => Ok(()),
                     _ => Err(errno()),
                 }
             };
             let mut bound = bind();
-            if bound == Err(libc::EADDRINUSE) && remove_stale && stale_socket(path, &name) {
+            if bound == Err(libc::EADDRINUSE) && remove_stale && stale_socket(&address, &name) {
                 // SAFETY: name is a C string.
                 unsafe { libc::unlink(name.as_ptr()) };
                 bound = bind();

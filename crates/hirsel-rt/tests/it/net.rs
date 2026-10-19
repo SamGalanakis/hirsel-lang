@@ -1356,6 +1356,66 @@ fn unix_listen_removes_only_a_stale_socket_and_only_under_its_rule() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A cooperative Unix connect facing a full backlog has queued nothing, so it parks on a
+/// timer, stays cancellable and connects once an accept makes room. A listen's stale probe
+/// of that live path refuses at once instead of waiting for room.
+#[test]
+fn cooperative_unix_connect_parks_on_a_full_backlog_and_the_stale_probe_never_waits() {
+    use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
+    use std::os::fd::AsRawFd;
+    let dir = socket_dir("backlog");
+    let path = dir.join("app.sock").to_str().unwrap().to_owned();
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    // SAFETY: listener owns its descriptor; listening again sets the smallest backlog.
+    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+    let mut io = real([
+        rule(&path, 0, NetOperation::UnixConnect),
+        rule(&path, 0, NetOperation::UnixListenRemoveStale),
+    ]);
+    let ready = Readiness::default();
+    io.set_net_provider(CooperativeNet::new(ready.clone()));
+    let n = net(&mut io);
+    let connect = Request::UnixConnect {
+        net: n,
+        path: path.clone(),
+    };
+    let mut held = vec![];
+    let waiting = loop {
+        let token = held.len() as u64 + 1;
+        assert!(token < 100, "the backlog never filled");
+        ready.enter(token);
+        match io.call(connect.clone()) {
+            Err(AdapterError::Blocked) => break token,
+            result => held.push(handle(result)),
+        }
+        ready.finish(token);
+    };
+    assert!(!held.is_empty());
+    assert!(ready.cancellable(waiting));
+    assert!(!ready.ready(waiting).unwrap());
+    ready.enter(waiting + 1);
+    assert_eq!(
+        io.call(Request::UnixListen {
+            net: n,
+            path: path.clone(),
+        }),
+        Ok(Completion::Listened(Err(NetError::AddrInUse)))
+    );
+    ready.finish(waiting + 1);
+    let accepted = listener.accept().unwrap();
+    while !ready.ready(waiting).unwrap() {
+        assert!(ready.wait().unwrap());
+    }
+    ready.enter(waiting);
+    let connected = handle(io.call(connect));
+    ready.finish(waiting);
+    for handle in held.into_iter().chain([connected]) {
+        io.call(Request::Close { handle }).unwrap();
+    }
+    drop((accepted, listener));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn unix_paths_are_checked_before_grants_and_grants_before_any_effect() {
     let calls = Rc::new(Cell::new(0));

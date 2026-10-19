@@ -20,6 +20,8 @@ mod replay;
 mod select_race;
 #[path = "cli/testing.rs"]
 mod testing;
+#[path = "cli/unix_backlog.rs"]
+mod unix_backlog;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 #[test]
 fn help_spellings_print_usage_to_stdout_and_exit_zero() {

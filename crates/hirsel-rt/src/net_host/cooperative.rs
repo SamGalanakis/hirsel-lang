@@ -1,6 +1,8 @@
 //! Cooperative host provider. Socket conventions and poll/SO_ERROR handling follow
 //! Rust std's Unix Socket::connect_timeout, read, write and set_nonblocking.
 //! Unlike the blocking provider, EAGAIN retains readiness instead of becoming a timeout.
+//! A Unix connect facing a full backlog keeps its nonblocking socket and connects again
+//! after a short timer wait, since Linux signals no room in a listener's backlog.
 use super::*;
 use crate::io::AdapterError;
 use crate::readiness::Readiness;
@@ -8,6 +10,9 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{Receiver, TryRecvError};
+
+/// How long a Unix connect facing a full backlog waits before connecting again.
+const UNIX_CONNECT_RETRY: Duration = Duration::from_millis(5);
 
 /// Separate provider selection leaves native HostNet's blocking contract intact.
 pub struct CooperativeNet {
@@ -476,15 +481,34 @@ impl NetProvider for CooperativeNet {
         Ok(Ok(()))
     }
     fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
-        // A Unix connect completes at once unless the backlog is full; it runs blocking.
-        match self.host.unix_connect(id, path)? {
-            Ok(()) => match set_nonblocking(self.host.socket(id).unwrap(), true) {
-                Ok(()) => Ok(Ok(())),
-                Err(e) => {
-                    self.host.close(id);
-                    Ok(Err(e))
-                }
+        let address = match unix_address(path) {
+            Ok(address) => address,
+            Err(e) => return Ok(Err(e)),
+        };
+        let mut pending = self.readiness.pending();
+        let socket = match pending.connecting.take() {
+            Some(socket) => socket,
+            None => match unix_socket()
+                .and_then(|socket| set_nonblocking(socket.as_raw_fd(), true).map(|()| socket))
+            {
+                Ok(socket) => socket,
+                Err(e) => return Ok(Err(e)),
             },
+        };
+        match unix_connect_on(socket.as_raw_fd(), &address) {
+            Ok(true) => {
+                drop(pending);
+                self.host.sockets.insert(id, socket);
+                Ok(Ok(()))
+            }
+            // The backlog is full and nothing was queued, so the wait stays cancellable.
+            // Nothing signals room in a backlog: the wait is a timer, then a fresh attempt.
+            Ok(false) => {
+                pending.connecting = Some(socket);
+                pending.interest = None;
+                pending.deadline = Some(Instant::now() + UNIX_CONNECT_RETRY);
+                Err(AdapterError::Blocked)
+            }
             Err(e) => Ok(Err(e)),
         }
     }

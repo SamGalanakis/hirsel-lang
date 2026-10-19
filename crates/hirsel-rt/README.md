@@ -433,8 +433,10 @@ nonblocking readiness under cooperative admission. Tapes retain the admitted
 prefix, peer and truncation flag, and replay checks their authority without
 sockets. Unix stream sockets use exact-path `UnixConnect`/`UnixListen` rules (port 0) and
 return ordinary Stream and Listener handles whose addresses are the unnamed `0.0.0.0:0`;
-`net_host.rs` binds and connects `sockaddr_un` blocking (cooperative runs make the result
-nonblocking), removes a stale socket only under `UnixListenRemoveStale`, and unlinks a
+`net_host.rs` binds and connects `sockaddr_un` blocking. A cooperative connect is
+nonblocking: facing a full backlog it queues nothing and Linux signals no room, so it keeps
+its socket, parks on a 5 ms timer and connects again, cancellable throughout (the stale
+probe is nonblocking too). It removes a stale socket only under `UnixListenRemoveStale`, and unlinks a
 listener's file at close while its device and inode still match. `ScriptNet` keys
 listeners by address string and port, so a socket path is one more scripted endpoint.
 `net_abi.rs` exports the datagram and stream
