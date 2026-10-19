@@ -1,6 +1,7 @@
 //! Exact tape replay: validation precedes every visible state change, even handle consumption.
 use crate::handles::Handles;
 use crate::io::*;
+use crate::watch::WatchEvent;
 #[derive(Clone, Debug)]
 pub struct SimIo {
     state: State,
@@ -193,6 +194,9 @@ impl Adapter for SimIo {
             None => Err(AdapterError::MissingInput(self.position)),
         }
     }
+    fn injected_wait(&self, request: &Request) -> bool {
+        self.state.injected_wait(request)
+    }
     /// The waits the recording re-issued at this scheduling point: the `ready` events at
     /// the tape's head whose wait has waited through exactly the recorded points.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
@@ -249,6 +253,9 @@ impl Adapter for SimIo {
         self.state.stdout.clone()
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.state.awaits_injection(&request) {
+            return Err(AdapterError::Blocked);
+        }
         let event = self
             .tape
             .get(self.position)
@@ -297,6 +304,10 @@ impl Adapter for SimIo {
             },
             view_input: match &event.completion {
                 Completion::View(view) => view.bytes.clone(),
+                _ => None,
+            },
+            watch_input: match &event.completion {
+                Completion::Watch(Ok(event)) => Some(event.clone()),
                 _ => None,
             },
             read_limit: match (&request, &event.completion) {
@@ -542,6 +553,14 @@ impl Storage for MemoryTree<'_> {
     fn unmap(&mut self, id: u64) {
         self.identities.opened.remove(&id);
     }
+    /// A tree has no change source of its own: its watchers read injected events.
+    fn watch(&mut self, path: &str, _id: u64, _recursive: bool) -> Result<(), IoError> {
+        self.metadata(path).map(|_| ())
+    }
+    fn watch_next(&mut self, _id: u64, _root: &str) -> Result<Option<WatchEvent>, IoError> {
+        Ok(None)
+    }
+    fn unwatch(&mut self, _id: u64) {}
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
         let mut meta = self.metadata(path)?;
         if !matches!(meta.kind, FileKind::Regular | FileKind::Directory) {
@@ -965,6 +984,8 @@ pub(crate) struct LinkedTree<'a> {
     metadata_input: Option<Metadata>,
     /// A recorded `mapped.with` view: a host input, like recorded metadata.
     view_input: Option<Vec<u8>>,
+    /// A recorded `watcher.next` event of a host watcher.
+    watch_input: Option<WatchEvent>,
     read_limit: Option<u64>,
     write_limit: Option<u64>,
     tree: &'a mut Tree,
@@ -989,6 +1010,7 @@ impl<'a> LinkedTree<'a> {
             active: Default::default(),
             metadata_input: None,
             view_input: None,
+            watch_input: None,
             read_limit: None,
             write_limit: None,
         }
@@ -1168,6 +1190,18 @@ impl Storage for LinkedTree<'_> {
     fn unmap(&mut self, id: u64) {
         self.memory().unmap(id);
     }
+    fn watch(&mut self, path: &str, id: u64, recursive: bool) -> Result<(), IoError> {
+        let path = self.path(path, true)?;
+        if self.detached() {
+            return Err(IoError::IsDirectory);
+        }
+        self.memory().watch(&path, id, recursive)
+    }
+    /// A host watcher's recorded event: an input, like a recorded view.
+    fn watch_next(&mut self, _id: u64, _root: &str) -> Result<Option<WatchEvent>, IoError> {
+        Ok(self.watch_input.take())
+    }
+    fn unwatch(&mut self, _id: u64) {}
     fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         let path = self.path(path, true)?;
         if self.detached() {

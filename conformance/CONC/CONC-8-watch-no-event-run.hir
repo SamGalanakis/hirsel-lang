@@ -1,0 +1,17 @@
+// rule: CONC-8
+// expect: run
+// entry: exercise
+// The same watcher with an event delivered first completes instead of waiting.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("a"), b"")])
+  let mut w = file.watch(d, path.of(""), false)?
+  test.dir_event(t, d, Removed(path.of("a")))
+  test.check(
+    t,
+    match watcher.next(d, mut w) {
+      Ok(Removed(p)) => path.text(p) == "a",
+      _ => false,
+    }
+  )
+  Ok(())
+}

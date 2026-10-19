@@ -9,7 +9,8 @@
 //! answers `AdapterError::Blocked`: under cooperative admission a host provider recorded its
 //! descriptor interest or deadline under the token, and in replay the tape recorded the park.
 //! The task then parks ([`crate::tasks::park_host`]): a network request yields first and parks
-//! when it is next at the front, while a stdin read parks at once, as the interpreter parks
+//! when it is next at the front, while a stdin read or a watcher's next event parks
+//! at once, as the interpreter parks
 //! them; the park tells the adapter ([`parked`]). Each scheduling point asks the adapter once
 //! for the parked tokens that are ready ([`ready`]), so its cost does not grow with the parked
 //! count, and the scheduler polls only those tasks and the canceled ones: timer waits by
@@ -84,13 +85,14 @@ pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
         Some(Request::ChildRead { .. }) => "child.read_stderr",
         Some(Request::ChildWait { .. }) => "child.wait",
         Some(Request::GroupWait { .. }) => "proc.wait_group",
+        Some(Request::WatchNext { .. }) => "watcher.next",
         _ => "provider request",
     }
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
-/// wait, a process run or pipeline, a child or group write, read or wait, a runner call, or a
-/// network request.
+/// wait, a process run or pipeline, a child or group write, read or wait, a runner call, a
+/// watcher's next event, or a network request.
 pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
@@ -103,6 +105,7 @@ pub(crate) fn may_park(request: &Request) -> bool {
             | Request::ChildWait { .. }
             | Request::GroupWait { .. }
             | Request::RunnerCall(_)
+            | Request::WatchNext { .. }
     ) || crate::net::is_net_request(request)
 }
 
@@ -134,7 +137,10 @@ pub(crate) unsafe fn issue(
     let token = binding.waits.next;
     binding.waits.next += 1;
     binding.adapter.enter(token);
-    let yielded = !matches!(request, Request::ReadStdin { .. });
+    let yielded = !matches!(
+        request,
+        Request::ReadStdin { .. } | Request::WatchNext { .. }
+    );
     let retry = request.clone();
     match binding.adapter.call(request) {
         Err(AdapterError::Blocked) => {}
@@ -296,7 +302,22 @@ pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
         return Ok(Ready::Tokens(Vec::new()));
     }
-    binding.adapter.ready().map_err(Stop::refusal)
+    let ready = binding.adapter.ready().map_err(Stop::refusal)?;
+    // Injected waits are derived, never recorded: each point re-issues them.
+    let Ready::Tokens(mut tokens) = ready else {
+        return Ok(ready);
+    };
+    tokens.extend(
+        binding
+            .waits
+            .parked
+            .iter_unordered()
+            .filter(|(_, parked)| binding.adapter.injected_wait(&parked.request))
+            .map(|(token, _)| token),
+    );
+    tokens.sort_unstable();
+    tokens.dedup();
+    Ok(Ready::Tokens(tokens))
 }
 
 /// The parked tasks whose request `ready` names. Their order is immaterial: the scheduler

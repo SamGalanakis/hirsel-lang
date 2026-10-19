@@ -917,6 +917,121 @@ fn filesystem_breadth_source_replays_across_backends_without_following_outside_l
     }
 }
 
+/// A host Dir's watcher reads inotify: the program's own creation, write, rename and
+/// removal arrive in order with Dir-relative paths, and a task parked on an empty watcher
+/// wakes when another task creates a file.
+const WATCH_PROGRAM: &str = r#"pub type LaunchError = Grant(GrantError) | Files(FileError)
+
+fn seen(event: Result[WatchEvent, FileError], kind: u32, p: String) -> bool {
+  match event {
+    Ok(Created(q)) => kind == 0u32 && path.text(q) == p,
+    Ok(Modified(q)) => kind == 1u32 && path.text(q) == p,
+    Ok(Removed(q)) => kind == 2u32 && path.text(q) == p,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let d = io.dir(rt, path.of("")) ? Files
+  file.mkdir(d, path.of("w")) ? Files
+  let mut w = file.watch(d, path.of("w"), false) ? Files
+  let mut f = file.create(d, path.of("w/a")) ? Files
+  file.append(d, mut f, b"x") ? Files
+  file.rename(d, path.of("w/a"), path.of("w/b")) ? Files
+  file.remove(d, path.of("w/b")) ? Files
+  failure.check(seen(watcher.next(d, mut w), 0u32, "w/a"), TextInvariant())
+  failure.check(seen(watcher.next(d, mut w), 1u32, "w/a"), TextInvariant())
+  failure.check(
+    match watcher.next(d, mut w) {
+      Ok(Renamed(a, b)) => path.text(a) == "w/a" && path.text(b) == "w/b",
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(seen(watcher.next(d, mut w), 2u32, "w/b"), TextInvariant())
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut parked = match file.watch(d, path.of("w"), false) {
+        Ok(parked) => parked,
+        Error(_) => return,
+      }
+      let h = task.async(
+        s,
+        fn() -> bool {
+          match file.create(d, path.of("w/c")) {
+            Ok(_) => true,
+            Error(_) => false,
+          }
+        }
+      )
+      failure.check(seen(watcher.next(d, mut parked), 0u32, "w/c"), TextInvariant())
+      failure.check(task.await(s, take h), TextInvariant())
+    }
+  )
+  let _ = out.print(io.stdout(rt) ? Grant, "watched\n")
+  Ok(())
+}
+"#;
+
+#[test]
+fn host_watch_events_record_and_replay_across_backends() {
+    let fixture = Fixture::new("file-watch");
+    std::fs::write(fixture.source(), WATCH_PROGRAM).unwrap();
+    let data = fixture.0.join("data");
+    let grants = fixture.0.join("watch-grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"","host":data,"access":"read_write"}]}})
+            .to_string(),
+    )
+    .unwrap();
+    let mut tapes = vec![];
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        std::fs::create_dir_all(&data).unwrap();
+        let tape = fixture.tape(&format!("watch-{}.tape", backend.unwrap_or("interp")));
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty() && output.stdout == b"watched\n",
+            "{backend:?}: {output:?}"
+        );
+        std::fs::remove_dir_all(&data).unwrap();
+        tapes.push(tape);
+    }
+    for tape in tapes {
+        for backend in [None, Some("llvm"), Some("cranelift")] {
+            let mut command = hirsel(
+                backend.is_some(),
+                &fixture.source(),
+                &["--replay".as_ref(), tape.as_os_str()],
+            );
+            if let Some(backend) = backend {
+                command.args(["--backend", backend]);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success() && output.stdout == b"watched\n",
+                "{} {backend:?}: {output:?}",
+                tape.display()
+            );
+        }
+    }
+}
+
 /// A host mapping lends the file's pages in place; truncating the file under it makes the
 /// mapped.with that reads past the new end see zeros instead of SIGBUS and return
 /// Truncated(). Each backend's tape keeps the lent bytes, so every backend replays it

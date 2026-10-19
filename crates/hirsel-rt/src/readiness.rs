@@ -29,6 +29,11 @@ pub struct Readiness(Rc<RefCell<ReadyState>>, u64);
 /// counter, below the host's own token ranges (bits 62 and 63).
 const TAG_SHIFT: u32 = 48;
 const TAG_MASK: u64 = ((1 << 14) - 1) << TAG_SHIFT;
+impl std::fmt::Debug for Readiness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Readiness")
+    }
+}
 #[derive(Default)]
 struct ReadyState {
     current: u64,

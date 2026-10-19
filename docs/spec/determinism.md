@@ -448,6 +448,17 @@ Replay lends the recorded bytes and returns the recorded check without mapping a
 so a truncation or in-place change by another process replays exactly. A host run that
 records copies each view into the recording; an unrecorded run copies nothing.
 
+### Watch recording
+
+`file.watch` is recorded like `file.open`. Each `watcher.next` on a host Dir records the
+event it returned, an input like a recorded read, and a park while none had arrived
+records the cooperative `blocked` and `ready` events of any host wait. Replay returns the
+recorded events at the recorded polls without watching anything. A `test.dir` tree's
+watcher events are derived: replay repeats the `test.dir_event` deliveries, and a
+`watcher.next` on such a watcher with nothing queued records nothing. Its task parks and
+retries at each poll, in recording and replay alike, until a delivery or a cancellation;
+a run in which nothing delivers ends Blocked.
+
 ### Network recording
 
 Network operations are recorded at the core API: the request (operation, handles, host,

@@ -1,0 +1,148 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// A test tree's watchers see only the events test.dir_event delivers, each as its watch
+// sees it: a directory watch sees its entries, a recursive one everything below it, and
+// a rename across the watch's edge is a creation or a removal. Paths are relative to the
+// watcher's Dir. A repeat of the last queued event coalesces into it, and past 1024
+// pending events the queue ends in one Overflow() until that is read; an injected
+// Overflow() reaches every watcher of the tree.
+fn created(event: Result[WatchEvent, FileError], p: String) -> bool {
+  match event {
+    Ok(Created(q)) => path.text(q) == p,
+    _ => false,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("src/main"), b""), (path.of("notes"), b"")])
+  let mut src = file.watch(d, path.of("src"), false)?
+  let mut all = file.watch(d, path.of(""), true)?
+  let mut note = file.watch(d, path.of("notes"), false)?
+  test.dir_event(t, d, Modified(path.of("src/main")))
+  test.dir_event(t, d, Modified(path.of("src/main")))
+  test.dir_event(t, d, Created(path.of("src/deep/leaf")))
+  test.dir_event(t, d, Renamed(path.of("src/main"), path.of("src/lib")))
+  test.dir_event(t, d, Renamed(path.of("src/lib"), path.of("lib")))
+  test.dir_event(t, d, Modified(path.of("notes")))
+  test.dir_event(t, d, Modified(path.of("../outside")))
+  test.check(
+    t,
+    match watcher.next(d, mut src) {
+      Ok(Modified(p)) => path.text(p) == "src/main",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut src) {
+      Ok(Renamed(a, b)) => path.text(a) == "src/main" && path.text(b) == "src/lib",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut src) {
+      Ok(Removed(p)) => path.text(p) == "src/lib",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut all) {
+      Ok(Modified(p)) => path.text(p) == "src/main",
+      _ => false,
+    }
+  )
+  test.check(t, created(watcher.next(d, mut all), "src/deep/leaf"))
+  test.check(
+    t,
+    match watcher.next(d, mut all) {
+      Ok(Renamed(_, b)) => path.text(b) == "src/lib",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut all) {
+      Ok(Renamed(a, b)) => path.text(a) == "src/lib" && path.text(b) == "lib",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut all) {
+      Ok(Modified(p)) => path.text(p) == "notes",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut note) {
+      Ok(Modified(p)) => path.text(p) == "notes",
+      _ => false,
+    }
+  )
+  let sub = dir.narrow(d, path.of("src"))?
+  let mut inner = file.watch(sub, path.of(""), false)?
+  test.dir_event(t, d, Created(path.of("src/new")))
+  test.check(t, created(watcher.next(sub, mut inner), "new"))
+  test.dir_event(t, sub, Created(path.of("other")))
+  test.check(t, created(watcher.next(sub, mut inner), "other"))
+  test.check(t, created(watcher.next(d, mut src), "src/new"))
+  test.check(t, created(watcher.next(d, mut src), "src/other"))
+  let mut top = file.watch(d, path.of(""), false)?
+  for i in 0u64..515u64 {
+    test.dir_event(t, d, Created(path.of("a")))
+    test.dir_event(t, d, Created(path.of("b")))
+  }
+  test.dir_event(t, d, Overflow())
+  for i in 0u64..512u64 {
+    test.check(t, created(watcher.next(d, mut top), "a"))
+    test.check(t, created(watcher.next(d, mut top), "b"))
+  }
+  test.check(
+    t,
+    match watcher.next(d, mut top) {
+      Ok(Overflow()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut note) {
+      Ok(Overflow()) => true,
+      _ => false,
+    }
+  )
+  test.dir_event(t, d, Removed(path.of("notes")))
+  test.check(
+    t,
+    match watcher.next(d, mut top) {
+      Ok(Removed(p)) => path.text(p) == "notes",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match watcher.next(d, mut note) {
+      Ok(Removed(p)) => path.text(p) == "notes",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.watch(d, path.of("missing"), false) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.watch(d, path.of("../escape"), true) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

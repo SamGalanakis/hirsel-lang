@@ -398,6 +398,25 @@ pub enum Request {
         directory: u64,
         mapped: u64,
     },
+    /// `file.watch`: watch a directory's entries (with `recursive`, every path below it) or
+    /// a file.
+    Watch {
+        directory: u64,
+        path: String,
+        recursive: bool,
+    },
+    /// `watcher.next`: the watcher's next change event; it parks while none has arrived.
+    WatchNext {
+        directory: u64,
+        watcher: u64,
+    },
+    /// `test.dir_event`: deliver `event` (its paths relative to the Dir) to the watchers of
+    /// a test tree.
+    TestDirEvent {
+        test: u64,
+        directory: u64,
+        event: crate::watch::WatchEvent,
+    },
     Close {
         handle: u64,
     },
@@ -661,6 +680,8 @@ pub enum Completion {
     Runner(hirsel_run_config::RunnerCompletion),
     /// `mapped.with`'s view.
     View(MapView),
+    /// `watcher.next`'s event, its paths relative to the watcher's Dir.
+    Watch(Result<crate::watch::WatchEvent, IoError>),
 }
 /// The bytes a mapping lends `mapped.with`'s body. A host mapping that nothing records
 /// keeps them where they are mapped: `block` is then the address of the static block in
@@ -872,6 +893,17 @@ pub(crate) trait Storage {
     /// was answered with zeros.
     fn map_truncated(&mut self, id: u64, length: u64) -> bool;
     fn unmap(&mut self, id: u64);
+    /// Watch the directory or file at `path` as watcher `id`; with `recursive`, every
+    /// directory below it too.
+    fn watch(&mut self, path: &str, id: u64, recursive: bool) -> Result<(), IoError>;
+    /// Watcher `id`'s next event, its paths relative to Dir root `root`, or `None` when none
+    /// has arrived: a cooperative host provider then records its descriptor interest.
+    fn watch_next(
+        &mut self,
+        id: u64,
+        root: &str,
+    ) -> Result<Option<crate::watch::WatchEvent>, IoError>;
+    fn unwatch(&mut self, id: u64);
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
@@ -919,6 +951,8 @@ pub(crate) struct State {
     pub script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
     /// Whether a host mapping's view copies its bytes, for a tape that keeps them.
     pub(crate) capture_views: bool,
+    /// The queue of each test tree's watcher, with its tree; `test.dir_event` fills them.
+    fake_watches: BTreeMap<u64, (u64, crate::watch::WatchQueue)>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -953,6 +987,7 @@ impl Default for State {
             script_children: BTreeMap::new(),
             script_groups: BTreeMap::new(),
             capture_views: true,
+            fake_watches: BTreeMap::new(),
             projections: [
                 "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
             ]
@@ -1045,6 +1080,21 @@ impl State {
     pub fn grant_test(&mut self, seed: u64) -> u64 {
         self.handles.insert(Grant::Test { seed })
     }
+    /// A `test.dir` tree's watcher asked for its next event. Only `test.dir_event` fills its
+    /// queue, which recording and replay derive alike, so its wait is never recorded: every
+    /// scheduling point re-issues it ([`Adapter::injected_wait`]).
+    pub(crate) fn injected_wait(&self, request: &Request) -> bool {
+        matches!(request, Request::WatchNext { directory, watcher }
+            if matches!(self.handles.rows.get(watcher), Some(Grant::Watcher { directory: owner, .. }) if owner == directory)
+                && self.fake_watches.contains_key(watcher))
+    }
+    /// An injected wait with nothing queued: both adapters answer `Blocked` without
+    /// recording or consuming an event.
+    pub(crate) fn awaits_injection(&self, request: &Request) -> bool {
+        self.injected_wait(request)
+            && matches!(request, Request::WatchNext { watcher, .. }
+                if self.fake_watches.get(watcher).is_some_and(|(_, queue)| queue.is_empty()))
+    }
     pub(crate) fn is_fake_request(&self, request: &Request) -> bool {
         self.fake_tree(request).is_some()
     }
@@ -1076,14 +1126,17 @@ impl State {
             | Request::Commit { directory, .. }
             | Request::Sync { directory, .. }
             | Request::PutNew { directory, .. } => *directory,
-            | Request::Map { directory, .. }
+            Request::Map { directory, .. }
             | Request::MapView { directory, .. }
-            | Request::MapCheck { directory, .. } => *directory,
+            | Request::MapCheck { directory, .. }
+            | Request::Watch { directory, .. }
+            | Request::WatchNext { directory, .. } => *directory,
             Request::Close { handle } => match self.handles.rows.get(handle) {
                 Some(
                     Grant::File { directory, .. }
                     | Grant::AtomicFile { directory, .. }
-                    | Grant::Mapped { directory, .. },
+                    | Grant::Mapped { directory, .. }
+                    | Grant::Watcher { directory, .. },
                 ) => *directory,
                 _ => return None,
             },
@@ -1200,6 +1253,11 @@ impl State {
             ) && let Ok(Completion::Handle(Ok(id))) = &result
             {
                 self.fake_directories.insert(*id, tree_id);
+            }
+            if matches!(request, Request::Watch { .. })
+                && let Ok(Completion::Handle(Ok(id))) = &result
+            {
+                self.fake_watches.insert(*id, (tree_id, Default::default()));
             }
             result
         } else {
@@ -1413,6 +1471,37 @@ impl State {
                     .extend_from_slice(&hirsel_kernels::report::snapshot(name, text));
                 Ok(C::Checked(true))
             }
+            R::TestDirEvent {
+                test,
+                directory,
+                event,
+            } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                let root = self.directory(*directory)?;
+                // An event reaches the watchers of the Dir's test tree that see it; one
+                // whose path leaves the Dir reaches none, nor does one on a host Dir.
+                if let Some(tree) = self.fake_directories.get(directory).copied()
+                    && let Some(event) =
+                        crate::watch::map_paths(event, |p| confined_relative(&root, p))
+                {
+                    for (id, (watched_tree, queue)) in &mut self.fake_watches {
+                        let Some(Grant::Watcher {
+                            root, recursive, ..
+                        }) = self.handles.rows.get(id)
+                        else {
+                            continue;
+                        };
+                        if *watched_tree == tree
+                            && let Some(seen) = crate::watch::seen(root, *recursive, &event)
+                        {
+                            queue.push(seen);
+                        }
+                    }
+                }
+                Ok(C::Unit(Ok(())))
+            }
             R::TestDir { test, entries } => {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
                     return Err(AdapterError::InvalidHandle(*test));
@@ -1541,6 +1630,10 @@ impl State {
                 } else if matches!(grant, Grant::Mapped { .. }) {
                     self.handles.rows.remove(handle);
                     storage.unmap(*handle);
+                } else if matches!(grant, Grant::Watcher { .. }) {
+                    self.handles.rows.remove(handle);
+                    self.fake_watches.remove(handle);
+                    storage.unwatch(*handle);
                 } else {
                     return Err(AdapterError::InvalidHandle(*handle));
                 }
@@ -1790,6 +1883,29 @@ impl State {
                 let result = error.map_or_else(|| storage.walk(&root), Err);
                 Ok(C::Paths(result))
             }
+            R::WatchNext { directory, watcher } => {
+                let root = self.directory(*directory)?;
+                storage.activate(*directory, &root);
+                if !matches!(self.handles.rows.get(watcher), Some(Grant::Watcher { directory: owner, .. }) if owner == directory)
+                {
+                    return Err(AdapterError::InvalidHandle(*watcher));
+                }
+                if let Some(e) = error {
+                    return Ok(C::Watch(Err(e)));
+                }
+                // A test tree's watcher reads its injected queue; a host one its provider.
+                let event = match self.fake_watches.get_mut(watcher) {
+                    Some((_, queue)) => Ok(queue
+                        .pop()
+                        .map(|event| crate::watch::relative_to(&root, event))),
+                    None => storage.watch_next(*watcher, &root),
+                };
+                match event {
+                    Ok(Some(event)) => Ok(C::Watch(Ok(event))),
+                    Ok(None) => Err(AdapterError::Blocked),
+                    Err(e) => Ok(C::Watch(Err(e))),
+                }
+            }
             R::MapView { directory, mapped } | R::MapCheck { directory, mapped } => {
                 let capture = self.capture_views;
                 let root = self.directory(*directory)?;
@@ -1844,8 +1960,11 @@ impl State {
                     | R::CreateAtomic { directory, path }
                     | R::PutNew {
                         directory, path, ..
+                    }
+                    | R::Map { directory, path }
+                    | R::Watch {
+                        directory, path, ..
                     } => (*directory, path),
-                    | R::Map { directory, path } => (*directory, path),
                     _ => unreachable!(),
                 };
                 let root = self.directory(directory)?;
@@ -1867,6 +1986,18 @@ impl State {
                                 directory,
                                 position: 0,
                                 writable,
+                            }))
+                        })
+                    })),
+                    R::Watch { recursive, .. } => Ok(C::Handle(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|path| {
+                            storage.watch(&path, self.handles.next(), *recursive)?;
+                            Ok(self.handles.insert(Grant::Watcher {
+                                directory,
+                                root: path,
+                                recursive: *recursive,
                             }))
                         })
                     })),
@@ -2086,6 +2217,11 @@ pub trait Adapter {
     /// A seeded scheduler's choice among runnable candidates; replay supplies the recorded choice.
     fn schedule(&mut self, _count: u64, choice: u64) -> Result<u64, AdapterError> {
         Ok(choice)
+    }
+    /// Whether parked `request` waits only on state recording and replay derive alike (a
+    /// `test.dir` tree's watcher): every scheduling point re-issues it, recording nothing.
+    fn injected_wait(&self, _request: &Request) -> bool {
+        false
     }
     /// A scheduling point with a parked request: the requests to re-issue now. A
     /// cooperative host answers the tokens whose interest is ready, in token order; the
@@ -2629,6 +2765,103 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_check(
     };
     unsafe { out.write(status) };
     crate::STATUS_OK
+}
+/// # Safety
+/// Context bound; directory and Path borrowed, out writable Result[Watcher, FileError].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_watch(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    directory: *const u64,
+    path: *const u64,
+    recursive: u8,
+) -> u8 {
+    let request = Request::Watch {
+        directory: unsafe { directory.read() },
+        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        recursive: recursive != 0,
+    };
+    let Ok(Completion::Handle(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(HandleResult::of(result)) };
+    crate::STATUS_OK
+}
+/// Result[WatchEvent, FileError]: the Result tag at 0; the event's tag at 8 and its paths
+/// at 16 and 24, or the FileError at 8.
+#[repr(C)]
+pub struct WatchResult {
+    pub words: [u64; 4],
+}
+/// A WatchEvent's tag and its paths, as `watcher.next` returns and `test.dir_event` takes.
+fn watch_words(ctx: *mut crate::TaskCtx, event: &crate::watch::WatchEvent) -> [u64; 3] {
+    use crate::watch::WatchEvent::*;
+    let binding = unsafe { Binding::get(ctx) };
+    match event {
+        Created(p) => [0, binding.intern_path(p), 0],
+        Modified(p) => [1, binding.intern_path(p), 0],
+        Removed(p) => [2, binding.intern_path(p), 0],
+        Renamed(a, b) => [3, binding.intern_path(a), binding.intern_path(b)],
+        Overflow => [4, 0, 0],
+    }
+}
+/// # Safety
+/// Context bound; directory borrowed, watcher exclusive and out writable for 32 bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_watcher_next(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut WatchResult,
+    directory: *const u64,
+    watcher: *mut u64,
+) -> u8 {
+    let request = Request::WatchNext {
+        directory: unsafe { directory.read() },
+        watcher: unsafe { watcher.read() },
+    };
+    let Ok(Completion::Watch(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let words = match result {
+        Ok(event) => {
+            let [tag, first, second] = watch_words(ctx, &event);
+            [0, tag, first, second]
+        }
+        Err(error) => [1, error_word(error), 0, 0],
+    };
+    unsafe { out.write(WatchResult { words }) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound; Test and directory borrowed, event a readable WatchEvent.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_dir_event(
+    ctx: *mut crate::TaskCtx,
+    test: *const u64,
+    directory: *const u64,
+    event: *const [u64; 3],
+) -> u8 {
+    use crate::watch::WatchEvent::*;
+    let [tag, first, second] = unsafe { event.read() };
+    let binding = unsafe { Binding::get(ctx) };
+    let event = match tag as u32 {
+        0 => Created(binding.path(first)),
+        1 => Modified(binding.path(first)),
+        2 => Removed(binding.path(first)),
+        3 => Renamed(binding.path(first), binding.path(second)),
+        4 => Overflow,
+        _ => crate::fault("invalid WatchEvent tag"),
+    };
+    let request = Request::TestDirEvent {
+        test: unsafe { test.read() },
+        directory: unsafe { directory.read() },
+        event,
+    };
+    match unsafe { capability_call(ctx, request) } {
+        Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
+        _ => crate::STATUS_FAILURE,
+    }
 }
 path_export!(
     hirsel_rt_v2_file_size,
@@ -4233,6 +4466,19 @@ mod filesystem_authority_tests {
             unreachable!()
         }
         fn unmap(&mut self, _: u64) {
+            unreachable!()
+        }
+        fn watch(&mut self, _: &str, _: u64, _: bool) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn watch_next(
+            &mut self,
+            _: u64,
+            _: &str,
+        ) -> Result<Option<crate::watch::WatchEvent>, IoError> {
+            unreachable!()
+        }
+        fn unwatch(&mut self, _: u64) {
             unreachable!()
         }
         fn metadata(&mut self, _: &str) -> Result<Metadata, IoError> {

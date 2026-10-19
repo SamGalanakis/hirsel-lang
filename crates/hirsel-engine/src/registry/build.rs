@@ -128,6 +128,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("FileKind", "", "Regular()|Directory()|Symlink()|Other()"),
         ("Durability", "", "Durable()|Volatile()"),
+        (
+            "WatchEvent",
+            "",
+            "Created(Path)|Modified(Path)|Removed(Path)|Renamed(Path,Path)|Overflow()",
+        ),
         ("IpAddr", "", "V4(Inline[u8, 4])|V6(Inline[u8, 16])"),
         (
             "NetOperation",
@@ -372,6 +377,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("File", ""),
         ("AtomicFile", "dir: Dir,tmp: Path,dst: Path"),
         ("Mapped", ""),
+        ("Watcher", ""),
     ] {
         let mut b = Builder::new("").with_declarations(&out);
         let repr = (!fields.is_empty()).then(|| b.record(fields));

@@ -380,6 +380,64 @@ impl HostLibrary {
             continuation,
         })
     }
+    /// `watcher.next` on a host watcher: the next inotify event, or, with none yet, a park
+    /// on the watcher's readiness, as a stdin read parks at once.
+    fn host_watch_next(
+        &mut self,
+        a: &[Value],
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.watch_request(a, token) {
+            Err(Error::Blocked(_)) => {}
+            result => {
+                self.yield_now = true;
+                return result;
+            }
+        }
+        self.waits.insert(
+            token,
+            HostWait {
+                name: "watcher.next".into(),
+                arguments: a.to_vec(),
+            },
+        );
+        Ok(OperationResult::Park {
+            token,
+            wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                kind: "watcher.next".into(),
+                targets: vec![],
+            },
+        })
+    }
+    /// Issue `watcher.next` under `token`: its event, or Blocked while none has arrived.
+    fn watch_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let request = R::WatchNext {
+            directory: self.id(&a[0])?,
+            watcher: self.id(&a[1])?,
+        };
+        self.io.adapter().enter(token);
+        let completion = self.host(request);
+        if !matches!(completion, Err(Error::Blocked(_))) {
+            self.io.adapter().finish(token);
+        }
+        let C::Watch(result) = completion? else {
+            return Err(invalid());
+        };
+        use hirsel_rt::watch::WatchEvent::*;
+        let path = hirsel_interp::library::path;
+        Ok(OperationResult::returned(match result {
+            Ok(Created(p)) => ok(variant(0, vec![path(&p)])),
+            Ok(Modified(p)) => ok(variant(1, vec![path(&p)])),
+            Ok(Removed(p)) => ok(variant(2, vec![path(&p)])),
+            Ok(Renamed(a, b)) => ok(variant(3, vec![path(&a), path(&b)])),
+            Ok(Overflow) => ok(variant(4, vec![])),
+            Err(e) => file_error(e),
+        }))
+    }
     /// Every host request goes through here. A provider that would block parks the
     /// task; any other adapter error is a refusal (a replay divergence or host fault).
     fn host(&mut self, request: R) -> Result<C, Error> {
@@ -1228,6 +1286,11 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
             },
+            "file.watch" => R::Watch {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+                recursive: matches!(a[2], Value::Bool(true)),
+            },
             "file.write_all" => R::WriteAll {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
@@ -1267,6 +1330,7 @@ impl HostLibrary {
                         "file.open" | "file.create" => "File",
                         "file.create_atomic" => "AtomicFile",
                         "file.map" => "Mapped",
+                        "file.watch" => "Watcher",
                         _ => "Dir",
                     },
                 )),
@@ -2028,6 +2092,16 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
+        if name == "watcher.next" {
+            // A canceled wait completes Canceled through the host's cancellation check.
+            return match self.watch_request(&arguments, token) {
+                Err(Error::Blocked(_)) => Ok(None),
+                result => {
+                    self.waits.remove(&token);
+                    result.map(Some)
+                }
+            };
+        }
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
@@ -2100,6 +2174,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
                 return self.storage(&name, call.arguments).map(Some);
             }
+            if name == "watcher.next" && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+            {
+                return self.host_watch_next(call.arguments, cx).map(Some);
+            }
             if name == "mapped.with" && call.arguments.first().is_some_and(|v| self.id(v).is_ok()) {
                 return self.host_mapped_with(call.arguments).map(Some);
             }
@@ -2171,8 +2249,15 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     ) -> Result<(), Error> {
         if matches!(
             kind,
-            "Stream" | "Listener" | "UdpSocket" | "File" | "AtomicFile" | "Child" | "ChildGroup"
+            "Stream"
+                | "Listener"
+                | "UdpSocket"
+                | "File"
+                | "AtomicFile"
+                | "Child"
+                | "ChildGroup"
                 | "Mapped"
+                | "Watcher"
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.

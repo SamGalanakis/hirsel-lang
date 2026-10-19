@@ -83,7 +83,9 @@ impl State {
             | R::PutNew { directory, .. } => *directory,
             R::Map { directory, .. }
             | R::MapView { directory, .. }
-            | R::MapCheck { directory, .. } => *directory,
+            | R::MapCheck { directory, .. }
+            | R::Watch { directory, .. }
+            | R::WatchNext { directory, .. } => *directory,
             _ => return Ok(None),
         };
         let root = self.directory(directory)?;
@@ -119,6 +121,13 @@ impl State {
                 if !matches!(self.handles.rows.get(mapped), Some(Grant::Mapped { directory: owner, .. }) if *owner == directory)
                 {
                     return Err(AdapterError::InvalidHandle(*mapped));
+                }
+                None
+            }
+            R::WatchNext { watcher, .. } => {
+                if !matches!(self.handles.rows.get(watcher), Some(Grant::Watcher { directory: owner, .. }) if *owner == directory)
+                {
+                    return Err(AdapterError::InvalidHandle(*watcher));
                 }
                 None
             }
@@ -176,7 +185,8 @@ impl State {
             | R::RemoveDir { path, .. }
             | R::CreateAtomic { path, .. }
             | R::PutNew { path, .. }
-            | R::Map { path, .. } => hirsel_run_config::confined_relative(&root, path).is_none(),
+            | R::Map { path, .. }
+            | R::Watch { path, .. } => hirsel_run_config::confined_relative(&root, path).is_none(),
             R::Rename { from, to, .. } => {
                 hirsel_run_config::confined_relative(&root, from).is_none()
                     || hirsel_run_config::confined_relative(&root, to).is_none()
@@ -189,9 +199,12 @@ impl State {
 
 fn file_completion(request: &R, error: IoError) -> C {
     match request {
-        R::Open { .. } | R::Create { .. } | R::CreateAtomic { .. } | R::Map { .. } => {
-            C::Handle(Err(error))
-        }
+        R::Open { .. }
+        | R::Create { .. }
+        | R::CreateAtomic { .. }
+        | R::Map { .. }
+        | R::Watch { .. } => C::Handle(Err(error)),
+        R::WatchNext { .. } => C::Watch(Err(error)),
         R::FileRead { .. } | R::Read { .. } => C::Bytes(Err(error)),
         R::FileWrite { .. } | R::Size { .. } => C::Size(Err(error)),
         R::ReadDir { .. } => C::Entries(Err(error)),
@@ -259,8 +272,10 @@ pub fn cancel(
         | R::WriteAll { .. }
         | R::Commit { .. }
         | R::Sync { .. }
-        | R::PutNew { .. } => file_completion(request, IoError::Canceled(cause)),
-        R::Map { .. } => file_completion(request, IoError::Canceled(cause)),
+        | R::PutNew { .. }
+        | R::Map { .. }
+        | R::Watch { .. }
+        | R::WatchNext { .. } => file_completion(request, IoError::Canceled(cause)),
         _ => return Ok(None),
     };
     let completion = adapter.preflight(request)?.unwrap_or(canceled);

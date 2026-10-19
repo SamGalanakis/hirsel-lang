@@ -84,6 +84,7 @@ N fn test.clock(t: Test) -> MonotonicClock
 N fn test.log(t: Test, text: String) -> ()
 N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
+fn test.dir_event(t: Test, d: Dir, event: WatchEvent) -> ()
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 fn test.crash(t: Test, d: Dir, seed: u64) -> ()
@@ -115,6 +116,8 @@ fn file.sync(d: Dir, mut f: File of d) -> Result[(), FileError]
 fn file.put_new(d: Dir, p: Path, take data: Bytes, mode: Durability) -> Result[(), FileError]
 fn file.map(d: Dir, p: Path) -> Result[Mapped of d, FileError]
 fn mapped.with[R](d: Dir, m: Mapped of d, body: fn(view: Bytes) -> R) -> Result[R, FileError]
+fn file.watch(d: Dir, p: Path, recursive: bool) -> Result[Watcher of d, FileError]
+fn watcher.next(d: Dir, mut w: Watcher of d) -> Result[WatchEvent, FileError]
 
 // CAP-1/2/3, PROV-1/3, DROP-2/3/4, CONC-3/8, DET-1
 fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]
@@ -297,7 +300,7 @@ holds its written unknown captures.
 
 `Io`, `Args`, `Env`, `Unsafe` and the global projections, `Runner`
 ([runners](runners.md)) included, are plain capabilities; `Path` is
-an inert, plain, immutable path value. `File`, `AtomicFile` and `Mapped` carry `Dir` authority, task
+an inert, plain, immutable path value. `File`, `AtomicFile`, `Mapped` and `Watcher` carry `Dir` authority, task
 handles `Scope`, and `Mutex`, `Atomic` and channel handles `Tasks`. The latter use run-time
 scheduling-domain affinity, not an implicit static `of tasks` brand; an operation with
 another domain fails [CAP-2](capabilities.md#cap-2-charged-at-use) before any effect. The
@@ -351,6 +354,7 @@ and writing it through that `Dir` is still `NotGranted()`.
 type FileKind = Regular | Directory | Symlink | Other
 type Metadata { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permissions: u32 }
 type DirEntry { path: Path, kind: FileKind }
+type WatchEvent = Created(Path) | Modified(Path) | Removed(Path) | Renamed(Path, Path) | Overflow
 ```
 
 `DirEntry` is `serializable` like `FileKind` and `Metadata`: a listed path is data, and
@@ -473,6 +477,37 @@ modifications are: the body may see old or new bytes. So are the program's own w
 the mapped file while a body runs (from the body or another task): a host view shows
 them in place and a simulated view keeps the bytes it lent; a truncation still makes
 `mapped.with` return `Truncated()`. Writes made before `mapped.with` starts always show.
+
+### Watching files
+
+`file.watch(d, p, recursive)` returns a `Watcher of d`, a noncopyable resource with `Dir`
+authority whose `@noalloc` finalizer stops it. It watches the directory or file at `p`:
+for a directory, the directory itself and its entries, and with `recursive` every path
+below it. It is a read under the Dir's ordinary rights and confinement and a cancellation
+point; a missing path is `NotFound`, a path outside the grant `FileFault`.
+
+`watcher.next(d, mut w)` returns the watcher's next change, its paths relative to `d`:
+`Created`, `Modified` (a content write), `Removed`, `Renamed(from, to)` within the watch, and
+`Overflow()`. A rename into the watch is `Created` there and one out of it `Removed`. An
+event equal to the last one still queued is coalesced into it. A watcher queues at most
+1024 events; past that the queue ends with one `Overflow()` and drops later events until
+the program reads it, after which it should rescan what it watches. With no event queued,
+`watcher.next` parks its task, as a stdin read does, until one arrives or the task is
+canceled (`Canceled(cause)`); a parked watcher that nothing can deliver to is a CONC-8
+wait. Other tasks run meanwhile.
+
+The Dir decides where events come from. A host Dir's watcher reads inotify: the
+program's own effects and other processes' alike, in kernel order, including the
+temporary file a replacing write publishes by rename. A move is `Renamed` when the kernel
+reports both halves in one read and otherwise a removal and a creation; a directory
+created or moved into a recursive watch is watched from when its event is read, so
+entries made in it before then are not reported. A kernel queue overflow is
+`Overflow()`. A simulated tree (a `test.dir` tree or the interpreter's default tree) has
+no change source of its own: its watchers receive only what `test.dir_event(t, d, event)`
+delivers. That operation hands `event`, its paths relative to `d`, to every watcher of
+`d`'s `test.dir` tree that sees it; an event whose path leaves `d`, or one on a Dir that
+is not a `test.dir` tree, reaches no watcher. An injected `Overflow()` reaches every
+watcher of the tree.
 
 ## Network types
 

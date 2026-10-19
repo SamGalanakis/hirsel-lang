@@ -1,0 +1,11 @@
+// rule: CONC-8
+// expect: blocked
+// entry: exercise
+// A test tree has no change source but test.dir_event, so a watcher that nothing will
+// deliver to waits forever and the run ends Blocked.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("a"), b"")])
+  let mut w = file.watch(d, path.of(""), false)?
+  let _ = watcher.next(d, mut w)
+  Ok(())
+}

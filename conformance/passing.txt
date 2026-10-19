@@ -32,6 +32,8 @@ conformance/CAP/CAP-1-file-put-new-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-ok.hir
 conformance/CAP/CAP-1-file-walk-steps-run.hir
+conformance/CAP/CAP-1-file-watch-authority-bad.hir
+conformance/CAP/CAP-1-file-watch-authority-ok.hir
 conformance/CAP/CAP-1-hello-web-scripted-run.hir
 conformance/CAP/CAP-1-host-inputs-run.hir
 conformance/CAP/CAP-1-listen-not-granted-run.hir
@@ -170,6 +172,7 @@ conformance/CAP/CAP-2-file-permissions-run.hir
 conformance/CAP/CAP-2-file-put-new-run.hir
 conformance/CAP/CAP-2-file-stream-dir-bad.hir
 conformance/CAP/CAP-2-file-stream-dir-ok.hir
+conformance/CAP/CAP-2-file-watch-run.hir
 conformance/CAP/CAP-2-filesystem-breadth-host-run.hir
 conformance/CAP/CAP-2-filesystem-lifecycle-run.hir
 conformance/CAP/CAP-2-filesystem-pinned-directory-run.hir
@@ -592,6 +595,7 @@ conformance/CONC/CONC-3-cancel-order-net-run.hir
 conformance/CONC/CONC-3-cancel-order-stdin-timer-channel-run.hir
 conformance/CONC/CONC-3-cancel-order-tls-inputs-run.hir
 conformance/CONC/CONC-3-cancel-order-tls-run.hir
+conformance/CONC/CONC-3-cancel-order-watch-run.hir
 conformance/CONC/CONC-3-cancel-tls-accept-cleanup-fail.hir
 conformance/CONC/CONC-3-cancel-tls-accept-cleanup-run.hir
 conformance/CONC/CONC-3-cancel-tls-close-cleanup-fail.hir
@@ -702,6 +706,9 @@ conformance/CONC/CONC-8-held-sender-blocked.hir
 conformance/CONC/CONC-8-held-sender-run.hir
 conformance/CONC/CONC-8-two-task-channel-blocked.hir
 conformance/CONC/CONC-8-two-task-channel-run.hir
+conformance/CONC/CONC-8-watch-injected-wake-run.hir
+conformance/CONC/CONC-8-watch-no-event-blocked.hir
+conformance/CONC/CONC-8-watch-no-event-run.hir
 conformance/CT/CT-1-arithmetic-constant.hir
 conformance/CT/CT-1-conditional-constant.hir
 conformance/CT/CT-1-contract-failure-bad.hir

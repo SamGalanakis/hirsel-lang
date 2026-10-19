@@ -78,5 +78,6 @@ mod tasks;
 mod timers;
 
 mod channels;
+mod watch;
 
 mod synchronization;

@@ -83,6 +83,7 @@ impl RealIo {
     /// Cooperative admission: a request whose provider parks on `readiness` answers
     /// `AdapterError::Blocked`, and the tape records it and each ready poll (DET-1).
     pub fn set_cooperative(&mut self, readiness: crate::readiness::Readiness) {
+        self.disk.readiness = Some(readiness.clone());
         self.cooperative = Some((readiness, Default::default()));
     }
     /// Cooperative admission whose host network provider is cooperative too: the net
@@ -161,6 +162,8 @@ impl RealIo {
                 next_write: 1,
                 prepared: BTreeMap::new(),
                 maps: BTreeMap::new(),
+                watches: BTreeMap::new(),
+                readiness: None,
             },
             tape: vec![],
             fault: None,
@@ -530,6 +533,9 @@ impl Adapter for RealIo {
         self.journal.issuer(task);
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.state.awaits_injection(&request) {
+            return Err(AdapterError::Blocked);
+        }
         let parks = self.cooperative.is_some() && crate::host_waits::may_park(&request);
         // A durable journal prepares the request first; one that may park waits for the
         // barrier that makes its record durable, parked as for the host (group commit).
@@ -621,6 +627,9 @@ impl Adapter for RealIo {
             fault: None,
         })?;
         Ok(choice)
+    }
+    fn injected_wait(&self, request: &Request) -> bool {
+        self.state.injected_wait(request)
     }
     /// The tokens the Readiness finds ready, with the held requests a journal barrier
     /// released (which wait on no host interest), each recorded as its wait's `ready` event,
@@ -943,6 +952,7 @@ impl RealIo {
                 | Completion::Paths(Err(e))
                 | Completion::Entries(Err(e))
                 | Completion::Metadata(Err(e))
+                | Completion::Watch(Err(e))
                     if *e != IoError::NotGranted =>
                 {
                     Some(e.clone())
@@ -1016,6 +1026,10 @@ struct Disk {
     prepared: BTreeMap<(u64, String), File>,
     /// Live `file.map` mappings by Mapped handle.
     maps: BTreeMap<u64, crate::mapping::Mapping>,
+    /// Live `file.watch` watchers by Watcher handle.
+    watches: BTreeMap<u64, crate::watch::HostWatch>,
+    /// Cooperative admission's readiness: a watcher with no event records its interest.
+    readiness: Option<crate::readiness::Readiness>,
 }
 fn error(e: std::io::Error) -> IoError {
     // Portable conditions, never expose host errno as language data.
@@ -1613,6 +1627,46 @@ impl Storage for Disk {
     fn unmap(&mut self, id: u64) {
         self.maps.remove(&id);
     }
+    fn watch(&mut self, path: &str, id: u64, recursive: bool) -> Result<(), IoError> {
+        let target = self.open(path, libc::O_PATH, 0)?;
+        let directories = if recursive && target.metadata().map_err(error)?.is_dir() {
+            subdirectories(&target, path)?
+        } else {
+            vec![]
+        };
+        let watch = crate::watch::HostWatch::new(&target, path, recursive, directories)?;
+        self.watches.insert(id, watch);
+        Ok(())
+    }
+    fn watch_next(
+        &mut self,
+        id: u64,
+        root: &str,
+    ) -> Result<Option<crate::watch::WatchEvent>, IoError> {
+        let mut watch = self.watches.remove(&id).expect("live watcher");
+        let disk = &*self;
+        let mut open = |path: &str| disk.open(path, libc::O_PATH | libc::O_DIRECTORY, 0).ok();
+        let event = loop {
+            match watch.next(&mut open) {
+                Ok(None) if disk.readiness.is_none() => {
+                    if let Err(e) = watch.block() {
+                        break Err(e);
+                    }
+                }
+                Ok(None) => {
+                    let readiness = disk.readiness.as_ref().unwrap();
+                    readiness.pending().interest = Some((watch.descriptor(), libc::POLLIN));
+                    break Ok(None);
+                }
+                other => break other,
+            }
+        };
+        self.watches.insert(id, watch);
+        event.map(|event| event.map(|event| crate::watch::relative_to(root, event)))
+    }
+    fn unwatch(&mut self, id: u64) {
+        self.watches.remove(&id);
+    }
     fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError> {
         let (parent, name) = self.parent(path)?;
         let pin = open_component(
@@ -1736,6 +1790,40 @@ impl Storage for Disk {
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError> {
         self.entries(root).map(|(f, _)| f)
     }
+}
+/// Every directory below pinned directory `root` (tree path `path`), each pinned, without
+/// following links.
+fn subdirectories(root: &File, path: &str) -> Result<Vec<(File, String)>, IoError> {
+    let mut found = vec![];
+    let mut work = vec![(root.try_clone().map_err(error)?, path.to_owned())];
+    while let Some((directory, prefix)) = work.pop() {
+        let listing = open_component(
+            directory.as_raw_fd(),
+            ".",
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        for entry in
+            std::fs::read_dir(format!("/proc/self/fd/{}", listing.as_raw_fd())).map_err(error)?
+        {
+            let name = entry
+                .map_err(error)?
+                .file_name()
+                .into_string()
+                .map_err(|_| IoError::Fault(1))?;
+            let pin = open_component(directory.as_raw_fd(), &name, libc::O_PATH, 0)?;
+            if pin.metadata().map_err(error)?.is_dir() {
+                let child = if prefix.is_empty() {
+                    name
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                found.push((pin.try_clone().map_err(error)?, child.clone()));
+                work.push((pin, child));
+            }
+        }
+    }
+    Ok(found)
 }
 fn open_beneath(fd: RawFd, path: &str, flags: i32, mode: u64) -> Result<File, IoError> {
     let root = open_component(fd, ".", libc::O_PATH | libc::O_DIRECTORY, 0)?;

@@ -224,3 +224,8 @@ mapped length), calls its body with that view and, on resume, records
 `mapped.check`: `Truncated()` once the identity is shorter than the mapping, sticky,
 and then the body's result is released after publication. Both yield like other
 capability operations; neither is a cancellation point.
+
+`file.watch` opens a `Watcher` grant over the resolved path (`library/watch.rs`).
+`watcher.next` records the next queued event, relative to its Dir, or parks its task
+until `test.dir_event` delivers one into its `test.dir` tree or the task is canceled. A
+simulated tree derives no events from the program's own effects.

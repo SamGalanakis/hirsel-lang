@@ -173,7 +173,9 @@ impl Operations for Io {
             };
         }
         match self.grants.remove(&handle) {
-            Some(IoGrant::File { .. } | IoGrant::Mapped { .. }) => Ok(None),
+            Some(IoGrant::File { .. } | IoGrant::Mapped { .. } | IoGrant::Watcher { .. }) => {
+                Ok(None)
+            }
             Some(IoGrant::Atomic {
                 tree,
                 temporary,
@@ -259,6 +261,18 @@ impl Operations for Io {
             },
             // `mapped.with`'s entries are no cancellation points.
             (Some("$intrinsic"), "MappedView" | "MappedCheck", _) => return None,
+            (Some("watcher"), "next", [OpValue::Handle(directory), OpValue::Handle(watcher)]) => {
+                if !matches!(self.grants.get(watcher), Some(IoGrant::Watcher { directory: owner, .. }) if owner == directory)
+                {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                let mut bytes = 1u32.to_le_bytes().to_vec();
+                bytes.extend_from_slice(&cause.to_le_bytes());
+                OpValue::Variant {
+                    tag: 1,
+                    value: Box::new(OpValue::Plain(bytes)),
+                }
+            }
             (Some("net" | "udp" | "tls" | "$intrinsic"), _, _) => {
                 self.yielded = true;
                 let outcome = self.net(module, &path.name, args, Some(cause));
@@ -442,6 +456,15 @@ enum IoGrant {
         length: u64,
         truncated: bool,
         identity: std::sync::Arc<()>,
+    },
+    /// A `file.watch` watcher over tree path `root`; its queue holds the events
+    /// `test.dir_event` delivered (`hirsel_rt::watch`).
+    Watcher {
+        tree: u64,
+        directory: u64,
+        root: String,
+        recursive: bool,
+        queue: hirsel_rt::watch::WatchQueue,
     },
 }
 /// The pure Instant operations: no capability, no scheduling point.
@@ -1107,6 +1130,90 @@ impl Io {
                 self.update_files(&identity, bytes, true);
                 io_ok(OpValue::Unit)
             }
+            // The next delivered event, its paths relative to the watcher's Dir; with none
+            // the task suspends and polls again (CONC-8 when nothing can deliver one).
+            (Some("watcher"), "next", [OpValue::Handle(directory), OpValue::Handle(watcher)]) => {
+                let Some(IoGrant::Dir { root, .. }) = self.grants.get(directory).cloned() else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                let Some(IoGrant::Watcher {
+                    directory: owner,
+                    queue,
+                    ..
+                }) = self.grants.get_mut(watcher)
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                if owner != directory {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                let Some(event) = queue.pop() else {
+                    return Some(OpOutcome::Pending);
+                };
+                use hirsel_rt::watch::WatchEvent::*;
+                // The event inline: its tag, then its paths' identities.
+                let words = match hirsel_rt::watch::relative_to(&root, event) {
+                    Created(p) => [0, self.path(&p), 0],
+                    Modified(p) => [1, self.path(&p), 0],
+                    Removed(p) => [2, self.path(&p), 0],
+                    Renamed(a, b) => [3, self.path(&a), self.path(&b)],
+                    Overflow => [4, 0, 0],
+                };
+                io_ok(OpValue::Plain(
+                    words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+                ))
+            }
+            // Delivered to the watchers of a `test.dir` tree that see it; an event whose
+            // path leaves the Dir reaches none, nor does one on another tree.
+            (
+                Some("test"),
+                "dir_event",
+                [
+                    OpValue::Handle(test),
+                    OpValue::Handle(directory),
+                    OpValue::Variant { tag, value },
+                ],
+            ) if matches!(self.grants.get(test), Some(IoGrant::Test)) => {
+                let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(directory).cloned()
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                let path = |v: &OpValue| -> Option<String> {
+                    let OpValue::Handle(p) = v else { return None };
+                    self.paths.get(p.checked_sub(1)? as usize).cloned()
+                };
+                use hirsel_rt::watch::WatchEvent::*;
+                let event = match (tag, value.as_ref()) {
+                    (0, p) => Created(path(p)?),
+                    (1, p) => Modified(path(p)?),
+                    (2, p) => Removed(path(p)?),
+                    (3, OpValue::Aggregate(pair)) if pair.len() == 2 => {
+                        Renamed(path(&pair[0])?, path(&pair[1])?)
+                    }
+                    (4, _) => Overflow,
+                    _ => return Some(OpOutcome::Unsupported),
+                };
+                if tree != 0
+                    && let Some(event) =
+                        hirsel_rt::watch::map_paths(&event, |p| io_relative(&root, p))
+                {
+                    for grant in self.grants.values_mut() {
+                        if let IoGrant::Watcher {
+                            tree: watched,
+                            root,
+                            recursive,
+                            queue,
+                            ..
+                        } = grant
+                            && *watched == tree
+                            && let Some(seen) = hirsel_rt::watch::seen(root, *recursive, &event)
+                        {
+                            queue.push(seen);
+                        }
+                    }
+                }
+                OpValue::Unit
+            }
             // `mapped.with`'s view: the identity's current bytes, zero past their end;
             // its check: 1 once the identity is found shorter than the mapping.
             (
@@ -1163,7 +1270,7 @@ impl Io {
             (
                 Some("file"),
                 kind @ ("open" | "create" | "size" | "read_bytes" | "write_bytes" | "remove"
-                | "create_atomic" | "put_new" | "map"),
+                | "create_atomic" | "put_new" | "map" | "watch"),
                 [OpValue::Handle(directory), OpValue::Handle(path), rest @ ..],
             ) => {
                 let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned()
@@ -1219,6 +1326,27 @@ impl Io {
                             contents: self.trees[&tree].1[&path].clone(),
                             tree,
                             path: logical,
+                        })))
+                    }
+                    "watch"
+                        if self.trees[&tree].1.contains_key(&path)
+                            || self.trees[&tree].0.contains(&path) =>
+                    {
+                        let [
+                            OpValue::Bits {
+                                scalar: ScalarKind::Bool,
+                                bits,
+                            },
+                        ] = rest
+                        else {
+                            return Some(OpOutcome::Unsupported);
+                        };
+                        io_ok(OpValue::OpenHandle(self.grant(IoGrant::Watcher {
+                            tree,
+                            directory: *directory,
+                            root: logical,
+                            recursive: *bits != 0,
+                            queue: Default::default(),
                         })))
                     }
                     "map" if self.trees[&tree].1.contains_key(&path) => {

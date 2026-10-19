@@ -50,6 +50,7 @@ pub mod test_net_abi;
 pub mod text;
 pub mod tls_abi;
 pub mod views;
+pub mod watch;
 
 pub mod alloc;
 pub mod budget;

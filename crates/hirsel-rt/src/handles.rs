@@ -81,6 +81,13 @@ pub enum Grant {
         length: u64,
         truncated: bool,
     },
+    /// A change watcher branded by its Dir, over tree path `root` and, with `recursive`,
+    /// everything below it.
+    Watcher {
+        directory: u64,
+        root: String,
+        recursive: bool,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Handles {

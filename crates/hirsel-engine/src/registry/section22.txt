@@ -46,6 +46,7 @@ N fn test.clock(t: Test) -> MonotonicClock
 N fn test.log(t: Test, text: String) -> ()
 N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
+fn test.dir_event(t: Test, d: Dir, event: WatchEvent) -> ()
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 fn test.crash(t: Test, d: Dir, seed: u64) -> ()
@@ -77,6 +78,8 @@ fn file.sync(d: Dir, mut f: File of d) -> Result[(), FileError]
 fn file.put_new(d: Dir, p: Path, take data: Bytes, mode: Durability) -> Result[(), FileError]
 fn file.map(d: Dir, p: Path) -> Result[Mapped of d, FileError]
 fn mapped.with[R](d: Dir, m: Mapped of d, body: fn(view: Bytes) -> R) -> Result[R, FileError]
+fn file.watch(d: Dir, p: Path, recursive: bool) -> Result[Watcher of d, FileError]
+fn watcher.next(d: Dir, mut w: Watcher of d) -> Result[WatchEvent, FileError]
 
 // CAP-1/2/3, PROV-1/3, DROP-2/3/4, CONC-3/8, DET-1
 fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]

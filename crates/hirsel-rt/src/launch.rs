@@ -149,6 +149,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn parked(&mut self, token: u64) {
         self.0.borrow_mut().parked(token);
     }
+    fn injected_wait(&self, request: &Request) -> bool {
+        self.0.borrow().injected_wait(request)
+    }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.0.borrow_mut().ready()
     }
@@ -245,6 +248,38 @@ fn parse_metadata(text: &str) -> Result<crate::io::Metadata, String> {
         },
     })
 }
+/// A watch event as one tape word: its kind, then each path in hex, `:`-separated.
+fn render_watch_event(event: &crate::watch::WatchEvent) -> String {
+    use crate::watch::WatchEvent::*;
+    match event {
+        Created(p) => format!("created:{}", hex(p.as_bytes())),
+        Modified(p) => format!("modified:{}", hex(p.as_bytes())),
+        Removed(p) => format!("removed:{}", hex(p.as_bytes())),
+        Renamed(a, b) => format!("renamed:{}:{}", hex(a.as_bytes()), hex(b.as_bytes())),
+        Overflow => "overflow".into(),
+    }
+}
+fn parse_watch_event(word: &str) -> Result<crate::watch::WatchEvent, String> {
+    use crate::watch::WatchEvent::*;
+    let path = |word: &str| -> Result<String, String> {
+        if !word.is_ascii() || word.len() % 2 != 0 {
+            return Err("bad tape watch path".into());
+        }
+        let bytes = (0..word.len() / 2)
+            .map(|i| u8::from_str_radix(&word[2 * i..2 * i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>()
+            .map_err(|_| "bad tape watch path")?;
+        String::from_utf8(bytes).map_err(|_| "bad tape watch path".into())
+    };
+    Ok(match word.split(':').collect::<Vec<_>>().as_slice() {
+        ["created", p] => Created(path(p)?),
+        ["modified", p] => Modified(path(p)?),
+        ["removed", p] => Removed(path(p)?),
+        ["renamed", a, b] => Renamed(path(a)?, path(b)?),
+        ["overflow"] => Overflow,
+        _ => return Err("bad tape watch event".into()),
+    })
+}
 pub fn render_tape(tape: &[Event]) -> Result<String, String> {
     fn outcome<T>(value: &Result<T, IoError>, ok: impl FnOnce(&T) -> String) -> String {
         match value {
@@ -290,6 +325,26 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             }
             Request::MapView { directory, mapped } => format!("map_view {directory} {mapped}"),
             Request::MapCheck { directory, mapped } => format!("map_check {directory} {mapped}"),
+            Request::Watch {
+                directory,
+                path,
+                recursive,
+            } => format!(
+                "watch {directory} {} {}",
+                hex(path.as_bytes()),
+                u8::from(*recursive)
+            ),
+            Request::WatchNext { directory, watcher } => {
+                format!("watch_next {directory} {watcher}")
+            }
+            Request::TestDirEvent {
+                test,
+                directory,
+                event,
+            } => format!(
+                "test_dir_event {test} {directory} {}",
+                render_watch_event(event)
+            ),
             Request::FileRead {
                 directory,
                 file,
@@ -452,6 +507,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             ),
             Completion::Checked(v) => format!("checked {}", u8::from(*v)),
             Completion::Refused(id) => format!("refused {id}"),
+            Completion::Watch(v) => format!("watch {}", outcome(v, render_watch_event)),
             Completion::View(view) => format!(
                 "view {}",
                 hex(view
@@ -613,6 +669,20 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["map_check", d, m] => Request::MapCheck {
                     directory: number(d)?,
                     mapped: number(m)?,
+                },
+                ["watch", d, p, r] => Request::Watch {
+                    directory: number(d)?,
+                    path: string(p)?,
+                    recursive: boolean(r)?,
+                },
+                ["watch_next", d, w] => Request::WatchNext {
+                    directory: number(d)?,
+                    watcher: number(w)?,
+                },
+                ["test_dir_event", t, d, e] => Request::TestDirEvent {
+                    test: number(t)?,
+                    directory: number(d)?,
+                    event: parse_watch_event(e)?,
                 },
                 ["file_read", d, f, n] => Request::FileRead {
                     directory: number(d)?,
@@ -808,6 +878,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["checked", v] => Completion::Checked(boolean(v)?),
                 ["refused", id] => Completion::Refused(number(id)?),
                 ["view", b] => Completion::View(crate::io::MapView::of(bytes(b)?)),
+                ["watch", r @ ..] => Completion::Watch(result(r, parse_watch_event)?),
                 words => match crate::host_io_tape::parse_completion(words)?
                     .or(crate::net::tape::parse_completion(words)?)
                 {

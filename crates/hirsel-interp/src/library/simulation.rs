@@ -222,6 +222,15 @@ pub(crate) enum Grant {
         length: u64,
         truncated: bool,
     },
+    /// A change watcher over tree path `root` (with `recursive`, everything below it) and
+    /// the events delivered to it.
+    Watcher {
+        tree: u64,
+        dir: u64,
+        root: String,
+        recursive: bool,
+        queue: super::watch::Queue,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct Simulation {
@@ -322,6 +331,12 @@ pub enum ObservedGrant {
         length: u64,
         truncated: bool,
     },
+    Watcher {
+        tree: u64,
+        directory: u64,
+        root: String,
+        recursive: bool,
+    },
 }
 impl Simulation {
     /// Supply the next provider chunk without changing any grant or replay state.
@@ -400,6 +415,18 @@ impl Simulation {
                             directory: *dir,
                             length: *length,
                             truncated: *truncated,
+                        },
+                        Grant::Watcher {
+                            tree,
+                            dir,
+                            root,
+                            recursive,
+                            ..
+                        } => ObservedGrant::Watcher {
+                            tree: *tree,
+                            directory: *dir,
+                            root: root.clone(),
+                            recursive: *recursive,
                         },
                     },
                 )
@@ -915,6 +942,7 @@ impl Simulation {
                 Some(Grant::Atomic { .. }) => kind == "AtomicFile",
                 Some(Grant::Runner(_)) => kind == "Runner",
                 Some(Grant::Mapped { .. }) => kind == "Mapped",
+                Some(Grant::Watcher { .. }) => kind == "Watcher",
                 None => false,
             }
         {

@@ -1255,6 +1255,17 @@ and replay serve views from the mapped identity's contents, zero past their end;
 view copies its bytes only for a tape that keeps them (`State::capture_views`), and replay
 lends the recorded view bytes as a metadata input is lent.
 
+File watching (`watch.rs`): every `Watcher` has a `WatchQueue` that coalesces an event
+equal to the last one queued and ends past 1024 pending events with one `Overflow`,
+dropping later events until it is read. `State` keeps the queues of `test.dir` trees'
+watchers, which `test.dir_event` fills by each watch's coverage. A host Dir's watcher is a
+`HostWatch`: one inotify instance with a watch on the pinned path (through
+`/proc/self/fd`) and, when recursive, on every directory below it, translated into events
+with tree paths. `watcher.next` on an empty host queue records POLLIN interest under the
+entered token and answers `Blocked`, so `host_waits` parks the task as it parks a stdin
+read; without cooperative admission it blocks in `poll`. Replay returns each recorded
+event as the host watcher's input.
+
 ### Cooperative parallelism profile
 
 In a `measurement` runtime archive, also set `HIRSEL_RT_MC_PROFILE=1` and

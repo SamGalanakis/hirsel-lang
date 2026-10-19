@@ -18,6 +18,16 @@ macro_rules! requests {
         values
     }};
 }
+fn watch_event(n: u64, text: &str) -> hirsel_rt::watch::WatchEvent {
+    use hirsel_rt::watch::WatchEvent::*;
+    match n % 5 {
+        0 => Created(format!("{text}#created")),
+        1 => Modified(text.to_owned()),
+        2 => Removed(format!("{text}#removed")),
+        3 => Renamed(text.to_owned(), format!("{text}#to")),
+        _ => Overflow,
+    }
+}
 pub(super) fn requests(n: u64) -> Vec<Request> {
     let text = ["", "a b\n\t\0é/../->!,:", "文件"][n as usize % 3].to_owned();
     let bytes = if n % 2 == 0 {
@@ -188,6 +198,9 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Map { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         MapView { directory: n.wrapping_add(7), mapped: n.wrapping_add(9) },
         MapCheck { directory: n.wrapping_add(7), mapped: n.wrapping_add(9) },
+        Watch { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") }, recursive: n % 2 == 0 },
+        WatchNext { directory: n.wrapping_add(7), watcher: n.wrapping_add(9) },
+        TestDirEvent { test: n.wrapping_add(29), directory: n.wrapping_add(7), event: watch_event(n, &text) },
         Close { handle: n.wrapping_add(11) },
         NetNarrow { net: n.wrapping_add(17), rules: vec![NetRule { address: if n == 0 { String::new() } else { format!("{text}#address") }, port: n.wrapping_add(21) as u16, operation: NetOperation::Connect }] },
         Resolve { net: n.wrapping_add(17), host: if n == 0 { String::new() } else { format!("{text}#host") }, port: n.wrapping_add(21) as u16 },
@@ -271,6 +284,7 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Size(result!(n, io_error.clone())),
         Completion::Bytes(result!(bytes.clone(), io_error.clone())),
         Completion::View(MapView::of(bytes.clone())),
+        Completion::Watch(result!(watch_event(n, &text), io_error.clone())),
         Completion::Paths(result!(vec![String::new(), text.clone()], io_error.clone())),
         Completion::Entries(result!(
             vec![DirEntry {
@@ -388,6 +402,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::GroupExit(_) => (),
             Completion::Runner(_) => (),
             Completion::View(_) => (),
+            Completion::Watch(_) => (),
             Completion::Blocked { .. } => (),
             Completion::Ready => (),
         }

@@ -1,0 +1,67 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// file.watch and watcher.next are cancellation points. Under an expired deadline each
+// checks its operands, then returns Canceled(DeadlineExceeded()) without watching or
+// reading; a watcher parked with no event is canceled when its scope's deadline passes.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let d = match io.dir(rt, path.of("")) {
+    Ok(d) => d,
+    Error(_) => return Ok(()),
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let later = match instant.checked_add(c, now, 1000u64) {
+    Some(later) => later,
+    None => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      failure.check(
+        match file.watch(d, path.of("../outside"), false) {
+          Error(FileFault(_)) => true,
+          _ => false,
+        },
+        Arithmetic()
+      )
+      failure.check(
+        match file.watch(d, path.of(""), false) {
+          Error(Canceled(DeadlineExceeded())) => true,
+          _ => false,
+        },
+        Arithmetic()
+      )
+    }
+  )
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: later),
+    fn(s: Scope) {
+      let mut w = match file.watch(d, path.of(""), true) {
+        Ok(w) => w,
+        Error(_) => return,
+      }
+      failure.check(
+        match watcher.next(d, mut w) {
+          Error(Canceled(DeadlineExceeded())) => true,
+          _ => false,
+        },
+        Arithmetic()
+      )
+      failure.check(
+        match watcher.next(d, mut w) {
+          Error(Canceled(DeadlineExceeded())) => true,
+          _ => false,
+        },
+        Arithmetic()
+      )
+    }
+  )
+  Ok(())
+}

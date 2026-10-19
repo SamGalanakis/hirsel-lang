@@ -1,0 +1,36 @@
+// rule: CONC-8
+// expect: run
+// entry: exercise
+// A task waiting on a test tree's watcher parks until another task delivers an event, then
+// wakes with it: the scheduler re-issues the wait at each scheduling point.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("a"), b"")])
+  let tasks = test.tasks(t)
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let woke = task.scope(
+    tasks,
+    fn(s: Scope) -> bool {
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut tx = take sender
+          let mut w = match file.watch(d, path.of(""), false) {
+            Ok(w) => w,
+            Error(_) => return false,
+          }
+          let _ = channel.send(tasks, mut tx, 1u64)
+          match watcher.next(d, mut w) {
+            Ok(Created(p)) => path.text(p) == "b",
+            _ => false,
+          }
+        }
+      )
+      let mut rx = take receiver
+      let _ = channel.receive(tasks, mut rx)
+      test.dir_event(t, d, Created(path.of("b")))
+      task.await(s, take child)
+    }
+  )
+  test.check(t, woke)
+  Ok(())
+}

@@ -162,6 +162,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.create_atomic"
         | "file.commit"
         | "file.map"
+        | "file.watch"
+        | "watcher.next"
         | "file.size"
         | "file.read_dir"
         | "file.metadata"
@@ -192,6 +194,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "test.log"
         | "test.expect_snapshot"
         | "test.dir"
+        | "test.dir_event"
         | "test.net"
         | "test.crash"
         | "file.read_bytes"
@@ -372,6 +375,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.map"
             | "$intrinsic.MappedView"
             | "$intrinsic.MappedCheck"
+            | "file.watch"
+            | "watcher.next"
+            | "test.dir_event"
     ) || NET_EXPORTS.contains(&name.as_str())
         || name == "$intrinsic.NetReadInto"
     {
@@ -1543,6 +1549,27 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_file_watch",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I8],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_watcher_next",
+        destination: true,
+        result: Some((32, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_test_dir_event",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_mapped_check",
         destination: false,
         result: Some((4, 4)),
@@ -1946,6 +1973,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "file.commit",
     "file.map",
     "mapped.with",
+    "file.watch",
+    "watcher.next",
     "file.create",
     "file.create_atomic",
     "file.narrow",
@@ -2099,6 +2128,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "test.check_case",
     "test.crash",
     "test.dir",
+    "test.dir_event",
     "test.expect_snapshot",
     "test.fail",
     "test.log",

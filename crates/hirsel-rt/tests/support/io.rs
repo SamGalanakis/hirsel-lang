@@ -299,6 +299,11 @@ pub fn replay_interpreter_with_fixture(
                 Request::MapView { .. } | Request::MapCheck { .. } => {
                     panic!("mapped.with runs its body: conformance records and replays it")
                 }
+                Request::Watch { .. }
+                | Request::WatchNext { .. }
+                | Request::TestDirEvent { .. } => {
+                    panic!("watcher tapes replay through tests/it/recording.rs")
+                }
                 Request::UdpBind { .. }
                 | Request::UdpSend { .. }
                 | Request::UdpRecv { .. }
@@ -331,6 +336,7 @@ pub fn replay_interpreter_with_fixture(
                         ObservedGrant::Listener { .. } => "Listener",
                         ObservedGrant::UdpSocket { .. } => "UdpSocket",
                         ObservedGrant::Mapped { .. } => "Mapped",
+                        ObservedGrant::Watcher { .. } => "Watcher",
                         _ => panic!("unsupported closed handle: {grant:?}"),
                     };
                     library
@@ -567,6 +573,16 @@ pub fn replay_interpreter_with_fixture(
                             directory: *directory,
                             length: *length,
                             truncated: *truncated,
+                        },
+                        hirsel_rt::handles::Grant::Watcher {
+                            directory,
+                            root,
+                            recursive,
+                        } => ObservedGrant::Watcher {
+                            tree: 0,
+                            directory: *directory,
+                            root: root.clone(),
+                            recursive: *recursive,
                         },
                     },
                 )
