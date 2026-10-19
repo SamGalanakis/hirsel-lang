@@ -1,0 +1,454 @@
+// rule: SEM-1
+// expect: test
+fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
+  std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
+}
+
+fn request_fields() -> List[std@1/hpack.Field] {
+  [
+    field(b":method", b"GET"),
+    field(b":scheme", b"https"),
+    field(b":path", b"/"),
+    field(b":authority", b"localhost")
+  ]
+}
+
+fn transfer(mut endpoint: std@1/http2.Session, wire: Bytes) -> List[std@1/http2.Event] {
+  let mut offset: u64 = if bytes.len(wire) >= 24 && bytes.slice(wire, 0, 24) == std@1/http2_wire.preface() {
+    24
+  } else {
+    0
+  }
+  let mut events: List[std@1/http2.Event] = []
+  while offset < bytes.len(wire) {
+    let Ok(Some((frame, end))) = std@1/http2_wire.parse(wire, offset, 16384) else {
+      failure.check(false, TextInvariant())
+      return []
+    }
+    let Ok(event) = std@1/http2.receive(mut endpoint, frame) else {
+      failure.check(false, TextInvariant())
+      return []
+    }
+    list.push(mut events, take event)
+    offset = end
+  }
+  take events
+}
+
+fn handshake(mut client: std@1/http2.Session, mut server: std@1/http2.Session) {
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+}
+
+@test
+fn multiplex_and_control(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(1))
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(3))
+  let requests = transfer(mut server, std@1/http2.output(mut client))
+  test.check(
+    t,
+    requests == [Headers(1, request_fields(), true), Headers(3, request_fields(), true)]
+  )
+  let response: List[std@1/hpack.Field] = [field(b":status", b"200")]
+  test.check(t, std@1/http2.headers(mut server, 3, response, false) == Ok(()))
+  test.check(t, std@1/http2.send_data(mut server, 3, b"second first", true) == Ok(12))
+  test.check(t, std@1/http2.headers(mut server, 1, response, true) == Ok(()))
+  let events = transfer(mut client, std@1/http2.output(mut server))
+  test.check(
+    t,
+    events == [
+      Headers(3, copy response, false),
+      Data(3, b"second first", 12, true),
+      Headers(1, response, true)
+    ]
+  )
+  test.check(t, std@1/http2.consumed(mut client, 3, 12) == Ok(()))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  test.check(t, std@1/http2.ping(mut client, b"12345678") == Ok(()))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  test.check(
+    t,
+    transfer(mut client, std@1/http2.output(mut server)) == [PingAck(b"12345678")]
+  )
+  std@1/http2.goaway(mut server, NoError())
+  test.check(t, transfer(mut client, std@1/http2.output(mut server)) == [Goaway(3, 0)])
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Error(Closed()))
+}
+
+@test
+fn windows_and_reset(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  test.check(t, std@1/http2.open(mut client, request_fields(), false) == Ok(1))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let settings = std@1/http2_wire.Frame(
+    kind: 4,
+    flags: 0,
+    stream: 0,
+    payload: b"\x00\x04\x00\x00\x00\x00"
+  )
+  test.check(t, std@1/http2.receive(mut client, settings) == Ok(Settings()))
+  test.check(t, std@1/http2.send_data(mut client, 1, b"x", true) == Ok(0))
+  let update = std@1/http2_wire.Frame(
+    kind: 8,
+    flags: 0,
+    stream: 1,
+    payload: b"\x00\x00\x00\x01"
+  )
+  test.check(t, std@1/http2.receive(mut client, update) == Ok(Idle()))
+  test.check(t, std@1/http2.send_data(mut client, 1, b"x", true) == Ok(1))
+  // Drop the SETTINGS acknowledgement, whose synthetic setting wasn't sent by server.
+  let writes = std@1/http2.output(mut client)
+  let data = bytes.slice(writes, 9, bytes.len(writes))
+  test.check(t, transfer(mut server, data) == [Data(1, b"x", 1, true)])
+  test.check(
+    t,
+    std@1/http2.consumed(mut server, 1, 2) == Error(Wire(StreamError(1, FlowControl())))
+  )
+  test.check(t, std@1/http2.consumed(mut server, 1, 1) == Ok(()))
+  test.check(t, std@1/http2.reset(mut server, 1, Cancel()) == Ok(()))
+  let received = transfer(mut client, std@1/http2.output(mut server))
+  test.check(t, received == [Idle(), Reset(1, 8)])
+}
+
+@test
+fn continuation_and_errors(t: Test) {
+  let mut server = std@1/http2.session(Server(), 65536)
+  let settings = std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  test.check(t, std@1/http2.receive(mut server, settings) == Ok(Settings()))
+  let mut encoder = std@1/hpack.encoder(4096)
+  let block = std@1/hpack.encode(mut encoder, request_fields())
+  let first = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 1,
+    stream: 1,
+    payload: bytes.slice(block, 0, 1)
+  )
+  test.check(t, std@1/http2.receive(mut server, first) == Ok(Idle()))
+  let rest = std@1/http2_wire.Frame(
+    kind: 9,
+    flags: 4,
+    stream: 1,
+    payload: bytes.slice(block, 1, bytes.len(block))
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, rest) == Ok(Headers(1, request_fields(), true))
+  )
+  let bad = std@1/http2_wire.Frame(kind: 9, flags: 4, stream: 1, payload: b"")
+  test.check(
+    t,
+    std@1/http2.receive(mut server, bad) == Error(Wire(ConnectionError(Protocol())))
+  )
+  test.check(t, std@1/http2.receive(mut server, settings) == Error(Closed()))
+  let mut interrupted = std@1/http2.session(Server(), 65536)
+  let _ = std@1/http2.receive(mut interrupted, settings)
+  let _ = std@1/http2.receive(mut interrupted, first)
+  let ping = std@1/http2_wire.Frame(kind: 6, flags: 0, stream: 0, payload: b"12345678")
+  test.check(
+    t,
+    std@1/http2.receive(mut interrupted, ping) == Error(
+      Wire(ConnectionError(Protocol()))
+    )
+  )
+}
+
+@test
+fn scripted_client(t: Test) -> Result[(), std@1/http2.Error] {
+  let expected: Bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x11\x01\x05\x00\x00\x00\x01\x82\x86\x84\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff"
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "www.example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(expected),
+              Send(
+                b"\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x01\x00\x00\x00\x01hi"
+              ),
+              Expect(b"\x00\x00\x00\x04\x01\x00\x00\x00\x00"),
+              Expect(b"\x00\x00\x04\x08\x00\x00\x00\x00\x00\x00\x00\x00\x02"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let stream = net.connect(n, "www.example.com", 80u16, Unbounded()) ? network_error
+  let mut c = std@1/http2.connection(n, take stream, Client(), 65536)
+  let fields: List[std@1/hpack.Field] = [
+    field(b":method", b"GET"),
+    field(b":scheme", b"http"),
+    field(b":path", b"/"),
+    field(b":authority", b"www.example.com")
+  ]
+  test.check(t, std@1/http2.start(mut c, fields, true)? == 1)
+  test.check(t, std@1/http2.next_event(mut c)? == Settings())
+  test.check(
+    t,
+    std@1/http2.next_event(mut c)? == Headers(1, [field(b":status", b"200")], false)
+  )
+  test.check(t, std@1/http2.next_event(mut c)? == Data(1, b"hi", 2, true))
+  std@1/http2.release_body(mut c, 1, 2)?
+  test.check(t, std@1/http2.next_event(mut c) == Error(Closed()))
+  test.check(t, std@1/http2.write_body(mut c, 1, b"late", true) == Error(Closed()))
+  Ok(())
+}
+
+fn network_error(error: NetError) -> std@1/http2.Error {
+  Net(error)
+}
+
+@test
+fn backpressure_and_large_headers(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  let mut large: List[u8] = []
+  for i in 0u64..17000u64 {
+    list.push(mut large, 128u8)
+  }
+  let mut fields = request_fields()
+  list.push(mut fields, field(b"large", bytes.from_list(take large)))
+  test.check(t, std@1/http2.open(mut client, fields, false) == Ok(1))
+  test.check(
+    t,
+    transfer(mut server, std@1/http2.output(mut client)) == [
+      Headers(1, take fields, false)
+    ]
+  )
+  let mut payload: List[u8] = []
+  for i in 0u64..16384u64 {
+    list.push(mut payload, 120u8)
+  }
+  let data = bytes.from_list(take payload)
+  let mut sent: u64 = 0
+  for i in 0u64..4u64 {
+    match std@1/http2.send_data(mut client, 1, data, false) {
+      Ok(count) => {
+        sent += count
+      },
+      Error(_) => test.check(t, false),
+    }
+  }
+  test.check(t, sent == 65535)
+  test.check(t, std@1/http2.send_data(mut client, 1, b"x", true) == Ok(0))
+  let events = transfer(mut server, std@1/http2.output(mut client))
+  let mut received: u64 = 0
+  for event in events {
+    match event {
+      Data(id, body, cost, end) => {
+        received += bytes.len(body)
+        test.check(t, id == 1 && !end)
+        test.check(t, std@1/http2.consumed(mut server, id, cost) == Ok(()))
+      },
+      _ => test.check(t, false),
+    }
+  }
+  test.check(t, received == sent)
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  test.check(t, std@1/http2.send_data(mut client, 1, b"x", true) == Ok(1))
+  test.check(
+    t,
+    transfer(mut server, std@1/http2.output(mut client)) == [Data(1, b"x", 1, true)]
+  )
+}
+
+@test
+fn malformed_stream_preserves_compression(t: Test) {
+  let mut server = std@1/http2.session(Server(), 65536)
+  let settings = std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  let _ = std@1/http2.receive(mut server, settings)
+  let mut encoder = std@1/hpack.encoder(4096)
+  let first = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, request_fields())
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, first) == Ok(Headers(1, request_fields(), true))
+  )
+  // A header block on a remotely closed stream still updates HPACK before
+  // RST_STREAM, since the next stream may refer to its new dynamic entry.
+  let addition: List[std@1/hpack.Field] = [field(b"x", b"new")]
+  let bad = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, addition)
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, bad) == Error(Wire(StreamError(1, StreamClosed())))
+  )
+  let mut fields = request_fields()
+  list.push(mut fields, field(b"x", b"new"))
+  let next = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 3,
+    payload: std@1/hpack.encode(mut encoder, fields)
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, next) == Ok(Headers(3, take fields, true))
+  )
+}
+
+@test
+fn informational_trailers_and_lengths(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  let _ = std@1/http2.open(mut client, request_fields(), true)
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let info: List[std@1/hpack.Field] = [field(b":status", b"103")]
+  let response: List[std@1/hpack.Field] = [
+    field(b":status", b"200"),
+    field(b"content-length", b"2")
+  ]
+  let trailers: List[std@1/hpack.Field] = [field(b"checksum", b"ok")]
+  test.check(t, std@1/http2.headers(mut server, 1, info, false) == Ok(()))
+  test.check(t, std@1/http2.headers(mut server, 1, response, false) == Ok(()))
+  test.check(t, std@1/http2.send_data(mut server, 1, b"hi", false) == Ok(2))
+  test.check(t, std@1/http2.headers(mut server, 1, trailers, true) == Ok(()))
+  test.check(
+    t,
+    transfer(mut client, std@1/http2.output(mut server)) == [
+      Headers(1, take info, false),
+      Headers(1, take response, false),
+      Data(1, b"hi", 2, false),
+      Headers(1, take trailers, true)
+    ]
+  )
+  let mut broken = std@1/http2.session(Server(), 65536)
+  let settings = std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  let _ = std@1/http2.receive(mut broken, settings)
+  let mut encoder = std@1/hpack.encoder(4096)
+  let mut fields = request_fields()
+  list.push(mut fields, field(b"content-length", b"1"))
+  let headers = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, fields)
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut broken, headers) == Error(Wire(StreamError(1, Protocol())))
+  )
+}
+
+@test
+fn scripted_server(t: Test) -> Result[(), std@1/http2.Error] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "h2.test",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"),
+              Send(b"PRI * HTTP/2.0\r\n\r\nSM\r"),
+              Send(
+                b"\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x03\x01\x05\x00\x00\x00\x01\x82\x86\x84"
+              ),
+              Expect(b"\x00\x00\x00\x04\x01\x00\x00\x00\x00"),
+              Expect(
+                b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x01\x00\x00\x00\x01hi"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let stream = net.connect(n, "h2.test", 80u16, Unbounded()) ? network_error
+  let mut c = std@1/http2.connection(n, take stream, Server(), 65536)
+  test.check(t, std@1/http2.next_event(mut c)? == Settings())
+  test.check(
+    t,
+    std@1/http2.next_event(mut c)? == Headers(
+      1,
+      [field(b":method", b"GET"), field(b":scheme", b"http"), field(b":path", b"/")],
+      true
+    )
+  )
+  std@1/http2.write_headers(mut c, 1, [field(b":status", b"200")], false)?
+  test.check(t, std@1/http2.write_body(mut c, 1, b"hi", true)? == 2)
+  test.check(t, std@1/http2.next_event(mut c) == Error(Closed()))
+  Ok(())
+}
+
+@test
+fn bad_preface(t: Test) -> Result[(), std@1/http2.Error] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "h2.test",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open([Expect(b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"), Send(b"X"), Close()])
+        ]
+      )
+    ],
+    []
+  )
+  let stream = net.connect(n, "h2.test", 80u16, Unbounded()) ? network_error
+  let mut c = std@1/http2.connection(n, take stream, Server(), 65536)
+  test.check(t, std@1/http2.next_event(mut c) == Error(InvalidPreface()))
+  test.check(t, std@1/http2.next_event(mut c) == Error(Closed()))
+  Ok(())
+}
+
+@test
+fn concurrency_limit_excludes_closed_bodies(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  let setting = std@1/http2_wire.Frame(
+    kind: 4,
+    flags: 0,
+    stream: 0,
+    payload: b"\x00\x03\x00\x00\x00\x01"
+  )
+  let _ = std@1/http2.receive(mut client, setting)
+  // The setting is synthetic; remove its acknowledgement before transferring requests.
+  let _ = std@1/http2.output(mut client)
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(1))
+  test.check(
+    t,
+    std@1/http2.open(mut client, request_fields(), true) == Error(WouldBlock())
+  )
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let _ = std@1/http2.headers(mut server, 1, [field(b":status", b"200")], false)
+  let _ = std@1/http2.send_data(mut server, 1, b"hi", true)
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  // The application's unconsumed body retains credit, but the stream is closed
+  // and no longer contributes to SETTINGS_MAX_CONCURRENT_STREAMS.
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(3))
+  test.check(t, std@1/http2.consumed(mut client, 1, 2) == Ok(()))
+}

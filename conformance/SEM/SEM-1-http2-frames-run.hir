@@ -1,0 +1,145 @@
+// rule: SEM-1
+// expect: test
+// Go net/http/internal/http2 frame_test.go and RFC 9113 section 6 cases.
+fn raw(kind: u8, flags: u8, stream: u32, payload: Bytes) -> Bytes {
+  let size = bytes.len(payload)
+  let mut out: List[u8] = [
+    int.narrow(size / 65536),
+    int.narrow(size / 256 % 256),
+    int.narrow(size % 256),
+    kind,
+    flags
+  ]
+  let id = std@1/http2_wire.u32_bytes(stream)
+  for b in id {
+    list.push(mut out, b)
+  }
+  for b in payload {
+    list.push(mut out, b)
+  }
+  bytes.from_list(take out)
+}
+
+fn rejects(
+  t: Test,
+  kind: u8,
+  flags: u8,
+  stream: u32,
+  payload: Bytes,
+  error: std@1/http2_wire.FrameError
+) {
+  test.check(
+    t,
+    std@1/http2_wire.parse(raw(kind, flags, stream, payload), 0, 16384) == Error(error)
+  )
+}
+
+@test
+fn roundtrips_and_partial(t: Test) {
+  let frames: List[std@1/http2_wire.Frame] = [
+    std@1/http2_wire.Frame(kind: 0, flags: 1, stream: 1, payload: b"abc"),
+    std@1/http2_wire.Frame(kind: 1, flags: 4, stream: 3, payload: b"\x82"),
+    std@1/http2_wire.Frame(
+      kind: 2,
+      flags: 0,
+      stream: 1,
+      payload: b"\x80\x00\x00\x03\x10"
+    ),
+    std@1/http2_wire.Frame(kind: 3, flags: 0, stream: 1, payload: b"\x00\x00\x00\x08"),
+    std@1/http2_wire.Frame(kind: 4, flags: 1, stream: 0, payload: b""),
+    std@1/http2_wire.Frame(kind: 6, flags: 1, stream: 0, payload: b"12345678"),
+    std@1/http2_wire.Frame(
+      kind: 7,
+      flags: 0,
+      stream: 0,
+      payload: b"\x00\x00\x00\x01\x00\x00\x00\x00debug"
+    ),
+    std@1/http2_wire.Frame(kind: 8, flags: 0, stream: 1, payload: b"\x80\x00\x00\x01"),
+    std@1/http2_wire.Frame(kind: 9, flags: 4, stream: 1, payload: b"\x82"),
+    std@1/http2_wire.Frame(kind: 255, flags: 255, stream: 0, payload: b"ignored")
+  ]
+  for frame in frames {
+    let encoded = raw(frame.kind, frame.flags, frame.stream, frame.payload)
+    test.check(t, std@1/http2_wire.encode(frame, 16384) == Ok(copy encoded))
+    test.check(
+      t,
+      std@1/http2_wire.parse(encoded, 0, 16384) == Ok(Some((frame, bytes.len(encoded))))
+    )
+    for end in 0u64..bytes.len(encoded) {
+      test.check(
+        t,
+        std@1/http2_wire.parse(bytes.slice(encoded, 0, end), 0, 16384) == Ok(None())
+      )
+    }
+  }
+  test.check(t, std@1/http2_wire.parse(b"", 18446744073709551615, 16384) == Ok(None()))
+  test.check(
+    t,
+    std@1/http2_wire.parse(b"\x00\x40\x01\x00\x00\x00\x00\x00\x01", 0, 16384) == Error(
+      ConnectionError(FrameSize())
+    )
+  )
+  let reserved = raw(1, 4, 2147483649, b"\x82")
+  match std@1/http2_wire.parse(reserved, 0, 16384) {
+    Ok(Some((frame, _))) => test.check(t, frame.stream == 1),
+    _ => test.check(t, false),
+  }
+}
+
+@test
+fn padding_and_priority(t: Test) {
+  let data = raw(0, 9, 1, b"\x02abc\x00\x00")
+  match std@1/http2_wire.parse(data, 0, 16384) {
+    Ok(Some((frame, _))) => test.check(t, std@1/http2_wire.fragment(frame) == b"abc"),
+    _ => test.check(t, false),
+  }
+  let headers = raw(1, 44, 1, b"\x01\x00\x00\x00\x03\x10\x82\x00")
+  match std@1/http2_wire.parse(headers, 0, 16384) {
+    Ok(Some((frame, _))) => test.check(t, std@1/http2_wire.fragment(frame) == b"\x82"),
+    _ => test.check(t, false),
+  }
+  rejects(t, 0, 8, 1, b"", ConnectionError(FrameSize()))
+  rejects(t, 0, 8, 1, b"\x01", ConnectionError(Protocol()))
+  rejects(t, 1, 32, 1, b"1234", ConnectionError(FrameSize()))
+  rejects(t, 1, 32, 1, b"\x80\x00\x00\x01\x00", StreamError(1, Protocol()))
+  rejects(t, 2, 0, 1, b"1234", StreamError(1, FrameSize()))
+  rejects(t, 2, 0, 1, b"\x00\x00\x00\x01\x00", StreamError(1, Protocol()))
+}
+
+@test
+fn control_frames(t: Test) {
+  rejects(t, 3, 0, 1, b"123", ConnectionError(FrameSize()))
+  rejects(t, 6, 0, 0, b"1234567", ConnectionError(FrameSize()))
+  rejects(t, 7, 0, 0, b"1234567", ConnectionError(FrameSize()))
+  rejects(t, 8, 0, 0, b"123", ConnectionError(FrameSize()))
+  rejects(t, 8, 0, 0, b"\x80\x00\x00\x00", ConnectionError(Protocol()))
+  rejects(t, 8, 0, 1, b"\x00\x00\x00\x00", StreamError(1, Protocol()))
+  let stream_kinds: List[u8] = [0u8, 1u8, 2u8, 3u8, 5u8, 9u8]
+  for kind in stream_kinds {
+    rejects(t, kind, 0, 0, b"", ConnectionError(Protocol()))
+  }
+  let connection_kinds: List[u8] = [4u8, 6u8, 7u8]
+  for kind in connection_kinds {
+    rejects(t, kind, 0, 1, b"", ConnectionError(Protocol()))
+  }
+}
+
+@test
+fn settings(t: Test) {
+  rejects(t, 4, 1, 0, b"\x00\x02\x00\x00\x00\x00", ConnectionError(FrameSize()))
+  rejects(t, 4, 0, 0, b"12345", ConnectionError(FrameSize()))
+  rejects(t, 4, 0, 0, b"\x00\x02\x00\x00\x00\x02", ConnectionError(Protocol()))
+  rejects(t, 4, 0, 0, b"\x00\x04\x80\x00\x00\x00", ConnectionError(FlowControl()))
+  rejects(t, 4, 0, 0, b"\x00\x05\x00\x00\x3f\xff", ConnectionError(Protocol()))
+  rejects(t, 4, 0, 0, b"\x00\x05\x01\x00\x00\x00", ConnectionError(Protocol()))
+  let valid = raw(
+    4,
+    0,
+    0,
+    b"\x00\x02\x00\x00\x00\x00\x00\x04\x7f\xff\xff\xff\x00\x05\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+  )
+  match std@1/http2_wire.parse(valid, 0, 16384) {
+    Ok(Some(_)) => (),
+    _ => test.check(t, false),
+  }
+}

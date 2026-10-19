@@ -781,6 +781,30 @@
       "module": [
         "cookie"
       ]
+    },
+    {
+      "path": "hpack.hir",
+      "module": [
+        "hpack"
+      ]
+    },
+    {
+      "path": "hpack_tables.hir",
+      "module": [
+        "hpack"
+      ]
+    },
+    {
+      "path": "http2_wire.hir",
+      "module": [
+        "http2_wire"
+      ]
+    },
+    {
+      "path": "http2.hir",
+      "module": [
+        "http2"
+      ]
     }
   ],
   "dependencies": []

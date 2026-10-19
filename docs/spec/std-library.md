@@ -113,8 +113,9 @@ fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleErr
 N fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}
 ```
 
-Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,
-`fnv`, `derive`, `keys`, `task` and the `format_into` and NFC functions below) define their contracts by
+Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`,
+`hpack`, `http2_wire`, `http2`, `bufio`, `fnv`, `derive`, `keys`, `task` and the
+`format_into` and NFC functions below) define their contracts by
 their declared signatures and the rules in this part.
 
 ## Conventions
@@ -1457,6 +1458,75 @@ timeout as above. A handshake or timeout failure is `Net(error)` and closes the 
 The connection then behaves exactly as a plaintext one; the handshake offers ALPN
 `http/1.1` only. A server that reads the client's certificate chain performs
 `tls.accept` and `tls.peer` itself and passes the secured stream to `server_connection`.
+
+## HPACK and explicit HTTP/2 connections
+
+`std@1/hpack` implements RFC 7541 over opaque byte sequences. A `Field` holds
+`name: Bytes`, `value: Bytes` and `sensitive: bool`. Use one `Encoder` and one
+`Decoder` per connection direction, initially `encoder(4096)` and
+`decoder(4096)`. `encode(mut encoder, fields)` emits a complete header block;
+`decode(mut decoder, block, limit)` decodes a complete block. The decoder
+bounds the sum of uncompressed name/value lengths plus 32 octets per field,
+including indexed fields, before emitting a field. Huffman expansion observes
+the same bound. A decode error permanently invalidates that context: reuse
+returns `Failed`. The caller closes the connection after a compression error.
+`set_capacity` applies the peer's table-size setting and emits the smallest
+intermediate size and final size at the next block. `set_allowed_capacity`
+changes the decoder's locally advertised bound; a reduction requires a peer
+size update at the start of its next block. Sensitive fields always encode as
+never-indexed literals, even for exact table matches. `huffman_encode` and
+`huffman_decode` expose the static code, rejecting EOS symbols, invalid padding,
+overlong padding, truncation and expansion beyond the supplied limit.
+
+`std@1/http2_wire` provides RFC 9113 frame validation and serialization.
+`Frame` holds `kind: u8`, `flags: u8`, `stream: u32`, `payload: Bytes`.
+`parse(bytes, offset, max_size)` returns `Ok(None())` for incomplete input or
+`Ok(Some((frame, next_offset)))`; its frame borrows the input. It rejects an
+oversized payload from the nine-octet header, before awaiting more bytes,
+and ignores the reserved stream bit. `validate` checks a complete frame;
+`encode(frame, max_size)` also rejects a reserved bit supplied by the caller.
+`fragment(frame)` borrows DATA or HPACK octets without padding or priority
+fields. Unknown types and flag bits remain available to the connection layer.
+Errors distinguish `ConnectionError(Code)` and `StreamError(stream, Code)`.
+
+`std@1/http2` supplies an explicit HTTP/2 endpoint. `session(Client() | Server(),
+header_limit)` owns compression state, multiplexed stream state and separate
+connection/stream flow-control windows. Its client output begins with the
+prior-knowledge preface and SETTINGS disabling push. The server expects its
+caller to verify that preface before passing frames. Both require the peer's
+first frame to be non-ACK SETTINGS. `output(mut session)` drains pending wire
+bytes. `receive(mut session, frame)` produces `Headers`, `Data`, `Reset`,
+`Goaway`, `PingAck`, `Settings` or `Idle` events, queuing protocol acknowledgements
+and errors. A connection error queues GOAWAY and permanently fails the endpoint;
+a stream error queues RST_STREAM. Push promises are connection errors. Header
+blocks must be contiguous HEADERS/CONTINUATION frames for the same stream;
+compressed blocks and decoded header lists each obey `header_limit`.
+
+`open` allocates an odd, increasing client stream ID without awaiting earlier
+responses. `headers` sends response headers or trailers. `send_data` accepts
+only the prefix allowed by both send windows and the peer's frame-size setting;
+zero means await WINDOW_UPDATE. Its END_STREAM bit is sent only when the
+complete supplied buffer fits. `Data(id, bytes, flow_bytes, end)` carries body
+octets separately from the flow-control cost, which includes padding.
+`consumed(id, flow_bytes)` returns credit only for octets already received on
+that stream. `ping`, `reset` and `goaway` produce the corresponding control
+frames. SETTINGS window reductions can make existing stream windows negative;
+new DATA waits until sufficient credit arrives. GOAWAY stops new local streams.
+
+`connection(net, take stream, role, header_limit)` wraps this endpoint around a
+branded core Stream. It is a prior-knowledge API: plain streams use h2c; a TLS
+stream must already have its protocol selected by the caller. It uses the
+existing Net provider selection in RunConfig (`net.stream@1`, `net.script@2`,
+or replay), with no new transport or retry policy. `start`, `write_headers`,
+`write_body`, `release_body` and `reset_stream` apply the corresponding endpoint
+operation and flush its output. `next_event` retains partial frame bytes,
+verifies the server-side preface and flushes protocol responses before returning.
+A failed write makes the connection unusable; EOF within a frame or preface is
+`Truncated`. Dropping the connection closes its owned stream.
+
+These explicit modules do not change `std@1/http`'s HTTP/1.1 client/server or
+negotiate ALPN. Automatic HTTPS selection and integration with that module's
+request/body types require the TLS ALPN observation API and connection adapter.
 
 ## Unicode scalar properties and simple case
 

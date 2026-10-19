@@ -1,0 +1,1104 @@
+// HTTP/2 connection state, adapted from Go net/http/internal/http2's
+// transport/server flow control and frame dispatch (ebe2feef). No push.
+// BSD-3-Clause (Go)
+// third-party/NOTICES.md.
+pub type Role = Client | Server
+
+pub type Event = Idle | Headers(u32, List[hpack.Field], bool) | Data(
+  u32,
+  Bytes,
+  u32,
+  bool
+) | Reset(u32, u32) | Goaway(u32, u32) | PingAck(Bytes) | Settings
+
+pub type Error = Net(NetError) | Truncated | InvalidPreface | Wire(
+  http2_wire.FrameError
+) | Closed | InvalidHeaders | UnknownStream | WouldBlock
+
+type StreamState {
+  id: u32,
+  send_window: i64,
+  receive_window: i64,
+  unconsumed: u32,
+  sent_headers: bool,
+  received_headers: bool,
+  sent_end: bool,
+  received_end: bool,
+  head_request: bool,
+  body_forbidden: bool,
+  content_length: Option[u64],
+  received_bytes: u64,
+}
+
+/// A transport-independent HTTP/2 endpoint. Feed complete validated frames
+/// with receive; drain bytes with output and write them through the caller's
+/// Net Stream. DATA events are not buffered here. Call consumed only after
+/// the consumer releases the octets, including the reported padding cost.
+pub opaque type Session: copyable + inert + noalloc_drop uses {} {
+  role: Role,
+  encoder: hpack.Encoder,
+  decoder: hpack.Decoder,
+  streams: List[StreamState],
+  next_id: u32,
+  last_peer: u32,
+  max_concurrent: u32,
+  initial_window: i64,
+  send_window: i64,
+  receive_window: i64,
+  unconsumed: u32,
+  peer_frame_size: u32,
+  peer_header_limit: u64,
+  max_header_bytes: u64,
+  continuation: u32,
+  header_end: bool,
+  header_block: List[u8],
+  outgoing: List[u8],
+  first: bool,
+  settings_pending: bool,
+  draining: bool,
+  failed: bool,
+}
+
+/// Both peers advertise no server push. Clients emit the connection preface;
+/// servers must verify the client's preface before passing its first frame.
+/// Header blocks and decoded header lists are each bounded by `header_limit`.
+pub fn session(role: Role, header_limit: u64) -> Session uses {} {
+  let mut s = Session(
+    role: role,
+    encoder: hpack.encoder(4096),
+    decoder: hpack.decoder(4096),
+    streams: [],
+    next_id: 1,
+    last_peer: 0,
+    max_concurrent: 4294967295,
+    initial_window: 65535,
+    send_window: 65535,
+    receive_window: 65535,
+    unconsumed: 0,
+    peer_frame_size: 16384,
+    peer_header_limit: 18446744073709551615,
+    max_header_bytes: header_limit,
+    continuation: 0,
+    header_end: false,
+    header_block: [],
+    outgoing: [],
+    first: true,
+    settings_pending: true,
+    draining: false,
+    failed: false
+  )
+  if role == Client() {
+    append(mut s.outgoing, http2_wire.preface())
+  }
+  emit(
+    mut s,
+    http2_wire.Frame(
+      kind: 4,
+      flags: 0,
+      stream: 0,
+      payload: if role == Client() {
+        b"\x00\x02\x00\x00\x00\x00"
+      } else {
+        b""
+      }
+    )
+  )
+  take s
+}
+
+@preserves_unique(out)
+fn append(mut out: List[u8], data: Bytes) uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+}
+
+fn emit(mut s: Session, frame: http2_wire.Frame) uses {} {
+  let Ok(data) = http2_wire.encode(frame, s.peer_frame_size) else {
+    core@1/failure.check(false, TextInvariant())
+    return
+  }
+  append(mut s.outgoing, data)
+}
+
+/// Move all pending writes out of the endpoint, in wire order.
+pub fn output(mut s: Session) -> unique Bytes uses {} {
+  unique core@1/bytes.from_list(replace(mut s.outgoing, []))
+}
+
+@noalloc
+fn stream_index(s: Session, id: u32) -> Option[u64] uses {} {
+  let mut i: u64 = 0
+  while i < core@1/list.len(s.streams) {
+    if s.streams[i].id == id {
+      return Some(i)
+    }
+    i += 1
+  }
+  None()
+}
+
+fn add_stream(mut s: Session, id: u32) uses {} {
+  core@1/list.push(
+    mut s.streams,
+    StreamState(
+      id: id,
+      send_window: s.initial_window,
+      receive_window: 65535,
+      unconsumed: 0,
+      sent_headers: false,
+      received_headers: false,
+      sent_end: false,
+      received_end: false,
+      head_request: false,
+      body_forbidden: false,
+      content_length: None(),
+      received_bytes: 0
+    )
+  )
+}
+
+fn retire(mut s: Session) uses {} {
+  let mut active: List[StreamState] = []
+  for stream in s.streams {
+    if !stream.sent_end || !stream.received_end || stream.unconsumed != 0 {
+      core@1/list.push(mut active, copy stream)
+    }
+  }
+  s.streams = take active
+}
+
+// RFC 9113 section 8.2: lowercase names, pseudo-fields before ordinary
+// fields, no connection-specific fields, TE only trailers. Preserve octets.
+fn valid_headers(fields: List[hpack.Field], role: Role, trailers: bool) -> bool uses {} {
+  let mut ordinary = false
+  let mut pseudo: List[Bytes] = []
+  let mut method: Bytes = b""
+  let mut path: Bytes = b""
+  let mut scheme: Bytes = b""
+  let mut authority: Bytes = b""
+  let mut status: Bytes = b""
+  for field in fields {
+    let name = field.name
+    let value = field.value
+    if core@1/bytes.len(name) == 0 {
+      return false
+    }
+    let is_pseudo = name[0] == 58
+    let mut i: u64 = if is_pseudo {
+      1
+    } else {
+      0
+    }
+    if i == core@1/bytes.len(name) {
+      return false
+    }
+    while i < core@1/bytes.len(name) {
+      let byte = name[i]
+      if byte >= 65 && byte <= 90 || !token(byte) {
+        return false
+      }
+      i += 1
+    }
+    i = 0
+    while i < core@1/bytes.len(value) {
+      if value[i] == 0 || value[i] == 10 || value[i] == 13 {
+        return false
+      }
+      i += 1
+    }
+    if core@1/bytes.len(value) > 0 && (value[0] == 32 || value[0] == 9 || value[core@1/bytes.len(
+      value
+    ) - 1] == 32 || value[core@1/bytes.len(value) - 1] == 9) {
+      return false
+    }
+    if is_pseudo {
+      if trailers || ordinary {
+        return false
+      }
+      for seen in pseudo {
+        if seen == name {
+          return false
+        }
+      }
+      core@1/list.push(mut pseudo, unique name)
+      if name == b":method" {
+        method = unique value
+      } else if name == b":path" {
+        path = unique value
+      } else if name == b":scheme" {
+        scheme = unique value
+      } else if name == b":authority" {
+        authority = unique value
+      } else if name == b":status" {
+        status = unique value
+      } else {
+        return false
+      }
+    } else {
+      ordinary = true
+      if name == b"connection" || name == b"proxy-connection" || name == b"keep-alive" || name == b"transfer-encoding" || name == b"upgrade" {
+        return false
+      }
+      if name == b"te" && value != b"trailers" {
+        return false
+      }
+    }
+  }
+  if trailers {
+    return true
+  }
+  if role == Client() {
+    if core@1/list.len(pseudo) != 1 || core@1/bytes.len(status) != 3 {
+      return false
+    }
+    if status[0] < 49 || status[0] > 53 || status == b"101" {
+      return false
+    }
+    return status[1] >= 48 && status[1] <= 57 && status[2] >= 48 && status[2] <= 57
+  }
+  if core@1/bytes.len(method) == 0 || core@1/bytes.len(status) != 0 {
+    return false
+  }
+  if method == b"CONNECT" {
+    return core@1/bytes.len(authority) > 0 && core@1/bytes.len(path) == 0 && core@1/bytes.len(
+      scheme
+    ) == 0
+  }
+  core@1/bytes.len(path) > 0 && core@1/bytes.len(scheme) > 0
+}
+
+fn send_headers(
+  mut s: Session,
+  id: u32,
+  fields: List[hpack.Field],
+  end: bool,
+  trailers: bool
+) -> Result[(), Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  let Some(index) = stream_index(s, id) else {
+    return Error(UnknownStream())
+  }
+  if s.streams[index].sent_end {
+    return Error(Closed())
+  }
+  if !valid_headers(
+    fields,
+    if s.role == Client() {
+      Server()
+    } else {
+      Client()
+    },
+    trailers
+  ) || trailers && !end {
+    return Error(InvalidHeaders())
+  }
+  let mut size: u64 = 0
+  for field in fields {
+    let cost = core@1/bytes.len(field.name) + core@1/bytes.len(field.value) + 32
+    if cost > s.peer_header_limit - size {
+      return Error(InvalidHeaders())
+    }
+    size += cost
+  }
+  let informational = s.role == Server() && !trailers && informational_headers(fields)
+  if informational && end {
+    return Error(InvalidHeaders())
+  }
+  if s.role == Client() && !trailers {
+    for field in fields {
+      if field.name == b":method" {
+        s.streams[index].head_request = field.value == b"HEAD"
+      }
+    }
+  }
+  let block = hpack.encode(mut s.encoder, fields)
+  let length = core@1/bytes.len(block)
+  let mut offset: u64 = 0
+  let mut first = true
+  while first || offset < length {
+    let mut count = length - offset
+    if count > core@1/int.widen(s.peer_frame_size) {
+      count = core@1/int.widen(s.peer_frame_size)
+    }
+    let last = offset + count == length
+    let flags: u8 = if first && end {
+      1
+    } else {
+      0
+    } | if last {
+      4
+    } else {
+      0
+    }
+    emit(
+      mut s,
+      http2_wire.Frame(
+        kind: if first {
+          1
+        } else {
+          9
+        },
+        flags: flags,
+        stream: id,
+        payload: unique core@1/bytes.slice(block, offset, offset + count)
+      )
+    )
+    first = false
+    offset += count
+  }
+  if !informational {
+    s.streams[index].sent_headers = true
+  }
+  s.streams[index].sent_end = end
+  retire(mut s)
+  Ok(())
+}
+
+/// Open another client stream without waiting for earlier responses. Odd IDs
+/// increase monotonically. WouldBlock means the peer's concurrency limit is full.
+pub fn open(mut s: Session, fields: List[hpack.Field], end: bool) -> Result[u32, Error] uses {} {
+  if s.role != Client() || s.draining || s.failed || s.next_id > 2147483647u32 {
+    return Error(Closed())
+  }
+  if active_streams(s) >= core@1/int.widen(s.max_concurrent) {
+    return Error(WouldBlock())
+  }
+  let id = s.next_id
+  add_stream(mut s, id)
+  match send_headers(mut s, id, fields, end, false) {
+    Ok(()) => {
+      s.next_id += 2
+      Ok(id)
+    },
+    Error(error) => {
+      let Some(index) = stream_index(s, id) else {
+        return Error(error)
+      }
+      s.streams[index].sent_end = true
+      s.streams[index].received_end = true
+      retire(mut s)
+      Error(error)
+    },
+  }
+}
+
+/// Send initial response headers, or trailers after initial headers.
+pub fn headers(mut s: Session, id: u32, fields: List[hpack.Field], end: bool) -> Result[
+  (),
+  Error
+] uses {} {
+  let Some(index) = stream_index(s, id) else {
+    return Error(UnknownStream())
+  }
+  let trailers = s.streams[index].sent_headers
+  send_headers(mut s, id, fields, end, trailers)
+}
+
+/// Send as many bytes as connection/stream windows and the peer frame limit
+/// allow. Zero means wait for WINDOW_UPDATE. END_STREAM is sent only when
+/// all supplied bytes fit. Empty final DATA is legal even at a zero window.
+pub fn send_data(mut s: Session, id: u32, data: Bytes, end: bool) -> Result[u64, Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  let Some(index) = stream_index(s, id) else {
+    return Error(UnknownStream())
+  }
+  if s.streams[index].sent_end || !s.streams[index].sent_headers {
+    return Error(Closed())
+  }
+  let mut count = core@1/bytes.len(data)
+  let mut available = s.send_window
+  if s.streams[index].send_window < available {
+    available = s.streams[index].send_window
+  }
+  if available < 0 {
+    available = 0
+  }
+  let capacity: u64 = core@1/int.narrow(available)
+  if count > capacity {
+    count = capacity
+  }
+  if count > core@1/int.widen(s.peer_frame_size) {
+    count = core@1/int.widen(s.peer_frame_size)
+  }
+  let finished = end && count == core@1/bytes.len(data)
+  if count == 0 && !finished {
+    return Ok(0)
+  }
+  emit(
+    mut s,
+    http2_wire.Frame(
+      kind: 0,
+      flags: if finished {
+        1
+      } else {
+        0
+      },
+      stream: id,
+      payload: unique core@1/bytes.slice(data, 0, count)
+    )
+  )
+  let count32: u32 = core@1/int.narrow(count)
+  let sent: i64 = core@1/int.widen(count32)
+  s.send_window -= sent
+  s.streams[index].send_window -= sent
+  s.streams[index].sent_end = finished
+  retire(mut s)
+  Ok(count)
+}
+
+/// Return receive credit after the application consumes a DATA event. The
+/// amount includes its padding and never exceeds octets actually received.
+pub fn consumed(mut s: Session, id: u32, amount: u32) -> Result[(), Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  let Some(index) = stream_index(s, id) else {
+    return Error(UnknownStream())
+  }
+  if amount > s.streams[index].unconsumed {
+    return Error(Wire(StreamError(id, FlowControl())))
+  }
+  if amount == 0 {
+    return Ok(())
+  }
+  s.streams[index].unconsumed -= amount
+  s.unconsumed -= amount
+  s.receive_window += core@1/int.widen(amount)
+  s.streams[index].receive_window += core@1/int.widen(amount)
+  emit(
+    mut s,
+    http2_wire.Frame(
+      kind: 8,
+      flags: 0,
+      stream: 0,
+      payload: http2_wire.u32_bytes(amount)
+    )
+  )
+  if !s.streams[index].received_end {
+    emit(
+      mut s,
+      http2_wire.Frame(
+        kind: 8,
+        flags: 0,
+        stream: id,
+        payload: http2_wire.u32_bytes(amount)
+      )
+    )
+  }
+  retire(mut s)
+  Ok(())
+}
+
+pub fn ping(mut s: Session, payload: Bytes) -> Result[(), Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  if core@1/bytes.len(payload) != 8 {
+    return Error(Wire(ConnectionError(FrameSize())))
+  }
+  emit(mut s, http2_wire.Frame(kind: 6, flags: 0, stream: 0, payload: unique payload))
+  Ok(())
+}
+
+pub fn reset(mut s: Session, id: u32, code: http2_wire.Code) -> Result[(), Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  let Some(index) = stream_index(s, id) else {
+    return Error(UnknownStream())
+  }
+  emit(
+    mut s,
+    http2_wire.Frame(
+      kind: 3,
+      flags: 0,
+      stream: id,
+      payload: http2_wire.u32_bytes(http2_wire.code_number(code))
+    )
+  )
+  s.streams[index].sent_end = true
+  s.streams[index].received_end = true
+  let unconsumed = s.streams[index].unconsumed
+  consumed(mut s, id, unconsumed)?
+  retire(mut s)
+  Ok(())
+}
+
+pub fn goaway(mut s: Session, code: http2_wire.Code) uses {} {
+  let mut payload: List[u8] = []
+  append(mut payload, http2_wire.u32_bytes(s.last_peer))
+  append(mut payload, http2_wire.u32_bytes(http2_wire.code_number(code)))
+  emit(
+    mut s,
+    http2_wire.Frame(
+      kind: 7,
+      flags: 0,
+      stream: 0,
+      payload: core@1/bytes.from_list(take payload)
+    )
+  )
+  s.draining = true
+}
+
+fn complete_headers(mut s: Session) -> Result[Event, Error] uses {} {
+  let id = s.continuation
+  s.continuation = 0
+  let block = core@1/bytes.from_list(replace(mut s.header_block, []))
+  let fields = match hpack.decode(mut s.decoder, block, s.max_header_bytes) {
+    Ok(fields) => take fields,
+    Error(HeaderListTooLarge()) => return Error(
+      Wire(ConnectionError(EnhanceYourCalm()))
+    ),
+    Error(_) => return Error(Wire(ConnectionError(Compression()))),
+  }
+  let Some(index) = stream_index(s, id) else {
+    return Error(Wire(StreamError(id, StreamClosed())))
+  }
+  if s.streams[index].received_end {
+    return Error(Wire(StreamError(id, StreamClosed())))
+  }
+  let trailers = s.streams[index].received_headers
+  if !valid_headers(fields, s.role, trailers) || trailers && !s.header_end {
+    return Error(Wire(StreamError(id, Protocol())))
+  }
+  let informational = s.role == Client() && !trailers && informational_headers(fields)
+  if informational && s.header_end {
+    return Error(Wire(StreamError(id, Protocol())))
+  }
+  if !informational && !trailers {
+    let mut length: Option[u64] = None()
+    for field in fields {
+      if field.name == b"content-length" {
+        let Some(value) = decimal(field.value) else {
+          return Error(Wire(StreamError(id, Protocol())))
+        }
+        if let Some(prior) = length {
+          if prior != value {
+            return Error(Wire(StreamError(id, Protocol())))
+          }
+        }
+        length = Some(value)
+      }
+      if field.name == b":method" {
+        s.streams[index].head_request = field.value == b"HEAD"
+      }
+      if s.role == Client() && field.name == b":status" {
+        s.streams[index].body_forbidden = s.streams[index].head_request || field.value == b"204" || field.value == b"304"
+      }
+    }
+    s.streams[index].content_length = if s.streams[index].body_forbidden {
+      None()
+    } else {
+      length
+    }
+    s.streams[index].received_headers = true
+  }
+  if trailers {
+    for field in fields {
+      if field.name == b"content-length" {
+        return Error(Wire(StreamError(id, Protocol())))
+      }
+    }
+  }
+  if s.header_end {
+    if let Some(expected) = s.streams[index].content_length {
+      if expected != s.streams[index].received_bytes {
+        return Error(Wire(StreamError(id, Protocol())))
+      }
+    }
+  }
+  s.streams[index].received_end = s.header_end
+  let end = s.header_end
+  retire(mut s)
+  Ok(Headers(id, take fields, end))
+}
+
+fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses {} {
+  if s.continuation != 0 && (frame.kind != 9 || frame.stream != s.continuation) {
+    return Error(Wire(ConnectionError(Protocol())))
+  }
+  if s.first {
+    if frame.kind != 4 || frame.flags & 1 != 0 {
+      return Error(Wire(ConnectionError(Protocol())))
+    }
+    s.first = false
+  }
+  let id = frame.stream
+  if frame.kind == 4 {
+    if frame.flags & 1 != 0 {
+      if !s.settings_pending {
+        return Error(Wire(ConnectionError(Protocol())))
+      }
+      s.settings_pending = false
+      return Ok(Settings())
+    }
+    let mut offset: u64 = 0
+    while offset < core@1/bytes.len(frame.payload) {
+      let setting: u16 = core@1/int.widen(frame.payload[offset]) * 256u16 + core@1/int.widen(
+        frame.payload[offset + 1]
+      )
+      let value = http2_wire.read_u32(frame.payload, offset + 2)
+      if setting == 1 {
+        hpack.set_capacity(mut s.encoder, value)
+      } else if setting == 2 && s.role == Client() {
+        return Error(Wire(ConnectionError(Protocol())))
+      } else if setting == 3 {
+        s.max_concurrent = value
+      } else if setting == 4 {
+        let window: i64 = core@1/int.widen(value)
+        let delta = window - s.initial_window
+        let mut i: u64 = 0
+        while i < core@1/list.len(s.streams) {
+          if s.streams[i].send_window + delta > 2147483647i64 {
+            return Error(Wire(ConnectionError(FlowControl())))
+          }
+          s.streams[i].send_window += delta
+          i += 1
+        }
+        s.initial_window = window
+      } else if setting == 5 {
+        s.peer_frame_size = value
+      } else if setting == 6 {
+        s.peer_header_limit = core@1/int.widen(value)
+      }
+      offset += 6
+    }
+    emit(mut s, http2_wire.Frame(kind: 4, flags: 1, stream: 0, payload: b""))
+    return Ok(Settings())
+  }
+  if frame.kind == 6 {
+    if frame.flags & 1 != 0 {
+      return Ok(PingAck(unique frame.payload))
+    }
+    emit(
+      mut s,
+      http2_wire.Frame(kind: 6, flags: 1, stream: 0, payload: unique frame.payload)
+    )
+    return Ok(Idle())
+  }
+  if frame.kind == 7 {
+    s.draining = true
+    return Ok(
+      Goaway(
+        http2_wire.read_u32(frame.payload, 0) & 2147483647u32,
+        http2_wire.read_u32(frame.payload, 4)
+      )
+    )
+  }
+  if frame.kind == 5 {
+    return Error(Wire(ConnectionError(Protocol())))
+  }
+  if frame.kind == 8 {
+    let amount: i64 = core@1/int.widen(
+      http2_wire.read_u32(frame.payload, 0) & 2147483647u32
+    )
+    if id == 0 {
+      if s.send_window + amount > 2147483647i64 {
+        return Error(Wire(ConnectionError(FlowControl())))
+      }
+      s.send_window += amount
+    } else if let Some(index) = stream_index(s, id) {
+      if s.streams[index].send_window + amount > 2147483647i64 {
+        return Error(Wire(StreamError(id, FlowControl())))
+      }
+      s.streams[index].send_window += amount
+    } else if id > if s.role == Client() {
+      if s.next_id > 1 {
+        s.next_id - 2
+      } else {
+        0
+      }
+    } else {
+      s.last_peer
+    } {
+      return Error(Wire(ConnectionError(Protocol())))
+    }
+    return Ok(Idle())
+  }
+  if frame.kind == 1 || frame.kind == 9 {
+    if frame.kind == 1 {
+      if let None() = stream_index(s, id) {
+        if s.role != Server() || id % 2 != 1 || id <= s.last_peer {
+          return Error(Wire(ConnectionError(Protocol())))
+        }
+        s.last_peer = id
+        add_stream(mut s, id)
+      }
+      let Some(index) = stream_index(s, id) else {
+        return Error(UnknownStream())
+      }
+      s.continuation = id
+      s.header_end = frame.flags & 1 != 0
+    } else if s.continuation == 0 {
+      return Error(Wire(ConnectionError(Protocol())))
+    }
+    let fragment = http2_wire.fragment(frame)
+    if core@1/bytes.len(fragment) > s.max_header_bytes - core@1/list.len(s.header_block) {
+      return Error(Wire(ConnectionError(EnhanceYourCalm())))
+    }
+    append(mut s.header_block, fragment)
+    if frame.flags & 4 != 0 {
+      return complete_headers(mut s)
+    }
+    return Ok(Idle())
+  }
+  if frame.kind == 0 {
+    let cost: u32 = core@1/int.narrow(core@1/bytes.len(frame.payload))
+    let count: i64 = core@1/int.widen(cost)
+    if count > s.receive_window {
+      return Error(Wire(ConnectionError(FlowControl())))
+    }
+    let Some(index) = stream_index(s, id) else {
+      return Error(Wire(ConnectionError(Protocol())))
+    }
+    let data = http2_wire.fragment(frame)
+    let length = core@1/bytes.len(data)
+    let ended = frame.flags & 1 != 0
+    let mut invalid: Option[http2_wire.Code] = None()
+    if !s.streams[index].received_headers {
+      invalid = Some(Protocol())
+    } else if s.streams[index].received_end {
+      invalid = Some(StreamClosed())
+    } else if count > s.streams[index].receive_window {
+      invalid = Some(FlowControl())
+    } else if s.streams[index].body_forbidden && length > 0 {
+      invalid = Some(Protocol())
+    } else if length > 18446744073709551615u64 - s.streams[index].received_bytes {
+      invalid = Some(Protocol())
+    } else if let Some(expected) = s.streams[index].content_length {
+      let size = s.streams[index].received_bytes + length
+      if size > expected || ended && size != expected {
+        invalid = Some(Protocol())
+      }
+    }
+    if let Some(code) = invalid {
+      // Discarding a bad stream still returns the connection credit its DATA
+      // consumed at the peer, so unrelated streams cannot be starved.
+      if cost != 0 {
+        emit(
+          mut s,
+          http2_wire.Frame(
+            kind: 8,
+            flags: 0,
+            stream: 0,
+            payload: http2_wire.u32_bytes(cost)
+          )
+        )
+      }
+      return Error(Wire(StreamError(id, code)))
+    }
+    s.streams[index].received_bytes += length
+    s.receive_window -= count
+    s.streams[index].receive_window -= count
+    s.unconsumed += cost
+    s.streams[index].unconsumed += cost
+    let end = frame.flags & 1 != 0
+    s.streams[index].received_end = end
+    return Ok(Data(id, unique http2_wire.fragment(frame), cost, end))
+  }
+  if frame.kind == 3 {
+    let Some(index) = stream_index(s, id) else {
+      if id > if s.role == Client() {
+        if s.next_id > 1 {
+          s.next_id - 2
+        } else {
+          0
+        }
+      } else {
+        s.last_peer
+      } {
+        return Error(Wire(ConnectionError(Protocol())))
+      }
+      return Ok(Idle())
+    }
+    s.streams[index].sent_end = true
+    s.streams[index].received_end = true
+    let amount = s.streams[index].unconsumed
+    consumed(mut s, id, amount)?
+    retire(mut s)
+    return Ok(Reset(id, http2_wire.read_u32(frame.payload, 0)))
+  }
+  Ok(Idle())
+}
+
+/// Process one complete frame. The parser validates its fixed shape first,
+/// including when callers construct Frame values directly. Connection errors
+/// emit GOAWAY and permanently fail the session; stream errors emit RST_STREAM.
+pub fn receive(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses {} {
+  if s.failed {
+    return Error(Closed())
+  }
+  if core@1/bytes.len(frame.payload) > 16384 {
+    goaway(mut s, FrameSize())
+    s.failed = true
+    return Error(Wire(ConnectionError(FrameSize())))
+  }
+  let outcome = match http2_wire.validate(frame) {
+    Ok(()) => handle(mut s, frame),
+    Error(error) => Error(Wire(error)),
+  }
+  match outcome {
+    Error(Wire(ConnectionError(code))) => {
+      goaway(mut s, code)
+      s.failed = true
+    },
+    Error(Wire(StreamError(id, code))) => {
+      let _ = reset(mut s, id, code)
+    },
+    _ => (),
+  }
+  outcome
+}
+
+@noalloc
+fn token(byte: u8) -> bool uses {} {
+  if byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 {
+    return true
+  }
+  byte == 33 || byte == 35 || byte == 36 || byte == 37 || byte == 38 || byte == 39 || byte == 42 || byte == 43 || byte == 45 || byte == 46 || byte == 94 || byte == 95 || byte == 96 || byte == 124 || byte == 126
+}
+
+/// An explicit HTTP/2 connection over an already selected Net transport.
+/// `connection` uses prior knowledge: the caller supplies a plain h2c stream
+/// or a TLS stream whose protocol it has already selected. It never upgrades
+/// an HTTP/1.1 connection. Net's host/script/replay provider remains authoritative.
+pub opaque resource type Connection: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+  endpoint: Session,
+  input: List[u8],
+  offset: u64,
+  needs_preface: bool,
+  closed: bool,
+}
+@noalloc drop(self) {}
+
+pub fn connection(n: Net, take stream: Stream of n, role: Role, header_limit: u64) -> Connection {
+  Connection(
+    net: n,
+    stream: take stream,
+    endpoint: session(role, header_limit),
+    input: [],
+    offset: 0,
+    needs_preface: role == Server(),
+    closed: false
+  )
+}
+
+/// Write queued protocol frames. Any write failure makes the connection unusable.
+pub fn flush(mut c: Connection) -> Result[(), Error] {
+  if c.closed {
+    return Error(Closed())
+  }
+  let data = output(mut c.endpoint)
+  if core@1/bytes.len(data) == 0 {
+    return Ok(())
+  }
+  c.closed = true
+  let n = c.net
+  core@1/net.write_all(n, mut c.stream, data) ? net_error
+  c.closed = false
+  Ok(())
+}
+
+pub fn start(mut c: Connection, fields: List[hpack.Field], end: bool) -> Result[
+  u32,
+  Error
+] {
+  if c.closed {
+    return Error(Closed())
+  }
+  let id = open(mut c.endpoint, fields, end)?
+  flush(mut c)?
+  Ok(id)
+}
+
+pub fn write_headers(mut c: Connection, id: u32, fields: List[hpack.Field], end: bool) -> Result[
+  (),
+  Error
+] {
+  if c.closed {
+    return Error(Closed())
+  }
+  headers(mut c.endpoint, id, fields, end)?
+  flush(mut c)
+}
+
+/// The streaming body writer returns the prefix accepted by flow control.
+/// Call next_event to receive WINDOW_UPDATE when this returns zero.
+pub fn write_body(mut c: Connection, id: u32, data: Bytes, end: bool) -> Result[
+  u64,
+  Error
+] {
+  if c.closed {
+    return Error(Closed())
+  }
+  let count = send_data(mut c.endpoint, id, data, end)?
+  flush(mut c)?
+  Ok(count)
+}
+
+pub fn release_body(mut c: Connection, id: u32, flow_bytes: u32) -> Result[(), Error] {
+  if c.closed {
+    return Error(Closed())
+  }
+  consumed(mut c.endpoint, id, flow_bytes)?
+  flush(mut c)
+}
+
+pub fn reset_stream(mut c: Connection, id: u32, code: http2_wire.Code) -> Result[
+  (),
+  Error
+] {
+  if c.closed {
+    return Error(Closed())
+  }
+  reset(mut c.endpoint, id, code)?
+  flush(mut c)
+}
+
+/// Read one event, retaining partial frame bytes across reads. Protocol
+/// responses (SETTINGS/PING acknowledgements, RST_STREAM and GOAWAY) are
+/// flushed before returning. EOF in a partial frame/preface is Truncated.
+pub fn next_event(mut c: Connection) -> Result[Event, Error] {
+  if c.closed {
+    return Error(Closed())
+  }
+  flush(mut c)?
+  let n = c.net
+  while true {
+    let data = core@1/bytes.from_list(unique c.input)
+    if c.needs_preface {
+      let expected = http2_wire.preface()
+      let have = core@1/bytes.len(data) - c.offset
+      let count = if have < 24 {
+        have
+      } else {
+        24
+      }
+      let mut i: u64 = 0
+      while i < count {
+        if data[c.offset + i] != expected[i] {
+          c.closed = true
+          return Error(InvalidPreface())
+        }
+        i += 1
+      }
+      if have >= 24 {
+        c.offset += 24
+        c.needs_preface = false
+      }
+    }
+    if !c.needs_preface {
+      let parsed = http2_wire.parse(data, c.offset, 16384)
+      match parsed {
+        Error(error) => {
+          let code = match error {
+            ConnectionError(code) => code,
+            StreamError(_, code) => code,
+          }
+          goaway(mut c.endpoint, code)
+          let _ = flush(mut c)
+          c.closed = true
+          return Error(Wire(error))
+        },
+        Ok(Some((frame, end))) => {
+          c.offset = end
+          let outcome = receive(mut c.endpoint, frame)
+          let flushed = flush(mut c)
+          if let Error(Wire(ConnectionError(_))) = outcome {
+            c.closed = true
+          }
+          match take outcome {
+            Error(error) => return Error(error),
+            Ok(event) => {
+              flushed?
+              return Ok(take event)
+            },
+          }
+        },
+        Ok(None()) => (),
+      }
+    }
+    // Keep no consumed prefix and read at most one maximum-size frame.
+    let mut pending: List[u8] = []
+    let mut i = c.offset
+    while i < core@1/list.len(c.input) {
+      core@1/list.push(mut pending, c.input[i])
+      i += 1
+    }
+    c.input = take pending
+    c.offset = 0
+    let have = core@1/list.len(c.input)
+    let capacity: u64 = 16393
+    if have >= capacity {
+      c.closed = true
+      return Error(Wire(ConnectionError(FrameSize())))
+    }
+    c.closed = true
+    let count = core@1/net.read(n, mut c.stream, mut c.input, capacity - have) ? net_error
+    c.closed = false
+    if count == 0 {
+      c.closed = true
+      if have == 0 && !c.needs_preface {
+        return Error(Closed())
+      }
+      return Error(Truncated())
+    }
+  }
+  Error(Closed())
+}
+
+fn net_error(error: NetError) -> Error uses {} {
+  Net(error)
+}
+
+@noalloc
+fn informational_headers(fields: List[hpack.Field]) -> bool uses {} {
+  for field in fields {
+    if field.name == b":status" && core@1/bytes.len(field.value) == 3 && field.value[0] == 49 {
+      return true
+    }
+  }
+  false
+}
+
+@noalloc
+fn decimal(data: Bytes) -> Option[u64] uses {} {
+  if core@1/bytes.len(data) == 0 {
+    return None()
+  }
+  let mut value: u64 = 0
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    let byte = data[i]
+    if byte < 48 || byte > 57 {
+      return None()
+    }
+    let digit: u64 = core@1/int.widen(byte - 48)
+    if value > (18446744073709551615u64 - digit) / 10 {
+      return None()
+    }
+    value = value * 10 + digit
+    i += 1
+  }
+  Some(value)
+}
+
+@noalloc
+fn active_streams(s: Session) -> u64 uses {} {
+  let mut count: u64 = 0
+  for stream in s.streams {
+    if !stream.sent_end || !stream.received_end {
+      count += 1
+    }
+  }
+  count
+}

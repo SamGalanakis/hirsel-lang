@@ -1,0 +1,252 @@
+// Adapted from Go net/http/internal/http2/frame.go (ebe2feef) and its
+// frame_test.go. BSD-3-Clause (Go); third-party/NOTICES.md. RFC 9113 framing
+// is pure source code; transport and scheduling belong to the caller.
+pub type Code = Protocol | Internal | FlowControl | SettingsTimeout | StreamClosed | FrameSize | RefusedStream | Cancel | Compression | Connect | EnhanceYourCalm | InadequateSecurity | Http11Required | NoError
+
+pub type FrameError = ConnectionError(Code) | StreamError(u32, Code)
+
+pub type Frame {
+  kind: u8,
+  flags: u8,
+  stream: u32,
+  payload: Bytes,
+}
+
+pub fn preface() -> Bytes uses {} {
+  b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+}
+
+@noalloc
+pub fn read_u32(data: Bytes, offset: u64) -> u32 uses {} {
+  core@1/int.widen(data[offset]) * 16777216u32 + core@1/int.widen(data[offset + 1]) * 65536u32 + core@1/int.widen(
+    data[offset + 2]
+  ) * 256u32 + core@1/int.widen(data[offset + 3])
+}
+
+pub fn u32_bytes(value: u32) -> unique Bytes uses {} {
+  core@1/bytes.from_list(
+    [
+      core@1/int.narrow(value / 16777216),
+      core@1/int.narrow(value / 65536 % 256),
+      core@1/int.narrow(value / 256 % 256),
+      core@1/int.narrow(value % 256)
+    ]
+  )
+}
+
+@noalloc
+pub fn code_number(code: Code) -> u32 uses {} {
+  match code {
+    NoError() => 0,
+    Protocol() => 1,
+    Internal() => 2,
+    FlowControl() => 3,
+    SettingsTimeout() => 4,
+    StreamClosed() => 5,
+    FrameSize() => 6,
+    RefusedStream() => 7,
+    Cancel() => 8,
+    Compression() => 9,
+    Connect() => 10,
+    EnhanceYourCalm() => 11,
+    InadequateSecurity() => 12,
+    Http11Required() => 13,
+  }
+}
+
+// Validate only a complete frame. Unknown types and flag bits are ignored.
+@noalloc
+pub fn validate(f: Frame) -> Result[(), FrameError] uses {} {
+  if f.stream > 2147483647u32 {
+    return Error(ConnectionError(Protocol()))
+  }
+  let size = core@1/bytes.len(f.payload)
+  if f.kind == 0 || f.kind == 1 || f.kind == 2 || f.kind == 3 || f.kind == 5 || f.kind == 9 {
+    if f.stream == 0 {
+      return Error(ConnectionError(Protocol()))
+    }
+  }
+  if f.kind == 4 || f.kind == 6 || f.kind == 7 {
+    if f.stream != 0 {
+      return Error(ConnectionError(Protocol()))
+    }
+  }
+  if f.kind == 0 || f.kind == 1 || f.kind == 5 {
+    let mut offset: u64 = 0
+    let mut padding: u64 = 0
+    if f.flags & 8 != 0 {
+      if size == 0 {
+        return Error(ConnectionError(FrameSize()))
+      }
+      offset = 1
+      padding = core@1/int.widen(f.payload[0])
+    }
+    if f.kind == 1 && f.flags & 32 != 0 {
+      if size - offset < 5 {
+        return Error(ConnectionError(FrameSize()))
+      }
+      if read_u32(f.payload, offset) & 2147483647u32 == f.stream {
+        return Error(StreamError(f.stream, Protocol()))
+      }
+      offset += 5
+    }
+    if f.kind == 5 {
+      if size - offset < 4 {
+        return Error(ConnectionError(FrameSize()))
+      }
+      if read_u32(f.payload, offset) & 2147483647u32 == 0 {
+        return Error(ConnectionError(Protocol()))
+      }
+      offset += 4
+    }
+    if padding > size - offset {
+      return Error(ConnectionError(Protocol()))
+    }
+  }
+  if f.kind == 2 {
+    if size != 5 {
+      return Error(StreamError(f.stream, FrameSize()))
+    }
+    if read_u32(f.payload, 0) & 2147483647u32 == f.stream {
+      return Error(StreamError(f.stream, Protocol()))
+    }
+  }
+  if f.kind == 3 && size != 4 {
+    return Error(ConnectionError(FrameSize()))
+  }
+  if f.kind == 4 {
+    if size % 6 != 0 || f.flags & 1 != 0 && size != 0 {
+      return Error(ConnectionError(FrameSize()))
+    }
+    let mut offset: u64 = 0
+    while offset < size {
+      let id: u16 = core@1/int.widen(f.payload[offset]) * 256u16 + core@1/int.widen(
+        f.payload[offset + 1]
+      )
+      let value = read_u32(f.payload, offset + 2)
+      if id == 2 && value > 1 {
+        return Error(ConnectionError(Protocol()))
+      }
+      if id == 4 && value > 2147483647u32 {
+        return Error(ConnectionError(FlowControl()))
+      }
+      if id == 5 && (value < 16384 || value > 16777215) {
+        return Error(ConnectionError(Protocol()))
+      }
+      offset += 6
+    }
+  }
+  if f.kind == 6 && size != 8 {
+    return Error(ConnectionError(FrameSize()))
+  }
+  if f.kind == 7 && size < 8 {
+    return Error(ConnectionError(FrameSize()))
+  }
+  if f.kind == 8 {
+    if size != 4 {
+      return Error(ConnectionError(FrameSize()))
+    }
+    if read_u32(f.payload, 0) & 2147483647u32 == 0 {
+      return Error(
+        if f.stream == 0 {
+          ConnectionError(Protocol())
+        } else {
+          StreamError(f.stream, Protocol())
+        }
+      )
+    }
+  }
+  Ok(())
+}
+
+/// Parse one frame at `offset`; incomplete input consumes nothing. The
+/// reserved stream bit is ignored. Oversized frames fail from the header,
+/// before waiting for their payload. `max_size` is the local frame limit.
+pub fn parse(data: Bytes, offset: u64, max_size: u32) -> Result[
+  Option[(Frame, u64)],
+  FrameError
+] in data {
+  let length = core@1/bytes.len(data)
+  if offset > length || length - offset < 9 {
+    return Ok(None())
+  }
+  let size: u64 = core@1/int.widen(data[offset]) * 65536u64 + core@1/int.widen(
+    data[offset + 1]
+  ) * 256u64 + core@1/int.widen(data[offset + 2])
+  if size > core@1/int.widen(max_size) {
+    return Error(ConnectionError(FrameSize()))
+  }
+  if size > length - offset - 9 {
+    return Ok(None())
+  }
+  let end = offset + 9 + size
+  let frame = Frame(
+    kind: data[offset + 3],
+    flags: data[offset + 4],
+    stream: read_u32(data, offset + 5) & 2147483647u32,
+    payload: core@1/bytes.slice(data, offset + 9, end)
+  )
+  validate(frame)?
+  Ok(Some((frame, end)))
+}
+
+/// Serialize a frame with the peer's maximum payload size. Stream IDs with
+/// the reserved bit set are rejected rather than silently changed.
+pub fn encode(frame: Frame, max_size: u32) -> Result[unique Bytes, FrameError] uses {} {
+  let size = core@1/bytes.len(frame.payload)
+  if size > core@1/int.widen(max_size) || size > 16777215 {
+    return Error(ConnectionError(FrameSize()))
+  }
+  if frame.stream > 2147483647u32 {
+    return Error(ConnectionError(Protocol()))
+  }
+  validate(frame)?
+  let mut out: List[u8] = [
+    core@1/int.narrow(size / 65536),
+    core@1/int.narrow(size / 256 % 256),
+    core@1/int.narrow(size % 256),
+    frame.kind,
+    frame.flags
+  ]
+  append(mut out, u32_bytes(frame.stream))
+  append(mut out, frame.payload)
+  Ok(core@1/bytes.from_list(take out))
+}
+
+/// DATA octets or the HPACK fragment of HEADERS/PUSH_PROMISE/CONTINUATION,
+/// excluding padding and priority fields. The input must have passed parse.
+@noalloc
+pub fn fragment(frame: Frame) -> Bytes in frame {
+  let mut start: u64 = 0
+  let mut end = core@1/bytes.len(frame.payload)
+  if (frame.kind == 0 || frame.kind == 1 || frame.kind == 5) && frame.flags & 8 != 0 {
+    if end == 0 {
+      return core@1/bytes.slice(frame.payload, 0, 0)
+    }
+    start = 1
+    let padding: u64 = core@1/int.widen(frame.payload[0])
+    if padding > end - start {
+      return core@1/bytes.slice(frame.payload, 0, 0)
+    }
+    end -= padding
+  }
+  if frame.kind == 1 && frame.flags & 32 != 0 {
+    start += 5
+  }
+  if frame.kind == 5 {
+    start += 4
+  }
+  if start > end {
+    return core@1/bytes.slice(frame.payload, 0, 0)
+  }
+  core@1/bytes.slice(frame.payload, start, end)
+}
+
+@preserves_unique(out)
+fn append(mut out: List[u8], data: Bytes) uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+}

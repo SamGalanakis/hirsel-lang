@@ -1,0 +1,412 @@
+// Adapted from Go x/net/http2/hpack's Decoder, Encoder and Huffman codec.
+// BSD-3-Clause (Go); third-party/NOTICES.md. Complete blocks are supplied by
+// the HTTP/2 CONTINUATION assembler. A decoding error poisons the context:
+// compression state cannot be reused after a connection COMPRESSION_ERROR.
+pub type Field {
+  name: Bytes,
+  value: Bytes,
+  sensitive: bool,
+}
+
+pub type Error = Truncated | IntegerOverflow | InvalidIndex | InvalidHuffman | TableSize | HeaderListTooLarge | Failed
+
+type Table {
+  entries: List[Field],
+  size: u64,
+  capacity: u32,
+}
+
+pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
+  table: Table,
+  allowed: u32,
+  failed: bool,
+}
+
+pub opaque type Encoder: copyable + inert + noalloc_drop uses {} {
+  table: Table,
+  pending: bool,
+  minimum: u32,
+}
+
+/// One decoding context per connection direction. `capacity` is the locally
+/// advertised SETTINGS_HEADER_TABLE_SIZE, initially 4096 for HTTP/2.
+pub fn decoder(capacity: u32) -> Decoder uses {} {
+  Decoder(
+    table: Table(entries: [], size: 0, capacity: capacity),
+    allowed: capacity,
+    failed: false
+  )
+}
+
+/// One encoding context per connection direction, using the peer's table limit.
+pub fn encoder(capacity: u32) -> Encoder uses {} {
+  Encoder(
+    table: Table(entries: [], size: 0, capacity: capacity),
+    pending: false,
+    minimum: capacity
+  )
+}
+
+@noalloc
+fn field_size(f: Field) -> u64 uses {} {
+  core@1/bytes.len(f.name) + core@1/bytes.len(f.value) + 32
+}
+
+fn evict(mut t: Table, limit: u64) uses {} {
+  let count = core@1/list.len(t.entries)
+  let mut first: u64 = 0
+  while t.size > limit && first < count {
+    t.size -= field_size(t.entries[first])
+    first += 1
+  }
+  if first > 0 {
+    let mut retained: List[Field] = []
+    while first < count {
+      core@1/list.push(mut retained, unique t.entries[first])
+      first += 1
+    }
+    t.entries = take retained
+  }
+}
+
+fn insert(mut t: Table, f: Field) uses {} {
+  let size = field_size(f)
+  let capacity: u64 = core@1/int.widen(t.capacity)
+  if size > capacity {
+    t.entries = []
+    t.size = 0
+    return
+  }
+  evict(mut t, capacity - size)
+  core@1/list.push(
+    mut t.entries,
+    Field(name: unique f.name, value: unique f.value, sensitive: false)
+  )
+  t.size += size
+}
+
+fn lookup(t: Table, index: u64) -> Result[Field, Error] uses {} {
+  if index == 0 {
+    return Error(InvalidIndex())
+  }
+  if index <= 61 {
+    return Ok(Field(name: NAMES[index - 1], value: VALUES[index - 1], sensitive: false))
+  }
+  if index - 62 >= core@1/list.len(t.entries) {
+    return Error(InvalidIndex())
+  }
+  Ok(unique t.entries[core@1/list.len(t.entries) - (index - 61)])
+}
+
+/// Apply the peer's SETTINGS_HEADER_TABLE_SIZE. Multiple changes before the
+/// next block emit the smallest value followed by the final value (7541 4.2).
+pub fn set_capacity(mut e: Encoder, capacity: u32) uses {} {
+  if !e.pending || capacity < e.minimum {
+    e.minimum = capacity
+  }
+  e.pending = true
+  e.table.capacity = capacity
+  evict(mut e.table, core@1/int.widen(capacity))
+}
+
+/// Change the locally advertised upper bound. A reduction must be reflected
+/// by the peer's first size update before any field in the next block.
+pub fn set_allowed_capacity(mut d: Decoder, capacity: u32) uses {} {
+  d.allowed = capacity
+}
+
+@noalloc
+fn integer(data: Bytes, mut pos: u64, mask: u8) -> Result[u64, Error] uses {} {
+  let end = core@1/bytes.len(data)
+  if pos >= end {
+    return Error(Truncated())
+  }
+  let mut value: u64 = core@1/int.widen(data[pos] & mask)
+  pos += 1
+  if value < core@1/int.widen(mask) {
+    return Ok(value)
+  }
+  let mut factor: u64 = 1
+  while pos < end {
+    let byte = data[pos]
+    pos += 1
+    let part: u64 = core@1/int.widen(byte & 127)
+    if part > (18446744073709551615u64 - value) / factor {
+      return Error(IntegerOverflow())
+    }
+    value += part * factor
+    if byte < 128 {
+      return Ok(value)
+    }
+    if factor > 18446744073709551615u64 / 128 {
+      return Error(IntegerOverflow())
+    }
+    factor *= 128
+  }
+  Error(Truncated())
+}
+
+@preserves_unique(out)
+fn append_integer(mut out: List[u8], value: u64, mask: u8, prefix: u8) uses {} {
+  let maximum: u64 = core@1/int.widen(mask)
+  if value < maximum {
+    core@1/list.push(mut out, prefix | core@1/int.narrow(value))
+    return
+  }
+  core@1/list.push(mut out, prefix | mask)
+  let mut remaining = value - maximum
+  while remaining >= 128 {
+    core@1/list.push(mut out, 128 | core@1/int.narrow(remaining % 128))
+    remaining /= 128
+  }
+  core@1/list.push(mut out, core@1/int.narrow(remaining))
+}
+
+/// Decode static Huffman octets, enforcing EOS and at most seven one bits
+/// of padding. `limit` bounds output before allocation of the next octet.
+pub fn huffman_decode(data: Bytes, limit: u64) -> Result[unique Bytes, Error] uses {} {
+  let mut out: List[u8] = []
+  let mut node: u64 = 0
+  let mut pending: u8 = 0
+  let mut ones = true
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    let mut shift: u8 = 128
+    while shift > 0 {
+      let bit = data[i] & shift != 0
+      node = core@1/int.widen(
+        if bit {
+          RIGHT[node]
+        } else {
+          LEFT[node]
+        }
+      )
+      pending += 1
+      ones = ones && bit
+      if SYMBOL[node] != 65535 {
+        if SYMBOL[node] == 256 {
+          return Error(InvalidHuffman())
+        }
+        if core@1/list.len(out) >= limit {
+          return Error(HeaderListTooLarge())
+        }
+        core@1/list.push(mut out, core@1/int.narrow(SYMBOL[node]))
+        node = 0
+        pending = 0
+        ones = true
+      }
+      shift /= 2
+    }
+    i += 1
+  }
+  if pending > 7 || !ones {
+    return Error(InvalidHuffman())
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+pub fn huffman_encode(data: Bytes) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut buffer: u64 = 0
+  let mut count: u64 = 0
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    let symbol: u64 = core@1/int.widen(data[i])
+    let bits: u64 = core@1/int.widen(LENGTHS[symbol])
+    buffer = buffer << bits | core@1/int.widen(CODES[symbol])
+    count += bits
+    while count >= 8 {
+      count -= 8
+      core@1/list.push(mut out, core@1/int.truncate(buffer >> count))
+    }
+    buffer &= (1u64 << count) - 1
+    i += 1
+  }
+  if count > 0 {
+    let padding = 8 - count
+    core@1/list.push(
+      mut out,
+      core@1/int.narrow(buffer << padding | (1u64 << padding) - 1)
+    )
+  }
+  core@1/bytes.from_list(take out)
+}
+
+fn string(data: Bytes, mut pos: u64, limit: u64) -> Result[Bytes, Error] uses {} {
+  if pos >= core@1/bytes.len(data) {
+    return Error(Truncated())
+  }
+  let huffman = data[pos] >= 128
+  let size = integer(data, mut pos, 127)?
+  if size > core@1/bytes.len(data) - pos {
+    return Error(Truncated())
+  }
+  let end = pos + size
+  let value = core@1/bytes.slice(data, pos, end)
+  pos = end
+  if huffman {
+    return huffman_decode(value, limit)
+  }
+  if size > limit {
+    return Error(HeaderListTooLarge())
+  }
+  Ok(unique value)
+}
+
+fn decode_block(mut d: Decoder, data: Bytes, limit: u64) -> Result[List[Field], Error] uses {} {
+  let mut out: List[Field] = []
+  let mut pos: u64 = 0
+  let mut total: u64 = 0
+  let mut first = true
+  while pos < core@1/bytes.len(data) {
+    let byte = data[pos]
+    if byte >= 32 && byte < 64 {
+      if !first {
+        return Error(TableSize())
+      }
+      let size = integer(data, mut pos, 31)?
+      if size > core@1/int.widen(d.allowed) {
+        return Error(TableSize())
+      }
+      d.table.capacity = core@1/int.narrow(size)
+      evict(mut d.table, size)
+    } else {
+      if d.table.capacity > d.allowed {
+        return Error(TableSize())
+      }
+      first = false
+      let field: Field = if byte >= 128 {
+        lookup(d.table, integer(data, mut pos, 127)?)?
+      } else {
+        let indexed = byte >= 64
+        let index = integer(
+          data,
+          mut pos,
+          if indexed {
+            63
+          } else {
+            15
+          }
+        )?
+        let name = if index == 0 {
+          string(data, mut pos, limit - total)?
+        } else {
+          lookup(d.table, index)?.name
+        }
+        let value = string(data, mut pos, limit - total)?
+        let f = Field(name: name, value: value, sensitive: !indexed && byte >= 16)
+        if indexed {
+          insert(mut d.table, f)
+        }
+        f
+      }
+      let size = field_size(field)
+      if size > limit - total {
+        return Error(HeaderListTooLarge())
+      }
+      total += size
+      core@1/list.push(mut out, take field)
+    }
+  }
+  if d.table.capacity > d.allowed {
+    return Error(TableSize())
+  }
+  Ok(take out)
+}
+
+/// Decode one complete header block. `limit` counts uncompressed name and
+/// value octets plus 32 per field, including indexed fields (RFC 9113 6.5.2).
+/// Any failure invalidates this context; callers must close the connection.
+pub fn decode(mut d: Decoder, data: Bytes, limit: u64) -> Result[List[Field], Error] uses {} {
+  if d.failed {
+    return Error(Failed())
+  }
+  let outcome = decode_block(mut d, data, limit)
+  if let Error(_) = outcome {
+    d.failed = true
+  }
+  outcome
+}
+
+@preserves_unique(out)
+fn append_string(mut out: List[u8], value: Bytes) uses {} {
+  let compressed = huffman_encode(value)
+  if core@1/bytes.len(compressed) < core@1/bytes.len(value) {
+    append_integer(mut out, core@1/bytes.len(compressed), 127, 128)
+    append_bytes(mut out, compressed)
+  } else {
+    append_integer(mut out, core@1/bytes.len(value), 127, 0)
+    append_bytes(mut out, value)
+  }
+}
+
+/// Encode a complete block, reusing static/dynamic entries. Sensitive fields
+/// always use never-indexed literals, even when an exact table match exists.
+pub fn encode(mut e: Encoder, fields: List[Field]) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  if e.pending {
+    append_integer(mut out, core@1/int.widen(e.minimum), 31, 32)
+    if e.minimum != e.table.capacity {
+      append_integer(mut out, core@1/int.widen(e.table.capacity), 31, 32)
+    }
+    e.pending = false
+  }
+  for f in fields {
+    let mut name: u64 = 0
+    let mut exact: u64 = 0
+    let mut index: u64 = 1
+    while index <= 61 + core@1/list.len(e.table.entries) {
+      let Ok(candidate) = lookup(e.table, index) else {
+        break
+      }
+      if candidate.name == f.name {
+        if name == 0 {
+          name = index
+        }
+        if candidate.value == f.value {
+          exact = index
+          break
+        }
+      }
+      index += 1
+    }
+    if exact != 0 && !f.sensitive {
+      append_integer(mut out, exact, 127, 128)
+    } else {
+      let indexed = !f.sensitive && field_size(f) <= core@1/int.widen(e.table.capacity)
+      append_integer(
+        mut out,
+        name,
+        if indexed {
+          63
+        } else {
+          15
+        },
+        if indexed {
+          64
+        } else if f.sensitive {
+          16
+        } else {
+          0
+        }
+      )
+      if name == 0 {
+        append_string(mut out, f.name)
+      }
+      append_string(mut out, f.value)
+      if indexed {
+        insert(mut e.table, f)
+      }
+    }
+  }
+  core@1/bytes.from_list(take out)
+}
+
+@preserves_unique(out)
+fn append_bytes(mut out: List[u8], data: Bytes) uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+}
