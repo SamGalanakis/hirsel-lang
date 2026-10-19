@@ -2110,7 +2110,7 @@ hirsel_test(
 hirsel_library(
     opt_level = 1,
     name = "hirsel-graph",
-    deps = [],
+    deps = ["//:hirsel-syntax"],
     crate = "hirsel_graph",
     crate_root = "crates/hirsel-graph/src/lib.rs",
     srcs = glob(["crates/hirsel-graph/src/**"]),
@@ -2124,7 +2124,10 @@ hirsel_library(
 hirsel_test(
     opt_level = 1,
     name = "hirsel-graph-unittest",
-    deps = ["//:hirsel-guard"],
+    deps = [
+        "//:hirsel-guard",
+        "//:hirsel-syntax",
+    ],
     data = glob(["crates/hirsel-graph/Cargo.toml"]) + glob(["crates/hirsel-graph/src/**"], exclude = ["crates/hirsel-graph/src/**/*.rs"]),
     crate = "hirsel_graph",
     crate_root = "crates/hirsel-graph/src/lib.rs",

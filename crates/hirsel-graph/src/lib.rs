@@ -7,6 +7,8 @@
 hirsel_guard::install!();
 
 use std::collections::{BTreeMap, BTreeSet};
+mod keys;
+pub use keys::{KeyWriter, scc_keys};
 
 /// Nodes reachable from `entry`, in reverse DFS postorder.
 pub fn reverse_postorder(succ: &[Vec<usize>], entry: usize) -> Vec<usize> {

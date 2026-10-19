@@ -25,7 +25,8 @@ enum Class {
 }
 
 const CRATES: &[(&str, Class)] = &[
-    ("hirsel-graph", Class::LeafUtility),
+    // Data rather than a leaf utility: its content keys are ContentHash values.
+    ("hirsel-graph", Class::Data),
     ("hirsel-guard", Class::LeafUtility),
     ("hirsel-span", Class::Data),
     ("hirsel-intern", Class::Data),
@@ -290,15 +291,25 @@ fn argument_parser_is_shared_only_by_tools() {
 
 #[test]
 fn layering_controls() {
-    for &(consumer, class) in CRATES {
-        if !matches!(class, Class::LeafUtility) {
-            assert!(check_edge(consumer, "hirsel-graph", Kind::Production).is_ok());
-            assert!(check_edge("hirsel-graph", consumer, Kind::Production).is_err());
+    // The graph helpers serve every compiler layer and read only data crates
+    // and leaf utilities.
+    for &(consumer, kind) in CRATES {
+        if consumer != "hirsel-graph" {
+            let leaf = matches!(kind, Class::LeafUtility | Class::LeafKernel);
+            assert_eq!(
+                check_edge(consumer, "hirsel-graph", Kind::Production).is_ok(),
+                !leaf,
+                "{consumer}"
+            );
+            assert_eq!(
+                check_edge("hirsel-graph", consumer, Kind::Production).is_ok(),
+                matches!(kind, Class::Data | Class::LeafUtility),
+                "{consumer}"
+            );
         }
     }
-    // Leaf utilities depend on no workspace crate, each other included.
+    // Leaf utilities depend on no workspace crate.
     assert!(check_edge("hirsel-guard", "hirsel-graph", Kind::Production).is_err());
-    assert!(check_edge("hirsel-graph", "hirsel-guard", Kind::Production).is_err());
     for consumer in ["hirsel-rt", "hirsel-interp", "hirsel-heapcheck"] {
         assert!(check_edge(consumer, "hirsel-kernels", Kind::Production).is_ok());
     }
