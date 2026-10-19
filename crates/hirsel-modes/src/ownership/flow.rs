@@ -1926,7 +1926,8 @@ impl Checker<'_> {
     /// instantiate. Its deep copy keeps the captures' loans.
     /// MODE-2/MODE-4: a deep copy builds fresh blocks that it owns alone, so it
     /// crosses exactly when its type does once unique, whatever its source's
-    /// evidence. One that may keep borrowed captures keeps its source's proof.
+    /// evidence. One that may keep borrowed captures keeps its source's proof,
+    /// and one built in an arena or region never crosses (MEM-5).
     fn deep_copy_sendability(&self, expression: ExprId, value: &mut Value) {
         if !value.deep_copy || self.may_capture(expression) {
             return;
@@ -1935,6 +1936,10 @@ impl Checker<'_> {
             return;
         };
         let mut row = self.body.types.get(root).unwrap().clone();
+        if self.arenas.placed(&row.modes.relation) {
+            value.modes.sendability = Sendability::NotSendable;
+            return;
+        }
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::NotSendable;
         let mut store = self.body.types.clone();

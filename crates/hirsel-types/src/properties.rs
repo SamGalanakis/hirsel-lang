@@ -1221,7 +1221,11 @@ fn compatible(
 /// relation naming a call's own parameters (a bound reference) is a dependent
 /// promise that only the same relation keeps until the call substitutes it.
 /// An unrelated borrowed parameter accepts its actual relation.
-fn receives_relation(expected: &Relation, actual: &Relation, relation: TypeRelation) -> bool {
+pub(crate) fn receives_relation(
+    expected: &Relation,
+    actual: &Relation,
+    relation: TypeRelation,
+) -> bool {
     let dependent = expected.reaches().iter().any(|r| {
         matches!(
             r,

@@ -1608,17 +1608,20 @@ impl<'a> Checker<'a> {
                 if op == UnaryOp::Unique {
                     self.copy_value_type(e, value);
                     // A unique value is independent of the lifetime of the
-                    // operand it was extracted from (MODE-1: a deep copy holds
-                    // no loan on bindings or own roots). One extracted in an
-                    // arena or region is bounded by that placement (MEM-5),
-                    // which PROV-4 judges where the value is kept. A function
-                    // value or a type parameter's value may hold borrowed
-                    // captures a deep copy keeps. Whether the operand was
-                    // already unique, and so moved with its own relation, is
-                    // I's flow judgment.
+                    // operand it was extracted from. An operand local to an
+                    // own root or environment is borrowed, so `unique` copies
+                    // it deeply, and a deep copy holds no loan on bindings or
+                    // own roots (MODE-1). One extracted in an arena or region
+                    // is bounded by that placement (MEM-5), which PROV-4
+                    // judges where the value is kept. A function value or a
+                    // type parameter's value may hold borrowed captures a deep
+                    // copy keeps. An owned operand's relation is I's: it moves
+                    // when already unique.
                     if let Some(t) = self.ty(e) {
                         let mut ty = self.out.body.types.get(t).unwrap().clone();
-                        if !matches!(ty.kind, TypeKind::Function(_) | TypeKind::Parameter(_)) {
+                        if self.lifetime(&ty.modes.relation).has_environment()
+                            && !matches!(ty.kind, TypeKind::Function(_) | TypeKind::Parameter(_))
+                        {
                             let placement = self.placement(&ty.modes.relation);
                             if placement != ty.modes.relation {
                                 ty.modes.relation = placement;

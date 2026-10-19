@@ -865,6 +865,19 @@ pub(crate) fn semantic_equal_adjusted(
         if forget_brands && left.brand.alternatives.is_empty() {
             actual.brand = Brand::default();
         }
+        // MODE-1: an owned payload read through a view may be bounded by less
+        // than its receiving row allows, as a received root may: a global
+        // payload (a deep copy, say) fills a frame-local slot's payload.
+        if view
+            && actual.modes.relation != left.modes.relation
+            && crate::properties::receives_relation(
+                &left.modes.relation,
+                &actual.modes.relation,
+                crate::properties::TypeRelation::Value,
+            )
+        {
+            actual.modes.relation = left.modes.relation.clone();
+        }
         if view
             && left.modes.uniqueness == Uniqueness::Aliased
             && actual.modes.uniqueness == Uniqueness::Unique
