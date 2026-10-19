@@ -1,0 +1,40 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 33
+// A record that also holds an aliased List is not sendable: copying it into a child would
+// share the list's blocks across tasks.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+type Services {
+  tasks: Tasks,
+  state: Mutex[Board],
+  names: List[String],
+}
+
+fn revision(tasks: Tasks, m: Mutex[Board]) -> u64 {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> u64 uses {} {
+      b.revision
+    }
+  )
+}
+
+fn serve(tasks: Tasks, m: Mutex[Board], names: List[String]) -> u64 {
+  let svc = Services(tasks: tasks, state: m, names: copy names)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let h = task.async(
+        s,
+        fn() -> u64 {
+          revision(svc.tasks, svc.state)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

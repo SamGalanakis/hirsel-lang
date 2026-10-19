@@ -1,0 +1,18 @@
+// rule: CONC-5
+// expect: reject MODE-1 at line 15
+// A plain copy of part of a mutex payload shares the payload's blocks, so it can neither
+// leave the body nor cross back to the caller.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+fn titles(tasks: Tasks, m: Mutex[Board]) -> List[String] {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> List[String] uses {} {
+      copy b.titles
+    }
+  )
+}

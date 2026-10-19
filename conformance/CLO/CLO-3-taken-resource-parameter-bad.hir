@@ -1,0 +1,21 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 14
+// Bytes received by `take` may still be shared by the caller, so they are not sendable
+// without a `unique` parameter.
+fn use_bytes(take b: Bytes) -> () {}
+
+fn f(n: Net, tasks: Tasks, take l: Bytes) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let mine = take l
+      let h = task.async(
+        s,
+        fn() -> () {
+          use_bytes(take mine)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

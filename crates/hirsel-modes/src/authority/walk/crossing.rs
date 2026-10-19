@@ -269,6 +269,16 @@ impl Checker<'_> {
         }
         false
     }
+    /// Whether a copy of this value is an independent global value: plain
+    /// bits and `Shared`, `Mutex` or `Atomic` handles only (MEM-11, CONC-2).
+    pub(super) fn copy_detaches(&mut self, id: TypeId) -> bool {
+        let store = self.out.body.types.clone();
+        let generics = self.declarations();
+        hirsel_types::copy_detaches(&store, id, &generics, &mut |path| {
+            Ok::<_, hirsel_types::QueryError>(self.read(path))
+        })
+        .unwrap_or_else(|error| self.proof_failure(error, false))
+    }
     pub(super) fn property(&mut self, id: TypeId, bound: Bound) -> bool {
         self.property_in(self.out.body.types.clone(), id, bound, None)
     }

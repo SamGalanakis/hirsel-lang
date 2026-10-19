@@ -32,6 +32,16 @@ fn implies(bounds: &[Bound], bound: Bound) -> bool {
     bounds.contains(&bound) || (bound == Bound::NoallocDrop && bounds.contains(&Bound::Plain))
 }
 impl Checker<'_> {
+    /// A copy of this row is an independent global value: plain bits and
+    /// `Shared`, `Mutex` or `Atomic` handles only (MEM-11, CONC-2).
+    pub(super) fn copy_detaches(&self, source: &TypeStore, root: TypeId) -> bool {
+        hirsel_types::copy_detaches(source, root, self.generic_declarations(), &mut |p| {
+            Ok::<_, hirsel_types::QueryError>(
+                self.signatures.get(p).cloned().map(std::sync::Arc::new),
+            )
+        })
+        .unwrap_or_else(|error| self.proof_failure(error, false))
+    }
     pub(super) fn bound(
         &self,
         source: &TypeStore,

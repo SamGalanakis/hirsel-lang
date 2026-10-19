@@ -77,6 +77,9 @@ pub(super) struct Properties {
     /// run-owned cell, so it supplies a unique result whether or not it is
     /// unique (MODE-2), as V's `handle_root`.
     pub handle_root: bool,
+    /// Plain bits and `Shared`, `Mutex` or `Atomic` handles only: a copy is an
+    /// independent global value (MEM-11, CONC-2).
+    pub copy_detaches: bool,
     pub scoped_capability: bool,
 }
 
@@ -120,6 +123,7 @@ pub(super) fn classify(
             false
         };
         let flat = structural_flat(&store, root, &generics, &mut lookup)?;
+        let copy_detaches = copy_detaches(&store, root, &generics, &mut lookup)?;
         // Flow can invalidate the root's uniqueness after J has proved a
         // generic bound. Cache the same structural proof without that root
         // evidence; locality is checked separately at the call.
@@ -162,6 +166,7 @@ pub(super) fn classify(
                     ..
                 }
             ),
+            copy_detaches,
             scoped_capability,
         });
     }

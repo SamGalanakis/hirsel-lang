@@ -327,6 +327,11 @@ capabilities whose complete represented value meets these rules. Not sendable: c
 values that are not unique, Receivers (they cross only as task-closure captures), local
 values, scoped capabilities, and task handles.
 Locality wins even for flat values: a local value never crosses.
+A noncopyable value received by `take` has no other holder, since nothing can share it
+([OWN-5](#own-5-noncopyable)), so it crosses exactly as a call result of its type does:
+`take l: Listener of n` moves into a child as the result of `net.listen` would. A deep
+copy (`unique x`) owns only fresh blocks, so it crosses whenever its type does once
+unique, whatever its source.
 
 A written `sendable T` is a receiving requirement for the complete value of `T`, for every
 type `T`. Every argument, initialization, constructed part, result and replacement
@@ -554,7 +559,8 @@ fn contents(take h: Holder) -> List[u64] {
 ## On `copy` and `take`
 
 `copy x` shares `x` and keeps `x`'s bounds, so it never makes local content global; the
-one exception is a copied `Shared` root. When a value must escape and the caller no longer
+exceptions are a copied `Shared` root and the copied capture of a value whose only counted
+parts are `Shared`, `Mutex` and `Atomic` handles ([CLO-3](closures.md#clo-3-task-closures)). When a value must escape and the caller no longer
 needs it, `take` is the repair: declare the parameter `take x` and pass `take v` at the
 last use. It costs nothing and moves ownership. When the caller keeps using the value,
 `unique x` deep-copies it (an allocation site). A `copy` that changes nothing may be

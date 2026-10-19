@@ -1,0 +1,18 @@
+// rule: CONC-5
+// expect: accept
+// A `unique` copy of part of a mutex payload is fresh and owns no payload block, so it is a
+// sendable result whenever its type is.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+fn titles(tasks: Tasks, m: Mutex[Board]) -> List[String] {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> unique List[String] uses {} {
+      unique b.titles
+    }
+  )
+}

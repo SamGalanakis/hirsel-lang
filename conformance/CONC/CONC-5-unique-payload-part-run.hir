@@ -1,0 +1,85 @@
+// rule: CONC-5
+// expect: run
+// stdout: ok
+// `unique` copies of a whole mutex payload, of a field and of an element leave the body
+// as sendable results; one crosses into a child task, and the payload stays intact.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+fn titles(tasks: Tasks, m: Mutex[Board]) -> unique List[String] {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> unique List[String] uses {} {
+      unique b.titles
+    }
+  )
+}
+
+fn whole(tasks: Tasks, m: Mutex[Board]) -> unique Board {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> unique Board uses {} {
+      unique b
+    }
+  )
+}
+
+fn first(tasks: Tasks, m: Mutex[Board]) -> unique String {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> unique String uses {} {
+      unique b.titles[0]
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let board: unique Board = Board(revision: 1, titles: unique ["a", "b"])
+  let m = mutex.create(tasks, take board)
+  let copied = titles(tasks, m)
+  let count = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let h = task.async(
+        s,
+        fn() -> u64 {
+          let mine = take copied
+          list.len(mine)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+  let snapshot = whole(tasks, m)
+  let head = first(tasks, m)
+  let _ = mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> () uses {} {
+      list.push(mut b.titles, "c")
+    }
+  )
+  let now = mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> u64 uses {} {
+      list.len(b.titles)
+    }
+  )
+  let _ = out.print(
+    stdout,
+    if count == 2 && list.len(snapshot.titles) == 2 && snapshot.revision == 1 && head == "a" && now == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

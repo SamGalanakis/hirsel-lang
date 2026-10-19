@@ -1,0 +1,39 @@
+// rule: CLO-3
+// expect: accept
+// A record whose fields are a global capability and a Mutex handle is copyable and sendable,
+// and its copy holds only independent handle counts, so a child copies it from the scope.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+type Services {
+  tasks: Tasks,
+  state: Mutex[Board],
+}
+
+fn revision(tasks: Tasks, m: Mutex[Board]) -> u64 {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> u64 uses {} {
+      b.revision
+    }
+  )
+}
+
+fn serve(tasks: Tasks, m: Mutex[Board]) -> u64 {
+  let svc = Services(tasks: tasks, state: m)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let h = task.async(
+        s,
+        fn() -> u64 {
+          revision(svc.tasks, svc.state)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

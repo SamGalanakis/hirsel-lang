@@ -1798,7 +1798,7 @@ impl<'a> Checker<'a> {
                 // A flat copy owns independent bytes. Counted copies share
                 // storage, so derive both uniqueness and sendability before
                 // comparing the independently declared capture type.
-                let actual = if handle_root(&target, actual) {
+                let actual = if self.copy_detaches(&target, actual) {
                     let mut row = target.get(actual).unwrap().clone();
                     row.modes.relation = Relation::global();
                     row.modes.sendability = target.get(expected).unwrap().modes.sendability.clone();
@@ -3156,9 +3156,11 @@ impl<'a> Checker<'a> {
                 for capture in captures {
                     let source = self.place_type(capture.place);
                     let mut row = self.definition.types.get(source).unwrap().clone();
-                    // MEM-11: a copied Shared root is an independently
-                    // counted global handle, wherever the root was read.
-                    if capture.usage == UseKind::Copy && handle_root(&self.definition.types, source)
+                    // MEM-11, CONC-2: a copied Shared root, Mutex or Atomic,
+                    // or an aggregate of them and plain bits, is an
+                    // independently counted global value, wherever it was read.
+                    if capture.usage == UseKind::Copy
+                        && self.copy_detaches(&self.definition.types, source)
                     {
                         row.modes.relation = Relation::global();
                     }

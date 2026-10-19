@@ -2879,16 +2879,10 @@ impl Checker<'_> {
             let flat = self.property(b.ty, Bound::Flat);
             // The environment's locality and uniqueness are the ownership
             // pass's, from current content; these rows feed sendability.
-            let handle = matches!(
-                capture_type.kind,
-                TypeKind::Builtin {
-                    kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
-                    ..
-                }
-            );
             // A copied Shared root is an independently counted handle (MEM-11);
-            // a copied Mutex or Atomic names its run-owned table entry (MODE-4).
-            if usage == UseKind::Copy && (plain || flat || handle) {
+            // a copied Mutex or Atomic names its run-owned table entry (MODE-4),
+            // also inside a record, variant or tuple of handles and plain bits.
+            if usage == UseKind::Copy && (plain || flat || self.copy_detaches(b.ty)) {
                 capture_type.modes.relation = self.placement(&capture_type.modes.relation);
             }
             if usage == UseKind::Copy && !plain && !flat {

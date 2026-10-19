@@ -16,7 +16,11 @@ Without `copyable`, `copy x` of a `T` is GEN-1; without `data`, `a == b` is GEN-
 Bounds are structural, computed from the type, with no user instances. An unbounded `[T]`
 admits every type, which generic code may borrow, move and drop; ordinary copying needs
 `[T: copyable]`, except for the signature-derived result-read obligation of
-[OWN-1](ownership.md#own-1-borrow), which needs no written bound.
+[OWN-1](ownership.md#own-1-borrow), which needs no written bound. A transparent record,
+variant or tuple has a bound exactly when all its fields do, with no opt-in, as Rust derives
+its auto traits: `type Services { tasks: Tasks, state: Mutex[Board] }` is copyable and
+sendable. A `Shared`, `Mutex` or `Atomic` handle is copyable whatever it holds, since a
+copy is a count on the root or run-owned cell and never copies the contents.
 
 - Representation: `plain` (copyable and holds no blocks; copies implicitly) and `flat`
   ([MEM-12](memory.md#mem-12-flat-types)).

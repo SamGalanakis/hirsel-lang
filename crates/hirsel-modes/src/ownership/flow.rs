@@ -1044,6 +1044,11 @@ impl InitialStorage {
                 let row = checker.body.types.get(binding.ty).unwrap();
                 let property = checker.properties[binding.ty.index()];
                 let bound = matches!(row.kind, TypeKind::Parameter(p) if checker.body.resolution.generic_declarations.bounds(p).contains(&hirsel_syntax::Bound::Sendable));
+                let passing = checker.parameter_passing(&binding.owner, parameter);
+                // MODE-4: a taken noncopyable root has no other holder, since
+                // nothing can share it (OWN-5), so it keeps its type's crossing
+                // proof exactly as a call receipt of the same type does.
+                let unshared_root = passing == PassingMode::Take && !property.copyable;
                 if row.modes.sendability == Sendability::Sendable
                     && row.sendability_requirement != SendabilityRequirement::Sendable
                     && row.modes.uniqueness != Uniqueness::Unique
@@ -1053,10 +1058,10 @@ impl InitialStorage {
                     && !property.function
                     && !property.sendable_aliased
                     && !bound
+                    && !unshared_root
                 {
                     slot.value.modes.sendability = Sendability::NotSendable;
                 }
-                let passing = checker.parameter_passing(&binding.owner, parameter);
                 if passing != PassingMode::Take && !checker.properties[binding.ty.index()].plain {
                     slot.value.set_alias(Some((index, Site::Binding(index))));
                     // A borrowed parameter is local to itself, and a written
@@ -1919,6 +1924,39 @@ impl Checker<'_> {
     /// Whether `expression`'s value may be a closure holding borrowed
     /// captures: a function value, or a type parameter's, which one may
     /// instantiate. Its deep copy keeps the captures' loans.
+    /// MODE-2/MODE-4: a deep copy builds fresh blocks that it owns alone, so it
+    /// crosses exactly when its type does once unique, whatever its source's
+    /// evidence. One that may keep borrowed captures keeps its source's proof.
+    fn deep_copy_sendability(&self, expression: ExprId, value: &mut Value) {
+        if !value.deep_copy || self.may_capture(expression) {
+            return;
+        }
+        let Some(root) = self.ty(expression) else {
+            return;
+        };
+        let mut row = self.body.types.get(root).unwrap().clone();
+        row.modes.uniqueness = Uniqueness::Unique;
+        row.modes.sendability = Sendability::NotSendable;
+        let mut store = self.body.types.clone();
+        let root = store.push(row);
+        let own = self.own;
+        value.modes.sendability = content_sendability(
+            &store,
+            root,
+            &self.body.resolution.generic_declarations,
+            &mut |path| {
+                Ok::<_, QueryError>(if path == &own.definition {
+                    Some(Arc::new(own.clone()))
+                } else {
+                    self.signatures.cached(path)
+                })
+            },
+        )
+        .unwrap_or_else(|error| {
+            *self.proof_error.borrow_mut() = Some(error);
+            Sendability::NotSendable
+        });
+    }
     fn may_capture(&self, expression: ExprId) -> bool {
         self.ty(expression)
             .and_then(|ty| self.body.types.get(ty))
@@ -3604,15 +3642,9 @@ impl Checker<'_> {
                 ty.modes = part.modes.clone();
                 if usage == UseKind::Copy {
                     // A copied Shared root, Mutex or Atomic is an independent
-                    // global handle (MEM-11, MODE-4).
-                    let handle = matches!(
-                        ty.kind,
-                        TypeKind::Builtin {
-                            kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
-                            ..
-                        }
-                    );
-                    if plain || handle {
+                    // global handle (MEM-11, CONC-2), also inside an aggregate
+                    // of handles and plain bits.
+                    if plain || self.properties[capture.ty.index()].copy_detaches {
                         ty.modes.relation = Relation::global();
                     }
                     if flat {
@@ -4421,6 +4453,7 @@ impl Checker<'_> {
                     }
                     value.modes.uniqueness = Uniqueness::Unique;
                     value.extract_unique(self.may_capture(*expression));
+                    self.deep_copy_sendability(*expression, &mut value);
                     // A value already unique is not copied (MEM-5), so it keeps
                     // its own relation: `unique x` of a local x stays local.
                 }
@@ -4650,6 +4683,7 @@ impl Checker<'_> {
                                 );
                             }
                             value.extract_unique(self.may_capture(*expression));
+                            self.deep_copy_sendability(*expression, &mut value);
                         }
                         value.modes.uniqueness = Uniqueness::Unique;
                     }

@@ -182,7 +182,11 @@ The closure passed to `task.async(s, ..)` is once and taken. It captures sendabl
 borrows nothing counted. To let several children read one large value, freeze it into a
 `Shared` ([MEM-11](memory.md#mem-11-shared)) and copy the root into each. Children reach a
 parent's Mutex, Atomic or Sender by capturing the handle; its payload stays reachable only
-through `mutex.with`, atomic operations or `channel.send`. `task.isolate`'s
+through `mutex.with`, atomic operations or `channel.send`. A copied capture whose only
+counted parts are `Shared`, `Mutex` and `Atomic` handles, beside plain fields, is global
+wherever it was read: each handle copy acquires its own count. So a scope body's
+`svc: Services { tasks: Tasks, state: Mutex[Board] }` is copied into each child, while a
+record that also holds an aliased `List` is not sendable. `task.isolate`'s
 closure follows the same rules. An owning environment cannot take a parameter or capture
 that its creator only borrows (OWN-1). The Receiver capture exception never permits a local
 capture into a global task environment.

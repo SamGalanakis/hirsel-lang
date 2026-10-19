@@ -163,6 +163,7 @@ pub fn structural_property(
         true,
         true,
         false,
+        false,
         lookup,
     )?;
     let proven = summary == Sendability::Sendable;
@@ -189,6 +190,31 @@ pub fn structural_flat(
         true,
         true,
         false,
+        false,
+        lookup,
+    )? == Sendability::Sendable)
+}
+
+/// MEM-11, CONC-2: a copy of a value whose only counted parts are `Shared`,
+/// `Mutex` and `Atomic` handles shares no block of its source. Each handle copy
+/// acquires its own count on an immutable root or a run-owned cell, and the rest
+/// is plain bits, so the copy is global wherever its source was read. Handle
+/// contents are never traversed. Plain values qualify.
+pub fn copy_detaches(
+    source: &TypeStore,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<bool, QueryError> {
+    Ok(prove(
+        source,
+        root,
+        Bound::Plain,
+        generics,
+        true,
+        true,
+        false,
+        true,
         lookup,
     )? == Sendability::Sendable)
 }
@@ -224,6 +250,7 @@ pub fn structural_sendability(
         check_locality,
         false,
         false,
+        false,
         lookup,
     )
 }
@@ -242,6 +269,7 @@ pub fn content_sendability(
         generics,
         false,
         true,
+        false,
         false,
         lookup,
     )
@@ -264,6 +292,7 @@ pub fn sendability_after_sharing(
         false,
         false,
         true,
+        false,
         lookup,
     )
 }
@@ -306,6 +335,7 @@ fn prove(
     check_root_locality: bool,
     use_evidence: bool,
     shared_storage: bool,
+    handles: bool,
     lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
     let mut store = crate::graph::RootedScratch::new(source);
@@ -347,6 +377,7 @@ fn prove(
                 generics,
                 true,
                 true,
+                false,
                 false,
                 lookup,
             )? != Sendability::Sendable
@@ -443,6 +474,7 @@ fn prove(
                             true,
                             true,
                             false,
+                            false,
                             lookup,
                         )? != Sendability::Sendable
                         {
@@ -501,6 +533,14 @@ fn prove(
                         return Ok(Sendability::NotSendable);
                     }
                 }
+                if handles
+                    && matches!(
+                        kind,
+                        BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
+                    )
+                {
+                    continue;
+                }
                 if matches!(
                     kind,
                     BuiltinType::SlotId
@@ -532,7 +572,11 @@ fn prove(
                         ) {
                             return Ok(Sendability::NotSendable);
                         }
-                        if *kind == BuiltinType::Shared {
+                        // Copying a handle never copies its contents.
+                        if matches!(
+                            kind,
+                            BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
+                        ) {
                             continue;
                         }
                     }

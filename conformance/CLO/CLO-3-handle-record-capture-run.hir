@@ -1,0 +1,72 @@
+// rule: CLO-3
+// expect: run
+// stdout: ok
+// Children copy a record of a Tasks capability and a Mutex handle from their scope and
+// update the shared board through it.
+type Board {
+  revision: u64,
+  titles: List[String],
+}
+
+type Services {
+  tasks: Tasks,
+  state: Mutex[Board],
+}
+
+fn add(tasks: Tasks, m: Mutex[Board], title: String) -> u64 {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut b: unique Board) -> u64 uses {} {
+      list.push(mut b.titles, unique title)
+      b.revision += 1
+      b.revision
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let board: unique Board = Board(revision: 0, titles: unique [])
+  let svc = Services(tasks: tasks, state: mutex.create(tasks, take board))
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let a = task.async(
+        s,
+        fn() -> u64 {
+          add(svc.tasks, svc.state, "a")
+        }
+      )
+      let b = task.async(
+        s,
+        fn() -> u64 {
+          add(svc.tasks, svc.state, "b")
+        }
+      )
+      let _ = task.await(s, take a)
+      let _ = task.await(s, take b)
+    }
+  )
+  let count = mutex.with(
+    tasks,
+    svc.state,
+    fn(mut b: unique Board) -> u64 uses {} {
+      if b.revision == 2 {
+        list.len(b.titles)
+      } else {
+        0
+      }
+    }
+  )
+  let _ = out.print(
+    stdout,
+    if count == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

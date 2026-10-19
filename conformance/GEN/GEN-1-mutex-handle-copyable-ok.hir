@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: accept
+// Copying a Mutex handle never copies its payload, so a Mutex is copyable whatever it guards.
+fn need_copy[T: copyable](x: T) -> () {}
+
+fn f(tasks: Tasks, m: Mutex[Sender[u64]]) -> () {
+  need_copy(m)
+}

@@ -1,0 +1,21 @@
+// rule: CLO-3
+// expect: accept
+// A Listener received by `take` has no other holder, so it moves into a child as one the
+// function created would.
+fn use_listener(n: Net, take l: Listener of n) -> () {}
+
+fn f(n: Net, tasks: Tasks, take l: Listener of n) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let mine = take l
+      let h = task.async(
+        s,
+        fn() -> () {
+          use_listener(n, take mine)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

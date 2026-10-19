@@ -677,7 +677,9 @@ a Global result only when every captured source is Global, some capture is
 borrowed and no parameter is a borrowed non-plain value; otherwise `closure
 result` reports it. A whole replaced Local-receiving slot counts as a Global
 source only with parent flow's current-global, owned, conflict-free proof at
-creation (`closure capture`). A copy of a Shared root is Global (MEM-11). A
+creation (`closure capture`). A copy of a value whose only counted parts are
+Shared, Mutex and Atomic handles (`hirsel_types::copy_detaches`: a Shared root, a
+Mutex, a record of handles and plain fields) is Global (MEM-11, CONC-2). A
 specialised result's sendability is structural, or sendable over a sendable
 environment. A local callee with a `uses` restriction is inert in typing and
 checked at its source in flow; an unrestricted one has unknown effects only

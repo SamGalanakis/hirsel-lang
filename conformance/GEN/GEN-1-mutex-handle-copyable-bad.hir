@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 7
+// A Sender itself is a noncopyable resource.
+fn need_copy[T: copyable](x: T) -> () {}
+
+fn f(tasks: Tasks, s: Sender[u64]) -> () {
+  need_copy(s)
+}

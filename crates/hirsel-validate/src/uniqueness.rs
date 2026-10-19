@@ -15,9 +15,10 @@ impl Checker<'_> {
         if value.usage != UseKind::Copy {
             return ty;
         }
-        if super::handle_root(store, ty) {
-            // MEM-11: a copied Shared root is an independently counted handle
-            // on an immutable root that is never region-placed: it is global.
+        if !self.flat_value(value.place) && self.copy_detaches(store, ty) {
+            // MEM-11, CONC-2: a copied Shared root, Mutex or Atomic, or an
+            // aggregate of them and plain bits, is an independently counted
+            // value, never region-placed: it is global.
             let mut row = store.get(ty).unwrap().clone();
             row.modes.relation = self.placement(&row.modes.relation);
             let root = store.push(row.clone());

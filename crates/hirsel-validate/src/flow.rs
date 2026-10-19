@@ -3164,9 +3164,10 @@ impl Checker<'_> {
         {
             return BTreeSet::new();
         }
-        // MEM-11: a copied Shared root acquires its own atomic count on an
-        // immutable root that is never region-placed.
-        if operand.usage == UseKind::Copy && handle_root(&self.definition.types, ty_id) {
+        // MEM-11, CONC-2: a copied Shared root acquires its own atomic count on
+        // an immutable root that is never region-placed, and a copied Mutex or
+        // Atomic its own count on a run-owned cell, also inside an aggregate.
+        if operand.usage == UseKind::Copy && self.copy_detaches(&self.definition.types, ty_id) {
             return BTreeSet::new();
         }
         // Plain bits have no region dependency (MODE-1). A claimed Global row

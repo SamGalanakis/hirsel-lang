@@ -68,8 +68,9 @@ fn sizes(tasks: Tasks, dir: Dir, a: Path, b: Path) -> Result[(u64, u64), FileErr
 ```
 
 A child capturing a borrowed `List[u64]` instead is CLO-3: a counted value that is not
-unique is not sendable. A child may copy its parent's `Mutex` or `Atomic` handle, or take a
-Sender, since those handles are run-owned ([MODE-4](ownership.md#mode-4-sendable)).
+unique is not sendable. A child may copy its parent's `Mutex` or `Atomic` handle, or a
+record of such handles and plain fields, or take a Sender, since those handles are
+run-owned ([MODE-4](ownership.md#mode-4-sendable)).
 
 ### CONC-3: Cancellation
 
@@ -130,7 +131,10 @@ mutex release before the next acquire; atomic operations; suspend before resume.
 the acquiring task. The body holds no authority, so it cannot block, do I/O, take another
 lock or use a channel, and lock-order deadlock is impossible. It may capture inert values
 under the ordinary borrow rules and take sendable ones; values stored into the payload are
-unique, and its result must be sendable. Payload counts are plain, serialised by the lock.
+unique, and its result must be sendable. A `unique` copy of the payload or of a part of it
+(`unique v.items`, `unique v.items[0]`) is fresh, so it is a sendable result whenever its
+type is; a plain `copy v.items` shares the payload's blocks and cannot leave the body.
+Payload counts are plain, serialised by the lock.
 
 ```hirsel
 fn tally(tasks: Tasks) -> u64 {

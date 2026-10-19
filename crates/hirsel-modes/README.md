@@ -90,7 +90,13 @@ local to the environment: the frame result keeps it, and the closure's function
 type publishes it Global when every captured source is Global, some capture is
 borrowed and no parameter is a borrowed non-plain value. Ownership seeds the
 capture slot from the same view row and checks closure returns against the
-frame result. A copy of a Shared root is Global in both passes (MEM-11). J's
+frame result. A copy of a Shared root is Global in both passes (MEM-11), and so
+is a task or escaping closure's copied capture of a value whose only counted parts
+are Shared, Mutex and Atomic handles (`copy_detaches`, CONC-2), as V's copy rule.
+A deep copy (`unique x`) is Global in J apart from its arena or region placement
+and crosses whenever its type does once unique; I keeps an already unique operand's
+own relation. A taken noncopyable parameter keeps its row's crossing proof without
+written `unique`, as a call receipt of its type does (MODE-4). J's
 source rows are receiving contracts; where J specialised over a borrowed
 capture whose current content ownership knows is local (a finalizer's value, a
 record holding local content, consumed loop content), ownership publishes the closure's rows with a local result, and a

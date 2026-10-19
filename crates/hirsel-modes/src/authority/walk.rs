@@ -1607,21 +1607,27 @@ impl<'a> Checker<'a> {
                 }
                 if op == UnaryOp::Unique {
                     self.copy_value_type(e, value);
-                    self.set_unique(e);
                     // A unique value is independent of the lifetime of the
-                    // operand it was extracted from. One extracted in an
+                    // operand it was extracted from (MODE-1: a deep copy holds
+                    // no loan on bindings or own roots). One extracted in an
                     // arena or region is bounded by that placement (MEM-5),
-                    // which PROV-4 judges where the value is kept.
+                    // which PROV-4 judges where the value is kept. A function
+                    // value or a type parameter's value may hold borrowed
+                    // captures a deep copy keeps. Whether the operand was
+                    // already unique, and so moved with its own relation, is
+                    // I's flow judgment.
                     if let Some(t) = self.ty(e) {
                         let mut ty = self.out.body.types.get(t).unwrap().clone();
-                        if self.placed(&ty.modes.relation)
-                            && self.lifetime(&ty.modes.relation).is_environment()
-                        {
-                            ty.modes.relation = self.placement(&ty.modes.relation);
-                            let t = self.out.body.types.push(ty);
-                            self.set_ty(e, t);
+                        if !matches!(ty.kind, TypeKind::Function(_) | TypeKind::Parameter(_)) {
+                            let placement = self.placement(&ty.modes.relation);
+                            if placement != ty.modes.relation {
+                                ty.modes.relation = placement;
+                                let t = self.out.body.types.push(ty);
+                                self.set_ty(e, t);
+                            }
                         }
                     }
+                    self.set_unique(e);
                 }
                 if op == UnaryOp::Take {
                     self.invalidate(value, self.span(e), false);
