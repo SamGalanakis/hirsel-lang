@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """tools/capped runs one command in a capped systemd scope, a run at a time."""
+import contextlib
 import fcntl
+import importlib.machinery
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,9 +84,40 @@ class Capped(unittest.TestCase):
             self.assertFalse(self.calls.exists(), env)
 
     def test_the_timeout_kills_the_command_and_its_children(self):
-        result = self.capped('--timeout', '1', 'sh', '-c', 'sleep 30 & sleep 30')
+        pids = Path(self.directory.name) / 'pids'
+        result = self.capped('--timeout', '1', 'sh', '-c',
+                             # Off the captured pipes, so an orphan cannot delay the result.
+                             f'for _ in 1 2; do sleep 30 >/dev/null 2>&1 & echo $! >> {pids}; done; '
+                             f'echo $$ >> {pids}; wait')
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn('timed out after 1 s', result.stderr)
+        survivors = [int(pid) for pid in pids.read_text().split()]
+        self.assertEqual(len(survivors), 3)
+        # Killed processes may linger as zombies until their new parent reaps them.
+        deadline = time.monotonic() + 5
+        while survivors and time.monotonic() < deadline:
+            survivors = [pid for pid in survivors if alive(pid)]
+            time.sleep(0.05)
+        self.assertEqual(survivors, [], 'the timeout left processes of the command running')
+
+    def test_only_an_oom_kill_during_the_run_reports_the_cap(self):
+        cgroup = Path(self.directory.name) / 'cgroup'
+        cgroup.mkdir()
+        events = cgroup / 'memory.events'
+        (cgroup / 'memory.peak').write_text(str(5 << 20))
+        loader = importlib.machinery.SourceFileLoader('capped', str(CAPPED))
+        capped = importlib.util.module_from_spec(importlib.util.spec_from_loader('capped', loader))
+        loader.exec_module(capped)
+        capped.own_cgroup = lambda: cgroup
+        # The session's cgroup already saw two kills; the first run adds none.
+        for command, note in ((['true'], False),
+                              (['sh', '-c', f'printf "oom 3\\noom_kill 3\\n" > {events}'], True)):
+            events.write_text('oom 2\noom_kill 2\n')
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(capped.inside(60, '4G', command), 0)
+            self.assertRegex(stderr.getvalue(), r'^capped: peak 5 MiB of 4G \(systemd scope\), [0-9.]+ s, exit 0')
+            self.assertEqual('memory limit 4G reached' in stderr.getvalue(), note, stderr.getvalue())
 
     def test_a_second_run_waits_for_the_first(self):
         with open(self.lock, 'a') as held:
@@ -93,6 +129,14 @@ class Capped(unittest.TestCase):
         self.assertEqual(waiting.wait(60), 0)
         waiting.stderr.close()
         self.assertEqual(len(self.properties()), 4)
+
+
+def alive(pid: int) -> bool:
+    """Whether the process exists and is not a zombie."""
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+    except (OSError, IndexError):
+        return False
 
 
 if __name__ == '__main__':

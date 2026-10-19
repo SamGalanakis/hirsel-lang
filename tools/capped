@@ -60,11 +60,23 @@ def own_cgroup() -> Path | None:
     return None
 
 
+def oom_kills(cgroup: Path | None) -> int:
+    """The cgroup's count of OOM kills so far (0 when unreadable)."""
+    try:
+        events = dict(line.split() for line in (cgroup / 'memory.events').read_text().splitlines())
+        return int(events.get('oom_kill', '0'))
+    except (OSError, TypeError, ValueError):
+        return 0
+
+
 def inside(timeout: int, limit: str, command: list[str], limits=None) -> int:
     """Run the command in its own process group under the timeout, then report
     the peak memory and whether it hit the cap: the scope's when inside one,
     otherwise the largest child's under `limits` (process limits applied in
-    the child before it runs the command)."""
+    the child before it runs the command). Only an OOM kill during this run
+    counts, so a cgroup's earlier kills never read as this command's."""
+    cgroup = None if limits else own_cgroup()
+    kills_before = oom_kills(cgroup)
     start = time.monotonic()
     child = subprocess.Popen(command, start_new_session=True, preexec_fn=limits)
     timed_out = False
@@ -86,7 +98,6 @@ def inside(timeout: int, limit: str, command: list[str], limits=None) -> int:
     if status < 0:
         status = 128 - status
     wall = time.monotonic() - start
-    cgroup = None if limits else own_cgroup()
     peak = 'unknown'
     oom = False
     if limits:
@@ -96,11 +107,7 @@ def inside(timeout: int, limit: str, command: list[str], limits=None) -> int:
             peak = mib(int((cgroup / 'memory.peak').read_text()))
         except (OSError, ValueError):
             pass
-        try:
-            events = dict(line.split() for line in (cgroup / 'memory.events').read_text().splitlines())
-            oom = int(events.get('oom_kill', '0')) > 0
-        except (OSError, ValueError):
-            pass
+        oom = oom_kills(cgroup) > kills_before
     notes = []
     if oom:
         notes.append(f'memory limit {limit} reached (HIRSEL_MEMORY_LIMIT): the kernel killed the command')
