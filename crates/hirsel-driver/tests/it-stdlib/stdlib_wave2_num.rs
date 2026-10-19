@@ -281,3 +281,80 @@ fn adjacent_pair_reductions_match_an_independent_host_tree_at_both_widths() {
         execute(&source);
     });
 }
+
+/// Interpreter steps of `std@1/f64.parse(text)` for each text, which no corpus
+/// result observes.
+fn parse_steps(texts: &[&str]) -> Vec<u64> {
+    with_compiler_stack(|| {
+        let source = "pub fn parse(text: String) -> bool {\nstd@1/f64.parse(text) != Error(Invalid)\n}\npub fn main() -> () {\nlet _ = parse(\"1\")\n}\n";
+        let mut loaded = load_program_source(&fixture(), Some(source)).unwrap();
+        loaded.check_for_execution().unwrap();
+        let runtime = loaded.engine.runtime_types().unwrap();
+        let sources = loaded.engine.sources.clone();
+        let mut entry = loaded.entry.clone();
+        entry.0.name = "parse".into();
+        let configuration = RunConfiguration {
+            entry,
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        texts
+            .iter()
+            .map(|text| {
+                let mut library =
+                    hirsel_interp::library::Library::new(&configuration, Default::default())
+                        .unwrap();
+                let execution = hirsel_interp::run_with_runtime(
+                    &mut loaded.engine,
+                    &sources,
+                    &configuration,
+                    vec![hirsel_interp::Value::String((*text).into())],
+                    Default::default(),
+                    &mut library,
+                    &runtime,
+                )
+                .unwrap();
+                assert!(
+                    matches!(
+                        execution.outcome,
+                        hirsel_interp::Outcome::Returned {
+                            value: hirsel_interp::Value::Bool(true),
+                            ..
+                        }
+                    ),
+                    "{text}: {:?}",
+                    execution.outcome
+                );
+                execution.steps
+            })
+            .collect()
+    })
+}
+
+// Scaling by 10^e shifts whole decimal limbs and the significand comes from
+// word quotients, so the cost follows the decimal size of the scaled values
+// (significant digits plus |e|), not e repeated multiplications or one bignum
+// pass per significand bit (formerly 559k steps for 1e300).
+#[test]
+fn f64_parse_steps_grow_linearly_with_the_decimal_exponent() {
+    let cases = [
+        ("1e0", 1u64),
+        ("1e30", 31),
+        ("1e100", 101),
+        ("1e300", 301),
+        ("1e-30", 31),
+        ("1e-100", 101),
+        ("1e-300", 301),
+        ("1.7976931348623157e308", 325),
+        ("2.2250738585072014e-308", 325),
+        ("5e-324", 325),
+    ];
+    let texts: Vec<_> = cases.iter().map(|(text, _)| *text).collect();
+    let all = parse_steps(&texts);
+    for ((text, size), steps) in cases.iter().zip(&all) {
+        assert!(
+            *steps <= 10_000 + 400 * size,
+            "{text} took {steps} steps; all: {all:?}"
+        );
+    }
+}

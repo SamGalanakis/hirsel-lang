@@ -201,24 +201,39 @@ pub fn big_add_small(mut a: Big, value: u64) -> () uses {} {
 
 @noalloc
 pub fn big_power(mut a: Big, base: u64, exponent: u64) -> () uses {} {
-  // 5^12, 2^29 and 10^8 fit below 10^9; every limb product fits u64.
+  let mut e = exponent
+  if base == 10 {
+    // Each 10^9 factor is one limb: shift whole limbs, then multiply the rest.
+    let shift = e / 9
+    e %= 9
+    if a.used > 0 && shift > 0 {
+      let mut i: u64 = copy a.used
+      while i > 0 {
+        i -= 1
+        a.limbs[a.first + i + shift] = a.limbs[a.first + i]
+      }
+      i = 0
+      while i < shift {
+        a.limbs[a.first + i] = 0
+        i += 1
+      }
+      a.used += shift
+    }
+  }
+  // 5^27 and 2^63 are the largest powers below 2^64, and a limb times one fits
+  // u128. Base 10 has e < 9 here and multiplies only its tail.
   let chunk: u64 = if base == 5 {
-    12
-  } else if base == 2 {
-    29
+    27
   } else {
-    8
+    63
   }
   let multiplier: u64 = if base == 5 {
-    244140625
-  } else if base == 2 {
-    536870912
+    7450580596923828125
   } else {
-    100000000
+    9223372036854775808
   }
-  let mut e = exponent
   while e >= chunk {
-    big_mul(mut a, multiplier)
+    big_mul_word(mut a, multiplier)
     e -= chunk
   }
   let mut tail: u64 = 1
@@ -226,7 +241,9 @@ pub fn big_power(mut a: Big, base: u64, exponent: u64) -> () uses {} {
     tail *= base
     e -= 1
   }
-  big_mul(mut a, tail)
+  if tail > 1 {
+    big_mul_word(mut a, tail)
+  }
 }
 
 // Compare a + bump with b without constructing another 1 KiB value.
@@ -266,7 +283,11 @@ pub fn big_subtract(mut a: Big, b: Big) -> () uses {} {
   let mut i: u64 = 0
   while i < a.used {
     let x = a.limbs[a.first + i]
-    let y = big_digit(b, i) + borrow
+    let y = borrow + if i < b.used {
+      b.limbs[b.first + i]
+    } else {
+      0
+    }
     if x < y {
       a.limbs[a.first + i] = x + 1000000000 - y
       borrow = 1
@@ -277,6 +298,44 @@ pub fn big_subtract(mut a: Big, b: Big) -> () uses {} {
     i += 1
   }
   big_trim(mut a)
+}
+
+// Shift `remainder` left by `bits` (at most 26) and divide it by `divisor`,
+// keeping the remainder: one quotient word instead of `bits` doubling steps.
+// Needs remainder < divisor, so the quotient is below 2^bits. The estimate
+// from the divisor's top two limbs is never low and at most one too high.
+@noalloc
+pub fn big_quotient(mut remainder: Big, divisor: Big, bits: u64) -> u64 uses {} {
+  big_mul_word(mut remainder, 1u64 << bits)
+  let low: u64 = if divisor.used > 2 {
+    divisor.used - 2
+  } else {
+    0
+  }
+  let mut top: u128 = 0
+  let mut i: u64 = copy divisor.used
+  while i > low {
+    i -= 1
+    top = top * 1000000000 + core@1/int.widen(divisor.limbs[divisor.first + i])
+  }
+  let mut high: u128 = 0
+  i = copy remainder.used
+  while i > low {
+    i -= 1
+    high = high * 1000000000 + core@1/int.widen(remainder.limbs[remainder.first + i])
+  }
+  let mut quotient: u64 = core@1/int.narrow(high / top)
+  if quotient == 0 {
+    return 0
+  }
+  let mut product = divisor
+  big_mul_word(mut product, quotient)
+  while big_compare(product, remainder, false) > 0 {
+    big_subtract(mut product, divisor)
+    quotient -= 1
+  }
+  big_subtract(mut remainder, product)
+  quotient
 }
 
 @noalloc

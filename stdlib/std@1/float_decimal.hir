@@ -428,13 +428,18 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
     mantissa = 1
     internal.big.big_subtract(mut numerator, denominator)
     while count > 0 {
-      internal.big.big_mul(mut numerator, 2)
-      mantissa *= 2
-      if internal.big.big_compare(numerator, denominator, false) >= 0 {
-        mantissa += 1
-        internal.big.big_subtract(mut numerator, denominator)
+      let bits: i32 = if count > 26 {
+        26
+      } else {
+        count
       }
-      count -= 1
+      let quotient = internal.big.big_quotient(
+        mut numerator,
+        denominator,
+        core@1/int.narrow(bits)
+      )
+      mantissa = mantissa << core@1/int.narrow(bits) | quotient
+      count -= bits
     }
     internal.big.big_mul(mut numerator, 2)
   }
