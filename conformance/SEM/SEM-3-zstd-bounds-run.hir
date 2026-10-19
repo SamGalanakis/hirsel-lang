@@ -1,0 +1,135 @@
+// rule: SEM-3
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.equal(t, zstd.decode(b"(\xb5/\xfd \x05)\x00\x00hello", 5, 5), Ok(b"hello"))
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x05)\x00\x00hello", 4, 5),
+    Error(OutputTooLarge())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x05)\x00\x00hello", 5, 4),
+    Error(WindowTooLarge(5))
+  )
+  test.equal(t, zstd.decode(b"(\xb5/\xfd\x00\x00)\x00\x00hello", 5, 1024), Ok(b"hello"))
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00)\x00\x00hello", 4, 1024),
+    Error(OutputTooLarge())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00)\x00\x00hello", 5, 1023),
+    Error(WindowTooLarge(1024))
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd`,\x00a\x09\x00xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      300,
+      300
+    ),
+    Ok(
+      b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\xa0\x05\x00\x00\x00)\x00\x00xxxxx", 300, 300),
+    Ok(b"xxxxx")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd\xe0\x05\x00\x00\x00\x00\x00\x00\x00)\x00\x00xxxxx",
+      300,
+      300
+    ),
+    Ok(b"xxxxx")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\xe0\xff\xff\xff\xff\xff\xff\xff\xff", 65536, 1024),
+    Error(WindowTooLarge(18446744073709551615))
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\xff", 65536, 1024),
+    Error(WindowTooLarge(4123168604160))
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x051\x00\x00helloo", 65536, 1024),
+    Error(BlockOversize())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x05!\x00\x00hell", 65536, 1024),
+    Error(ContentSize())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00C\x9c\x00x", 65536, 1024),
+    Error(BlockOversize())
+  )
+  test.equal(t, zstd.decode(b"(\xb5/\xfd \x00\x01\x00\x00", 0, 0), Ok(b""))
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x00\x01\x00\x00\x99\xe9\xd8Q", 65536, 1024),
+    Ok(b"")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x00\x01\x00\x00\x99\xe9\xd8P", 65536, 1024),
+    Error(Checksum())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x00\x01\x00\x00\x99\xe9\xd8", 65536, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x05)\x00\x00hello\xa3m\x9f\x88", 65536, 1024),
+    Ok(b"hello")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x05)\x00\x00hello\xa3m\x9f\x89", 65536, 1024),
+    Error(Checksum())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd$\x05)\x00\x00hello\xa3m\x9f", 65536, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x05)\x00\x00hello(\xb5/\xfd \x05)\x00\x00hello", 10, 5),
+    Ok(b"hellohello")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd \x05)\x00\x00hello(\xb5/\xfd \x05)\x00\x00hello", 9, 5),
+    Error(OutputTooLarge())
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd \x05)\x00\x00hello(\xb5/\xfd\x00\x00=\x00\x00\x00\x01T\x00\x00\x00\x01",
+      65536,
+      1024
+    ),
+    Error(Corrupt())
+  )
+  // Window descriptor mantissa and exponent contribute independently.
+  test.equal(t, zstd.decode(b"\x28\xb5\x2f\xfd\x00\x01\x01\x00\x00", 0, 1152), Ok(b""))
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x00\x01\x01\x00\x00", 0, 1151),
+    Error(WindowTooLarge(1152))
+  )
+  test.equal(t, zstd.decode(b"\x28\xb5\x2f\xfd\x00\x08\x01\x00\x00", 0, 2048), Ok(b""))
+  Ok(())
+}

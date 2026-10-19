@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// Reference output size and XXH64, plus a truncated-input twin for each vector.
+fn verify(t: Test, data: Bytes, size: u64, digest: u64) -> () {
+  let out = test.expect_ok(t, zstd.decode(data, size, 2097152))
+  test.equal(t, bytes.len(out), size)
+  test.equal(t, xxhash64.digest(out), digest)
+  test.equal(
+    t,
+    match zstd.decode(bytes.slice(data, 0, bytes.len(data) - 1), size, 2097152) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    true
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  verify(t, vectors.golden_empty_block(), 0, 17241709254077376921)
+  verify(t, vectors.golden_zeroSeq_2B(), 13, 3305718589876166805)
+  // Exact large RLE golden refuses a declared content size above the caller's bound.
+  test.equal(
+    t,
+    zstd.decode(vectors.golden_rle_first_block(), 1048575, 2097152),
+    Error(OutputTooLarge())
+  )
+  // The raw golden's header alone proves the window bound is checked before payload allocation.
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x00\x38", 131068, 131071),
+    Error(WindowTooLarge(131072))
+  )
+  Ok(())
+}

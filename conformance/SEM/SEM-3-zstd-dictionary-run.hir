@@ -1,0 +1,169 @@
+// rule: SEM-3
+// expect: run
+// steps: 12000000
+// Validate and reuse trained dictionary tables, including malformed twins and a 1024-byte window boundary.
+pub fn main(t: Test) -> Result[(), ()] {
+  let d = test.expect_ok(t, zstd.dictionary(vectors.formatted_dictionary()))
+  let frame = vectors.dictionary_frame()
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(frame, d, 4096, 4096),
+    Ok(vectors.dictionary_plain())
+  )
+  let raw = test.expect_ok(t, zstd.dictionary(vectors.raw_dictionary()))
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(vectors.raw_dictionary_frame(), raw, 4096, 4096),
+    Ok(vectors.raw_dictionary_plain())
+  )
+  test.equal(
+    t,
+    match zstd.decode(frame, 4096, 4096) {
+      Error(DictionaryRequired(_)) => true,
+      _ => false,
+    },
+    true
+  )
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(frame, raw, 4096, 4096),
+    Error(DictionaryMismatch())
+  )
+  // A formatted dictionary may serve ID-zero frames, but a different nonzero ID fails.
+  let mut wrong: List[u8] = []
+  for byte in vectors.formatted_dictionary() {
+    list.push(mut wrong, byte)
+  }
+  wrong[4] = wrong[4] ^ 1u8
+  let other = test.expect_ok(t, zstd.dictionary(bytes.from_list(take wrong)))
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(frame, other, 4096, 4096),
+    Error(DictionaryMismatch())
+  )
+  test.equal(
+    t,
+    match zstd.dictionary(b"\x37\xa4\x30\xec") {
+      Error(Truncated()) => true,
+      _ => false,
+    },
+    true
+  )
+  test.equal(
+    t,
+    match zstd.dictionary(b"") {
+      Error(InvalidDictionary()) => true,
+      _ => false,
+    },
+    true
+  )
+  let minimal = test.expect_ok(t, zstd.dictionary(b"ABCDEFGH"))
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(b"\x28\xb5\x2f\xfd\x20\x00\x01\x00\x00", minimal, 0, 0),
+    Ok(b"")
+  )
+  // The same dictionary is reset per frame and is reusable after errors.
+  let mut both: List[u8] = []
+  for byte in frame {
+    list.push(mut both, byte)
+  }
+  for byte in frame {
+    list.push(mut both, byte)
+  }
+  let mut plain: List[u8] = []
+  for byte in vectors.dictionary_plain() {
+    list.push(mut plain, byte)
+  }
+  for byte in vectors.dictionary_plain() {
+    list.push(mut plain, byte)
+  }
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(bytes.from_list(take both), d, 4096, 4096),
+    Ok(bytes.from_list(take plain))
+  )
+  test.equal(t, zstd.decode_with_dictionary(frame, d, 1, 4096), Error(OutputTooLarge()))
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(frame, d, 4096, 4096),
+    Ok(vectors.dictionary_plain())
+  )
+  // ID-zero frame permits the supplied formatted dictionary's entropy tables.
+  let mut no_id: List[u8] = []
+  for byte in frame {
+    list.push(mut no_id, byte)
+  }
+  no_id[5] = 0u8
+  no_id[6] = 0u8
+  no_id[7] = 0u8
+  no_id[8] = 0u8
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(bytes.from_list(take no_id), d, 4096, 4096),
+    Ok(vectors.dictionary_plain())
+  )
+  // Dictionary references may exceed the window, until output passes it.
+  let mut at_window: List[u8] = []
+  for byte in b"(\xb5/\xfd\x00\x00\x00 \x00" {
+    list.push(mut at_window, byte)
+  }
+  let mut expected: List[u8] = []
+  let mut i: u64 = 0
+  while i < 1024 {
+    list.push(mut at_window, b'a')
+    list.push(mut expected, b'a')
+    i += 1
+  }
+  let mut past_window = copy at_window
+  for byte in b"\x08\x00\x00bE\x00\x00\x00\x01T\x00\x0a\x00\x05\x04" {
+    list.push(mut past_window, byte)
+  }
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(bytes.from_list(take past_window), minimal, 2048, 1024),
+    Error(Corrupt())
+  )
+  for byte in b"E\x00\x00\x00\x01T\x00\x0a\x00\x04\x04" {
+    list.push(mut at_window, byte)
+  }
+  for byte in b"Haa" {
+    list.push(mut expected, byte)
+  }
+  test.equal(
+    t,
+    zstd.decode_with_dictionary(bytes.from_list(take at_window), minimal, 2048, 1024),
+    Ok(bytes.from_list(take expected))
+  )
+  // An otherwise identical formatted dictionary with repeat offset zero.
+  let mut invalid: List[u8] = []
+  for byte in vectors.formatted_dictionary() {
+    list.push(mut invalid, byte)
+  }
+  invalid[109] = 0u8
+  test.equal(
+    t,
+    match zstd.dictionary(bytes.from_list(take invalid)) {
+      Error(InvalidDictionary()) => true,
+      _ => false,
+    },
+    true
+  )
+  let mut id_zero: List[u8] = []
+  for byte in vectors.formatted_dictionary() {
+    list.push(mut id_zero, byte)
+  }
+  id_zero[4] = 0u8
+  id_zero[5] = 0u8
+  id_zero[6] = 0u8
+  id_zero[7] = 0u8
+  test.equal(
+    t,
+    match zstd.dictionary(bytes.from_list(take id_zero)) {
+      Error(InvalidDictionary()) => true,
+      _ => false,
+    },
+    true
+  )
+  Ok(())
+}

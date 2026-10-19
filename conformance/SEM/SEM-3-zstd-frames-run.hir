@@ -1,0 +1,113 @@
+// rule: SEM-3
+// expect: run
+// Zig std.compress.zstd vectors and RFC 8878 sections 3.1.1 and 3.1.2.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.equal(t, zstd.decode(b"\x28\xb5\x2f\xfd\x20\x00\x01\x00\x00", 64, 1024), Ok(b""))
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x20\x00\x03\x00\x00\xaa", 64, 1024),
+    Ok(b"")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x50\x2a\x4d\x18\x02\x00\x00\x00\xff\xff", 64, 1024),
+    Ok(b"")
+  )
+  let raw = b"\x28\xb5\x2f\xfd\x20\x05\x29\x00\x00hello"
+  test.equal(t, zstd.decode(raw, 5, 5), Ok(b"hello"))
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x20\x05\x2b\x00\x00x", 5, 5),
+    Ok(b"xxxxx")
+  )
+  // Two raw blocks and an intervening empty RLE block share one frame.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x20\x05\x10\x00\x00he\x02\x00\x00x\x19\x00\x00llo",
+      5,
+      5
+    ),
+    Ok(b"hello")
+  )
+  // Every skippable magic, concatenation, and unused descriptor bit 4.
+  let mut i: u64 = 0
+  while i < 16 {
+    let mut bytes: List[u8] = [
+      core@1/int.narrow(0x50 + i),
+      0x2a,
+      0x4d,
+      0x18,
+      0,
+      0,
+      0,
+      0
+    ]
+    for b in raw {
+      list.push(mut bytes, b)
+    }
+    for b in raw {
+      list.push(mut bytes, b)
+    }
+    test.equal(t, zstd.decode(bytes.from_list(take bytes), 10, 5), Ok(b"hellohello"))
+    i += 1
+  }
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x30\x05\x29\x00\x00hello", 5, 5),
+    Ok(b"hello")
+  )
+  // The missing trailer of each otherwise valid input is a malformed twin.
+  test.equal(t, zstd.decode(b"\x28\xb5\x2f", 64, 1024), Error(Truncated()))
+  test.equal(t, zstd.decode(b"", 64, 1024), Error(Truncated()))
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x20\x05\x29\x00\x00hell", 64, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x20\x05\x2b\x00\x00", 64, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x50\x2a\x4d\x18\x02\x00\x00\x00\xff", 64, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfc\x20\x00\x01\x00\x00", 64, 1024),
+    Error(BadMagic())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x28\x00\x01\x00\x00", 64, 1024),
+    Error(ReservedBit())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"\x28\xb5\x2f\xfd\x20\x00\x07\x00\x00", 64, 1024),
+    Error(Corrupt())
+  )
+  // All dictionary-ID field widths, including explicitly absent ID zero.
+  test.equal(t, zstd.decode(b"(\xb5/\xfd!\x00\x00\x01\x00\x00", 0, 0), Ok(b""))
+  test.equal(t, zstd.decode(b"(\xb5/\xfd!\x01\x00", 0, 0), Error(DictionaryRequired(1)))
+  test.equal(t, zstd.decode(b"(\xb5/\xfd\x22\x00\x00\x00\x01\x00\x00", 0, 0), Ok(b""))
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x22\x01\x00\x00", 0, 0),
+    Error(DictionaryRequired(1))
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd#\x00\x00\x00\x00\x00\x01\x00\x00", 0, 0),
+    Ok(b"")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd#\x01\x00\x00\x00\x00", 0, 0),
+    Error(DictionaryRequired(1))
+  )
+  Ok(())
+}

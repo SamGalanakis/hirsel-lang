@@ -5147,6 +5147,7 @@ conformance/SEM/SEM-3-wave2-text-slice-run.hir
 conformance/SEM/SEM-3-wave2-trim-empty-run.hir
 conformance/SEM/SEM-3-wave2-trim-run.hir
 conformance/SEM/SEM-3-x509-run.hir
+conformance/SEM/SEM-3-xxhash64-list-run.hir
 conformance/SEM/SEM-3-xxhash64-run.hir
 conformance/SEM/SEM-3-yaml-aliases-laughs-run.hir
 conformance/SEM/SEM-3-yaml-aliases-limit-run.hir
@@ -5277,6 +5278,14 @@ conformance/SEM/SEM-3-zip-read-unix-run.hir
 conformance/SEM/SEM-3-zip-read-zip64-run.hir
 conformance/SEM/SEM-3-zip-write-run.hir
 conformance/SEM/SEM-3-zip-zip64-run.hir
+conformance/SEM/SEM-3-zstd-bounds-run.hir
+conformance/SEM/SEM-3-zstd-compressed-run.hir
+conformance/SEM/SEM-3-zstd-dictionary-run.hir
+conformance/SEM/SEM-3-zstd-frames-run.hir
+conformance/SEM/SEM-3-zstd-golden-run.hir
+conformance/SEM/SEM-3-zstd-huffman-run.hir
+conformance/SEM/SEM-3-zstd-malformed-run.hir
+conformance/SEM/SEM-3-zstd-sequences-run.hir
 conformance/SEM/SEM-4-array-borrow.hir
 conformance/SEM/SEM-4-array-mut.hir
 conformance/SEM/SEM-4-array-take.hir

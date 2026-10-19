@@ -837,6 +837,12 @@
       "module": [
         "binary"
       ]
+    },
+    {
+      "path": "zstd.hir",
+      "module": [
+        "zstd"
+      ]
     }
   ],
   "dependencies": []

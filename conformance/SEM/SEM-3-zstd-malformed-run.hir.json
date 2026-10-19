@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-3-zstd-malformed-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/zstd@1/vectors.hir",
+      "module": [
+        "vectors"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

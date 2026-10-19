@@ -1,0 +1,109 @@
+// rule: SEM-3
+// expect: run
+// Zig Decode.nextSequence repeat-offset transitions and repeat table modes.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd\x00\x00|\x00\x00@abcdefgh\x01T\x08\x02\x00\x07D\x00\x00\x08Q\x01T\x01\x00\x00\x01<\x00\x00\x00\x01T\x00\x00\x00\x01<\x00\x00\x00\x01T\x00\x01\x00\x02<\x00\x00\x00\x01T\x00\x01\x00\x03D\x00\x00\x08Z\x01T\x01\x01\x00\x02E\x00\x00\x08Y\x01T\x01\x01\x00\x03",
+      65536,
+      1024
+    ),
+    Ok(b"abcdefghefgQefggggggggggZgggYYYY")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd\x00\x00D\x00\x00\x08a\x01T\x01\x00\x00\x01\x08\x00\x00x\x0a\x00\x00y-\x00\x00\x08b\x01\xfc\x01",
+      65536,
+      1024
+    ),
+    Ok(b"aaaaxybbbb")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00-\x00\x00\x08b\x01\xfc\x01", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00E\x00\x00\x08a\x01T\x01\x00\x00\x00", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00=\x00\x00\x00\x01T\x00\x01\x00\x03", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00=\x00\x00\x00\x01T$\x00\x00\x01", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00=\x00\x00\x00\x01T\x00 \x00\x01", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00=\x00\x00\x00\x01T\x00\x005\x01", 65536, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00E\x00\x00\x08a\x01U\x01\x00\x00\x01", 65536, 1024),
+    Error(ReservedBit())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00%\x00\x00\x08a\x00\x01", 65536, 1024),
+    Error(Corrupt())
+  )
+  // Two-symbol FSE distributions [16,16] for each of LL, ML and OF.
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00M\x00\x00\x08a\x01\x94\x10?\x00\x00#", 64, 1024),
+    Ok(b"aaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00M\x00\x00\x08a\x02\x94\x10?\x00\x00F", 64, 1024),
+    Ok(b"aaaaaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00M\x00\x00\x08a\x01X\x01\x00\x10?#", 64, 1024),
+    Ok(b"aaaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00\x85\x00\x00@abcdefgh\x01d\x08\x10?\x00F", 64, 1024),
+    Ok(b"abcdefghefg")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"(\xb5/\xfd\x00\x00L\x00\x00\x08a\x01\x94\x10?\x00\x00#-\x00\x00\x08b\x01\xfc#",
+      64,
+      1024
+    ),
+    Ok(b"aaaabbbb")
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00M\x00\x00\x08a\x01\x94\x1f?\x00\x00#", 64, 1024),
+    Error(Corrupt())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00-\x00\x00\x08a\x01\x94\x10", 64, 1024),
+    Error(Truncated())
+  )
+  test.equal(
+    t,
+    zstd.decode(b"(\xb5/\xfd\x00\x00M\x00\x00\x08a\x01\x94\x10?\x00\x00\x01", 64, 1024),
+    Error(Corrupt())
+  )
+  Ok(())
+}

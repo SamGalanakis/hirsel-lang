@@ -2361,6 +2361,53 @@ header has no name, comment or time, zlib's extra flags (2 at level 9, 4 below l
 and operating system 255 (unknown), with a CRC-32 and the input size modulo 2^32 after
 the stream.
 
+## Zstandard decoding
+
+`std@1/zstd` decodes RFC 8878 frames in ordinary Hirsel source, adapted from
+Zig's `std.compress.zstd`. It accepts raw, RLE and compressed blocks, FSE and
+Huffman literal streams, repeat tables and offsets, and concatenated and
+skippable frames. Every frame checksum is verified using XXH64.
+
+```text
+ZstdError = Truncated | BadMagic | ReservedBit | Corrupt | BlockOversize
+  | Checksum | ContentSize | WindowTooLarge(u64) | OutputTooLarge
+  | DictionaryRequired(u64) | DictionaryMismatch | InvalidDictionary
+fn zstd.decode(data: Bytes, max_output: u64, max_window: u64) -> Result[unique Bytes, ZstdError] uses {}
+fn zstd.dictionary(data: Bytes) -> Result[Dictionary, ZstdError] in data uses {}
+fn zstd.decode_with_dictionary(data: Bytes, dict: Dictionary, max_output: u64, max_window: u64) -> Result[unique Bytes, ZstdError] uses {}
+```
+
+Both limits are explicit caller policy. `max_output` bounds the total output
+across all frames; `OutputTooLarge()` is returned before exceeding it.
+`max_window` bounds the history requirement declared by each frame, including
+the content size of a single-segment frame. `WindowTooLarge(required)` refuses
+an oversize header before allocating output or entropy tables for that frame.
+No output buffer is allocated from an unchecked size. The whole-buffer decoder
+keeps its bounded output as history, at most one block's literals (128 KiB),
+and format-bounded entropy tables; it does not allocate a declared window.
+Input and dictionary content are borrowed. No partial output is returned.
+
+`dictionary` recognizes formatted dictionaries by magic `0xec30a437`, validates
+their Huffman/FSE tables and nonzero repeat offsets within their content, and
+otherwise accepts at least eight bytes as raw content. Structural truncation and
+malformed tables return `Truncated()` or `Corrupt()`; invalid initial repeat
+offsets, dictionary ID zero, and raw content shorter than eight bytes are
+`InvalidDictionary()`. The dictionary can be reused without mutation. Its entropy
+tables, repeat offsets and history are reset independently at each
+frame. A nonzero frame dictionary ID requires a matching formatted dictionary;
+absence is `DictionaryRequired(id)`, and a different ID is
+`DictionaryMismatch()`. ID zero permits a caller-selected dictionary, including
+a raw-content prefix. A frame cannot refer to a preceding frame's output.
+
+`Truncated()` means a required byte field or section is incomplete; malformed
+bitstreams, entropy tables, repeat modes and match distances are `Corrupt()`.
+Reserved frame or sequence bits are `ReservedBit()`; the unused frame bit is
+ignored as specified by RFC 8878. A block exceeding its frame's maximum is
+`BlockOversize()`. Declared content-size mismatches are `ContentSize()` and
+checksum mismatches are `Checksum()`. Empty input is `Truncated()`; a stream
+containing only skippable frames succeeds with empty output. Trailing bytes
+must form another complete frame; a non-Zstandard magic is `BadMagic()`.
+
 ## Tar archives
 
 `std@1/tar` reads and writes tar archives: V7, USTAR and POSIX.1-2001 PAX headers on

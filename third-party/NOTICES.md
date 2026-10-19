@@ -10,6 +10,10 @@ the license named in its row; the license texts follow once each.
 | rustls | RootCertStore::add trust-anchor decoding, TLS verification-name parsing, `ServerConfig::with_single_cert` identity loading (`CertifiedKey::keys_match`), `WebPkiClientVerifier` client-certificate verification and `ResolvesServerCertUsingSni`-style identity selection, with the existing rsa-2048 ca.cert accepted control | `crates/hirsel-run-config/src/tls.rs`, TLS input conformance | rustls/rustls `f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb` (v/0.23.46) | MIT |
 | Rust standard library | `library/std/src/net/udp.rs` and `sys/net/connection/socket/unix.rs` bind/sendto/recvfrom conventions, empty datagram and truncation vectors | UDP core operations, host provider and UDP conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/std/src/sys/fs/unix.rs` no-follow descriptor deletion and pinned permission mutation; remove_dir_all symlink and nested vectors; `library/alloc/src/io/read.rs` 8 KiB stream-copy buffer policy | filesystem breadth providers, `stdlib/std@1/file.hir` copy_file and conformance/host replay tests | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
+| Zig standard library | `lib/std/compress/zstd.zig`, `lib/std/compress/zstd/Decompress.zig` frame, FSE, Huffman and repeat-offset decoder and vectors | `stdlib/std@1/zstd.hir`, `conformance/SEM/SEM-3-zstd-*.hir` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| Zstandard | `tests/golden-decompression/`, `tests/golden-decompression-errors/`, `tests/golden-compression/{http,huffman-compressed-larger,large-literal-and-match-lengths}` | Zstandard conformance and `packages/fixtures/zstd@1/` | facebook/zstd `49cf51799ea051457f57243527aa2058f999f005` | BSD-3-Clause (Zstandard) |
+| Zstandard | libzstd 1.5.5 compression and dictionary-training outputs, with deterministic HTTP/JSON and varied-length fragments | `packages/fixtures/zstd@1/vectors.hir`, Zstandard conformance | facebook/zstd v1.5.5 | BSD-3-Clause (Zstandard) |
+| RFC 8878 | section 4.2 Huffman weights example and appendix A default tables | `stdlib/std@1/zstd.hir`, Zstandard entropy conformance | RFC 8878 (February 2021) | Simplified BSD (IETF Trust) |
 | Zig standard library | `lib/std/Io/Dir.zig` Walker explicit stack, directory-only descent and recursive traversal vectors | `stdlib/std@1/file.hir` list_recursive, filesystem breadth conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Go standard library | `src/unicode/letter.go` range binary search adapted from the existing Unicode property lookup; Unicode16 UCD supplies display-width data and P1868R2 supplies the estimate | `stdlib/std@1/display_width.hir`, display-width conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go x/net | `http2/hpack/{hpack,encode,huffman,tables,static_table}.go` and decoder, encoder, Huffman test vectors | `stdlib/std@1/hpack*.hir`, HPACK conformance | golang/net `7e562009b3884a0845019b5f886f0242a7c0b970` | BSD-3-Clause (Go) |
@@ -151,6 +155,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
 - postcard: Copyright (c) 2019 Anthony James Munns
 - bincode: Copyright (c) 2014 Ty Overby
+- RFC 8878: Copyright (c) 2021 IETF Trust and the persons identified as the document authors
 - RFC 8949: Copyright (c) 2020 IETF Trust and the persons identified as the document authors
 - lexopt: Copyright (c) 2021 Jan Verbeek
 - Cranelift: Copyright (c) the Bytecode Alliance and Cranelift contributors
@@ -661,3 +666,36 @@ prospectively choose to deem waived or otherwise exclude such Section(s) of
 the License, but only in their entirety and only with respect to the Combined
 Software.
 ```
+
+## BSD-3-Clause License (Zstandard)
+
+BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

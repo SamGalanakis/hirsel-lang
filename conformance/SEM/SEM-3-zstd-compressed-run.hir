@@ -1,0 +1,24 @@
+// rule: SEM-3
+// expect: run
+// steps: 8000000
+// Published HTTP and Huffman vectors rebuild entropy tables and verify XXH64, with truncated twins.
+// Reference output size and XXH64, plus a truncated-input twin for each vector.
+fn verify(t: Test, data: Bytes, size: u64, digest: u64) -> () {
+  let out = test.expect_ok(t, zstd.decode(data, size, 2097152))
+  test.equal(t, bytes.len(out), size)
+  test.equal(t, xxhash64.digest(out), digest)
+  test.equal(
+    t,
+    match zstd.decode(bytes.slice(data, 0, bytes.len(data) - 1), size, 2097152) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    true
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  verify(t, vectors.http(), 1189, 14515210543015416591)
+  verify(t, vectors.huffman_compressed_larger(), 142, 7608634191712078651)
+  Ok(())
+}

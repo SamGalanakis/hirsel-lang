@@ -1,0 +1,56 @@
+// rule: SEM-3
+// expect: run
+// Published malformed golden files, each paired with a repaired accepted frame.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.equal(
+    t,
+    match zstd.decode(vectors.bad_off0_bin(), 131072, 1024) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    true
+  )
+  test.equal(
+    t,
+    zstd.decode(vectors.bad_off0_bin_repaired(), 131072, 1024),
+    Ok(b"\x08\x00\x02\x00/C\x0b\xae")
+  )
+  test.equal(
+    t,
+    match zstd.decode(vectors.bad_truncated_huff_state(), 131072, 1024) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    true
+  )
+  test.equal(
+    t,
+    zstd.decode(vectors.bad_truncated_huff_state_repaired(), 131072, 1024),
+    Ok(b"r\x80\x01\x04 ~\x1f\x02\xaa\x00")
+  )
+  test.equal(
+    t,
+    match zstd.decode(vectors.bad_zeroSeq_extraneous(), 131072, 1024) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    true
+  )
+  test.equal(
+    t,
+    zstd.decode(vectors.bad_zeroSeq_extraneous_repaired(), 131072, 1024),
+    Ok(b"hHello World!\x0a\x80\x00\x00\x00")
+  )
+  // Zig's declared raw-literal size past the available block bytes.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x95\x00\x00\xbc\xf3\xae\xa5\x9f\xe3",
+      131072,
+      1024
+    ),
+    Error(Truncated())
+  )
+  test.equal(t, zstd.decode(b"\x28\xb5\x2f\xfd\x20\x00\x01\x00\x00", 0, 0), Ok(b""))
+  Ok(())
+}
