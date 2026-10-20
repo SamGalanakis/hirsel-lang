@@ -11,3 +11,7 @@ pub use graph::{
 };
 mod depth;
 pub use depth::{DepthEvidence, SiteSpan, dependency_limit};
+mod holds;
+pub use holds::{HoldStats, Holds, Retention, default_hold_bytes};
+mod worklist;
+pub use worklist::{Step, WorkKey, WorkKind, Worklist};
