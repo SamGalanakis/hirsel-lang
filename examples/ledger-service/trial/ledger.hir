@@ -1,0 +1,48 @@
+// The candidate revision of the ledger's rules: a transfer now charges a fee
+// of 1% (rounded down), paid by the sender on top of the amount moved. Only
+// `transfer` differs from ../ledger.hir.
+@serializable
+pub type Receipt {
+  from: u64,
+  to: u64,
+  moved: u64,
+  fee: u64,
+}
+
+@serializable
+pub type Refusal = NoAccount(u64) | Insufficient(u64) | Table(table.TxError)
+
+fn balances() -> table.Table[u64, u64] {
+  table.named("balances")
+}
+
+/// Sets `account`'s balance to `cents`, creating the table on first use.
+pub fn open(mut tx: store.Tx, account: u64, cents: u64) -> Result[u64, Refusal] {
+  match table.create(mut tx, balances()) {
+    Ok(()) => {},
+    Error(TableExists()) => {},
+    Error(e) => return Error(Table(e)),
+  }
+  table.put(mut tx, balances(), account, cents) ? Table
+  Ok(cents)
+}
+
+/// Moves `cents` from one account to another; the sender also pays the fee.
+pub fn transfer(mut tx: store.Tx, from: u64, to: u64, cents: u64) -> Result[
+  Receipt,
+  Refusal
+] {
+  let Some(have) = table.get(tx, balances(), from) ? Table else {
+    return Error(NoAccount(from))
+  }
+  let Some(other) = table.get(tx, balances(), to) ? Table else {
+    return Error(NoAccount(to))
+  }
+  let fee = cents / 100
+  if have < cents + fee {
+    return Error(Insufficient(have))
+  }
+  table.put(mut tx, balances(), from, have - cents - fee) ? Table
+  table.put(mut tx, balances(), to, other + cents) ? Table
+  Ok(Receipt(from: from, to: to, moved: cents, fee: fee))
+}

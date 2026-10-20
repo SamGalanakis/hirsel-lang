@@ -112,6 +112,9 @@ const DENIED: u32 = 0;
 const UNREACHABLE: u32 = 2;
 const OVERLOADED: u32 = 3;
 const REJECTED: u32 = 4;
+/// `sim@1`'s crash points: a crash stops a callee before one of its first this many
+/// requests (or suspensions).
+const CRASH_POINTS: u64 = 32;
 const LOST: u32 = 0;
 const ABANDONED: u32 = 2;
 
@@ -627,11 +630,13 @@ impl Library {
             return Ok(Err(Refused::InDoubt(LOST)));
         }
         place.running += 1;
+        // The crash point: one of the callee's first 32 requests, or suspensions where it
+        // makes none; a callee that ends first has its outcome lost.
         let crash_after = fire("crash", attempt).then(|| {
             draw(
                 "hirsel.runner.fault.crash.v1",
                 &[&seed, entry.name.as_bytes(), &ordinal.to_le_bytes()],
-            ) % 4
+            ) % CRASH_POINTS
         });
         let lose_reply = fire("lose_reply", attempt);
         let key = hirsel_run_schema::call_key(&cause.instance, ordinal);
@@ -691,7 +696,8 @@ impl Library {
             .get(&token)
             .ok_or_else(|| invalid("an outcome for an unknown runner call"))?;
         let callee = Some(pending.callee);
-        if pending.lose_reply && !matches!(end, CalleeEnd::Canceled) {
+        // A crashed place sends no reply to lose.
+        if pending.lose_reply && !matches!(end, CalleeEnd::Canceled | CalleeEnd::Abandoned) {
             return Ok(RunnerCompletion {
                 outcome: CallOutcome::InDoubt(LOST),
                 callee,

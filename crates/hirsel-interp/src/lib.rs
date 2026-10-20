@@ -221,7 +221,9 @@ pub struct CalleeStart {
     pub arguments: Vec<Value>,
     pub operations: Box<dyn Operations>,
     pub budgets: RunBudgets,
-    /// `sim@1`'s `crash` fault: the callee's place stops it after this many suspensions.
+    /// `sim@1`'s `crash` fault: the callee's place stops it at this point, counted in its
+    /// requests where its provider makes them (`Operations::stops_itself`), else in its
+    /// suspensions. A callee that ends first ends with its outcome withheld.
     pub crash_after: Option<u32>,
     /// The call as a host provider admits its callee run.
     pub call: CallStart,
@@ -344,6 +346,9 @@ operation_boundary! {
     /// The logical bytes of the values this layer holds for the run (channel buffers,
     /// task results), measured with the evaluator's own (`budgets.limits@2`).
     fn retained_bytes(&self) -> u64 { 0 }
+    /// A callee run whose provider stops it at its place's crash point itself, before one
+    /// of its requests (`sim@1` on a host), instead of the execution counting suspensions.
+    fn stops_itself(&self) -> bool { false }
     }
     mutable {
     /// A scheduling point: the index in `runnable` (queue order, nonempty) of the task to run

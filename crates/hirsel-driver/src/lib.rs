@@ -18,8 +18,10 @@ pub mod observation_view;
 mod pipeline;
 pub mod serve;
 pub mod testing;
+mod trial;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
+pub use trial::{TrialCall, trial_tapes};
 
 /// The complete compiler over the front phases in [`FrontPhases`].
 include!(concat!(env!("OUT_DIR"), "/compiler_identity.rs"));

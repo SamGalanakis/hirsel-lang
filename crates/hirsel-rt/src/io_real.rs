@@ -845,7 +845,7 @@ impl RealIo {
             }
             // The in-process place acknowledges a forwarded cancellation at once; a
             // callee's outcome is recorded as it ended.
-            Request::RunnerCancel { .. } | Request::CallReturn(_) => {
+            Request::RunnerCancel { .. } | Request::CallReturn(_) | Request::Stopped => {
                 self.record(Event {
                     request,
                     completion: Completion::Ready,

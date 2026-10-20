@@ -2179,6 +2179,7 @@ pub(crate) unsafe fn execute(
             hirsel_run_schema::Environmental::Output(reason) => {
                 format!("environmental output {reason}")
             }
+            hirsel_run_schema::Environmental::Stopped => "environmental stopped".into(),
         }),
         _ => None,
     };

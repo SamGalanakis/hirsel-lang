@@ -2502,6 +2502,11 @@ pub fn observe_run(
                     hirsel_run_schema::Environmental::Output(rest(3)),
                 ))
             }
+            ["stopped", "environmental", "stopped"] => {
+                stopped = Some(hirsel_run_schema::RunOutcome::Environmental(
+                    hirsel_run_schema::Environmental::Stopped,
+                ))
+            }
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,
             ["waits", ..] => {

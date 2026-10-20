@@ -2704,3 +2704,128 @@ fn tasks_event_streams_hold_no_board_llvm() {
     assert!(server.finish("server").success());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// examples/ledger-service (docs/replay-a-service.md): a store at a `sim@1` place, its
+/// client's calls under a crash before a commit and a lost reply, every tape replayed
+/// alone and the set joined, then the trading calls trialled against a fork of the store
+/// under the candidate revision whose transfer charges a fee.
+#[test]
+fn ledger_service_survives_faults_replays_and_trials_a_changed_transfer() {
+    let dir = std::env::temp_dir().join(format!("hirsel-ledger-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("db")).unwrap();
+    let example = repository_manifest("examples/ledger-service");
+    for template in ["grants.json", "faults.json", "fork.json"] {
+        std::fs::copy(example.join(template), dir.join(template)).unwrap();
+    }
+    let manifest = example.join("hirsel.json");
+    let hirsel = |args: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    let run = |grants: &str, tape: Option<&std::path::Path>| {
+        let grants = dir.join(grants);
+        let mut args = vec![
+            "run".as_ref(),
+            manifest.as_os_str(),
+            "--grants".as_ref(),
+            grants.as_os_str(),
+        ];
+        if let Some(tape) = tape {
+            args.extend(["--record".as_ref(), tape.as_os_str()]);
+        }
+        hirsel(&args)
+    };
+    let opened = run("grants.json", None);
+    assert!(opened.status.success(), "{}", text(&opened.stderr));
+    assert_eq!(
+        text(&opened.stdout),
+        "1: opened 1 with 500\n2: opened 2 with 100\n"
+    );
+    let copy = Command::new("cp")
+        .arg("-r")
+        .arg(dir.join("db"))
+        .arg(dir.join("fork"))
+        .status()
+        .unwrap();
+    assert!(copy.success());
+    let tape = dir.join("T");
+    let traded = run("faults.json", Some(&tape));
+    assert!(traded.status.success(), "{}", text(&traded.stderr));
+    // Position 3's first attempt crashed before its commit, which ran again; position
+    // 6's commit happened and its reply was lost, so the re-send read its outcome.
+    let trades = "3: in doubt, sending it again\n3: moved 200 from 1 to 2, fee 0\n\
+         4: opened 3 with 0\n5: moved 50 from 2 to 3, fee 0\n\
+         6: in doubt, sending it again\n6: moved 250 from 2 to 1, fee 0\n\
+         7: insufficient: 550\n";
+    assert_eq!(text(&traded.stdout), trades);
+    let call = |n: u32| dir.join(format!("T.call-{n}"));
+    let crashed = std::fs::read_to_string(call(0)).unwrap();
+    assert!(crashed.contains("\nstopped -> ready\n"), "{crashed}");
+    let replay = |tape: &std::path::Path| {
+        hirsel(&[
+            "run".as_ref(),
+            manifest.as_os_str(),
+            "--replay".as_ref(),
+            tape.as_os_str(),
+        ])
+    };
+    let caller = replay(&tape);
+    assert!(caller.status.success(), "{}", text(&caller.stderr));
+    assert_eq!(text(&caller.stdout), trades);
+    // The crashed callee replays to where its place stopped it.
+    let stopped = replay(&call(0));
+    assert_eq!(stopped.status.code(), Some(6), "{}", text(&stopped.stderr));
+    assert!(
+        text(&stopped.stderr).contains("its place stopped the run"),
+        "{}",
+        text(&stopped.stderr)
+    );
+    // The callee whose reply was lost committed, and replays to its outcome.
+    let lost = replay(&call(4));
+    assert!(lost.status.success(), "{}", text(&lost.stderr));
+    let mut tapes = vec!["tapes".as_ref(), "check".as_ref(), tape.as_os_str()];
+    let calls: Vec<_> = (0..7).map(call).collect();
+    tapes.extend(calls.iter().map(|c| c.as_os_str()));
+    let checked = hirsel(&tapes);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    assert!(
+        text(&checked.stdout).ends_with("tapes: 7 links checked, 0 unchecked\n"),
+        "{}",
+        text(&checked.stdout)
+    );
+    let candidate = example.join("trial/hirsel.json");
+    let fork = dir.join("fork.json");
+    let trial = hirsel(&[
+        "tapes".as_ref(),
+        "trial".as_ref(),
+        candidate.as_os_str(),
+        "--grants".as_ref(),
+        fork.as_os_str(),
+        tape.as_os_str(),
+    ]);
+    let report = text(&trial.stdout);
+    assert_eq!(
+        trial.status.code(),
+        Some(1),
+        "{report}{}",
+        text(&trial.stderr)
+    );
+    for line in [
+        "call 0 ledger_service@1/transfer (changed code): unrecorded\n  recorded InDoubt(Abandoned())\n",
+        "call 1 ledger_service@1/transfer (changed code): DIVERGED\n  recorded Ok(Receipt(from: 1, to: 2, moved: 200, fee: 0))\n  trial    Ok(Receipt(from: 1, to: 2, moved: 200, fee: 2))\n",
+        "call 2 ledger_service@1/open_account (same code): same\n",
+        "call 3 ledger_service@1/transfer (changed code): same\n",
+        "call 6 ledger_service@1/transfer (changed code): DIVERGED\n  recorded Failed(Call(Tx(Aborted(Insufficient(550)))))\n  trial    Failed(Call(Tx(Aborted(Insufficient(298)))))\n",
+    ] {
+        assert!(report.contains(line), "{line}\n{report}");
+    }
+    assert!(
+        report.ends_with("trial: 7 calls, first divergence at call 1\n"),
+        "{report}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -380,6 +380,7 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
         RunOutcome::Environmental(Environmental::Output(why)) => {
             format!("environmental output {}", hex(why.as_bytes()))
         }
+        RunOutcome::Environmental(Environmental::Stopped) => "environmental stopped".into(),
         RunOutcome::Tooling(why) => format!("tooling {}", hex(why.as_bytes())),
         RunOutcome::ToolingLimit(limit) => format!(
             "tooling_limit {} {} {}",
@@ -457,6 +458,7 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
             "codec" => RunOutcome::Environmental(Environmental::CodecLimit),
             "recording" => RunOutcome::Environmental(Environmental::Recording(unhex(next()?)?)),
             "output" => RunOutcome::Environmental(Environmental::Output(unhex(next()?)?)),
+            "stopped" => RunOutcome::Environmental(Environmental::Stopped),
             _ => return Err("bad journal environment".into()),
         },
         "tooling" => RunOutcome::Tooling(unhex(next()?)?),
@@ -1119,6 +1121,7 @@ mod tests {
             RunOutcome::Environmental(Environmental::CodecLimit),
             RunOutcome::Environmental(Environmental::Recording("disk".into())),
             RunOutcome::Environmental(Environmental::Output("o".into())),
+            RunOutcome::Environmental(Environmental::Stopped),
             RunOutcome::Tooling("t".into()),
             RunOutcome::ToolingLimit(ToolingLimit {
                 kind: "steps".into(),

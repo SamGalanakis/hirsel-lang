@@ -57,6 +57,7 @@ selects an explicit bound.
 | [todo](todo/main.hir) | Execute `add TEXT`, `done NUMBER`, `list`; missing state starts empty; load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
 | [adventure](adventure/main.hir) | Play a command-file state machine with a key, cave and locked gate. |
 | [udp-query](udp-query/main.hir) | Send one datagram and receive a bounded reply; `demo.json` and `grants.json` supply a scripted echo peer. |
+| [ledger-service](ledger-service/main.hir) | A ledger store at a `sim@1` place with two transaction entries, a client that re-sends in-doubt calls on a call stream, crash and lost-reply faults, replay and an upgrade trial; see [Replay a service](../docs/replay-a-service.md). |
 | [unix-http](unix-http/README.md) | Serve and fetch one HTTP exchange over a Unix domain socket granted by exact path, with the std client's `unix_socket` setting as `curl --unix-socket` uses one. |
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
 | [fetchjson](fetchjson/README.md) | POST two JSON values and decode the replies over one persistent Client connection; `demo.json` supplies a deterministic echo peer. |

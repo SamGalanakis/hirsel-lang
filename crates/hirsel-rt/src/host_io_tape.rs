@@ -116,6 +116,7 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
                 format!("call_return failed {}", hex(bytes))
             }
         },
+        Request::Stopped => "stopped".into(),
         Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
         Request::Telemetry { io } => format!("telemetry {io}"),
@@ -545,6 +546,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             "failed" => hirsel_run_schema::CalleeOutcome::Failed(bytes(value)?),
             _ => return Err("bad call return".into()),
         }),
+        ["stopped"] => Request::Stopped,
         ["schedule", count, choice] => Request::Schedule {
             count: number(count)?,
             choice: number(choice)?,

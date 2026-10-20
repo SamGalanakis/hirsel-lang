@@ -176,6 +176,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         TestClock { test: n.wrapping_add(29) },
         TestSeed { test: n.wrapping_add(29) },
         TestTasks { test: n.wrapping_add(29) },
+        Stopped {},
         TestLog { test: n.wrapping_add(29), text: if n == 0 { String::new() } else { format!("{text}#text") } },
         TestSnapshot { test: n.wrapping_add(29), name: if n == 0 { String::new() } else { format!("{text}#name") }, text: if n == 0 { String::new() } else { format!("{text}#text") } },
         TestNet { test: n.wrapping_add(29), peers: peers, listeners: listeners },

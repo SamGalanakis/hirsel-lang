@@ -57,6 +57,7 @@ fn every_run_ending_has_one_exit_policy() {
             RunOutcome::Environmental(Environmental::Output("stdout".into())),
             6,
         ),
+        (RunOutcome::Environmental(Environmental::Stopped), 6),
     ];
     for (outcome, code) in cases {
         assert_eq!(outcome.exit_code(), code, "{outcome:?}");

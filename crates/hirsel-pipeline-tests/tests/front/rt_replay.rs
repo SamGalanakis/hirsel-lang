@@ -183,7 +183,10 @@ pub fn replay_interpreter_with_fixture(
                 Request::Ready { .. } | Request::Schedule { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
-                Request::RunnerCall(_) | Request::RunnerCancel { .. } | Request::CallReturn(_) => {
+                Request::RunnerCall(_)
+                | Request::RunnerCancel { .. }
+                | Request::CallReturn(_)
+                | Request::Stopped => {
                     panic!("runner tapes replay through hirsel-cli's runner tests")
                 }
                 Request::Signals { .. } | Request::SignalWait { .. } => {

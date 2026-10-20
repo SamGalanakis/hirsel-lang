@@ -567,6 +567,7 @@ impl HostLibrary {
         self.host_cancelable(request, self.library.cancellation())
     }
     fn host_cancelable(&mut self, request: R, cancellation: Option<u32>) -> Result<C, Error> {
+        self.crash_point()?;
         if self.io.adapter().wants_issuer() {
             let task = self.library.task_path();
             self.io.adapter().issuer(&task);
@@ -579,8 +580,14 @@ impl HostLibrary {
                 }),
             None => self.io.call(request),
         };
+        if !matches!(result, Err(hirsel_rt::io::AdapterError::Blocked)) {
+            self.runners.requests += 1;
+        }
         result.map_err(|e| match e {
             hirsel_rt::io::AdapterError::Blocked => Error::Blocked(vec![]),
+            hirsel_rt::io::AdapterError::Stopped => {
+                Error::Environmental(hirsel_run_schema::Environmental::Stopped)
+            }
             e => {
                 let message = format!("{e:?}");
                 self.refused.get_or_insert(message.clone());
@@ -2321,6 +2328,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         cx: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
         self.callee_finished(end, cx)
+    }
+    fn stops_itself(&self) -> bool {
+        self.runners.crash.is_some()
     }
     fn parked(&mut self, token: u64) {
         if self.waits.contains_key(&token) || self.waits_on_runner(token) {

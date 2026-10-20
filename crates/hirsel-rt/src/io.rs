@@ -78,6 +78,8 @@ pub enum AdapterError {
     Unsupported(String),
     /// A scripted signal took its default action, which ends the run.
     Signaled(hirsel_run_schema::SignalKind),
+    /// Replay reached the recorded point where the run's place stopped it.
+    Stopped,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
@@ -604,6 +606,9 @@ pub enum Request {
     /// A callee run's own outcome as it ended (RUN-11), acknowledged with `Ready`: replay
     /// checks it, and a joined tape check compares it with its caller's completion.
     CallReturn(hirsel_run_schema::CalleeOutcome),
+    /// The run's place stopped it here, before its next request (a simulated place's crash,
+    /// RUN-6 `Abandoned`), acknowledged with `Ready`: replay stops the run at this event.
+    Stopped,
     /// A scheduling input of cooperative runs, never a capability request: the parked
     /// request of wait `wait` (creation ordinal) was ready at the scheduling point after the
     /// `points` it waited through since it parked or was last ready, and was re-issued there.

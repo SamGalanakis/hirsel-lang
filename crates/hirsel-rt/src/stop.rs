@@ -49,6 +49,7 @@ impl Stop {
             AdapterError::RecordingFailed(_) => {
                 Stop::Environmental(Environmental::Recording(format!("{error:?}")))
             }
+            AdapterError::Stopped => Stop::Environmental(Environmental::Stopped),
             _ => Stop::Refused(format!("{error:?}")),
         }
     }

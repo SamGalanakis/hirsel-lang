@@ -219,7 +219,11 @@ impl RunConfig {
                 detail: e.to_string(),
             })?;
         if let (Some(base), Some(io)) = (base, &mut grants.io) {
-            for mount in &mut io.dirs {
+            // A runner's grant set names host directories as the run's own mounts do.
+            let runners = io.runners.iter_mut().filter_map(|r| r.grants.as_mut());
+            let mounts: Vec<&mut hirsel_run_schema::Mount> =
+                runners.flat_map(|grants| grants.dirs.iter_mut()).collect();
+            for mount in io.dirs.iter_mut().chain(mounts) {
                 let host = std::path::Path::new(&mount.host);
                 if host.is_relative() {
                     let candidate = base.join(host);

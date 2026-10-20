@@ -177,6 +177,7 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::RunnerCall(_) => "RunnerCall",
         Request::RunnerCancel { .. } => "RunnerCancel",
         Request::CallReturn(_) => "CallReturn",
+        Request::Stopped => "Stopped",
         Request::Stdout { .. } => "Stdout",
         Request::Directory { .. } => "Directory",
         Request::NarrowDir { .. } => "NarrowDir",

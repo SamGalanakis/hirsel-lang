@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
@@ -43,6 +43,14 @@ enum Command {
     /// `tapes check <tape>...`: the joined check over linked tapes (RUN-11).
     Tapes {
         tapes: Vec<OsString>,
+    },
+    /// `tapes trial <candidate> --grants <json> [--from <n>] <tape>`: the tape's runner calls
+    /// issued again to a candidate revision's callees under the template's runners.
+    Trial {
+        candidate: OsString,
+        grants: OsString,
+        from: u64,
+        tape: OsString,
     },
     DepsCard {
         manifest: OsString,
@@ -439,8 +447,50 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             }
         }
         Some(Value(command)) if command == "tapes" => {
-            if !matches!(args.next()?, Some(Value(sub)) if sub == "check") {
-                return Err("tapes requires check".into());
+            match args.next()? {
+                Some(Value(sub)) if sub == "check" => {}
+                Some(Value(sub)) if sub == "trial" => {
+                    let (mut candidate, mut grants, mut from, mut tape) = (None, None, None, None);
+                    while let Some(arg) = args.next()? {
+                        match arg {
+                            Long("grants") if grants.is_none() => grants = Some(args.value()?),
+                            Long("from") if from.is_none() => {
+                                let value = args.value()?;
+                                from = Some(
+                                    value
+                                        .to_str()
+                                        .and_then(|s| s.parse::<u64>().ok())
+                                        .ok_or("--from requires a request ordinal")?,
+                                );
+                            }
+                            Value(path)
+                                if candidate.is_none()
+                                    && !path.to_string_lossy().starts_with('-') =>
+                            {
+                                candidate = Some(path)
+                            }
+                            Value(path)
+                                if tape.is_none() && !path.to_string_lossy().starts_with('-') =>
+                            {
+                                tape = Some(path)
+                            }
+                            arg => return Err(arg.unexpected()),
+                        }
+                    }
+                    let (Some(candidate), Some(grants), Some(tape)) = (candidate, grants, tape)
+                    else {
+                        return Err(
+                            "tapes trial requires a candidate manifest, --grants and a tape".into(),
+                        );
+                    };
+                    return Ok(Command::Trial {
+                        candidate,
+                        grants,
+                        from: from.unwrap_or(0),
+                        tape,
+                    });
+                }
+                _ => return Err("tapes requires check or trial".into()),
             }
             let mut tapes = vec![];
             while let Some(arg) = args.next()? {
@@ -1108,6 +1158,59 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     }
                     1
                 }
+            };
+        }
+        Command::Trial {
+            candidate,
+            grants,
+            from,
+            tape,
+        } => {
+            return match hirsel_driver::trial_tapes(
+                Path::new(&candidate),
+                &grants,
+                Path::new(&tape),
+                from,
+            ) {
+                Ok(calls) => {
+                    let mut first = None;
+                    for call in &calls {
+                        let verdict = match call.same_outcome {
+                            Some(true) => "same",
+                            Some(false) => "DIVERGED",
+                            None => "unrecorded",
+                        };
+                        if call.same_outcome == Some(false) && first.is_none() {
+                            first = Some(call.ordinal);
+                        }
+                        println!(
+                            "call {} {} ({}): {verdict}\n  recorded {}\n  trial    {}",
+                            call.ordinal,
+                            call.path,
+                            if call.same_code {
+                                "same code"
+                            } else {
+                                "changed code"
+                            },
+                            call.recorded,
+                            call.trial
+                        );
+                    }
+                    match first {
+                        Some(ordinal) => {
+                            println!(
+                                "trial: {} calls, first divergence at call {ordinal}",
+                                calls.len()
+                            );
+                            1
+                        }
+                        None => {
+                            println!("trial: {} calls, no divergence", calls.len());
+                            0
+                        }
+                    }
+                }
+                Err(error) => tool_error(error, false),
             };
         }
         Command::Precheck { manifest, output } => {

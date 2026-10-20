@@ -356,7 +356,9 @@ impl Registry {
             R::Accept { listener, .. } | R::LocalAddr { listener, .. } => {
                 on(self, &mut keys, *listener, X)
             }
-            R::RunnerCall(_) | R::RunnerCancel { .. } | R::CallReturn(_) => keys.push((PLACE, X)),
+            R::RunnerCall(_) | R::RunnerCancel { .. } | R::CallReturn(_) | R::Stopped => {
+                keys.push((PLACE, X))
+            }
         }
         KeySet::new(keys)
     }

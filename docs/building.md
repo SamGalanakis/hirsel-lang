@@ -4,6 +4,8 @@ Browse the [full signature index](api.md) for every public core and std declarat
 
 New to the language? Start with the [runnable language tour](tour.md), then
 try the [runnable tools](../examples/README.md).
+[Replay a service](replay-a-service.md) records a ledger service under injected faults,
+replays it from its tapes and trials a changed function against recorded calls.
 The [concurrent agent guide](concurrent-agents.md) covers compute fan-out,
 actors, shared state and scheduling tests. To work on the compiler, runtime
 or libraries, see [Contributing to Hirsel](contributing.md).

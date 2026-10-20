@@ -833,6 +833,18 @@ fn relative_grant_hosts_resolve_beside_the_template_and_records_remain_strict() 
         root.join("data").canonicalize().unwrap().to_str().unwrap()
     );
     assert!(RunConfig::validate(run.canonical()).is_ok());
+    // A runner's grant set resolves its hosts beside the template too.
+    let runner = br#"{"io":{"dirs":[],"runners":[{"name":"place","provider":"local.threads@1","grants":{"dirs":[{"path":"data","host":"../data","access":"read"}]},"definitions":null}]}}"#;
+    std::fs::write(&path, runner).unwrap();
+    let runs =
+        RunConfig::read_grants(&path, [0; 32], "probe@1/main".into(), LaunchKind::Main).unwrap();
+    let grants = runs.record().io.as_ref().unwrap().runners[0]
+        .grants
+        .as_ref();
+    assert_eq!(
+        grants.unwrap().dirs[0].host,
+        root.join("data").canonicalize().unwrap().to_str().unwrap()
+    );
     // Bytes without a template location cannot bind a relative host.
     assert!(
         RunConfig::bind_grants(template, [0; 32], "probe@1/main".into(), LaunchKind::Main).is_err()

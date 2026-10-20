@@ -6,6 +6,7 @@ mod abi;
 mod alloc;
 mod arena_lists;
 mod clocks;
+mod codec_text;
 mod copy;
 mod count;
 mod finalizers;

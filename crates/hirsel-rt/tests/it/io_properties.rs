@@ -132,6 +132,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::RunnerCall(_) => false,
             Request::RunnerCancel { .. } => false,
             Request::CallReturn(_) => false,
+            Request::Stopped => false,
             Request::Ready { .. } => false,
             Request::Schedule { .. } => false,
         };

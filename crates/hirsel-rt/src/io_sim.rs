@@ -271,6 +271,11 @@ impl Adapter for SimIo {
             .tape
             .get(self.position)
             .ok_or(AdapterError::MissingInput(self.position))?;
+        // The recorded run's place stopped it before this request: so does replay.
+        if event.request == Request::Stopped && event.completion == Completion::Ready {
+            self.position += 1;
+            return Err(AdapterError::Stopped);
+        }
         if event.request != request {
             return Err(AdapterError::ReplayMismatch(self.position));
         }

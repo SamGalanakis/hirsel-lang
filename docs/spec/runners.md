@@ -6,7 +6,9 @@ types and every operation of the [ledger](#ledger), and the checker forms entrie
 caller's execution (RUN-1 to RUN-7, RUN-9, RUN-10's isolation and derived seeds, RUN-12),
 both under a simulation fixture and in a host launch. A host launch records linked tapes
 (RUN-11): with `--record T` each callee run that starts journals its own tape to
-`T.call-<ordinal>`, every tape replays alone, and `hirsel tapes check` joins a set. The
+`T.call-<ordinal>`, every tape replays alone, and `hirsel tapes check` joins a set.
+`hirsel tapes trial` replays a tape's calls against a candidate revision
+([upgrade trials](#upgrade-trials)). The
 arrival check covers the definition allowlists and a runner entry's `admit.safe@1` code
 policy (RUN-8). An interpreted host launch calls `remote.tls@1` runners, and `hirsel serve`
 is their runner host (crate `hirsel-remote`). The native engines report the operations
@@ -20,7 +22,9 @@ trailer, so the trailer stays `complete N`; `local.threads@1` interleaves its ca
 with the caller on the caller's thread, bounded to `threads` running at once, rather than
 on operating-system threads; and `hirsel serve` runs one callee at a time (`runs` other
 than 1 is refused), holds only its own revision (`code.none@1`), and refuses `durable`
-callee recording.
+callee recording. A `sim@1` crash on a host launch stops the callee before one of its
+requests but keeps every write it completed, since its directories are host directories,
+not simulated ones.
 
 A **runner** is a place functions can run. The run configuration decides what each place
 is (threads in this process, a child process, another host, a node of a deterministic
@@ -574,12 +578,18 @@ names its `node` and the runner contract it `models`, including `local.threads@1
 Faults are provider outcomes drawn from
 `inputs.fault_seed`: each named fault site is enabled once per run with probability
 `enable` and then fires per evaluation with probability `fire`, both in parts per million.
+A crash's point is the first eight bytes, little-endian, of `H("hirsel.runner.fault.crash.v1",
+fault seed, runner name, request ordinal)` modulo 32: the callee stops before that request
+to its providers, counted from 0, or, in a simulation fixture whose callees make no
+requests, after that many suspensions; a callee that ends first ran to completion and only
+its outcome is lost. A stopped callee's tape records the event `stopped` where it stopped,
+and its replay stops there with the environmental outcome "its place stopped the run".
 The sites are `refuse` (before the commit point: `NotRun(Unreachable())`), `overload`
 (`NotRun(Overloaded())`), `lose_request` (after the commit point, before the callee
 starts: `InDoubt(Lost())`), `lose_reply` (after the callee completes:
-`InDoubt(Lost())`), `crash` (the node stops at a random suspension point of the callee,
-every write to its simulated directories that was not yet durable is lost, and the call
-is `InDoubt(Abandoned())`; the node restarts for its next call) and `partition` (calls to
+`InDoubt(Lost())`), `crash` (the node stops the callee at its crash point, every write to
+its simulated directories that was not yet durable is lost, and the call is
+`InDoubt(Abandoned())`, never `Lost`; the node restarts for its next call) and `partition` (calls to
 the node are `refuse` until a later poll heals it). Every decision is recorded as the
 completion it produced, so a simulated tape replays without the seed. Each node writes its
 callees' tapes in the real format, and running the same record twice must produce
@@ -720,6 +730,22 @@ once and `queue` (default 64) admitted calls waiting, beyond which a call is
 
 **`db@1`** (Reserved) runs compute and transact callees inside the writer of a store
 ([STORE-12](storage.md#store-12-transactions-at-a-runner)).
+
+## Upgrade trials
+
+`hirsel tapes trial <candidate> --grants <template> [--from <n>] <tape>` issues every
+runner call the caller's tape recorded, from request ordinal `n` on, again and in order,
+each as a live callee run of the candidate revision: the same entry, form, cause and
+argument bytes, admitted under the grant set the template's runner of the request's name
+holds, with seeds derived from the call key as for the original. It reports, per call,
+whether the candidate's callee has the recorded code (its request digest, recomputed with
+the candidate's code hash and signature fingerprint, equals the recorded one), the
+recorded outcome and the trial's, rendered from their codec envelopes, and whether the
+outcome bytes are equal; a recorded `NotRun`, `InDoubt` or `Canceled` holds no outcome to
+compare. It exits 1 when any outcome differs. A trial contacts no other place and never
+runs the caller; pointing its runner at a copy of a store's directory (a store's objects
+are immutable, so a copy is a consistent fork) trials a change against recorded traffic
+without touching the live store.
 
 ## Examples
 

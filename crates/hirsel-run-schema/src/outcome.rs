@@ -45,6 +45,9 @@ pub enum Environmental {
     Recording(String),
     /// A host output sink failed.
     Output(String),
+    /// The run's place stopped it before its next request: a simulated place's crash
+    /// (`sim@1`), which its caller sees as `InDoubt(Abandoned())` (RUN-6).
+    Stopped,
 }
 impl std::fmt::Display for Environmental {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -52,6 +55,7 @@ impl std::fmt::Display for Environmental {
             Self::CodecLimit => f.write_str("codec operational budget exhausted"),
             Self::Recording(reason) => write!(f, "the recording: {reason}"),
             Self::Output(reason) => write!(f, "output: {reason}"),
+            Self::Stopped => f.write_str("its place stopped the run"),
         }
     }
 }

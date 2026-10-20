@@ -1,0 +1,170 @@
+// A ledger service. The ledger's place holds a store of account balances; two
+// entries run there, each one store transaction on the client's call stream;
+// the client calls them through a runner and sends a call again, at the same
+// stream position, when its outcome is in doubt. The store runs each position
+// once, so a commit lost in a crash runs again and a commit whose reply was
+// lost returns its recorded outcome.
+@serializable
+type Opening {
+  call: store.CallRequest,
+  account: u64,
+  cents: u64,
+}
+
+@serializable
+type Transfer {
+  call: store.CallRequest,
+  from: u64,
+  to: u64,
+  cents: u64,
+}
+
+@serializable
+type LedgerError = Grant(FileError) | Store(store.StoreError) | Call(
+  store.CallFailure[ledger.Refusal]
+)
+
+/// Opens an account with a starting balance, once per call position.
+fn open_account(rt: Io, req: Opening) -> Result[u64, LedgerError] {
+  let d = io.dir(rt, path.of("ledger")) ? Grant
+  let mut s = store.open(d, store.default_config()) ? Store
+  let outcome = store.call(
+    mut s,
+    req.call,
+    fn(mut tx: store.Tx) -> Result[u64, ledger.Refusal] {
+      ledger.open(mut tx, req.account, req.cents)
+    }
+  )
+  store.close(take s) ? Store
+  Ok(outcome ? Call)
+}
+
+/// Moves cents between two accounts, once per call position.
+fn transfer(rt: Io, req: Transfer) -> Result[ledger.Receipt, LedgerError] {
+  let d = io.dir(rt, path.of("ledger")) ? Grant
+  let mut s = store.open(d, store.default_config()) ? Store
+  let outcome = store.call(
+    mut s,
+    req.call,
+    fn(mut tx: store.Tx) -> Result[ledger.Receipt, ledger.Refusal] {
+      ledger.transfer(mut tx, req.from, req.to, req.cents)
+    }
+  )
+  store.close(take s) ? Store
+  Ok(outcome ? Call)
+}
+
+pub type AppError = Grant(GrantError) | Output(OutputError) | Usage
+
+type Op = Open(u64, u64) | Move(u64, u64, u64)
+
+/// The request for stream position `position`. Its digest names the operation,
+/// so the store refuses a different request at a position it already ran.
+fn request(position: u64, op: Op) -> store.CallRequest {
+  let text = match op {
+    Open(account, cents) => f"open {account} {cents}",
+    Move(from, to, cents) => f"move {from} {to} {cents}",
+  }
+  store.CallRequest(
+    stream: b"client-1",
+    epoch: 1,
+    position: position,
+    digest: copy string.as_bytes(text),
+    acknowledged: position - 1
+  )
+}
+
+fn store_error(e: store.StoreError) -> String {
+  match e {
+    Storage(_) => "storage",
+    Corrupt(name) => f"corrupt {name}",
+    Fenced() => "fenced",
+    Conflict() => "conflict",
+    Injected() => "injected",
+    Closed() => "closed",
+  }
+}
+
+fn shown(e: RunError[LedgerError]) -> String {
+  match e {
+    NotRun(_) => "not run",
+    InDoubt(_) => "in doubt",
+    Failed(Call(Tx(Aborted(NoAccount(account))))) => f"no account {account}",
+    Failed(Call(Tx(Aborted(Insufficient(have))))) => f"insufficient: {have}",
+    Failed(Call(Tx(Aborted(Table(_))))) => "table error",
+    Failed(Call(Tx(Storage(s)))) => f"commit failed: {store_error(s)}",
+    Failed(Call(Tx(Unknown(s)))) => f"commit unknown: {store_error(s)}",
+    Failed(Call(Tx(_))) => "not committed",
+    Failed(Call(Denied())) => "stream fenced",
+    Failed(Call(Rejected())) => "position rejected",
+    Failed(Store(s)) => f"store: {store_error(s)}",
+    Failed(Grant(_)) => "no ledger directory",
+    Faulted(_) => "faulted",
+    Canceled(_) => "canceled",
+  }
+}
+
+/// One call, sent again at the same position while its outcome is in doubt.
+fn perform(ledger: Runner, output: Stdout, position: u64, op: Op) -> Result[
+  (),
+  AppError
+] {
+  let mut attempts: u32 = 0
+  while attempts < 4 {
+    attempts += 1
+    let call = request(position, op)
+    let line: Option[String] = match op {
+      Open(account, cents) => match runner.call(
+        ledger,
+        open_account,
+        Opening(call: call, account: account, cents: cents)
+      ) {
+        Ok(balance) => Some(f"opened {account} with {balance}"),
+        Error(InDoubt(_)) => None(),
+        Error(e) => Some(shown(e)),
+      },
+      Move(from, to, cents) => match runner.call(
+        ledger,
+        transfer,
+        Transfer(call: call, from: from, to: to, cents: cents)
+      ) {
+        Ok(r) => Some(f"moved {r.moved} from {r.from} to {r.to}, fee {r.fee}"),
+        Error(InDoubt(_)) => None(),
+        Error(e) => Some(shown(e)),
+      },
+    }
+    match line {
+      Some(text) => {
+        out.print(output, f"{position}: {text}\n") ? Output
+        return Ok(())
+      },
+      None() => out.print(output, f"{position}: in doubt, sending it again\n") ? Output,
+    }
+  }
+  out.print(output, f"{position}: still in doubt, giving up\n") ? Output
+  Ok(())
+}
+
+/// `open` opens two accounts at positions 1 and 2; `trade` makes the calls at
+/// positions 3 to 7.
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let ledger = io.runner(rt, "ledger") ? Grant
+  let phase = match arg.text(args, 0) {
+    Ok(text) => text,
+    Error(_) => return Error(Usage()),
+  }
+  let (first, ops): (u64, List[Op]) = if phase == "open" {
+    (1, [Open(1, 500), Open(2, 100)])
+  } else if phase == "trade" {
+    (3, [Move(1, 2, 200), Open(3, 0), Move(2, 3, 50), Move(2, 1, 250), Move(1, 2, 900)])
+  } else {
+    return Error(Usage())
+  }
+  let mut position = first
+  for op in ops {
+    perform(ledger, output, position, op)?
+    position += 1
+  }
+  Ok(())
+}

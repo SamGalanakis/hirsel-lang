@@ -38,6 +38,10 @@ pub(crate) struct HostRunners {
     remote_calls: BTreeMap<u64, String>,
     /// A runner host's cancellation of this run, when a host serves it.
     external: Option<super::remote::ExternalCancel>,
+    /// A live `sim@1` callee whose place crashes: it stops before this request.
+    pub(super) crash: Option<u64>,
+    /// The requests this run has issued.
+    pub(super) requests: u64,
 }
 
 /// Where a host run's runner calls lead: what the launcher found about the program and
@@ -53,6 +57,23 @@ pub(crate) struct RunnerContext {
 }
 
 impl HostLibrary {
+    /// A live callee whose `sim@1` place crashes stops before its crash point's request: it
+    /// records where it stopped (`stopped`), which its replay reproduces, and its writes so
+    /// far stand. Replay stops at that event, never here.
+    pub(super) fn crash_point(&mut self) -> Result<(), Error> {
+        if self.runners.crash != Some(self.runners.requests) {
+            return Ok(());
+        }
+        let HostIo::Live(io) = &mut self.io else {
+            return Ok(());
+        };
+        if let Err(error) = io.call(R::Stopped) {
+            return Err(self.adapter_error(error));
+        }
+        Err(Error::Environmental(
+            hirsel_run_schema::Environmental::Stopped,
+        ))
+    }
     /// Configure the run's runners: its instance, the callee facts and its tape.
     pub(crate) fn set_runners(&mut self, context: RunnerContext) {
         let config = &mut self.library.simulation.config;
@@ -354,8 +375,8 @@ impl HostLibrary {
             CalleeEnd::Canceled => hirsel_run_schema::RunOutcome::Tooling(
                 "the call was cancelled before its callee started".into(),
             ),
-            CalleeEnd::Abandoned => hirsel_run_schema::RunOutcome::Tooling(
-                "the place stopped the callee without an outcome".into(),
+            CalleeEnd::Abandoned => hirsel_run_schema::RunOutcome::Environmental(
+                hirsel_run_schema::Environmental::Stopped,
             ),
         };
         if let HostIo::Live(io) = &mut self.io {
@@ -457,6 +478,8 @@ impl HostLibrary {
             remote: None,
         });
         callee.runners.tags = self.runners.tags.clone();
+        // A crashing place stops its callee before one of its requests (RUN-6 `crash`).
+        callee.runners.crash = start.crash_after.map(u64::from);
         // The callee receives its own root Io and the argument decoded from the request.
         let argument = start
             .arguments

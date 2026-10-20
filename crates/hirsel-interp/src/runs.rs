@@ -113,7 +113,7 @@ struct Callee {
     caller: usize,
     token: u64,
     started: bool,
-    /// Suspensions so far, and the one at which its place crashes (`sim@1`).
+    /// Suspensions so far, and the point at which its place crashes (`sim@1`).
     suspensions: u32,
     crash_after: Option<u32>,
 }
@@ -292,7 +292,9 @@ pub(crate) fn execute(
                 if index != 0 {
                     let callee = callees[index - 1].as_mut().unwrap();
                     callee.suspensions += 1;
-                    if callee.crash_after.is_some_and(|at| callee.suspensions > at) {
+                    if !callee.operations.stops_itself()
+                        && callee.crash_after.is_some_and(|at| callee.suspensions > at)
+                    {
                         Some(CalleeEnd::Abandoned)
                     } else {
                         None
@@ -312,7 +314,6 @@ pub(crate) fn execute(
                         exit_code: 0,
                     },
                 ) {
-                    _ if callee.crash_after.is_some() => Some(CalleeEnd::Abandoned),
                     Outcome::Returned { value, .. } => Some(CalleeEnd::Returned(value)),
                     Outcome::Failed(_) => {
                         Some(CalleeEnd::Failed(std::mem::take(&mut execution.failures)))
@@ -325,6 +326,10 @@ pub(crate) fn execute(
                 }
             }
             Err(Error::BudgetExceeded(kind)) if index != 0 => Some(CalleeEnd::BudgetExceeded(kind)),
+            // Its place crashed before one of its requests.
+            Err(Error::Environmental(hirsel_run_schema::Environmental::Stopped)) if index != 0 => {
+                Some(CalleeEnd::Abandoned)
+            }
             Err(Error::Blocked(waits)) if index != 0 => {
                 // A provider that can never complete an operation stops its run as
                 // Blocked at once; the execution cannot complete the call either.
@@ -344,6 +349,13 @@ pub(crate) fn execute(
             ) {
                 break Err(error);
             }
+            // A callee that ended before its place's crash point records its own end, and
+            // the crash withholds its outcome.
+            let end = match end {
+                CalleeEnd::Canceled => end,
+                _ if callee.crash_after.is_some() => CalleeEnd::Abandoned,
+                end => end,
+            };
             if let Err(error) = ended(
                 sources,
                 runtime,

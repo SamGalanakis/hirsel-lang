@@ -64,6 +64,7 @@ pub mod alloc;
 pub mod budget;
 mod channels;
 pub mod codec;
+pub mod codec_text;
 pub mod context;
 pub mod copy;
 pub mod count;
