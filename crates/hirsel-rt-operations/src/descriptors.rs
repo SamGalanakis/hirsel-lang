@@ -868,6 +868,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_string_from_bytes", Local),
     entry("hirsel_rt_v2_string_slice", Local),
     entry("hirsel_rt_v2_bytes_append", Local),
+    entry("hirsel_rt_v2_bytes_append_from_history", Local),
     entry("hirsel_rt_v2_bytes_slice", Local),
     entry("hirsel_rt_v2_string_position", Local),
     entry("hirsel_rt_v2_string_byte_offset", Local),
