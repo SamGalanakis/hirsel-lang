@@ -5,8 +5,9 @@ $intrinsic.ArrayConsume_open	4f010ab5a241c99af39b574fbc2014e69f8697c49d63b5fbed0
 $intrinsic.AtomicCreate	d25f31fa30f676455429291c6abf490e90a1cbe1406194f2f9333778096e278d	0:b:[0];1:b:n->n
 $intrinsic.AtomicLoad	0c4997ba6c98f26590013100ea8fc9ed56330b4b458cfaeae8cbcb28a4002a46	0:b:n;1:m:[0];2:b:n->n
 $intrinsic.AtomicStore	e5e2f72e3d216ba781d88547cfc6f031a1f4259e96b422a9e99d085e486f7c40	0:b:n;1:b:[0];2:b:n->n
-$intrinsic.ChannelReceive	3ba689e6924850e0194063d7340d67a7e02f33bd7d7bb686e36a5779c6e9f869	0:m:[0];1:m:[0]->n
-$intrinsic.ChannelSend	f283665348ed70b9ebd093b1c31964aaca5a951713a8c80373686d7ea3367dae	0:m:[0];1:m:[0]->n
+$intrinsic.ChannelOpen	c6e279f8f563c0f65e0e95bd65f58df39a3d1a7db6820041a1888e9a08aaad02	0:b:n;1:b:[0];2:b:n->[0]
+$intrinsic.ChannelReceive	3ba26ed55b30defc5cc7f3deb5ec78cd75dc53550d874b390577403c77a64672	0:m:[0];1:m:[0]->n
+$intrinsic.ChannelSend	a38c8c22ae022cb1dc56422209bebabdbf0ccc8a12ca5bce517168f75a43204d	0:m:[0];1:m:[0]->n
 $intrinsic.InlineConsume_next	faaefbfc2e09bec2f781ce15cb976c3c6008afe4bae93907babdb7e0a3ac973f	0:m:[0]->[0]
 $intrinsic.InlineConsume_open	0889e32c3eb06e96259a9afcb04d36355beda77ba28d1195cb341dc5f815a753	0:t:[0]->[0]
 $intrinsic.IsolateBegin	f86d888777e8f62b5763a9c6f2fa6287c7243dfa62df079f96095be7f1cb0664	0:b:n->n

@@ -146,6 +146,7 @@ pub const BODIES: &[&LibraryBody] = &[
     // mapped (fs-watch-mmap): mapped.with over its view and check entries.
     &mapped::WITH,
     &isolate::ISOLATE,
+    &channels::OPEN,
     &channels::SEND,
     &channels::RECEIVE,
     &sync::MUTEX_CREATE,

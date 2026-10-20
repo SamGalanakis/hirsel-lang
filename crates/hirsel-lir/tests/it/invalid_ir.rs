@@ -8,7 +8,7 @@ use hirsel_core_contract::{Disposition, Passing, Unavailable};
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::effect::Opcode;
 use hirsel_lir::ir::*;
-use hirsel_lir::layout_types::LayoutId;
+use hirsel_lir::layout_types::{LayoutId, ScalarKind};
 use hirsel_lir::stage::{Placed, Rc, Ready, Reuse, Stage, Value};
 use hirsel_lir::validate::{self, Inputs};
 use support::*;
@@ -1887,6 +1887,49 @@ fn a_string_literal_is_a_plain_slice_over_static_storage() {
     let case = |bad| move |m| string_literal(if m { bad } else { Literal::Valid });
     pair(case(Literal::OwnedSlice), |k| matches!(k, K::Holding(_)));
     pair(case(Literal::NotSlice), |k| *k == K::Type("constant"));
+}
+
+/// Where a layout-descriptor literal goes wrong.
+#[derive(Clone, Copy, PartialEq)]
+enum Descriptor {
+    /// A `u32` naming a layout of the table.
+    Valid,
+    /// The registry index at a `u64`.
+    Wide,
+    /// A layout outside the table.
+    Unknown,
+}
+
+/// A layout's runtime descriptor index (`ConstantValue::Descriptor`), produced and dropped.
+fn descriptor_literal(case: Descriptor) -> Vec<K> {
+    let mut t = Lir::<Value>::new(&[], None);
+    let (repr, layout) = if case == Descriptor::Wide {
+        (ValueRepr::Scalar(ScalarKind::U64), l::U64)
+    } else {
+        (ValueRepr::Scalar(ScalarKind::U32), l::U32)
+    };
+    let ty = t.ty(repr, layout);
+    let described = if case == Descriptor::Unknown {
+        LayoutId(u32::MAX)
+    } else {
+        l::PAY
+    };
+    t.builder.unit.tables.constants.push(ConstantData {
+        ty,
+        value: ConstantValue::Descriptor(described),
+    });
+    let constant = ConstantId(t.builder.unit.tables.constants.len() as u32 - 1);
+    let result = t.value_as(repr, layout, Holding::Plain);
+    t.builder.push(ENTRY, Inst::Const { result, constant });
+    t.builder.ret(ENTRY, None);
+    t.check()
+}
+
+#[test]
+fn a_descriptor_literal_is_a_u32_naming_a_layout_of_the_table() {
+    let case = |bad| move |m| descriptor_literal(if m { bad } else { Descriptor::Valid });
+    pair(case(Descriptor::Wide), |k| *k == K::Type("constant"));
+    pair(case(Descriptor::Unknown), |_| true);
 }
 
 /// A closure over one copied i64, produced at `layout` and returned.

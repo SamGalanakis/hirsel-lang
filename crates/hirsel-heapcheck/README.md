@@ -451,9 +451,11 @@ leak on that path and its fixed twin) and a run left Blocked. A host (non-script
 child or network (a grant with no scripted peers) is a real host effect, and an extern call
 or C callback runs foreign code: H models neither, so those operations are Unsupported.
 
-`exec/channels.rs` is the runtime's channel table (CONC-6). Each queued message is a harness
-root, a send and a receive move it out of and into the bodies' `Option` slots, and the last
-receiver's close drops the messages nobody received, oldest first.
+`exec/channels.rs` is the runtime's channel table (CONC-6). The open names the element: a
+`Descriptor` constant evaluates to its layout's id (this executor's registry is the layout
+table) and the `None` image comes with it. Each queued message is a harness root, a send and
+a receive move it out of and into the bodies' `Option[T]` slots, which must have the channel's
+layout, and the last receiver's close drops the messages nobody received, oldest first.
 
 `exec/sync.rs` is the runtime's mutex and atomic cells. An atomic holds its payload's `Some`
 image; a mutex's payload carrier is a harness root while no body holds it, and the run's finish

@@ -1,0 +1,60 @@
+// rule: CONC-6
+// expect: run
+// stdout: m0
+// stdout: m1
+// stdout: m2
+// stdout: m3
+// stdout: m4
+// stdout: m5
+// stdout: m6
+// stdout: m7
+// Received messages drop where their receiver drops them; closing the last
+// receiver destroys the queued rest oldest first, after the queue has both
+// wrapped and grown.
+resource type Trace {
+  stdout: Stdout,
+  n: u64,
+}
+drop(x) {
+  let line = match x.n {
+    0u64 => "m0\n",
+    1u64 => "m1\n",
+    2u64 => "m2\n",
+    3u64 => "m3\n",
+    4u64 => "m4\n",
+    5u64 => "m5\n",
+    6u64 => "m6\n",
+    _ => "m7\n",
+  }
+  let _ = out.print(x.stdout, line)
+}
+
+fn discard[T](take value: T) -> () {}
+
+fn send(tasks: Tasks, mut tx: Sender[Trace], stdout: Stdout, n: u64) -> () {
+  let _ = channel.send(tasks, mut tx, Trace(stdout: stdout, n: n))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let (sender, receiver): (Sender[Trace], Receiver[Trace]) = channel.open(tasks)
+  let mut tx = take sender
+  let mut rx = take receiver
+  send(tasks, mut tx, stdout, 0u64)
+  send(tasks, mut tx, stdout, 1u64)
+  send(tasks, mut tx, stdout, 2u64)
+  for _ in 0u64..2u64 {
+    match channel.receive(tasks, mut rx) {
+      Ok(trace) => discard(take trace),
+      Error(_) => {},
+    }
+  }
+  send(tasks, mut tx, stdout, 3u64)
+  send(tasks, mut tx, stdout, 4u64)
+  send(tasks, mut tx, stdout, 5u64)
+  send(tasks, mut tx, stdout, 6u64)
+  send(tasks, mut tx, stdout, 7u64)
+  discard(take rx)
+  Ok(())
+}

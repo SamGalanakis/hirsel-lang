@@ -1230,6 +1230,10 @@ impl<S: Stage> Checker<'_, '_, S> {
                         }
                         (ConstantValue::F32(_), ValueRepr::Scalar(ScalarKind::F32)) => true,
                         (ConstantValue::F64(_), ValueRepr::Scalar(ScalarKind::F64)) => true,
+                        // A registry index names a layout of this unit's table.
+                        (ConstantValue::Descriptor(layout), ValueRepr::Scalar(ScalarKind::U32)) => {
+                            layouts.get(*layout).is_some()
+                        }
                         (
                             ConstantValue::String(_) | ConstantValue::Bytes(_),
                             ValueRepr::Block | ValueRepr::Uncounted,

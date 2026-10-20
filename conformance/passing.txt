@@ -704,6 +704,7 @@ conformance/CONC/CONC-6-owned-record-payload-run.hir
 conformance/CONC/CONC-6-receiver-child-capture.hir
 conformance/CONC/CONC-6-receiver-copy-bad.hir
 conformance/CONC/CONC-6-receiver-copy-ok.hir
+conformance/CONC/CONC-6-receiver-drops-buffer-in-order-run.hir
 conformance/CONC/CONC-6-receiver-drops-buffer-run.hir
 conformance/CONC/CONC-6-sender-duplicate-bad.hir
 conformance/CONC/CONC-6-sender-duplicate-ok.hir

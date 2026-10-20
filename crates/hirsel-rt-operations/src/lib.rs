@@ -119,6 +119,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "task.async"
             | "task.await"
             | "task.await_at"
+            | "channel.open"
             | "channel.send"
             | "channel.receive"
             | "mutex.create"
@@ -295,9 +296,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         }
         "$intrinsic.TaskSetHas" => Some("hirsel_rt_v2_task_set_has".into()),
         "$intrinsic.TaskSetTake" => Some("hirsel_rt_v2_task_set_take".into()),
-        // Channels (CONC-6), in the task runtime: the compiled send and receive bodies move a
-        // message's block through these entries.
-        "channel.open" | "sender.dup" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
+        // Channels (CONC-6), in the task runtime: the compiled open, send and receive bodies
+        // pass a channel its element layout and move a message's `Option` image through these
+        // entries.
+        "sender.dup" => Some("hirsel_rt_v2_sender_dup".into()),
+        "$intrinsic.ChannelOpen" => Some("hirsel_rt_v2_channel_open".into()),
         "$intrinsic.ChannelSend" => Some("hirsel_rt_v2_channel_send".into()),
         "$intrinsic.ChannelReceive" => Some("hirsel_rt_v2_channel_receive".into()),
         // Mutex and atomic cells (`sync.rs`) behind their compiled bodies.
@@ -784,7 +787,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_channel_open",
         destination: true,
         result: Some((16, 8)),
-        parameters: &[Physical::Pointer],
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I32],
     },
     AbiExport {
         caller_site: false,
@@ -2120,6 +2123,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.TaskJoin",
     "$intrinsic.TaskSetHas",
     "$intrinsic.TaskSetTake",
+    "$intrinsic.ChannelOpen",
     "$intrinsic.ChannelSend",
     "$intrinsic.ChannelReceive",
     "$intrinsic.MutexCreate",

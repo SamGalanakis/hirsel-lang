@@ -1,28 +1,35 @@
 //! Channels (CONC-6) over the task runtime's entries (`hirsel_rt_v2_channel_*`,
 //! `hirsel-rt/src/tasks.rs`).
 //!
-//! A message crosses as the block of a one-element `List[T]` in an `Option`
-//! slot, so the runtime moves block references and never reads `T`'s layout.
-//! `channel.send` builds `Some([v])` and `$intrinsic.ChannelSend` takes the
-//! block, leaving `None`, unless the channel refuses it; `channel.receive`
-//! passes a `None` slot that `$intrinsic.ChannelReceive` fills. A refused or
-//! received value comes back out by moving the list's one element out and
-//! dropping the then empty list. The entries' status is 0 sent or received,
-//! 1 closed and 2 + cause canceled.
+//! A message crosses inline, as the `Some` image of an `Option[T]` slot the
+//! runtime copies. `channel.open` gives `$intrinsic.ChannelOpen` a `None` image
+//! and `Option[T]`'s layout descriptor (`ConstantValue::Descriptor`), so the
+//! runtime knows a message's size, the `None` a send leaves behind and the drop
+//! of a message nobody receives. `channel.send` puts `Some(v)` in a slot and
+//! `$intrinsic.ChannelSend` moves it out, leaving `None`, unless the channel
+//! refuses it; `channel.receive` passes a `None` slot that
+//! `$intrinsic.ChannelReceive` fills. A refused or received value comes back out
+//! by moving the `Some` payload out of its slot. The entries' status is 0 sent
+//! or received, 1 closed and 2 + cause canceled.
 use super::LibraryBody;
 use super::builder::{Body, Cx};
 use super::iter::{drop_local, local, option};
 use super::slots::{construct, nominal};
-use super::tasks::{exclusive, intrinsic, invoke, operation, option_of};
+use super::tasks::{argument, exclusive, intrinsic, invoke, operation, option_of};
 use crate::PassError;
+use hirsel_core_contract::Passing;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::DefPath;
-use hirsel_types::{BuiltinType, GenericArgument, Type, TypeKind};
+use hirsel_types::GenericArgument;
 
 type R<T> = Result<T, PassError>;
 
+pub static OPEN: LibraryBody = LibraryBody {
+    path: || DefPath::core("channel.open"),
+    build: open,
+};
 pub static SEND: LibraryBody = LibraryBody {
     path: || DefPath::core("channel.send"),
     build: send,
@@ -32,21 +39,13 @@ pub static RECEIVE: LibraryBody = LibraryBody {
     build: receive,
 };
 
-/// The message carrier `List[T]` of `channel.<op>[T]`: its layout and the
-/// layout of its `Option`.
-pub(super) fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
-    let element = cx.type_actual(0)?;
-    let list = cx.store.push(Type::with_kind(TypeKind::Builtin {
-        kind: BuiltinType::List,
-        arguments: vec![GenericArgument::Type(element)].into(),
-    }));
-    let list_layout = cx.layout(list)?;
-    let (option_layout, _) = option_of(cx, list)?;
-    Ok((list_layout, option_layout))
-}
-
 /// The layout of field `field` of variant `variant` of `layout`.
-fn variant_field(b: &Body<'_, '_>, layout: LayoutId, variant: u32, field: usize) -> R<LayoutId> {
+pub(super) fn variant_field(
+    b: &Body<'_, '_>,
+    layout: LayoutId,
+    variant: u32,
+    field: usize,
+) -> R<LayoutId> {
     b.record(layout)
         .tag
         .as_ref()
@@ -97,41 +96,27 @@ fn branch_done(b: &mut Body<'_, '_>, status: ValueId) -> R<(BlockId, BlockId)> {
     Ok((yes, no))
 }
 
-/// Move the value out of the `Some([v])` message in `slot`, whose storage then ends,
-/// and drop the empty list. The value is left in a local the body holds.
-pub(super) fn unbox(
+/// Move the value out of the `Some(v)` message in `slot`, whose storage then ends.
+fn unbox(
     b: &mut Body<'_, '_>,
     slot: SlotId,
     address: AddressId,
     option_layout: LayoutId,
 ) -> R<ValueId> {
-    let list_layout = variant_field(b, option_layout, 1, 0)?;
+    let layout = variant_field(b, option_layout, 1, 0)?;
     let field = b.place(
         AddressBase::Address(address),
         &[ProjectionStep::VariantField {
             variant: 1,
             field: 0,
         }],
-        list_layout,
+        layout,
         None,
     )?;
-    let list = b.take(field)?;
+    let value = b.take(field)?;
     b.emptied(slot);
     b.push(Inst::StorageDead {
         slot,
-        if_live: false,
-    });
-    let (list_slot, list_address) = local(b, list)?;
-    let zero = b.u64(0)?;
-    let at = b.slot_place(list_address, zero)?;
-    let value = b.take(at)?;
-    let (value_slot, value_address) = local(b, value)?;
-    b.seq_set_len(list_address, zero)?;
-    drop_local(b, list_slot, list_address);
-    let value = b.take(value_address)?;
-    b.emptied(value_slot);
-    b.push(Inst::StorageDead {
-        slot: value_slot,
         if_live: false,
     });
     Ok(value)
@@ -200,10 +185,56 @@ fn channel_error(b: &mut Body<'_, '_>, status: ValueId, layout: LayoutId) -> R<V
     Ok(error)
 }
 
+/// `channel.open(tasks) -> (Sender[T], Receiver[T])`: a channel of `Option[T]`
+/// images, given their layout descriptor and the `None` a send leaves behind.
+fn open(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let element = cx.type_actual(0)?;
+    let (option_layout, _) = option_of(cx, element)?;
+    let entry = intrinsic(cx, "ChannelOpen", vec![GenericArgument::Type(element)])?;
+    let u32_layout = cx.primitive(hirsel_types::Primitive::U32)?;
+    let mut b = Body::new(cx)?;
+    let &[tasks] = b.parameters.as_slice() else {
+        return Err(PassError::Malformed("channel.open parameters".into()));
+    };
+    let tasks = b.read_bits(tasks.address)?;
+    let none = option(&mut b, option_layout, 0, &[]);
+    let (none_slot, none_address) = local(&mut b, none)?;
+    let (none, none_loan) = b.borrow(none_address, false)?;
+    let descriptor = b.constant(u32_layout, ConstantValue::Descriptor(option_layout));
+    let failure = b.failure(None);
+    let callee = operation(&mut b, &entry);
+    let arguments = vec![
+        argument(0, Passing::Borrow, tasks),
+        argument(1, Passing::Borrow, none),
+        argument(2, Passing::Borrow, descriptor),
+    ];
+    let pair = invoke(
+        &mut b,
+        callee,
+        entry.abi,
+        arguments,
+        &[none_loan],
+        failure,
+        BlockKind::Body,
+    )
+    .ok_or_else(|| PassError::Malformed("a channel open without its endpoints".into()))?;
+    // The endpoints are held while the `None` image drops, so its failure edge releases them.
+    let (pair_slot, pair_address) = local(&mut b, pair)?;
+    drop_local(&mut b, none_slot, none_address);
+    let pair = b.take(pair_address)?;
+    b.emptied(pair_slot);
+    b.push(Inst::StorageDead {
+        slot: pair_slot,
+        if_live: false,
+    });
+    b.ret(Some(pair));
+    Ok(b.finish())
+}
+
 /// `channel.send(tasks, mut s, take v) -> Result[(), (T, ChannelError)]`.
 fn send(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let (list_layout, option_layout) = carrier(cx)?;
     let element = cx.type_actual(0)?;
+    let (option_layout, _) = option_of(cx, element)?;
     let entry = intrinsic(cx, "ChannelSend", vec![GenericArgument::Type(element)])?;
     let result = cx.fn_abi().result.unwrap().layout;
     let mut b = Body::new(cx)?;
@@ -211,15 +242,14 @@ fn send(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         return Err(PassError::Malformed("channel.send parameters".into()));
     };
     let value = b.take(v.address)?;
-    let list = construct(&mut b, list_layout, ConstructorKind::Sequence, &[value])?;
-    let some = option(&mut b, option_layout, 1, &[list]);
+    let some = option(&mut b, option_layout, 1, &[value]);
     let (slot, address) = local(&mut b, some)?;
     let status = call(&mut b, &entry, s, slot, address)?;
     let held = b.held_state();
     let (sent, refused) = branch_done(&mut b, status)?;
     let definition = nominal(&mut b, "Result");
     b.at(sent);
-    // The runtime took the block and left `None`.
+    // The runtime took the image and left `None`.
     drop_local(&mut b, slot, address);
     let unit_layout = variant_field(&b, result, 0, 0)?;
     let unit = b.constant(unit_layout, ConstantValue::Unit);
@@ -255,8 +285,8 @@ fn send(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 
 /// `channel.receive(tasks, mut r) -> Result[T, ChannelError]`.
 fn receive(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let (_, option_layout) = carrier(cx)?;
     let element = cx.type_actual(0)?;
+    let (option_layout, _) = option_of(cx, element)?;
     let entry = intrinsic(cx, "ChannelReceive", vec![GenericArgument::Type(element)])?;
     let result = cx.fn_abi().result.unwrap().layout;
     let mut b = Body::new(cx)?;

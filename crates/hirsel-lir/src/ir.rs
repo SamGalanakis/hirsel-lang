@@ -1326,6 +1326,11 @@ pub enum ConstantValue {
     F64(u64),
     String(String),
     Bytes(Vec<u8>),
+    /// A `u32`: the run's descriptor-registry index of `LayoutId`'s runtime layout descriptor
+    /// (`hirsel_rt_v2_layout`), the index a construction's allocation receives. A runtime
+    /// entry that holds values of a type it was not compiled for (a channel's queued
+    /// messages, CONC-6) reads their size and drop program through it.
+    Descriptor(LayoutId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -2678,7 +2683,12 @@ impl<S: Stage> LirUnit<S> {
             }
             push(Ref::SourceAnchor(site.anchor));
         }
-        t.constants.iter().for_each(|c| push(Ref::Type(c.ty)));
+        for constant in &t.constants {
+            push(Ref::Type(constant.ty));
+            if let ConstantValue::Descriptor(layout) = constant.value {
+                push(Ref::Layout(layout));
+            }
+        }
         t.loans.iter().for_each(|l| push(Ref::Address(l.address)));
         for failure in &t.failures {
             push(Ref::Edge(failure.cleanup));
@@ -3070,6 +3080,7 @@ snapshot_enum!(ConstantValue {
     F64(bits),
     String(value),
     Bytes(value),
+    Descriptor(layout),
 });
 snapshot_struct!(ConstantData { ty, value });
 snapshot_enum!(SymbolKind {

@@ -815,18 +815,26 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "s: Scope, mut set: TaskSet[R] of s, index: u64",
             "Task[R] of s",
         ),
-        // A message crosses as a one-element list block the runtime queues and, unreceived,
-        // releases (CONC-6). The status is 0 sent or received, 1 closed, 2 + cause canceled.
+        // A message crosses as the `Some` image of an `Option[T]` the runtime copies into
+        // the channel's queue, leaving the channel's `None` image; the open gives the
+        // runtime both, and the layout descriptor that releases unreceived messages
+        // (CONC-6). The status is 0 sent or received, 1 closed, 2 + cause canceled.
+        (
+            "T",
+            "$intrinsic.ChannelOpen",
+            "tasks: Tasks, none: Option[T], descriptor: u32",
+            "(Sender[T], Receiver[T])",
+        ),
         (
             "T",
             "$intrinsic.ChannelSend",
-            "mut s: Sender[T], mut message: Option[List[T]]",
+            "mut s: Sender[T], mut message: Option[T]",
             "u32",
         ),
         (
             "T",
             "$intrinsic.ChannelReceive",
-            "mut r: Receiver[T], mut message: Option[List[T]]",
+            "mut r: Receiver[T], mut message: Option[T]",
             "u32",
         ),
         // A Mutex holds its payload as the block of a one-element list, which a create or

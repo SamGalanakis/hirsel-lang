@@ -3374,6 +3374,15 @@ impl<'p, S: Stage> Machine<'p, S> {
                         scalar: ScalarKind::F64,
                         bits: u128::from(*b),
                     },
+                    // This executor's descriptor registry is the layout table itself: the
+                    // index of a layout's descriptor is its id, which a channel's open reads.
+                    (ConstantValue::Descriptor(layout), ValueRepr::Scalar(ScalarKind::U32)) => {
+                        self.record(*layout)?;
+                        Val::Bits {
+                            scalar: ScalarKind::U32,
+                            bits: u128::from(layout.0),
+                        }
+                    }
                     (ConstantValue::String(s), ValueRepr::Block | ValueRepr::Uncounted) => {
                         Val::Ptr(self.static_bytes(
                             unit,

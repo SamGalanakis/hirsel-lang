@@ -105,6 +105,9 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             }
             (ConstantValue::String(text), _) => return self.text_literal(data.ty, text.as_bytes()),
             (ConstantValue::Bytes(bytes), _) => return self.text_literal(data.ty, bytes),
+            (ConstantValue::Descriptor(layout), Shape::Scalar(ScalarKind::U32)) => {
+                V::One(self.descriptor_value(*layout)?)
+            }
             _ => return self.invalid("a constant of another type"),
         })
     }

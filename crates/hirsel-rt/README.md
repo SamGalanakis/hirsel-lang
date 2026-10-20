@@ -712,11 +712,15 @@ call the `$intrinsic.Task*` entries (`hirsel_rt_v2_task_*`). A result crosses as
 `task.cancel` and `task.detach` are runtime primitives. A detached child drops its result when
 it completes, or at the detach if it already has; only live children keep scope rows.
 
-`channels.rs` is the run's unbounded FIFO channels (CONC-6), behind `channel.open`,
-`sender.dup` and the compiled bodies of `channel.send` and `channel.receive`:
+`channels.rs` is the run's unbounded FIFO channels (CONC-6), behind `sender.dup` and the
+compiled bodies of `channel.open`, `channel.send` and `channel.receive`:
 
-- A message crosses as the block of a one-element `List[T]` in an `Option` slot, so the runtime
-  moves block references and never reads a payload's layout.
+- A message crosses inline, as the `Some` image of an `Option[T]` slot. The compiled open
+  passes `Option[T]`'s registry descriptor (LIR `ConstantValue::Descriptor`) and its `None`
+  image; the channel keeps both. A send copies the image into the channel's ring of images (one
+  allocation of `capacity * stride` bytes, the capacity a power of two that doubles when full)
+  and writes `None` back into the sender's slot; a receive copies the oldest image into the
+  receiver's `None` slot. Neither allocates once the ring has grown.
 - A send never checks cancellation. It moves the payload into the queue, or returns `Closed`
   with the payload when no receiver is left, and still yields.
 - A receive returns `Canceled`, else the oldest message, else `Closed` once no sender is left,
@@ -725,13 +729,19 @@ it completes, or at the detach if it already has; only live children keep scope 
   wakes as many of its waiting receivers, oldest first, as it has messages (every one once
   no sender is left).
 - Sender and Receiver are run-local handle words with bit 63 set. Their drop's handle close
-  reaches the scheduler instead of the Io adapter, and the last receiver's close releases the
-  messages nobody received, oldest first.
+  reaches the scheduler instead of the Io adapter. The last receiver's close detaches the ring
+  and drops the messages nobody received in place through the descriptor's drop program
+  (`hirsel_rt_v2_finalize`'s engine), oldest first; an element whose program runs nothing
+  (a `u64`) is not walked.
+- A scheduling point keeps the storage of its woken and touched lists across points, so waking
+  receivers allocates nothing.
+- Runtime ABI 28: `hirsel_rt_v2_channel_open` takes the `None` image and the `Option[T]`
+  descriptor index, and `hirsel_rt_v2_channel_send`/`_receive` take `Option[T]` image slots
+  instead of `Option[List[T]]` carriers.
 
 `sync.rs` is the run's mutex and atomic cells (CONC-4, CONC-5, FAIL-4), behind the compiled
 bodies of `mutex.create`, `mutex.with` and `atomic.*`. A mutex's cell holds its payload as the
-block of a one-element list, moved out of and into `Option[List[T]]` carriers as a channel
-message is, so a Map, String or List payload needs no layout knowledge here; the run's end
+block of a one-element list, moved out of and into `Option[List[T]]` carriers, so a Map, String or List payload needs no layout knowledge here; the run's end
 releases the blocks the mutexes still hold. The layout of `Mutex[T]` requires a copyable payload,
 whose release is unobservable (a mutex over a resource stays M2). An atomic's cell holds its
 scalar payload as the `Some` image of an `Option`, which the runtime copies. A mutex body may not

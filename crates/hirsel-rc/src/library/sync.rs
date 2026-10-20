@@ -1,7 +1,7 @@
 //! Mutexes and atomics (CONC-4, CONC-5, FAIL-4) over the runtime's cells
 //! (`hirsel_rt_v2_mutex_*`, `hirsel_rt_v2_atomic_*`, `hirsel-rt/src/sync.rs`).
 //!
-//! A mutex payload crosses as a channel message does (`channels.rs`): the block
+//! A mutex payload crosses as the block
 //! of a one-element `List[T]` in an `Option` carrier, which the runtime takes
 //! from `Some` and moves into `None`, so it never reads `T`'s layout. An
 //! atomic's scalar payload crosses as the `Some` image of an `Option` of known
@@ -11,7 +11,7 @@
 //! mutex fails FAIL-4, continued by the chain of the body that killed it.
 use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::channels::{carrier, unbox};
+use super::channels::variant_field;
 use super::iter::{drop_local, local, option};
 use super::slots::construct;
 use super::tasks::{
@@ -24,9 +24,62 @@ use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::DefPath;
-use hirsel_types::GenericArgument;
+use hirsel_types::{BuiltinType, GenericArgument, Type, TypeKind};
 
 type R<T> = Result<T, PassError>;
+
+/// The payload carrier `List[T]` of `mutex.<op>[T]`: its layout and the
+/// layout of its `Option`.
+fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
+    let element = cx.type_actual(0)?;
+    let list = cx.store.push(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(element)].into(),
+    }));
+    let list_layout = cx.layout(list)?;
+    let (option_layout, _) = option_of(cx, list)?;
+    Ok((list_layout, option_layout))
+}
+
+/// Move the value out of the `Some([v])` carrier in `slot`, whose storage then ends,
+/// and drop the empty list. The value is left in a local the body holds.
+fn unbox(
+    b: &mut Body<'_, '_>,
+    slot: SlotId,
+    address: AddressId,
+    option_layout: LayoutId,
+) -> R<ValueId> {
+    let list_layout = variant_field(b, option_layout, 1, 0)?;
+    let field = b.place(
+        AddressBase::Address(address),
+        &[ProjectionStep::VariantField {
+            variant: 1,
+            field: 0,
+        }],
+        list_layout,
+        None,
+    )?;
+    let list = b.take(field)?;
+    b.emptied(slot);
+    b.push(Inst::StorageDead {
+        slot,
+        if_live: false,
+    });
+    let (list_slot, list_address) = local(b, list)?;
+    let zero = b.u64(0)?;
+    let at = b.slot_place(list_address, zero)?;
+    let value = b.take(at)?;
+    let (value_slot, value_address) = local(b, value)?;
+    b.seq_set_len(list_address, zero)?;
+    drop_local(b, list_slot, list_address);
+    let value = b.take(value_address)?;
+    b.emptied(value_slot);
+    b.push(Inst::StorageDead {
+        slot: value_slot,
+        if_live: false,
+    });
+    Ok(value)
+}
 
 pub static MUTEX_CREATE: LibraryBody = LibraryBody {
     path: || DefPath::core("mutex.create"),

@@ -88,7 +88,9 @@ impl Channels {
         } else {
             channel.receivers -= 1;
             if channel.receivers == 0 {
-                self.released.extend(channel.queue.drain(..));
+                // The evaluator pushes each release to the front of its work, so the newest
+                // goes first here and the queue drops oldest first, as the runtime's does.
+                self.released.extend(channel.queue.drain(..).rev());
             }
         }
         if channel.senders == 0 && channel.receivers == 0 {

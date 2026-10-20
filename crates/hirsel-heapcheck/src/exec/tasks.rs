@@ -245,7 +245,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.TaskSetTake",
         "task.cancel_all",
         "task.detach_all",
-        "channel.open",
+        "$intrinsic.ChannelOpen",
         "sender.dup",
         "$intrinsic.ChannelSend",
         "$intrinsic.ChannelReceive",
@@ -695,7 +695,7 @@ impl<S: Stage> Machine<'_, S> {
             self.timer_choice()?;
         }
         match name {
-            "channel.open"
+            "$intrinsic.ChannelOpen"
             | "sender.dup"
             | "$intrinsic.ChannelSend"
             | "$intrinsic.ChannelReceive" => {

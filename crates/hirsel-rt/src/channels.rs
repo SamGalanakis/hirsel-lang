@@ -1,18 +1,24 @@
 //! Unbounded FIFO channels between the tasks of one run (CONC-6).
 //!
-//! A message crosses as the one-element list block the compiled `channel.send` body builds, so
-//! the runtime moves block references and never reads a payload's layout: a receive hands the
-//! block to the compiled `channel.receive` body, which moves the element out. Messages nobody
-//! receives are released through their blocks' own descriptors when the last receiver closes.
+//! A message is carried inline: the `Some` image of the `Option[T]` the compiled `channel.send`
+//! body passes, which the runtime copies into the channel's queue and replaces with the
+//! channel's `None` image. A receive copies the oldest image into the compiled
+//! `channel.receive` body's `None` slot. The compiled `channel.open` body gives the channel
+//! `Option[T]`'s `None` image and its layout descriptor ([`Element`]), so the runtime moves
+//! messages by their size and, when the last receiver closes, drops the ones nobody received
+//! in place through the descriptor's drop program, oldest first. A send allocates nothing
+//! but the queue's growth: the queue is one ring of images ([`Ring`]) that doubles when full.
 //!
 //! Sender and Receiver are run-local handle words with [`ENDPOINT`] set, an endpoint index and
 //! a generation; dropping one closes it through [`close`], reached from the handle close of
 //! `finalize.rs` instead of the Io adapter.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 
-use crate::{Header, fault};
+use crate::fault;
+use crate::release::{LAYOUT_DYNAMIC, Layout};
 
 /// The tag of a channel endpoint's handle word.
 pub(crate) const ENDPOINT: u64 = 1 << 63;
@@ -22,12 +28,151 @@ pub(crate) const DONE: u32 = 0;
 pub(crate) const CLOSED: u32 = 1;
 pub(crate) const CANCELED: u32 = 2;
 
+/// A channel's element: the `Option[T]` images it carries.
+pub(crate) struct Element {
+    /// `Option[T]`'s descriptor index, which drops an unreceived message.
+    pub(crate) descriptor: u32,
+    /// The image size in bytes.
+    size: usize,
+    /// The descriptor runs nothing: an unreceived message needs no drop.
+    inert: bool,
+    /// The `None` image a send leaves in the sender's slot.
+    none: Box<[u8]>,
+}
+
+impl Element {
+    /// The element of `layout`, `index`'s descriptor, whose `None` image is at `none`.
+    ///
+    /// # Safety
+    /// `layout` is a live descriptor and `none` readable for its size.
+    pub(crate) unsafe fn new(index: u32, layout: *const Layout, none: *const u8) -> Element {
+        // SAFETY: caller contract.
+        let layout = unsafe { &*layout };
+        if layout.flags & LAYOUT_DYNAMIC != 0 {
+            fault("a channel element of dynamic size");
+        }
+        let size = usize::try_from(layout.size)
+            .ok()
+            .filter(|&size| size > 0)
+            .unwrap_or_else(|| fault("a channel element without an Option image"));
+        Element {
+            descriptor: index,
+            size,
+            inert: layout.finalizer.is_none() && layout.step_count == 0,
+            // SAFETY: caller contract.
+            none: unsafe { std::slice::from_raw_parts(none, size) }.into(),
+        }
+    }
+}
+
+/// Queued message images, oldest first: `len` images of `stride` bytes from slot `head` of a
+/// buffer of `capacity` slots (a power of two, or zero before the first message), wrapping.
+pub(crate) struct Ring {
+    buffer: NonNull<u8>,
+    stride: usize,
+    align: usize,
+    capacity: usize,
+    head: usize,
+    len: usize,
+}
+
+impl Ring {
+    fn new(size: usize, align: usize) -> Ring {
+        let align = align.max(1).next_power_of_two();
+        Ring {
+            buffer: NonNull::dangling(),
+            stride: size.next_multiple_of(align),
+            align,
+            capacity: 0,
+            head: 0,
+            len: 0,
+        }
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    fn allocation(&self, capacity: usize) -> Allocation {
+        capacity
+            .checked_mul(self.stride)
+            .and_then(|bytes| Allocation::from_size_align(bytes, self.align).ok())
+            .unwrap_or_else(|| fault("a channel queue beyond the address space"))
+    }
+    /// The `i`th oldest image.
+    pub(crate) fn at(&self, i: usize) -> *mut u8 {
+        let slot = (self.head + i) & (self.capacity - 1);
+        // SAFETY: `slot` is inside the buffer of `capacity` slots.
+        unsafe { self.buffer.as_ptr().add(slot * self.stride) }
+    }
+    /// Append a copy of the `size`-byte image at `image`.
+    fn push(&mut self, image: *const u8, size: usize) {
+        if self.len == self.capacity {
+            self.grow();
+        }
+        let at = self.at(self.len);
+        // SAFETY: a free slot of at least `size` bytes; the image is another frame's.
+        unsafe { std::ptr::copy_nonoverlapping(image, at, size) };
+        self.len += 1;
+    }
+    /// Move the oldest image into `out`, if any.
+    fn pop(&mut self, out: *mut u8, size: usize) -> bool {
+        if self.len == 0 {
+            return false;
+        }
+        // SAFETY: the oldest slot holds an image; `out` is another frame's.
+        unsafe { std::ptr::copy_nonoverlapping(self.at(0), out, size) };
+        self.head = (self.head + 1) & (self.capacity - 1);
+        self.len -= 1;
+        true
+    }
+    /// Double the buffer, keeping the images in order from slot 0.
+    fn grow(&mut self) {
+        let capacity = (self.capacity * 2).max(4);
+        let allocation = self.allocation(capacity);
+        // SAFETY: a nonzero size (the stride is nonzero).
+        let buffer = NonNull::new(unsafe { alloc(allocation) })
+            .unwrap_or_else(|| handle_alloc_error(allocation));
+        let first = (self.capacity - self.head).min(self.len);
+        // SAFETY: both runs are inside the old buffer, the new one is fresh and large enough.
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.at(0), buffer.as_ptr(), first * self.stride);
+            if self.len > first {
+                std::ptr::copy_nonoverlapping(
+                    self.buffer.as_ptr(),
+                    buffer.as_ptr().add(first * self.stride),
+                    (self.len - first) * self.stride,
+                );
+            }
+        }
+        self.release();
+        self.buffer = buffer;
+        self.capacity = capacity;
+        self.head = 0;
+    }
+    fn release(&mut self) {
+        if self.capacity > 0 {
+            // SAFETY: the buffer was allocated with this allocation.
+            unsafe { dealloc(self.buffer.as_ptr(), self.allocation(self.capacity)) };
+        }
+    }
+}
+
+impl Drop for Ring {
+    /// Frees the storage only: images still queued were dropped or moved out first.
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 struct Channel {
-    queue: VecDeque<NonNull<Header>>,
+    element: Element,
+    queue: Ring,
     senders: u32,
     receivers: u32,
-    /// The tasks parked receiving, by their place in park order.
-    waiting: BTreeMap<u64, u32>,
+    /// The tasks parked receiving and their places in park order, ascending: a park appends.
+    waiting: VecDeque<(u64, u32)>,
     /// A send or a sender's close since the last scheduling point.
     touched: bool,
 }
@@ -52,13 +197,14 @@ pub(crate) struct Channels {
 }
 
 impl Channels {
-    /// A fresh channel's Sender and Receiver words.
-    pub(crate) fn open(&mut self) -> (u64, u64) {
+    /// A fresh channel of `element`s, `layout` its descriptor: its Sender and Receiver words.
+    pub(crate) fn open(&mut self, element: Element, layout: &Layout) -> (u64, u64) {
         let row = Channel {
-            queue: VecDeque::new(),
+            queue: Ring::new(element.size, layout.align as usize),
+            element,
             senders: 1,
             receivers: 1,
-            waiting: BTreeMap::new(),
+            waiting: VecDeque::new(),
             touched: false,
         };
         let channel = match self.vacant_channels.pop() {
@@ -140,13 +286,20 @@ impl Channels {
             .unwrap_or_else(|| fault("a vacant channel row"))
     }
 
-    /// Queue `message` unless the channel has no receiver left (`CLOSED`).
-    pub(crate) fn send(&mut self, channel: u32, message: NonNull<Header>) -> u32 {
+    /// Queue the `Some` image in `slot` and leave `None` there, unless the channel has no
+    /// receiver left (`CLOSED`).
+    ///
+    /// # Safety
+    /// `slot` is a `Some` image of the channel's element in another frame.
+    pub(crate) unsafe fn send(&mut self, channel: u32, slot: *mut u8) -> u32 {
         let row = self.row(channel);
         if row.receivers == 0 {
             return CLOSED;
         }
-        row.queue.push_back(message);
+        let element = &row.element;
+        row.queue.push(slot, element.size);
+        // SAFETY: caller contract; the image moved, so the slot now holds `None`.
+        unsafe { std::ptr::copy_nonoverlapping(element.none.as_ptr(), slot, element.size) };
         self.touch(channel);
         DONE
     }
@@ -160,61 +313,72 @@ impl Channels {
         }
     }
 
-    /// The channels touched since the last scheduling point.
-    pub(crate) fn take_touched(&mut self) -> Vec<u32> {
-        let touched = std::mem::take(&mut self.touched);
-        for &channel in &touched {
+    /// Move the channels touched since the last scheduling point into the empty `into`, whose
+    /// storage the channels keep for the next point.
+    pub(crate) fn take_touched(&mut self, into: &mut Vec<u32>) {
+        std::mem::swap(&mut self.touched, into);
+        for &channel in into.iter() {
             if let Some(Some(row)) = self.channels.get_mut(channel as usize) {
                 row.touched = false;
             }
         }
-        touched
     }
 
-    /// `task` parked receiving on `channel` at park place `at`.
+    /// `task` parked receiving on `channel` at park place `at`, the latest place so far.
     pub(crate) fn wait(&mut self, channel: u32, at: u64, task: u32) {
-        self.row(channel).waiting.insert(at, task);
+        self.row(channel).waiting.push_back((at, task));
     }
     /// The receiver parked at `at` is no longer waiting.
     pub(crate) fn unwait(&mut self, channel: u32, at: u64) {
-        if let Some(Some(row)) = self.channels.get_mut(channel as usize) {
-            row.waiting.remove(&at);
+        if let Some(Some(row)) = self.channels.get_mut(channel as usize)
+            && let Some(i) = row.waiting.iter().position(|&(place, _)| place == at)
+        {
+            row.waiting.remove(i);
         }
     }
     /// A live channel's queued message count, whether no sender is left, and its parked
     /// receivers in park order.
-    pub(crate) fn waiting(&self, channel: u32) -> Option<(usize, bool, &BTreeMap<u64, u32>)> {
+    pub(crate) fn waiting(&self, channel: u32) -> Option<(usize, bool, &VecDeque<(u64, u32)>)> {
         let row = self.channels.get(channel as usize)?.as_ref()?;
         Some((row.queue.len(), row.senders == 0, &row.waiting))
     }
 
-    /// The oldest queued message, `Err(CLOSED)` once the queue is empty and no sender is left,
-    /// or `Ok(None)` while a sender may still send.
-    pub(crate) fn receive(&mut self, channel: u32) -> Result<Option<NonNull<Header>>, u32> {
+    /// Move the oldest queued message into the `None` slot `slot`: `Ok(true)`, `Err(CLOSED)`
+    /// once the queue is empty and no sender is left, or `Ok(false)` while a sender may still
+    /// send.
+    ///
+    /// # Safety
+    /// `slot` is a `None` image of the channel's element in another frame.
+    pub(crate) unsafe fn receive(&mut self, channel: u32, slot: *mut u8) -> Result<bool, u32> {
         let row = self.row(channel);
-        match row.queue.pop_front() {
-            Some(message) => Ok(Some(message)),
-            None if row.senders == 0 => Err(CLOSED),
-            None => Ok(None),
+        if row.queue.pop(slot, row.element.size) {
+            Ok(true)
+        } else if row.senders == 0 {
+            Err(CLOSED)
+        } else {
+            Ok(false)
         }
     }
 
-    /// Close the endpoint `word`; the messages a channel's last receiver leaves are returned,
-    /// oldest first, for the caller to release.
-    pub(crate) fn close(&mut self, word: u64) -> VecDeque<NonNull<Header>> {
+    /// Close the endpoint `word`. The messages a channel's last receiver leaves are returned
+    /// with their descriptor index, for the caller to drop oldest first; none when the element
+    /// needs no drop.
+    pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
         let Some((index, endpoint)) = self.lookup(word) else {
             fault("a channel endpoint closed twice or of another run");
         };
         self.endpoints[index as usize] = None;
         self.vacant_endpoints.push(index);
         let row = self.row(endpoint.channel);
-        let mut left = VecDeque::new();
+        let mut left = None;
         if endpoint.sender {
             row.senders -= 1;
         } else {
             row.receivers -= 1;
-            if row.receivers == 0 {
-                left = std::mem::take(&mut row.queue);
+            if row.receivers == 0 && row.queue.len() > 0 {
+                let empty = Ring::new(row.element.size, row.queue.align);
+                let queue = std::mem::replace(&mut row.queue, empty);
+                left = (!row.element.inert).then_some((queue, row.element.descriptor));
             }
         }
         let (senders, receivers) = (row.senders, row.receivers);

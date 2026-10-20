@@ -545,6 +545,11 @@ of the same region. Other region payloads retain scheduled cleanup.
 User finalizers cannot be omitted, and nested regional values cannot return.
 
 LIR revision 25 adds `ConstantValue::Heap`, the distinguished inert Arena token.
+LIR revision 40 adds `ConstantValue::Descriptor(LayoutId)`: a `u32`, the run's registry index of
+that layout's runtime descriptor, which both backends emit as the index a construction's
+allocation receives. The structure validator requires a `u32` result and a layout of the table;
+`channel.open`'s body passes `Option[T]`'s to the runtime, which then moves and drops messages
+it was not compiled for (CONC-6).
 C admits that exact literal at Arena layout; integer bits and call results still
 cannot forge tokens. Scoped Arena tokens retain their open-region obligations.
 Runtime ABI 6 passes the destination token to both deep-copy entries.

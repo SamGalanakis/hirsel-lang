@@ -2,10 +2,12 @@
 //! with each queued message a harness root, so H observes the moves, the
 //! receive order and the releases of unreceived messages native code performs.
 //!
-//! A message is the `Some` image of the compiled bodies' `Option[List[T]]`
-//! slot; a send moves it into the queue and leaves `None`, a receive moves it
-//! into the receiver's `None` slot, and the last receiver's close drops what
-//! is left, oldest first. Sender and Receiver are handle words with
+//! A message is the `Some` image of the compiled bodies' `Option[T]` slot,
+//! carried inline. The open names the channel's element: `Option[T]`'s layout,
+//! through its descriptor (this executor's descriptor index is the layout id),
+//! and its `None` image. A send moves a `Some` of that layout into the queue and
+//! leaves the channel's `None`, a receive moves it into the receiver's `None`
+//! slot, and the last receiver's close drops what is left, oldest first. Sender and Receiver are handle words with
 //! [`ENDPOINT`] set, opened in the ledger like any operation's handle and
 //! closed by their drop's `CloseHandle`.
 use super::tasks::{Park, Wait};
@@ -23,6 +25,9 @@ const CANCELED: u32 = 2;
 
 #[derive(Clone)]
 struct Channel {
+    /// The `Option[T]` layout every message has, and its `None` image.
+    layout: LayoutId,
+    none: Extent,
     /// Queued messages, oldest first.
     queue: VecDeque<u64>,
     senders: u32,
@@ -42,13 +47,13 @@ pub(super) struct Channels {
     endpoints: Vec<Option<Endpoint>>,
     generation: u32,
     next: u64,
-    /// Each queued message's layout.
-    layouts: std::collections::BTreeMap<u64, LayoutId>,
 }
 
 impl Channels {
-    fn open(&mut self) -> (u64, u64) {
+    fn open(&mut self, layout: LayoutId, none: Extent) -> (u64, u64) {
         self.channels.push(Some(Channel {
+            layout,
+            none,
             queue: VecDeque::new(),
             senders: 1,
             receivers: 1,
@@ -108,8 +113,27 @@ impl<S: Stage> Machine<'_, S> {
             .result
             .ok_or_else(|| err(V::Malformed, "a channel operation without a result"))?;
         match name {
-            "channel.open" => {
-                let (sender, receiver) = self.scheduler().channels.open();
+            "$intrinsic.ChannelOpen" => {
+                let descriptor = self.task_word(f, &Self::task_argument(arguments, 2)?)?;
+                let layout = LayoutId(
+                    u32::try_from(descriptor)
+                        .map_err(|_| err(V::Malformed, "a channel descriptor beyond u32"))?,
+                );
+                self.record(layout)?;
+                let ArgumentValue::Value(none) = Self::task_argument(arguments, 1)?.value else {
+                    return fail(V::Malformed, "a None image passed by address");
+                };
+                let none = match self.read_use(f, none)? {
+                    Val::Image(image) => image,
+                    _ => return fail(V::TypeConfusion, "a None image that is not an aggregate"),
+                };
+                if none.bytes.len() as u64 != self.size(layout)? {
+                    return fail(
+                        V::TypeConfusion,
+                        "a None image of another size than its layout",
+                    );
+                }
+                let (sender, receiver) = self.scheduler().channels.open(layout, none);
                 let layout = self.value_type(f.unit, result)?.layout;
                 let image = self.operation_image(
                     f,
@@ -204,14 +228,25 @@ impl<S: Stage> Machine<'_, S> {
         self.task_return(f, arguments, Some((result, val)), normal)
     }
 
-    /// Move the `Some` message at `at` into `channel`'s queue, leaving `None`.
+    /// The layout of `channel`'s messages, which a slot of `layout` must have.
+    fn element(&mut self, channel: u32, layout: LayoutId) -> Checked<Extent> {
+        let row = self.scheduler().channels.row(channel)?;
+        if row.layout != layout {
+            return fail(
+                V::TypeConfusion,
+                "a message slot of another layout than its channel's",
+            );
+        }
+        Ok(row.none.clone())
+    }
+
+    /// Move the `Some` message at `at` into `channel`'s queue, leaving its `None`.
     fn enqueue(&mut self, channel: u32, at: Ptr, layout: LayoutId) -> Checked<()> {
+        let none = self.element(channel, layout)?;
         let size = self.size(layout)?;
         let owned = self.resources_of(layout)?;
         let image = self.take_part(at, size, &owned);
         let (val, _, credited) = self.val_from(image, ValueRepr::Aggregate, layout)?;
-        let mut none = Extent::new(size);
-        none.write_bytes(0, &vec![0; size as usize]);
         self.write_value(
             at,
             layout,
@@ -224,7 +259,6 @@ impl<S: Stage> Machine<'_, S> {
         let s = self.scheduler();
         let id = s.channels.next;
         s.channels.next += 1;
-        s.channels.layouts.insert(id, layout);
         s.channels.row(channel)?.queue.push_back(id);
         self.set_root(
             MESSAGE_ROOT | id,
@@ -253,10 +287,15 @@ impl<S: Stage> Machine<'_, S> {
             return Ok(Some(CANCELED + cause));
         }
         let row = s.channels.row(channel)?;
+        if row.layout != layout {
+            return fail(
+                V::TypeConfusion,
+                "a message slot of another layout than its channel's",
+            );
+        }
         let Some(id) = row.queue.pop_front() else {
             return Ok((row.senders == 0).then_some(CLOSED));
         };
-        s.channels.layouts.remove(&id);
         let held = self
             .roots
             .get(&(MESSAGE_ROOT | id))
@@ -288,6 +327,7 @@ impl<S: Stage> Machine<'_, S> {
         };
         s.channels.endpoints[index as usize] = None;
         let row = s.channels.row(endpoint.channel)?;
+        let layout = row.layout;
         let mut left = VecDeque::new();
         if endpoint.sender {
             row.senders -= 1;
@@ -302,12 +342,6 @@ impl<S: Stage> Machine<'_, S> {
         }
         // The work list is a stack: the oldest message's drop goes on last.
         for id in left.into_iter().rev() {
-            let s = self.scheduler();
-            let layout = s
-                .channels
-                .layouts
-                .remove(&id)
-                .ok_or_else(|| err(V::Malformed, "a queued message without its layout"))?;
             let held = self
                 .roots
                 .get(&(MESSAGE_ROOT | id))
