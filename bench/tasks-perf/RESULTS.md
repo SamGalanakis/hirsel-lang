@@ -50,3 +50,17 @@ failure-table tests and one native JSON physical-copy regression. The corrected
 server also passed 11 differential HTTP/HTML checks and four persistence-failure
 checks against Rust. The verifier additionally passed Rust's SIGTERM and
 storage-provider checks. No performance samples were excluded.
+
+A follow-up session compares the isolated tasks-perf binary with the landed
+combined revision `044644a0e7e2`, which includes sse-memory `402118f9` and other
+intervening main changes. This is a combined-revision comparison, without
+attributing the entire difference to one lane. It uses the same ten-round
+seeded, interleaved protocol, CPU31/CPU7, 10k board and 1 req/s for one second.
+The comparison driver selects only `list` and `search`; all 60 samples passed
+and none were excluded. [Raw counters and hashes](results/combined-search-list-session.json)
+retain the independent baseline for this session.
+
+| Operation | Isolated / Rust | Combined / Rust (95% CI) | Combined / isolated |
+|---|---:|---:|---:|
+| list | 2.834 | 2.609 [2.566, 2.638] | 0.920 |
+| search | 4.642 | 1.049 [1.043, 1.055] | 0.226 |

@@ -1,0 +1,2287 @@
+{
+  "seed": 20261020,
+  "rounds": 10,
+  "seconds": 1,
+  "server_cpu": 31,
+  "client_cpu": 7,
+  "binaries": {
+    "before": {
+      "path": "/tmp/tasks-perf/tasks-fixed",
+      "sha256": "9b318c127b12012a3efc425a5fe2b4d6275665fef39501a562f4afd3dff7631d"
+    },
+    "after": {
+      "path": "/tmp/tasks-perf/tasks-combined",
+      "sha256": "cd26f8471cad5a866b9cdd36db9ec1cea4da07a27943030a5487561395717644"
+    },
+    "rust": {
+      "path": "/workspace/code/hirsel-wt/tasks-rust/bench/apps/tasks/rust/target/release/tasks-rust",
+      "sha256": "66d755f25aee0596cb5bc001f172cfe9b1886dbc862726c0c88aac9af03231dc"
+    }
+  },
+  "samples": [
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 101.184766,
+      "idle_rss": 39141376,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192877817,
+        "total": 555225109
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001033004,
+      "requests_per_s": 0.9989680619960859,
+      "p50_us": 280319,
+      "p99_us": 280319,
+      "p999_us": 280319,
+      "max_us": 280319,
+      "perf": {
+        "task-clock": 249.89,
+        "cycles": 951420196.0,
+        "instructions": 742700366.0,
+        "cycles:u": 492057432.0,
+        "instructions:u": 547087695.0
+      },
+      "load_rss": 43347968,
+      "instructions_per_request": 742700366.0,
+      "cpu_s_per_request": 0.24988999999999997,
+      "sibling_after": {
+        "busy": 192877915,
+        "total": 555225218
+      },
+      "sibling_busy_share": 0.8990825688073395,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 25.053725,
+      "idle_rss": 7380992,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192877957,
+        "total": 555225264
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00115875,
+      "requests_per_s": 0.9988425911475077,
+      "p50_us": 102399,
+      "p99_us": 102399,
+      "p999_us": 102399,
+      "max_us": 102399,
+      "perf": {
+        "task-clock": 79.82,
+        "cycles": 315956545.0,
+        "instructions": 266837129.0,
+        "cycles:u": 144278585.0,
+        "instructions:u": 203146522.0
+      },
+      "load_rss": 8327168,
+      "instructions_per_request": 266837129.0,
+      "cpu_s_per_request": 0.07981999999999999,
+      "sibling_after": {
+        "busy": 192878052,
+        "total": 555225369
+      },
+      "sibling_busy_share": 0.9047619047619048,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 68.74768,
+      "idle_rss": 33615872,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192878085,
+        "total": 555225414
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001076806,
+      "requests_per_s": 0.9989243522639362,
+      "p50_us": 220543,
+      "p99_us": 220543,
+      "p999_us": 220543,
+      "max_us": 220543,
+      "perf": {
+        "task-clock": 208.15,
+        "cycles": 826148360.0,
+        "instructions": 684792614.0,
+        "cycles:u": 394374649.0,
+        "instructions:u": 488697100.0
+      },
+      "load_rss": 36769792,
+      "instructions_per_request": 684792614.0,
+      "cpu_s_per_request": 0.20815,
+      "sibling_after": {
+        "busy": 192878185,
+        "total": 555225522
+      },
+      "sibling_busy_share": 0.9259259259259259,
+      "participant": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 114.219068,
+      "idle_rss": 38998016,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192878264,
+        "total": 555225602
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001292171,
+      "requests_per_s": 0.9987094965511321,
+      "p50_us": 28063,
+      "p99_us": 28063,
+      "p999_us": 28063,
+      "max_us": 28063,
+      "perf": {
+        "task-clock": 23.73,
+        "cycles": 91773085.0,
+        "instructions": 75408333.0,
+        "cycles:u": 79496125.0,
+        "instructions:u": 70101039.0
+      },
+      "load_rss": 38039552,
+      "instructions_per_request": 75408333.0,
+      "cpu_s_per_request": 0.02373,
+      "sibling_after": {
+        "busy": 192878364,
+        "total": 555225709
+      },
+      "sibling_busy_share": 0.9345794392523364,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 17.670154,
+      "idle_rss": 7303168,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192878414,
+        "total": 555225762
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00118485,
+      "requests_per_s": 0.9988165522081162,
+      "p50_us": 5399,
+      "p99_us": 5399,
+      "p999_us": 5399,
+      "max_us": 5399,
+      "perf": {
+        "task-clock": 3.81,
+        "cycles": 14760572.0,
+        "instructions": 16178953.0,
+        "cycles:u": 13641923.0,
+        "instructions:u": 15897974.0
+      },
+      "load_rss": 7311360,
+      "instructions_per_request": 16178953.0,
+      "cpu_s_per_request": 0.00381,
+      "sibling_after": {
+        "busy": 192878493,
+        "total": 555225864
+      },
+      "sibling_busy_share": 0.7745098039215687,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 64.242183,
+      "idle_rss": 33763328,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192878524,
+        "total": 555225901
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00122218,
+      "requests_per_s": 0.9987793119005812,
+      "p50_us": 4495,
+      "p99_us": 4495,
+      "p999_us": 4495,
+      "max_us": 4495,
+      "perf": {
+        "task-clock": 2.88,
+        "cycles": 11238316.0,
+        "instructions": 16928663.0,
+        "cycles:u": 9872271.0,
+        "instructions:u": 16669313.0
+      },
+      "load_rss": 33775616,
+      "instructions_per_request": 16928663.0,
+      "cpu_s_per_request": 0.0028799999999999997,
+      "sibling_after": {
+        "busy": 192878594,
+        "total": 555226004
+      },
+      "sibling_busy_share": 0.6796116504854369,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 17.053203,
+      "idle_rss": 7356416,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192878630,
+        "total": 555226040
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000610609,
+      "requests_per_s": 0.9993897636158283,
+      "p50_us": 104383,
+      "p99_us": 104383,
+      "p999_us": 104383,
+      "max_us": 104383,
+      "perf": {
+        "task-clock": 71.22,
+        "cycles": 278954153.0,
+        "instructions": 260193742.0,
+        "cycles:u": 138608893.0,
+        "instructions:u": 203181257.0
+      },
+      "load_rss": 8302592,
+      "instructions_per_request": 260193742.0,
+      "cpu_s_per_request": 0.07122,
+      "sibling_after": {
+        "busy": 192878700,
+        "total": 555226142
+      },
+      "sibling_busy_share": 0.6862745098039216,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 50.906744,
+      "idle_rss": 33636352,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192878721,
+        "total": 555226181
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.002292353,
+      "requests_per_s": 0.997712889863782,
+      "p50_us": 215935,
+      "p99_us": 215935,
+      "p999_us": 215935,
+      "max_us": 215935,
+      "perf": {
+        "task-clock": 207.76,
+        "cycles": 844643251.0,
+        "instructions": 687359758.0,
+        "cycles:u": 423659921.0,
+        "instructions:u": 488697818.0
+      },
+      "load_rss": 36790272,
+      "instructions_per_request": 687359758.0,
+      "cpu_s_per_request": 0.20776,
+      "sibling_after": {
+        "busy": 192878787,
+        "total": 555226284
+      },
+      "sibling_busy_share": 0.6407766990291263,
+      "participant": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 61.525903,
+      "idle_rss": 39149568,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192878810,
+        "total": 555226322
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001006984,
+      "requests_per_s": 0.9989940289967048,
+      "p50_us": 206719,
+      "p99_us": 206719,
+      "p999_us": 206719,
+      "max_us": 206719,
+      "perf": {
+        "task-clock": 202.22,
+        "cycles": 809716680.0,
+        "instructions": 745062421.0,
+        "cycles:u": 417994289.0,
+        "instructions:u": 550226632.0
+      },
+      "load_rss": 43352064,
+      "instructions_per_request": 745062421.0,
+      "cpu_s_per_request": 0.20222,
+      "sibling_after": {
+        "busy": 192878879,
+        "total": 555226420
+      },
+      "sibling_busy_share": 0.7040816326530612,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 12.264704,
+      "idle_rss": 7303168,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192878898,
+        "total": 555226453
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00086049,
+      "requests_per_s": 0.9991402498064441,
+      "p50_us": 3429,
+      "p99_us": 3429,
+      "p999_us": 3429,
+      "max_us": 3429,
+      "perf": {
+        "task-clock": 2.22,
+        "cycles": 8983304.0,
+        "instructions": 16201657.0,
+        "cycles:u": 7579779.0,
+        "instructions:u": 15897411.0
+      },
+      "load_rss": 7311360,
+      "instructions_per_request": 16201657.0,
+      "cpu_s_per_request": 0.00222,
+      "sibling_after": {
+        "busy": 192878936,
+        "total": 555226555
+      },
+      "sibling_busy_share": 0.37254901960784315,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 50.455396,
+      "idle_rss": 33615872,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192878955,
+        "total": 555226586
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000667937,
+      "requests_per_s": 0.9993325088420416,
+      "p50_us": 3709,
+      "p99_us": 3709,
+      "p999_us": 3709,
+      "max_us": 3709,
+      "perf": {
+        "task-clock": 2.55,
+        "cycles": 10000720.0,
+        "instructions": 17017292.0,
+        "cycles:u": 8606778.0,
+        "instructions:u": 16669312.0
+      },
+      "load_rss": 33628160,
+      "instructions_per_request": 17017292.0,
+      "cpu_s_per_request": 0.0025499999999999997,
+      "sibling_after": {
+        "busy": 192878993,
+        "total": 555226682
+      },
+      "sibling_busy_share": 0.3958333333333333,
+      "participant": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 1,
+      "first_ms": 78.597661,
+      "idle_rss": 39112704,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879019,
+        "total": 555226721
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000574081,
+      "requests_per_s": 0.9994262483799039,
+      "p50_us": 13111,
+      "p99_us": 13111,
+      "p999_us": 13111,
+      "max_us": 13111,
+      "perf": {
+        "task-clock": 12.06,
+        "cycles": 49256583.0,
+        "instructions": 75074199.0,
+        "cycles:u": 40933803.0,
+        "instructions:u": 70092024.0
+      },
+      "load_rss": 38137856,
+      "instructions_per_request": 75074199.0,
+      "cpu_s_per_request": 0.012060000000000001,
+      "sibling_after": {
+        "busy": 192879067,
+        "total": 555226817
+      },
+      "sibling_busy_share": 0.5,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 12.585267,
+      "idle_rss": 7315456,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879083,
+        "total": 555226847
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001332438,
+      "requests_per_s": 0.9986693350285732,
+      "p50_us": 79679,
+      "p99_us": 79679,
+      "p999_us": 79679,
+      "max_us": 79679,
+      "perf": {
+        "task-clock": 48.72,
+        "cycles": 192642869.0,
+        "instructions": 259079794.0,
+        "cycles:u": 87184452.0,
+        "instructions:u": 203176928.0
+      },
+      "load_rss": 8261632,
+      "instructions_per_request": 259079794.0,
+      "cpu_s_per_request": 0.04872,
+      "sibling_after": {
+        "busy": 192879128,
+        "total": 555226947
+      },
+      "sibling_busy_share": 0.45,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 65.437953,
+      "idle_rss": 39014400,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879144,
+        "total": 555226981
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000719705,
+      "requests_per_s": 0.9992808126027657,
+      "p50_us": 192639,
+      "p99_us": 192639,
+      "p999_us": 192639,
+      "max_us": 192639,
+      "perf": {
+        "task-clock": 182.36,
+        "cycles": 742499011.0,
+        "instructions": 745041295.0,
+        "cycles:u": 386076447.0,
+        "instructions:u": 550220910.0
+      },
+      "load_rss": 43216896,
+      "instructions_per_request": 745041295.0,
+      "cpu_s_per_request": 0.18236000000000002,
+      "sibling_after": {
+        "busy": 192879193,
+        "total": 555227081
+      },
+      "sibling_busy_share": 0.49,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 53.294467,
+      "idle_rss": 33628160,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879224,
+        "total": 555227121
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000703615,
+      "requests_per_s": 0.9992968797259717,
+      "p50_us": 185983,
+      "p99_us": 185983,
+      "p999_us": 185983,
+      "max_us": 185983,
+      "perf": {
+        "task-clock": 177.88,
+        "cycles": 731697050.0,
+        "instructions": 683482970.0,
+        "cycles:u": 332852399.0,
+        "instructions:u": 485549086.0
+      },
+      "load_rss": 36782080,
+      "instructions_per_request": 683482970.0,
+      "cpu_s_per_request": 0.17787999999999998,
+      "sibling_after": {
+        "busy": 192879281,
+        "total": 555227222
+      },
+      "sibling_busy_share": 0.5643564356435643,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 13.139009,
+      "idle_rss": 7299072,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879300,
+        "total": 555227254
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00166298,
+      "requests_per_s": 0.9983397809111403,
+      "p50_us": 4803,
+      "p99_us": 4803,
+      "p999_us": 4803,
+      "max_us": 4803,
+      "perf": {
+        "task-clock": 2.71,
+        "cycles": 11123879.0,
+        "instructions": 16267443.0,
+        "cycles:u": 9635419.0,
+        "instructions:u": 15897182.0
+      },
+      "load_rss": 7307264,
+      "instructions_per_request": 16267443.0,
+      "cpu_s_per_request": 0.00271,
+      "sibling_after": {
+        "busy": 192879337,
+        "total": 555227357
+      },
+      "sibling_busy_share": 0.3592233009708738,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 65.157215,
+      "idle_rss": 38985728,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879346,
+        "total": 555227387
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001040309,
+      "requests_per_s": 0.9989607721181186,
+      "p50_us": 13199,
+      "p99_us": 13199,
+      "p999_us": 13199,
+      "max_us": 13199,
+      "perf": {
+        "task-clock": 11.96,
+        "cycles": 48773973.0,
+        "instructions": 75081001.0,
+        "cycles:u": 40172377.0,
+        "instructions:u": 70098853.0
+      },
+      "load_rss": 38010880,
+      "instructions_per_request": 75081001.0,
+      "cpu_s_per_request": 0.01196,
+      "sibling_after": {
+        "busy": 192879374,
+        "total": 555227491
+      },
+      "sibling_busy_share": 0.2692307692307692,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 2,
+      "first_ms": 43.822566,
+      "idle_rss": 33775616,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879382,
+        "total": 555227526
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.003442849,
+      "requests_per_s": 0.9965689635404438,
+      "p50_us": 3433,
+      "p99_us": 3433,
+      "p999_us": 3433,
+      "max_us": 3433,
+      "perf": {
+        "task-clock": 2.24,
+        "cycles": 9320570.0,
+        "instructions": 16918307.0,
+        "cycles:u": 8111054.0,
+        "instructions:u": 16668836.0
+      },
+      "load_rss": 33787904,
+      "instructions_per_request": 16918307.0,
+      "cpu_s_per_request": 0.0022400000000000002,
+      "sibling_after": {
+        "busy": 192879428,
+        "total": 555227629
+      },
+      "sibling_busy_share": 0.44660194174757284,
+      "participant": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 58.759258,
+      "idle_rss": 39202816,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879446,
+        "total": 555227669
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001555177,
+      "requests_per_s": 0.9984472378200288,
+      "p50_us": 194303,
+      "p99_us": 194303,
+      "p999_us": 194303,
+      "max_us": 194303,
+      "perf": {
+        "task-clock": 185.43,
+        "cycles": 768460469.0,
+        "instructions": 743898987.0,
+        "cycles:u": 395210557.0,
+        "instructions:u": 550227918.0
+      },
+      "load_rss": 43409408,
+      "instructions_per_request": 743898987.0,
+      "cpu_s_per_request": 0.18543,
+      "sibling_after": {
+        "busy": 192879483,
+        "total": 555227767
+      },
+      "sibling_busy_share": 0.37755102040816324,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 44.963012,
+      "idle_rss": 33464320,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879495,
+        "total": 555227801
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001382172,
+      "requests_per_s": 0.9986197357625816,
+      "p50_us": 180479,
+      "p99_us": 180479,
+      "p999_us": 180479,
+      "max_us": 180479,
+      "perf": {
+        "task-clock": 170.58,
+        "cycles": 671850850.0,
+        "instructions": 683720952.0,
+        "cycles:u": 314330865.0,
+        "instructions:u": 485549202.0
+      },
+      "load_rss": 36618240,
+      "instructions_per_request": 683720952.0,
+      "cpu_s_per_request": 0.17058,
+      "sibling_after": {
+        "busy": 192879535,
+        "total": 555227903
+      },
+      "sibling_busy_share": 0.39215686274509803,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 12.035464,
+      "idle_rss": 7286784,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879541,
+        "total": 555227933
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.003490108,
+      "requests_per_s": 0.9965220304892133,
+      "p50_us": 61439,
+      "p99_us": 61439,
+      "p999_us": 61439,
+      "max_us": 61439,
+      "perf": {
+        "task-clock": 43.77,
+        "cycles": 180108911.0,
+        "instructions": 262930733.0,
+        "cycles:u": 76206864.0,
+        "instructions:u": 203168558.0
+      },
+      "load_rss": 8232960,
+      "instructions_per_request": 262930733.0,
+      "cpu_s_per_request": 0.04377,
+      "sibling_after": {
+        "busy": 192879575,
+        "total": 555228035
+      },
+      "sibling_busy_share": 0.3333333333333333,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 51.294304,
+      "idle_rss": 39129088,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879586,
+        "total": 555228064
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000928659,
+      "requests_per_s": 0.9990722026073988,
+      "p50_us": 11159,
+      "p99_us": 11159,
+      "p999_us": 11159,
+      "max_us": 11159,
+      "perf": {
+        "task-clock": 9.94,
+        "cycles": 42281964.0,
+        "instructions": 75006342.0,
+        "cycles:u": 34084462.0,
+        "instructions:u": 70097981.0
+      },
+      "load_rss": 38170624,
+      "instructions_per_request": 75006342.0,
+      "cpu_s_per_request": 0.00994,
+      "sibling_after": {
+        "busy": 192879613,
+        "total": 555228166
+      },
+      "sibling_busy_share": 0.2647058823529412,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 42.5378,
+      "idle_rss": 33525760,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879622,
+        "total": 555228201
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.002840776,
+      "requests_per_s": 0.9971672711481369,
+      "p50_us": 3793,
+      "p99_us": 3793,
+      "p999_us": 3793,
+      "max_us": 3793,
+      "perf": {
+        "task-clock": 2.66,
+        "cycles": 10964459.0,
+        "instructions": 17077382.0,
+        "cycles:u": 9696401.0,
+        "instructions:u": 16669288.0
+      },
+      "load_rss": 33538048,
+      "instructions_per_request": 17077382.0,
+      "cpu_s_per_request": 0.00266,
+      "sibling_after": {
+        "busy": 192879662,
+        "total": 555228302
+      },
+      "sibling_busy_share": 0.39603960396039606,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 3,
+      "first_ms": 12.122336,
+      "idle_rss": 7348224,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879679,
+        "total": 555228333
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001868397,
+      "requests_per_s": 0.9981350873971125,
+      "p50_us": 3773,
+      "p99_us": 3773,
+      "p999_us": 3773,
+      "max_us": 3773,
+      "perf": {
+        "task-clock": 2.56,
+        "cycles": 10615889.0,
+        "instructions": 16251192.0,
+        "cycles:u": 9197254.0,
+        "instructions:u": 15898516.0
+      },
+      "load_rss": 7356416,
+      "instructions_per_request": 16251192.0,
+      "cpu_s_per_request": 0.00256,
+      "sibling_after": {
+        "busy": 192879725,
+        "total": 555228436
+      },
+      "sibling_busy_share": 0.44660194174757284,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 52.665263,
+      "idle_rss": 39190528,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879735,
+        "total": 555228465
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000277945,
+      "requests_per_s": 0.9997221322319569,
+      "p50_us": 9791,
+      "p99_us": 9791,
+      "p999_us": 9791,
+      "max_us": 9791,
+      "perf": {
+        "task-clock": 9.67,
+        "cycles": 39102387.0,
+        "instructions": 75104508.0,
+        "cycles:u": 31430156.0,
+        "instructions:u": 70098103.0
+      },
+      "load_rss": 38215680,
+      "instructions_per_request": 75104508.0,
+      "cpu_s_per_request": 0.00967,
+      "sibling_after": {
+        "busy": 192879771,
+        "total": 555228564
+      },
+      "sibling_busy_share": 0.36363636363636365,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 40.39107,
+      "idle_rss": 33591296,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879784,
+        "total": 555228596
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001627173,
+      "requests_per_s": 0.998375470390718,
+      "p50_us": 3623,
+      "p99_us": 3623,
+      "p999_us": 3623,
+      "max_us": 3623,
+      "perf": {
+        "task-clock": 2.4,
+        "cycles": 8195995.0,
+        "instructions": 16990363.0,
+        "cycles:u": 6921153.0,
+        "instructions:u": 16668942.0
+      },
+      "load_rss": 33603584,
+      "instructions_per_request": 16990363.0,
+      "cpu_s_per_request": 0.0024,
+      "sibling_after": {
+        "busy": 192879799,
+        "total": 555228693
+      },
+      "sibling_busy_share": 0.15463917525773196,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 16.586235,
+      "idle_rss": 7368704,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879821,
+        "total": 555228726
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001381451,
+      "requests_per_s": 0.9986204547741317,
+      "p50_us": 4971,
+      "p99_us": 4971,
+      "p999_us": 4971,
+      "max_us": 4971,
+      "perf": {
+        "task-clock": 2.79,
+        "cycles": 10959052.0,
+        "instructions": 16169057.0,
+        "cycles:u": 9539591.0,
+        "instructions:u": 15897382.0
+      },
+      "load_rss": 7376896,
+      "instructions_per_request": 16169057.0,
+      "cpu_s_per_request": 0.00279,
+      "sibling_after": {
+        "busy": 192879878,
+        "total": 555228830
+      },
+      "sibling_busy_share": 0.5480769230769231,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 56.583064,
+      "idle_rss": 38993920,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192879893,
+        "total": 555228862
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001498,
+      "requests_per_s": 0.99850424064751,
+      "p50_us": 194815,
+      "p99_us": 194815,
+      "p999_us": 194815,
+      "max_us": 194815,
+      "perf": {
+        "task-clock": 182.88,
+        "cycles": 746765331.0,
+        "instructions": 746939275.0,
+        "cycles:u": 431056529.0,
+        "instructions:u": 553379239.0
+      },
+      "load_rss": 43208704,
+      "instructions_per_request": 746939275.0,
+      "cpu_s_per_request": 0.18288,
+      "sibling_after": {
+        "busy": 192879938,
+        "total": 555228965
+      },
+      "sibling_busy_share": 0.4368932038834951,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 37.444908,
+      "idle_rss": 33665024,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192879945,
+        "total": 555228996
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00111523,
+      "requests_per_s": 0.9988860123524442,
+      "p50_us": 139903,
+      "p99_us": 139903,
+      "p999_us": 139903,
+      "max_us": 139903,
+      "perf": {
+        "task-clock": 130.42,
+        "cycles": 535923591.0,
+        "instructions": 684156733.0,
+        "cycles:u": 239401138.0,
+        "instructions:u": 485549172.0
+      },
+      "load_rss": 36818944,
+      "instructions_per_request": 684156733.0,
+      "cpu_s_per_request": 0.13041999999999998,
+      "sibling_after": {
+        "busy": 192879971,
+        "total": 555229094
+      },
+      "sibling_busy_share": 0.2653061224489796,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 4,
+      "first_ms": 11.234887,
+      "idle_rss": 7331840,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192879982,
+        "total": 555229125
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000516384,
+      "requests_per_s": 0.9994838825148115,
+      "p50_us": 63711,
+      "p99_us": 63711,
+      "p999_us": 63711,
+      "max_us": 63711,
+      "perf": {
+        "task-clock": 46.55,
+        "cycles": 191737541.0,
+        "instructions": 271385440.0,
+        "cycles:u": 84012860.0,
+        "instructions:u": 203168565.0
+      },
+      "load_rss": 8278016,
+      "instructions_per_request": 271385440.0,
+      "cpu_s_per_request": 0.046549999999999994,
+      "sibling_after": {
+        "busy": 192880004,
+        "total": 555229227
+      },
+      "sibling_busy_share": 0.21568627450980393,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 53.922919,
+      "idle_rss": 39006208,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192880010,
+        "total": 555229257
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.002266446,
+      "requests_per_s": 0.9977386791615691,
+      "p50_us": 175999,
+      "p99_us": 175999,
+      "p999_us": 175999,
+      "max_us": 175999,
+      "perf": {
+        "task-clock": 164.58,
+        "cycles": 670544063.0,
+        "instructions": 780005076.0,
+        "cycles:u": 334525928.0,
+        "instructions:u": 550228385.0
+      },
+      "load_rss": 43212800,
+      "instructions_per_request": 780005076.0,
+      "cpu_s_per_request": 0.16458,
+      "sibling_after": {
+        "busy": 192880094,
+        "total": 555229362
+      },
+      "sibling_busy_share": 0.8,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 88.145244,
+      "idle_rss": 33570816,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192880136,
+        "total": 555229414
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001118657,
+      "requests_per_s": 0.9988825929951679,
+      "p50_us": 242047,
+      "p99_us": 242047,
+      "p999_us": 242047,
+      "max_us": 242047,
+      "perf": {
+        "task-clock": 208.12,
+        "cycles": 802057923.0,
+        "instructions": 693676927.0,
+        "cycles:u": 404082738.0,
+        "instructions:u": 488697054.0
+      },
+      "load_rss": 36724736,
+      "instructions_per_request": 693676927.0,
+      "cpu_s_per_request": 0.20812,
+      "sibling_after": {
+        "busy": 192880231,
+        "total": 555229518
+      },
+      "sibling_busy_share": 0.9134615384615384,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 23.597396,
+      "idle_rss": 7348224,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192880274,
+        "total": 555229566
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000429079,
+      "requests_per_s": 0.9995711050298248,
+      "p50_us": 121919,
+      "p99_us": 121919,
+      "p999_us": 121919,
+      "max_us": 121919,
+      "perf": {
+        "task-clock": 73.18,
+        "cycles": 280267687.0,
+        "instructions": 261986376.0,
+        "cycles:u": 136322075.0,
+        "instructions:u": 203173474.0
+      },
+      "load_rss": 8294400,
+      "instructions_per_request": 261986376.0,
+      "cpu_s_per_request": 0.07318000000000001,
+      "sibling_after": {
+        "busy": 192880378,
+        "total": 555229672
+      },
+      "sibling_busy_share": 0.9811320754716981,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 97.367605,
+      "idle_rss": 38952960,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192880428,
+        "total": 555229728
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001392803,
+      "requests_per_s": 0.9986091342020559,
+      "p50_us": 49823,
+      "p99_us": 49823,
+      "p999_us": 49823,
+      "max_us": 49823,
+      "perf": {
+        "task-clock": 37.85,
+        "cycles": 143252693.0,
+        "instructions": 76020203.0,
+        "cycles:u": 126761179.0,
+        "instructions:u": 70119004.0
+      },
+      "load_rss": 37994496,
+      "instructions_per_request": 76020203.0,
+      "cpu_s_per_request": 0.03785,
+      "sibling_after": {
+        "busy": 192880525,
+        "total": 555229835
+      },
+      "sibling_busy_share": 0.9065420560747663,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 87.088145,
+      "idle_rss": 33665024,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192880571,
+        "total": 555229891
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000607976,
+      "requests_per_s": 0.9993923934102241,
+      "p50_us": 8375,
+      "p99_us": 8375,
+      "p999_us": 8375,
+      "max_us": 8375,
+      "perf": {
+        "task-clock": 4.03,
+        "cycles": 15285776.0,
+        "instructions": 17036365.0,
+        "cycles:u": 13407887.0,
+        "instructions:u": 16669254.0
+      },
+      "load_rss": 33677312,
+      "instructions_per_request": 17036365.0,
+      "cpu_s_per_request": 0.004030000000000001,
+      "sibling_after": {
+        "busy": 192880675,
+        "total": 555229999
+      },
+      "sibling_busy_share": 0.9629629629629629,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 5,
+      "first_ms": 26.569747,
+      "idle_rss": 7299072,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192880727,
+        "total": 555230054
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001124959,
+      "requests_per_s": 0.998876305110679,
+      "p50_us": 4687,
+      "p99_us": 4687,
+      "p999_us": 4687,
+      "max_us": 4687,
+      "perf": {
+        "task-clock": 3.29,
+        "cycles": 12083991.0,
+        "instructions": 16143950.0,
+        "cycles:u": 10853153.0,
+        "instructions:u": 15898655.0
+      },
+      "load_rss": 7307264,
+      "instructions_per_request": 16143950.0,
+      "cpu_s_per_request": 0.00329,
+      "sibling_after": {
+        "busy": 192880834,
+        "total": 555230163
+      },
+      "sibling_busy_share": 0.981651376146789,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 108.160059,
+      "idle_rss": 38998016,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192880891,
+        "total": 555230227
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001401129,
+      "requests_per_s": 0.9986008314156793,
+      "p50_us": 25583,
+      "p99_us": 25583,
+      "p999_us": 25583,
+      "max_us": 25583,
+      "perf": {
+        "task-clock": 21.87,
+        "cycles": 82908476.0,
+        "instructions": 75378274.0,
+        "cycles:u": 71199509.0,
+        "instructions:u": 70114269.0
+      },
+      "load_rss": 38039552,
+      "instructions_per_request": 75378274.0,
+      "cpu_s_per_request": 0.02187,
+      "sibling_after": {
+        "busy": 192880987,
+        "total": 555230334
+      },
+      "sibling_busy_share": 0.897196261682243,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 86.045494,
+      "idle_rss": 33812480,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192881037,
+        "total": 555230390
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001195261,
+      "requests_per_s": 0.9988061659432885,
+      "p50_us": 6527,
+      "p99_us": 6527,
+      "p999_us": 6527,
+      "max_us": 6527,
+      "perf": {
+        "task-clock": 4.05,
+        "cycles": 15157075.0,
+        "instructions": 17481343.0,
+        "cycles:u": 12336269.0,
+        "instructions:u": 16668962.0
+      },
+      "load_rss": 33824768,
+      "instructions_per_request": 17481343.0,
+      "cpu_s_per_request": 0.00405,
+      "sibling_after": {
+        "busy": 192881140,
+        "total": 555230498
+      },
+      "sibling_busy_share": 0.9537037037037037,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 26.629841,
+      "idle_rss": 7331840,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192881198,
+        "total": 555230556
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00143338,
+      "requests_per_s": 0.9985686716374483,
+      "p50_us": 7355,
+      "p99_us": 7355,
+      "p999_us": 7355,
+      "max_us": 7355,
+      "perf": {
+        "task-clock": 3.75,
+        "cycles": 14494686.0,
+        "instructions": 16221650.0,
+        "cycles:u": 12852014.0,
+        "instructions:u": 15898714.0
+      },
+      "load_rss": 7340032,
+      "instructions_per_request": 16221650.0,
+      "cpu_s_per_request": 0.00375,
+      "sibling_after": {
+        "busy": 192881303,
+        "total": 555230665
+      },
+      "sibling_busy_share": 0.963302752293578,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 126.247138,
+      "idle_rss": 39108608,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192881381,
+        "total": 555230745
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000882894,
+      "requests_per_s": 0.9991178848142047,
+      "p50_us": 304127,
+      "p99_us": 304127,
+      "p999_us": 304127,
+      "max_us": 304127,
+      "perf": {
+        "task-clock": 256.41,
+        "cycles": 967616648.0,
+        "instructions": 747456811.0,
+        "cycles:u": 533270927.0,
+        "instructions:u": 550224781.0
+      },
+      "load_rss": 43352064,
+      "instructions_per_request": 747456811.0,
+      "cpu_s_per_request": 0.25641,
+      "sibling_after": {
+        "busy": 192881489,
+        "total": 555230854
+      },
+      "sibling_busy_share": 0.9908256880733946,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 96.425402,
+      "idle_rss": 33697792,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192881557,
+        "total": 555230925
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001206813,
+      "requests_per_s": 0.9987946416421359,
+      "p50_us": 296191,
+      "p99_us": 296191,
+      "p999_us": 296191,
+      "max_us": 296191,
+      "perf": {
+        "task-clock": 243.78,
+        "cycles": 939264585.0,
+        "instructions": 690266884.0,
+        "cycles:u": 481102466.0,
+        "instructions:u": 488697616.0
+      },
+      "load_rss": 36851712,
+      "instructions_per_request": 690266884.0,
+      "cpu_s_per_request": 0.24378,
+      "sibling_after": {
+        "busy": 192881670,
+        "total": 555231038
+      },
+      "sibling_busy_share": 1.0,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 6,
+      "first_ms": 22.630577,
+      "idle_rss": 7311360,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192881731,
+        "total": 555231099
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00157715,
+      "requests_per_s": 0.9984253334852937,
+      "p50_us": 113471,
+      "p99_us": 113471,
+      "p999_us": 113471,
+      "max_us": 113471,
+      "perf": {
+        "task-clock": 72.19,
+        "cycles": 273311678.0,
+        "instructions": 264384126.0,
+        "cycles:u": 130838316.0,
+        "instructions:u": 203174379.0
+      },
+      "load_rss": 8257536,
+      "instructions_per_request": 264384126.0,
+      "cpu_s_per_request": 0.07219,
+      "sibling_after": {
+        "busy": 192881837,
+        "total": 555231207
+      },
+      "sibling_busy_share": 0.9814814814814815,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 118.856463,
+      "idle_rss": 33599488,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192881909,
+        "total": 555231282
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001949761,
+      "requests_per_s": 0.9980540331702319,
+      "p50_us": 5399,
+      "p99_us": 5399,
+      "p999_us": 5399,
+      "max_us": 5399,
+      "perf": {
+        "task-clock": 4.15,
+        "cycles": 15700810.0,
+        "instructions": 16975793.0,
+        "cycles:u": 14006863.0,
+        "instructions:u": 16669144.0
+      },
+      "load_rss": 33615872,
+      "instructions_per_request": 16975793.0,
+      "cpu_s_per_request": 0.00415,
+      "sibling_after": {
+        "busy": 192882007,
+        "total": 555231389
+      },
+      "sibling_busy_share": 0.9158878504672897,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 25.319525,
+      "idle_rss": 7344128,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192882074,
+        "total": 555231465
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000566639,
+      "requests_per_s": 0.9994336818979229,
+      "p50_us": 4935,
+      "p99_us": 4935,
+      "p999_us": 4935,
+      "max_us": 4935,
+      "perf": {
+        "task-clock": 3.16,
+        "cycles": 12070432.0,
+        "instructions": 16271193.0,
+        "cycles:u": 10702820.0,
+        "instructions:u": 15898288.0
+      },
+      "load_rss": 7352320,
+      "instructions_per_request": 16271193.0,
+      "cpu_s_per_request": 0.00316,
+      "sibling_after": {
+        "busy": 192882172,
+        "total": 555231571
+      },
+      "sibling_busy_share": 0.9245283018867925,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 107.884131,
+      "idle_rss": 39010304,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192882252,
+        "total": 555231653
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001728475,
+      "requests_per_s": 0.9982745074706997,
+      "p50_us": 35807,
+      "p99_us": 35807,
+      "p999_us": 35807,
+      "max_us": 35807,
+      "perf": {
+        "task-clock": 29.7,
+        "cycles": 107691565.0,
+        "instructions": 75408903.0,
+        "cycles:u": 93645142.0,
+        "instructions:u": 70098453.0
+      },
+      "load_rss": 38051840,
+      "instructions_per_request": 75408903.0,
+      "cpu_s_per_request": 0.0297,
+      "sibling_after": {
+        "busy": 192882359,
+        "total": 555231761
+      },
+      "sibling_busy_share": 0.9907407407407407,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 82.553875,
+      "idle_rss": 33509376,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192882432,
+        "total": 555231839
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.000467562,
+      "requests_per_s": 0.9995326565120558,
+      "p50_us": 307711,
+      "p99_us": 307711,
+      "p999_us": 307711,
+      "max_us": 307711,
+      "perf": {
+        "task-clock": 270.97,
+        "cycles": 1043465359.0,
+        "instructions": 688141902.0,
+        "cycles:u": 550940297.0,
+        "instructions:u": 491844370.0
+      },
+      "load_rss": 36712448,
+      "instructions_per_request": 688141902.0,
+      "cpu_s_per_request": 0.27097000000000004,
+      "sibling_after": {
+        "busy": 192882547,
+        "total": 555231954
+      },
+      "sibling_busy_share": 1.0,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 30.710648,
+      "idle_rss": 7294976,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192882611,
+        "total": 555232019
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00183056,
+      "requests_per_s": 0.9981727848270071,
+      "p50_us": 139263,
+      "p99_us": 139263,
+      "p999_us": 139263,
+      "max_us": 139263,
+      "perf": {
+        "task-clock": 84.5,
+        "cycles": 332128273.0,
+        "instructions": 268365417.0,
+        "cycles:u": 147818394.0,
+        "instructions:u": 203146519.0
+      },
+      "load_rss": 8241152,
+      "instructions_per_request": 268365417.0,
+      "cpu_s_per_request": 0.0845,
+      "sibling_after": {
+        "busy": 192882718,
+        "total": 555232127
+      },
+      "sibling_busy_share": 0.9907407407407407,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 7,
+      "first_ms": 171.259193,
+      "idle_rss": 38965248,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192882806,
+        "total": 555232217
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001175715,
+      "requests_per_s": 0.9988256656824721,
+      "p50_us": 339199,
+      "p99_us": 339199,
+      "p999_us": 339199,
+      "max_us": 339199,
+      "perf": {
+        "task-clock": 286.34,
+        "cycles": 1065252041.0,
+        "instructions": 750694700.0,
+        "cycles:u": 626906609.0,
+        "instructions:u": 556527685.0
+      },
+      "load_rss": 43163648,
+      "instructions_per_request": 750694700.0,
+      "cpu_s_per_request": 0.28634,
+      "sibling_after": {
+        "busy": 192882917,
+        "total": 555232330
+      },
+      "sibling_busy_share": 0.9823008849557522,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 121.158505,
+      "idle_rss": 39141376,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192883001,
+        "total": 555232415
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00124792,
+      "requests_per_s": 0.9987536353633574,
+      "p50_us": 32591,
+      "p99_us": 32591,
+      "p999_us": 32591,
+      "max_us": 32591,
+      "perf": {
+        "task-clock": 279.68,
+        "cycles": 1051536580.0,
+        "instructions": 811433232.0,
+        "cycles:u": 623160567.0,
+        "instructions:u": 620381198.0
+      },
+      "load_rss": 43364352,
+      "instructions_per_request": 811433232.0,
+      "cpu_s_per_request": 0.27968,
+      "sibling_after": {
+        "busy": 192883110,
+        "total": 555232525
+      },
+      "sibling_busy_share": 0.990909090909091,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 129.10782,
+      "idle_rss": 33677312,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192883185,
+        "total": 555232601
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001654737,
+      "requests_per_s": 0.9983479966310986,
+      "p50_us": 6395,
+      "p99_us": 6395,
+      "p999_us": 6395,
+      "max_us": 6395,
+      "perf": {
+        "task-clock": 4.41,
+        "cycles": 17173342.0,
+        "instructions": 17140512.0,
+        "cycles:u": 15416528.0,
+        "instructions:u": 16669165.0
+      },
+      "load_rss": 33689600,
+      "instructions_per_request": 17140512.0,
+      "cpu_s_per_request": 0.00441,
+      "sibling_after": {
+        "busy": 192883297,
+        "total": 555232713
+      },
+      "sibling_busy_share": 1.0,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 20.014555,
+      "idle_rss": 7307264,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192883359,
+        "total": 555232779
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001329325,
+      "requests_per_s": 0.9986724397590174,
+      "p50_us": 5059,
+      "p99_us": 5059,
+      "p999_us": 5059,
+      "max_us": 5059,
+      "perf": {
+        "task-clock": 3.67,
+        "cycles": 14013211.0,
+        "instructions": 16162499.0,
+        "cycles:u": 12802917.0,
+        "instructions:u": 15898154.0
+      },
+      "load_rss": 7315456,
+      "instructions_per_request": 16162499.0,
+      "cpu_s_per_request": 0.00367,
+      "sibling_after": {
+        "busy": 192883463,
+        "total": 555232888
+      },
+      "sibling_busy_share": 0.9541284403669725,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 127.182288,
+      "idle_rss": 39145472,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192883538,
+        "total": 555232963
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001883978,
+      "requests_per_s": 0.9981195646987381,
+      "p50_us": 356607,
+      "p99_us": 356607,
+      "p999_us": 356607,
+      "max_us": 356607,
+      "perf": {
+        "task-clock": 291.09,
+        "cycles": 1150698283.0,
+        "instructions": 757775134.0,
+        "cycles:u": 678786415.0,
+        "instructions:u": 553370076.0
+      },
+      "load_rss": 43352064,
+      "instructions_per_request": 757775134.0,
+      "cpu_s_per_request": 0.29108999999999996,
+      "sibling_after": {
+        "busy": 192883644,
+        "total": 555233071
+      },
+      "sibling_busy_share": 0.9814814814814815,
+      "participant": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 85.382056,
+      "idle_rss": 33673216,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192883718,
+        "total": 555233147
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001217364,
+      "requests_per_s": 0.998784116173199,
+      "p50_us": 283135,
+      "p99_us": 283135,
+      "p999_us": 283135,
+      "max_us": 283135,
+      "perf": {
+        "task-clock": 243.03,
+        "cycles": 905738614.0,
+        "instructions": 690366993.0,
+        "cycles:u": 454510850.0,
+        "instructions:u": 485550024.0
+      },
+      "load_rss": 36827136,
+      "instructions_per_request": 690366993.0,
+      "cpu_s_per_request": 0.24303,
+      "sibling_after": {
+        "busy": 192883823,
+        "total": 555233258
+      },
+      "sibling_busy_share": 0.9459459459459459,
+      "participant": "after"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 8,
+      "first_ms": 22.967711,
+      "idle_rss": 7335936,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192883886,
+        "total": 555233322
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001437728,
+      "requests_per_s": 0.998564336094196,
+      "p50_us": 118911,
+      "p99_us": 118911,
+      "p999_us": 118911,
+      "max_us": 118911,
+      "perf": {
+        "task-clock": 73.33,
+        "cycles": 282276441.0,
+        "instructions": 261392445.0,
+        "cycles:u": 134997124.0,
+        "instructions:u": 203169400.0
+      },
+      "load_rss": 8282112,
+      "instructions_per_request": 261392445.0,
+      "cpu_s_per_request": 0.07332999999999999,
+      "sibling_after": {
+        "busy": 192883979,
+        "total": 555233428
+      },
+      "sibling_busy_share": 0.8773584905660378,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 155.546381,
+      "idle_rss": 39211008,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192884047,
+        "total": 555233499
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00070975,
+      "requests_per_s": 0.9992907533877831,
+      "p50_us": 268287,
+      "p99_us": 268287,
+      "p999_us": 268287,
+      "max_us": 268287,
+      "perf": {
+        "task-clock": 235.23,
+        "cycles": 936220877.0,
+        "instructions": 748130816.0,
+        "cycles:u": 501678074.0,
+        "instructions:u": 550234186.0
+      },
+      "load_rss": 43417600,
+      "instructions_per_request": 748130816.0,
+      "cpu_s_per_request": 0.23523,
+      "sibling_after": {
+        "busy": 192884134,
+        "total": 555233605
+      },
+      "sibling_busy_share": 0.8207547169811321,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "list",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 22.188094,
+      "idle_rss": 7315456,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192884197,
+        "total": 555233672
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.002250047,
+      "requests_per_s": 0.9977550043457369,
+      "p50_us": 110399,
+      "p99_us": 110399,
+      "p999_us": 110399,
+      "max_us": 110399,
+      "perf": {
+        "task-clock": 74.49,
+        "cycles": 291013416.0,
+        "instructions": 265425024.0,
+        "cycles:u": 125179259.0,
+        "instructions:u": 203157239.0
+      },
+      "load_rss": 8261632,
+      "instructions_per_request": 265425024.0,
+      "cpu_s_per_request": 0.07449,
+      "sibling_after": {
+        "busy": 192884291,
+        "total": 555233778
+      },
+      "sibling_busy_share": 0.8867924528301887,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 51.727438,
+      "idle_rss": 33771520,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192884312,
+        "total": 555233815
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001551212,
+      "requests_per_s": 0.9984511905318326,
+      "p50_us": 232319,
+      "p99_us": 232319,
+      "p999_us": 232319,
+      "max_us": 232319,
+      "perf": {
+        "task-clock": 220.51,
+        "cycles": 865294007.0,
+        "instructions": 701158539.0,
+        "cycles:u": 448238848.0,
+        "instructions:u": 491843854.0
+      },
+      "load_rss": 36925440,
+      "instructions_per_request": 701158539.0,
+      "cpu_s_per_request": 0.22050999999999998,
+      "sibling_after": {
+        "busy": 192884382,
+        "total": 555233917
+      },
+      "sibling_busy_share": 0.6862745098039216,
+      "participant": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 100.085589,
+      "idle_rss": 39051264,
+      "binary_bytes": 8809752,
+      "sibling_before": {
+        "busy": 192884412,
+        "total": 555233960
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001049328,
+      "requests_per_s": 0.998951771935059,
+      "p50_us": 23807,
+      "p99_us": 23807,
+      "p999_us": 23807,
+      "max_us": 23807,
+      "perf": {
+        "task-clock": 21.62,
+        "cycles": 85416650.0,
+        "instructions": 75141636.0,
+        "cycles:u": 74608490.0,
+        "instructions:u": 70079962.0
+      },
+      "load_rss": 38092800,
+      "instructions_per_request": 75141636.0,
+      "cpu_s_per_request": 0.02162,
+      "sibling_after": {
+        "busy": 192884474,
+        "total": 555234059
+      },
+      "sibling_busy_share": 0.6262626262626263,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "search",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 16.081716,
+      "idle_rss": 7315456,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192884496,
+        "total": 555234094
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001283081,
+      "requests_per_s": 0.9987185631872272,
+      "p50_us": 5639,
+      "p99_us": 5639,
+      "p999_us": 5639,
+      "max_us": 5639,
+      "perf": {
+        "task-clock": 3.74,
+        "cycles": 14491953.0,
+        "instructions": 16288726.0,
+        "cycles:u": 12703319.0,
+        "instructions:u": 15897600.0
+      },
+      "load_rss": 7323648,
+      "instructions_per_request": 16288726.0,
+      "cpu_s_per_request": 0.0037400000000000003,
+      "sibling_after": {
+        "busy": 192884556,
+        "total": 555234197
+      },
+      "sibling_busy_share": 0.5825242718446602,
+      "participant": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "search",
+      "rate": 1,
+      "round": 9,
+      "first_ms": 48.660538,
+      "idle_rss": 33591296,
+      "binary_bytes": 8810008,
+      "sibling_before": {
+        "busy": 192884574,
+        "total": 555234240
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.002243299,
+      "requests_per_s": 0.9977617221265153,
+      "p50_us": 6007,
+      "p99_us": 6007,
+      "p999_us": 6007,
+      "max_us": 6007,
+      "perf": {
+        "task-clock": 3.01,
+        "cycles": 12366433.0,
+        "instructions": 16960128.0,
+        "cycles:u": 10998945.0,
+        "instructions:u": 16668941.0
+      },
+      "load_rss": 33603584,
+      "instructions_per_request": 16960128.0,
+      "cpu_s_per_request": 0.0030099999999999997,
+      "sibling_after": {
+        "busy": 192884608,
+        "total": 555234340
+      },
+      "sibling_busy_share": 0.34,
+      "participant": "after"
+    }
+  ],
+  "ratios": [
+    {
+      "operation": "list",
+      "medians": {
+        "before": 747198043.0,
+        "after": 687750830.0,
+        "rust": 263657429.5
+      },
+      "before_rust_ratio": 2.8339730248337265,
+      "before_rust_ci": [
+        2.793465954476233,
+        2.872729429640265
+      ],
+      "after_rust_ratio": 2.608501612506239,
+      "after_rust_ci": [
+        2.5663318165891376,
+        2.637733344582547
+      ],
+      "after_before_ratio": 0.9204398170512874
+    },
+    {
+      "operation": "search",
+      "medians": {
+        "before": 75259955.0,
+        "after": 17003827.5,
+        "rust": 16211653.5
+      },
+      "before_rust_ratio": 4.64233676102194,
+      "before_rust_ci": [
+        4.618610073267976,
+        4.6821811216144535
+      ],
+      "after_rust_ratio": 1.0488644788762602,
+      "after_rust_ci": [
+        1.0430625452322162,
+        1.0551223393021976
+      ],
+      "after_before_ratio": 0.22593459562924267
+    }
+  ],
+  "status": "passed",
+  "after_source_revision": "044644a0e7e2",
+  "after_includes_sse_memory": "402118f9",
+  "before_description": "Previously measured isolated tasks-perf binary; sha256 retained in binaries.before."
+}
