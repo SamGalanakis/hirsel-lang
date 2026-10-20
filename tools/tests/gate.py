@@ -1550,14 +1550,48 @@ if [[ $1 == test && -n $log ]]; then
       "$argument" "$( [[ -n ${FAIL_TESTS:-} || $argument == "${FAIL_TARGET:-}" ]] && echo 2 || echo 1 )" "$details" >> "$log.results"
   done
 fi
-# A tree holding FAIL_BUILD_IF fails its workspace build (a batch member that turns main red).
-if [[ $1 == build && -n ${FAIL_BUILD_IF:-} && -e $FAIL_BUILD_IF && $* != *show-json-output* ]]; then
-  echo "error: $FAIL_BUILD_IF breaks the build" >&2; exit 1
+# A tree holding FAIL_BUILD_IF fails its workspace build (a batch member that turns main red);
+# one holding every path of FAIL_BUILD_IF_ALL fails (two changes that break together);
+# FAIL_BUILD_ONCE fails one build (a flake); under CHECK_PRESENT a target the tree does not
+# declare (./buck-targets, beside root//:a*) fails. The build report names FAIL_REPORT_TARGET,
+# or else the first target built.
+failed_build=
+if [[ $1 == build && $* != *show-json-output* ]]; then
+  [[ -n ${FAIL_BUILD_IF:-} && -e $FAIL_BUILD_IF ]] && failed_build="$FAIL_BUILD_IF breaks the build"
+  if [[ -n ${FAIL_BUILD_IF_ALL:-} ]]; then
+    all=1; for path in $FAIL_BUILD_IF_ALL; do [[ -e $path ]] || all=; done
+    [[ -n $all ]] && failed_build="$FAIL_BUILD_IF_ALL break the build together"
+  fi
+  if [[ -n ${FAIL_BUILD_ONCE:-} && ! -e $FAIL_BUILD_ONCE && $* != *show-full-json-output* ]]; then
+    touch "$FAIL_BUILD_ONCE"; failed_build='a flake'
+  fi
+  if [[ -n ${CHECK_PRESENT:-} ]]; then
+    for argument in "$@"; do
+      target=${argument%%\\[*}
+      [[ $target == root//* && $target != root//:a* && $target != root//:hirsel-cli-bin-hirsel ]] || continue
+      grep -qx "$target" buck-targets 2>/dev/null || failed_build="unknown target $target"
+    done
+  fi
+fi
+if [[ -n $failed_build ]]; then
+  for ((i = 0; i < $#; i++)); do
+    if [[ ${arguments[i]} == --build-report ]]; then
+      for argument in "$@"; do
+        if [[ $argument == root//* ]]; then
+          printf '{"results":{"%s":{"success":"FAIL","configured":{"c":{"errors":[{"message_content":"broken"}]}}}}}' \\
+            "${FAIL_REPORT_TARGET:-${argument%%\\[*}}" > "${arguments[i + 1]}"
+          break
+        fi
+      done
+    fi
+  done
+  echo "error: $failed_build" >&2; exit 1
 fi
 case $1 in
   log) [[ -f $3.results ]] && cat "$3.results"; exit 0 ;;
   uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
     [[ -n ${QUERY_TRACE:-} ]] && printf '%s\n' "$query" >> "$QUERY_TRACE"
+    if [[ $query == 'root//:' ]]; then echo 'root//:a'; [[ -f buck-targets ]] && cat buck-targets; exit 0; fi
     [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit "${FAIL_QUERY:-0}" ;;
   build)
     if [[ $* == *show-json-output* ]]; then
@@ -1658,12 +1692,14 @@ class LandStats(unittest.TestCase):
             batches = [dict(at='2026-10-20T01:00:00Z', seconds=600, checks=[check(True, 540)]),
                        dict(at='2026-10-20T02:00:00Z', seconds=1800,
                             checks=[check(False, 600), check(True, 300), check(False, 300), check(True, 480)]),
-                       dict(at='2026-10-20T03:00:00Z', seconds=300, checks=[check(True, 240)])]
+                       dict(at='2026-10-20T03:00:00Z', seconds=300, checks=[check(True, 240)],
+                            flakes=[dict(tip='f' * 40, failed=['root//:a'], batch=['x', 'y'])])]
             (root / '.git/hirsel-land-batches.jsonl').write_text(''.join(json.dumps(b) + '\n' for b in batches))
             result = subprocess.run([sys.executable, str(TOOLS / 'gate_land_stats.py')], cwd=root,
                                     capture_output=True, text=True, check=True)
         self.assertIn('batches: 3, median 10.0 min (green 7.5 min, red 30.0 min); 2.0 checks per batch; '
                       '1 red spent 18.0 min on checks after their first', result.stdout)
+        self.assertIn('flake: root//:a on ffffffffffff at 2026-10-20T03:00:00Z (batch: x, y)', result.stdout)
 
 
 class Scripts(unittest.TestCase):
@@ -2005,8 +2041,10 @@ Local.start = traced_local_check
         self.assertEqual(git(self.origin, 'rev-parse', 'main'), git(self.root, 'rev-parse', 'HEAD'))
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
         # Build and Clippy in one Buck2 command, formatting and build files beside it; no test.
-        self.assertIn('build -c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75 '
-                      '--materializations none root//:a root//:a-clippy[clippy.txt]', logged)
+        [build] = [row for row in logged if row.startswith('build ') and '--materializations none' in row]
+        self.assertTrue(build.startswith('build -c hirsel.clippy=true -c buck2.test_builds_targets=true '
+                                         '-c hirsel.priority=75 --materializations none --build-report '), build)
+        self.assertTrue(build.endswith(' root//:a root//:a-clippy[clippy.txt]'), build)
         self.assertIn('fmt.py --check', logged)
         self.assertIn('sync.py --check --files-only', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
@@ -2097,6 +2135,30 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(result.stdout.count(f'land: main copy marker {self.root}'), 1, result.stdout)
         self.assertIn('pushed', result.stdout)
         self.assertEqual(git(self.root, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+
+    def test_the_batch_runs_main_s_newest_landing_scripts_not_the_waiting_lane_s(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
+        with gating.fifo_slot(directory, 1, label='land', exclusive=True), contextlib.redirect_stdout(io.StringIO()):
+            process = subprocess.Popen([str(self.root / 'tools/land')], cwd=self.root, env=self.env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for _ in range(200):
+                if list((directory / 'requests').glob('*.json')):
+                    break
+                gating.time.sleep(0.05)
+            else:
+                self.fail('land never queued')
+            # Main's landing scripts change while the lane waits.
+            land = (self.sibling / 'tools/land').read_text()
+            marker = "    say('land: newer batch runner')\n"
+            land = land.replace('    batch = read_json(Path(batch_file))\n',
+                                '    batch = read_json(Path(batch_file))\n' + marker, 1)
+            self.sibling_pushes({'tools/land': land})
+        out, _ = process.communicate(timeout=120)
+        self.assertEqual(process.returncode, 0, out)
+        self.assertIn('land: newer batch runner', out)
+        self.assertIn('pushed', out)
 
     def test_land_refuses_to_run_under_an_outer_timeout(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
@@ -2275,15 +2337,59 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('this change turns the checks red on top of main', results[1][1])
         self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(),
                          ['grammar change', 'Readme'])
-        # Bisected: the whole batch, the first change, the first two; then the rest in a new round.
         logged = self.commands.read_text().splitlines()
-        self.assertEqual(sum(row.startswith('build ') and '--materializations none' in row for row in logged), 4, logged)
+        # The whole batch; its failed target alone on the tip, then bisecting the
+        # prefixes (the first change, the first two); then the rest, in a new round.
+        builds = [row.split(' --build-report ')[1].split(' ', 1)[1] for row in logged
+                  if row.startswith('build ') and '--materializations none' in row]
+        self.assertEqual(builds, ['root//:a root//:a-clippy[clippy.txt]', 'root//:a', 'root//:a', 'root//:a',
+                                  'root//:a root//:a-clippy[clippy.txt]'], logged)
         self.assertNotEqual(git(red, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
         # The batch's row records each check, so the red member's cost is measured.
         [row] = [json.loads(line) for line in (self.root / '.git/hirsel-land-batches.jsonl').read_text().splitlines()]
         self.assertEqual(row['outcomes'], {'main': 'landed', 'poison': 'red', 'grammar': 'landed'})
-        self.assertEqual([check['passed'] for check in row['checks']], [False, True, False, True])
+        self.assertEqual([(check['passed'], check['probe']) for check in row['checks']],
+                         [(False, False), (False, True), (True, True), (False, True), (True, False)])
         self.assertEqual(row['rounds'], 2)
+
+    def batch_builds(self):
+        """The targets of each build the batch checked with, in order."""
+        return [row.split(' --build-report ')[1].split(' ', 1)[1] for row in self.commands.read_text().splitlines()
+                if row.startswith('build ') and '--materializations none' in row]
+
+    def test_a_failure_that_does_not_repeat_is_checked_again_and_the_batch_lands(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        other = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
+        self.env['FAIL_BUILD_ONCE'] = str(self.root.parent / 'flaked')
+        results = self.queued_lands([self.root, other])
+        self.assertEqual([status for status, _ in results], [0, 0], ''.join(out for _, out in results))
+        self.assertIn('land: FLAKE  root//:a failed on ', results[0][1])
+        self.assertIn(' and passed when repeated (batch: main, grammar); checking the whole tip again', results[0][1])
+        [row] = [json.loads(line) for line in (self.root / '.git/hirsel-land-batches.jsonl').read_text().splitlines()]
+        self.assertEqual([(flake['failed'], flake['batch']) for flake in row['flakes']],
+                         [(['root//:a'], ['main', 'grammar'])])
+        self.assertEqual(self.batch_builds(), ['root//:a root//:a-clippy[clippy.txt]', 'root//:a',
+                                               'root//:a root//:a-clippy[clippy.txt]'])
+        self.assertEqual(git(self.origin, 'log', '-2', '--format=%s', 'main').splitlines(),
+                         ['grammar change', 'Readme'])
+
+    def test_a_failed_target_a_later_change_adds_is_that_change_s_not_an_earlier_one_s(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        api = self.lane('api', {'docs/api-change.md': 'renames a function\n'})
+        user = self.lane('user', {'buck-targets': 'root//:b\n', 'docs/old-api-user.md': 'calls it by its old name\n'})
+        before = git(self.origin, 'rev-parse', 'main')
+        self.env |= {'FAIL_BUILD_IF_ALL': 'docs/api-change.md docs/old-api-user.md',
+                     'FAIL_REPORT_TARGET': 'root//:b', 'CHECK_PRESENT': '1'}
+        results = self.queued_lands([self.root, api, user])
+        self.assertEqual([status for status, _ in results], [0, 0, 1], ''.join(out for _, out in results))
+        self.assertIn('this change turns the checks red on top of main, api', results[2][1])
+        # The prefixes without root//:b build nothing of the failure; the rest lands together.
+        self.assertEqual(self.batch_builds(), ['root//:a root//:a-clippy[clippy.txt]', 'root//:b',
+                                               'root//:a root//:a-clippy[clippy.txt]'])
+        self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(),
+                         ['api change', 'Readme'])
 
     def test_append_only_and_generated_conflicts_resolve_and_others_stop_their_change(self):
         self.sibling_pushes({'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n',

@@ -8,7 +8,8 @@ Lands per hour counts landed changes (`hirsel-landings.jsonl`) over the span
 from the first to the last in the window, beside the median land wait and,
 for batched landings, the batch sizes. Batches (`hirsel-land-batches.jsonl`)
 give the median batch time, green and red apart, and what red batches spent
-on checks after their first: the bisection and the rebuild of the rest. Gate
+on checks after their first: the bisection and the rebuild of the rest, and
+every flake (a failure that passed when repeated) with its batch. Gate
 time to first failure is `first_failure_seconds` of each failed gate
 (`hirsel-gates.jsonl`), with the floor time and the queue wait, so a red floor
 that never queued shows as such.
@@ -67,6 +68,10 @@ def main():
               f'{sum(len(r["checks"]) for r in batches) / len(batches):.1f} checks per batch; '
               f'{len(red)} red spent {sum(c["seconds"] for r in red for c in r["checks"][1:]) / 60:.1f} min '
               'on checks after their first')
+        for row in batches:
+            for flake in row.get('flakes', []):
+                print(f'flake: {", ".join(flake["failed"])} on {flake["tip"][:12]} at {row["at"]} '
+                      f'(batch: {", ".join(flake["batch"])})')
     gates = rows(common / 'hirsel-gates.jsonl', args.since, args.until)
     failed = [row for row in gates if not row.get('passed')]
     print(f'gates: {len(gates)}, {len(failed)} failed; time to first failure: median '

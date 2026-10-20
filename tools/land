@@ -28,9 +28,14 @@ BATCH_MAX, as one batch in queue order, in a batch worktree beside the lock
   command at pool priority LAND_PRIORITY in one daemon state; regenerate
   docs/api.md with the built CLI in its own generated-only commit, 'Regenerate
   the API index.'; push once;
-- on red, bisect the batch's prefixes for the first change that turns it red,
-  push the green prefix, tell that change's lane, and land the rest in the
-  next round. A push rejected because main moved repeats the round.
+- on red, repeat only what failed (the targets the build report names, the
+  Clippy twins with errors, the failed local checks) on the tip; a failure
+  that does not repeat is a flake, named with its batch in the log and the
+  batch's row, and the tip is checked again. Otherwise
+  bisect the batch's prefixes with those failed checks alone for the first
+  change that turns them red, tell that change's lane, and check the rest of
+  the batch again in the next round. A push rejected because main moved
+  repeats the round.
 
 Each lane's land prints its outcome, moves its branch to main as pushed,
 prints what the gate ran for the change and why (its green record), and
@@ -72,8 +77,9 @@ os.environ.pop(TREE, None)
 
 PY = sys.executable
 ATTEMPTS = 20
-# A batch's size: a red batch costs about log2 of it more builds to bisect.
-BATCH_MAX = 8
+# A batch's size. A red batch costs about log2 of it builds of only its failed
+# targets to bisect, then one build of the rest.
+BATCH_MAX = 16
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 CLI = 'root//:hirsel-cli-bin-hirsel'
 LANDINGS = 'hirsel-landings.jsonl'
@@ -125,10 +131,21 @@ def read_json(path):
 
 # ---------------------------------------------------------------- checks of a tree
 
-def checks():
-    """Build, Clippy, formatting and the build files on this tree: whether all
-    pass, and what failed."""
+FORMATTING = 'formatting'
+BUILD_FILES = 'Buck2 build files match Cargo'
+LOCAL_CHECKS = {FORMATTING: [PY, 'tools/buck2/fmt.py', '--check'],
+                # No Buck2 command beside the build: one with another configuration
+                # waits for it, or makes it wait (each gate checked its test-cost coverage).
+                BUILD_FILES: [PY, 'tools/buck2/sync.py', '--check', '--files-only']}
+
+
+def checks(probe=None):
+    """Build, Clippy, formatting and the build files on this tree, or only the
+    parts a red tip failed (`probe`): whether all pass, what failed, and the
+    probe of what failed (None when a failure names no part to repeat alone)."""
     failed = []
+    found = dict(build=[], clippy=[], local=[])
+    narrow = True
 
     def report(line, detail=None):
         say(line)
@@ -138,28 +155,46 @@ def checks():
             failed.extend([line, detail])
 
     local = gating.Local()
-    local.start('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
-    # No Buck2 command beside the build: one with another configuration waits
-    # for it, or makes it wait (each gate checked its own test-cost coverage).
-    local.start('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check', '--files-only'])
-    build = gating.uquery(LAND_BUILD_SET)
-    clippy = gating.uquery(gating.CLIPPY_SET)
-    started = time.monotonic()
-    result = gating.buck2('build', '--materializations', 'none', *build, *[t + '[clippy.txt]' for t in clippy],
-                          capture_output=True, text=True)
-    line = (f'land: {"pass" if result.returncode == 0 else "FAIL"}  workspace build and Clippy: {len(build)} targets, '
-            f'{len(clippy)} Clippy twins ({time.monotonic() - started:.0f} s)')
-    if result.returncode:
-        report(line, gating.last_lines(result.stderr, 40))
+    for name, command in LOCAL_CHECKS.items():
+        if probe is None or name in probe['local']:
+            local.start(name, command)
+    if probe is None:
+        build, clippy = gating.uquery(LAND_BUILD_SET), gating.uquery(gating.CLIPPY_SET)
     else:
-        say(line)
-        clean, text = gating.clippy_report(clippy)
-        if not clean:
-            report('land: FAIL  Clippy', gating.last_lines(text, 40))
+        # A prefix without a failed target (a later change adds it) cannot have its failure.
+        present = set(gating.uquery('root//:'))
+        build = [target for target in probe['build'] if target.split('[')[0] in present]
+        clippy = [target for target in probe['clippy'] if target in present]
+    if build or clippy:
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix='hirsel-land-') as scratch:
+            build_report = Path(scratch) / 'build.json'
+            result = gating.buck2('build', '--materializations', 'none', '--build-report', str(build_report),
+                                  *build, *[t + '[clippy.txt]' for t in clippy], capture_output=True, text=True)
+            broken = gating.build_failures(build_report)
+        line = (f'land: {"pass" if result.returncode == 0 else "FAIL"}  '
+                f'{"workspace build" if probe is None else "the failed targets"} and Clippy: {len(build)} targets, '
+                f'{len(clippy)} Clippy twins ({time.monotonic() - started:.0f} s)')
+        if result.returncode:
+            report(line, gating.last_lines(result.stderr, 40))
+            # What a red build repeats alone: the targets the build report names.
+            found['build'] = sorted('root//:' + target for target in broken)
+            narrow = bool(broken)
+        else:
+            say(line)
+        if result.returncode == 0 and clippy:
+            names = []
+            clean, text = gating.clippy_report(clippy, names)
+            if not clean:
+                report('land: FAIL  Clippy', gating.last_lines(text, 40))
+                found['clippy'] = sorted(f'root//:{name}-clippy' for name in names)
+                narrow = bool(names)
     for name, _, status, output, seconds in local.finish():
         line = f'land: {"pass" if status == 0 else "FAIL"}  {name} ({seconds:.0f} s)'
         report(line, gating.last_lines(output, 20) if status else None)
-    return not failed, failed
+        if status:
+            found['local'].append(name)
+    return not failed, failed, (found if narrow else None)
 
 
 def regenerate_index(checked_head):
@@ -294,19 +329,41 @@ def resolve_conflict(path):
     return run('git', 'add', '--', path).returncode == 0
 
 
-# This batch's rounds and checks, for its row in BATCHES.
-BATCH = dict(rounds=0, checks=[])
+# This batch's rounds, checks and flakes, for its row in BATCHES.
+BATCH = dict(rounds=0, checks=[], flakes=[])
 
 
-def checked(tip, cache):
-    """Whether the checks pass at `tip`, once per tip."""
-    if tip not in cache:
+def checked(tip, cache, probe=None):
+    """Whether the checks pass at `tip` (all of them, or only `probe`), what
+    failed and its probe; once per tip and probe."""
+    key = (tip, json.dumps(probe, sort_keys=True))
+    if key not in cache:
         run('git', 'checkout', '-q', '--detach', tip)
-        say(f'land: checking {tip[:12]}')
+        say(f'land: checking {tip[:12]}' + (' (the failed checks only)' if probe else ''))
         started = time.monotonic()
-        cache[tip] = checks()
-        BATCH['checks'].append(dict(tip=tip, passed=cache[tip][0], seconds=round(time.monotonic() - started, 1)))
-    return cache[tip]
+        cache[key] = checks(probe)
+        BATCH['checks'].append(dict(tip=tip, passed=cache[key][0], seconds=round(time.monotonic() - started, 1),
+                                    probe=probe is not None))
+    return cache[key]
+
+
+def first_red(rebased, main, probe, cache):
+    """The index of the change that first turns the batch's prefixes red, or
+    None when main itself is red. A prefix is tried with the tip's failed
+    checks alone (`probe`), or all of them when the failure named none."""
+    def passes(tip):
+        return checked(tip, cache, probe)[0]
+    # The prefix of `low` changes passes and `high` fails; main is the empty prefix.
+    low, high = 0, len(rebased)
+    while high - low > 1:
+        middle = (low + high) // 2
+        if passes(rebased[middle - 1][1]):
+            low = middle
+        else:
+            high = middle
+    if high == 1 and not passes(main):
+        return None
+    return high - 1
 
 
 def expire_known_failures(owners):
@@ -380,52 +437,47 @@ def land_batch(members, results):
                 say(f'land: {member.get("branch")}: resolved {", ".join(resolved)}')
             rebased.append((member, tip, dict(resolved=resolved, base=onto)))
         pending = []
+        if not rebased:
+            return
         cache = {}
-        while rebased:
-            ok, failure = checked(rebased[-1][1], cache)
-            if ok:
-                green, culprit = len(rebased), None
-            else:
-                # The prefix of `low` changes passes and `high` fails; main is
-                # the empty prefix.
-                low, high = 0, len(rebased)
-                while high - low > 1:
-                    middle = (low + high) // 2
-                    if checked(rebased[middle - 1][1], cache)[0]:
-                        low = middle
-                    else:
-                        high = middle
-                green, culprit = low, high - 1
-                if green == 0 and not checked(main, cache)[0]:
-                    for member, _, _ in rebased:
-                        results[member['name']] = outcome('red', member, details=[
-                            f'origin/main {main[:12]} itself fails the checks; nothing lands until it is fixed',
-                            *checked(main, cache)[1]])
-                    return
-            if green:
-                landed = rebased[:green]
-                state, pushed = push(landed[-1][1], [m.get('branch') for m, _, _ in landed if m.get('branch')])
-                if state == 'moved':
-                    pending = [member for member, _, _ in rebased]
-                    break
-                if state == 'failed':
-                    for member, _, _ in rebased:
-                        results[member['name']] = outcome('error', member, details=['the push failed', pushed or ''])
-                    return
-                say(f'land: pushed {pushed[:12]} to main: {len(landed)} changes')
-                names = [member.get('branch') for member, _, _ in landed]
-                for position, (member, tip, landing) in enumerate(landed, 1):
-                    results[member['name']] = outcome('landed', member, tip=tip, pushed=pushed, batch=names,
-                                                      position=position, details=[], **landing)
-            if culprit is None:
-                break
-            member = rebased[culprit][0]
-            failure = checked(rebased[culprit][1], cache)[1]
-            say(f'land: {member.get("branch")} turns the batch red; it leaves the batch')
-            results[member['name']] = outcome('red', member, details=failure,
-                                              behind=[m.get('branch') for m, _, _ in rebased[:culprit]])
-            pending = [m for m, _, _ in rebased[culprit + 1:]]
-            break
+        ok, _, probe = checked(tip, cache)
+        if not ok and probe is not None and checked(tip, cache, probe)[0]:
+            # A failure that does not repeat is no change's: name it, so flakes
+            # are fixed rather than absorbed, and check the tip again.
+            failed = probe['build'] + probe['clippy'] + probe['local']
+            batch = [member.get('branch') or member['name'] for member, _, _ in rebased]
+            say(f'land: FLAKE  {", ".join(failed)} failed on {tip[:12]} and passed when repeated '
+                f'(batch: {", ".join(batch)}); checking the whole tip again')
+            BATCH['flakes'].append(dict(tip=tip, failed=failed, batch=batch))
+            del cache[(tip, json.dumps(None))]
+            ok, _, probe = checked(tip, cache)
+        if ok:
+            state, pushed = push(tip, [m.get('branch') for m, _, _ in rebased if m.get('branch')])
+            if state == 'moved':
+                pending = [member for member, _, _ in rebased]
+                continue
+            if state == 'failed':
+                for member, _, _ in rebased:
+                    results[member['name']] = outcome('error', member, details=['the push failed', pushed or ''])
+                return
+            say(f'land: pushed {pushed[:12]} to main: {len(rebased)} changes')
+            names = [member.get('branch') for member, _, _ in rebased]
+            for position, (member, tip, landing) in enumerate(rebased, 1):
+                results[member['name']] = outcome('landed', member, tip=tip, pushed=pushed, batch=names,
+                                                  position=position, details=[], **landing)
+            return
+        culprit = first_red(rebased, main, probe, cache)
+        if culprit is None:
+            failure = checked(main, cache, probe)[1]
+            for member, _, _ in rebased:
+                results[member['name']] = outcome('red', member, details=[
+                    f'origin/main {main[:12]} itself fails the checks; nothing lands until it is fixed', *failure])
+            return
+        member, red_tip, _ = rebased[culprit]
+        say(f'land: {member.get("branch")} turns the batch red; it leaves the batch and the rest is checked again')
+        results[member['name']] = outcome('red', member, details=checked(red_tip, cache, probe)[1],
+                                          behind=[m.get('branch') for m, _, _ in rebased[:culprit]])
+        pending = [m for index, (m, _, _) in enumerate(rebased) if index != culprit]
     for member in pending:
         results[member['name']] = outcome('error', member, details=[f'main moved under {ATTEMPTS} rounds in a row'])
 
@@ -496,8 +548,14 @@ def lead(directory, request):
     write_json(batch_file, dict(directory=str(directory), at=time.time(), members=members))
     say(f'land: landing a batch of {len(members)} in {tree}: '
         + ', '.join(member.get('branch') or member['name'] for member in members))
-    gating.run([PY, str(Path(__file__).resolve()), '--batch', str(batch_file)], cwd=tree,
-               env=os.environ | {TREE: str(tree)})
+    # The batch runs origin/main's newest landing scripts, not the copy this
+    # lane started with hours ago, so a landed tooling fix holds from the next
+    # batch. The batch file and the results are the interface between copies.
+    script = Path(__file__).resolve()
+    if run('git', 'fetch', 'origin').returncode == 0:
+        script, sha = main_copy()
+        say(f'land: the batch runs origin/main\'s landing scripts ({sha[:12]})')
+    gating.run([PY, str(script), '--batch', str(batch_file)], cwd=tree, env=os.environ | {TREE: str(tree)})
     batch_file.unlink(missing_ok=True)
 
 
@@ -695,7 +753,7 @@ def finish(request, result, record, timing):
     elif state == 'red':
         behind = result.get('behind') or []
         say('land: refusing to push a red tree: this change turns the checks red'
-            + (f' on top of {", ".join(behind)}' if behind else '') + '; the rest of the batch landed without it')
+            + (f' on top of {", ".join(behind)}' if behind else '') + '; the rest of the batch lands without it')
     return 1
 
 

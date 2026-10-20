@@ -887,8 +887,11 @@ tickets carry process start times so PID reuse cannot strand the queue. Each
 waiter leaves its change (worktree, commit, identity) in `requests/`.
 
 The lane at the head of the queue lands a batch: its own change and the gated
-changes queued behind it (up to 8, in queue order), in a batch worktree beside
-the lock (`batch-<clone>`, reused and prepared once). It fetches, rebases each
+changes queued behind it (up to 16, in queue order), in a batch worktree beside
+the lock (`batch-<clone>`, reused and prepared once). The batch runs
+origin/main's newest landing scripts, fetched when the batch starts, not the
+copy the leading lane started with, so a landed tooling fix holds from the
+next batch. It fetches, rebases each
 change onto the one before, builds the workspace, runs Clippy, formatting and
 the build-file check once on the batch's tip, regenerates the API index and
 pushes once. Every Buck2 command of the batch runs with one configuration
@@ -900,9 +903,18 @@ The build is the gate floor's build set without the std precheck and the
 toolchain bundle that holds it; the precheck runs the compiler over std, a
 test the gate runs, and took 6-10 minutes of a batch's critical path. Each waiting land reads its result from `results/`, moves its
 branch to main as pushed, and prints and logs its landing. When the batch's
-tip is red, land bisects its prefixes for the first change that turns it red,
-pushes the green prefix before it, tells that change's lane (with the failing
-check's output), and lands the rest in the next round. An out-of-band push
+tip is red, land repeats only what failed on it: the targets Buck2's build
+report names, the Clippy twins with errors and the failed local checks. A
+failure that does not repeat is a flake: land prints `land: FLAKE` with the
+failed targets and the batch, records them in the batch's row, and checks the
+tip again whole.
+Otherwise land bisects the batch's prefixes with those failed checks alone (a
+prefix that lacks a failed target, because a later change adds it, passes),
+tells the first change that turns them red (with the failing check's output),
+and checks the rest of the batch again, together, in the next round. A red
+batch thus costs a few builds of its failed targets and one more build of the
+workspace, where bisecting with whole-workspace builds cost one per step, a
+full rebuild each because every prefix is a new tree. An out-of-band push
 that moves main repeats the round under the same lock.
 
 Rebase conflicts in generated and append-only files are resolved, not

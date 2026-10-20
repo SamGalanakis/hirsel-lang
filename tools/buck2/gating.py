@@ -1285,9 +1285,10 @@ def tool_tests():
                                             str(ROOT / 'bench/native/tests')])]
 
 
-def clippy_report(targets) -> tuple[bool, str]:
-    """Clippy's diagnostics for the twins the invocation built; fetching the
-    small `[clippy.txt]` outputs is a cache hit."""
+def clippy_report(targets, failed=None) -> tuple[bool, str]:
+    """Clippy's diagnostics for the twins the invocation built, adding the
+    crates with an error to `failed` when given; fetching the small
+    `[clippy.txt]` outputs is a cache hit."""
     import clippy
     for attempt in (1, 2):
         report = buck2('build', '--show-full-json-output', *[t + '[clippy.txt]' for t in targets],
@@ -1299,5 +1300,7 @@ def clippy_report(targets) -> tuple[bool, str]:
             break
     if report.returncode:
         return False, report.stderr
-    failed, text = clippy.diagnostics(json.loads(report.stdout or '{}'))
-    return not failed, text + ('clippy: errors in ' + ', '.join(failed) + '\n' if failed else '')
+    errors, text = clippy.diagnostics(json.loads(report.stdout or '{}'))
+    if failed is not None:
+        failed.extend(errors)
+    return not errors, text + ('clippy: errors in ' + ', '.join(errors) + '\n' if errors else '')
