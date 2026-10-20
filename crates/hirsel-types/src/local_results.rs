@@ -123,7 +123,7 @@ mod tests {
     }
     #[test]
     fn nested_generic_result_does_not_bind_an_outer_ordinal() {
-        let mut types = TypeStore::default();
+        let types = TypeInterner::new(None);
         let t = types.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));

@@ -454,13 +454,11 @@ mod tests {
             name: name.into(),
         })
     }
-    fn nominal(kind: TypeKind) -> Signature {
-        let mut types = TypeStore::default();
+    fn nominal(types: &TypeInterner, kind: TypeKind) -> Signature {
         let root = types.intern(row(kind));
         Signature {
-            definition: path("Row"),
+            definition: DefId::intern(&path("Row")),
             metadata: SignatureMetadata::default(),
-            types,
             fingerprint: Default::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
@@ -495,27 +493,27 @@ mod tests {
     }
     #[test]
     fn a_nominal_reached_along_two_paths_is_admitted_once() {
-        let mut s = TypeStore::default();
+        let s = TypeInterner::new(None);
         let named = || {
             row(TypeKind::Named {
-                definition: path("Row"),
+                definition: DefId::intern(&path("Row")),
                 arguments: vec![].into(),
             })
         };
-        let (a, b) = (s.push(named()), s.push(named()));
-        let pair = s.push(row(TypeKind::Tuple(vec![a, b].into())));
-        let declaration = nominal(TypeKind::Primitive(Primitive::U64));
+        let (a, b) = (s.intern(named()), s.intern(named()));
+        let pair = s.intern(row(TypeKind::Tuple(vec![a, b].into())));
+        let declaration = nominal(&s, TypeKind::Primitive(Primitive::U64));
         let shared = schema(&s, pair, Some(declaration.clone())).expect("admitted");
-        let single = s.push(row(TypeKind::Tuple(vec![a, a].into())));
+        let single = s.intern(row(TypeKind::Tuple(vec![a, a].into())));
         assert_eq!(shared, schema(&s, single, Some(declaration)).unwrap());
     }
     #[test]
     fn descriptors_have_schema_ids_and_declaration_order_without_native_layout() {
-        let mut s = TypeStore::default();
-        s.push(row(TypeKind::Primitive(Primitive::Never))); // unreachable rows are irrelevant
-        let n = s.push(row(TypeKind::Primitive(Primitive::U64)));
-        let text = s.push(row(TypeKind::Primitive(Primitive::String)));
-        let r = s.push(row(TypeKind::Record(
+        let s = TypeInterner::new(None);
+        s.intern(row(TypeKind::Primitive(Primitive::Never))); // unreachable rows are irrelevant
+        let n = s.intern(row(TypeKind::Primitive(Primitive::U64)));
+        let text = s.intern(row(TypeKind::Primitive(Primitive::String)));
+        let r = s.intern(row(TypeKind::Record(
             vec![
                 Field {
                     name: "second".into(),
@@ -543,17 +541,17 @@ mod tests {
         let mut t = s.get(r).unwrap().clone();
         t.modes.relation = Relation::environment();
         t.modes.sendability = Sendability::NotSendable;
-        let local = s.push(t);
+        let local = s.intern(t);
         assert_eq!(schema(&s, local, None), Some(descriptor));
     }
     #[test]
     fn opt_in_never_overrides_opaque_resource_authority_or_missing_schema() {
-        let mut s = TypeStore::default();
-        let r = s.push(row(TypeKind::Named {
-            definition: path("Row"),
+        let s = TypeInterner::new(None);
+        let r = s.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Row")),
             arguments: vec![].into(),
         }));
-        let good = nominal(TypeKind::Primitive(Primitive::U64));
+        let good = nominal(&s, TypeKind::Primitive(Primitive::U64));
         assert!(schema(&s, r, Some(good.clone())).is_some());
         for change in 0..6 {
             let mut bad = good.clone();
@@ -574,10 +572,10 @@ mod tests {
     #[test]
     fn parameter_evidence_uses_the_exact_binder_and_never_implies_crossing() {
         let p = TypeParameterRef::bound(TypeParamId(0));
-        let mut s = TypeStore::default();
+        let s = TypeInterner::new(None);
         let mut parameter = row(TypeKind::Parameter(p));
         parameter.modes.sendability = Sendability::DependsOn(vec![p].into());
-        let root = s.push(parameter);
+        let root = s.intern(parameter);
         let g = GenericParameter::Type {
             name: "T".into(),
             bounds: vec![Bound::Serializable].into(),
@@ -606,8 +604,8 @@ mod tests {
     }
     #[test]
     fn every_unsupported_builtin_and_nested_brand_fails_closed() {
-        let mut s = TypeStore::default();
-        let n = s.push(row(TypeKind::Primitive(Primitive::U64)));
+        let s = TypeInterner::new(None);
+        let n = s.intern(row(TypeKind::Primitive(Primitive::U64)));
         for kind in [
             BuiltinType::Shared,
             BuiltinType::Slots,
@@ -624,7 +622,7 @@ mod tests {
             BuiltinType::Atomic,
             BuiltinType::Region,
         ] {
-            let r = s.push(row(TypeKind::Builtin {
+            let r = s.intern(row(TypeKind::Builtin {
                 kind,
                 arguments: vec![GenericArgument::Type(n)].into(),
             }));
@@ -636,10 +634,10 @@ mod tests {
             fields: Default::default(),
         }]
         .into();
-        let branded = s.push(branded);
-        let root = s.push(row(TypeKind::Box(branded)));
+        let branded = s.intern(branded);
+        let root = s.intern(row(TypeKind::Box(branded)));
         assert!(schema(&s, root, None).is_none());
-        let root = s.push(row(TypeKind::Box(n)));
+        let root = s.intern(row(TypeKind::Box(n)));
         assert!(schema(&s, root, None).is_some());
     }
 }
@@ -649,25 +647,25 @@ mod canonical_tests {
     use super::*;
     #[test]
     fn canonical_schemas_ignore_arena_sharing_and_qualifier_copies() {
-        let mut a = TypeStore::default();
-        let n = a.push(Type {
+        let a = TypeInterner::new(None);
+        let n = a.intern(Type {
             kind: TypeKind::Primitive(Primitive::U64),
             ..Type::unit()
         });
-        let pair = a.push(Type {
+        let pair = a.intern(Type {
             kind: TypeKind::Tuple(vec![n, n].into()),
             ..Type::unit()
         });
-        let mut b = TypeStore::default();
-        b.push(Type::boolean());
-        let first = b.push(Type {
+        let b = std::sync::Arc::clone(&a);
+        b.intern(Type::boolean());
+        let first = b.intern(Type {
             kind: TypeKind::Primitive(Primitive::U64),
             ..Type::unit()
         });
         let mut second = b.get(first).unwrap().clone();
         second.modes.sendability = Sendability::NotSendable;
-        let second = b.push(second);
-        let pair_b = b.push(Type {
+        let second = b.intern(second);
+        let pair_b = b.intern(Type {
             kind: TypeKind::Tuple(vec![first, second].into()),
             ..Type::unit()
         });

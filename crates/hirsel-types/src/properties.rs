@@ -983,7 +983,7 @@ mod flat_tests {
     }
     #[test]
     fn shared_handle_canonicalization_preserves_other_contracts() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let payload = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
         let mut shared = row(TypeKind::Builtin {
             kind: BuiltinType::Shared,
@@ -1012,11 +1012,10 @@ mod flat_tests {
             modules: vec![],
             name: "FlatText".into(),
         });
-        let mut declared = TypeStore::default();
-        let bytes = declared.push(row(TypeKind::Primitive(Primitive::Bytes)));
+        let declared = TypeInterner::new(None);
+        let bytes = declared.intern(row(TypeKind::Primitive(Primitive::Bytes)));
         let declaration = std::sync::Arc::new(Signature {
-            definition: path.clone(),
-            types: declared,
+            definition: DefId::intern(&path),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
@@ -1042,9 +1041,9 @@ mod flat_tests {
                 captures: None,
             }),
         });
-        let mut store = TypeStore::default();
+        let store = std::sync::Arc::clone(&declared);
         let flat = store.intern(row(TypeKind::Named {
-            definition: path,
+            definition: DefId::intern(&path),
             arguments: vec![].into(),
         }));
         let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
@@ -1058,7 +1057,7 @@ mod flat_tests {
             name: "T".into(),
             bounds: vec![Bound::Flat].into(),
         }];
-        let mut lookup = |_: &DefPath| Ok::<_, QueryError>(Some(declaration.clone()));
+        let mut lookup = |_: DefId| Ok::<_, QueryError>(Some(declaration.clone()));
         for (root, expected) in [
             (flat, true),
             (scalar, true),
@@ -1070,18 +1069,6 @@ mod flat_tests {
             assert_eq!(
                 structural_flat(
                     &store,
-                    root,
-                    &GenericDeclarations::signature(&generics),
-                    &mut lookup
-                )
-                .unwrap(),
-                expected
-            );
-            let mut imported = TypeStore::default();
-            let root = import_type(&store, root, &mut imported).unwrap();
-            assert_eq!(
-                structural_flat(
-                    &imported,
                     root,
                     &GenericDeclarations::signature(&generics),
                     &mut lookup
@@ -1138,7 +1125,7 @@ mod flat_tests {
                 &store,
                 flat,
                 &GenericDeclarations::signature(&[]),
-                &mut |_: &DefPath| Ok::<_, QueryError>(Some(std::sync::Arc::new(
+                &mut |_: DefId| Ok::<_, QueryError>(Some(std::sync::Arc::new(
                     opaque_plain.clone()
                 )))
             )
@@ -1201,14 +1188,14 @@ mod flat_tests {
     #[test]
     fn a_nested_result_promises_more_only_where_the_value_is_not_handed_back() {
         let generics = GenericDeclarations::signature(&[]);
-        let mut lookup = |_: &DefPath| Ok::<Option<SignatureRef>, QueryError>(None);
+        let mut lookup = |_: DefId| Ok::<Option<SignatureRef>, QueryError>(None);
         let inert = || Uses::Only(AuthoritySummary::inert());
-        let mut store = TypeStore::default();
-        let plain = producer(&mut store, Sendability::NotSendable, Uses::Unrestricted);
+        let store = TypeInterner::new(None);
+        let plain = producer(&store, Sendability::NotSendable, Uses::Unrestricted);
         for stronger in [
-            producer(&mut store, Sendability::Sendable, Uses::Unrestricted),
-            producer(&mut store, Sendability::NotSendable, inert()),
-            producer(&mut store, Sendability::Sendable, inert()),
+            producer(&store, Sendability::Sendable, Uses::Unrestricted),
+            producer(&store, Sendability::NotSendable, inert()),
+            producer(&store, Sendability::Sendable, inert()),
         ] {
             for relation in [TypeRelation::Value, TypeRelation::Parameter] {
                 let mut received = |expected, actual| {
@@ -1261,12 +1248,12 @@ mod flat_tests {
     #[test]
     fn a_nested_erased_state_is_received_where_its_type_states_less() {
         let generics = GenericDeclarations::signature(&[]);
-        let mut lookup = |_: &DefPath| Ok::<Option<SignatureRef>, QueryError>(None);
-        let mut store = TypeStore::default();
+        let mut lookup = |_: DefId| Ok::<Option<SignatureRef>, QueryError>(None);
+        let store = TypeInterner::new(None);
         let mut item = row(TypeKind::Primitive(Primitive::U64));
         item.drop_allocation = DropAllocation::NoAlloc;
         let item = store.intern(item);
-        let mut iterator = |captures: Option<ErasedCaptures>, cleanup: DropAllocation| {
+        let iterator = |captures: Option<ErasedCaptures>, cleanup: DropAllocation| {
             let mut part = row(TypeKind::Builtin {
                 kind: BuiltinType::Iter,
                 arguments: vec![GenericArgument::Type(item)].into(),

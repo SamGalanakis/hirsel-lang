@@ -282,15 +282,15 @@ mod tests {
 
     #[test]
     fn only_strict_active_argument_growth_spends_the_operational_budget() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let mut actual = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let mut proof = NominalExpansions::default();
         for growing in 0..=MAX_POLYMORPHIC_EXPANSIONS + 1 {
             let root = store.intern(row(TypeKind::Named {
-                definition: path("Wrap"),
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(actual)].into(),
             }));
-            let result = proof.enter(root, 0, |_| &store);
+            let result = proof.enter(root, 0, &store);
             if growing <= MAX_POLYMORPHIC_EXPANSIONS {
                 assert_eq!(result, Ok(true));
             } else {
@@ -307,7 +307,7 @@ mod tests {
     fn regular_recursive_properties_check_every_component_and_nonregular_recursion_is_operational()
     {
         for growing in [false, true] {
-            let mut declaration = TypeStore::default();
+            let declaration = TypeInterner::new(None);
             let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
@@ -320,15 +320,15 @@ mod tests {
                 parameter
             };
             let next = declaration.intern(row(TypeKind::Named {
-                definition: path("Wrap"),
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(actual)].into(),
             }));
             let representation = declaration.intern(row(TypeKind::Box(next)));
-            let signature = nominal(declaration, Some(representation), vec![]);
-            let mut store = TypeStore::default();
+            let signature = nominal(Some(representation), vec![]);
+            let store = std::sync::Arc::clone(&declaration);
             let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
             let root = store.intern(row(TypeKind::Named {
-                definition: path("Wrap"),
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(scalar)].into(),
             }));
             let generics = GenericDeclarations::default();
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn growth_inside_a_fixed_constructor_is_detected_and_shrinking_is_not() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let boxed = store.intern(row(TypeKind::Box(scalar)));
         let old_actual = store.intern(row(TypeKind::Builtin {
@@ -387,16 +387,16 @@ mod tests {
             arguments: vec![GenericArgument::Type(boxed)].into(),
         }));
         let old = store.intern(row(TypeKind::Named {
-            definition: path("Wrap"),
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(old_actual)].into(),
         }));
         let new = store.intern(row(TypeKind::Named {
-            definition: path("Wrap"),
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(new_actual)].into(),
         }));
         let mut shapes = Shapes::default();
-        assert!(shapes.arguments_grow(old, new, &|_| &store));
-        assert!(!shapes.arguments_grow(new, old, &|_| &store));
+        assert!(shapes.arguments_grow(&store, old, new));
+        assert!(!shapes.arguments_grow(&store, new, old));
     }
 
     /// A small random graph over one store, with shared children, repeated
@@ -429,7 +429,7 @@ mod tests {
                 TypeKind::Tuple(vec![a, b].into())
             }
             6 => TypeKind::Named {
-                definition: path(["Wrap", "Pair"][below(seed, 2) as usize]),
+                definition: DefId::intern(&path(["Wrap", "Pair"][below(seed, 2) as usize])),
                 arguments: vec![GenericArgument::Type(random_graph(seed, store, depth - 1))].into(),
             },
             _ => TypeKind::Builtin {
@@ -453,35 +453,23 @@ mod tests {
     fn structural_classes_agree_with_semantic_equality_on_random_graphs() {
         for case in 0..64u64 {
             let mut seed = 0x9e37_79b9_7f4a_7c15 ^ case;
-            let mut left = TypeStore::default();
-            let mut right = TypeStore::default();
-            let a: Vec<_> = (0..8)
-                .map(|_| random_graph(&mut seed, &mut left, 3))
-                .collect();
-            let b: Vec<_> = (0..8)
-                .map(|_| random_graph(&mut seed, &mut right, 3))
-                .collect();
+            let left = TypeInterner::new(None);
+            let right = std::sync::Arc::clone(&left);
+            let a: Vec<_> = (0..8).map(|_| random_graph(&mut seed, &left, 3)).collect();
+            let b: Vec<_> = (0..8).map(|_| random_graph(&mut seed, &right, 3)).collect();
             // Copies of one store's roots guarantee equal pairs; a graph
             // holding a recovery row cannot be imported.
             let copies: Vec<_> = a
                 .iter()
-                .filter_map(|t| import_type(&left, *t, &mut right).ok())
+                .filter_map(|t| Ok::<TypeId, GraphError>(*t).ok())
                 .collect();
             let mut shapes = Shapes::default();
-            let resolve = |id: TypeId| {
-                if left.id(id.index()) == Some(id) {
-                    &left
-                } else {
-                    &right
-                }
-            };
             let mut equal_pairs = 0;
             for x in &a {
                 for y in b.iter().chain(&copies).chain(&a) {
-                    let expected =
-                        semantic_equal(resolve(*x), *x, resolve(*y), *y).unwrap_or(false);
+                    let expected = semantic_equal(&left, *x, *y).unwrap_or(false);
                     assert_eq!(
-                        shapes.equal(*x, *y, &resolve),
+                        shapes.equal(&left, *x, *y),
                         expected,
                         "case {case}: {x:?} {y:?}"
                     );
@@ -499,23 +487,22 @@ mod tests {
         // every entered instantiation with every earlier one and recomputed
         // heights for each active pair. Its work is now linear in depth.
         let work = |depth: usize| {
-            let mut store = TypeStore::default();
+            let store = TypeInterner::new(None);
             let mut roots = vec![store.intern(row(TypeKind::Primitive(Primitive::U8)))];
             for _ in 0..depth {
                 let inner = *roots.last().unwrap();
                 roots.push(store.intern(row(TypeKind::Named {
-                    definition: path("Wrap"),
+                    definition: DefId::intern(&path("Wrap")),
                     arguments: vec![GenericArgument::Type(inner)].into(),
                 })));
             }
-            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows);
             let mut proof = NominalExpansions::default();
             for root in roots.iter().rev() {
-                assert_eq!(proof.enter(*root, 0, |_| &store), Ok(true));
+                assert_eq!(proof.enter(*root, 0, &store), Ok(true));
             }
             // Re-entering any instantiation is the coinductive assumption.
-            assert_eq!(proof.enter(roots[depth / 2], 0, |_| &store), Ok(false));
-            hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows) - before
+            assert_eq!(proof.enter(roots[depth / 2], 0, &store), Ok(false));
+            proof.shapes.heights.len()
         };
         let (half, full) = (work(256), work(512));
         assert!(

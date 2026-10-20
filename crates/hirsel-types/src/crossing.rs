@@ -90,14 +90,14 @@ pub fn mutable_capture_state_sendability(
     let Some(parameter) = header.parameters.get(slot) else {
         return Ok(Sendability::NotSendable);
     };
-    let mut store = source.clone();
-    let root = declared_receipt_evidence(&mut store, parameter.ty).map_err(|error| {
+    let store = source;
+    let root = declared_receipt_evidence(store, parameter.ty).map_err(|error| {
         QueryError::Operational(OperationalFailure {
             operation: "mutable capture contract".into(),
             message: format!("{error:?}"),
         })
     })?;
-    content_sendability(&store, root, declarations, lookup)
+    content_sendability(store, root, declarations, lookup)
 }
 
 /// Copying permission is per declared binder. The selected result read is
@@ -177,7 +177,7 @@ pub fn has_owned_crossing_requirement(
             id
         };
         if row.sendability_requirement == SendabilityRequirement::Sendable
-            && !redundant(&store, proof_root, declarations, lookup)?
+            && !redundant(store, proof_root, declarations, lookup)?
         {
             return Ok(true);
         }
@@ -521,14 +521,14 @@ mod tests {
     use super::*;
     #[test]
     fn copying_admissibility_uses_fixed_modes_and_owned_boundaries() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let mut row = Type::unit();
         row.kind = TypeKind::Primitive(Primitive::Bytes);
         row.sendability_requirement = SendabilityRequirement::Sendable;
         row.modes.sendability = Sendability::Sendable;
         let bytes = store.intern(row.clone());
         let declarations = GenericDeclarations::default();
-        let mut lookup = |_: &hirsel_syntax::DefPath| Ok(None);
+        let mut lookup = |_: hirsel_syntax::DefId| Ok(None);
         assert!(has_owned_crossing_requirement(&store, bytes, &declarations, &mut lookup).unwrap());
         row.kind = TypeKind::Builtin {
             kind: BuiltinType::List,
@@ -555,13 +555,13 @@ mod tests {
     }
     #[test]
     fn read_only_forgetting_stops_at_invariant_edges() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let mut row = Type::unit();
         row.kind = TypeKind::Primitive(Primitive::Bytes);
         row.sendability_requirement = SendabilityRequirement::Sendable;
         let bytes = store.intern(row.clone());
         let declarations = GenericDeclarations::default();
-        let mut lookup = |_: &hirsel_syntax::DefPath| Ok(None);
+        let mut lookup = |_: hirsel_syntax::DefId| Ok(None);
         for (kind, forgets) in [(BuiltinType::List, true), (BuiltinType::Map, false)] {
             row.kind = TypeKind::Builtin {
                 kind,
@@ -570,7 +570,7 @@ mod tests {
             row.sendability_requirement = SendabilityRequirement::None;
             let before = store.intern(row.clone());
             let after =
-                forget_read_crossing_requirements(&mut store, before, &declarations, &mut lookup)
+                forget_read_crossing_requirements(&store, before, &declarations, &mut lookup)
                     .unwrap();
             assert_eq!(
                 has_owned_crossing_requirement(&store, after, &declarations, &mut lookup).unwrap(),

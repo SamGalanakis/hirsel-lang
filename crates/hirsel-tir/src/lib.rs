@@ -541,6 +541,41 @@ impl Definition {
             .is_ok()
     }
 }
+/// `Definition.types` for these bodies: the closure (`hirsel_types::closure`)
+/// of every TypeId they name, rooted per body in a fixed order: the result,
+/// local, place and rvalue types, then call-site type actuals in block order.
+/// Lowering and every TIR rewrite compute `types` with this one walk.
+pub fn definition_types(t: &TypeInterner, definition: &Definition) -> std::sync::Arc<[TypeId]> {
+    fn actuals(arguments: &[GenericArgument], roots: &mut Vec<TypeId>) {
+        roots.extend(arguments.iter().filter_map(|a| match a {
+            GenericArgument::Type(t) => Some(*t),
+            GenericArgument::Size(_) => None,
+        }));
+    }
+    let mut roots = vec![];
+    for body in &definition.bodies {
+        roots.push(body.result);
+        roots.extend(body.locals.iter().map(|l| l.ty));
+        roots.extend(body.places.iter().map(|p| p.ty));
+        for rvalue in &body.rvalues {
+            match rvalue {
+                Rvalue::Shape(t) => roots.push(*t),
+                Rvalue::FunctionReference { arguments, .. } => actuals(arguments, &mut roots),
+                _ => (),
+            }
+        }
+        for block in &body.blocks {
+            if let Terminator::Call { callee, .. } = &block.terminator {
+                match callee {
+                    Callee::Definition { arguments, .. } | Callee::Indirect { arguments, .. } => {
+                        actuals(arguments, &mut roots)
+                    }
+                }
+            }
+        }
+    }
+    hirsel_types::closure(t, roots)
+}
 /// Observable fail-stop data uses an indexed cause chain (FAIL-2); no Rc trees.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -614,6 +649,25 @@ mod tests {
             Terminator::Return { .. }
         ));
         assert!(body.cleanup_actions(CleanupId(0)).next().is_none());
+        // The table roots at the result, then locals, places and rvalues, and
+        // reaches each root's parts in first-encounter order.
+        let byte = types.intern(Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::U8,
+        )));
+        let pair = types.intern(Type::with_kind(TypeKind::Tuple(vec![byte, unit].into())));
+        let mut shaped = body.clone();
+        shaped.rvalues.push(Rvalue::Shape(pair));
+        let definition = Definition {
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: vec![].into(),
+            path: DefId::intern(&hirsel_syntax::DefPath::core("main")),
+            signature_hash: ContentHash::default(),
+            bodies: vec![body, shaped],
+            entry: BodyId(0),
+            contracts: vec![],
+        };
+        assert_eq!(&*definition_types(&types, &definition), &[unit, pair, byte]);
     }
 }
 

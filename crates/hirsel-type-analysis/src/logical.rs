@@ -8,7 +8,7 @@
 //! and `Simd[T, n]` are `n` times `T`. Padding, headers and slabs are never charged.
 use hirsel_syntax::{DefId, DefPath};
 use hirsel_types::{
-    BinderRef, BuiltinType, GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeInterner,
+    BinderRef, BuiltinType, GenericArgument, Primitive, Size, Type, TypeId, TypeInterner, TypeKind,
 };
 use std::rc::Rc;
 
@@ -258,8 +258,8 @@ pub fn primitive(p: Primitive) -> u64 {
 }
 
 /// The logical size of `ty` in `store`.
-pub fn logical_size<'a>(
-    store: &'a TypeInterner,
+pub fn logical_size(
+    store: &TypeInterner,
     ty: TypeId,
     nominal: &dyn Fn(DefId) -> Option<LogicalNominal>,
 ) -> Result<u64, LogicalError> {
@@ -267,8 +267,8 @@ pub fn logical_size<'a>(
 }
 
 /// The logical element size of a block type in `store` (see [`Logical::element`]).
-pub fn logical_element<'a>(
-    store: &'a TypeInterner,
+pub fn logical_element(
+    store: &TypeInterner,
     ty: TypeId,
     nominal: &dyn Fn(DefId) -> Option<LogicalNominal>,
 ) -> Result<Option<u64>, LogicalError> {
@@ -326,7 +326,7 @@ mod tests {
                 arguments: vec![GenericArgument::Type(pair)].into(),
             },
         );
-        let none = |_: &DefPath| None;
+        let none = |_: DefId| None;
         assert_eq!(logical_size(&store, pair, &none), Ok(9));
         assert_eq!(logical_size(&store, boxed, &none), Ok(8));
         assert_eq!(logical_size(&store, either, &none), Ok(4 + 9 + 8));
@@ -367,11 +367,11 @@ mod tests {
         );
         let store = std::sync::Arc::clone(&representation);
         let short = push(&store, TypeKind::Primitive(Primitive::U16));
-        let path = DefPath::core("Pair");
+        let path = DefId::intern(&DefPath::core("Pair"));
         let named = push(
             &store,
             TypeKind::Named {
-                definition: path.clone(),
+                definition: path,
                 arguments: vec![GenericArgument::Type(short)].into(),
             },
         );
@@ -385,16 +385,11 @@ mod tests {
         let other = push(
             &store,
             TypeKind::Named {
-                definition: DefPath::core("Other"),
+                definition: DefId::intern(&DefPath::core("Other")),
                 arguments: vec![].into(),
             },
         );
-        let resolve = |p: &DefPath| {
-            (*p == path).then_some(LogicalNominal::Representation {
-                types: &representation,
-                shape,
-            })
-        };
+        let resolve = |p: DefId| (p == path).then_some(LogicalNominal::Representation { shape });
         assert_eq!(logical_size(&store, named, &resolve), Ok(10));
         assert_eq!(
             logical_size(&store, generic, &resolve),

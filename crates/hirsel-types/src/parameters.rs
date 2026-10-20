@@ -1,6 +1,6 @@
 //! Lexical value-parameter transport, independent of syntax traversal and storage.
 use crate::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// Rebuild a rooted graph while visiting parameter references with their binder
 /// depth. Root value qualifiers are outside a FunctionType's binder; its parameter,

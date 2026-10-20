@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn an_owned_whole_adopts_parts_its_holder_contains_and_only_those() {
-        use crate::{Primitive, Type, TypeKind, TypeStore};
+        use crate::{Primitive, Type, TypeInterner, TypeKind};
         let row = |kind, relation| Type {
             modes: Modes {
                 relation,
@@ -481,15 +481,15 @@ mod tests {
             TypeKind::Tuple(ts) => store.get(ts[0]).unwrap().modes.relation.clone(),
             _ => unreachable!(),
         };
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         // A join's part `in a` holds global content (PROV-4 union join).
-        let holder = pair(&mut store, Relation::new([param(0, &[])]));
-        let global = pair(&mut store, Relation::global());
-        let adopted = adopt_local(&mut store, holder, global);
+        let holder = pair(&store, Relation::new([param(0, &[])]));
+        let global = pair(&store, Relation::global());
+        let adopted = adopt_local(&store, holder, global);
         assert_eq!(part(&store, adopted), Relation::global());
         // Content in another place is not within the holder's part.
-        let other = pair(&mut store, Relation::new([param(1, &[])]));
-        assert_eq!(adopt_local(&mut store, holder, other), holder);
+        let other = pair(&store, Relation::new([param(1, &[])]));
+        assert_eq!(adopt_local(&store, holder, other), holder);
         assert_eq!(part(&store, holder), Relation::new([param(0, &[])]));
     }
 }

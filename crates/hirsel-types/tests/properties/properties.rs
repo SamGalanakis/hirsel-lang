@@ -21,7 +21,7 @@ fn declarations() -> Vec<GenericParameter> {
     .into_iter()
     .enumerate()
     .map(|(i, bounds)| GenericParameter::Type {
-        name: format!("T{i}"),
+        name: format!("T{i}").as_str().into(),
         bounds: bounds.into(),
     })
     .collect()
@@ -49,10 +49,10 @@ fn row(kind: TypeKind, once: bool) -> Type {
 
 /// A random acyclic graph of at most `depth` levels; every row is global and
 /// aliased, so only the structure decides the three properties.
-fn generate(r: &mut Random, store: &mut TypeStore, depth: u32) -> TypeId {
+fn generate(r: &mut Random, store: &TypeInterner, depth: u32) -> TypeId {
     let leaf = depth == 0;
     let choice = if leaf { r.below(5) } else { r.below(12) };
-    let child = |r: &mut Random, store: &mut TypeStore| generate(r, store, depth - 1);
+    let child = |r: &mut Random, store: &TypeInterner| generate(r, store, depth - 1);
     let kind = match choice {
         0 => TypeKind::Primitive(
             [Primitive::U8, Primitive::U64, Primitive::Bool][r.below(3) as usize],
@@ -62,7 +62,7 @@ fn generate(r: &mut Random, store: &mut TypeStore, depth: u32) -> TypeId {
         3 => {
             let mut f = Type::boolean();
             f.kind = TypeKind::Tuple(vec![].into());
-            let unit = store.push(f);
+            let unit = store.intern(f);
             TypeKind::Function(FunctionType {
                 state_promises: Default::default(),
                 generics: vec![].into(),
@@ -85,9 +85,9 @@ fn generate(r: &mut Random, store: &mut TypeStore, depth: u32) -> TypeId {
         7 => TypeKind::Variant(
             (0..1 + r.below(3))
                 .map(|v| Variant {
-                    name: format!("V{v}"),
+                    name: format!("V{v}").as_str().into(),
                     fields: (0..r.below(3))
-                        .map(|i| (Some(format!("f{i}")), child(r, store)))
+                        .map(|i| (Some(format!("f{i}").as_str().into()), child(r, store)))
                         .collect::<Vec<_>>()
                         .into(),
                 })
@@ -117,7 +117,7 @@ fn generate(r: &mut Random, store: &mut TypeStore, depth: u32) -> TypeId {
         },
     };
     let once = matches!(kind, TypeKind::Function(_)) && r.below(2) == 0;
-    store.push(row(kind, once))
+    store.intern(row(kind, once))
 }
 
 fn type_arguments(arguments: &[GenericArgument]) -> Vec<TypeId> {
@@ -152,7 +152,7 @@ fn bounded(p: &TypeParameterRef, implied: &[Bound]) -> bool {
     bounds.iter().any(|b| implied.contains(b))
 }
 
-fn reference_copyable(store: &TypeStore, id: TypeId) -> bool {
+fn reference_copyable(store: &TypeInterner, id: TypeId) -> bool {
     let t = store.get(id).unwrap();
     if t.modes.multiplicity == Multiplicity::Once {
         return false;
@@ -164,7 +164,7 @@ fn reference_copyable(store: &TypeStore, id: TypeId) -> bool {
     }
 }
 
-fn reference_plain(store: &TypeStore, id: TypeId) -> bool {
+fn reference_plain(store: &TypeInterner, id: TypeId) -> bool {
     let t = store.get(id).unwrap();
     // Holding a block: strings, bytes, boxes, lists, maps and callables.
     let holds_block = match &t.kind {
@@ -183,12 +183,12 @@ fn reference_plain(store: &TypeStore, id: TypeId) -> bool {
 fn prove_agrees_with_a_naive_reference_on_random_type_graphs() {
     let declarations = declarations();
     let generics = GenericDeclarations::signature(&declarations);
-    let mut lookup = |_: &DefPath| Ok::<_, QueryError>(None);
+    let mut lookup = |_: DefId| Ok::<_, QueryError>(None);
     let mut counts = [0usize; 2];
     for seed in 1..=4000u64 {
         let mut r = Random(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
-        let mut store = TypeStore::default();
-        let root = generate(&mut r, &mut store, 1 + (seed % 4) as u32);
+        let store = TypeInterner::new(None);
+        let root = generate(&mut r, &store, 1 + (seed % 4) as u32);
         let plain = reference_plain(&store, root);
         counts[usize::from(plain)] += 1;
         for (property, expected) in [
@@ -219,14 +219,14 @@ fn prove_agrees_with_a_naive_reference_on_random_type_graphs() {
 fn properties_are_monotone_under_field_addition() {
     let declarations = declarations();
     let generics = GenericDeclarations::signature(&declarations);
-    let mut lookup = |_: &DefPath| Ok::<_, QueryError>(None);
+    let mut lookup = |_: DefId| Ok::<_, QueryError>(None);
     for seed in 1..=2000u64 {
         let mut r = Random(seed.wrapping_mul(0xd1b5_4a32_d192_ed03));
-        let mut store = TypeStore::default();
-        let base = generate(&mut r, &mut store, 2);
-        let added = generate(&mut r, &mut store, 2);
-        let before = store.push(row(TypeKind::Tuple(vec![base].into()), false));
-        let after = store.push(row(TypeKind::Tuple(vec![base, added].into()), false));
+        let store = TypeInterner::new(None);
+        let base = generate(&mut r, &store, 2);
+        let added = generate(&mut r, &store, 2);
+        let before = store.intern(row(TypeKind::Tuple(vec![base].into()), false));
+        let after = store.intern(row(TypeKind::Tuple(vec![base, added].into()), false));
         for property in [StructuralProperty::Plain, StructuralProperty::Copyable] {
             let mut proved =
                 |t| structural_property(&store, t, property, &generics, &mut lookup).unwrap();
@@ -275,7 +275,7 @@ fn crossing_declarations() -> Vec<GenericParameter> {
         .iter()
         .enumerate()
         .map(|(i, bounds)| GenericParameter::Type {
-            name: format!("T{i}"),
+            name: format!("T{i}").as_str().into(),
             bounds: bounds.to_vec().into(),
         })
         .collect()
@@ -313,6 +313,8 @@ pub(super) struct Declaration {
     /// a client sees it.
     pub(super) representation: TypeId,
     pub(super) signature: SignatureRef,
+    /// The session interner the representation and every client row share.
+    pub(super) types: std::sync::Arc<TypeInterner>,
 }
 /// Declarations `D0..Dn`; each representation names only earlier ones.
 pub(super) struct World(pub(super) Vec<Declaration>);
@@ -324,14 +326,14 @@ impl World {
                 version: "1".into(),
             },
             modules: vec![],
-            name: format!("D{i}"),
+            name: format!("D{i}").as_str().into(),
         })
     }
-    pub(super) fn get(&self, path: &DefPath) -> Option<&Declaration> {
-        let i: usize = path.0.name.strip_prefix('D')?.parse().ok()?;
+    pub(super) fn get(&self, path: DefId) -> Option<&Declaration> {
+        let i: usize = path.path().0.name.strip_prefix('D')?.parse().ok()?;
         self.0.get(i)
     }
-    pub(super) fn generate(r: &mut Random) -> Self {
+    pub(super) fn generate(r: &mut Random, types: &std::sync::Arc<TypeInterner>) -> Self {
         let mut world = World(vec![]);
         for i in 0..1 + r.below(5) as usize {
             let declared = match r.below(9) {
@@ -346,7 +348,6 @@ impl World {
                 Declared::FlatLayout => 0,
                 _ => r.below(3) as usize,
             };
-            let mut types = TypeStore::default();
             let representation = match declared {
                 Declared::FlatLayout => {
                     let fields = (0..1 + r.below(3))
@@ -355,14 +356,14 @@ impl World {
                                 [r.below(3) as usize];
                             Field {
                                 growable: false,
-                                name: format!("f{f}"),
-                                ty: types.push(Type::with_kind(TypeKind::Primitive(p))),
+                                name: format!("f{f}").as_str().into(),
+                                ty: types.intern(Type::with_kind(TypeKind::Primitive(p))),
                             }
                         })
                         .collect::<Vec<_>>();
-                    types.push(Type::with_kind(TypeKind::Record(fields.into())))
+                    types.intern(Type::with_kind(TypeKind::Record(fields.into())))
                 }
-                _ => crossing_type(r, &mut types, 2, Scope::Declaration(generics), &world),
+                _ => crossing_type(r, types, 2, Scope::Declaration(generics), &world),
             };
             let (bounds, visibility) = match declared {
                 Declared::Opaque(bounds) => {
@@ -372,8 +373,7 @@ impl World {
                 _ => (vec![], hirsel_syntax::Visibility::Private),
             };
             let signature = std::sync::Arc::new(Signature {
-                definition: World::path(i),
-                types,
+                definition: DefId::intern(&World::path(i)),
                 metadata: SignatureMetadata {
                     visibility,
                     ..SignatureMetadata::default()
@@ -385,7 +385,7 @@ impl World {
                     destructor_allocation: Allocation::MayAllocate,
                     generics: (0..generics)
                         .map(|g| GenericParameter::Type {
-                            name: format!("U{g}"),
+                            name: format!("U{g}").as_str().into(),
                             bounds: vec![].into(),
                         })
                         .collect(),
@@ -417,6 +417,7 @@ impl World {
                 generics,
                 representation,
                 signature,
+                types: std::sync::Arc::clone(types),
             });
         }
         world
@@ -450,13 +451,13 @@ fn summary(r: &mut Random) -> Sendability {
 /// representation is written with.
 fn crossing_type(
     r: &mut Random,
-    store: &mut TypeStore,
+    store: &TypeInterner,
     depth: u32,
     scope: Scope,
     world: &World,
 ) -> TypeId {
     let choice = if depth == 0 { r.below(4) } else { r.below(15) };
-    let child = |r: &mut Random, store: &mut TypeStore| {
+    let child = |r: &mut Random, store: &TypeInterner| {
         crossing_type(r, store, depth.saturating_sub(1), scope, world)
     };
     let builtin = |kind, arguments: Vec<TypeId>| TypeKind::Builtin {
@@ -486,7 +487,7 @@ fn crossing_type(
         ))),
         2 | 3 => TypeKind::Tuple(vec![].into()),
         4 => {
-            let unit = store.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
+            let unit = store.intern(Type::with_kind(TypeKind::Tuple(vec![].into())));
             TypeKind::Function(FunctionType {
                 state_promises: Default::default(),
                 generics: vec![].into(),
@@ -511,7 +512,7 @@ fn crossing_type(
             (0..1 + r.below(3))
                 .map(|f| Field {
                     growable: false,
-                    name: format!("f{f}"),
+                    name: format!("f{f}").as_str().into(),
                     ty: child(r, store),
                 })
                 .collect::<Vec<_>>()
@@ -520,7 +521,7 @@ fn crossing_type(
         7 => TypeKind::Variant(
             (0..1 + r.below(3))
                 .map(|v| Variant {
-                    name: format!("V{v}"),
+                    name: format!("V{v}").as_str().into(),
                     fields: (0..r.below(3))
                         .map(|_| (None, child(r, store)))
                         .collect::<Vec<_>>()
@@ -562,7 +563,7 @@ fn crossing_type(
         _ => {
             let i = r.below(world.0.len() as u64) as usize;
             TypeKind::Named {
-                definition: World::path(i),
+                definition: DefId::intern(&World::path(i)),
                 arguments: (0..world.0[i].generics)
                     .map(|_| GenericArgument::Type(child(r, store)))
                     .collect::<Vec<_>>()
@@ -601,7 +602,7 @@ fn crossing_type(
         }
         Scope::Declaration(_) => (),
     }
-    let id = store.push(row.clone());
+    let id = store.intern(row.clone());
     // Normalized graphs give every row that proves plain one canonical
     // spelling of its modes: global, aliased and sendable.
     let at = At {
@@ -611,7 +612,7 @@ fn crossing_type(
     };
     if matches!(scope, Scope::Root) && rich_plain(world, at) {
         row.canonicalize_plain();
-        return store.push(row);
+        return store.intern(row);
     }
     id
 }
@@ -620,7 +621,7 @@ fn crossing_type(
 /// for (`None` in the root scope, whose parameters are `T0..T9`).
 #[derive(Clone)]
 struct At<'a> {
-    store: &'a TypeStore,
+    store: &'a TypeInterner,
     id: TypeId,
     actuals: Option<std::rc::Rc<Vec<At<'a>>>>,
 }
@@ -666,7 +667,7 @@ impl<'a> At<'a> {
                 },
                 _,
             ) => {
-                let declaration = world.get(definition).unwrap();
+                let declaration = world.get(*definition).unwrap();
                 let actuals = type_arguments(arguments)
                     .into_iter()
                     .map(|id| self.part(id))
@@ -674,7 +675,7 @@ impl<'a> At<'a> {
                 Node::Nominal(
                     declaration.declared,
                     Box::new(At {
-                        store: &declaration.signature.types,
+                        store: &declaration.types,
                         id: declaration.representation,
                         actuals: Some(std::rc::Rc::new(actuals)),
                     }),
@@ -918,7 +919,7 @@ fn reference_equality<'a>(world: &'a World, at: At<'a>, key: bool) -> bool {
 }
 
 /// A failing case, spelled with its modes, and the declarations it names.
-fn spell(store: &TypeStore, id: TypeId) -> String {
+fn spell(store: &TypeInterner, id: TypeId) -> String {
     let t = store.get(id).unwrap();
     let mut out = String::new();
     if !t.modes.relation.is_global() {
@@ -952,19 +953,23 @@ fn spell(store: &TypeStore, id: TypeId) -> String {
         TypeKind::Named {
             definition,
             arguments,
-        } => format!("{}[{}]", definition.0.name, list(type_arguments(arguments))),
+        } => format!(
+            "{}[{}]",
+            definition.path().0.name,
+            list(type_arguments(arguments))
+        ),
         TypeKind::Error => "error".into(),
     };
     out
 }
-fn describe(world: &World, store: &TypeStore, root: TypeId) -> String {
+fn describe(world: &World, store: &TypeInterner, root: TypeId) -> String {
     let mut out = spell(store, root);
     for (i, d) in world.0.iter().enumerate() {
         out += &format!(
             "\n  D{i}[{}] {:?} = {}",
             d.generics,
             d.declared,
-            spell(&d.signature.types, d.representation)
+            spell(&d.types, d.representation)
         );
     }
     out
@@ -993,22 +998,16 @@ fn crossing_flatness_and_equality_agree_with_a_spec_reference() {
         };
     for seed in 1..=6000u64 {
         let mut r = Random(seed.wrapping_mul(0x2545_f491_4f6c_dd1d) | 1);
-        let world = World::generate(&mut r);
-        let mut store = TypeStore::default();
-        let root = crossing_type(
-            &mut r,
-            &mut store,
-            1 + (seed % 3) as u32,
-            Scope::Root,
-            &world,
-        );
+        let store = TypeInterner::new(None);
+        let world = World::generate(&mut r, &store);
+        let root = crossing_type(&mut r, &store, 1 + (seed % 3) as u32, Scope::Root, &world);
         let at = At {
             store: &store,
             id: root,
             actuals: None,
         };
         let mut lookup =
-            |path: &DefPath| Ok::<_, QueryError>(world.get(path).map(|d| d.signature.clone()));
+            |path: DefId| Ok::<_, QueryError>(world.get(path).map(|d| d.signature.clone()));
         let case = || format!("seed {seed}: {}", describe(&world, &store, root));
         for (property, crossing) in [
             ("structural sendability", Crossing::Structural),

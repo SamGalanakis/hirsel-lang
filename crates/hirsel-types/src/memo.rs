@@ -522,7 +522,6 @@ impl<'q> ContextMemo<'q> {
         Ok(crate::graph::directional_equal(
             t,
             expected,
-            actual,
             actual_row,
             policy.forget_brands,
             payloads,

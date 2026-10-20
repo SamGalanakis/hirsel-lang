@@ -724,6 +724,12 @@ mod table;
 pub use table::*;
 mod actual_key;
 pub use actual_key::*;
+#[cfg(test)]
+mod reference;
+#[cfg(test)]
+mod test_api;
+#[cfg(test)]
+pub(crate) use test_api::*;
 /// Self-contained cross-query signature: its TypeIds are rows of the session
 /// interner, which every phase shares, so reading one imports nothing (LANG-6).
 /// Fingerprints are of canonical semantic encoding, never Rust Debug or ids (PROG-5).

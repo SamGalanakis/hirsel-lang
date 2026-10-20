@@ -1,6 +1,5 @@
 //! Pure graph transport. Signature lookup and rule diagnostics remain phase-owned.
 use crate::*;
-use hirsel_intern::work::{self, Counter};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Role of an edge in the complete structural type graph. Callable edges cross
@@ -697,14 +696,13 @@ impl Variance {
         }
     }
 }
-/// The directional walk behind `ContextMemo::compatible`: `actual` (whose root
-/// row is `actual_root`, already adjusted by the root reception rules) is
+/// The directional walk behind `ContextMemo::compatible`: the actual graph,
+/// whose root row `actual_root` the root reception rules already adjusted, is
 /// received where `expected` stands. Exact sub-comparisons that no policy can
 /// weaken are decided by semantic normal forms.
 pub(crate) fn directional_equal(
     t: &TypeInterner,
     expected: TypeId,
-    actual: TypeId,
     actual_root: Type,
     // A nested row of `actual` may carry a brand where `expected` names none.
     forget_brands: bool,
@@ -1031,7 +1029,7 @@ mod shape_tests {
 
     #[test]
     fn inference_holes_preserve_known_nested_shapes_and_graph_validation() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let variable = TypeParameterRef::bound(TypeParamId(0));
         let hole = store.intern(row(TypeKind::Parameter(variable)));
         let boolean = store.intern(Type::boolean());
@@ -1041,15 +1039,13 @@ mod shape_tests {
         let wrong_part = store.intern(row(TypeKind::Tuple(vec![byte, byte].into())));
         let wrong_constructor = store.intern(row(TypeKind::Box(complete)));
         let is_hole = |kind: &TypeKind| matches!(kind, TypeKind::Parameter(p) if *p == variable);
-        assert!(!shape_equal(&store, partial, &store, complete).unwrap());
-        assert!(shape_equal_with_holes(&store, partial, &store, complete, is_hole).unwrap());
-        assert!(!shape_equal_with_holes(&store, partial, &store, wrong_part, is_hole).unwrap());
-        assert!(
-            !shape_equal_with_holes(&store, partial, &store, wrong_constructor, is_hole).unwrap()
-        );
+        assert!(!shape_equal(&store, partial, complete).unwrap());
+        assert!(shape_equal_with_holes(&store, partial, complete, is_hole).unwrap());
+        assert!(!shape_equal_with_holes(&store, partial, wrong_part, is_hole).unwrap());
+        assert!(!shape_equal_with_holes(&store, partial, wrong_constructor, is_hole).unwrap());
         let recovery = store.intern(row(TypeKind::Error));
         assert!(matches!(
-            shape_equal_with_holes(&store, hole, &store, recovery, is_hole),
+            shape_equal_with_holes(&store, hole, recovery, is_hole),
             Err(GraphError::RecoveryType(_))
         ));
     }
@@ -1124,7 +1120,7 @@ mod shape_tests {
                 .into(),
             ),
             TypeKind::Named {
-                definition: path("Owner"),
+                definition: DefId::intern(&path("Owner")),
                 arguments: vec![
                     GenericArgument::Type(parameter),
                     GenericArgument::Size(Size::Constant(2)),
@@ -1148,17 +1144,17 @@ mod shape_tests {
     }
     #[test]
     fn shape_constructors_and_structural_children_remain_distinct() {
-        let mut store = TypeStore::default();
-        let roots = shapes(&mut store);
+        let store = TypeInterner::new(None);
+        let roots = shapes(&store);
         for (i, a) in roots.iter().enumerate() {
             for (j, b) in roots.iter().enumerate() {
-                assert_eq!(shape_equal(&store, *a, &store, *b).unwrap(), i == j);
+                assert_eq!(shape_equal(&store, *a, *b).unwrap(), i == j);
             }
         }
     }
     #[test]
     fn callable_shapes_keep_binders_labels_passing_and_error_edges() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let t = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
@@ -1188,7 +1184,7 @@ mod shape_tests {
             let mut changed = f.clone();
             change(&mut changed);
             let changed = store.intern(row(TypeKind::Function(changed)));
-            assert!(shape_equal(&store, root, &store, changed).unwrap());
+            assert!(shape_equal(&store, root, changed).unwrap());
         }
         for change in [
             |f: &mut FunctionType| f.parameters[0].label = Some("other".into()),
@@ -1211,17 +1207,17 @@ mod shape_tests {
             let mut changed = f.clone();
             change(&mut changed);
             let changed = store.intern(row(TypeKind::Function(changed)));
-            assert!(!shape_equal(&store, root, &store, changed).unwrap());
+            assert!(!shape_equal(&store, root, changed).unwrap());
         }
         let other = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let inner = store.intern(row(TypeKind::Function(callable(other))));
         let outer = store.intern(row(TypeKind::Function(callable(root))));
         let changed = store.intern(row(TypeKind::Function(callable(inner))));
-        assert!(!shape_equal(&store, outer, &store, changed).unwrap());
+        assert!(!shape_equal(&store, outer, changed).unwrap());
     }
     #[test]
     fn shapes_keep_field_layout_nominal_arguments_and_generic_sizes() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let t = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let record = TypeKind::Record(
             vec![Field {
@@ -1241,10 +1237,10 @@ mod shape_tests {
                 }]
                 .into(),
             )));
-            assert!(!shape_equal(&store, root, &store, changed).unwrap());
+            assert!(!shape_equal(&store, root, changed).unwrap());
         }
         let nominal = store.intern(row(TypeKind::Named {
-            definition: path("Owner"),
+            definition: DefId::intern(&path("Owner")),
             arguments: vec![
                 GenericArgument::Type(t),
                 GenericArgument::Size(Size::Constant(2)),
@@ -1260,33 +1256,32 @@ mod shape_tests {
             ),
         ] {
             let changed = store.intern(row(TypeKind::Named {
-                definition: path(name),
+                definition: DefId::intern(&path(name)),
                 arguments: vec![GenericArgument::Type(t), GenericArgument::Size(size)].into(),
             }));
-            assert!(!shape_equal(&store, nominal, &store, changed).unwrap());
+            assert!(!shape_equal(&store, nominal, changed).unwrap());
         }
-        let mut other = TypeStore::default();
-        let imported = import_type(&store, nominal, &mut other).unwrap();
-        assert!(shape_equal(&store, nominal, &other, imported).unwrap());
+        // Import is the identity: the nominal's own id is its only id.
+        assert!(shape_equal(&store, nominal, nominal).unwrap());
     }
     #[test]
     fn rooted_shapes_reject_malformed_reachable_graphs_and_ignore_unrelated_rows() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let root = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         store.intern(row(TypeKind::Error));
-        assert!(shape_equal(&store, root, &store, root).unwrap());
-        let cycle = TypeStore::from_graph(1, |ids| vec![row(TypeKind::Box(ids[0]))]);
+        assert!(shape_equal(&store, root, root).unwrap());
+        let cycle = store.intern_graph(1, |ids| vec![row(TypeKind::Box(ids[0]))])[0];
         assert!(matches!(
-            shape_equal(&cycle, cycle.id(0).unwrap(), &cycle, cycle.id(0).unwrap()),
+            shape_equal(&store, cycle, cycle),
             Err(GraphError::StructuralCycle(_))
         ));
         assert!(matches!(
-            shape_equal(&store, cycle.id(0).unwrap(), &store, root),
+            shape_equal(&store, TypeId::DANGLING, root),
             Err(GraphError::MissingType(_))
         ));
         let recovery = store.intern(row(TypeKind::Error));
         assert!(matches!(
-            shape_equal(&store, recovery, &store, root),
+            shape_equal(&store, recovery, root),
             Err(GraphError::RecoveryType(_))
         ));
     }
@@ -1299,7 +1294,7 @@ mod value_parts_tests {
 
     #[test]
     fn value_parts_follow_declaration_order_without_entering_callable_binders() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let a = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let b = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
         let field = Field {
@@ -1323,7 +1318,7 @@ mod value_parts_tests {
             (TypeKind::Box(a), vec![a]),
             (
                 TypeKind::Named {
-                    definition: path("Wrap"),
+                    definition: DefId::intern(&path("Wrap")),
                     arguments: vec![
                         GenericArgument::Size(Size::Constant(4)),
                         GenericArgument::Type(a),
