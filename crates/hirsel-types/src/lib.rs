@@ -726,6 +726,8 @@ pub use table::*;
 mod actual_key;
 pub use actual_key::*;
 #[cfg(test)]
+mod arch_tests;
+#[cfg(test)]
 mod pool_tests;
 #[cfg(test)]
 mod prove_tests;

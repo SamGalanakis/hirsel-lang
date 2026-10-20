@@ -67,79 +67,116 @@ pub fn encode_table(t: &TypeInterner, roots: &[TypeId]) -> (TypeTable, Vec<u32>)
     )
 }
 
-/// Intern `table`'s rows, returning the id of each position. Acyclic tables
-/// intern bottom-up, so every row gets the id an equal row already has.
+/// Intern `table`'s rows, returning the id of each position. Rows intern
+/// bottom-up, so every row gets the id an equal row already has; only rows on
+/// or above a cycle (an invalid graph) are interned together as a graph.
 pub fn decode_table(t: &TypeInterner, table: &TypeTable) -> Vec<TypeId> {
     let n = table.rows.len();
-    let edges = |i: usize| -> Vec<u32> {
+    let edges = |i: usize| -> Vec<usize> {
         table.rows[i]
             .kind
             .graph_edges()
             .into_iter()
-            .map(|e| e.ty.raw_index())
-            .filter(|&p| (p as usize) < n)
+            .map(|e| e.ty.raw_index() as usize)
+            .filter(|&p| p < n)
             .collect()
     };
-    // Postorder over positions; a back edge means an invalid cyclic graph.
+    // Postorder over positions, marking rows on a cycle (a back edge closes
+    // the path from its target) and then every row reaching one.
     let mut state = vec![0u8; n];
+    let mut cyclic = vec![false; n];
     let mut order = Vec::with_capacity(n);
-    let mut cyclic = false;
     for start in 0..n {
         if state[start] != 0 {
             continue;
         }
+        let mut path: Vec<usize> = vec![];
         let mut stack = vec![(start, false)];
         while let Some((i, exit)) = stack.pop() {
             if exit {
                 state[i] = 2;
+                path.pop();
+                cyclic[i] |= edges(i).into_iter().any(|p| cyclic[p]);
                 order.push(i);
                 continue;
             }
-            match state[i] {
-                2 => continue,
-                1 => {
-                    cyclic = true;
-                    continue;
-                }
-                _ => (),
+            if state[i] != 0 {
+                continue;
             }
             state[i] = 1;
+            path.push(i);
             stack.push((i, true));
             for p in edges(i).into_iter().rev() {
-                if state[p as usize] == 1 {
-                    cyclic = true;
-                } else if state[p as usize] == 0 {
-                    stack.push((p as usize, false));
+                match state[p] {
+                    0 => stack.push((p, false)),
+                    1 => {
+                        let from = path.iter().rposition(|&q| q == p).expect("on the path");
+                        for &q in &path[from..] {
+                            cyclic[q] = true;
+                        }
+                    }
+                    _ => (),
                 }
             }
         }
     }
-    let resolve = |row: &Type, ids: &dyn Fn(u32) -> TypeId| {
+    let resolve = |row: &Type, ids: &dyn Fn(usize) -> TypeId| {
         let mut row = row.clone();
-        row.kind = row.kind.map_edges(|edge| ids(edge.raw_index()));
+        row.kind = row.kind.map_edges(|edge| ids(edge.raw_index() as usize));
         row
     };
-    if cyclic {
-        return t.intern_graph(n, |ids| {
-            table
-                .rows
+    let mut ids = vec![TypeId::DANGLING; n];
+    for &i in order.iter().filter(|&&i| !cyclic[i]) {
+        let row = resolve(&table.rows[i], &|p| {
+            ids.get(p).copied().unwrap_or(TypeId::DANGLING)
+        });
+        ids[i] = t.intern(row);
+    }
+    let graph: Vec<usize> = (0..n).filter(|&i| cyclic[i]).collect();
+    if !graph.is_empty() {
+        let slot: std::collections::HashMap<usize, usize> =
+            graph.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+        let interned = t.intern_graph(graph.len(), |graph_ids| {
+            graph
                 .iter()
-                .map(|row| {
-                    resolve(row, &|p| {
-                        ids.get(p as usize).copied().unwrap_or(TypeId::DANGLING)
+                .map(|&i| {
+                    resolve(&table.rows[i], &|p| match slot.get(&p) {
+                        Some(&k) => graph_ids[k],
+                        None => ids.get(p).copied().unwrap_or(TypeId::DANGLING),
                     })
                 })
                 .collect()
         });
-    }
-    let mut ids = vec![TypeId::DANGLING; n];
-    for i in order {
-        let row = resolve(&table.rows[i], &|p| {
-            ids.get(p as usize).copied().unwrap_or(TypeId::DANGLING)
-        });
-        ids[i] = t.intern(row);
+        for (k, &i) in graph.iter().enumerate() {
+            ids[i] = interned[k];
+        }
     }
     ids
+}
+
+impl TypeBase {
+    /// The immutable base holding a canonical table's rows (the image's std
+    /// rows), and the base id of each table position.
+    pub fn from_table(table: &TypeTable) -> (Arc<TypeBase>, Vec<TypeId>) {
+        let mut assigned = vec![];
+        let base = TypeBase::build(table.rows.len(), |ids| {
+            assigned = ids.to_vec();
+            table
+                .rows
+                .iter()
+                .map(|row| {
+                    let mut row = row.clone();
+                    row.kind = row.kind.map_edges(|edge| {
+                        ids.get(edge.raw_index() as usize)
+                            .copied()
+                            .unwrap_or(TypeId::DANGLING)
+                    });
+                    row
+                })
+                .collect()
+        });
+        (base, assigned)
+    }
 }
 
 /// How `TypeId` serializes on this thread: as a table position.

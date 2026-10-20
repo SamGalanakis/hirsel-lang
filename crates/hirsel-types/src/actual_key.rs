@@ -16,14 +16,20 @@ const SEPARATOR: char = '\u{0}';
 pub struct GeneratedActualKey(Symbol);
 
 impl GeneratedActualKey {
-    /// Each actual's spelling, in argument order: the generated DefPath's
-    /// hash input (`instance$<H("hirsel.generated-instance.v1", spellings)>`).
+    /// Each actual's spelling, in argument order, as main's key listed them.
     pub fn spellings(self) -> Vec<&'static str> {
         let text = self.0.as_str();
         if text.is_empty() {
             return vec![];
         }
         text[1..].split(SEPARATOR).collect()
+    }
+}
+impl GeneratedActualKey {
+    /// The generated instance's item name, as main spelled it:
+    /// `declaration[spelling, ...]`.
+    pub fn instance_name(self, declaration: &hirsel_syntax::DefPath) -> String {
+        format!("{}[{}]", declaration, self.spellings().join(", "))
     }
 }
 impl std::fmt::Debug for GeneratedActualKey {
@@ -52,10 +58,13 @@ pub fn generated_actual_key(
     Some(GeneratedActualKey(Symbol::intern(&key)))
 }
 
-/// CT-3 closed spelling of `ty`, or None if it names a parameter.
+/// CT-3 closed spelling of `ty`, or None if it names a parameter or its
+/// graph is invalid (a recovery row or a cycle has no instance).
 fn closed_spelling(t: &TypeInterner, ty: TypeId) -> Option<Arc<str>> {
-    let compute =
-        || (!mentions_parameter(t, ty)).then(|| Arc::from(CanonicalSpelling::closed(t, ty)));
+    let compute = || {
+        (t.valid(ty) && !mentions_parameter(t, ty))
+            .then(|| Arc::from(CanonicalSpelling::closed(t, ty)))
+    };
     match t.entry(ty) {
         Some(entry) => entry.actual_key.get_or_init(compute).clone(),
         None => compute(),
