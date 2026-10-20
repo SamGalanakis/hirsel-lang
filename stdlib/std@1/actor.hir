@@ -10,17 +10,17 @@ pub type Reply[R] = Sender[R]
 
 /// Start an actor in `s`. Closing every handle drains the mailbox and ends
 /// the task. Handlers may use capabilities, including I/O.
-pub fn spawn[S: sendable, M: sendable](
+pub fn spawn[S, M: sendable](
   s: Scope,
   tasks: Tasks,
-  take initial: unique S,
+  take initial: unique sendable S,
   take handle: sendable fn(mut unique S, take M) -> ()
 ) -> Actor[M] {
   let (tx, rx): (Sender[M], Receiver[M]) = core@1/channel.open(tasks)
   let child = core@1/task.async(
     s,
     fn() {
-      let mut state = take initial
+      let mut state: unique S = take initial
       let handler = take handle
       let mut inbox = take rx
       while true {
