@@ -92,11 +92,13 @@ Exercise alternate interleavings with the test runner's seeded schedulers:
 
 ```sh
 hirsel test app/hirsel.json --scheduler random@1:42
-hirsel test app/hirsel.json --explore 100 --scheduler pct@1
+hirsel test app/hirsel.json --explore 100 --scheduler pct@1 --race
 ```
 
-Keep the seed printed for a failing test. Race naming (lane T1) builds on
-these schedulers to identify the operations involved; use that diagnostic
-when available, then replay the reported schedule. See
-[testing](building.md) and [determinism](spec/determinism.md) for recording and
+Keep the seed printed for a failing test. In interpreted tests, `--race`
+names both operations in each application-level race candidate, including
+task paths, source locations and the shared object. Candidates are possible
+interactions, not proof of what caused the failure. Replay the printed command
+to reproduce its scheduler seed and simulator point settings. See
+[testing](building.md#schedules) and [determinism](spec/determinism.md) for recording and
 replay, and the [API index](api.md) for complete signatures.

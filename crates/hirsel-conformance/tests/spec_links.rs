@@ -285,3 +285,22 @@ fn the_spec_hash_covers_every_spec_part() {
         assert_eq!(text, parts[name].as_bytes(), "{name}");
     }
 }
+
+#[test]
+fn user_guides_do_not_contain_contributor_process_vocabulary() {
+    let root = root();
+    for page in ["tour.md", "concurrent-agents.md", "building.md"] {
+        let text = fs::read_to_string(root.join("docs").join(page))
+            .unwrap()
+            .to_ascii_lowercase();
+        for (i, line) in text.lines().enumerate() {
+            for word in ["lane ", "sluice", "orchestrator", "@agentlang"] {
+                assert!(
+                    !line.contains(word),
+                    "docs/{page}:{} contains contributor process vocabulary: {word:?}",
+                    i + 1
+                );
+            }
+        }
+    }
+}
