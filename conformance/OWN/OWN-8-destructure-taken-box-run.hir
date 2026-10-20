@@ -1,0 +1,59 @@
+// rule: OWN-8
+// expect: run
+type Node {
+  value: u64,
+  next: Option[box Node],
+}
+
+// Each `take node` moves `next` out of a box it holds alone and copies it out
+// of a box another list still holds.
+fn reversed(take root: Option[box Node]) -> Option[box Node] {
+  let mut current = take root
+  let mut out: Option[box Node] = None()
+  while true {
+    match take current {
+      None() => break,
+      Some(node) => {
+        let Node(value: value, next: next) = take node
+        current = take next
+        out = Some(box Node(value: value, next: take out))
+      },
+    }
+  }
+  out
+}
+
+fn digits(xs: Option[box Node]) -> u64 {
+  let mut n: u64 = 0
+  let mut current = copy xs
+  while true {
+    match take current {
+      None() => break,
+      Some(node) => {
+        n = n * 10 + node.value
+        current = copy node.next
+      },
+    }
+  }
+  n
+}
+
+fn list() -> Option[box Node] {
+  let mut root: Option[box Node] = None()
+  let mut i: u64 = 5
+  while i > 1 {
+    i -= 1
+    root = Some(box Node(value: i, next: take root))
+  }
+  root
+}
+
+pub fn main() -> Result[(), ()] {
+  let alone = reversed(list())
+  let kept = list()
+  let shared = reversed(copy kept)
+  failure.check(digits(alone) == 4321, Bounds())
+  failure.check(digits(kept) == 1234, Bounds())
+  failure.check(digits(shared) == 4321, Bounds())
+  Ok(())
+}

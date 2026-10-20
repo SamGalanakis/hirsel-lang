@@ -1230,6 +1230,7 @@ OWN/OWN-8-assign-resource-field-bad.hir
 OWN/OWN-8-assign-resource-field-ok.hir
 OWN/OWN-8-boxed-variant-take-run.hir
 OWN/OWN-8-counted-field-locality.hir
+OWN/OWN-8-destructure-taken-box-run.hir
 OWN/OWN-8-library-moved-payloads.hir
 OWN/OWN-8-local-aggregate-bad.hir
 OWN/OWN-8-local-aggregate-ok.hir

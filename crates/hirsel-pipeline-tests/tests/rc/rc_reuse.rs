@@ -274,3 +274,71 @@ fn a_failing_finalizer_disposes_the_live_token() {
         assert_eq!(on.counters.reuses, 0);
     }
 }
+
+const LIST: &str = "type Node { value: u64, next: Option[box Node] }\n\
+fn mapped(take root: Option[box Node]) -> Option[box Node] {\n\
+  let mut current = take root\n\
+  let mut reversed: Option[box Node] = None()\n\
+  while true {\n\
+    match take current {\n\
+      None() => break,\n\
+      Some(node) => {\n\
+        let Node(value: value, next: next) = take node\n\
+        current = take next\n\
+        reversed = Some(box Node(value: value + 1u64, next: take reversed))\n\
+      },\n\
+    }\n\
+  }\n\
+  reversed\n\
+}\n\
+fn sum(xs: Option[box Node]) -> u64 {\n\
+  match xs { None() => 0u64, Some(n) => n.value + sum(n.next) }\n\
+}\n\
+fn build() -> Option[box Node] {\n\
+  let mut root: Option[box Node] = None()\n\
+  let mut i = 3u64\n\
+  while i > 0u64 { i -= 1u64; root = Some(box Node(value: i, next: take root)) }\n\
+  root\n\
+}\n";
+
+/// `let Node(value, next) = take node` over a temporary's box copies `next`
+/// and drops the box whole. Specialized on the box's count, a unique box
+/// gives `next` up without a Dup and is reused for the new node with no
+/// release of `next`, so the per-node Dup and child release cancel away.
+#[test]
+fn a_destructured_unique_box_moves_its_children() {
+    let source = format!("{LIST}fn main() -> u64 {{ let m = mapped(build()); sum(m) }}");
+    let outcomes = run_all(&source);
+    for regions in [true, false] {
+        let (on, off) = (on(&outcomes, regions, true), super_off(&outcomes, regions));
+        assert_eq!(returned_u64(&on.observation), 6);
+        // Two of the three nodes have a successor to copy out.
+        assert_eq!(on.counters.dups + 2, off.counters.dups, "regions {regions}");
+        assert_eq!(on.counters.reuses, 3, "regions {regions}");
+        let mapped: Vec<_> = on
+            .built
+            .units
+            .iter()
+            .filter(|u| u.header.definition.0.name == "mapped")
+            .cloned()
+            .collect();
+        assert_eq!(count(&mapped, |i| matches!(i, Inst::IsUnique { .. })), 1);
+    }
+}
+
+/// The shared twin: the list is still held, so each box's count is two and
+/// the specialized shared path copies `next` and decrements the box, leaving
+/// the original list intact.
+#[test]
+fn a_destructured_shared_box_copies_its_children() {
+    let source = format!(
+        "{LIST}fn main() -> u64 {{ let xs = build(); let m = mapped(copy xs); sum(m) * 10u64 + sum(xs) }}"
+    );
+    let outcomes = run_all(&source);
+    for regions in [true, false] {
+        let (on, off) = (on(&outcomes, regions, true), super_off(&outcomes, regions));
+        assert_eq!(returned_u64(&on.observation), 63);
+        assert_eq!(on.counters.dups, off.counters.dups, "regions {regions}");
+        assert_eq!(on.counters.reuses, 0, "regions {regions}");
+    }
+}

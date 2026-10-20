@@ -272,13 +272,21 @@ names every program of a group);
 stage. With it on, three rewrites run in order:
 
 - `specialize_drop::specialize`: a run `address d.f..; copy d.f..; release d`
-  of a counted owned block whose copied children are counted blocks becomes
-  `is_unique d` and two paths joining with the children as parameters. The
-  unique path takes each child out (`read take` through `Value(d)`) and
+  of a counted owned block whose copied children hold counted blocks (a
+  block, or an inline aggregate such as `Option[box T]` whose scan names one)
+  becomes `is_unique d` and two paths joining with the children as parameters.
+  The unique path takes each child out (`read take` through `Value(d)`) and
   releases `d` under a static mask without them: no Dup, and the layout's own
   drop program for what stays. The shared path copies and decrements. A
   failure cleanup naming a child is cloned per path with the child renamed;
-  any cleanup the clone cannot express leaves the run alone.
+  any cleanup the clone cannot express leaves the run alone. The slot form,
+  `copy s.f..; d = read take s; release d`, is what a pattern over `take b`
+  imports when a temporary holds the box: the test borrows the slot's block
+  under a loan of its own, the unique path takes each child through the slot
+  before taking `d` (a partial move the release's mask covers), and each path
+  takes `d` under its own name; the token pass knows that shared path's block
+  from the view it tested. `rc_reuse.rs` witnesses the removed Dups and the
+  reuse on a reversed list, and the shared twin.
 - `reuse::pair_tokens`: buckets are exact `(usable bytes, alignment, domain)`
   of fixed heap payloads. A release (or a whole closure-slot drop, by the
   environment layout of the `Closure` that built it) of a counted, owned,

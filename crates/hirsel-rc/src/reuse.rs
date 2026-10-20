@@ -32,7 +32,7 @@ use crate::insert::Lay;
 use crate::insert::{Editor, Facts, owns};
 use hirsel_lir::ir::{
     BlockId, BlockKind, EdgeId, FailureId, Holding, Inst, LirTypeId, LirUnit, Placement, PoolRange,
-    StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
+    ReadMode, StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
 };
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use hirsel_lir::runtime_abi::{SizeClass, size_class};
@@ -538,8 +538,10 @@ fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reus
     }
 
     // A block entered only by the shared edge of `IsUnique(d)` releases a
-    // block it knows is shared: that release never yields storage.
-    let mut shared: Vec<Option<ValueId>> = vec![None; n];
+    // block it knows is shared: that release never yields storage. When `d`
+    // is a view of a slot's block (drop specialization's slot form), the
+    // block that block takes from the same slot version is that one too.
+    let mut shared: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); n];
     for b in 0..n {
         if let Terminator::Branch { condition, no, .. } = ed.unit.terminators[b] {
             let target = ed.unit.tables.edges[no.index()].target;
@@ -547,8 +549,30 @@ fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reus
                 Inst::IsUnique { result, value } if result == condition => Some(value),
                 _ => None,
             });
-            if graph.preds[target.index()].len() == 1 {
-                shared[target.index()] = tested;
+            let (Some(tested), 1) = (tested, graph.preds[target.index()].len()) else {
+                continue;
+            };
+            let viewed = ed.code[b].iter().find_map(|i| match *i {
+                Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Borrow,
+                } if result == tested => Some((address, reaching)),
+                _ => None,
+            });
+            let known = &mut shared[target.index()];
+            known.insert(tested);
+            if let Some((address, version)) = viewed {
+                known.extend(ed.code[target.index()].iter().filter_map(|i| match *i {
+                    Inst::Read {
+                        result,
+                        address: a,
+                        reaching,
+                        mode: ReadMode::Take,
+                    } if a == address && reaching == version => Some(result),
+                    _ => None,
+                }));
             }
         }
     }
@@ -613,7 +637,7 @@ fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reus
                     live: mask,
                     anchor,
                     failure,
-                } if shared[bi] != Some(value)
+                } if !shared[bi].contains(&value)
                     && heap[value.index()]
                     && repr(&ed.unit, value) == ValueRepr::Block
                     && ed.unit.values[value.index()].holding == Holding::Owned

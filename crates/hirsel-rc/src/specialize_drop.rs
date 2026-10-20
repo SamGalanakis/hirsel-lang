@@ -25,6 +25,22 @@
 //! not immediately before the release, are left alone, as is a run whose
 //! addresses are prepared between its copies.
 //!
+//! The same run appears through a slot when a temporary holds the box (a
+//! `let` pattern over `take b`): the copies read `s.f` through its payload at
+//! the slot's version, and the block is taken out of the slot just before
+//! its release:
+//!
+//! ```text
+//! x1 = copy s.f1 @v; ..; d = read take s @v; release d
+//! ```
+//!
+//! The test then borrows the slot's block under a loan of its own, the
+//! unique path takes each child through the slot (a partial move of the box,
+//! as a write through counted storage takes it) before taking `d`, and both
+//! paths take `d` under a name of their own. A child counts when copying it
+//! adds a holder: a counted block, or an inline aggregate (an
+//! `Option[box T]`, say) whose scan program names one.
+//!
 //! Each path's children are values of their own, so a failure cleanup that
 //! releases a copied child by name (as the release's own cleanup does) is
 //! cloned per path with the child renamed. Only a cleanup of releases, drops
@@ -34,10 +50,12 @@ use crate::PassError;
 use crate::insert::{Editor, Facts, Place, Root, Step};
 use crate::reuse::type_of;
 use hirsel_lir::ir::{
-    BlockId, EdgeId, FailureId, FieldMask, Holding, Inst, LirUnit, MaskId, MaskRef, PoolRange,
-    ReadMode, Ref, Terminator, ValueId, ValueRepr,
+    AddressId, BlockId, EdgeId, FailureId, FieldMask, Holding, Inst, LirUnit, LoanId, LoanInfo,
+    MaskId, MaskRef, PoolRange, ReadMode, Ref, Terminator, ValueId, ValueRepr,
 };
-use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind, LayoutTable, ScalarKind};
+use hirsel_lir::layout_types::{
+    CopyRecipe, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind,
+};
 use hirsel_lir::stage::Reuse;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,10 +86,29 @@ pub fn specialize(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<R
     Ok(ed.finish())
 }
 
-/// The run of child copies `first..release` and the release at `release`.
+/// The run of child copies from `first` and the release at `release`. In the
+/// slot form the copies read through the box `slot` holds, and the
+/// instruction before the release takes it out of the slot.
 struct Candidate {
     first: usize,
     release: usize,
+    slot: Option<SlotRoot>,
+}
+
+/// The slot form's whole-slot address and the version every read reaches.
+#[derive(Clone, Copy)]
+struct SlotRoot {
+    whole: AddressId,
+    version: ValueId,
+}
+
+/// Whether copying a value of `layout` adds a holder to some block.
+fn counted(layout: Option<&LayoutRecord>) -> bool {
+    layout.is_some_and(|l| match l.copy {
+        CopyRecipe::Dup => matches!(l.kind, LayoutKind::Block { .. } | LayoutKind::Box { .. }),
+        CopyRecipe::Fields => !l.scan.is_empty(),
+        _ => false,
+    })
 }
 
 fn candidate(
@@ -98,7 +135,26 @@ fn candidate(
         {
             continue;
         }
-        let mut first = r;
+        // The slot form: `d` was just taken whole out of a slot.
+        let slot = match r.checked_sub(1).map(|i| &code[i]) {
+            Some(&Inst::Read {
+                result,
+                address,
+                reaching,
+                mode: ReadMode::Take,
+            }) if result == d => facts
+                .places
+                .get(address.index())
+                .cloned()
+                .flatten()
+                .and_then(|p| match p.root {
+                    Root::Slot(s) if p.path.is_empty() => Some((s, address, reaching)),
+                    _ => None,
+                }),
+            _ => None,
+        };
+        let end = if slot.is_some() { r - 1 } else { r };
+        let mut first = end;
         let mut fields = BTreeSet::new();
         while first > 0 {
             let Inst::Copy {
@@ -111,37 +167,54 @@ fn candidate(
                 break;
             };
             let child = facts.places.get(address.index()).cloned().flatten();
-            let Some(f) = child_field(&child, d) else {
+            let (f, through) = match slot {
+                Some((s, _, version)) => (slot_child_field(&child, s), reaching == version),
+                None => (child_field(&child, d), reaching == d),
+            };
+            let Some(f) = f else {
                 break;
             };
             let layout = unit.types[unit.values[result.index()].ty.index()].layout;
-            let counted = table.layout(layout).is_some_and(|l| {
-                l.copy == CopyRecipe::Dup
-                    && matches!(l.kind, LayoutKind::Block { .. } | LayoutKind::Box { .. })
-            });
-            if reaching != d || !counted || !fields.insert(f) {
+            if !through || !counted(table.layout(layout)) || !fields.insert(f) {
                 break;
             }
             first -= 1;
         }
-        if first == r {
+        if first == end {
             continue;
         }
-        let copied: BTreeSet<ValueId> = code[first..r]
+        let mut renamed: BTreeSet<ValueId> = code[first..end]
             .iter()
             .filter_map(|i| match *i {
                 Inst::Copy { result, .. } => Some(result),
                 _ => None,
             })
             .collect();
+        renamed.insert(d);
         let mut failures = vec![failure];
-        failures.extend(code[first..r].iter().filter_map(Inst::failure));
-        if !failures.iter().all(|&f| clonable(ed, f, &copied)) {
+        failures.extend(code[first..end].iter().filter_map(Inst::failure));
+        if !failures.iter().all(|&f| clonable(ed, f, &renamed)) {
             continue;
         }
-        return Some(Candidate { first, release: r });
+        return Some(Candidate {
+            first,
+            release: r,
+            slot: slot.map(|(_, whole, version)| SlotRoot { whole, version }),
+        });
     }
     None
+}
+
+/// The field of the payload of the box slot `s` holds that a place names.
+fn slot_child_field(place: &Option<Place>, s: hirsel_lir::ir::SlotId) -> Option<u32> {
+    let place = place.as_ref()?;
+    if place.root != Root::Slot(s) || place.crossings != [0] {
+        return None;
+    }
+    match place.path[..] {
+        [Step::Payload, Step::Field(f)] | [Step::Payload, Step::Variant(_, f)] => Some(f),
+        _ => None,
+    }
 }
 
 /// The field of `d`'s payload a one-step place through `d` names.
@@ -363,7 +436,7 @@ fn rewrite(
     let at = ed.unit.blocks[b].anchor;
     let tail: Vec<Inst> = ed.code[b].split_off(c.release + 1);
     let run: Vec<Inst> = ed.code[b].split_off(c.first);
-    let copies: Vec<Inst> = run[..run.len() - 1].to_vec();
+    let copies: Vec<Inst> = run[..run.len() - 1 - usize::from(c.slot.is_some())].to_vec();
     let children: Vec<ValueId> = copies
         .iter()
         .map(|i| match *i {
@@ -383,105 +456,173 @@ fn rewrite(
         let info = ed.unit.values[v.index()].clone();
         ed.value(info.ty, info.holding)
     };
+    // In the slot form each path takes the block out of the slot under its
+    // own name, after its children.
+    let take_block = |ed: &mut Editor<Reuse>, code: &mut Vec<Inst>, root: SlotRoot| {
+        let block = fresh(ed, d);
+        code.push(Inst::Read {
+            result: block,
+            address: root.whole,
+            reaching: root.version,
+            mode: ReadMode::Take,
+        });
+        block
+    };
 
     // Unique: move each child out; the release drops only what stays.
     let unique = ed.block(kind, &[], at);
+    let mut code = Vec::new();
     let mut taken = Vec::new();
     let mut moved = BTreeSet::new();
     for inst in &copies {
         let Inst::Copy {
-            result, address, ..
+            result,
+            address,
+            reaching,
+            ..
         } = *inst
         else {
             unreachable!()
         };
         let x = fresh(ed, result);
         taken.push(x);
-        ed.code[unique.index()].push(Inst::Read {
+        code.push(Inst::Read {
             result: x,
             address,
-            reaching: d,
+            reaching,
             mode: ReadMode::Take,
         });
-        let field = field_of(ed, address, d);
-        moved.insert(field);
+        moved.insert(field_of(ed, address));
     }
+    let unique_block = match c.slot {
+        Some(root) => take_block(ed, &mut code, root),
+        None => d,
+    };
     let mask = live_mask(ed, table, layout, &moved);
-    let renamed: BTreeMap<ValueId, ValueId> = children
+    let mut renamed: BTreeMap<ValueId, ValueId> = children
         .iter()
         .copied()
         .zip(taken.iter().copied())
         .collect();
+    renamed.insert(d, unique_block);
     let unique_failure = clone_failure(ed, failure, &renamed);
-    ed.code[unique.index()].push(Inst::Release {
-        value: d,
+    code.push(Inst::Release {
+        value: unique_block,
         layout,
         live: MaskRef::Static(mask),
         anchor,
         failure: unique_failure,
     });
+    ed.code[unique.index()] = code;
     let to_join = ed.edge(join, &taken);
     ed.unit.terminators[unique.index()] = Terminator::Jump(to_join);
 
     // Shared: the copies and the plain release, as before.
     let shared = ed.block(kind, &[], at);
     let fresh_copies: Vec<ValueId> = children.iter().map(|&v| fresh(ed, v)).collect();
-    let renamed: BTreeMap<ValueId, ValueId> = children
+    let mut renamed: BTreeMap<ValueId, ValueId> = children
         .iter()
         .copied()
         .zip(fresh_copies.iter().copied())
         .collect();
+    let mut code = Vec::new();
     let mut copied = Vec::new();
     for (inst, x) in copies.into_iter().zip(fresh_copies) {
         let Inst::Copy {
-            result,
             address,
             reaching,
             failure,
+            ..
         } = inst
         else {
             unreachable!()
         };
-        let _ = result;
         copied.push(x);
         let failure = clone_failure(ed, failure, &renamed);
-        ed.code[shared.index()].push(Inst::Copy {
+        code.push(Inst::Copy {
             result: x,
             address,
             reaching,
             failure,
         });
     }
+    let shared_block = match c.slot {
+        Some(root) => take_block(ed, &mut code, root),
+        None => d,
+    };
+    renamed.insert(d, shared_block);
     let failure = clone_failure(ed, failure, &renamed);
-    ed.code[shared.index()].push(Inst::Release {
-        value: d,
+    code.push(Inst::Release {
+        value: shared_block,
         layout,
         live: MaskRef::All,
         anchor,
         failure,
     });
+    ed.code[shared.index()] = code;
     let to_join = ed.edge(join, &copied);
     ed.unit.terminators[shared.index()] = Terminator::Jump(to_join);
 
     let condition = ed.value(bool_ty, Holding::Plain);
-    ed.code[b].push(Inst::IsUnique {
-        result: condition,
-        value: d,
-    });
+    match c.slot {
+        None => ed.code[b].push(Inst::IsUnique {
+            result: condition,
+            value: d,
+        }),
+        Some(root) => {
+            // The slot keeps its block across the test: a view under a loan.
+            let loan = LoanId(ed.unit.tables.loans.len() as u32);
+            ed.unit.tables.loans.push(LoanInfo {
+                address: root.whole,
+                mutable: false,
+            });
+            let ty = ed.unit.values[d.index()].ty;
+            let view = ed.value(ty, Holding::Borrowed(loan));
+            ed.code[b].extend([
+                Inst::BeginLoan {
+                    loan,
+                    address: root.whole,
+                    mutable: false,
+                    if_inactive: false,
+                },
+                Inst::Read {
+                    result: view,
+                    address: root.whole,
+                    reaching: root.version,
+                    mode: ReadMode::Borrow,
+                },
+                Inst::IsUnique {
+                    result: condition,
+                    value: view,
+                },
+                Inst::EndLoan {
+                    loan,
+                    if_active: false,
+                },
+            ]);
+        }
+    }
     let yes = ed.edge(unique, &[]);
     let no = ed.edge(shared, &[]);
     ed.unit.terminators[b] = Terminator::Branch { condition, yes, no };
     join
 }
 
-fn field_of(ed: &Editor<Reuse>, address: hirsel_lir::ir::AddressId, d: ValueId) -> u32 {
+/// The payload field a candidate child's one-step address names.
+fn field_of(ed: &Editor<Reuse>, address: AddressId) -> u32 {
     let info = &ed.unit.addresses[address.index()];
-    debug_assert_eq!(info.base, hirsel_lir::ir::AddressBase::Value(d));
-    match info
+    let steps = info
         .projection
         .get(&ed.unit.pools.projections)
-        .unwrap_or(&[])
-    {
+        .unwrap_or(&[]);
+    let steps = match info.base {
+        hirsel_lir::ir::AddressBase::Slot(_) => match steps {
+            [hirsel_lir::ir::ProjectionStep::Payload, rest @ ..] => rest,
+            _ => steps,
+        },
+        _ => steps,
+    };
+    match steps {
         [hirsel_lir::ir::ProjectionStep::Field(f)]
         | [hirsel_lir::ir::ProjectionStep::VariantField { field: f, .. }] => *f,
         _ => unreachable!("a candidate child is one field step"),

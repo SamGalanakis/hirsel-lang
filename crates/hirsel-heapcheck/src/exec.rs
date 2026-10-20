@@ -9049,6 +9049,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                             });
                         }
                     }
+                    // An inline variant child a live mask leaves dead moved out whole:
+                    // its tag is not read, as the runtime skips the tag's span.
+                    DropStep::ActiveVariant { tag_offset, .. } if gated(tag_offset) => {}
                     DropStep::ActiveVariant {
                         tag_offset,
                         form,

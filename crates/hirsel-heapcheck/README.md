@@ -180,7 +180,9 @@ producer that differs changes this crate or the producer):
   path.
 - A `Release` or `Reset` mask gates the fields of the released block's
   payload (or of the value itself for an inline layout); for a variant, the
-  active variant's fields.
+  active variant's fields. An inline variant child the mask leaves dead moved
+  out whole, so its tag step is skipped unread, as the runtime skips the tag's
+  span.
 - A variant's tag is read through its `TagForm`. A null-pointer niche's word
   is the dataful variant while it holds a data cell, or after a move took
   exactly that one cell out (the native move leaves the bits, so the variant
