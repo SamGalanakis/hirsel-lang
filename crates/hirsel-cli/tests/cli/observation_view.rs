@@ -57,3 +57,112 @@ fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
     assert!(!refused.status.success());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn offline_view_redacts_recorded_secrets_in_json_and_perfetto() {
+    let root = std::env::temp_dir().join(format!("hirsel-view-secrets-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let secret = "recorded-credential-DO-NOT-PRINT";
+    let encoded = hirsel_run_schema::hex(secret.as_bytes());
+    let header =
+        include_str!("../../../hirsel-driver/tests/fixtures/observation-view/ordinary.tape")
+            .split_once("events\n")
+            .unwrap()
+            .0;
+    let recording = format!(
+        "{header}events\nrandom_bytes 1 {} -> random ok {encoded}\nenv_get 1 544f4b454e -> env some {encoded}\nread 1 736563726574 -> bytes ok {encoded}\nnet_read 1 2 100 -> net_bytes ok {encoded}\nprint 1 {encoded} -> unit ok \ncomplete 5\n",
+        secret.len()
+    );
+    let tape = root.join("secrets.tape");
+    let output = root.join("view.json");
+    std::fs::write(&tape, recording).unwrap();
+    for perfetto in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("view")
+            .arg(&tape)
+            .args(["--capture", "fixture", "-o"])
+            .arg(&output);
+        if perfetto {
+            command.arg("--perfetto");
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        let text = format!(
+            "{}{}{}",
+            std::fs::read_to_string(&output).unwrap(),
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!text.contains(secret));
+        assert!(!text.contains(&encoded));
+        assert!(text.contains(&format!("[redacted len={} sha256=", secret.len())));
+        assert!(text.contains("random ok [redacted"));
+        assert!(text.contains("env some [redacted"));
+    }
+    // --source must not leak through the replay adapter's normal stdout/stderr echo.
+    let source = root.join("main.hir");
+    std::fs::write(
+        &source,
+        format!(
+            r#"
+pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {{
+  let output = io.stdout(rt) ? Grant
+  let error = io.stderr(rt) ? Grant
+  out.print(output, "{secret}") ? Output
+  err.print(error, "{secret}") ? Output
+  Ok(())
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .args([
+            "--grants",
+            r#"{"io":{"stdout":"stdout.bytes@1","stderr":"stderr.bytes@1","dirs":[]}}"#,
+            "--record",
+        ])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert!(String::from_utf8_lossy(&result.stdout).contains(secret));
+    assert!(String::from_utf8_lossy(&result.stderr).contains(secret));
+    let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--replay")
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert!(String::from_utf8_lossy(&result.stdout).contains(secret));
+    assert!(String::from_utf8_lossy(&result.stderr).contains(secret));
+    let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("view")
+        .arg(&tape)
+        .args(["--capture", "fixture", "-o"])
+        .arg(&output)
+        .arg("--source")
+        .arg(&source)
+        .args(["--analysis", "analysis"])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert!(
+        result.stdout.is_empty(),
+        "replayed stdout must remain private"
+    );
+    assert!(
+        result.stderr.is_empty(),
+        "replayed stderr must remain private"
+    );
+    let text = std::fs::read_to_string(&output).unwrap();
+    assert!(!text.contains(secret));
+    assert!(!text.contains(&encoded));
+    std::fs::remove_dir_all(root).unwrap();
+}

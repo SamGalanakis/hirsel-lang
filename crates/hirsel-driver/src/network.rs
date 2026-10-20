@@ -279,6 +279,8 @@ pub(crate) struct HostLibrary {
     pub refused: Option<String>,
     /// Replay output already copied to the process's streams.
     echoed: (usize, usize),
+    /// Offline semantic observation must not echo recorded streams or exit reports.
+    emit_output: bool,
     handles: BTreeMap<u64, u64>,
     next: u64,
     next_wait: u64,
@@ -355,11 +357,17 @@ impl HostLibrary {
             io,
             refused: None,
             echoed: (0, 0),
+            emit_output: true,
             handles: BTreeMap::new(),
             next: 1 << 63,
             mapped: BTreeMap::new(),
             next_continuation: 1 << 61,
         })
+    }
+    pub fn silence_replay_output(&mut self) {
+        if matches!(self.io, HostIo::Replay(_)) {
+            self.emit_output = false;
+        }
     }
     /// `mapped.with` over a host mapping: the view, then the body, then (`resume`) the check.
     fn host_mapped_with(&mut self, a: &[Value]) -> Result<OperationResult, Error> {
@@ -575,7 +583,9 @@ impl HostLibrary {
     /// to the process's streams as it is produced.
     fn echo(&mut self, stdout: &[u8]) -> Result<(), Error> {
         use std::io::Write;
-        if let HostIo::Replay(_) = self.io {
+        if self.emit_output
+            && let HostIo::Replay(_) = self.io
+        {
             let stderr = &self.library.simulation.stderr;
             std::io::stdout()
                 .write_all(&stdout[self.echoed.0..])
@@ -2085,11 +2095,15 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     ) -> Result<bool, Error> {
         use std::io::Write;
         self.echo(context.stdout)?;
-        std::io::stdout()
-            .flush()
-            .map_err(|e| Error::Unavailable(format!("host stdout: {e}")))?;
+        if self.emit_output {
+            std::io::stdout()
+                .flush()
+                .map_err(|e| Error::Unavailable(format!("host stdout: {e}")))?;
+        }
         let consume = self.library.entry_returned(value, runtime, context)?;
-        if let Some(report) = self.library.exit_report.take() {
+        if let Some(report) = self.library.exit_report.take()
+            && self.emit_output
+        {
             std::io::stderr()
                 .write_all(report.text.as_bytes())
                 .and_then(|()| std::io::stderr().flush())

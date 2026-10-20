@@ -606,6 +606,9 @@ fn run_path_on_host_observed(
     }
     let mut operations = network::HostLibrary::new(&tir_run, &run, io)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
+    if observed.is_some() {
+        operations.silence_replay_output();
+    }
     let call_schemas = match &call {
         Some(_) => Some(call_schemas(&signature, &runtime)?),
         None => None,

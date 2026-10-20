@@ -129,7 +129,7 @@ class Collector:
 
 class Export(unittest.TestCase):
     def bundle(self):
-        return exporter.prepare(load('view.json'), load('projection.json'), load('correlation.json'))
+        return exporter.prepare(load('view.json'), load('projection.json'), load('correlation.json'), include_payloads=True)
 
     def logs(self):
         return exporter.prepare(load('view.json'))
@@ -141,6 +141,46 @@ class Export(unittest.TestCase):
                                sleep=lambda _: None, **kwargs)
             rows = [json.loads(line) for line in receipt.read_text().splitlines()]
         return ok, rows
+
+    def test_default_cli_and_collector_never_export_recorded_secrets(self):
+        secret = 'recorded-credential-DO-NOT-EXPORT'
+        hex_secret = secret.encode().hex()
+        projection = load('projection.json')
+        projection['records'][0]['message'] = secret
+        with self.assertRaisesRegex(ValueError, '--include-payloads'):
+            exporter.prepare(load('view.json'), projection)
+        self.assertIn(secret, str(exporter.prepare(load('view.json'), projection,
+                                                  load('correlation.json'), include_payloads=True)))
+        view = load('view.json')
+        view['events'][0].update(request='print 2 ' + hex_secret,
+                                 completion='unit ok ' + secret)
+        view['events'][1].update(request='mapped_view 1 2', completion='view ' + hex_secret)
+        with tempfile.TemporaryDirectory() as temp:
+            source, bundle = Path(temp) / 'view', Path(temp) / 'bundle'
+            source.write_text(json.dumps(view))
+            command = [sys.executable, ROOT / 'tools/obs_export.py', 'prepare', source, '-o', bundle]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = bundle.read_text() + result.stdout + result.stderr
+            for value in (secret, hex_secret):
+                self.assertNotIn(value, output)
+            prepared = json.loads(bundle.read_text())
+            records = prepared['requests'][0]['body']['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+            self.assertEqual(records[0]['body']['stringValue'], 'print -> unit ok')
+            self.assertEqual(records[1]['body']['stringValue'], 'mapped_view -> view')
+            self.assertIn(exporter.attribute('hirsel.original.monotonic_ns', '100'), records[0]['attributes'])
+            self.assertIn(exporter.attribute('hirsel.request.text_bytes', str(len(view['events'][0]['request']))),
+                          records[0]['attributes'])
+            with Collector([(200, {})]) as collector:
+                self.assertTrue(self.deliver(collector, prepared)[0])
+                sent = collector.requests[0][1].decode()
+                for value in (secret, hex_secret):
+                    self.assertNotIn(value, sent)
+            bundle.unlink()
+            result = subprocess.run(command + ['--include-payloads'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(secret, bundle.read_text())
+            self.assertIn(hex_secret, bundle.read_text())
 
     def test_pinned_reference_examples_and_emitted_captured_payloads_validate(self):
         self.assertEqual(SCHEMA['pin'], exporter.PIN)
@@ -178,10 +218,10 @@ class Export(unittest.TestCase):
     def test_missing_time_refuses_spans_metrics_and_never_uses_monotonic_as_epoch(self):
         view, projection = load('view.json'), load('projection.json')
         with self.assertRaisesRegex(ValueError, 'original timing'):
-            exporter.prepare(view, projection)
+            exporter.prepare(view, projection, include_payloads=True)
         view['events'][1]['original_time_ns'] = None
         with self.assertRaisesRegex(ValueError, 'original timing'):
-            exporter.prepare(view, projection, load('correlation.json'))
+            exporter.prepare(view, projection, load('correlation.json'), include_payloads=True)
         untimed = self.logs()['requests'][0]['body']['resourceLogs'][0]['scopeLogs'][0]['logRecords']
         self.assertTrue(all('timeUnixNano' not in r for r in untimed))
         self.assertTrue(all('observedTimeUnixNano' not in r for r in untimed))
@@ -191,31 +231,31 @@ class Export(unittest.TestCase):
             projection = load('projection.json')
             projection['records'][0][key] = '0' * (32 if key == 'trace_id' else 16)
             with self.assertRaisesRegex(ValueError, 'ID'):
-                exporter.prepare(load('view.json'), projection, load('correlation.json'))
+                exporter.prepare(load('view.json'), projection, load('correlation.json'), include_payloads=True)
         for value in [None, 'wrong', 'n s', 'μs']:
             projection = load('projection.json')
             projection['records'][5]['unit'] = value
             if value == 'wrong':  # User units are opaque ASCII; no fabricated conversion.
-                bundle = exporter.prepare(load('view.json'), projection, load('correlation.json'))
+                bundle = exporter.prepare(load('view.json'), projection, load('correlation.json'), include_payloads=True)
                 self.assertIn('wrong', str(bundle))
             else:
                 with self.assertRaises(ValueError):
-                    exporter.prepare(load('view.json'), projection, load('correlation.json'))
+                    exporter.prepare(load('view.json'), projection, load('correlation.json'), include_payloads=True)
         for field, value in [('bounds', [1, 1]), ('bounds', [2**53 + 1]),
                              ('bucket_counts', [2**64, 0]), ('sum', 2**53 + 1), ('end', 99)]:
             projection = load('projection.json')
             projection['records'][5][field] = value
             with self.assertRaises(ValueError):
-                exporter.prepare(load('view.json'), projection, load('correlation.json'))
+                exporter.prepare(load('view.json'), projection, load('correlation.json'), include_payloads=True)
         for which in ('projection', 'correlation'):
             projection, correlation = load('projection.json'), load('correlation.json')
             (projection if which == 'projection' else correlation)['evidence']['capture'] = 'other'
             with self.assertRaisesRegex(ValueError, 'evidence'):
-                exporter.prepare(load('view.json'), projection, correlation)
+                exporter.prepare(load('view.json'), projection, correlation, include_payloads=True)
         view = load('view.json')
         view['timing']['clock'] = 'replay-duration'
         with self.assertRaisesRegex(ValueError, 'original timing'):
-            exporter.prepare(view, load('projection.json'), load('correlation.json'))
+            exporter.prepare(view, load('projection.json'), load('correlation.json'), include_payloads=True)
 
     def test_partial_success_warning_and_empty_partial_are_never_retried(self):
         for partial, expected, state in [({'rejectedLogRecords': '1', 'errorMessage': 'bad log'}, False, 'partial-success'),

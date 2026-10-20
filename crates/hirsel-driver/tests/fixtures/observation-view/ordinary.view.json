@@ -18,7 +18,7 @@
       "ordinal": 1,
       "origin": "application",
       "original_time_ns": null,
-      "request": "print 2 68656c6c6f",
+      "request": "print 2 [redacted len=5 sha256=2cf24dba5fb0]",
       "source": null
     }
   ],

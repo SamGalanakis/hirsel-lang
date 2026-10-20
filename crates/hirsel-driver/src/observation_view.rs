@@ -42,7 +42,12 @@ impl View {
         let evidence = EvidenceId::new(capture, bytes)?;
         let (recording, complete, valid, anchors, pending, outcome, format) =
             if journal::is_journal(bytes) {
-                let recovered = journal::recover(bytes).map_err(|e| e.to_string())?;
+                let recovered = journal::recover(bytes).map_err(|e| {
+                    format!(
+                        "corrupt durable recording: {}",
+                        payload_summary(e.to_string().as_bytes())
+                    )
+                })?;
                 let anchors: Vec<_> = recovered
                     .event_prepared
                     .iter()
@@ -62,7 +67,18 @@ impl View {
                         "request": request_text(&p.request)?}))
                     })
                     .collect::<Result<_, String>>()?;
-                let outcome = recovered.outcome.as_ref().map(journal::render_outcome);
+                let outcome = recovered.outcome.as_ref().map(|outcome| {
+                    use hirsel_run_schema::RunOutcome;
+                    let canonical = journal::render_outcome(outcome);
+                    match outcome {
+                        RunOutcome::Returned(_) | RunOutcome::BudgetExceeded(_) => canonical,
+                        _ => {
+                            let (kind, details) =
+                                canonical.split_once(' ').unwrap_or((&canonical, ""));
+                            format!("{kind} details={}", payload_summary(details.as_bytes()))
+                        }
+                    }
+                });
                 (
                     recovered.recording.clone(),
                     recovered.complete(),
@@ -79,7 +95,12 @@ impl View {
                     .map_or(0, |at| at + 1);
                 let text =
                     std::str::from_utf8(&bytes[..valid]).map_err(|_| "bad recording UTF-8")?;
-                let (recording, complete) = launch::parse_recording_prefix(text)?;
+                let (recording, complete) = launch::parse_recording_prefix(text).map_err(|e| {
+                    format!(
+                        "corrupt ordinary recording: {}",
+                        payload_summary(e.as_bytes())
+                    )
+                })?;
                 if complete && valid != bytes.len() {
                     return Err("bytes after complete recording".into());
                 }
@@ -143,8 +164,12 @@ impl View {
             Ok(())
         };
         check()?;
-        let observed =
-            crate::replay_observations(source, tape, max_steps).map_err(|e| e.to_string())?;
+        let observed = crate::replay_observations(source, tape, max_steps).map_err(|e| {
+            format!(
+                "replay analysis failed: {}",
+                payload_summary(e.to_string().as_bytes())
+            )
+        })?;
         check()?;
         self.enrich(analysis, &observed)?;
         Ok(observed)
@@ -195,7 +220,9 @@ impl View {
         }
         let effects: Vec<_> = observed.effects.iter().enumerate().map(|(ordinal, e)| {
             let effect = match &e.effect {
-                Effect::CapabilityConsumed(event) => json!({"kind": "capability", "event": event}),
+                Effect::CapabilityConsumed(event) => json!({"kind": "capability", "event": {
+                    "capability": event.capability, "operation": event.operation,
+                    "input": payload_summary(&event.input), "output": payload_summary(&event.output)}}),
                 Effect::HandleDropped { kind, id } => json!({"kind": "handle-drop", "handle_kind": kind, "id": id}),
                 Effect::ResourceCreated { definition } => json!({"kind": "resource-construction", "definition": definition.to_string()}),
                 Effect::Finalizer { definition } => json!({"kind": "finalizer-entry", "definition": definition.to_string()}),
@@ -243,13 +270,119 @@ impl View {
 
 fn event_text(event: &Event) -> Result<String, String> {
     let text = launch::render_tape(std::slice::from_ref(event))?;
-    Ok(text
+    let line = text
         .split_once('\n')
         .ok_or("missing tape header")?
         .1
-        .trim_end_matches('\n')
-        .into())
+        .trim_end_matches('\n');
+    let (request, completion) = line.split_once(" -> ").ok_or("missing completion")?;
+    let (completion, fault) = completion.split_once(" ! ").unwrap_or((completion, ""));
+    let mut result = format!(
+        "{} -> {}",
+        redact_request(&event.request, request),
+        redact_completion(&event.completion, completion)
+    );
+    if !fault.is_empty() {
+        result.push_str(" ! ");
+        result.push_str(fault);
+    }
+    Ok(result)
 }
+
+// Keep redaction at the diagnostic boundary: replay's canonical codec must retain
+// the original bytes. Reuse the view's existing SHA-256 implementation.
+fn payload_summary(bytes: &[u8]) -> String {
+    format!(
+        "[redacted len={} sha256={}]",
+        bytes.len(),
+        &hirsel_run_schema::hex(&Sha256::digest(bytes))[..12]
+    )
+}
+
+fn redact_request(request: &Request, canonical: &str) -> String {
+    use Request as R;
+    let mut words: Vec<String> = canonical.split(' ').map(String::from).collect();
+    let last = words.len() - 1;
+    match request {
+        R::Print { bytes, .. }
+        | R::PrintStderr { bytes, .. }
+        | R::FileWrite { bytes, .. }
+        | R::FileAppend { bytes, .. }
+        | R::Write { bytes, .. }
+        | R::WriteAll { bytes, .. }
+        | R::NetWrite { bytes, .. }
+        | R::NetWriteAll { bytes, .. }
+        | R::ChildWrite { bytes, .. } => words[last] = payload_summary(bytes),
+        R::PutNew { bytes, .. } | R::UdpSend { bytes, .. } => {
+            words[last - 1] = payload_summary(bytes);
+        }
+        R::TestLog { text, .. } | R::TestSnapshot { text, .. } => {
+            words[last] = payload_summary(text.as_bytes());
+        }
+        // These composite inputs may embed credentials, child output, runner
+        // arguments or granted Env values. Summarize the entire canonical argument
+        // text rather than duplicate their nested codecs in a diagnostic tool.
+        R::ProcessRun { .. }
+        | R::ProcessPipeline { .. }
+        | R::ProcessSpawn { .. }
+        | R::ProcessSpawnPipeline { .. }
+        | R::TestProcess { .. }
+        | R::TestNet { .. }
+        | R::TestDir { .. }
+        | R::RunnerCall(_)
+        | R::CallReturn(_) => {
+            let (operation, arguments) = canonical.split_once(' ').expect("request arguments");
+            return format!(
+                "{operation} arguments={}",
+                payload_summary(arguments.as_bytes())
+            );
+        }
+        _ => {}
+    }
+    words.join(" ")
+}
+
+fn redact_completion(completion: &Completion, canonical: &str) -> String {
+    use Completion as C;
+    use hirsel_run_schema::{CallOutcome, PipelineOutcome, ProcessOutcome};
+    let mut words: Vec<String> = canonical.split(' ').map(String::from).collect();
+    match completion {
+        C::Random(Ok(bytes))
+        | C::Input(Ok(bytes))
+        | C::Bytes(Ok(bytes))
+        | C::NetBytes(Ok(bytes))
+        | C::ChildBytes(Ok(bytes)) => words[2] = payload_summary(bytes),
+        C::Env(Ok(Some(value))) => words[2] = payload_summary(value.as_bytes()),
+        C::Datagram(Ok((bytes, _, _))) => words[2] = payload_summary(bytes),
+        C::Certificates(Ok(Some(bytes))) => words[2] = format!("der:{}", payload_summary(bytes)),
+        C::View(view) => {
+            words[1] = payload_summary(view.bytes.as_ref().expect("rendered mapped bytes"));
+        }
+        C::Process(ProcessOutcome::Output { stdout, stderr, .. }) => {
+            words[3] = payload_summary(stdout);
+            words[4] = payload_summary(stderr);
+        }
+        C::Pipeline(PipelineOutcome::Output { stdout, stderr, .. }) => {
+            words[2] = payload_summary(stdout);
+            words[3] = payload_summary(stderr);
+        }
+        C::GroupExit(Ok(output)) => {
+            let first = words.len() - output.stderr.len();
+            for (word, bytes) in words[first..].iter_mut().zip(&output.stderr) {
+                *word = payload_summary(bytes);
+            }
+        }
+        C::Runner(c) => match &c.outcome {
+            CallOutcome::Ok(bytes) | CallOutcome::Failed(bytes) | CallOutcome::Faulted(bytes) => {
+                words[2] = payload_summary(bytes);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    words.join(" ")
+}
+
 fn request_text(request: &Request) -> Result<String, String> {
     let text = event_text(&Event {
         request: request.clone(),
@@ -336,6 +469,186 @@ mod tests {
             json!([0, 1])
         );
         assert_eq!(durable["events"][1]["accepted_bytes"], 5);
+    }
+
+    #[test]
+    fn payloads_are_redacted_in_completed_pending_and_terminal_records() {
+        use hirsel_rt::journal::Journal;
+        let secret = b"recorded-credential-DO-NOT-PRINT";
+        let value = String::from_utf8(secret.to_vec()).unwrap();
+        let encoded = hirsel_run_schema::hex(secret);
+        let summary = payload_summary(secret);
+        let command = hirsel_run_schema::Command {
+            program: "child".into(),
+            args: vec![value.clone()],
+            directory: None,
+            env: Some(vec![("TOKEN".into(), value.clone())]),
+            own_group: false,
+        };
+        let events = vec![
+            (
+                Request::RandomBytes {
+                    random: 1,
+                    count: secret.len() as u64,
+                },
+                Completion::Random(Ok(secret.to_vec())),
+            ),
+            (
+                Request::EnvGet {
+                    env: 1,
+                    name: "TOKEN".into(),
+                },
+                Completion::Env(Ok(Some(value.clone()))),
+            ),
+            (
+                Request::FileRead {
+                    directory: 1,
+                    file: 2,
+                    max: 100,
+                },
+                Completion::Bytes(Ok(secret.to_vec())),
+            ),
+            (
+                Request::MapView {
+                    directory: 1,
+                    mapped: 2,
+                },
+                Completion::View(hirsel_rt::io::MapView::of(secret.to_vec())),
+            ),
+            (
+                Request::NetWrite {
+                    net: 1,
+                    stream: 2,
+                    bytes: secret.to_vec(),
+                },
+                Completion::Count(Ok(secret.len() as u64)),
+            ),
+            (
+                Request::ProcessRun {
+                    process: 1,
+                    command,
+                    stdin: secret.to_vec(),
+                    max_output: 100,
+                    deadline: None,
+                },
+                Completion::Process(hirsel_run_schema::ProcessOutcome::Output {
+                    status: hirsel_run_schema::ExitStatus::Exited(0),
+                    stdout: secret.to_vec(),
+                    stderr: secret.to_vec(),
+                }),
+            ),
+            (
+                Request::ProcessSpawnPipeline {
+                    process: 1,
+                    stages: vec![],
+                    max_stderr: 100,
+                },
+                Completion::GroupExit(Ok(hirsel_run_schema::GroupOutput {
+                    statuses: vec![hirsel_run_schema::ExitStatus::Exited(0)],
+                    stderr: vec![secret.to_vec()],
+                })),
+            ),
+            (
+                Request::CallReturn(hirsel_run_schema::CalleeOutcome::Ok(secret.to_vec())),
+                Completion::Ready,
+            ),
+        ]
+        .into_iter()
+        .map(|(request, completion)| Event {
+            request,
+            completion,
+            fault: None,
+        })
+        .collect::<Vec<_>>();
+        let mut recording =
+            launch::parse_recording(std::str::from_utf8(ORDINARY).unwrap()).unwrap();
+        recording.events = events.clone();
+        let bytes = launch::render_recording(&recording).unwrap();
+        let mut view = View::parse("fixture", bytes.as_bytes()).unwrap();
+        let observed = Observable {
+            blocked: None,
+            schema_version: 1,
+            returned_type: None,
+            returned: None,
+            exit_code: Some(0),
+            output: vec![],
+            failures: vec![],
+            final_state: None,
+            effects: vec![hirsel_interp::observation::ObservedEffect {
+                anchor: hirsel_interp::observation::SemanticAnchor {
+                    source: hirsel_interp::observation::SourceSite {
+                        definition: hirsel_syntax::DefPath::core("main"),
+                        line: 1,
+                        column: 1,
+                    },
+                    role: hirsel_interp::observation::SemanticRole::CapabilityEffect,
+                },
+                effect: Effect::CapabilityConsumed(hirsel_tir::CapabilityEvent {
+                    capability: hirsel_syntax::DefPath::core("Secret"),
+                    operation: "read".into(),
+                    input: secret.to_vec(),
+                    output: secret.to_vec(),
+                }),
+            }],
+        };
+        view.enrich("analysis", &observed).unwrap();
+        assert_eq!(
+            view.document["replay_observer"]["effects"][0]["effect"]["event"]["output"],
+            summary
+        );
+        for output in [view.normalized(), view.logical_perfetto()] {
+            assert!(!output.contains(&value));
+            assert!(!output.contains(&encoded));
+            assert!(output.contains(&summary));
+        }
+        let malformed = bytes.replace("random_bytes 1", &format!("random_bytes {encoded}"));
+        let error = View::parse("fixture", malformed.as_bytes()).err().unwrap();
+        assert!(!error.contains(&value));
+        assert!(!error.contains(&encoded));
+        recording.events.clear();
+        let mut journal =
+            journal::DurableJournal::create(journal::SimJournalFile::default(), &recording)
+                .unwrap();
+        for (id, event) in events.iter().enumerate() {
+            journal
+                .prepare(&journal::Prepared {
+                    id: id as u64,
+                    task: vec![],
+                    issue: id as u64,
+                    request: event.request.clone(),
+                })
+                .unwrap();
+            journal.event(Some(id as u64), event).unwrap();
+        }
+        journal
+            .prepare(&journal::Prepared {
+                id: events.len() as u64,
+                task: vec![],
+                issue: events.len() as u64,
+                request: Request::Print {
+                    stdout: 1,
+                    bytes: secret.to_vec(),
+                },
+            })
+            .unwrap();
+        journal.barrier().unwrap();
+        let pending = View::parse("fixture", journal.file().bytes()).unwrap();
+        assert!(
+            pending.document["in_doubt"][0]["request"]
+                .as_str()
+                .unwrap()
+                .contains(&summary)
+        );
+        assert!(!pending.normalized().contains(&encoded));
+        journal
+            .end(&hirsel_run_schema::RunOutcome::Refused(value.clone()))
+            .unwrap();
+        let terminal = View::parse("fixture", journal.file().bytes())
+            .unwrap()
+            .normalized();
+        assert!(!terminal.contains(&value));
+        assert!(!terminal.contains(&encoded));
+        assert!(terminal.contains("refused details=[redacted"));
     }
 
     #[test]

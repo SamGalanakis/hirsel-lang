@@ -649,9 +649,17 @@ receive distinct archival identities even when their bytes match. Program/config
 identity alone is not execution identity. These diagnostic formats do not change
 the tape, journal, language, or application-visible inputs.
 
-Events retain zero-based tape order, canonical request/completion text (including
+Events retain zero-based tape order, diagnostic request/completion text (including
 outcomes and faults), origin, and accepted byte counts when the completion proves
-them. A blocked write has unknown accepted length; requested bytes are not counted
+them. Random draws, Env values, file and mapped-file contents, stream/datagram
+payloads (including TLS plaintext), child output, and runner argument/result bytes
+are replaced with their byte length and a 12-hex-digit SHA-256 prefix. Composite
+process/runner/test request arguments and terminal diagnostic details are summarized
+as a whole using the length and digest of their canonical argument text. This also
+applies to durable requests in doubt, replay-observer capability input/output,
+parser/replay error details, and logical Perfetto exports. There is no
+reveal option: a view never prints recorded random bytes. A blocked write has unknown
+accepted length; requested bytes are not counted
 as successful bytes. Ordinary recordings have no task/issue anchors. Durable events
 carry only their recorded Prepared association; scheduling inputs have none. Source
 and original time are null unless separately evidenced. Pure calls are not tape
@@ -668,7 +676,8 @@ never authorizes resumption.
 `--source <source-or-manifest> --analysis <analysis-id>` additionally replays a
 complete recording against its bound program. Every request must match and every
 event must be consumed. Replay uses recorded providers only: it performs no
-application host effects or exports. The normalized view stores existing semantic
+application host effects or exports, and echoes neither recorded standard streams
+nor exit reports to the viewing process. The normalized view stores existing semantic
 effect observations, source coordinates, and analysis identity under
 `replay_observer`, retaining the original evidence identity. This separately ordered
 sequence does not infer joins to tape ordinals or become new production traffic.
@@ -691,22 +700,28 @@ Logical Perfetto exports always label the track and category as logical ordinal
 order, retaining evidence identity and completeness in metadata. Each event is a
 thread-scoped instant with its ordinal as a synthetic coordinate, without duration.
 No same-track span nesting, task ancestry, parent/link edges or measured nanoseconds
-are invented from request order. Canonical requests can contain secrets: views and
-exports need the same archival access controls as their source recordings.
+are invented from request order. Paths, names, addresses, capture/analysis identities,
+and digest prefixes remain visible: views and exports still need archival access
+controls. Redaction does not remove secret material from source recordings.
 
 ### Separate OTLP export
 
 `python3 tools/obs_export.py prepare <view.json> -o <bundle.json>` converts an
 [offline view](#offline-observation-views) without executing its source, opening a
 transport or reading a clock. By default every original event becomes an Info log
-with canonical request/completion text, accepted byte count, ordinal, origin,
-evidence identity and prefix completeness. Replay observer effects are excluded;
-analysis provenance remains separate. Missing time remains missing. This is an
+with operation and outcome kind, request/completion text byte lengths, accepted
+byte count, ordinal, origin, evidence identity and prefix completeness. Request and
+completion payload text is excluded unless `--include-payloads` is explicitly
+supplied; this flag copies only what the input view contains and cannot recover
+redacted bytes. Replay observer effects are excluded; analysis provenance remains
+separate. Missing time remains missing. This is an
 explicit export of original evidence, never an automatic consequence of replay.
 Apply application redaction/allowlists before capture and protect these archives
 like their source recordings.
 
-`--projection <json>` selects explicit typed analysis records instead. The v1
+`--projection <json> --include-payloads` selects explicit typed analysis records
+instead. The payload flag is required because projection messages, names and
+attributes can also contain secrets. The v1
 `hirsel-export-projection` object contains `schema`, `version`, exact view
 `evidence`, `analysis` identity and `records`. This tooling input does not claim a
 structural effect was a business span. Logs carry `kind: "log"`, `ordinal`, `level`,

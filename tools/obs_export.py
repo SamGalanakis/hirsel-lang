@@ -79,7 +79,26 @@ def attributes(values):
     return [attribute(k, v) for k, v in sorted(values.items())]
 
 
-def prepare(view, projection=None, correlation=None):
+def event_metadata(event):
+    """Only operation/outcome tags and sizes; never copy canonical argument words."""
+    request, completion = event['request'], event['completion']
+    require(isinstance(request, str) and isinstance(completion, str), 'invalid event text')
+    operation = request.split(' ', 1)[0]
+    result = completion.split(' ')
+    require(re.fullmatch('[a-z][a-z0-9_]*', operation) is not None
+            and re.fullmatch('[a-z][a-z0-9_]*', result[0]) is not None, 'invalid event kind')
+    outcome = result[0]
+    # Some completions put bytes in the second word (mapped views), so copying
+    # an arbitrary second word would reintroduce the leak.
+    if len(result) > 1 and result[1] in {
+            'ok', 'some', 'none', 'err', 'error', 'exited', 'signaled', 'fault',
+            'canceled', 'invalid_input', 'invalid_utf8', 'not_granted', 'unavailable',
+            'out_of_range', 'denied', 'not_run', 'in_doubt', 'failed', 'faulted'}:
+        outcome += ' ' + result[1]
+    return operation, outcome
+
+
+def prepare(view, projection=None, correlation=None, *, include_payloads=False):
     """No I/O, clock or network. Typed projection is explicit analysis, never inferred evidence."""
     require(isinstance(view, dict), 'expected observation view object')
     require(view.get('schema') == 'hirsel-observation-view' and view.get('version') == 1,
@@ -98,6 +117,7 @@ def prepare(view, projection=None, correlation=None):
     if analysis is not None:
         require(analysis.get('evidence') == evidence, 'replay analysis evidence mismatch')
     if projection is not None:
+        require(include_payloads, '--projection requires --include-payloads: analysis text may contain secrets')
         require(projection.get('schema') == 'hirsel-export-projection' and projection.get('version') == 1
                 and projection.get('evidence') == evidence, 'projection schema/evidence mismatch')
         text(projection.get('analysis'), 256)
@@ -105,7 +125,8 @@ def prepare(view, projection=None, correlation=None):
         require(isinstance(rows, list), 'missing projection records')
     else:
         rows = [dict(kind='log', ordinal=e['ordinal'], level='Info',
-                     message=e['request'] + ' -> ' + e['completion']) for e in events]
+                     message=(e['request'] + ' -> ' + e['completion']) if include_payloads
+                     else ' -> '.join(event_metadata(e))) for e in events]
     require(len(rows) <= 100000, 'too many export records')
     if correlation is not None:
         require(correlation.get('schema') == 'hirsel-original-clock-correlation'
@@ -161,6 +182,12 @@ def prepare(view, projection=None, correlation=None):
         event = event_at(ordinal)
         attrs = attributes(row.get('attributes', {})) + [attribute('hirsel.ordinal', str(ordinal)),
                 attribute('hirsel.origin', event['origin'])]
+        if projection is None:
+            operation, outcome = event_metadata(event)
+            attrs += [attribute('hirsel.operation', operation),
+                      attribute('hirsel.outcome.kind', outcome),
+                      attribute('hirsel.request.text_bytes', str(len(event['request'].encode('utf-8')))),
+                      attribute('hirsel.completion.text_bytes', str(len(event['completion'].encode('utf-8'))))]
         if event.get('original_time_ns') is not None:
             attrs.append(attribute('hirsel.original.monotonic_ns', str(integer(event['original_time_ns']))))
         if event.get('accepted_bytes') is not None:
@@ -383,7 +410,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('prepare', help='offline conversion; no transport or clock access')
     p.add_argument('view')
-    p.add_argument('--projection')
+    p.add_argument('--include-payloads', action='store_true',
+                   help='allow request/completion text or explicit projection records (may contain secrets)')
+    p.add_argument('--projection', help='explicit typed analysis records (may contain secrets)')
     p.add_argument('--correlation')
     p.add_argument('-o', '--output', required=True)
     s = sub.add_parser('send', help='explicitly grant collector transport and receipt storage')
@@ -398,7 +427,8 @@ def main(argv=None):
     try:
         if args.command == 'prepare':
             bundle = prepare(load(args.view), load(args.projection) if args.projection else None,
-                             load(args.correlation) if args.correlation else None)
+                             load(args.correlation) if args.correlation else None,
+                             include_payloads=args.include_payloads)
             with Path(args.output).open('xb') as output:
                 output.write(encoded(bundle))
             return 0
