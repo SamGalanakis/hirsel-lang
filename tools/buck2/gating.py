@@ -40,7 +40,10 @@ TIMEOUT = 1800
 
 ALL_TESTS = '(kind("_rust_test", //...) + attrfilter(labels, doctest, //...)) - attrfilter(labels, gate, //...)'
 BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
-             ' - attrfilter(labels, gate, root//:)')
+             ' - attrfilter(labels, gate, root//:)'
+             # The two-host link build runs under one host-wide lock; it is part of
+             # the native-smoke campaign (gate-link-hosts depends on it), never the floor.
+             ' - kind("_link_hosts_local", root//:)')
 CLIPPY_SET = 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", root//:))'
 CAMPAIGN_TARGETS = {
     impact.CONFORMANCE: [f'root//:gate-conformance-shard-{i}' for i in range(1, CONFORMANCE_SHARDS + 1)],
