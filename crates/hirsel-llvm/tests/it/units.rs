@@ -185,3 +185,62 @@ fn section_names(bytes: &[u8]) -> Vec<String> {
         .filter_map(|s| s.name().ok().map(str::to_owned))
         .collect()
 }
+
+/// A unit's fragment (`hirsel_lir::fragment`) encoded in one program decodes, bound to a
+/// program that numbers its layouts apart, to the fragment that program makes itself.
+#[test]
+fn a_fragment_binds_into_a_program_that_numbers_its_layouts_apart() {
+    use hirsel_lir::fragment::{UnitFragment, UnitSummary};
+    use std::collections::HashMap;
+    let input = input();
+    for target in TargetSpec::executed() {
+        let plain = programs(&target);
+        let shifted = with_decoys(|| programs(&target));
+        for ((name, a), (_, b)) in plain.iter().zip(&shifted) {
+            let (ia, ib) = (
+                inputs(a, &input, OptLevel::None),
+                inputs(b, &input, OptLevel::None),
+            );
+            let layouts: HashMap<_, _> = ib
+                .keys
+                .all()
+                .iter()
+                .enumerate()
+                .map(|(i, k)| (*k, hirsel_lir::layout_types::LayoutId(i as u32)))
+                .collect();
+            let abis: HashMap<_, _> = ib
+                .layouts
+                .fn_abis
+                .iter()
+                .enumerate()
+                .map(|(i, abi)| {
+                    (
+                        ib.keys.fn_abi(abi),
+                        hirsel_lir::abi_types::FnAbiId(i as u32),
+                    )
+                })
+                .collect();
+            for (ua, ub) in a.units.iter().zip(&b.units) {
+                let what = format!(
+                    "{name} {} on {}",
+                    ua.unit().header.definition,
+                    target.triple
+                );
+                let fragment =
+                    |unit: &hirsel_lir::stage::ValidatedUnit<_>, i: &EmitInputs<'_>| UnitFragment {
+                        summary: UnitSummary::of(unit.unit(), i.layouts, i.keys, i.manifest)
+                            .unwrap(),
+                        object: emit_object(&[unit], i).unwrap(),
+                    };
+                let (fa, fb) = (fragment(ua, &ia), fragment(ub, &ib));
+                let bytes = fa.encode(ia.layouts, ia.keys).unwrap();
+                assert_eq!(bytes, fb.encode(ib.layouts, ib.keys).unwrap(), "{what}");
+                let decoded = UnitFragment::decode(&bytes, &|k| layouts.get(k).copied(), &|k| {
+                    abis.get(k).copied()
+                })
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!(decoded, fb, "{what}");
+            }
+        }
+    }
+}

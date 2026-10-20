@@ -15,6 +15,7 @@ pub mod descriptor_registry;
 pub mod discharge;
 pub mod effect;
 pub mod emission;
+pub mod fragment;
 pub mod fuel;
 pub mod glue;
 pub mod ir;
