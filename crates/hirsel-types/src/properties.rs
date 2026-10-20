@@ -701,6 +701,18 @@ pub fn canonical_plain_type(
     normalize_graph(store, root, None, Normalization::Plain, lookup)
 }
 
+/// Canonical inert qualifiers using the caller's exact generic declarations.
+/// Imported callable fields may substitute a nominal Plain actual or a
+/// parameter whose Plain proof belongs to an enclosing lexical binder.
+pub fn canonical_plain_type_in(
+    store: &mut TypeStore,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<TypeId, QueryError> {
+    normalize_graph(store, root, Some(generics), Normalization::Plain, lookup)
+}
+
 /// Canonicalize flow-checked current rows without replacing their evidence
 /// with a structural summary. Generic Plain assumptions still canonicalize.
 pub fn canonical_current_type(

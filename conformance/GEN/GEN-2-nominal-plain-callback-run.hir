@@ -1,0 +1,57 @@
+// rule: GEN-2
+// expect: run
+// Substituted nominal Plain callback parameters have the same canonical modes
+// as directly declared headers; counted callback parameters remain borrowed.
+type State {
+  count: u64,
+}
+
+type Dictionary[D: inert, W: data + inert] {
+  decode: fn(W, mut State) -> Result[D, ()] uses {},
+}
+
+type Wire {
+  n: u8,
+}
+
+type CountedWire {
+  text: String,
+}
+
+fn read(wire: Wire, mut state: State) -> Result[u8, ()] uses {} {
+  state.count += 1
+  Ok(wire.n)
+}
+
+fn read_counted(wire: CountedWire, mut state: State) -> Result[u8, ()] uses {} {
+  state.count += 1
+  Ok(1)
+}
+
+fn generic[T: plain + data + inert]() -> Dictionary[T, T] uses {} {
+  Dictionary(
+    decode: fn(value: T, mut state: State) -> Result[T, ()] uses {} {
+      Ok(value)
+    }
+  )
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let plain: Dictionary[u8, Wire] = Dictionary(decode: read)
+  let counted: Dictionary[u8, CountedWire] = Dictionary(decode: read_counted)
+  let same: Dictionary[Wire, Wire] = generic()
+  let mut state = State(count: 0)
+  let Ok(7u8) = plain.decode(Wire(n: 7), mut state) else {
+    return Error(())
+  }
+  let Ok(1u8) = counted.decode(CountedWire(text: "x"), mut state) else {
+    return Error(())
+  }
+  let Ok(again) = same.decode(Wire(n: 9), mut state) else {
+    return Error(())
+  }
+  if again.n != 9 || state.count != 2 {
+    return Error(())
+  }
+  Ok(())
+}

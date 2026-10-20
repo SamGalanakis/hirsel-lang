@@ -61,6 +61,15 @@ impl Normalizer<'_, '_> {
         for definition in dependencies {
             self.snapshot(&definition)?;
         }
-        Ok(result)
+        // Transport preserves occurrence qualifiers. A substituted nominal
+        // Plain argument needs its declaration to erase inert locality and
+        // uniqueness before this imported callback header is published.
+        let generics = self.declarations();
+        let mut types = std::mem::take(&mut self.types);
+        let normalized = canonical_plain_type_in(&mut types, result, &generics, &mut |path| {
+            self.property_signature(path)
+        });
+        self.types = types;
+        normalized
     }
 }

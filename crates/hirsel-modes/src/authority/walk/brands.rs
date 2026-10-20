@@ -1333,6 +1333,18 @@ impl Checker<'_> {
             },
             None,
         );
+        // Substitution can attach a generic borrow's relation to a nominal
+        // Plain actual. Resolve that declaration before comparing field
+        // callback headers, including Plain bounds in the caller's scope.
+        let result = result.and_then(|root| {
+            canonical_plain_type_in(&mut store, root, &self.declarations(), &mut |path| {
+                Ok(self.read(path))
+            })
+            .map_err(|error| RepresentationError {
+                root,
+                failure: RepresentationFailure::Query(error),
+            })
+        });
         self.out.body.types = store;
         match result {
             Ok(root) => self.out.body.types.get(root).map(|row| row.kind.clone()),

@@ -2082,6 +2082,14 @@ impl<'a> Checker<'a> {
                 )
                 .ok()?
             };
+            // Normalize the declaration-backed expectation after substitution,
+            // including Plain proofs from the actual's lexical generic binder.
+            // Keep current TIR rows intact so comparison still rejects stale
+            // call-locality binders in aggregate fields.
+            ty = canonical_plain_type_in(store, ty, self.generic_declarations(), &mut |path| {
+                Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
+            })
+            .ok()?;
         }
     }
 
