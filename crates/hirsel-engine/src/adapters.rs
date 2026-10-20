@@ -55,7 +55,6 @@ impl ParserPhase for ParserAdapter {
 }
 
 /// Sources, root arguments and limits are explicit; no capabilities are granted implicitly.
-#[derive(Default)]
 pub struct InterpreterAdapter {
     pub entry_signature: Option<hirsel_types::SignatureRef>,
     pub runtime: hirsel_interp::aggregate::RuntimeTypes,
@@ -63,6 +62,21 @@ pub struct InterpreterAdapter {
     pub sources: SourceMap,
     pub arguments: Vec<hirsel_interp::Value>,
     pub limits: hirsel_interp::Limits,
+}
+impl Default for InterpreterAdapter {
+    /// An empty placeholder interner: `prepare` installs the session's runtime before a run.
+    fn default() -> Self {
+        Self {
+            entry_signature: None,
+            runtime: hirsel_interp::aggregate::RuntimeTypes::new(hirsel_types::TypeInterner::new(
+                None,
+            )),
+            simulation: Default::default(),
+            sources: Default::default(),
+            arguments: Vec::new(),
+            limits: Default::default(),
+        }
+    }
 }
 impl InterpreterPhase for InterpreterAdapter {
     fn prepare(
@@ -180,7 +194,7 @@ impl InterpreterPhase for InterpreterAdapter {
             if let Some(signature) = &self.entry_signature {
                 if let hirsel_types::SignatureKind::Function(function) = &signature.kind {
                     match hirsel_types::encoding::canonical_type_encoding(
-                        &signature.types,
+                        &self.runtime.types,
                         function.result,
                     ) {
                         Ok(encoded) => observation.returned_type = Some(encoded),
