@@ -189,7 +189,9 @@ pub struct QueryEngine {
         crate::snapshot::SnapshotStamp,
         Arc<crate::snapshot::SignatureSnapshot>,
     )>,
-    pub(crate) snapshot_epoch: u64,
+    pub(crate) snapshot_epoch: crate::memo::Revision,
+    /// The session's one type interner (design §1(a)).
+    pub(crate) types: Arc<hirsel_types::TypeInterner>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     reads: Layered<(DefPath, QueryKind), DependencyReads>,
@@ -255,6 +257,12 @@ impl Drop for QueryEngine {
         released("engine: sources", take(&mut self.sources));
         released("engine: adapters", take(&mut self.adapters));
         released("engine: builtins", take(&mut self.builtins));
+    }
+}
+impl QueryEngine {
+    /// The session's type interner, which every phase and thread shares.
+    pub fn types(&self) -> &Arc<hirsel_types::TypeInterner> {
+        &self.types
     }
 }
 impl QueryEngine {
@@ -343,12 +351,12 @@ impl QueryEngine {
     ) -> Result<(), QueryError> {
         let report = match self.verify {
             Verify::On => {
-                let views = self
-                    .signature_snapshot()
-                    .validation_with(&definition.path.0.package, Arc::new(artifact));
+                let snapshot = self.signature_snapshot();
+                let views = snapshot
+                    .validation_with(&definition.path.path().0.package, Arc::new(artifact));
                 let _timing = timings::phase(Phase::Verify);
                 timings::count(Count::VRuns);
-                hirsel_validate::validate(definition, &views, &mut vec![])
+                hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
             }
             Verify::Off => hirsel_validate::Validation::default(),
         };
@@ -405,7 +413,8 @@ impl QueryEngine {
             package_publications: BTreeMap::new(),
             generic_verdict: None,
             snapshot: None,
-            snapshot_epoch: 0,
+            snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
+            types: hirsel_types::TypeInterner::new(None),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             reads: Layered::default(),
@@ -1700,10 +1709,10 @@ impl DefinitionQueries for QueryEngine {
         });
         let mut result = result.map(shared_output);
         if let Ok(lowered) = &result {
-            let report = self.run_v(&definition.0.package, |signatures| {
+            let report = self.run_v(&definition.0.package, |types, signatures| {
                 let _timing = timings::phase(Phase::Verify);
                 timings::count(Count::VRuns);
-                hirsel_validate::validate(&lowered.value, signatures, &mut vec![])
+                hirsel_validate::validate(&lowered.value, types, signatures, &mut vec![])
             });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);

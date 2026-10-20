@@ -8,7 +8,7 @@
 //! owner's signature in place of its declared one. Only the replaced views and
 //! the verdicts that read them are checked again.
 use hirsel_syntax::{ContentHash, DefId, DefMap};
-use hirsel_types::{HeapRole, Signature, SignatureRef};
+use hirsel_types::{HeapRole, Signature, SignatureRef, TypeInterner};
 use hirsel_validate::{
     SignatureLookup, UniverseErrors, VRead, ValidatedSignatures, ValidationDigest, ViewVerdict,
     Violation,
@@ -25,13 +25,13 @@ pub struct View {
 }
 impl View {
     /// A view of `signature`, keeping `previous`'s digest when it is the same view.
-    pub fn new(signature: SignatureRef, previous: Option<&View>) -> Self {
+    pub fn new(t: &TypeInterner, signature: SignatureRef, previous: Option<&View>) -> Self {
         let digest = match previous {
             Some(view) if Arc::ptr_eq(&view.signature, &signature) => view.digest,
-            _ => hirsel_validate::digest(&signature),
+            _ => hirsel_validate::digest(t, &signature),
         };
         Self {
-            d: DefId::intern(&signature.definition),
+            d: signature.definition,
             signature,
             digest,
         }
@@ -79,6 +79,7 @@ impl ViewTable {
     /// `previous` for unchanged views and the verdicts of `store`'s previous
     /// revision whose reads still hold.
     pub fn new(
+        t: &TypeInterner,
         signatures: impl IntoIterator<Item = SignatureRef>,
         previous: Option<&ViewTable>,
         store: &mut ValidatedSignatures,
@@ -89,8 +90,8 @@ impl ViewTable {
         let views: Vec<View> = sorted
             .into_iter()
             .map(|signature| {
-                let d = DefId::intern(&signature.definition);
-                View::new(signature, previous.and_then(|p| p.get(d)))
+                let d = signature.definition;
+                View::new(t, signature, previous.and_then(|p| p.get(d)))
             })
             .collect();
         let index = views
@@ -110,7 +111,7 @@ impl ViewTable {
         let verdicts: Vec<_> = table
             .views
             .iter()
-            .map(|v| store.verdict_from(v.d, &table, old))
+            .map(|v| store.verdict_from(t, v.d, &table, old))
             .collect();
         for (i, verdict) in verdicts.iter().enumerate() {
             for d in read_views(verdict).collect::<BTreeSet<_>>() {
@@ -159,32 +160,35 @@ pub struct PackageViews {
 impl PackageViews {
     /// The universe `base` with `replacements` in place of (or beside) its views.
     pub fn new(
+        t: &TypeInterner,
         base: Arc<ViewTable>,
         replacements: impl IntoIterator<Item = View>,
         store: &mut ValidatedSignatures,
         old: Option<&ValidatedSignatures>,
     ) -> Self {
         let replaced: DefMap<View> = replacements.into_iter().map(|v| (v.d, v)).collect();
-        Self::over(base, replaced, &DefMap::default(), store, old)
+        Self::over(t, base, replaced, &DefMap::default(), store, old)
     }
     /// This universe with `signature` in place of its view: compile-time
     /// evaluation's materialized owner.
     pub fn replace(
         &self,
+        t: &TypeInterner,
         signature: SignatureRef,
         store: &mut ValidatedSignatures,
         old: Option<&ValidatedSignatures>,
     ) -> Self {
-        let view = View::new(signature, None);
+        let view = View::new(t, signature, None);
         let mut replaced = self.replaced.clone();
         replaced.insert(view.d, view);
-        Self::over(self.base.clone(), replaced, &self.verdicts, store, old)
+        Self::over(t, self.base.clone(), replaced, &self.verdicts, store, old)
     }
     /// The view this universe has in place of `d`'s public one.
     pub fn replacement(&self, d: DefId) -> Option<&View> {
         self.replaced.get(&d)
     }
     fn over(
+        t: &TypeInterner,
         base: Arc<ViewTable>,
         replaced: DefMap<View>,
         checked: &DefMap<Arc<ViewVerdict>>,
@@ -226,7 +230,7 @@ impl PackageViews {
         };
         let verdicts: DefMap<_> = again
             .iter()
-            .map(|&d| (d, store.verdict_from(d, &views, old)))
+            .map(|&d| (d, store.verdict_from(t, d, &views, old)))
             .collect();
         let errors = order
             .iter()

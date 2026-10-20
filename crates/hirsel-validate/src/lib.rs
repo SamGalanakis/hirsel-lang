@@ -19,10 +19,11 @@
 hirsel_guard::install!();
 
 use hirsel_intern::work::{self, Counter};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use hirsel_tir::*;
 use hirsel_types::{
-    Destination, GenericArgument, QueryError, Signature, TypeId, TypeKind, TypeStore, UseKind,
+    Destination, GenericArgument, QueryError, Signature, TypeId, TypeInterner, TypeKind, TypeStore,
+    UseKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -164,11 +165,12 @@ pub enum ViolationKind {
 /// Every view V reads is appended to `reads` (`input`).
 pub fn validate(
     definition: &Definition,
+    t: &TypeInterner,
     signatures: &dyn SignatureLookup,
     reads: &mut Vec<VRead>,
 ) -> Validation {
     let reader = Reader::new(signatures);
-    let validation = validate_input(definition, &reader);
+    let validation = validate_input(definition, t, &reader);
     reader.finish(reads);
     validation
 }
@@ -182,12 +184,14 @@ fn invalid_signature(path: &DefPath) -> Violation {
     }
 }
 fn signature_error(
-    path: &DefPath,
+    t: &TypeInterner,
+    d: DefId,
     signature: &Signature,
     signatures: &Reader<'_>,
 ) -> Option<Violation> {
     work::count(Counter::ValidateSignatureRows);
-    if path != &signature.definition
+    let path = d.path();
+    if d != signature.definition
         || !typing::signature_valid(signature)
         || !carrier_rows_valid(&signature.types, signatures)
         || !declaration::valid(signature, signatures)
@@ -209,7 +213,7 @@ fn signature_error(
         }),
     }
 }
-fn validate_input(definition: &Definition, signatures: &Reader<'_>) -> Validation {
+fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader<'_>) -> Validation {
     let mut errors = validate_structure(definition);
     if !errors.is_empty() {
         return Validation { violations: errors };
@@ -514,8 +518,8 @@ fn format_association(signature: &Signature, signatures: &Reader<'_>) -> bool {
 /// Lowering-test helper: make invariant failures readable at their publication
 /// boundary, without introducing a dependency on the interpreter.
 #[track_caller]
-pub fn assert_valid(definition: &Definition, signatures: &dyn SignatureLookup) {
-    let result = validate(definition, signatures, &mut vec![]);
+pub fn assert_valid(definition: &Definition, t: &TypeInterner, signatures: &dyn SignatureLookup) {
+    let result = validate(definition, t, signatures, &mut vec![]);
     assert!(
         result.violations.is_empty(),
         "invalid typed IR: {:#?}",

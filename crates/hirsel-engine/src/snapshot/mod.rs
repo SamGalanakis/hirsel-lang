@@ -4,9 +4,10 @@
 //! private views each opaque type's own package sees, and V's verdict on every
 //! view with each package's universe errors. It is immutable, `Send + Sync`
 //! and stamped with its epoch, so definitions read it without locks.
+use crate::memo::Revision;
 use crate::*;
 use hirsel_syntax::{DefId, DefMap, PackageId};
-use hirsel_types::SignatureRef;
+use hirsel_types::{SignatureRef, TypeInterner};
 use hirsel_validate::{SignatureLookup, ValidatedSignatures};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -16,7 +17,8 @@ pub use views::{PackageViews, View, ViewTable};
 
 /// One revision's signatures, private views and V verdicts.
 pub struct SignatureSnapshot {
-    epoch: u64,
+    epoch: Revision,
+    types: Arc<TypeInterner>,
     signatures: DefMap<Result<SignatureRef, QueryError>>,
     /// Each opaque type's private view, which only its own package's bodies see.
     private: DefMap<SignatureRef>,
@@ -35,23 +37,23 @@ impl SignatureSnapshot {
     /// error that normalizing it reported) and `private` (each opaque owner's
     /// private view), reusing `previous`'s digests and verdicts that still hold.
     pub fn new(
-        epoch: u64,
-        signatures: impl IntoIterator<Item = (DefPath, Result<SignatureRef, QueryError>)>,
+        epoch: Revision,
+        types: Arc<TypeInterner>,
+        signatures: impl IntoIterator<Item = (DefId, Result<SignatureRef, QueryError>)>,
         private: impl IntoIterator<Item = SignatureRef>,
         previous: Option<&SignatureSnapshot>,
     ) -> Self {
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
-        let signatures: DefMap<_> = signatures
-            .into_iter()
-            .map(|(path, signature)| (DefId::intern(&path), signature))
-            .collect();
+        let t = &*types;
+        let signatures: DefMap<_> = signatures.into_iter().collect();
         let private: DefMap<SignatureRef> = private
             .into_iter()
-            .map(|view| (DefId::intern(&view.definition), view))
+            .map(|view| (view.definition, view))
             .collect();
         let old = previous.map(|p| &p.validated);
         let mut validated = ValidatedSignatures::default();
         let views = Arc::new(ViewTable::new(
+            t,
             signatures.values().filter_map(|s| s.as_ref().ok().cloned()),
             previous.map(|p| &*p.views),
             &mut validated,
@@ -66,17 +68,18 @@ impl SignatureSnapshot {
             owned
                 .entry(package.clone())
                 .or_default()
-                .push(View::new(view.clone(), earlier));
+                .push(View::new(t, view.clone(), earlier));
         }
         let packages = owned
             .into_iter()
             .map(|(package, replaced)| {
-                let views = PackageViews::new(views.clone(), replaced, &mut validated, old);
+                let views = PackageViews::new(t, views.clone(), replaced, &mut validated, old);
                 (package, views)
             })
             .collect();
         Self {
             epoch,
+            types,
             signatures,
             private,
             views,
@@ -84,8 +87,12 @@ impl SignatureSnapshot {
             validated,
         }
     }
-    pub fn epoch(&self) -> u64 {
+    pub fn epoch(&self) -> Revision {
         self.epoch
+    }
+    /// The session interner every view's rows live in.
+    pub fn types(&self) -> &Arc<TypeInterner> {
+        &self.types
     }
     /// The public signature of `d`, or the error normalizing it reported.
     pub fn signature(&self, d: DefId) -> Option<Result<&SignatureRef, &QueryError>> {
@@ -117,12 +124,14 @@ impl SignatureSnapshot {
     /// `package`'s universe with `signature` in place of its declared view:
     /// compile-time evaluation validates a materialized owner against it.
     pub fn validation_with(&self, package: &PackageId, signature: SignatureRef) -> PackageViews {
+        let t = &*self.types;
         let mut store = ValidatedSignatures::default();
         match self.packages.get(package) {
-            Some(views) => views.replace(signature, &mut store, Some(&self.validated)),
+            Some(views) => views.replace(t, signature, &mut store, Some(&self.validated)),
             None => PackageViews::new(
+                t,
                 self.views.clone(),
-                [View::new(signature, None)],
+                [View::new(t, signature, None)],
                 &mut store,
                 Some(&self.validated),
             ),
@@ -150,17 +159,18 @@ impl QueryEngine {
         {
             return snapshot.clone();
         }
-        let mut signatures: Vec<(DefPath, Result<SignatureRef, QueryError>)> = self
+        let mut signatures: Vec<(DefId, Result<SignatureRef, QueryError>)> = self
             .registry
             .signatures()
-            .map(|s| (s.definition.clone(), Ok(s.clone())))
+            .map(|s| (s.definition, Ok(s.clone())))
             .collect();
         let mut private = vec![];
         let mut complete = true;
         let paths: Vec<_> = self.items.keys().cloned().collect();
         self.with_validation_walk(|engine| {
             for path in paths {
-                let signature = engine.signature(&path);
+                let d = DefId::intern(&path);
+                let signature = engine.signature(d);
                 if let Ok(public) = &signature {
                     match engine.body_signature(&path.0.package, public.clone()) {
                         Ok((view, _)) if !Arc::ptr_eq(&view, public) => private.push(view),
@@ -170,16 +180,17 @@ impl QueryEngine {
                 } else {
                     complete = false;
                 }
-                signatures.push((path, signature));
+                signatures.push((d, signature));
             }
         });
         for (path, constant) in &self.staged_constants {
-            signatures.push((path.clone(), Ok(constant.signature.clone())));
+            signatures.push((DefId::intern(path), Ok(constant.signature.clone())));
         }
-        self.snapshot_epoch += 1;
+        self.snapshot_epoch = self.snapshot_epoch.next();
         let previous = self.snapshot.as_ref().map(|(_, s)| s.clone());
         let snapshot = Arc::new(SignatureSnapshot::new(
             self.snapshot_epoch,
+            self.types.clone(),
             signatures,
             private,
             previous.as_deref(),
@@ -200,10 +211,13 @@ impl QueryEngine {
     pub(crate) fn run_v(
         &mut self,
         package: &PackageId,
-        validate: impl FnOnce(&dyn SignatureLookup) -> hirsel_validate::Validation,
+        validate: impl FnOnce(&TypeInterner, &dyn SignatureLookup) -> hirsel_validate::Validation,
     ) -> hirsel_validate::Validation {
         match self.verify {
-            Verify::On => validate(self.signature_snapshot().validation(package)),
+            Verify::On => {
+                let snapshot = self.signature_snapshot();
+                validate(snapshot.types(), snapshot.validation(package))
+            }
             Verify::Off => hirsel_validate::Validation::default(),
         }
     }

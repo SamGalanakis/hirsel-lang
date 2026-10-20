@@ -10,7 +10,7 @@
 //! verdict is reusable exactly while its reads still hold (`read_holds`).
 use super::*;
 use hirsel_syntax::{ContentHash, DefId};
-use hirsel_types::HeapRole;
+use hirsel_types::{HeapRole, TypeInterner};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -45,15 +45,66 @@ pub trait SignatureLookup: Sync {
 /// V's digest of a view. Every field is encoded, including private shape,
 /// malformed rows and metadata a producer could leave out of its fingerprint.
 ///
-/// The encoding is the view's derived `Debug` form, which names every field
-/// of every row (store-local `TypeId`s print their row index), so it follows
-/// the shapes without a hand-kept field list.
-pub fn digest(signature: &Signature) -> ValidationDigest {
-    let text = format!("{signature:?}");
+/// The encoding is the view's derived `Debug` form, which names every field,
+/// followed by every row its types reach in first-encounter order. Each
+/// `TypeId` is written as its ordinal in that order, never as the interner's
+/// number, so the digest is the same in every session. It follows the shapes
+/// without a hand-kept field list.
+pub fn digest(t: &TypeInterner, signature: &Signature) -> ValidationDigest {
+    let order = hirsel_types::closure(t, hirsel_types::signature_types(signature));
+    let ordinals: HashMap<u32, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (raw(*id), i))
+        .collect();
+    let mut encoded = renumber(&format!("{signature:?}"), &ordinals);
+    for id in order.iter() {
+        encoded.push('\n');
+        encoded.push_str(&renumber(&format!("{:?}", t.row(*id)), &ordinals));
+    }
     ValidationDigest(ContentHash::of_parts(
-        "hirsel.validate.view.v1",
-        [text.as_bytes()],
+        "hirsel.validate.view.v2",
+        [encoded.as_bytes()],
     ))
+}
+const TYPE_ID: &str = "TypeId(";
+fn raw(id: hirsel_types::TypeId) -> u32 {
+    let text = format!("{id:?}");
+    type_ids(&text).next().expect("a TypeId prints its number")
+}
+/// The numbers of the `TypeId(n)`s in `text`, in order.
+fn type_ids(text: &str) -> impl Iterator<Item = u32> + '_ {
+    text.match_indices(TYPE_ID).filter_map(|(at, _)| {
+        let digits = &text[at + TYPE_ID.len()..];
+        let end = digits.find(')')?;
+        digits[..end].parse().ok()
+    })
+}
+/// `text` with each `TypeId(n)` of a row in `ordinals` written as `TypeId(#i)`,
+/// its ordinal; an id without a row keeps its number, which names the same
+/// absence for the whole session.
+fn renumber(text: &str, ordinals: &HashMap<u32, usize>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(TYPE_ID) {
+        let (before, after) = rest.split_at(at + TYPE_ID.len());
+        out.push_str(before);
+        let end = after.find(')').unwrap_or(0);
+        match after[..end]
+            .parse::<u32>()
+            .ok()
+            .and_then(|n| ordinals.get(&n))
+        {
+            Some(ordinal) => {
+                out.push('#');
+                out.push_str(&ordinal.to_string());
+            }
+            None => out.push_str(&after[..end]),
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The digest of a universe's errors, in the order V reports them.
@@ -84,8 +135,8 @@ impl<'a> Reader<'a> {
             reads: RefCell::default(),
         }
     }
-    pub(crate) fn get(&self, path: &DefPath) -> Option<&'a Signature> {
-        let d = DefId::intern(path);
+    pub(crate) fn get(&self, d: impl Into<DefId>) -> Option<&'a Signature> {
+        let d = d.into();
         match self.signatures.view(d) {
             Some((signature, digest)) => {
                 self.reads.borrow_mut().push(VRead::View(d, digest));
@@ -104,7 +155,7 @@ impl<'a> Reader<'a> {
         let selected = first.as_ref().map(|(d, _)| *d);
         self.reads.borrow_mut().push(VRead::FirstHeap(selected));
         if let Some(d) = selected {
-            self.get(d.path());
+            self.get(d);
         }
         first.map(|(_, role)| role)
     }
@@ -131,12 +182,13 @@ pub struct ViewVerdict {
 
 /// V's verdict on the view of `d`, read through `signatures`.
 pub fn check_view(
+    t: &TypeInterner,
     d: DefId,
     signature: &Signature,
     signatures: &dyn SignatureLookup,
 ) -> ViewVerdict {
     let reader = Reader::new(signatures);
-    let error = signature_error(d.path(), signature, &reader);
+    let error = signature_error(t, d, signature, &reader);
     let mut reads = vec![];
     reader.finish(&mut reads);
     ViewVerdict { error, reads }
@@ -168,13 +220,19 @@ pub struct ValidatedSignatures {
 }
 impl ValidatedSignatures {
     /// The verdict on view `d` of `signatures`, reused or computed.
-    pub fn verdict(&mut self, d: DefId, signatures: &dyn SignatureLookup) -> Arc<ViewVerdict> {
-        self.verdict_from(d, signatures, None)
+    pub fn verdict(
+        &mut self,
+        t: &TypeInterner,
+        d: DefId,
+        signatures: &dyn SignatureLookup,
+    ) -> Arc<ViewVerdict> {
+        self.verdict_from(t, d, signatures, None)
     }
     /// The verdict on view `d` of `signatures`: one this store or `previous`
     /// holds whose reads still hold, or a new one.
     pub fn verdict_from(
         &mut self,
+        t: &TypeInterner,
         d: DefId,
         signatures: &dyn SignatureLookup,
         previous: Option<&ValidatedSignatures>,
@@ -191,7 +249,7 @@ impl ValidatedSignatures {
         let verdict = previous
             .and_then(|previous| previous.verdicts.get(&digest))
             .and_then(|kept| kept.iter().find(holds).cloned())
-            .unwrap_or_else(|| Arc::new(check_view(d, signature, signatures)));
+            .unwrap_or_else(|| Arc::new(check_view(t, d, signature, signatures)));
         self.verdicts
             .entry(digest)
             .or_default()
@@ -202,12 +260,13 @@ impl ValidatedSignatures {
     /// `signatures`, in DefPath order).
     pub fn universe(
         &mut self,
+        t: &TypeInterner,
         views: impl IntoIterator<Item = DefId>,
         signatures: &dyn SignatureLookup,
     ) -> UniverseErrors {
         let errors = views
             .into_iter()
-            .filter_map(|d| self.verdict(d, signatures).error.clone())
+            .filter_map(|d| self.verdict(t, d, signatures).error.clone())
             .collect();
         UniverseErrors::new(errors)
     }
@@ -220,60 +279,64 @@ impl ValidatedSignatures {
     }
 }
 
-/// An owned universe of signatures for tools and tests. Each view's digest
-/// and the universe's errors are computed when first asked for, and changing
-/// a signature forgets them.
-#[derive(Clone, Debug, Default)]
+/// An owned universe of signatures for tools and tests, over one interner.
+/// Each view's digest and the universe's errors are computed when first asked
+/// for, and changing a signature forgets them.
+#[derive(Clone)]
 pub struct SignatureMap {
-    views: BTreeMap<DefPath, View>,
+    types: Arc<TypeInterner>,
+    views: BTreeMap<DefId, View>,
     errors: OnceLock<UniverseErrors>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct View {
-    d: DefId,
     signature: Signature,
     digest: OnceLock<ValidationDigest>,
 }
 impl View {
-    fn new(path: &DefPath, signature: Signature) -> Self {
+    fn new(signature: Signature) -> Self {
         Self {
-            d: DefId::intern(path),
             signature,
             digest: OnceLock::new(),
         }
     }
-    fn digest(&self) -> ValidationDigest {
-        *self.digest.get_or_init(|| digest(&self.signature))
-    }
 }
 impl SignatureMap {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(types: Arc<TypeInterner>) -> Self {
+        Self {
+            types,
+            views: BTreeMap::new(),
+            errors: OnceLock::new(),
+        }
     }
-    pub fn insert(&mut self, path: DefPath, signature: Signature) -> Option<Signature> {
-        self.errors = OnceLock::new();
-        let view = View::new(&path, signature);
-        self.views.insert(path, view).map(|old| old.signature)
+    pub fn types(&self) -> &Arc<TypeInterner> {
+        &self.types
     }
-    pub fn remove(&mut self, path: &DefPath) -> Option<Signature> {
+    pub fn insert(&mut self, d: impl Into<DefId>, signature: Signature) -> Option<Signature> {
         self.errors = OnceLock::new();
-        self.views.remove(path).map(|old| old.signature)
+        self.views
+            .insert(d.into(), View::new(signature))
+            .map(|old| old.signature)
+    }
+    pub fn remove(&mut self, d: impl Into<DefId>) -> Option<Signature> {
+        self.errors = OnceLock::new();
+        self.views.remove(&d.into()).map(|old| old.signature)
     }
     pub fn clear(&mut self) {
         self.errors = OnceLock::new();
         self.views.clear();
     }
-    pub fn get(&self, path: &DefPath) -> Option<&Signature> {
-        self.views.get(path).map(|v| &v.signature)
+    pub fn get(&self, d: impl Into<DefId>) -> Option<&Signature> {
+        self.views.get(&d.into()).map(|v| &v.signature)
     }
-    pub fn get_mut(&mut self, path: &DefPath) -> Option<&mut Signature> {
+    pub fn get_mut(&mut self, d: impl Into<DefId>) -> Option<&mut Signature> {
         self.errors = OnceLock::new();
-        let view = self.views.get_mut(path)?;
+        let view = self.views.get_mut(&d.into())?;
         view.digest = OnceLock::new();
         Some(&mut view.signature)
     }
-    pub fn contains_key(&self, path: &DefPath) -> bool {
-        self.views.contains_key(path)
+    pub fn contains_key(&self, d: impl Into<DefId>) -> bool {
+        self.views.contains_key(&d.into())
     }
     pub fn len(&self) -> usize {
         self.views.len()
@@ -281,61 +344,53 @@ impl SignatureMap {
     pub fn is_empty(&self) -> bool {
         self.views.is_empty()
     }
-    pub fn keys(&self) -> impl Iterator<Item = &DefPath> {
-        self.views.keys()
+    /// The views' definitions, in DefPath order.
+    pub fn keys(&self) -> impl Iterator<Item = DefId> + '_ {
+        self.views.keys().copied()
     }
     pub fn values(&self) -> impl Iterator<Item = &Signature> {
         self.views.values().map(|v| &v.signature)
     }
-    pub fn iter(&self) -> impl Iterator<Item = (&DefPath, &Signature)> {
-        self.views.iter().map(|(p, v)| (p, &v.signature))
+    pub fn iter(&self) -> impl Iterator<Item = (DefId, &Signature)> {
+        self.views.iter().map(|(d, v)| (*d, &v.signature))
+    }
+    /// Every signature, keyed by its own definition.
+    pub fn extend_signatures(&mut self, signatures: impl IntoIterator<Item = Signature>) {
+        for signature in signatures {
+            self.insert(signature.definition, signature);
+        }
     }
 }
-impl std::ops::Index<&DefPath> for SignatureMap {
-    type Output = Signature;
-    fn index(&self, path: &DefPath) -> &Signature {
-        self.get(path).expect("a signature at the path")
-    }
-}
-impl<const N: usize> From<[(DefPath, Signature); N]> for SignatureMap {
-    fn from(signatures: [(DefPath, Signature); N]) -> Self {
-        signatures.into_iter().collect()
-    }
-}
-impl FromIterator<(DefPath, Signature)> for SignatureMap {
-    fn from_iter<I: IntoIterator<Item = (DefPath, Signature)>>(iter: I) -> Self {
-        let mut map = Self::new();
-        map.extend(iter);
-        map
-    }
-}
-impl Extend<(DefPath, Signature)> for SignatureMap {
-    fn extend<I: IntoIterator<Item = (DefPath, Signature)>>(&mut self, iter: I) {
-        for (path, signature) in iter {
-            self.insert(path, signature);
+impl<D: Into<DefId>> Extend<(D, Signature)> for SignatureMap {
+    fn extend<I: IntoIterator<Item = (D, Signature)>>(&mut self, iter: I) {
+        for (d, signature) in iter {
+            self.insert(d, signature);
         }
     }
 }
 impl SignatureLookup for SignatureMap {
     fn view(&self, d: DefId) -> Option<(&Signature, ValidationDigest)> {
-        self.views.get(d.path()).map(|v| (&v.signature, v.digest()))
+        self.views.get(&d).map(|v| {
+            let digest = *v.digest.get_or_init(|| digest(&self.types, &v.signature));
+            (&v.signature, digest)
+        })
     }
     fn first_heap(&self) -> Option<(DefId, HeapRole)> {
-        self.views.values().find_map(|v| {
+        self.views.iter().find_map(|(d, v)| {
             v.signature
                 .metadata
                 .roles
                 .heap
                 .clone()
-                .map(|role| (v.d, role))
+                .map(|role| (*d, role))
         })
     }
     fn universe_errors(&self) -> (ContentHash, &[Violation]) {
         let universe = self.errors.get_or_init(|| {
             UniverseErrors::new(
                 self.views
-                    .values()
-                    .filter_map(|v| check_view(v.d, &v.signature, self).error)
+                    .iter()
+                    .filter_map(|(d, v)| check_view(&self.types, *d, &v.signature, self).error)
                     .collect(),
             )
         });
