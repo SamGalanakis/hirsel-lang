@@ -2,8 +2,9 @@
 // expect: run
 // std@1/store over a test Dir: a transaction reads its own writes, a commit is
 // visible to later snapshots at once, a snapshot never changes, ranges walk
-// either way with paging and prefix bounds, a transaction begun before another
-// commit conflicts, and a reopened store holds every durable commit.
+// either way with paging and prefix bounds, a transaction conflicts with a
+// commit after it began only on a key both write, and a reopened store holds
+// every durable commit.
 fn keys(entries: List[(Bytes, Bytes)]) -> List[Bytes] {
   let mut out: List[Bytes] = []
   for (k, _) in entries {
@@ -23,7 +24,7 @@ pub fn main(t: Test) -> Result[(), store.StoreError] {
   txn.delete(mut first, b"zone")
   test.check(
     t,
-    txn.get(first, b"user/ada") == Some(b"1815") && txn.get(first, b"zone") == None()
+    txn.get(mut first, b"user/ada") == Some(b"1815") && txn.get(mut first, b"zone") == None()
   )
   let earlier = store.snapshot(mut s)
   let ticket = store.commit(mut s, take first)?
@@ -65,14 +66,19 @@ pub fn main(t: Test) -> Result[(), store.StoreError] {
     t,
     store.range(after, ff_low, ff_high, up, 10) == [] && ff_high == Unbounded()
   )
-  // A transaction that began before another commit conflicts.
+  // A transaction conflicts with a commit after it began only on a key it
+  // writes: a disjoint one commits, an overlapping one does not.
   let mut early = store.begin(mut s)
+  let mut overlapping = store.begin(mut s)
   let mut late = store.begin(mut s)
   txn.delete(mut late, b"user/alan")
   txn.put(mut late, b"user/ada", b"1815-12-10")
   let second = store.commit(mut s, take late)?
+  txn.put(mut overlapping, b"user/ada", b"1815")
+  test.check(t, store.commit(mut s, take overlapping) == Error(Conflict()))
   txn.put(mut early, b"user/x", b"x")
-  test.check(t, store.commit(mut s, take early) == Error(Conflict()))
+  let third = store.commit(mut s, take early)?
+  test.check(t, store.sequence(third) == 3)
   test.check(
     t,
     keys(store.range(after, all, Unbounded(), up, 10)) == [
@@ -85,10 +91,13 @@ pub fn main(t: Test) -> Result[(), store.StoreError] {
   store.close(take s)?
   let mut again = store.open(d, store.default_config())?
   let now = store.snapshot(mut again)
-  test.check(t, store.snapshot_sequence(now) == 2)
+  test.check(t, store.snapshot_sequence(now) == 3)
   test.check(
     t,
-    store.get(now, b"user/ada") == Some(b"1815-12-10") && store.get(now, b"user/alan") == None()
+    store.get(now, b"user/ada") == Some(b"1815-12-10") && store.get(now, b"user/alan") == None() && store.get(
+      now,
+      b"user/x"
+    ) == Some(b"x")
   )
   store.close(take again)?
   Ok(())

@@ -41,8 +41,8 @@ pub fn main(t: Test) -> Result[(), store.StoreError] {
   let second = put(mut s, b"k2", b"v2")?
   test.check(t, logs(d) == 1)
   // A later transaction reads committed, not yet durable state.
-  let x = store.begin(mut s)
-  test.check(t, txn.get(x, b"k1") == Some(b"v1"))
+  let mut x = store.begin(mut s)
+  test.check(t, txn.get(mut x, b"k1") == Some(b"v1"))
   store.durable(mut s, first)?
   test.check(t, logs(d) == 2)
   store.durable(mut s, second)?

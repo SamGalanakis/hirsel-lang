@@ -2936,11 +2936,15 @@ fn store.get(snap: store.Snapshot, key: Bytes) -> Option[Bytes] in snap uses {}
 fn store.range(snap: store.Snapshot, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
 fn store.prefix_bounds(prefix: Bytes) -> (ordered_map.Bound[Bytes], ordered_map.Bound[Bytes]) uses {}
 fn store.compare_keys(a: Bytes, b: Bytes) -> i32 uses {}
+type store.Isolation = SnapshotIsolation | SerializableSnapshot
 fn store.begin[S](mut s: store.Store[S]) -> store.Txn uses {}
+fn store.begin_with[S](mut s: store.Store[S], isolation: store.Isolation) -> store.Txn uses {}
+fn store.rollback[S](mut s: store.Store[S], take t: store.Txn) -> () uses {}
 fn txn.put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {}
 fn txn.delete(mut t: store.Txn, take key: Bytes) -> () uses {}
-fn txn.get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}
-fn txn.range(t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
+fn txn.get(mut t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}
+fn txn.range(mut t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
+fn txn.mark_read(mut t: store.Txn, take key: Bytes) -> () uses {}
 fn store.commit[S](mut s: store.Store[S], take t: store.Txn) -> Result[store.Ticket, store.StoreError] uses {s}
 fn store.sequence(t: store.Ticket) -> u64 uses {}
 fn store.durable[S](mut s: store.Store[S], t: store.Ticket) -> Result[(), store.StoreError] uses {s}
@@ -2955,12 +2959,20 @@ work unchanged. Keys and values are `Bytes`, ordered
 byte-lexicographically (`compare_keys`). An affine `Store[S]` is the single writer of its backend;
 `Snapshot` and `Txn` are copyable values that hold no authority.
 
-**Transactions.** `begin` starts a `Txn` at the latest commit. `txn.get` and `txn.range`
-see that commit's state with the transaction's own earlier `put`s and `delete`s applied;
-nothing is visible elsewhere until `commit`. Dropping a `Txn` aborts it. `commit` makes
-the writes the next commit, numbered by consecutive sequences from 1, visible at once to
-later `snapshot`s and `begin`s, and returns its `Ticket`; it returns `Conflict()` with no
-effect when another commit landed after the transaction began. `range` and `txn.range`
+**Transactions.** `begin` starts a serializable `Txn` at the latest commit, and
+`begin_with` one at either `Isolation`. `txn.get` and `txn.range` see that commit's state
+with the transaction's own earlier `put`s and `delete`s applied; nothing is visible
+elsewhere until `commit`. Dropping a `Txn` aborts it; `rollback` aborts it and frees its
+conflict tracking at once. `commit` makes the writes the next commit, numbered by
+consecutive sequences from 1, visible at once to later `snapshot`s and `begin`s, and
+returns its `Ticket`. Conflicts are per key, after SlateDB's transaction manager
+(`std@1/txn_manager`): `commit` returns `Conflict()` with no effect when a commit made
+after the transaction began wrote a key it writes or marked with `txn.mark_read`
+(`SnapshotIsolation`), or also a key it read with `txn.get` or one inside a range it
+asked `txn.range` for (`SerializableSnapshot`, the default, so write skew conflicts too).
+The store retains the write sets of at most 4096 recent commits or 1 MiB of their keys
+while a transaction is open; a transaction older than what it retains conflicts whenever
+it writes or read anything. `range` and `txn.range`
 return at most `limit` entries between the bounds in `direction` order as fresh copies;
 `prefix_bounds(p)` gives the bounds of exactly the keys starting with `p`. A `Snapshot`
 reflects every commit up to `snapshot_sequence`, durable or not, and later commits never

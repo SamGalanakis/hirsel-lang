@@ -1056,6 +1056,12 @@
       "module": [
         "stream"
       ]
+    },
+    {
+      "path": "txn_manager.hir",
+      "module": [
+        "txn_manager"
+      ]
     }
   ],
   "dependencies": []

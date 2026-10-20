@@ -1,0 +1,210 @@
+// rule: STORE-2
+// expect: run
+// std@1/store transactions carry SlateDB's db_transaction.rs (a5c4fd2)
+// conflict tests: lost update under snapshot isolation, read-write and range
+// conflicts, write skew through empty scans, a phantom outside the yielded
+// keys, a resurrected tombstone and prefix scans. Then Hirsel's own: begin is
+// serializable, so write skew conflicts; disjoint transactions commit in any
+// order; rollback leaves no effect.
+// SlateDB's db.put: a write outside any transaction.
+fn db_put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+  let key = unique k
+  let value = unique v
+  let done: Result[(), store.TxFailure[()]] = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), ()] {
+      store.tx_put(mut tx, unique key, unique value)
+      Ok(())
+    }
+  )
+  match done {
+    Ok(()) => Ok(()),
+    Error(_) => Error(Closed()),
+  }
+}
+
+fn keys(entries: List[(Bytes, Bytes)]) -> List[Bytes] uses {} {
+  let mut out: List[Bytes] = []
+  for (k, _) in entries {
+    list.push(mut out, unique k)
+  }
+  out
+}
+
+fn conflicted(r: Result[store.Ticket, store.StoreError]) -> bool uses {} {
+  r == Error(Conflict())
+}
+
+fn committed(r: Result[store.Ticket, store.StoreError]) -> bool uses {} {
+  match r {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+// test_txn_si_commit_conflict through test_txn_ssi_scan_prefix_subrange_
+// tracks_composed_range, db_transaction.rs:856-1155.
+fn conflicts(t: Test) -> Result[(), store.StoreError] {
+  let ssi: store.Isolation = SerializableSnapshot()
+  let si: store.Isolation = SnapshotIsolation()
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  db_put(mut s, b"k1", b"v1")?
+  // test_txn_si_commit_conflict
+  let mut txn1 = store.begin_with(mut s, si)
+  txn.put(mut txn1, b"k1", b"v2")
+  let mut txn2 = store.begin_with(mut s, si)
+  txn.put(mut txn2, b"k1", b"v3")
+  test.check(t, committed(store.commit(mut s, take txn1)))
+  test.check(t, conflicted(store.commit(mut s, take txn2)))
+  // test_txn_si_commit_conflict_with_db_writes
+  let mut txn3 = store.begin_with(mut s, si)
+  txn.put(mut txn3, b"k1", b"v2")
+  db_put(mut s, b"k1", b"v3")?
+  test.check(t, conflicted(store.commit(mut s, take txn3)))
+  // test_txn_ssi_commit_conflict
+  db_put(mut s, b"k2", b"v2.1")?
+  let mut a = store.begin_with(mut s, ssi)
+  txn.put(mut a, b"k1", b"v2")
+  txn.put(mut a, b"k2", b"v2.2")
+  let mut b = store.begin_with(mut s, ssi)
+  test.check(t, txn.get(mut b, b"k2") == Some(b"v2.1"))
+  txn.put(mut b, b"k3", b"v3")
+  test.check(t, committed(store.commit(mut s, take a)))
+  test.check(t, conflicted(store.commit(mut s, take b)))
+  // test_txn_ssi_commit_conflit_with_ranges
+  let mut writer = store.begin_with(mut s, ssi)
+  let mut scanner = store.begin_with(mut s, ssi)
+  let _ = txn.range(mut scanner, Included(b"k2"), Included(b"k3"), Ascending(), 100)
+  txn.put(mut writer, b"k2", b"v2.2")
+  test.check(t, committed(store.commit(mut s, take writer)))
+  txn.put(mut scanner, b"k4", b"v4")
+  test.check(t, conflicted(store.commit(mut s, take scanner)))
+  // test_txn_ssi_write_skew_via_empty_scans: exactly one of the two commits.
+  db_put(mut s, b"skew/~outside_both_ranges", b"v")?
+  let mut left = store.begin_with(mut s, ssi)
+  let mut right = store.begin_with(mut s, ssi)
+  test.check(
+    t,
+    txn.range(mut left, Included(b"skew/a"), Excluded(b"skew/m"), Ascending(), 100) == []
+  )
+  test.check(
+    t,
+    txn.range(mut right, Included(b"skew/n"), Excluded(b"skew/z"), Ascending(), 100) == []
+  )
+  txn.put(mut left, b"skew/x_from_t1", b"v1")
+  txn.put(mut right, b"skew/b_from_t2", b"v2")
+  let r1 = committed(store.commit(mut s, take left))
+  let r2 = committed(store.commit(mut s, take right))
+  test.check(t, r1 != r2)
+  // test_txn_ssi_phantom_outside_yielded_bbox
+  db_put(mut s, b"k_mid", b"seed")?
+  let mut bbox = store.begin_with(mut s, ssi)
+  let found = txn.range(
+    mut bbox,
+    Included(b"k_aaa"),
+    Excluded(b"k_zzz"),
+    Ascending(),
+    100
+  )
+  test.check(t, keys(found) == [b"k_mid"])
+  db_put(mut s, b"k_aaa_inserted", b"phantom")?
+  txn.put(mut bbox, b"t1_marker", b"x")
+  test.check(t, conflicted(store.commit(mut s, take bbox)))
+  // test_txn_ssi_tombstone_resurrection_in_scan_range
+  db_put(mut s, b"l_deleted", b"v_orig")?
+  let mut gone = store.begin_with(mut s, si)
+  txn.delete(mut gone, b"l_deleted")
+  store.commit(mut s, take gone)?
+  let mut tomb = store.begin_with(mut s, ssi)
+  test.check(
+    t,
+    txn.range(mut tomb, Included(b"l_a"), Excluded(b"l_z"), Ascending(), 100) == []
+  )
+  db_put(mut s, b"l_deleted", b"resurrected")?
+  txn.put(mut tomb, b"t1_marker", b"x")
+  test.check(t, conflicted(store.commit(mut s, take tomb)))
+  // test_txn_ssi_empty_scan_prefix_detects_concurrent_insert
+  let (users_low, users_high) = store.prefix_bounds(b"users/")
+  let mut empty = store.begin_with(mut s, ssi)
+  test.check(t, txn.range(mut empty, users_low, users_high, Ascending(), 100) == [])
+  db_put(mut s, b"users/alice", b"first")?
+  txn.put(mut empty, b"users/bob", b"second")
+  test.check(t, conflicted(store.commit(mut s, take empty)))
+  // test_txn_ssi_scan_prefix_subrange_tracks_composed_range
+  db_put(mut s, b"users/m_mallory", b"v")?
+  let (_, sub_high) = store.prefix_bounds(b"users/")
+  let mut sub = store.begin_with(mut s, ssi)
+  let subrange = txn.range(
+    mut sub,
+    Included(b"users/m"),
+    copy sub_high,
+    Ascending(),
+    100
+  )
+  test.check(t, keys(subrange) == [b"users/m_mallory"])
+  db_put(mut s, b"users/alice", b"outside subrange")?
+  txn.put(mut sub, b"t1_marker", b"x")
+  test.check(t, committed(store.commit(mut s, take sub)))
+  let mut sub2 = store.begin_with(mut s, ssi)
+  let again = txn.range(mut sub2, Included(b"users/m"), copy sub_high, Ascending(), 100)
+  test.check(t, keys(again) == [b"users/m_mallory"])
+  db_put(mut s, b"users/zach", b"inside subrange")?
+  txn.put(mut sub2, b"t2_marker", b"x")
+  test.check(t, conflicted(store.commit(mut s, take sub2)))
+  store.close(take s)?
+  Ok(())
+}
+
+// Hirsel's own: store.begin is serializable, so the lost update and write
+// skew SlateDB's default snapshot isolation allows conflict; rollback frees a
+// transaction's tracking at once; disjoint transactions both commit, in
+// either order, and every commit is applied over the latest state.
+fn hirsel(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  db_put(mut s, b"on_call/ada", b"yes")?
+  db_put(mut s, b"on_call/alan", b"yes")?
+  let mut ada = store.begin(mut s)
+  let mut alan = store.begin(mut s)
+  test.check(t, txn.get(mut ada, b"on_call/alan") == Some(b"yes"))
+  test.check(t, txn.get(mut alan, b"on_call/ada") == Some(b"yes"))
+  txn.put(mut ada, b"on_call/ada", b"no")
+  txn.put(mut alan, b"on_call/alan", b"no")
+  test.check(t, committed(store.commit(mut s, take ada)))
+  test.check(t, conflicted(store.commit(mut s, take alan)))
+  let mut p = store.begin(mut s)
+  let mut q = store.begin(mut s)
+  let mut r = store.begin(mut s)
+  txn.put(mut p, b"p", b"1")
+  txn.put(mut q, b"q", b"2")
+  txn.put(mut r, b"r", b"3")
+  test.check(t, committed(store.commit(mut s, take q)))
+  test.check(t, committed(store.commit(mut s, take r)))
+  test.check(t, committed(store.commit(mut s, take p)))
+  let now = store.snapshot(mut s)
+  test.check(
+    t,
+    store.get(now, b"p") == Some(b"1") && store.get(now, b"q") == Some(b"2") && store.get(
+      now,
+      b"r"
+    ) == Some(b"3") && store.get(now, b"on_call/ada") == Some(b"no")
+  )
+  let mut held = store.begin(mut s)
+  txn.put(mut held, b"held", b"x")
+  store.rollback(mut s, take held)
+  store.close(take s)?
+  let mut again = store.open(d, store.default_config())?
+  let after = store.snapshot(mut again)
+  test.check(
+    t,
+    store.get(after, b"q") == Some(b"2") && store.get(after, b"held") == None()
+  )
+  store.close(take again)?
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  conflicts(t)?
+  hirsel(t)
+}

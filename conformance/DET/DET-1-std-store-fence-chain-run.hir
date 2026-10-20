@@ -1,0 +1,79 @@
+// rule: DET-1
+// expect: run
+// SlateDB's fence.rs tests (a5c4fd2) for std@1/store: test_fence, a writer
+// opening the store fences the one before it, whose next write is Fenced;
+// test_fencer_fenced_after_claiming_epoch, a writer that fenced another is
+// fenced in turn by a third; and their checks that the newest log object is
+// the empty fence log, that log ids are contiguous and that a reopen holds
+// every acknowledged commit and no stale one.
+fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+  let mut x = store.begin(mut s)
+  txn.put(mut x, unique k, unique v)
+  let ticket = store.commit(mut s, take x)?
+  store.durable(mut s, ticket)
+}
+
+// The log ids, which must be contiguous, and the size of the newest log.
+fn logs(d: Dir) -> (bool, u64) uses {d} {
+  let Ok(entries) = file.read_dir(d, path.of("log")) else {
+    return (false, 0)
+  }
+  let mut low: u64 = 18446744073709551615
+  let mut high: u64 = 0
+  let mut count: u64 = 0
+  let mut newest = ""
+  for entry in entries {
+    let name = string.as_bytes(path.text(entry.path))
+    let mut id: u64 = 0
+    for i in bytes.len(name) - 20..bytes.len(name) {
+      let digit: u64 = int.widen(name[i] - b'0')
+      id = id * 10 + digit
+    }
+    if id < low {
+      low = id
+    }
+    if id >= high {
+      high = id
+      newest = path.text(entry.path)
+    }
+    count += 1
+  }
+  let size = match file.read_bytes(d, path.of(newest)) {
+    Ok(data) => bytes.len(data),
+    Error(_) => 0,
+  }
+  (count > 0 && high - low + 1 == count, size)
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut first = store.open(d, store.default_config())?
+  let (_, fence_size) = logs(d)
+  put(mut first, b"k0", b"v0")?
+  let mut second = store.open(d, store.default_config())?
+  let (contiguous, newest) = logs(d)
+  test.check(t, contiguous && newest == fence_size)
+  test.check(t, put(mut first, b"k1", b"stale") == Error(Fenced()))
+  put(mut second, b"k1", b"v1")?
+  let mut third = store.open(d, store.default_config())?
+  let (still, last) = logs(d)
+  test.check(t, still && last == fence_size)
+  test.check(t, put(mut second, b"k2", b"stale") == Error(Fenced()))
+  test.check(t, store.close(take second) == Error(Closed()))
+  put(mut third, b"k2", b"v2")?
+  store.close(take third)?
+  let mut again = store.open(d, store.default_config())?
+  let now = store.snapshot(mut again)
+  test.check(
+    t,
+    store.get(now, b"k0") == Some(b"v0") && store.get(now, b"k1") == Some(b"v1") && store.get(
+      now,
+      b"k2"
+    ) == Some(b"v2")
+  )
+  let (end, _) = logs(d)
+  test.check(t, end)
+  store.close(take again)?
+  test.check(t, store.close(take first) == Error(Closed()))
+  Ok(())
+}

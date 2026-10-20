@@ -863,6 +863,7 @@ conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
 conformance/DET/DET-1-std-store-crash-boundaries-run.hir
 conformance/DET/DET-1-std-store-crash-compaction-run.hir
+conformance/DET/DET-1-std-store-fence-chain-run.hir
 conformance/DET/DET-1-std-store-fence-run.hir
 conformance/DET/DET-1-std-store-recover-run.hir
 conformance/DET/DET-1-std-store-transact-crash-run.hir
@@ -6291,6 +6292,9 @@ conformance/STORE/STORE-12-call-stream-run.hir
 conformance/STORE/STORE-12-sim-call-stream-run.hir
 conformance/STORE/STORE-2-sim-transact-run.hir
 conformance/STORE/STORE-2-transact-run.hir
+conformance/STORE/STORE-2-txn-conflicts-run.hir
+conformance/STORE/STORE-2-txn-isolation-run.hir
+conformance/STORE/STORE-2-txn-manager-run.hir
 conformance/STORE/STORE-3-body-capture-bad.hir
 conformance/STORE/STORE-3-body-capture-ok.hir
 conformance/STORE/STORE-3-tx-escape-bad.hir

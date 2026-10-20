@@ -1,6 +1,9 @@
 // Reads and writes inside a std@1/store transaction. Reads see the snapshot
 // the transaction began at with its own earlier writes applied; nothing is
-// visible to anyone else until store.commit.
+// visible to anyone else until store.commit. Under SerializableSnapshot a
+// read records its key or range, so a commit after the transaction began that
+// writes it makes store.commit return Conflict(), as SlateDB's
+// DbTransaction::get and scan track reads (db_transaction.rs:150, 299).
 /// Stores `value` under `key` when the transaction commits.
 pub fn put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {} {
   ordered_map.insert(mut t.state, copy key, copy value)
@@ -13,19 +16,35 @@ pub fn delete(mut t: store.Txn, take key: Bytes) -> () uses {} {
   ordered_map.insert(mut t.writes, take key, None())
 }
 
-/// The value under `key` as this transaction sees it.
-pub fn get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {} {
+/// The value under `key` as this transaction sees it; a serializable
+/// transaction records the read.
+pub fn get(mut t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {} {
+  if let SerializableSnapshot() = t.isolation {
+    ordered_map.insert(mut t.reads, unique key, true)
+  }
   ordered_map.get(t.state, key)
 }
 
 /// At most `limit` entries with keys between `from` and `to` as this
-/// transaction sees them, in `direction` order, as fresh copies.
+/// transaction sees them, in `direction` order, as fresh copies. A
+/// serializable transaction records the whole range it asked for, entries
+/// it did not return included.
 pub fn range(
-  t: store.Txn,
+  mut t: store.Txn,
   from: ordered_map.Bound[Bytes],
   to: ordered_map.Bound[Bytes],
   direction: ordered_map.Direction,
   limit: u64
 ) -> List[(Bytes, Bytes)] uses {} {
+  if let SerializableSnapshot() = t.isolation {
+    list.push(mut t.ranges, txn_manager.ReadRange(from: unique from, to: unique to))
+  }
   store.entries_in(t.state, from, to, direction, limit)
+}
+
+/// Records `key` as read, under either isolation, without reading it
+/// (DbTransaction::mark_read, db_transaction.rs:410): a commit after the
+/// transaction began that writes `key` makes its commit conflict.
+pub fn mark_read(mut t: store.Txn, take key: Bytes) -> () uses {} {
+  ordered_map.insert(mut t.reads, take key, true)
 }

@@ -474,7 +474,10 @@ discipline on byte keys; `store.transact`, views and tables are built on them.
 
 ```text
 fn store.begin(s: Store) -> Txn
-fn txn.get(t: Txn, key: Bytes) -> Option[Bytes]
+fn store.begin_with(s: Store, isolation: Isolation) -> Txn
+fn store.rollback(mut s: Store, take t: Txn) -> ()
+fn txn.get(mut t: Txn, key: Bytes) -> Option[Bytes]
+fn txn.mark_read(mut t: Txn, key: Bytes) -> ()
 fn txn.put(mut t: Txn, key: Bytes, value: Bytes) -> ()
 fn txn.delete(mut t: Txn, key: Bytes) -> ()
 fn store.commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError]
@@ -482,8 +485,10 @@ fn store.durable(mut s: Store, ticket: Ticket) -> Result[(), StoreError]
 fn store.compact(mut s: Store) -> Result[(), StoreError]
 ```
 
-`store.commit` returns `Conflict()` when another commit landed after `t` began, and
-otherwise applies `t` and returns a `Ticket` for its commit version; `store.durable`
+`store.commit` returns `Conflict()` when a commit after `t` began wrote a key `t`
+conflicts on: one it writes or marked read under `SnapshotIsolation`, and also one it
+read or one inside a range it read under `SerializableSnapshot`, `store.begin`'s level
+(per-key detection after SlateDB's transaction manager). Otherwise it applies `t` and returns a `Ticket` for its commit version; `store.durable`
 returns once `D` reaches the ticket's version, writing the queued group if needed. A
 library that releases an outcome before `durable` returns breaks the output gate.
 
@@ -602,7 +607,10 @@ fn store.tx_range(tx: Tx, from: Bound[Bytes], to: Bound[Bytes], direction: Direc
 fn store.snapshot(s: Store) -> Snapshot
 fn store.view[R: inert, E: inert](snap: Snapshot, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
 fn store.begin(s: Store) -> Txn
-fn txn.get(t: Txn, key: Bytes) -> Option[Bytes]
+fn store.begin_with(s: Store, isolation: Isolation) -> Txn
+fn store.rollback(mut s: Store, take t: Txn) -> ()
+fn txn.get(mut t: Txn, key: Bytes) -> Option[Bytes]
+fn txn.mark_read(mut t: Txn, key: Bytes) -> ()
 fn txn.put(mut t: Txn, key: Bytes, value: Bytes) -> ()
 fn txn.delete(mut t: Txn, key: Bytes) -> ()
 fn store.commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError]

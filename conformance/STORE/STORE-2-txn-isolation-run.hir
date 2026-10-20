@@ -1,0 +1,303 @@
+// rule: STORE-2
+// expect: run
+// steps: 3000000
+// twenty cases each open, load and close a store, about 1.9 million steps
+// std@1/store transactions carry SlateDB's db_transaction.rs (a5c4fd2)
+// test_txn_table_driven: all twenty cases, run as SlateDB runs them (one
+// transaction at either isolation level, interleaved with plain writes, which
+// are store.transact commits here). The conflict tests are in
+// STORE-2-txn-conflicts-run.
+type Op = TxnGet(Bytes) | TxnScan(Bytes, Bytes) | TxnPut(Bytes, Bytes) | TxnDelete(
+  Bytes
+) | TxnMarkRead(Bytes) | TxnCommit | TxnRollback | DbPut(Bytes, Bytes) | DbGet(Bytes)
+
+type Outcome = Empty | Got(Option[Bytes]) | Scanned(List[Bytes]) | Conflicted | Invalid
+
+type Case {
+  serializable: bool,
+  initial: List[(Bytes, Bytes)],
+  ops: List[Op],
+  expected: List[Outcome],
+}
+
+// SlateDB's db.put: a write outside any transaction.
+fn db_put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+  let key = unique k
+  let value = unique v
+  let done: Result[(), store.TxFailure[()]] = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), ()] {
+      store.tx_put(mut tx, unique key, unique value)
+      Ok(())
+    }
+  )
+  match done {
+    Ok(()) => Ok(()),
+    Error(_) => Error(Closed()),
+  }
+}
+
+fn level(serializable: bool) -> store.Isolation uses {} {
+  if serializable {
+    SerializableSnapshot()
+  } else {
+    SnapshotIsolation()
+  }
+}
+
+fn keys(entries: List[(Bytes, Bytes)]) -> List[Bytes] uses {} {
+  let mut out: List[Bytes] = []
+  for (k, _) in entries {
+    list.push(mut out, unique k)
+  }
+  out
+}
+
+// execute_transaction_test_ops, db_transaction.rs:1234.
+fn run_case(t: Test, c: Case) -> Result[bool, store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  for (k, v) in c.initial {
+    db_put(mut s, k, v)?
+  }
+  let mut x = store.begin_with(mut s, level(c.serializable))
+  let mut live = true
+  let mut results: List[Outcome] = []
+  for op in c.ops {
+    let r: Outcome = match op {
+      DbPut(k, v) => {
+        db_put(mut s, k, v)?
+        Empty()
+      },
+      DbGet(k) => Got(store.get(store.snapshot(mut s), k)),
+      _ if !live => Invalid(),
+      TxnGet(k) => Got(txn.get(mut x, k)),
+      TxnScan(from, to) => Scanned(
+        keys(
+          txn.range(mut x, Included(unique from), Included(unique to), Ascending(), 100)
+        )
+      ),
+      TxnPut(k, v) => {
+        txn.put(mut x, unique k, unique v)
+        Empty()
+      },
+      TxnDelete(k) => {
+        txn.delete(mut x, unique k)
+        Empty()
+      },
+      TxnMarkRead(k) => {
+        txn.mark_read(mut x, unique k)
+        Empty()
+      },
+      TxnCommit => {
+        live = false
+        let done = replace(mut x, store.begin_with(mut s, SnapshotIsolation()))
+        match store.commit(mut s, take done) {
+          Ok(_) => Empty(),
+          Error(Conflict()) => Conflicted(),
+          Error(e) => return Error(e),
+        }
+      },
+      TxnRollback => {
+        live = false
+        let done = replace(mut x, store.begin_with(mut s, SnapshotIsolation()))
+        store.rollback(mut s, take done)
+        Empty()
+      },
+    }
+    list.push(mut results, take r)
+  }
+  store.close(take s)?
+  Ok(results == c.expected)
+}
+
+fn table(t: Test) -> Result[(), store.StoreError] {
+  let one: List[(Bytes, Bytes)] = [(b"k1", b"v1")]
+  let five: List[(Bytes, Bytes)] = [
+    (b"k1", b"v1"),
+    (b"k2", b"v2"),
+    (b"k3", b"v3"),
+    (b"k4", b"v4"),
+    (b"k5", b"v5")
+  ]
+  let scanned_five: List[Bytes] = [b"k1", b"k2", b"k3", b"k4", b"k5"]
+  let cases: List[Case] = [
+    // ssi_basic_visibility
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnGet(b"k1"), TxnCommit()],
+      expected: [Got(Some(b"v1")), Empty()]
+    ),
+    // ssi_write_visibility_in_txn
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnPut(b"k1", b"v2"), TxnGet(b"k1"), TxnCommit()],
+      expected: [Empty(), Got(Some(b"v2")), Empty()]
+    ),
+    // ssi_delete_visibility_in_txn
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnDelete(b"k1"), TxnGet(b"k1"), TxnCommit()],
+      expected: [Empty(), Got(None()), Empty()]
+    ),
+    // ssi_rollback_visibility
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnPut(b"k1", b"v2"), TxnRollback(), DbGet(b"k1")],
+      expected: [Empty(), Empty(), Got(Some(b"v1"))]
+    ),
+    // si_concurrent_read_snapshot
+    Case(
+      serializable: false,
+      initial: copy one,
+      ops: [DbPut(b"k1", b"v2"), TxnGet(b"k1"), TxnCommit()],
+      expected: [Empty(), Got(Some(b"v1")), Empty()]
+    ),
+    // ssi_write_write_conflict
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnPut(b"k1", b"v2"), DbPut(b"k1", b"v3"), TxnCommit()],
+      expected: [Empty(), Empty(), Conflicted()]
+    ),
+    // ssi_read_write_conflict
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnGet(b"k1"), DbPut(b"k1", b"v1"), TxnPut(b"k2", b"v2.1"), TxnCommit()],
+      expected: [Got(Some(b"v1")), Empty(), Empty(), Conflicted()]
+    ),
+    // si_read_write_no_conflict
+    Case(
+      serializable: false,
+      initial: copy one,
+      ops: [TxnGet(b"k1"), DbPut(b"k1", b"v2"), TxnCommit()],
+      expected: [Got(Some(b"v1")), Empty(), Empty()]
+    ),
+    // ssi_write_read_conflict
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [DbPut(b"k1", b"v2"), TxnGet(b"k1"), TxnPut(b"k3", b"v3"), TxnCommit()],
+      expected: [Empty(), Got(Some(b"v1")), Empty(), Conflicted()]
+    ),
+    // si_write_read_no_conflict
+    Case(
+      serializable: false,
+      initial: copy one,
+      ops: [DbPut(b"k1", b"v2"), TxnGet(b"k1"), TxnCommit()],
+      expected: [Empty(), Got(Some(b"v1")), Empty()]
+    ),
+    // ssi_range_write_conflict
+    Case(
+      serializable: true,
+      initial: copy five,
+      ops: [
+        TxnScan(b"k1", b"k5"),
+        DbPut(b"k3", b"v3_new"),
+        TxnPut(b"k100", b"v100"),
+        TxnCommit()
+      ],
+      expected: [Scanned(copy scanned_five), Empty(), Empty(), Conflicted()]
+    ),
+    // si_range_write_no_conflict
+    Case(
+      serializable: false,
+      initial: copy five,
+      ops: [
+        TxnScan(b"k1", b"k5"),
+        DbPut(b"k3", b"v3_new"),
+        TxnPut(b"k100", b"v100"),
+        TxnCommit()
+      ],
+      expected: [Scanned(copy scanned_five), Empty(), Empty(), Empty()]
+    ),
+    // ssi_mark_read_conflict
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnMarkRead(b"k1"), DbPut(b"k1", b"v2"), TxnPut(b"k2", b"v2"), TxnCommit()],
+      expected: [Empty(), Empty(), Empty(), Conflicted()]
+    ),
+    // ssi_mark_read_multiple_keys_conflict
+    Case(
+      serializable: true,
+      initial: [(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
+      ops: [
+        TxnMarkRead(b"k1"),
+        TxnMarkRead(b"k2"),
+        DbPut(b"k2", b"v2_new"),
+        TxnPut(b"k4", b"v4"),
+        TxnCommit()
+      ],
+      expected: [Empty(), Empty(), Empty(), Empty(), Conflicted()]
+    ),
+    // ssi_mark_read_no_conflict_on_different_key
+    Case(
+      serializable: true,
+      initial: [(b"k1", b"v1"), (b"k2", b"v2")],
+      ops: [
+        TxnMarkRead(b"k1"),
+        DbPut(b"k2", b"v2_new"),
+        TxnPut(b"k3", b"v3"),
+        TxnCommit()
+      ],
+      expected: [Empty(), Empty(), Empty(), Empty()]
+    ),
+    // ssi_mark_read_conflict_without_write
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnMarkRead(b"k1"), DbPut(b"k1", b"v2"), TxnCommit()],
+      expected: [Empty(), Empty(), Conflicted()]
+    ),
+    // ssi_get_conflict_without_write
+    Case(
+      serializable: true,
+      initial: copy one,
+      ops: [TxnGet(b"k1"), DbPut(b"k1", b"v2"), TxnCommit()],
+      expected: [Got(Some(b"v1")), Empty(), Conflicted()]
+    ),
+    // ssi_scan_conflict_without_write
+    Case(
+      serializable: true,
+      initial: [(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")],
+      ops: [TxnScan(b"k1", b"k3"), DbPut(b"k2", b"v2_new"), TxnCommit()],
+      expected: [Scanned([b"k1", b"k2", b"k3"]), Empty(), Conflicted()]
+    ),
+    // si_mark_read_conflict
+    Case(
+      serializable: false,
+      initial: copy one,
+      ops: [TxnMarkRead(b"k1"), DbPut(b"k1", b"v2"), TxnPut(b"k2", b"v2"), TxnCommit()],
+      expected: [Empty(), Empty(), Empty(), Conflicted()]
+    ),
+    // si_mark_read_write_write_conflict
+    Case(
+      serializable: false,
+      initial: copy one,
+      ops: [
+        TxnMarkRead(b"k1"),
+        TxnPut(b"k2", b"v2"),
+        DbPut(b"k2", b"v2_db"),
+        TxnCommit()
+      ],
+      expected: [Empty(), Empty(), Empty(), Conflicted()]
+    )
+  ]
+  let mut n: u64 = 0
+  for c in cases {
+    test.check(t, run_case(t, c)?)
+    n += 1
+  }
+  test.check(t, n == 20)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  table(t)
+}

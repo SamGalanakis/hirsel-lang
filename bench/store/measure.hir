@@ -1,0 +1,112 @@
+// Measures std@1/store's in-memory index and compaction cost: loads `n` keys
+// of 16 bytes with 100-byte values through store.transact, 100 keys per
+// commit, then by `mode`: "load" stops there, "compact" compacts once,
+// "recompact" compacts, commits one more key and compacts again, and "begin"
+// keeps one serializable transaction open through the load (the conflict
+// tracker's retention). Prints the snapshot object's bytes.
+fn key(i: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  for b in b"key/" {
+    list.push(mut out, b)
+  }
+  let mut place: u64 = 100000000000
+  while place > 0 {
+    list.push(mut out, b'0' + int.truncate(i / place % 10))
+    place = place / 10
+  }
+  bytes.from_list(take out)
+}
+
+fn value(i: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  for j in 0u64..100u64 {
+    list.push(mut out, int.truncate((i + j) % 251))
+  }
+  bytes.from_list(take out)
+}
+
+fn load(mut s: store.Store[Dir], from: u64, to: u64) -> Result[(), ()] {
+  let mut i = from
+  while i < to {
+    let end = if i + 100 < to {
+      i + 100
+    } else {
+      to
+    }
+    let first = i
+    let done: Result[(), store.TxFailure[()]] = store.transact(
+      mut s,
+      fn(mut tx: store.Tx) -> Result[(), ()] {
+        for k in first..end {
+          store.tx_put(mut tx, key(k), value(k))
+        }
+        Ok(())
+      }
+    )
+    if done != Ok(()) {
+      return Error(())
+    }
+    i = end
+  }
+  Ok(())
+}
+
+fn snap_bytes(d: Dir) -> u64 uses {d} {
+  let Ok(entries) = file.read_dir(d, path.of("snap")) else {
+    return 0
+  }
+  let mut total: u64 = 0
+  for entry in entries {
+    if let Ok(data) = file.read_bytes(d, path.of(path.text(entry.path))) {
+      total += bytes.len(data)
+    }
+  }
+  total
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let Ok(stdout) = io.stdout(rt) else {
+    return Error(())
+  }
+  let Ok(d) = io.dir(rt, path.of("data")) else {
+    return Error(())
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(())
+  }
+  let Ok(n_text) = arg.text(args, 1) else {
+    return Error(())
+  }
+  let Ok(n) = u64.parse(n_text) else {
+    return Error(())
+  }
+  let Ok(opened) = store.open(d, store.default_config()) else {
+    return Error(())
+  }
+  let mut s = take opened
+  let held: Option[store.Txn] = if mode == "begin" {
+    Some(store.begin(mut s))
+  } else {
+    None()
+  }
+  load(mut s, 0, n)?
+  if mode == "compact" || mode == "recompact" {
+    if store.compact(mut s) != Ok(()) {
+      return Error(())
+    }
+  }
+  if mode == "recompact" {
+    load(mut s, n, n + 1)?
+    if store.compact(mut s) != Ok(()) {
+      return Error(())
+    }
+  }
+  if let Some(t) = take held {
+    store.rollback(mut s, take t)
+  }
+  if store.close(take s) != Ok(()) {
+    return Error(())
+  }
+  let _ = out.print(stdout, f"{snap_bytes(d)}\n")
+  Ok(())
+}

@@ -1,0 +1,365 @@
+// Per-key conflict detection for std@1/store transactions, after SlateDB's
+// TransactionManager (slatedb/src/transaction_manager.rs at a5c4fd2). The
+// manager knows the transactions begun and not yet ended and, while any is
+// active, the write keys of every commit since the oldest began. A commit
+// conflicts when a commit after its transaction began wrote a key it writes
+// (snapshot isolation), read or marked read, or that lies in a range it read
+// (serializable snapshot isolation).
+//
+// Deviations from SlateDB. A store.Txn is a copyable value with no drop hook,
+// so an abandoned transaction never ends; the manager therefore also bounds
+// what it retains by `Limits`. Past a limit the oldest write sets go, the
+// horizon rises to the newest commit dropped, the transactions that began
+// before it are forgotten, and such a transaction conflicts whenever it has
+// anything to check, since the commits it must be checked against are gone.
+// Transactions hand their key sets to `has_conflict` and `track_committed`
+// instead of tracking them in the manager (track_write_keys and
+// track_read_keys, transaction_manager.rs:160-180): a Txn already holds them.
+// Key lists are ascending and free of duplicates; sequences are tracked in
+// ascending order, so recycling drops a prefix (SlateDB retains by filter).
+
+/// The most a manager retains: `commits` committed write sets or `key_bytes`
+/// bytes of their keys, whichever is reached first.
+pub type Limits {
+  commits: u64,
+  key_bytes: u64,
+}
+
+/// 4096 write sets or 1 MiB of keys.
+pub fn default_limits() -> Limits uses {} {
+  Limits(commits: 4096, key_bytes: 1048576)
+}
+
+/// Conflict state for one store's transactions.
+pub opaque type Manager: () uses {} {
+  limits: Limits,
+  // Active transactions by id, with the sequence each began at, and how many
+  // began at each sequence (for the oldest).
+  active: ordered_map.OrderedMap[u64, u64],
+  starts: ordered_map.OrderedMap[u64, u64],
+  // Committed write sets, oldest first, and the bytes of their keys.
+  recent: List[Committed],
+  key_bytes: u64,
+  // Every commit after `horizon` that an active transaction may conflict
+  // with is in `recent`; `last` is the last committed sequence (SlateDB's
+  // oracle).
+  horizon: u64,
+  last: u64,
+  next_id: u64,
+}
+
+type Committed {
+  seq: u64,
+  keys: List[Bytes],
+}
+
+/// A key range read: both ends, as `ordered_map.fold_range` takes them.
+pub type ReadRange {
+  from: ordered_map.Bound[Bytes],
+  to: ordered_map.Bound[Bytes],
+}
+
+fn order_u64(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
+/// A manager whose last committed sequence is `seq`, with nothing active.
+pub fn new(seq: u64, limits: Limits) -> Manager uses {} {
+  Manager(
+    limits: limits,
+    active: ordered_map.empty(order_u64),
+    starts: ordered_map.empty(order_u64),
+    recent: [],
+    key_bytes: 0,
+    horizon: seq,
+    last: seq,
+    next_id: 1
+  )
+}
+
+/// Registers a transaction at the last committed sequence and returns its id
+/// and that sequence (new_transaction, transaction_manager.rs:112).
+pub fn begin(mut m: Manager) -> (u64, u64) uses {} {
+  let seq = m.last
+  (begin_at(mut m, seq), seq)
+}
+
+/// Registers a transaction that began at `seq` and returns its id (SlateDB's
+/// new_txn_with_id, transaction_manager.rs:130).
+pub fn begin_at(mut m: Manager, seq: u64) -> u64 uses {} {
+  let id = m.next_id
+  m.next_id += 1
+  ordered_map.insert(mut m.active, id, seq)
+  let count = match ordered_map.get(m.starts, seq) {
+    Some(n) => n,
+    None() => 0,
+  }
+  ordered_map.insert(mut m.starts, seq, count + 1)
+  id
+}
+
+/// Ends transaction `id` without a commit and recycles what no active
+/// transaction needs (drop_txn, transaction_manager.rs:151). An unknown id
+/// changes nothing but the recycling.
+pub fn end(mut m: Manager, id: u64) -> () uses {} {
+  forget(mut m, id)
+  recycle(mut m)
+}
+
+// Removes `id` from the active transactions.
+fn forget(mut m: Manager, id: u64) -> () uses {} {
+  let Some(seq) = ordered_map.remove(mut m.active, id) else {
+    return
+  }
+  let count = match ordered_map.get(m.starts, seq) {
+    Some(n) => n,
+    None() => 0,
+  }
+  if count <= 1 {
+    let _ = ordered_map.remove(mut m.starts, seq)
+  } else {
+    ordered_map.insert(mut m.starts, seq, count - 1)
+  }
+}
+
+/// Whether a transaction that began at `started` conflicts with a commit
+/// after it: one that wrote a key in `writes` or `reads`, or a key inside one
+/// of `ranges` (check_has_conflict, has_write_write_conflict and
+/// has_read_write_conflict, transaction_manager.rs:190, 324 and 350). Pass
+/// empty `reads` and `ranges` for snapshot isolation.
+pub fn has_conflict(
+  m: Manager,
+  started: u64,
+  writes: List[Bytes],
+  reads: List[Bytes],
+  ranges: List[ReadRange]
+) -> bool uses {} {
+  if list.len(writes) == 0 && list.len(reads) == 0 && list.len(ranges) == 0 {
+    return false
+  }
+  if started >= m.last {
+    return false
+  }
+  if started < m.horizon {
+    return true
+  }
+  for c in m.recent {
+    if c.seq <= started {
+      continue
+    }
+    for k in c.keys {
+      if member(writes, k) || member(reads, k) {
+        return true
+      }
+      for r in ranges {
+        if contains(r, k) {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+/// Ends transaction `id` as committed at `seq` with write keys `writes`,
+/// retained while an active transaction may conflict with them
+/// (track_recent_committed_txn, transaction_manager.rs:219). An unknown id
+/// records nothing but the sequence.
+pub fn track_committed(mut m: Manager, id: u64, seq: u64, take writes: List[Bytes]) -> () uses {} {
+  if ordered_map.contains(m.active, id) {
+    forget(mut m, id)
+    retain(mut m, seq, take writes)
+  }
+  advance(mut m, seq)
+}
+
+/// Records a commit made outside any registered transaction
+/// (track_recent_committed_write_batch, transaction_manager.rs:241).
+pub fn track_batch(mut m: Manager, seq: u64, take writes: List[Bytes]) -> () uses {} {
+  retain(mut m, seq, take writes)
+  advance(mut m, seq)
+}
+
+fn advance(mut m: Manager, seq: u64) -> () uses {} {
+  if seq > m.last {
+    m.last = seq
+  }
+  if ordered_map.len(m.active) == 0 && list.len(m.recent) == 0 && m.horizon < m.last {
+    m.horizon = m.last
+  }
+}
+
+// Appends a committed write set unless nothing is active
+// (track_recent_committed_state, transaction_manager.rs:276), then enforces
+// the limits.
+fn retain(mut m: Manager, seq: u64, take writes: List[Bytes]) -> () uses {} {
+  if ordered_map.len(m.active) == 0 {
+    clear(mut m, seq)
+    return
+  }
+  let mut size: u64 = 0
+  for k in writes {
+    size += bytes.len(k)
+  }
+  list.push(mut m.recent, Committed(seq: seq, keys: take writes))
+  m.key_bytes += size
+  if list.len(m.recent) > m.limits.commits || m.key_bytes > m.limits.key_bytes {
+    // Drop the older half at once, so a limit costs amortized O(1) per commit.
+    let keep = list.len(m.recent) / 2
+    drop_before(mut m, list.len(m.recent) - keep)
+    // A transaction that began before the horizon conflicts whatever it
+    // holds, so it no longer holds back recycling.
+    let mut stale: List[u64] = []
+    let line = m.horizon
+    let found = ordered_map.fold_range(
+      m.active,
+      Unbounded(),
+      Unbounded(),
+      Ascending(),
+      take stale,
+      fn(take acc: List[u64], id: u64, started: u64) -> (List[u64], bool) {
+        let mut out = take acc
+        if started < line {
+          list.push(mut out, id)
+        }
+        (take out, true)
+      }
+    )
+    for id in found {
+      forget(mut m, id)
+    }
+    recycle(mut m)
+  }
+}
+
+// Removes every retained write set and records that every commit up to
+// `seq` is past checking.
+fn clear(mut m: Manager, seq: u64) -> () uses {} {
+  m.recent = []
+  m.key_bytes = 0
+  let top = if seq > m.last {
+    seq
+  } else {
+    m.last
+  }
+  if top > m.horizon {
+    m.horizon = top
+  }
+}
+
+// Removes the first `n` retained write sets, raising the horizon past them.
+fn drop_before(mut m: Manager, n: u64) -> () uses {} {
+  if n == 0 {
+    return
+  }
+  let old = replace(mut m.recent, [])
+  let mut kept: List[Committed] = []
+  let mut size: u64 = 0
+  let mut i: u64 = 0
+  for c in old {
+    if i < n {
+      if c.seq > m.horizon {
+        m.horizon = c.seq
+      }
+    } else {
+      for k in c.keys {
+        size += bytes.len(k)
+      }
+      list.push(mut kept, copy c)
+    }
+    i += 1
+  }
+  m.recent = take kept
+  m.key_bytes = size
+}
+
+/// The oldest sequence an active transaction began at (min_active_seq,
+/// transaction_manager.rs:259).
+pub fn min_active(m: Manager) -> Option[u64] uses {} {
+  match ordered_map.first(m.starts) {
+    Some((seq, _)) => Some(seq),
+    None() => None(),
+  }
+}
+
+/// Drops every retained write set older than the oldest active transaction,
+/// keeping one committed at its very sequence, or all of them when nothing is
+/// active (recycle_recent_committed_txns, transaction_manager.rs:296).
+pub fn recycle(mut m: Manager) -> () uses {} {
+  let Some(oldest) = min_active(m) else {
+    let last = m.last
+    clear(mut m, last)
+    return
+  }
+  let mut n: u64 = 0
+  for c in m.recent {
+    if c.seq >= oldest {
+      break
+    }
+    n += 1
+  }
+  drop_before(mut m, n)
+}
+
+/// How many transactions are active.
+pub fn active(m: Manager) -> u64 uses {} {
+  ordered_map.len(m.active)
+}
+
+/// The sequences of the retained write sets, oldest first.
+pub fn retained(m: Manager) -> List[u64] uses {} {
+  let mut out: List[u64] = []
+  for c in m.recent {
+    list.push(mut out, c.seq)
+  }
+  out
+}
+
+/// The commit at and before which nothing can be checked any more: a
+/// transaction that began before it conflicts when it has anything to check.
+pub fn horizon(m: Manager) -> u64 uses {} {
+  m.horizon
+}
+
+/// The last committed sequence the manager has seen.
+pub fn last_committed(m: Manager) -> u64 uses {} {
+  m.last
+}
+
+/// Whether `key` lies in `r`.
+pub fn contains(r: ReadRange, key: Bytes) -> bool uses {} {
+  let above = match r.from {
+    Unbounded() => true,
+    Included(low) => !(key < low),
+    Excluded(low) => low < key,
+  }
+  let below = match r.to {
+    Unbounded() => true,
+    Included(high) => !(high < key),
+    Excluded(high) => key < high,
+  }
+  above && below
+}
+
+// Whether the ascending `keys` hold `key`, by binary search.
+fn member(keys: List[Bytes], key: Bytes) -> bool uses {} {
+  let mut low: u64 = 0
+  let mut high = list.len(keys)
+  while low < high {
+    let mid = low + (high - low) / 2
+    if keys[mid] < key {
+      low = mid + 1
+    } else if key < keys[mid] {
+      high = mid
+    } else {
+      return true
+    }
+  }
+  false
+}

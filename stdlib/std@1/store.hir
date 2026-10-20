@@ -14,6 +14,12 @@
 // A writer claims the store by creating a fence log at the next log id and
 // then the next manifest with the next epoch. A stale writer's next create
 // finds its id taken and the store reports Fenced().
+//
+// Transactions begun with `begin` detect conflicts per key at commit through
+// std@1/txn_manager, after SlateDB's transaction_manager.rs: a commit
+// conflicts only with commits made after it began that wrote a key it writes
+// or, under serializable snapshot isolation, a key it read or a key inside a
+// range it read.
 /// The storage seam: immutable whole-object reads, conditional creation,
 /// ordered prefix discovery, deletion and directory setup. A successful durable
 /// create acknowledges the exact bytes; an uncertain create must be read back.
@@ -96,7 +102,7 @@ pub type StoreFaults = NoFaults | StopAfterWrites(u64)
 /// Why a store operation failed. `Storage` is the Dir's own error; `Corrupt`
 /// names an object that fails its checksum or the layout's rules before the
 /// log's tail; `Fenced` means another writer claimed the store; `Conflict` means
-/// another commit landed after the transaction began; `Injected` is a
+/// a commit after the transaction began wrote a key it conflicts on; `Injected` is a
 /// `StopAfterWrites` stop. After `Storage`, `Corrupt`, `Fenced` or `Injected`
 /// the store is closed and every later call returns `Closed`.
 @serializable
@@ -168,12 +174,24 @@ pub opaque type Snapshot: copyable uses {} {
   index: ordered_map.OrderedMap[Bytes, Bytes],
 }
 
+/// How a transaction's commit detects conflicts, after SlateDB's
+/// IsolationLevel (transaction_manager.rs:13). `SnapshotIsolation` conflicts
+/// with a later commit that wrote a key it writes or marked read;
+/// `SerializableSnapshot` also with one that wrote a key it read with
+/// `txn.get` or inside a range it read with `txn.range`.
+pub type Isolation = SnapshotIsolation | SerializableSnapshot
+
 /// A transaction: reads see the snapshot it began at plus its own writes.
-/// Dropping it aborts it.
+/// Dropping it aborts it; `rollback` also frees its conflict tracking at once.
 pub opaque type Txn: copyable uses {} {
   base: u64,
+  // The id its store's transaction manager knows it by, 0 for none.
+  id: u64,
+  isolation: Isolation,
   state: ordered_map.OrderedMap[Bytes, Bytes],
   writes: ordered_map.OrderedMap[Bytes, Option[Bytes]],
+  reads: ordered_map.OrderedMap[Bytes, bool],
+  ranges: List[txn_manager.ReadRange],
 }
 
 /// The scoped capability a `transact` body holds: reads see the commit the
@@ -191,6 +209,7 @@ pub opaque type Store[S]: () uses {S} {
   config: StoreConfig,
   epoch: u64,
   index: ordered_map.OrderedMap[Bytes, Bytes],
+  txns: txn_manager.Manager,
   // The last commit applied (V) and the last one in a written log object (D).
   visible: u64,
   durable: u64,
@@ -307,6 +326,7 @@ pub fn open_backend[S](take state: S, take backend: Backend[S], config: StoreCon
     config: config,
     epoch: 0,
     index: ordered_map.empty(compare_keys),
+    txns: txn_manager.new(0, txn_manager.default_limits()),
     visible: 0,
     durable: 0,
     pending: [],
@@ -319,7 +339,10 @@ pub fn open_backend[S](take state: S, take backend: Backend[S], config: StoreCon
     closed: false
   )
   match recover(mut s) {
-    Ok(()) => Ok(take s),
+    Ok(()) => {
+      s.txns = txn_manager.new(s.visible, txn_manager.default_limits())
+      Ok(take s)
+    },
     Error(e) => Error(e),
   }
 }
@@ -354,9 +377,41 @@ pub fn range(
   entries_in(snap.index, from, to, direction, limit)
 }
 
-/// Starts a transaction at the latest commit.
+/// Starts a serializable transaction at the latest commit.
 pub fn begin[S](mut s: Store[S]) -> Txn uses {} {
-  Txn(base: s.visible, state: current(mut s), writes: ordered_map.empty(compare_keys))
+  begin_with(mut s, SerializableSnapshot())
+}
+
+/// Starts a transaction at the latest commit under `isolation`, registered
+/// with the store's transaction manager (DbTransaction::begin).
+pub fn begin_with[S](mut s: Store[S], isolation: Isolation) -> Txn uses {} {
+  let (id, base) = txn_manager.begin(mut s.txns)
+  fresh(mut s, base, id, isolation)
+}
+
+// A transaction no manager tracks, for a body that holds the store from
+// begin to commit, so no commit lands in between.
+fn serial[S](mut s: Store[S]) -> Txn uses {} {
+  let base = s.visible
+  fresh(mut s, base, 0, SnapshotIsolation())
+}
+
+fn fresh[S](mut s: Store[S], base: u64, id: u64, isolation: Isolation) -> Txn uses {} {
+  Txn(
+    base: base,
+    id: id,
+    isolation: isolation,
+    state: current(mut s),
+    writes: ordered_map.empty(compare_keys),
+    reads: ordered_map.empty(compare_keys),
+    ranges: []
+  )
+}
+
+/// Ends `t` without committing it, as dropping it does, and frees what the
+/// store tracks for its conflicts (DbTransaction::rollback).
+pub fn rollback[S](mut s: Store[S], take t: Txn) -> () uses {} {
+  txn_manager.end(mut s.txns, t.id)
 }
 
 // A share of the index that outlives this call: the index moves out of the
@@ -369,35 +424,51 @@ fn current[S](mut s: Store[S]) -> ordered_map.OrderedMap[Bytes, Bytes] uses {} {
 }
 
 /// Commits `t`'s writes as the next commit, visible at once to later
-/// snapshots and transactions, and returns its ticket. `Conflict()` when another
-/// commit landed since `t` began. A commit that fills its group writes the
+/// snapshots and transactions, and returns its ticket. `Conflict()` when a
+/// commit after `t` began wrote a key `t` conflicts on (see `Isolation`); a
+/// transaction older than the store's conflict retention conflicts whenever
+/// it writes or read anything. A commit that fills its group writes the
 /// group's log object; await its durability with `durable`.
 pub fn commit[S](mut s: Store[S], take t: Txn) -> Result[Ticket, StoreError] uses {s} {
   if s.closed {
     return Error(Closed())
   }
-  if t.base != s.visible {
-    return Error(Conflict())
-  }
-  let Txn(base: _, state: state, writes: writes) = take t
-  let start: List[Write] = []
-  let set = ordered_map.fold_range(
-    writes,
-    Unbounded(),
-    Unbounded(),
-    Ascending(),
-    take start,
-    fn(take acc: List[Write], k: Bytes, v: Option[Bytes]) -> (List[Write], bool) {
-      let mut out = take acc
-      match v {
-        Some(value) => list.push(mut out, Put(key: unique k, value: unique value)),
-        None() => list.push(mut out, Delete(key: unique k)),
-      }
-      (take out, true)
+  let Txn(
+    base: base,
+    id: id,
+    isolation: _,
+    state: state,
+    writes: writes,
+    reads: reads,
+    ranges: ranges
+  ) = take t
+  // Nothing committed since `t` began, the common case and every
+  // `transact`: nothing to check, and `t`'s state is the index plus its writes.
+  let latest = base == s.visible
+  if !latest {
+    let keys = write_keys(writes)
+    if txn_manager.has_conflict(s.txns, base, keys, read_keys(reads), ranges) {
+      txn_manager.end(mut s.txns, id)
+      return Error(Conflict())
     }
-  )
-  s.index = take state
+  }
+  let set = write_set(writes)
+  if latest {
+    s.index = take state
+  } else {
+    apply(mut s.index, set)
+  }
   s.visible += 1
+  // Ending first and then recording the write set as a batch records it even
+  // for a copy of a transaction whose id another copy already ended. With
+  // nothing active the manager keeps no write set, so none is built.
+  txn_manager.end(mut s.txns, id)
+  let retained: List[Bytes] = if txn_manager.active(s.txns) > 0 {
+    write_keys(writes)
+  } else {
+    []
+  }
+  txn_manager.track_batch(mut s.txns, s.visible, take retained)
   list.push(mut s.pending, take set)
   if list.len(s.pending) >= s.config.group_limit {
     flush(mut s)?
@@ -458,7 +529,7 @@ pub fn transact[S, R: inert, E: inert](
   if s.closed {
     return Error(Storage(Closed()))
   }
-  let mut tx = Tx(txn: begin(mut s))
+  let mut tx = Tx(txn: serial(mut s))
   let returned = body(mut tx)
   let Tx(txn: t) = take tx
   match take returned {
@@ -495,9 +566,9 @@ pub fn call[S, R: inert + serializable, E: inert + serializable](
     return Error(Tx(Storage(Closed())))
   }
   let key = stream_key(req.stream)
-  let t = begin(mut s)
+  let t = serial(mut s)
   let base = t.base
-  let mut row = match txn.get(t, key) {
+  let mut row = match ordered_map.get(t.state, key) {
     None() => StreamRow(epoch: 0, applied: 0, acknowledged: 0, retained: []),
     Some(data) => {
       let decoded: Result[StreamRow, DecodeError] = codec.decode(data)
@@ -531,7 +602,7 @@ pub fn call[S, R: inert + serializable, E: inert + serializable](
     // A later executor's duplicate fences the earlier ones.
     if req.epoch > row.epoch {
       row.epoch = req.epoch
-      let mut fence = begin(mut s)
+      let mut fence = serial(mut s)
       txn.put(mut fence, copy key, codec.encode(row))
       settle(mut s, take fence) ? released_call
     } else {
@@ -575,7 +646,7 @@ pub fn call[S, R: inert + serializable, E: inert + serializable](
   row.retained = take kept
   let mut commit_set = match outcome {
     Ok(_) => take done,
-    Error(_) => begin(mut s),
+    Error(_) => serial(mut s),
   }
   txn.put(mut commit_set, take key, codec.encode(row))
   settle(mut s, take commit_set) ? released_call
@@ -734,6 +805,60 @@ pub fn into_state[S](take store: Store[S]) -> Result[S, StoreError] uses {store}
   flush(mut s)?
   let Store(state: state, ..) = take s
   Ok(take state)
+}
+
+// A commit's write set, in key order.
+fn write_set(writes: ordered_map.OrderedMap[Bytes, Option[Bytes]]) -> List[Write] uses {} {
+  let first: List[Write] = []
+  ordered_map.fold_range(
+    writes,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    take first,
+    fn(take acc: List[Write], k: Bytes, v: Option[Bytes]) -> (List[Write], bool) {
+      let mut out = take acc
+      match v {
+        Some(value) => list.push(mut out, Put(key: unique k, value: unique value)),
+        None() => list.push(mut out, Delete(key: unique k)),
+      }
+      (take out, true)
+    }
+  )
+}
+
+// The keys a transaction writes, ascending.
+fn write_keys(writes: ordered_map.OrderedMap[Bytes, Option[Bytes]]) -> List[Bytes] uses {} {
+  let first: List[Bytes] = []
+  ordered_map.fold_range(
+    writes,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    take first,
+    fn(take acc: List[Bytes], k: Bytes, _v: Option[Bytes]) -> (List[Bytes], bool) {
+      let mut out = take acc
+      list.push(mut out, unique k)
+      (take out, true)
+    }
+  )
+}
+
+// The keys a transaction read, ascending.
+fn read_keys(reads: ordered_map.OrderedMap[Bytes, bool]) -> List[Bytes] uses {} {
+  let first: List[Bytes] = []
+  ordered_map.fold_range(
+    reads,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    take first,
+    fn(take acc: List[Bytes], k: Bytes, _v: bool) -> (List[Bytes], bool) {
+      let mut out = take acc
+      list.push(mut out, unique k)
+      (take out, true)
+    }
+  )
 }
 
 // Effective entries of `m` in a range, copied out.

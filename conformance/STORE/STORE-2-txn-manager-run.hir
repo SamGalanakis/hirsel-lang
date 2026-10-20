@@ -1,0 +1,291 @@
+// rule: STORE-2
+// expect: run
+// std@1/txn_manager carries SlateDB's transaction_manager.rs tests (a5c4fd2):
+// the eight write-write conflict cases, the oldest active sequence, tracking
+// commits with a known, unknown and no transaction, ending transactions,
+// recycling (by the oldest, all when nothing is active, at the equal
+// boundary), the lifecycle, concurrent and recycling-timing flows and the
+// serializable range conflict; then the retention limit, Hirsel's own.
+type Case {
+  committed: List[(u64, List[Bytes])],
+  writes: List[Bytes],
+  started: u64,
+  conflict: bool,
+}
+
+fn none() -> List[Bytes] uses {} {
+  []
+}
+
+fn no_ranges() -> List[txn_manager.ReadRange] uses {} {
+  []
+}
+
+fn fresh() -> txn_manager.Manager uses {} {
+  txn_manager.new(0, txn_manager.default_limits())
+}
+
+// test_check_conflict_table_driven, transaction_manager.rs:485-626. A guard
+// transaction at 0 keeps every committed set, as the test's direct setup does.
+fn conflict_case(c: Case) -> bool uses {} {
+  let mut m = fresh()
+  let _guard = txn_manager.begin_at(mut m, 0)
+  for (seq, keys) in c.committed {
+    txn_manager.track_batch(mut m, seq, unique keys)
+  }
+  txn_manager.has_conflict(m, c.started, c.writes, none(), no_ranges()) == c.conflict
+}
+
+fn conflict_table(t: Test) -> () {
+  let max: u64 = 18446744073709551615
+  let cases: List[Case] = [
+    // no_recent_committed_txns
+    Case(committed: [], writes: [b"key1", b"key2"], started: 100, conflict: false),
+    // no_overlapping_keys
+    Case(
+      committed: [(80, [b"key1", b"key2"])],
+      writes: [b"key3", b"key4"],
+      started: 100,
+      conflict: false
+    ),
+    // concurrent_write_same_key
+    Case(committed: [(150, [b"key1"])], writes: [b"key1"], started: 100, conflict: true),
+    // multiple_committed_mixed_conflict
+    Case(
+      committed: [(50, [b"key1"]), (150, [b"key2"])],
+      writes: [b"key1", b"key2"],
+      started: 100,
+      conflict: true
+    ),
+    // committed_before_current_started
+    Case(committed: [(50, [b"key1"])], writes: [b"key1"], started: 100, conflict: false),
+    // exact_seq_boundary
+    Case(
+      committed: [(100, [b"key1"])],
+      writes: [b"key1"],
+      started: 100,
+      conflict: false
+    ),
+    // partial_key_overlap_conflict
+    Case(
+      committed: [(150, [b"key1", b"key2", b"key3"])],
+      writes: [b"key3", b"key4", b"key5"],
+      started: 100,
+      conflict: true
+    ),
+    // max_seq_values
+    Case(
+      committed: [(max, [b"key1"])],
+      writes: [b"key1"],
+      started: max - 1,
+      conflict: true
+    )
+  ]
+  let mut i: u64 = 0
+  for c in cases {
+    test.check(t, conflict_case(c))
+    i += 1
+  }
+  test.check(t, i == 8)
+}
+
+// test_min_active_seq_table_driven, :631-660.
+fn min_active(t: Test) -> () {
+  let mut m = fresh()
+  test.check(t, txn_manager.min_active(m) == None())
+  let _ = txn_manager.begin_at(mut m, 100)
+  test.check(t, txn_manager.min_active(m) == Some(100))
+  let mut many = fresh()
+  let _ = txn_manager.begin_at(mut many, 200)
+  let _ = txn_manager.begin_at(mut many, 100)
+  let _ = txn_manager.begin_at(mut many, 150)
+  test.check(t, txn_manager.min_active(many) == Some(100))
+}
+
+// test_new_transaction_uses_oracle_seq, :419; the drop_txn tests, :434-483.
+fn begin_and_end(t: Test) -> () {
+  let mut oracle = txn_manager.new(123, txn_manager.default_limits())
+  let (id, seq) = txn_manager.begin(mut oracle)
+  test.check(t, seq == 123 && txn_manager.min_active(oracle) == Some(123))
+  txn_manager.end(mut oracle, id)
+  test.check(t, txn_manager.active(oracle) == 0)
+  let mut m = fresh()
+  txn_manager.end(mut m, 99)
+  let _ = txn_manager.begin_at(mut m, 100)
+  test.check(t, txn_manager.active(m) == 1)
+  let mut gc = fresh()
+  let active = txn_manager.begin_at(mut gc, 100)
+  txn_manager.track_batch(mut gc, 50, [b"key1"])
+  test.check(t, txn_manager.retained(gc) == [50])
+  txn_manager.end(mut gc, active)
+  test.check(t, txn_manager.retained(gc) == [])
+}
+
+// test_track_recent_committed_txn_table_driven, :671-815 (valid_id,
+// nonexistent_id, without_id_creates_record).
+fn tracking(t: Test) -> () {
+  let mut valid = fresh()
+  let id = txn_manager.begin_at(mut valid, 100)
+  let _other = txn_manager.begin_at(mut valid, 200)
+  txn_manager.track_committed(mut valid, id, 150, [b"key1", b"key2"])
+  test.check(t, txn_manager.retained(valid) == [150] && txn_manager.active(valid) == 1)
+  let mut unknown = fresh()
+  let _active = txn_manager.begin_at(mut unknown, 100)
+  txn_manager.track_committed(mut unknown, 999, 150, [b"key1"])
+  test.check(t, txn_manager.retained(unknown) == [] && txn_manager.active(unknown) == 1)
+  let mut batch = fresh()
+  let _writer = txn_manager.begin_at(mut batch, 50)
+  txn_manager.track_batch(mut batch, 100, [b"key1", b"key2"])
+  test.check(t, txn_manager.retained(batch) == [100] && txn_manager.active(batch) == 1)
+}
+
+// The recycle tests, :817-911.
+fn recycling(t: Test) -> () {
+  let mut filters = fresh()
+  let a = txn_manager.begin_at(mut filters, 120)
+  txn_manager.track_batch(mut filters, 50, [b"key1"])
+  txn_manager.track_batch(mut filters, 100, [b"key2"])
+  txn_manager.track_batch(mut filters, 150, [b"key3"])
+  test.check(t, list.len(txn_manager.retained(filters)) == 3)
+  txn_manager.end(mut filters, a)
+  test.check(t, txn_manager.retained(filters) == [])
+  let mut clears = fresh()
+  let b = txn_manager.begin_at(mut clears, 300)
+  txn_manager.track_batch(mut clears, 100, [b"key1", b"key2"])
+  txn_manager.track_batch(mut clears, 200, [b"key1", b"key2"])
+  test.check(t, list.len(txn_manager.retained(clears)) == 2)
+  txn_manager.end(mut clears, b)
+  test.check(t, txn_manager.retained(clears) == [])
+  let mut idle = fresh()
+  txn_manager.track_batch(mut idle, 100, [b"key1", b"key2"])
+  txn_manager.track_batch(mut idle, 200, [b"key1", b"key2"])
+  txn_manager.track_batch(mut idle, 300, [b"key1", b"key2"])
+  test.check(
+    t,
+    txn_manager.retained(idle) == [] && txn_manager.last_committed(idle) == 300
+  )
+  let mut boundary = fresh()
+  let _first = txn_manager.begin_at(mut boundary, 100)
+  let second = txn_manager.begin_at(mut boundary, 200)
+  txn_manager.track_batch(mut boundary, 99, [b"key1"])
+  txn_manager.track_batch(mut boundary, 100, [b"key1"])
+  txn_manager.track_batch(mut boundary, 101, [b"key1"])
+  txn_manager.end(mut boundary, second)
+  test.check(t, txn_manager.retained(boundary) == [100, 101])
+}
+
+// test_transaction_lifecycle_complete_flow, test_concurrent_transactions_
+// conflict_detection and test_garbage_collection_timing_with_multiple_
+// operations, :952-1067.
+fn flows(t: Test) -> () {
+  let mut m = fresh()
+  let id = txn_manager.begin_at(mut m, 100)
+  test.check(t, txn_manager.min_active(m) == Some(100))
+  let ours: List[Bytes] = [b"key1", b"key2"]
+  test.check(t, !txn_manager.has_conflict(m, 100, ours, none(), no_ranges()))
+  let other = txn_manager.begin_at(mut m, 50)
+  txn_manager.track_committed(mut m, other, 120, [b"key1", b"key3"])
+  test.check(t, txn_manager.has_conflict(m, 100, ours, none(), no_ranges()))
+  txn_manager.track_committed(mut m, id, 150, take ours)
+  test.check(
+    t,
+    txn_manager.active(m) == 0 && txn_manager.retained(m) == [] && txn_manager.min_active(
+      m
+    ) == None()
+  )
+  let mut c = fresh()
+  let t1 = txn_manager.begin_at(mut c, 100)
+  let t2 = txn_manager.begin_at(mut c, 110)
+  let _t3 = txn_manager.begin_at(mut c, 120)
+  let ab: List[Bytes] = [b"keyA", b"keyB"]
+  test.check(t, !txn_manager.has_conflict(c, 120, ab, none(), no_ranges()))
+  txn_manager.track_committed(mut c, t1, 130, [b"keyA"])
+  test.check(t, !txn_manager.has_conflict(c, 110, [b"keyB"], none(), no_ranges()))
+  test.check(t, txn_manager.has_conflict(c, 120, ab, none(), no_ranges()))
+  txn_manager.track_committed(mut c, t2, 140, [b"keyB"])
+  test.check(t, txn_manager.has_conflict(c, 120, ab, none(), no_ranges()))
+  test.check(t, txn_manager.active(c) == 1 && list.len(txn_manager.retained(c)) == 2)
+  let mut g = fresh()
+  let long = txn_manager.begin_at(mut g, 100)
+  let short1 = txn_manager.begin_at(mut g, 150)
+  let short2 = txn_manager.begin_at(mut g, 200)
+  txn_manager.track_batch(mut g, 50, [b"old_key1"])
+  txn_manager.track_batch(mut g, 60, [b"old_key2"])
+  test.check(t, list.len(txn_manager.retained(g)) == 2)
+  txn_manager.track_committed(mut g, short1, 180, [b"short_key"])
+  txn_manager.track_committed(mut g, short2, 220, [b"short_key"])
+  test.check(t, list.len(txn_manager.retained(g)) == 4)
+  txn_manager.end(mut g, long)
+  test.check(t, txn_manager.retained(g) == [] && txn_manager.active(g) == 0)
+}
+
+// test_ssi_phantom_read_conflict_on_range, :1069.
+fn phantom(t: Test) -> () {
+  let mut m = fresh()
+  let _ssi = txn_manager.begin_at(mut m, 100)
+  let _guard = txn_manager.begin_at(mut m, 200)
+  let writer = txn_manager.begin_at(mut m, 60)
+  txn_manager.track_committed(mut m, writer, 120, [b"foo5"])
+  let scanned: List[txn_manager.ReadRange] = [
+    txn_manager.ReadRange(from: Included(b"foo0"), to: Included(b"foo9"))
+  ]
+  test.check(t, txn_manager.has_conflict(m, 100, none(), none(), scanned))
+  let outside: List[txn_manager.ReadRange] = [
+    txn_manager.ReadRange(from: Excluded(b"foo5"), to: Unbounded())
+  ]
+  test.check(t, !txn_manager.has_conflict(m, 100, none(), none(), outside))
+  test.check(t, txn_manager.has_conflict(m, 100, none(), [b"foo5"], no_ranges()))
+}
+
+// Hirsel's own: an abandoned transaction never ends, so retention is bounded.
+// Past a limit the older half goes, the horizon rises past it, a
+// transaction that began before the horizon conflicts whatever it writes
+// and no longer holds back recycling, and one that began after it is
+// checked exactly.
+fn limits(t: Test) -> () {
+  let mut m = txn_manager.new(0, txn_manager.Limits(commits: 4, key_bytes: 1048576))
+  let _abandoned = txn_manager.begin_at(mut m, 0)
+  let mut seq: u64 = 1
+  while seq <= 4 {
+    txn_manager.track_batch(mut m, seq, [b"hot"])
+    seq += 1
+  }
+  test.check(t, txn_manager.retained(m) == [1, 2, 3, 4] && txn_manager.horizon(m) == 0)
+  let later = txn_manager.begin_at(mut m, 4)
+  txn_manager.track_batch(mut m, 5, [b"hot"])
+  test.check(
+    t,
+    txn_manager.retained(m) == [4, 5] && txn_manager.horizon(m) == 3 && txn_manager.active(
+      m
+    ) == 1
+  )
+  test.check(t, txn_manager.has_conflict(m, 0, [b"cold"], none(), no_ranges()))
+  test.check(t, !txn_manager.has_conflict(m, 4, [b"cold"], none(), no_ranges()))
+  txn_manager.end(mut m, later)
+  let mut bytes_bound = txn_manager.new(
+    0,
+    txn_manager.Limits(commits: 100, key_bytes: 8)
+  )
+  let _held = txn_manager.begin_at(mut bytes_bound, 0)
+  txn_manager.track_batch(mut bytes_bound, 1, [b"abcd"])
+  txn_manager.track_batch(mut bytes_bound, 2, [b"efgh"])
+  test.check(t, txn_manager.horizon(bytes_bound) == 0)
+  txn_manager.track_batch(mut bytes_bound, 3, [b"ijkl"])
+  test.check(
+    t,
+    txn_manager.horizon(bytes_bound) == 3 && txn_manager.active(bytes_bound) == 0
+  )
+  test.check(t, !txn_manager.has_conflict(bytes_bound, 0, none(), none(), no_ranges()))
+}
+
+pub fn main(t: Test) -> Result[(), String] {
+  conflict_table(t)
+  min_active(t)
+  begin_and_end(t)
+  tracking(t)
+  recycling(t)
+  flows(t)
+  phantom(t)
+  limits(t)
+  Ok(())
+}
