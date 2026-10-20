@@ -19,24 +19,19 @@ const OPTS: [OptLevel; 2] = [OptLevel::None, OptLevel::Speed];
 const SEEDS: u64 = 8;
 
 fn emit(corpus: &Corpus, opt: OptLevel) -> hirsel_lir::stage::ObjectArtifact {
-    let codes = failure_codes();
     let input = input();
     let program = &corpus.program;
     let inputs = EmitInputs {
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table.table,
-            &program.finalizers,
-        ),
+        callbacks: false,
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -125,7 +120,15 @@ fn glue_and_the_runtime_walk_free_the_same_blocks_in_the_same_order() {
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/native/glue_harness.c"
             ));
-            let executable = link(&target, &dir, &[("glue.o", &object.bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[
+                    ("glue.o", &object.bytes),
+                    ("program-glue.o", &corpus.program.glue()),
+                ],
+                &[source],
+            );
             let output = run(&target, &executable);
             let label = format!("{} {opt:?}", target.triple);
             // Diagnostic and production mode, each with no failure, every finalizer and

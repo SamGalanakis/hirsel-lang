@@ -27,12 +27,13 @@ mod instructions;
 mod module;
 mod object;
 mod places;
+mod program;
 mod scalar;
 mod soa;
 
 use std::fmt;
 
-use hirsel_lir::emission::EmitInputs;
+use hirsel_lir::emission::{EmitInputs, GlueInputs};
 use hirsel_lir::stage::{ObjectArtifact, Ready, ValidatedUnit};
 use hirsel_syntax::DefPath;
 
@@ -56,8 +57,6 @@ pub enum CodegenError {
     Invalid { definition: DefPath, what: String },
     /// A Ready operation this emitter does not lower.
     Unsupported { definition: DefPath, what: String },
-    /// A failure edge starts a rule with no runtime failure code.
-    UnknownRule { definition: DefPath, rule: String },
     /// Two units have one link name.
     DuplicateSymbol { name: String },
     /// Cranelift refused a function or a declaration.
@@ -76,8 +75,7 @@ impl CodegenError {
         match self {
             CodegenError::Receipt { definition, .. }
             | CodegenError::Invalid { definition, .. }
-            | CodegenError::Unsupported { definition, .. }
-            | CodegenError::UnknownRule { definition, .. } => Some(definition),
+            | CodegenError::Unsupported { definition, .. } => Some(definition),
             _ => None,
         }
     }
@@ -102,9 +100,6 @@ impl fmt::Display for CodegenError {
                     "{definition}: the Cranelift backend does not support {what}"
                 )
             }
-            CodegenError::UnknownRule { definition, rule } => {
-                write!(f, "{definition}: no runtime failure code for {rule}")
-            }
             CodegenError::DuplicateSymbol { name } => write!(f, "two units are named `{name}`"),
             CodegenError::Cranelift { name, message } => {
                 write!(f, "Cranelift refused `{name}`: {message}")
@@ -119,6 +114,13 @@ impl fmt::Display for CodegenError {
 }
 
 impl std::error::Error for CodegenError {}
+
+/// Emits the program's glue object (`hirsel_lir::glue`): the descriptor registry, the
+/// index and failure-code cells, codec records, statics, literals and C callback thunks
+/// the program's unit objects import.
+pub fn emit_glue(inputs: &GlueInputs<'_>) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| program::emit_glue(inputs))
+}
 
 /// Emits validated Ready units as one relocatable object for `inputs.target`.
 pub fn emit_object(

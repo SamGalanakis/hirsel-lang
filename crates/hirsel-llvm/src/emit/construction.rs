@@ -623,7 +623,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.position(in_arena);
         }
         // A bounded arena is charged before the bump (MEM-6).
-        if self.bounded_code().is_some() {
+        if self.tracking() {
             let bytes = self.construction_charge(site)?;
             self.charge(token, bytes, site.anchor, failure)?;
         }

@@ -604,6 +604,113 @@ impl<'context> Module<'context> {
         global
     }
 
+    /// An exported constant global of `ty` aligned to `align`, without an initializer yet:
+    /// a glue cell or block other objects read by name.
+    pub(crate) fn exported_constant<'m>(
+        &'m self,
+        name: &str,
+        of: Type<'m>,
+        align: u32,
+    ) -> Value<'m> {
+        let global = self.private_constant(name, of, align);
+        // SAFETY: the constant belongs to this live module.
+        unsafe {
+            LLVMSetLinkage(global.raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetUnnamedAddress(global.raw, llvm_sys::LLVMUnnamedAddr::LLVMNoUnnamedAddr);
+        }
+        global
+    }
+
+    /// Keeps `functions` in the object though nothing in it refers to them
+    /// (`llvm.compiler.used`).
+    pub(crate) fn keep(&self, functions: &[Value<'_>]) {
+        if functions.is_empty() {
+            return;
+        }
+        let ptr = self.ptr_type();
+        let ty = self.array_type(ptr, functions.len() as u64);
+        let c_name = c_string("llvm.compiler.used");
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, ty.raw, c_name.as_ptr()) };
+        let section = c_string("llvm.metadata");
+        // SAFETY: `raw` is a live global of this module and the initializer a constant of
+        // its type.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMAppendingLinkage);
+            LLVMSetSection(raw, section.as_ptr());
+            LLVMSetInitializer(raw, self.const_array(ptr, functions).raw);
+        }
+    }
+
+    /// Defines the hidden absolute symbol `name` of value `value`: an alias of a constant
+    /// address, which the object writer emits as `name = value`.
+    pub(crate) fn absolute_symbol(&self, name: &str, value: u64) {
+        let c_name = c_string(name);
+        let address = self.const_int(self.int_type(64), u128::from(value));
+        // SAFETY: the module is live, the name NUL-terminated, the aliasee a constant of
+        // this context.
+        unsafe {
+            let aliasee = LLVMConstIntToPtr(address.raw, self.ptr_type().raw);
+            let raw = LLVMAddAlias2(
+                self.raw,
+                self.int_type(8).raw,
+                0,
+                aliasee,
+                c_name.as_ptr(),
+            );
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetVisibility(raw, llvm_sys::LLVMVisibility::LLVMHiddenVisibility);
+        }
+    }
+
+    /// The constant `address` as an integer of `of`, truncated.
+    pub(crate) fn const_ptr_to_int<'m>(&'m self, address: Value<'m>, of: Type<'m>) -> Value<'m> {
+        // SAFETY: `address` is a constant pointer of this context, `of` an integer type.
+        value(unsafe { LLVMConstPtrToInt(address.raw, of.raw) })
+    }
+
+    /// The constant `name` another object defines, with its `initializer` so the optimizer
+    /// folds reads of it; this object emits no definition (`available_externally`).
+    pub(crate) fn available_constant<'m>(
+        &'m self,
+        name: &str,
+        of: Type<'m>,
+        align: u32,
+        initializer: Value<'m>,
+    ) -> Value<'m> {
+        if let Some(global) = self.named_global(name) {
+            return global;
+        }
+        let c_name = c_string(name);
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, of.raw, c_name.as_ptr()) };
+        // SAFETY: `raw` is a live global of this module, the initializer a constant of `of`.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMAvailableExternallyLinkage);
+            LLVMSetGlobalConstant(raw, 1);
+            LLVMSetAlignment(raw, align);
+            LLVMSetInitializer(raw, initializer.raw);
+        }
+        value(raw)
+    }
+
+    /// The constant global `name` another object defines (a glue cell or block), declared
+    /// once as `ty`.
+    pub(crate) fn external_constant<'m>(&'m self, name: &str, of: Type<'m>) -> Value<'m> {
+        if let Some(global) = self.named_global(name) {
+            return global;
+        }
+        let c_name = c_string(name);
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, of.raw, c_name.as_ptr()) };
+        // SAFETY: `raw` is a live global of this module.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetGlobalConstant(raw, 1);
+        }
+        value(raw)
+    }
+
     /// A program registry survives until the separately compiled launcher refers to it.
     pub(crate) fn registry_constant<'m>(&'m self, name: &str, of: Type<'m>) -> Value<'m> {
         let global = self.linkonce_constant(name, of, 8);

@@ -1002,9 +1002,10 @@ impl FnEmitter<'_, '_, '_> {
             let status = self.rt1(RuntimeEntry::Detach, &[context, block, site, out])?;
             // A tracked arena block is copied within its arena, charged (MEM-6): over its
             // budget, the arena it names records its own OutOfSpace.
-            match self.bounded_code() {
-                Some(code) => self.tracked_exhaustion(status, code, block, anchor, failure)?,
-                None => self.status_guard(status, failure)?,
+            if self.tracking() {
+                self.tracked_exhaustion(status, block, anchor, failure)?;
+            } else {
+                self.status_guard(status, failure)?;
             }
         }
         let copy = self.load_ptr(out);
@@ -1020,21 +1021,11 @@ impl FnEmitter<'_, '_, '_> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted {
-        let Some(code) = self.bounded_code() else {
+        if !self.tracking() {
             return self.status_guard(status, failure);
-        };
-        let exhausted = self.exhausted_block(code, destination, anchor, failure)?;
+        }
+        let exhausted = self.exhausted_block(destination, anchor, failure)?;
         self.branch_to(status, exhausted)
-    }
-
-    /// MEM-6's failure code, present when the program opens a bounded arena.
-    pub(crate) fn bounded_code(&self) -> Option<hirsel_lir::emission::FailureCode> {
-        self.em
-            .inputs
-            .failures
-            .codes
-            .get(hirsel_lir::emission::BOUNDED_RULE)
-            .copied()
     }
 
     /// A pointer-sized scalar loaded from `place`.

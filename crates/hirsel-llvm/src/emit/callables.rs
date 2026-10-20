@@ -77,6 +77,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             let name = callback_thunk_name(&symbol.definition, symbol.instance.as_ref());
             self.import_function(&name, &symbol.definition, None);
+            self.manifested
+                .kept
+                .insert(symbol_name(&symbol.definition, symbol.instance.as_ref()));
             return Ok(self.module.function_address(&name));
         }
         let name = function_thunk_name(&symbol.definition, symbol.instance.as_ref());

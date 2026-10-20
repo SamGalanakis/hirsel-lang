@@ -18,8 +18,8 @@ use hirsel_lir::abi_types::{
 };
 use hirsel_lir::emission::{
     EmitInputs, IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, Manifested, OptLevel, PrefixWord,
-    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, check_receipt, descriptor_name,
-    function_thunk_name, register_result, scalar_shape, site_code, slice_storage, symbol_name,
+    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, check_receipt, function_thunk_name,
+    register_result, scalar_shape, site_code, slice_storage, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -37,7 +37,7 @@ use hirsel_lir::runtime_abi::{
     LAYOUT_DESCRIPTOR_VERSION, LAYOUT_MAGIC, RuntimeEntry, small_pool,
 };
 use hirsel_lir::stage::{
-    DebugSource, InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
+    InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
     Reproducibility, StageKind, ValidatedUnit,
 };
 use hirsel_syntax::{ContentHash, DefPath};
@@ -66,6 +66,8 @@ mod instructions;
 mod ownership;
 mod pair;
 mod places;
+mod program;
+pub use program::emit_glue;
 mod sequence_state;
 mod soa;
 use soa::ColumnRow;
@@ -254,7 +256,7 @@ pub fn emit_object_profile(
     })?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
-    let mut artifact = artifact(file, manifested, units, inputs, &toolchain())
+    let mut artifact = artifact(file, manifested, inputs, &toolchain())
         .map_err(|problem| CodegenError::Manifest { problem })?;
     if sources.is_some() {
         artifact.reproducibility.options = ContentHash::of_parts(
@@ -300,11 +302,6 @@ fn lower<T>(
             problem,
         })?;
     }
-    if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {
-        return Err(CodegenError::Manifest {
-            problem: "foreign or noncanonical descriptor registry".into(),
-        });
-    }
     let mut manifested = Manifested::default();
     let finished = {
         let machine = machine(inputs.target, inputs.opt != OptLevel::None)?;
@@ -342,7 +339,7 @@ fn lower<T>(
                 &body_name,
                 &unit.header.definition,
                 true,
-                Aliasing::of(inputs),
+                Aliasing::of(inputs.callbacks),
             )?;
             let entry = if signature.roots.is_empty() {
                 function
@@ -353,7 +350,7 @@ fn lower<T>(
                     &name,
                     &unit.header.definition,
                     true,
-                    Aliasing::of(inputs),
+                    Aliasing::of(inputs.callbacks),
                 )?;
                 define_root_adapter(
                     &module,
@@ -374,37 +371,6 @@ fn lower<T>(
                 module.make_available_externally(function);
                 functions.push((unit, function, signature));
                 continue;
-            }
-            if inputs.callbacks.contains(&unit.header.definition) {
-                let thunk =
-                    callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
-                let callback = foreign::define_callback_thunk(
-                    &module,
-                    &mut manifested,
-                    inputs.layouts,
-                    inputs.target.c_convention,
-                    &thunk,
-                    entry,
-                    &external,
-                    &unit.header.definition,
-                )?;
-                if unit.header.origin == UnitOrigin::Library
-                    || inputs.inline_instances.contains(&unit.header.instance)
-                {
-                    module.make_linkonce_odr(callback);
-                    module.add_attribute(callback, AttributeSlot::Function, Attribute::InlineHint);
-                    manifested.library.insert(thunk);
-                } else {
-                    manifested.exports.insert(
-                        thunk.clone(),
-                        ObjectSymbol {
-                            name: thunk,
-                            kind: ObjectSymbolKind::Function,
-                            definition: Some(unit.header.definition.clone()),
-                            abi: Some(abi_digest(abi)),
-                        },
-                    );
-                }
             }
             // A library unit is in every object whose units call it, `linkonce_odr` and
             // `inlinehint`, so a partition never changes whether it inlines. It is no
@@ -488,9 +454,16 @@ fn lower<T>(
                 debug.location(&emitter.prologue, scope, line, 1);
                 debug.location(&emitter.builder, scope, line, 1);
             }
-            emitter.registry_table()?;
             emitter.emit()?;
         }
+        // A library copy a C callback names is kept for glue's thunk to call.
+        let kept: Vec<_> = manifested
+            .kept
+            .iter()
+            .filter(|name| module.defines(name))
+            .map(|name| module.function_address(name))
+            .collect();
+        module.keep(&kept);
         // An import the module also defines is internal to the object.
         manifested.imports.retain(|name, _| {
             !manifested.exports.contains_key(name) && !manifested.library.contains(name)

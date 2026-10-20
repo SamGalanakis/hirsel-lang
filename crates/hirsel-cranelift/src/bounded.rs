@@ -20,7 +20,7 @@ impl FnEmitter<'_, '_, '_> {
     /// program that opens no bounded arena builds none, and its pushes and writability
     /// tests read no tracked count.
     pub(crate) fn tracking(&self) -> bool {
-        self.bounded_code().is_some()
+        self.em.inputs.unit().tracking
     }
 
     /// Whether the construction `site` builds a tracked arena block.
@@ -180,9 +180,9 @@ impl FnEmitter<'_, '_, '_> {
             None if self.sequential_payload(place.layout)? => (0, 8),
             None => return self.invalid("an arena push of a place that holds no List block"),
         };
-        let Some(code) = self.bounded_code() else {
+        if !self.tracking() {
             return Ok(());
-        };
+        }
         let block = self.load_ptr(place.ptr);
         let out = self.out_word();
         let (size, align) = (self.u64c(size), self.u64c(align));
@@ -206,7 +206,7 @@ impl FnEmitter<'_, '_, '_> {
         else {
             return self.invalid("a failure outside the failure table");
         };
-        self.tracked_exhaustion(status, code, block, anchor, failure)?;
+        self.tracked_exhaustion(status, block, anchor, failure)?;
         let pushed = self.load_ptr(out);
         self.store_at(pushed, place.ptr, 0);
         Ok(())
@@ -228,7 +228,6 @@ impl FnEmitter<'_, '_, '_> {
     pub(crate) fn tracked_exhaustion(
         &mut self,
         status: Value,
-        code: hirsel_lir::emission::FailureCode,
         block: Value,
         anchor: SourceAnchorId,
         failure: FailureId,
@@ -238,7 +237,7 @@ impl FnEmitter<'_, '_, '_> {
         self.b.ins().brif(status, over, &[], next, &[]);
         self.b.switch_to_block(over);
         let region = self.tracked_region(block);
-        let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+        let exhausted = self.exhausted_block(region, anchor, failure)?;
         self.b.ins().jump(exhausted, &[]);
         self.b.switch_to_block(next);
         Ok(())

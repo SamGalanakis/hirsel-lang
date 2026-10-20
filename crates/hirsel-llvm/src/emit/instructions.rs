@@ -829,7 +829,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let status = self.builder.call(entry, &arguments);
                 if deep {
                     self.copy_status(status, destination, anchor, failure)?;
-                } else if let Some(code) = self.bounded_code() {
+                } else if self.tracking() {
                     // A tracked arena block is copied within its arena, charged (MEM-6):
                     // over its budget, the arena it names records its own OutOfSpace.
                     let zero = self.module.const_int(self.module.int_type(8), 0);
@@ -841,7 +841,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.cold_cond_br(failed, over, next);
                     self.builder.position(over);
                     let region = self.tracked_region(self.get(value)?);
-                    let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+                    let exhausted = self.exhausted_block(region, anchor, failure)?;
                     self.builder.br(exhausted);
                     self.builder.position(next);
                 } else {

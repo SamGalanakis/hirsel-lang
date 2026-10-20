@@ -363,7 +363,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // A runtime primitive's body is the runtime's, which states nothing.
         let aliasing = match site.callee {
             Callee::Operation(_) => Aliasing::Unstated,
-            _ => Aliasing::of(self.inputs),
+            _ => Aliasing::of(self.inputs.callbacks),
         };
         let function = match &name {
             Some(name) => Some(signature.declare(
@@ -663,12 +663,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .row(&unit.tables.operations[op.index()])
                 .and_then(|row| row.failure.as_ref())
         {
-            let Some(code) = self.inputs.failures.codes.get(&rule.0).copied() else {
-                return Err(CodegenError::UnknownRule {
-                    definition: self.definition().clone(),
-                    rule: rule.0.clone(),
-                });
-            };
             if self.failure_edge(failure)?.rule.is_some() {
                 return self.invalid("a runtime call failure rule must be recorded exactly once");
             }
@@ -678,17 +672,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
             let (site, operation) =
                 self.failure_sites_for(self.anchor_code(site.anchor)?, site.forward_caller);
-            let i32_ty = self.module.int_type(32);
-            self.builder.call(
-                begin,
-                &[
-                    self.context,
-                    self.module.const_int(i32_ty, u128::from(code.kind)),
-                    self.module.const_int(i32_ty, u128::from(code.rule)),
-                    site,
-                    operation,
-                ],
-            );
+            let (kind, rule) = self.failure_code(&rule.0);
+            self.builder
+                .call(begin, &[self.context, kind, rule, site, operation]);
             self.builder.br(fail);
             self.builder.position(here);
             record

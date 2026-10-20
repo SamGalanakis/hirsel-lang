@@ -205,25 +205,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let block = self.module.append_block(self.function);
         self.builder.position(block);
         if let Some(rule) = &edge.rule {
-            let Some(code) = self.inputs.failures.codes.get(rule).copied() else {
-                return Err(CodegenError::UnknownRule {
-                    definition: self.definition().clone(),
-                    rule: rule.clone(),
-                });
-            };
+            let (kind, rule) = self.failure_code(rule);
             let (site, operation) = self.failure_sites(self.anchor_code(edge.anchor)?);
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
-            let i32_ty = self.module.int_type(32);
-            self.builder.call(
-                begin,
-                &[
-                    self.context,
-                    self.module.const_int(i32_ty, u128::from(code.kind)),
-                    self.module.const_int(i32_ty, u128::from(code.rule)),
-                    site,
-                    operation,
-                ],
-            );
+            self.builder
+                .call(begin, &[self.context, kind, rule, site, operation]);
         }
         if edge.rule.is_none() {
             let (site, operation) = self.failure_sites(self.anchor_code(edge.anchor)?);

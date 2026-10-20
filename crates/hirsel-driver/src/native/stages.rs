@@ -146,6 +146,9 @@ pub struct ReadyProgram {
     pub input: InputIdentity,
     pub target: TargetSpec,
     pub table: LayoutTable,
+    /// The content key of each layout of `table` (`hirsel_lir::layout_keys`), which names
+    /// the glue symbols units import.
+    pub keys: hirsel_lir::LayoutKeys,
     pub manifest: Manifest,
     pub units: Vec<ValidatedUnit<Ready>>,
     /// Callable-target specializations and their known bodies, available in
@@ -181,6 +184,17 @@ pub struct ReadyProgram {
 }
 
 impl ReadyProgram {
+    /// Whether the program builds tracked arena blocks (MEM-6): it opens a bounded arena,
+    /// which only `arena.bounded`'s recovery does.
+    pub fn tracking(&self) -> bool {
+        self.units.iter().any(|u| {
+            u.unit()
+                .terminators
+                .iter()
+                .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
+        })
+    }
+
     /// The semantic program revision a run of `entry` binds to.
     pub fn revision(&self, entry: &DefPath) -> Option<&hirsel_run_schema::ProgramRevision> {
         self.revisions.get(entry)
@@ -417,6 +431,7 @@ pub fn build_program(
             .map(|(layout, f)| (*layout, f.instance))
             .collect(),
         functions,
+        keys: hirsel_lir::LayoutKeys::new(&lowered.table),
         table: lowered.table,
         manifest,
         units,

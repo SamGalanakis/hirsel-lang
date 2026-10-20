@@ -230,23 +230,18 @@ fn harness(program: &Program) -> String {
 }
 
 fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
-    let codes = failure_codes();
     let input = input();
     let inputs = EmitInputs {
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table.table,
-            &program.finalizers,
-        ),
+        callbacks: false,
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -295,7 +290,12 @@ fn every_target_executes_the_ready_probes_as_the_heap_checker_does() {
             let bytes = emit(&program, opt);
             let source = dir.join("ready_harness.c");
             std::fs::write(&source, harness(&program)).unwrap();
-            let executable = link(&target, &dir, &[("ready.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("ready.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,

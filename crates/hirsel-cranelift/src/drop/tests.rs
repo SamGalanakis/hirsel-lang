@@ -204,23 +204,44 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     let finalizers = BTreeMap::from([(LayoutId(2), instance)]);
     let empty = BTreeSet::new();
     let registry = DescriptorRegistry::new(&table, &finalizers);
+    let keys = hirsel_lir::LayoutKeys::new(&table);
+    let glue = hirsel_lir::glue::UnitGlue::default();
+    let glue_inputs = hirsel_lir::emission::GlueInputs {
+        target,
+        layouts: &table,
+        keys: &keys,
+        registry: registry.clone(),
+        finalizers: &finalizers,
+        glue: &glue,
+        failures: &failures,
+        statics: &[],
+        callbacks: &[],
+        aliasing_unstated: false,
+    };
     let inputs = EmitInputs {
         input: &input,
         target,
         layouts: &table,
+        keys: &keys,
         manifest: &manifest,
-        failures: &failures,
         statics: &[],
-        finalizers: &finalizers,
         inline_instances: &empty,
         available_externally: &empty,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-        registry: registry.clone(),
+        callbacks: false,
+        tracking: false,
         opt: OptLevel::None,
         measurement: false,
         fuel: false,
     };
-    let mut em = Emitter::new(&inputs, false).unwrap();
+    // The probes and the descriptors they name share one object: unit and glue inputs.
+    let mut em = Emitter::new(
+        crate::module::Inputs {
+            glue: Some(&glue_inputs),
+            ..crate::module::Inputs::units(&inputs)
+        },
+        false,
+    )
+    .unwrap();
     let abi = FnAbi {
         key: FnAbiKey {
             callable: input.digest,
@@ -329,6 +350,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         em.define(name, id, &mut ctx).unwrap();
     }
     em.registry_table(&path("probe")).unwrap();
+    em.cells().unwrap();
     em.drain_helpers(&path("probe")).unwrap();
     let source = HARNESS
         .replace("REGISTRY_NAME", &registry.symbol())

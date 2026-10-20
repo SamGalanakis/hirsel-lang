@@ -271,13 +271,6 @@ pub struct Relocation {
     pub addend: i64,
 }
 
-/// Source revisions the object's debug information refers to.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct DebugSource {
-    pub definition: DefPath,
-    pub implementation_revision: ContentHash,
-}
-
 /// What reproduces the object bit-for-bit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Reproducibility {
@@ -289,24 +282,22 @@ pub struct Reproducibility {
 }
 
 /// Owned object bytes and metadata. No LIR, LLVM context, provider,
-/// arena pointer or borrowed buffer.
+/// arena pointer or borrowed buffer, and nothing that names the program the object was
+/// built in (`crate::glue`).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ObjectArtifact {
-    pub input: InputIdentity,
     pub target: ContentHash,
     pub format: ObjectFormat,
     pub bytes: Vec<u8>,
     pub exports: Vec<ObjectSymbol>,
     pub imports: Vec<ObjectSymbol>,
     pub relocations: Vec<Relocation>,
-    pub debug: Vec<DebugSource>,
     pub abi: ContentHash,
-    pub layouts: ContentHash,
     pub reproducibility: Reproducibility,
 }
 
 impl ObjectArtifact {
-    /// Content digest, including the interface version through `input`.
+    /// Content digest.
     pub fn digest(&self) -> ContentHash {
         crate::snapshot::digest("object-artifact", self)
     }
@@ -351,10 +342,6 @@ snapshot_struct!(Relocation {
     kind,
     addend
 });
-snapshot_struct!(DebugSource {
-    definition,
-    implementation_revision
-});
 snapshot_struct!(Reproducibility {
     toolchain,
     options,
@@ -362,15 +349,12 @@ snapshot_struct!(Reproducibility {
     runtime_abi_version
 });
 snapshot_struct!(ObjectArtifact {
-    input,
     target,
     format,
     bytes,
     exports,
     imports,
     relocations,
-    debug,
     abi,
-    layouts,
     reproducibility
 });

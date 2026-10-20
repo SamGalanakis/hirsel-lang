@@ -13,7 +13,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use hirsel_lir::abi::abi_digest;
 use hirsel_lir::abi_types::{CallableShape, FnAbi, PhysicalType, ScalarExtension};
 use hirsel_lir::emission::{
-    EmitInputs, Manifested, OptLevel, artifact, check_receipt, function_thunk_name,
+    EmitInputs, GlueInputs, Manifested, OptLevel, artifact, check_receipt, function_thunk_name,
     register_result, symbol_name,
 };
 use hirsel_lir::ir::UnitOrigin;
@@ -180,11 +180,56 @@ pub(crate) struct CheckThunk {
     pub(crate) register: bool,
 }
 
+/// What one object is emitted from: the target, the layout table and its keys, and either
+/// a unit object's `EmitInputs` or the program glue's `GlueInputs`.
+#[derive(Clone, Copy)]
+pub(crate) struct Inputs<'a> {
+    pub(crate) target: &'a TargetSpec,
+    pub(crate) layouts: &'a LayoutTable,
+    pub(crate) keys: &'a hirsel_lir::LayoutKeys,
+    pub(crate) opt: OptLevel,
+    pub(crate) unit: Option<&'a EmitInputs<'a>>,
+    pub(crate) glue: Option<&'a GlueInputs<'a>>,
+}
+
+impl<'a> Inputs<'a> {
+    /// The inputs of a unit object.
+    pub(crate) fn units(inputs: &'a EmitInputs<'a>) -> Self {
+        Self {
+            target: inputs.target,
+            layouts: inputs.layouts,
+            keys: inputs.keys,
+            opt: inputs.opt,
+            unit: Some(inputs),
+            glue: None,
+        }
+    }
+    /// The inputs of the program's glue object, which is compiled without optimization.
+    pub(crate) fn program(glue: &'a GlueInputs<'a>) -> Self {
+        Self {
+            target: glue.target,
+            layouts: glue.layouts,
+            keys: glue.keys,
+            opt: OptLevel::None,
+            unit: None,
+            glue: Some(glue),
+        }
+    }
+    /// A unit object's inputs; only unit emission reads them.
+    pub(crate) fn unit(&self) -> &'a EmitInputs<'a> {
+        self.unit.expect("unit inputs in unit emission")
+    }
+    /// The glue object's inputs; only glue emission reads them.
+    pub(crate) fn glue(&self) -> &'a GlueInputs<'a> {
+        self.glue.expect("glue inputs in glue emission")
+    }
+}
+
 /// The object being emitted: its Cranelift module, the declarations made so far and the
 /// manifest the finished object must match.
 pub(crate) struct Emitter<'a> {
     pub(crate) module: ObjectModule,
-    pub(crate) inputs: &'a EmitInputs<'a>,
+    pub(crate) inputs: Inputs<'a>,
     pub(crate) call_conv: CallConv,
     pub(crate) manifested: Manifested,
     pub(crate) functions: BTreeMap<String, FuncId>,
@@ -252,12 +297,7 @@ pub(crate) fn emit(
             problem,
         })?;
     }
-    if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {
-        return Err(CodegenError::Manifest {
-            problem: "foreign or noncanonical descriptor registry".into(),
-        });
-    }
-    let mut emitter = Emitter::new(inputs, clif)?;
+    let mut emitter = Emitter::new(Inputs::units(inputs), clif)?;
     emitter.sources = sources;
     let emitted: Vec<&ValidatedUnit<Ready>> = units
         .iter()
@@ -317,21 +357,6 @@ pub(crate) fn emit(
             let thunk_id = emitter.declare_function(&thunk, linkage, &thunk_sig)?;
             emitter.define_thunk(&thunk, thunk_id, id, &thunk_sig, &sig.ir)?;
         }
-        if inputs.callbacks.contains(&header.definition) {
-            let callback = hirsel_lir::emission::callback_thunk_name(
-                &header.definition,
-                Some(&header.instance),
-            );
-            if library {
-                emitter.manifested.library.insert(callback.clone());
-            } else {
-                emitter
-                    .manifested
-                    .exports
-                    .insert(callback.clone(), record(&callback));
-            }
-            emitter.define_callback(&callback, id, &sig, linkage, &header.definition)?;
-        }
         bodies.push((unit, id, sig));
     }
     let mut context = Context::new();
@@ -356,12 +381,8 @@ pub(crate) fn emit(
         }
         emitter.module.clear_context(&mut context);
     }
-    // The registry names every descriptor of the program, and a descriptor its finalizer's
-    // drop wrapper.
     if let Some(first) = emitted.first() {
-        let definition = &first.unit().header.definition;
-        emitter.registry_table(definition)?;
-        emitter.drain_helpers(definition)?;
+        emitter.drain_helpers(&first.unit().header.definition)?;
     }
     emitter.manifested.settle_imports();
     let Emitter {
@@ -376,7 +397,7 @@ pub(crate) fn emit(
     let bytes = crate::object::finish(product)?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
-    artifact(file, manifested, units, inputs, crate::TOOLCHAIN)
+    artifact(file, manifested, inputs, crate::TOOLCHAIN)
         .map(|artifact| (artifact, clif))
         .map_err(|problem| CodegenError::Manifest { problem })
 }
@@ -427,7 +448,7 @@ pub(crate) fn colocate_hirsel_symbols(
 }
 
 impl<'a> Emitter<'a> {
-    pub(crate) fn new(inputs: &'a EmitInputs<'a>, clif: bool) -> Emitted<Self> {
+    pub(crate) fn new(inputs: Inputs<'a>, clif: bool) -> Emitted<Self> {
         let isa = isa(inputs.target, inputs.opt)?;
         let call_conv = isa.default_call_conv();
         let builder = ObjectBuilder::new(isa, "hirsel", cranelift_module::default_libcall_names())

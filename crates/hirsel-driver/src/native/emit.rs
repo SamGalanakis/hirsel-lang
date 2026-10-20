@@ -1,8 +1,11 @@
-//! P7: the Ready program as one owned object for its target. The emitter gets
-//! immutable inputs only; failure codes are assigned here, from the rules the
-//! program's failure edges start.
+//! P7: the Ready program as owned objects for its target. The emitter gets immutable
+//! inputs only. Unit objects name every number the program assigns by content
+//! (`hirsel_lir::glue`); the program's glue object, emitted here at every link, binds
+//! them: failure codes from the rules the program's failure edges start, descriptor
+//! indices from its registry.
 use super::stages::{NativeError, ReadyProgram, StageName};
-use hirsel_lir::emission::{EmitInputs, FailureCode, FailureCodes, OptLevel};
+use hirsel_lir::emission::{EmitInputs, FailureCodes, GlueCallback, GlueInputs, OptLevel};
+use hirsel_lir::glue::UnitGlue;
 use hirsel_lir::stage::ObjectArtifact;
 use std::collections::BTreeSet;
 
@@ -24,9 +27,7 @@ impl Backend {
     }
 }
 
-/// The failure category code of every language failure (`kind` of
-/// `hirsel_rt_v2_failure_begin`): M1b has one category, FAIL-1's `bug`.
-pub const KIND_BUG: u32 = 1;
+pub use hirsel_lir::emission::KIND_BUG;
 
 /// The rules a program can fail with, in order: a rule's runtime code is its
 /// index here plus one, so zero never names a rule.
@@ -61,20 +62,64 @@ pub fn failure_rules(program: &ReadyProgram) -> Vec<String> {
 }
 
 pub fn failure_codes(program: &ReadyProgram) -> FailureCodes {
-    FailureCodes {
-        codes: failure_rules(program)
-            .into_iter()
-            .enumerate()
-            .map(|(index, rule)| {
-                (
-                    rule,
-                    FailureCode {
-                        kind: KIND_BUG,
-                        rule: index as u32 + 1,
-                    },
+    hirsel_lir::glue::failure_codes(&failure_rules(program).into_iter().collect())
+}
+
+/// The glue object of `program` for `backend` (`hirsel_lir::glue`): what its units
+/// import by content, bound to the program's numbers.
+pub fn emit_glue(
+    program: &ReadyProgram,
+    backend: Backend,
+    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
+) -> Result<ObjectArtifact, NativeError> {
+    let failed = |definition: Option<hirsel_syntax::DefPath>, message: String| NativeError {
+        definition,
+        ..NativeError::new(StageName::Emission, message)
+    };
+    let mut glue = UnitGlue::default();
+    for unit in &program.units {
+        let unit = unit.unit();
+        let needs = UnitGlue::of(unit, &program.table, &program.keys, &program.manifest)
+            .map_err(|e| failed(Some(unit.header.definition.clone()), e))?;
+        glue.extend(&needs);
+    }
+    let failures = failure_codes(program);
+    let mut callbacks = Vec::with_capacity(glue.callbacks.len());
+    for (definition, instance) in &glue.callbacks {
+        let unit = program
+            .units
+            .iter()
+            .map(|u| &u.unit().header)
+            .find(|h| h.definition == *definition && instance.is_none_or(|i| h.instance == i))
+            .ok_or_else(|| {
+                failed(
+                    Some(definition.clone()),
+                    "a C callback of no unit".to_string(),
                 )
-            })
-            .collect(),
+            })?;
+        callbacks.push(GlueCallback {
+            definition: definition.clone(),
+            instance: Some(unit.instance),
+            abi: unit.abi,
+        });
+    }
+    let inputs = GlueInputs {
+        target: &program.target,
+        layouts: &program.table,
+        keys: &program.keys,
+        registry: registry.clone(),
+        finalizers: &program.finalizers,
+        glue: &glue,
+        failures: &failures,
+        statics: &program.statics,
+        callbacks: &callbacks,
+        aliasing_unstated: !program.callbacks.is_empty(),
+    };
+    match backend {
+        Backend::Llvm => hirsel_llvm::emit_glue(&inputs).map_err(|e| failed(None, e.to_string())),
+        Backend::Cranelift => {
+            hirsel_cranelift::emit_glue(&inputs).map_err(|e| failed(None, e.to_string()))
+        }
     }
 }
 
@@ -85,17 +130,12 @@ pub fn emit(
     opt: OptLevel,
     select: impl Fn(usize) -> bool,
 ) -> Result<ObjectArtifact, NativeError> {
-    let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-        &program.table,
-        &program.finalizers,
-    );
     emit_registered(
         program,
         Backend::Llvm,
         opt,
         select,
         &BTreeSet::new(),
-        &registry,
         false,
         None,
     )
@@ -104,24 +144,19 @@ pub fn emit(
 /// The optimized LLVM IR of the whole program, as `emit` would lower it into one
 /// object: the text codegen controls inspect.
 pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeError> {
-    let failures = failure_codes(program);
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
+        keys: &program.keys,
         manifest: &program.manifest,
-        failures: &failures,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &program.inline_instances,
         available_externally: &BTreeSet::new(),
-        callbacks: &program.callbacks,
+        callbacks: !program.callbacks.is_empty(),
+        tracking: program.tracking(),
         opt,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table,
-            &program.finalizers,
-        ),
         measurement: false,
         fuel: program.fuel,
     };
@@ -133,24 +168,19 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
 /// Cranelift parity failure is read from.
 pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
     check_runtime_calls(program)?;
-    let failures = failure_codes(program);
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
+        keys: &program.keys,
         manifest: &program.manifest,
-        failures: &failures,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &program.inline_instances,
         available_externally: &BTreeSet::new(),
-        callbacks: &program.callbacks,
+        callbacks: !program.callbacks.is_empty(),
+        tracking: program.tracking(),
         opt: OptLevel::None,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table,
-            &program.finalizers,
-        ),
         measurement: false,
         fuel: program.fuel,
     };
@@ -164,11 +194,9 @@ pub(crate) fn emit_registered(
     opt: OptLevel,
     select: impl Fn(usize) -> bool,
     copies: &BTreeSet<hirsel_syntax::ContentHash>,
-    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
     measurement: bool,
     sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<ObjectArtifact, NativeError> {
-    let failures = failure_codes(program);
     let units: Vec<_> = program
         .units
         .iter()
@@ -180,15 +208,14 @@ pub(crate) fn emit_registered(
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
+        keys: &program.keys,
         manifest: &program.manifest,
-        failures: &failures,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &program.inline_instances,
         available_externally: copies,
-        callbacks: &program.callbacks,
+        callbacks: !program.callbacks.is_empty(),
+        tracking: program.tracking(),
         opt,
-        registry: registry.clone(),
         measurement,
         fuel: program.fuel,
     };
@@ -197,8 +224,7 @@ pub(crate) fn emit_registered(
             let definition = match &e {
                 hirsel_llvm::CodegenError::Receipt { definition, .. }
                 | hirsel_llvm::CodegenError::Invalid { definition, .. }
-                | hirsel_llvm::CodegenError::Unsupported { definition, .. }
-                | hirsel_llvm::CodegenError::UnknownRule { definition, .. } => {
+                | hirsel_llvm::CodegenError::Unsupported { definition, .. } => {
                     Some(definition.clone())
                 }
                 _ => None,

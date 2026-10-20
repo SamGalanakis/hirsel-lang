@@ -19,7 +19,7 @@ use crate::layout_types::{
 };
 use crate::object::ObjectFile;
 use crate::stage::{
-    DebugSource, InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
+    InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
     Reproducibility, StageKind, ValidatedUnit,
 };
 
@@ -50,11 +50,18 @@ pub struct FailureCodes {
     pub codes: BTreeMap<String, FailureCode>,
 }
 
+/// The failure category code of every language failure (`kind` of
+/// `hirsel_rt_v2_failure_begin`): M1b has one category, FAIL-1's `bug`.
+pub const KIND_BUG: u32 = 1;
+
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
 /// The immutable inputs of one emission. The emitter receives no provider, query engine or
-/// linker, and keeps no reference to any input after it returns.
+/// linker, and keeps no reference to any input after it returns. Nothing here is a number
+/// the program assigns (`crate::glue`): a unit's code reads those from glue cells, so what
+/// it emits depends only on its units, the layouts they reach (by `LayoutKey`), the
+/// options and the program-wide bits below.
 #[derive(Clone, Debug)]
 pub struct EmitInputs<'a> {
     /// The frozen front-end input every unit was built from.
@@ -62,23 +69,25 @@ pub struct EmitInputs<'a> {
     pub target: &'a TargetSpec,
     /// The table every unit's receipt names.
     pub layouts: &'a LayoutTable,
+    /// The content key of every layout of `layouts`.
+    pub keys: &'a crate::layout_keys::LayoutKeys,
     /// The operation manifest every unit's receipt names.
     pub manifest: &'a Manifest,
-    pub failures: &'a FailureCodes,
-    /// The bytes of each static a `ReadStatic` names.
+    /// The bytes of each static a `ReadStatic` names: a constant slot copies pointer-free
+    /// ones (`statics::constant_slots`); glue defines the blocks.
     pub statics: &'a [crate::statics::StaticData],
-    /// Per layout with a user finalizer, the instance digest of its drop body's unit.
-    pub finalizers: &'a BTreeMap<LayoutId, ContentHash>,
     /// Source specializations and known callable bodies replicated by the driver.
     pub inline_instances: &'a BTreeSet<ContentHash>,
     /// Small source units another object of the partition implements, emitted here as
     /// `available_externally` bodies so calls into them inline across objects.
     pub available_externally: &'a BTreeSet<ContentHash>,
-    /// The definitions some unit of the program names as a C callback (PROG-4): each one's
-    /// own object exports its `callback_thunk_name` thunk.
-    pub callbacks: &'a BTreeSet<DefPath>,
+    /// The program names a C callback (PROG-4), so no Hirsel entry states `noalias`
+    /// (`hirsel-llvm`'s `Aliasing`).
+    pub callbacks: bool,
+    /// The program opens a bounded arena (MEM-6), so its constructions build tracked
+    /// arena blocks and charge them.
+    pub tracking: bool,
     pub opt: OptLevel,
-    pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
     pub measurement: bool,
     /// Charge the run's fuel at every fuel point (`crate::fuel::fuel_points`): the word at
@@ -86,6 +95,34 @@ pub struct EmitInputs<'a> {
     /// `hirsel_rt_v2_fuel_exhausted`. Without it no code reads the word, so a run without a
     /// fuel budget pays nothing.
     pub fuel: bool,
+}
+
+/// A C callback thunk glue defines: the definition, its instance and its entry's FnAbi.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GlueCallback {
+    pub definition: DefPath,
+    pub instance: Option<ContentHash>,
+    pub abi: crate::FnAbiId,
+}
+
+/// The inputs of the program's glue object (`crate::glue`), regenerated at every link.
+#[derive(Clone, Debug)]
+pub struct GlueInputs<'a> {
+    pub target: &'a TargetSpec,
+    pub layouts: &'a LayoutTable,
+    pub keys: &'a crate::layout_keys::LayoutKeys,
+    pub registry: crate::descriptor_registry::DescriptorRegistry,
+    /// Per layout with a user finalizer, the instance digest of its drop body's unit.
+    pub finalizers: &'a BTreeMap<LayoutId, ContentHash>,
+    /// What the program's units need from glue, merged.
+    pub glue: &'a crate::glue::UnitGlue,
+    /// Every rule's code: `glue::failure_codes` of `glue.failure_rules`.
+    pub failures: &'a FailureCodes,
+    /// The program's statics; glue defines those `glue.statics` names.
+    pub statics: &'a [crate::statics::StaticData],
+    pub callbacks: &'a [GlueCallback],
+    /// As the units' `EmitInputs::callbacks`.
+    pub aliasing_unstated: bool,
 }
 
 /// C library symbols for byte comparisons and those a backend's lowering may introduce for
@@ -165,16 +202,6 @@ pub fn function_thunk_name(definition: &DefPath, instance: Option<&ContentHash>)
 pub fn callback_thunk_name(definition: &DefPath, instance: Option<&ContentHash>) -> String {
     let name = symbol_name(definition, instance);
     format!("_H1C{}", &name[3..])
-}
-
-/// No callbacks, for inputs that name none.
-pub static NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
-
-/// A digest names the layout's runtime descriptor: one address identity across every object.
-pub fn descriptor_name(layout: &LayoutRecord) -> String {
-    let digest = crate::snapshot::digest("runtime-layout-descriptor", layout);
-    let hex: String = digest.0.iter().map(|b| format!("{b:02x}")).collect();
-    format!("hirsel.layout.{hex}")
 }
 
 /// The `site` code a failure passes to `hirsel_rt_v2_failure_begin`: the first eight bytes of
@@ -332,6 +359,9 @@ pub struct Manifested {
     pub library: BTreeSet<String>,
     /// Shared runtime descriptor and step globals emitted by this object.
     pub descriptors: BTreeSet<String>,
+    /// The entries the object's units name as C callbacks. Glue's thunk calls them, so
+    /// a library copy here is kept though nothing in the object calls it.
+    pub kept: BTreeSet<String>,
 }
 
 impl Manifested {
@@ -372,9 +402,53 @@ impl Manifested {
 pub fn artifact(
     file: ObjectFile,
     manifested: Manifested,
-    units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     toolchain: &str,
+) -> Result<ObjectArtifact, String> {
+    let mut options = format!(
+        "{:?} {} {} {}",
+        inputs.opt,
+        inputs.target.triple,
+        inputs.target.cpu,
+        inputs.target.features.join(",")
+    );
+    if inputs.measurement {
+        options.push_str(" measurement");
+    }
+    if inputs.fuel {
+        options.push_str(" fuel");
+    }
+    if inputs.callbacks {
+        options.push_str(" callbacks");
+    }
+    if inputs.tracking {
+        options.push_str(" tracking");
+    }
+    checked_artifact(file, manifested, inputs.target, toolchain, &options)
+}
+
+/// `artifact` for the program's glue object (`crate::glue`).
+pub fn glue_artifact(
+    file: ObjectFile,
+    manifested: Manifested,
+    target: &TargetSpec,
+    toolchain: &str,
+) -> Result<ObjectArtifact, String> {
+    let options = format!(
+        "glue {} {} {}",
+        target.triple,
+        target.cpu,
+        target.features.join(",")
+    );
+    checked_artifact(file, manifested, target, toolchain, &options)
+}
+
+fn checked_artifact(
+    file: ObjectFile,
+    manifested: Manifested,
+    target: &TargetSpec,
+    toolchain: &str,
+    options: &str,
 ) -> Result<ObjectArtifact, String> {
     if !file.thread_locals.is_empty() {
         return Err(format!(
@@ -436,39 +510,14 @@ pub fn artifact(
             .filter_map(|s| s.abi.as_ref())
             .map(|h| h.0.as_slice()),
     );
-    let mut options = format!(
-        "{:?} {} {} {}",
-        inputs.opt,
-        inputs.target.triple,
-        inputs.target.cpu,
-        inputs.target.features.join(",")
-    );
-    if inputs.measurement {
-        options.push_str(" measurement");
-    }
-    if inputs.fuel {
-        options.push_str(" fuel");
-    }
-    let mut debug: Vec<DebugSource> = units
-        .iter()
-        .map(|u| DebugSource {
-            definition: u.unit().header.definition.clone(),
-            implementation_revision: u.unit().header.implementation_revision,
-        })
-        .collect();
-    debug.sort_by(|a, b| a.definition.cmp(&b.definition));
-    debug.dedup();
     Ok(ObjectArtifact {
-        input: inputs.input.clone(),
-        target: inputs.target.digest(),
+        target: target.digest(),
         format: ObjectFormat::Elf,
         bytes: file.bytes,
         exports,
         imports,
         relocations,
-        debug,
         abi,
-        layouts: inputs.layouts.digest(),
         reproducibility: Reproducibility {
             toolchain: toolchain.to_owned(),
             options: ContentHash::of_parts("hirsel.native-options.v1", [options.as_bytes()]),
@@ -583,6 +632,7 @@ mod tests {
             imports: imports.iter().map(symbol).collect(),
             library: BTreeSet::new(),
             descriptors: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -600,29 +650,27 @@ mod tests {
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let layouts = LayoutTable::new(&target);
         let manifest = Manifest::skeleton([]);
-        let failures = FailureCodes::default();
         let input = InputIdentity {
             interface_version: crate::INTERFACE_VERSION,
             digest: ContentHash::of_bytes(b"input"),
         };
-        let finalizers = BTreeMap::new();
+        let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
             input: &input,
             target: &target,
             layouts: &layouts,
+            keys: &keys,
             manifest: &manifest,
-            failures: &failures,
             statics: &[],
-            finalizers: &finalizers,
             inline_instances: &BTreeSet::new(),
             available_externally: &BTreeSet::new(),
-            callbacks: &NO_CALLBACKS,
-            registry: crate::descriptor_registry::DescriptorRegistry::new(&layouts, &finalizers),
+            callbacks: false,
+            tracking: false,
             opt: OptLevel::None,
             measurement: false,
             fuel: false,
         };
-        artifact(file, manifested, &[], &inputs, "fixture")
+        artifact(file, manifested, &inputs, "fixture")
     }
 
     #[test]

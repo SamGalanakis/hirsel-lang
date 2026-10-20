@@ -6,8 +6,9 @@ use crate::support;
 
 use std::collections::BTreeSet;
 
-use hirsel_lir::descriptor_registry::DescriptorRegistry;
-use hirsel_lir::emission::{EmitInputs, NO_CALLBACKS, OptLevel};
+use hirsel_lir::emission::{EmitInputs, OptLevel};
+
+const NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
 use hirsel_lir::ir::{SlotKind, UnitOrigin};
 use hirsel_lir::layout_types::TargetSpec;
 use hirsel_llvm::emit_optimized_ir;
@@ -18,21 +19,19 @@ use support::ready::*;
 use support::*;
 
 fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String {
-    let codes = failure_codes();
     let input = input();
     let none = BTreeSet::new();
     let inputs = EmitInputs {
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &none,
         available_externally: &none,
-        callbacks,
-        registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
+        callbacks: !callbacks.is_empty(),
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -349,7 +348,15 @@ int main(void) {{
                 std::fs::write(&c, &source).unwrap();
                 let text = ir(&program, opt, &NO_CALLBACKS);
                 let object = hirsel_llvm::compile_ir(&text, &target, OptLevel::None).unwrap();
-                let executable = link(&target, &dir, &[("packed.o", &object.bytes)], &[c]);
+                let executable = link(
+                    &target,
+                    &dir,
+                    &[
+                        ("packed.o", &object.bytes),
+                        ("program-glue.o", &program.glue()),
+                    ],
+                    &[c],
+                );
                 assert_eq!(run(&target, &executable), "packed mut write-back ok\n");
             }
         }

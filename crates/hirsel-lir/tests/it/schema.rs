@@ -1294,7 +1294,6 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
     assert_ne!(raw.digest(), stale.digest());
 
     let artifact = ObjectArtifact {
-        input: input(),
         target: hash("target"),
         format: ObjectFormat::Elf,
         bytes: vec![0x7f, b'E', b'L', b'F'],
@@ -1324,12 +1323,7 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
             kind: 4,
             addend: -4,
         }],
-        debug: vec![DebugSource {
-            definition: path("f"),
-            implementation_revision: hash("f source"),
-        }],
         abi: hash("abi"),
-        layouts: hash("layouts"),
         reproducibility: Reproducibility {
             toolchain: "llvm 21.1.8".into(),
             options: hash("O2"),
@@ -1339,7 +1333,7 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
     };
     assert_round_trip(&artifact);
     let mut other = artifact.clone();
-    other.input.interface_version += 1;
+    other.reproducibility.lir_version += 1;
     assert_ne!(artifact.digest(), other.digest());
 
     let id = |name: &str| OperationId {

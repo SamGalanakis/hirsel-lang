@@ -59,7 +59,8 @@ pub fn input() -> InputIdentity {
     }
 }
 
-/// The rules fixtures fail with and their runtime codes.
+/// The rules fixtures fail with and their runtime codes, which glue binds; every rule's
+/// kind is `KIND_BUG`, which units state themselves.
 pub fn failure_codes() -> FailureCodes {
     let mut codes = BTreeMap::new();
     for (rule, kind, code) in [
@@ -67,7 +68,7 @@ pub fn failure_codes() -> FailureCodes {
         ("MEM-3", 1, 103),
         ("MEM-13", 1, 113),
         ("MEM-14", 1, 114),
-        ("LANG-9", 2, 9),
+        ("LANG-9", 1, 9),
     ] {
         codes.insert(rule.to_owned(), FailureCode { kind, rule: code });
     }
@@ -119,6 +120,8 @@ pub fn wire_owner(owners: &mut Owners) -> DefPath {
 pub struct Table {
     pub target: TargetSpec,
     pub table: LayoutTable,
+    /// `table`'s content keys, which name the glue symbols units import.
+    pub keys: hirsel_lir::LayoutKeys,
     pub layouts: BTreeMap<&'static str, LayoutId>,
     pub abis: BTreeMap<&'static str, FnAbiId>,
     /// The block header layout: a reuse token's.
@@ -254,6 +257,7 @@ impl Schema {
         }
         Table {
             target: target.clone(),
+            keys: hirsel_lir::LayoutKeys::new(&table),
             table,
             layouts,
             abis,

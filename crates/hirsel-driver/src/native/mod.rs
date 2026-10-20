@@ -35,7 +35,8 @@ pub use differential::{
     runner_oracle_in, runtime_builds, smoke_matrix, topology_matrix, trace_roots_matrix,
 };
 pub use emit::{
-    Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,
+    Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_glue, emit_ir, failure_codes,
+    failure_rules,
 };
 pub use executable::{BuildProfile, build_path_native, build_path_native_backend};
 pub use heap::{HeapRun, HeapWorld, heap_campaign, heap_campaign_in, run_heap, run_heap_in};

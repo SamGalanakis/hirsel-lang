@@ -761,7 +761,8 @@ pub fn partition_objects(
 }
 
 /// `partition_objects` by `backend`. Cranelift does not inline, so it copies no small
-/// callee bodies at any optimization level.
+/// callee bodies at any optimization level. The last object is the program's glue
+/// (`emit::emit_glue`).
 pub fn partition_backend_objects(
     program: &ReadyProgram,
     backend: Backend,
@@ -872,11 +873,11 @@ pub fn partition_backend_objects(
                 opt,
                 |unit| selected[unit],
                 &copies,
-                registry,
                 measurement,
                 sources,
             )
         })
+        .chain([super::emit::emit_glue(program, backend, registry)])
         .collect()
 }
 
@@ -1456,6 +1457,9 @@ fn link_launcher(
             hirsel_lir::stage::ObjectSymbolKind::Runtime
                 | hirsel_lir::stage::ObjectSymbolKind::Foreign
         ) || exported.contains(import.name.as_str())
+            // A library body glue's callback thunk calls: the object of the unit that
+            // names the callback keeps its copy.
+            || library_symbols.contains(&import.name)
             || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str());
         if !declared {
             return Err(NativeError::new(

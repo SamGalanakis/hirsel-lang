@@ -297,23 +297,18 @@ fn capture_masks_agree_on_both_native_targets() {
                 hirsel_lir::emission::OptLevel::None,
                 hirsel_lir::emission::OptLevel::Speed,
             ] {
-                let codes = failure_codes();
                 let id = input();
                 let inputs = hirsel_lir::emission::EmitInputs {
                     input: &id,
                     target: &target,
                     layouts: &p.table.table,
+                    keys: &p.table.keys,
                     manifest: &p.manifest,
-                    failures: &codes,
                     statics: &[],
-                    finalizers: &p.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &p.table.table,
-                        &p.finalizers,
-                    ),
+                    callbacks: false,
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -330,7 +325,12 @@ fn capture_masks_agree_on_both_native_targets() {
 #include <string.h>
 {main}
 int main(void) {{ hirsel_rt_v2_config config; memset(&config, 0, sizeof(config)); config.abi_version = HIRSEL_RT_V2_ABI_VERSION; config.flags = HIRSEL_RT_V2_CONFIG_DIAGNOSTIC; hirsel_rt_v2_ctx *ctx; if(hirsel_rt_v2_ctx_create(&config, &ctx)) return 1; for(unsigned i=0;i<1000;i++) {{ if(call_main(ctx)) return 2; hirsel_rt_v2_stats stats; hirsel_rt_v2_ctx_stats(ctx, &stats); if(stats.live_blocks) return 3; }} hirsel_rt_v2_ctx_destroy(ctx); puts("ok"); return 0; }}"#)).unwrap();
-                let executable = link(&target, &dir, &[("oncecap.o", &object.bytes)], &[source]);
+                let executable = link(
+                    &target,
+                    &dir,
+                    &[("oncecap.o", &object.bytes), ("program-glue.o", &p.glue())],
+                    &[source],
+                );
                 assert_eq!(run(&target, &executable), "ok\n");
             }
         }
@@ -508,24 +508,18 @@ fn initialization_masks_share_the_named_live_word_limit() {
         );
         u.builder.ret(ENTRY, None);
         let sealed = seal(&table, &m, u.finish());
-        let codes = failure_codes();
         let id = input();
-        let finalizers = Default::default();
         let inputs = hirsel_lir::emission::EmitInputs {
             input: &id,
             target: &table.target,
             layouts: &table.table,
+            keys: &table.keys,
             manifest: &m,
-            failures: &codes,
             statics: &[],
-            finalizers: &finalizers,
             inline_instances: &std::collections::BTreeSet::new(),
             available_externally: &std::collections::BTreeSet::new(),
-            callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-            registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                &table.table,
-                &finalizers,
-            ),
+            callbacks: false,
+            tracking: false,
             opt: hirsel_lir::emission::OptLevel::None,
             measurement: false,
             fuel: false,

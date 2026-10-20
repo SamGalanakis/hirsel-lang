@@ -1334,7 +1334,7 @@ pub struct ConstantData {
     pub value: ConstantValue,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum SymbolKind {
     Function,
     Constant,
@@ -1344,7 +1344,7 @@ pub enum SymbolKind {
 }
 
 /// A link-level symbol: definition plus instance digest for specialized code.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Symbol {
     pub kind: SymbolKind,
     pub definition: DefPath,

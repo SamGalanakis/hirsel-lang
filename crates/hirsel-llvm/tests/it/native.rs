@@ -413,7 +413,6 @@ fn scalar_harness(program: &Program) -> (String, String) {
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn every_target_executes_the_scalar_boundary_matrix() {
-    let codes = failure_codes();
     let input = input();
     for target in TargetSpec::executed() {
         let program = scalar_program(&target);
@@ -425,17 +424,13 @@ fn every_target_executes_the_scalar_boundary_matrix() {
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    callbacks: false,
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -444,7 +439,12 @@ fn every_target_executes_the_scalar_boundary_matrix() {
             };
             let source = dir.join("harness.c");
             std::fs::write(&source, &harness).unwrap();
-            let executable = link(&target, &dir, &[("scalar.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("scalar.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             let actual = run(&target, &executable);
             if actual != expected {
                 let first = actual
@@ -609,24 +609,19 @@ fn every_target_executes_the_abi_probes() {
         for opt in OPTS {
             let dir = scratch(&format!("abi-{}-{opt:?}", target.triple));
             let (bytes, names) = {
-                let codes = failure_codes();
                 let input = input();
                 let program = abi_program(&target);
                 let inputs = EmitInputs {
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    callbacks: false,
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -643,13 +638,22 @@ fn every_target_executes_the_abi_probes() {
                 // The imports are the C-defined entry, the runtime and toolchain routines.
                 let host = symbol_name(&path(HOST_SCALE), Some(&instance(HOST_SCALE)));
                 assert!(artifact.imports.iter().any(|i| i.name == host));
-                (artifact.bytes, (abi_names(&program), abi_entries(&program)))
+                let glue = program.glue();
+                (
+                    [artifact.bytes, glue],
+                    (abi_names(&program), abi_entries(&program)),
+                )
             };
             std::fs::write(dir.join("names.h"), names.0).unwrap();
             std::fs::write(dir.join("entries.h"), names.1).unwrap();
             let source = dir.join("abi_harness.c");
             std::fs::write(&source, ABI_HARNESS).unwrap();
-            let executable = link(&target, &dir, &[("abi.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("abi.o", &bytes[0]), ("program-glue.o", &bytes[1])],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,
@@ -703,7 +707,6 @@ fn every_target_executes_the_heap_probes() {
         for opt in OPTS {
             let dir = scratch(&format!("heap-{}-{opt:?}", target.triple));
             let (bytes, entries) = {
-                let codes = failure_codes();
                 let input = input();
                 let program = heap_program(&target);
                 let entries: String = HEAP_ENTRIES
@@ -714,30 +717,34 @@ fn every_target_executes_the_heap_probes() {
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    callbacks: false,
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
                 };
                 (
-                    emit_object(&program.units(), &inputs).unwrap().bytes,
+                    [
+                        emit_object(&program.units(), &inputs).unwrap().bytes,
+                        program.glue(),
+                    ],
                     entries,
                 )
             };
             std::fs::write(dir.join("entries.h"), entries).unwrap();
             let source = dir.join("heap_harness.c");
             std::fs::write(&source, HEAP_HARNESS).unwrap();
-            let executable = link(&target, &dir, &[("heap.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("heap.o", &bytes[0]), ("program-glue.o", &bytes[1])],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,

@@ -15,29 +15,20 @@ fn x86() -> TargetSpec {
     TargetSpec::x86_64_unknown_linux_gnu()
 }
 
-fn inputs<'a>(
-    program: &'a Program,
-    codes: &'a FailureCodes,
-    input: &'a InputIdentity,
-    opt: OptLevel,
-) -> EmitInputs<'a> {
+fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> EmitInputs<'a> {
     static EMPTY_INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
         input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &EMPTY_INLINE,
         available_externally: &EMPTY_INLINE,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table.table,
-            &program.finalizers,
-        ),
+        callbacks: false,
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -46,12 +37,11 @@ fn inputs<'a>(
 
 #[test]
 fn the_scalar_program_exports_every_case_on_every_target() {
-    let codes = failure_codes();
     let input = input();
     for target in TargetSpec::executed() {
         let program = scalar_program(&target);
         for opt in [OptLevel::None, OptLevel::Speed] {
-            let object = emit_object(&program.units(), &inputs(&program, &codes, &input, opt))
+            let object = emit_object(&program.units(), &inputs(&program, &input, opt))
                 .unwrap_or_else(|e| panic!("{}: {e}", target.triple));
             // Each definition and its function-reference thunk.
             let mut expected: Vec<String> = scalar_cases()
@@ -75,17 +65,21 @@ fn the_scalar_program_exports_every_case_on_every_target() {
                         && s.definition.is_some()
                         && s.abi.is_some())
             );
-            // Failure starts the runtime's failure state; i128 division and float remainder
-            // are toolchain routines; nothing else is imported.
+            // Failure starts the runtime's failure state with a rule's code from its glue
+            // cell; i128 division and float remainder are toolchain routines; nothing else
+            // is imported.
             for import in &object.imports {
                 let runtime = import.name == "hirsel_rt_v2_failure_begin";
+                let cell = import.name.starts_with("hirsel.fail.");
                 assert!(
                     runtime
+                        || cell
                         || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str()),
                     "{}",
                     import.name
                 );
                 assert_eq!(import.kind == ObjectSymbolKind::Runtime, runtime);
+                assert_eq!(import.kind == ObjectSymbolKind::Data, cell);
             }
             assert!(!object.relocations.is_empty());
         }
@@ -96,26 +90,18 @@ fn the_scalar_program_exports_every_case_on_every_target() {
 #[test]
 fn the_artifact_is_owned_and_reproducible() {
     fn owned<T: Send + Sync + 'static>(_: &T) {}
-    let codes = failure_codes();
     let input = input();
     let emit = || -> ObjectArtifact {
         let program = scalar_program(&x86());
-        emit_object(
-            &program.units(),
-            &inputs(&program, &codes, &input, OptLevel::Speed),
-        )
-        .unwrap()
+        emit_object(&program.units(), &inputs(&program, &input, OptLevel::Speed)).unwrap()
     };
     let first = emit();
     owned(&first);
     let second = emit();
     assert_eq!(first, second, "emission is deterministic");
     let program = scalar_program(&x86());
-    assert_eq!(first.input, input);
     assert_eq!(first.target, x86().digest());
-    assert_eq!(first.layouts, program.table.table.digest());
     assert_eq!(first.reproducibility.toolchain, "llvm 21.1.8");
-    assert_eq!(first.debug.len(), scalar_cases().len());
     assert_eq!(&first.bytes[..4], b"\x7fELF");
 }
 
@@ -124,11 +110,10 @@ fn the_artifact_is_owned_and_reproducible() {
 /// against.
 #[test]
 fn a_receipt_for_other_inputs_is_rejected() {
-    let codes = failure_codes();
     let input = input();
     let program = scalar_program(&x86());
     let units = program.units();
-    let valid = inputs(&program, &codes, &input, OptLevel::None);
+    let valid = inputs(&program, &input, OptLevel::None);
     emit_object(&units, &valid).expect("the accepted twin");
 
     let problem = |inputs: &EmitInputs<'_>| match emit_object(&units, inputs) {
@@ -188,36 +173,32 @@ fn a_receipt_for_other_inputs_is_rejected() {
     );
 }
 
+/// A unit names a failure rule by its glue cell, not by the code the program assigns it:
+/// the object imports `hirsel.fail.<rule>.code` as data.
 #[test]
-fn a_failure_rule_without_a_code_is_rejected() {
+fn a_failure_rule_is_a_glue_import() {
     let input = input();
     let program = scalar_program(&x86());
-    let mut codes = failure_codes();
-    codes.codes.remove("SEM-1");
-    match emit_object(
-        &program.units(),
-        &inputs(&program, &codes, &input, OptLevel::None),
-    ) {
-        Err(CodegenError::UnknownRule { rule, .. }) => assert_eq!(rule, "SEM-1"),
-        other => panic!("expected an unknown rule, got {other:?}"),
-    }
-    let codes = failure_codes();
-    emit_object(
-        &program.units(),
-        &inputs(&program, &codes, &input, OptLevel::None),
-    )
-    .expect("the accepted twin");
+    let object = emit_object(&program.units(), &inputs(&program, &input, OptLevel::None)).unwrap();
+    let cell = hirsel_lir::glue::failure_code_symbol("SEM-1");
+    assert!(
+        object
+            .imports
+            .iter()
+            .any(|s| s.name == cell && s.kind == ObjectSymbolKind::Data),
+        "{:?}",
+        object.imports
+    );
 }
 
 #[test]
 fn two_units_with_one_link_name_are_rejected() {
-    let codes = failure_codes();
     let input = input();
     let program = scalar_program(&x86());
     let units = program.units();
     match emit_object(
         &[units[0], units[0]],
-        &inputs(&program, &codes, &input, OptLevel::None),
+        &inputs(&program, &input, OptLevel::None),
     ) {
         Err(CodegenError::DuplicateSymbol { name }) => {
             let case = &units[0].unit().header.definition.0.name;
@@ -231,8 +212,23 @@ fn two_units_with_one_link_name_are_rejected() {
 fn a_forged_or_foreign_program_descriptor_assignment_is_rejected() {
     let program = heap_program(&x86());
     let codes = failure_codes();
-    let input = input();
-    let valid = inputs(&program, &codes, &input, OptLevel::None);
+    let keys = &program.table.keys;
+    let glue = hirsel_lir::glue::UnitGlue::default();
+    let valid = hirsel_lir::emission::GlueInputs {
+        target: &program.table.target,
+        layouts: &program.table.table,
+        keys,
+        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+            &program.table.table,
+            &program.finalizers,
+        ),
+        finalizers: &program.finalizers,
+        glue: &glue,
+        failures: &codes,
+        statics: &program.statics,
+        callbacks: &[],
+        aliasing_unstated: false,
+    };
     assert!(valid.registry.layouts.len() > 2);
     let mut swapped = valid.clone();
     swapped.registry.layouts.swap(0, 1);
@@ -246,23 +242,21 @@ fn a_forged_or_foreign_program_descriptor_assignment_is_rejected() {
     stale.registry.identity = hash("stale registry");
     for forged in [swapped, missing, duplicate, foreign, stale] {
         assert!(
-            matches!(emit_object(&program.units(), &forged), Err(CodegenError::Manifest { problem }) if problem.contains("descriptor registry"))
+            matches!(hirsel_llvm::emit_glue(&forged), Err(CodegenError::Manifest { problem }) if problem.contains("descriptor registry"))
         );
     }
-    emit_object(&program.units(), &valid).unwrap();
+    hirsel_llvm::emit_glue(&valid).unwrap();
 }
 
 /// A uniqueness query must stay a count read, including at O0: it must never
 /// acquire an opaque runtime call that clobbers surrounding sequence facts.
 #[test]
 fn uniqueness_queries_do_not_import_a_runtime_entry() {
-    let codes = failure_codes();
     let input = input();
     for target in TargetSpec::executed() {
         let program = support::ready::ready_program(&target);
         for opt in [OptLevel::None, OptLevel::Speed] {
-            let object =
-                emit_object(&program.units(), &inputs(&program, &codes, &input, opt)).unwrap();
+            let object = emit_object(&program.units(), &inputs(&program, &input, opt)).unwrap();
             assert!(
                 object
                     .imports

@@ -22,8 +22,8 @@ use std::fmt;
 use hirsel_syntax::DefPath;
 
 pub use c_entry::{c_call, c_definition};
-pub use emit::emit_object_profile;
 pub use emit::{check_target, compile_ir, emit_ir, emit_object, emit_optimized_ir};
+pub use emit::{emit_glue, emit_object_profile};
 pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
 
 /// An LLVM release, `major.minor.patch`.
@@ -86,8 +86,8 @@ pub enum CodegenError {
     Invalid { definition: DefPath, what: String },
     /// A Ready operation this emitter does not implement yet.
     Unsupported { definition: DefPath, what: String },
-    /// A failure edge starts a rule with no runtime failure code.
-    UnknownRule { definition: DefPath, rule: String },
+    /// The program's glue object cannot be built from its inputs.
+    Glue { what: String },
     /// Two units have one link name.
     DuplicateSymbol { name: String },
     /// The LLVM verifier rejected the module.
@@ -143,9 +143,7 @@ impl fmt::Display for CodegenError {
                     definition
                 )
             }
-            CodegenError::UnknownRule { definition, rule } => {
-                write!(f, "{}: no runtime failure code for {rule}", definition)
-            }
+            CodegenError::Glue { what } => write!(f, "program glue: {what}"),
             CodegenError::DuplicateSymbol { name } => write!(f, "two units are named `{name}`"),
             CodegenError::Verify { stage, message } => {
                 let stage = match stage {
