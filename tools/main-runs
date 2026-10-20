@@ -148,7 +148,7 @@ def stages(stage, tier):
     stage('full gate crate tests in release', full_crate_tests(*release, *libtests))
     stage('native and Lean checks', ['tools/check-native.sh'])
     stage('native matrix: both targets and named exclusions',
-          test(*[f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)], after=long))
+          test('-c', 'hirsel.native_selection=true', *[f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)], after=long))
     stage('agreement campaign on heap and native code (unrestricted)', [PY, 'tools/buck2/agree.py', '--native-full'])
     stage('native passing corpus with independent second hash seed', test('//:gate-native-hash-sweep', after=long))
 

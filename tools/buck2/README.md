@@ -777,17 +777,17 @@ reads the checked-in cover.
 
 Native program selections use measured per-case costs from
 `tools/buck2/test-costs/gate-native-{changed,cranelift-changed}.tsv`.
-`tools/gate` packs the slower backend's cost into 600-second slices; programs
+`python3 tools/buck2/native.py <ID>...` packs the slower backend's cost into 600-second slices; programs
 without a measurement, or above that budget, run alone. Both backends run
-every slice in separate pool actions. The gate uses exact `--case` IDs; the
+every slice in separate pool actions. The helper uses exact `--case` IDs; the
 CLI's `--filter` continues to match substrings. Each selected smoke or parity case runs
 in a fresh process within its action, releasing compiler and interpreter
 state before that worker takes another case. The existing memory cap and
 1800-second action timeout still apply.
 
 Workers print `native case program seconds peak_RSS_KiB`.
-Import a gate log with `python3 tools/buck2/test_costs.py <log>`, or refresh
-from gate history with `--from-history <history> --binary gate-native-changed`
+Import a Buck2 log with `python3 tools/buck2/test_costs.py <log>`, or refresh
+from test history with `--from-history <history> --binary gate-native-changed`
 (and `gate-native-cranelift-changed`). Partial selections retain timings for
 unobserved programs. The times guide scheduling; they are not cross-session
 performance comparisons.

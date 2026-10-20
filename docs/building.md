@@ -843,7 +843,7 @@ targets (`;` separates slices, `|` the paths of one slice):
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it
 .buck2/bin/buck2 test -c hirsel.conformance_paths='<case>|<case>' //:gate-conformance-selected-shard-1
 .buck2/bin/buck2 test -c hirsel.agree_paths='<case>|<case>' //:gate-agree-selected-shard-1
-.buck2/bin/buck2 test -c hirsel.native_filters='<program>|<program>' //:gate-native-changed //:gate-native-cranelift-changed
+python3 tools/buck2/native.py <program> <program>  # cost-bounded shards, both backends
 ```
 
 Corpus cases with a `// runners:` header run only interpreted. Land checks
@@ -933,7 +933,7 @@ A change to LLVM emission must carry the matching Cranelift change.
 
 For changes to `crates/hirsel-llvm`, `hirsel-cranelift`, `hirsel-lir`, `hirsel-rc`
 or the runtime, run the programs they affect through the LLVM native smoke
-matrix and Cranelift parity (`-c hirsel.native_filters`, above).
+matrix and Cranelift parity (`tools/buck2/native.py`, above).
 
 Changes to `crates/hirsel-cranelift` also run the Cranelift parity gate for the
 programs they touch: each case LLVM passes (unoptimized, diagnostic archive) must

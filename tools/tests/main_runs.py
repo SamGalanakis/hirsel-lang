@@ -10,8 +10,22 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class NativeCollection(unittest.TestCase):
+    def test_whole_native_stage_explicitly_requests_the_shared_cover(self):
+        stages = runpy.run_path(str(ROOT / 'tools/main-runs'))['stages']
+        commands = {}
+        with patch.dict(os.environ), patch('subprocess.run') as run:
+            run.return_value.stdout = 'root//:example-unittest'
+            stages(lambda name, command, **kwargs: commands.update({name: command}))
+        native = commands['native matrix: both targets and named exclusions']
+        at = native.index('hirsel.native_selection=true')
+        self.assertEqual(native[at - 1], '-c')
+        self.assertIn('//:gate-native-full-shard-1', native)
 
 
 class Route(unittest.TestCase):
