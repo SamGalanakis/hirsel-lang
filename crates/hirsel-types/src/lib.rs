@@ -728,6 +728,8 @@ pub use actual_key::*;
 #[cfg(test)]
 mod reference;
 #[cfg(test)]
+mod prove_tests;
+#[cfg(test)]
 mod test_api;
 #[cfg(test)]
 pub(crate) use test_api::*;

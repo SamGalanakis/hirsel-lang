@@ -264,6 +264,26 @@ impl NominalExpansions {
         self.active.push((root, context, growth, pushed));
         Ok(true)
     }
+    /// The equality class `enter` memoizes `root` under.
+    pub(crate) fn class_of(&self, t: &TypeInterner, root: TypeId) -> Option<TypeId> {
+        self.shapes.class(t, root)
+    }
+    /// `root`'s height, which bounds what can embed in it.
+    pub(crate) fn height_of(&mut self, t: &TypeInterner, root: TypeId) -> Option<usize> {
+        self.shapes.height(t, root)
+    }
+    /// Whether the last entered root spent the polymorphic expansion budget.
+    pub(crate) fn last_grew(&self) -> bool {
+        self.active.last().is_some_and(|a| a.2)
+    }
+    /// Whether an active instantiation of `definition` is no taller than
+    /// `height`: only then can an instantiation of that height grow from it.
+    pub(crate) fn may_grow_into(&self, definition: DefId, height: usize) -> bool {
+        self.lowest
+            .get(&definition)
+            .and_then(|l| l.last())
+            .is_some_and(|lowest| *lowest <= height)
+    }
     pub fn leave(&mut self, root: TypeId, context: usize) {
         let (t, c, growth, definition) =
             self.active.pop().expect("nominal proof exit without entry");

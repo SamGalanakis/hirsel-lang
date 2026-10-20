@@ -8,7 +8,7 @@ use crate::encoding::{Encoder, EncodingError, canonical_encoding};
 use crate::*;
 use hirsel_intern::IdHasher;
 use hirsel_syntax::{Bound, ContentHash};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{BuildHasher, Hash};
 use std::sync::{PoisonError, RwLock};
 
@@ -264,8 +264,8 @@ pub struct ContextMemo<'q> {
     /// Every lookup this memo's evaluations performed, in order; an entry
     /// records the range its evaluation appended.
     log: Vec<DefId>,
-    proofs: HashMap<(TypeId, Bound, ProofFlags), Recorded<Sendability>>,
-    plain: HashMap<TypeId, Recorded<bool>>,
+    /// Whole proofs and the interior sub-proofs that are facts.
+    proofs: HashMap<ProofKey, ProofEntry>,
     compatible: HashMap<(TypeId, TypeId, TypeRelation, CompatPolicy), Recorded<bool>>,
     payload_ids: HashMap<Vec<TypeId>, PayloadSetId>,
     payload_sets: Vec<HashSet<TypeId>>,
@@ -284,7 +284,6 @@ impl<'q> ContextMemo<'q> {
             lookup,
             log: vec![],
             proofs: HashMap::new(),
-            plain: HashMap::new(),
             compatible: HashMap::new(),
             payload_ids: HashMap::new(),
             payload_sets: vec![],
@@ -336,52 +335,259 @@ impl<'q> ContextMemo<'q> {
         });
         Recorded {
             value,
-            reads: self.log[start..].into(),
+            reads: distinct(&self.log[start..]),
         }
     }
 
     /// `ty` satisfies `bound` (Sendable: its crossing summary) under `flags`.
+    /// Main's proof walk, with every sub-proof that completes as a fact (no
+    /// coinductive assumption on an enclosing row, no budgeted expansion
+    /// growth, no root exemption) memoized for later rows and proofs.
     pub fn prove(
         &mut self,
         ty: TypeId,
         bound: Bound,
         flags: ProofFlags,
     ) -> Result<Sendability, QueryError> {
-        let key = (ty, bound, flags);
+        // A Sendable proof that exempts its root's own lifetime treats that
+        // row differently wherever it recurs.
+        let sensitive = bound == Bound::Sendable
+            && !flags.check_root_locality
+            && self
+                .t
+                .get(ty)
+                .is_some_and(|r| !r.modes.relation.is_global());
+        let key = ProofKey {
+            ty,
+            bound,
+            flags,
+            inherited_unique: false,
+            plain_known: false,
+            root: sensitive,
+        };
         if let Some(entry) = self.proofs.get(&key).cloned() {
             self.replay(&entry.reads);
             return entry.value;
         }
-        let entry = self.observed(|t, generics, lookup| {
-            crate::properties::prove(
-                t,
-                ty,
-                bound,
-                generics,
-                flags.check_root_locality,
-                flags.use_evidence,
-                flags.shared_storage,
-                flags.handles,
-                &mut |d| lookup(d),
-            )
+        let start = self.log.len();
+        let value = self.walk(ty, bound, flags, sensitive);
+        if let Err(error) = &value {
+            let entry = ProofEntry {
+                value: Err(error.clone()),
+                reads: distinct(&self.log[start..]),
+                heights: Box::default(),
+                nonglobal: true,
+                interior: false,
+            };
+            self.proofs.insert(key, entry);
+        }
+        value
+    }
+
+    fn walk(
+        &mut self,
+        root: TypeId,
+        bound: Bound,
+        flags: ProofFlags,
+        sensitive: bool,
+    ) -> Result<Sendability, QueryError> {
+        let mut w = Walk::default();
+        let mut stack: Vec<Frame> = vec![];
+        let mut next = Some((root, false, false));
+        loop {
+            let settled = match next.take() {
+                Some((id, inherited_unique, plain_known)) => self.visit(
+                    &mut w,
+                    &mut stack,
+                    (root, id, inherited_unique, plain_known),
+                    bound,
+                    flags,
+                    sensitive,
+                )?,
+                None => {
+                    let frame = stack.last_mut().expect("a walk ends with its root");
+                    if !frame.walked.failed
+                        && let Some(child) = frame.children.next()
+                    {
+                        next = Some((child, frame.unique, frame.plain_known));
+                        continue;
+                    }
+                    let frame = stack.pop().unwrap();
+                    Some(self.finish(&mut w, frame, sensitive, stack.is_empty()))
+                }
+            };
+            if let Some(walked) = settled {
+                match stack.last_mut() {
+                    None => return Ok(walked.verdict()),
+                    Some(parent) => parent.walked.join(&walked, walked.low),
+                }
+            }
+        }
+    }
+
+    /// Settle `id` from this walk or the memo, or push its frame.
+    fn visit(
+        &mut self,
+        w: &mut Walk,
+        stack: &mut Vec<Frame>,
+        (root, id, inherited_unique, plain_known): (TypeId, TypeId, bool, bool),
+        bound: Bound,
+        flags: ProofFlags,
+        sensitive: bool,
+    ) -> Result<Option<Walked>, QueryError> {
+        if let Some(visit) = w.seen.get(&(id, inherited_unique)) {
+            return Ok(Some(w.settled(*visit)));
+        }
+        let key = ProofKey {
+            ty: id,
+            bound,
+            flags,
+            inherited_unique,
+            plain_known,
+            root: sensitive && id == root,
+        };
+        if !stack.is_empty()
+            && let Some(entry) = self.proofs.get(&key)
+            && entry.interior
+            && !(sensitive && entry.nonglobal)
+            && entry
+                .heights
+                .iter()
+                .all(|(d, h)| !w.nominal.may_grow_into(*d, *h))
+        {
+            let entry = entry.clone();
+            self.replay(&entry.reads);
+            let walked = Walked::from_entry(&entry)?;
+            w.seen
+                .insert((id, inherited_unique), Visit::Done(w.done.len()));
+            w.done.push(walked.clone());
+            return Ok(Some(walked));
+        }
+        let serial = w.resolved.len();
+        w.resolved.push(None);
+        w.seen.insert((id, inherited_unique), Visit::Active(serial));
+        let log_start = self.log.len();
+        let mut walked = Walked::default();
+        if sensitive && let Some(row) = self.t.get(id) {
+            walked.nonglobal = !row.modes.relation.is_global();
+            walked.saw_root = id == root;
+        }
+        let mut known = plain_known;
+        let (t, generics) = (self.t, self.generics);
+        let (step, unique) = crate::properties::proof_step(
+            t,
+            root,
+            id,
+            inherited_unique,
+            &mut known,
+            bound,
+            generics,
+            flags,
+            &mut walked.deps,
+            self,
+        )?;
+        let mut children = vec![];
+        let mut entered = None;
+        match step {
+            crate::properties::ProofStep::Fail => walked.failed = true,
+            crate::properties::ProofStep::Parts(parts) => children = parts,
+            crate::properties::ProofStep::Expand {
+                signature,
+                arguments,
+            } => {
+                let context = usize::from(unique);
+                let class = w.nominal.class_of(t, id);
+                if !w.nominal.enter(id, context, t)? {
+                    // An instantiation already entered in this walk holds
+                    // coinductively, or was proven.
+                    match class.and_then(|c| w.classes.get(&(c, context))) {
+                        Some(visit) => {
+                            let assumed = w.settled(*visit);
+                            walked.join(&assumed, assumed.low);
+                        }
+                        None => walked.growth = true,
+                    }
+                } else {
+                    entered = Some((context, class));
+                    if let Some(class) = class {
+                        w.classes.insert((class, context), Visit::Active(serial));
+                    }
+                    walked.growth |= w.nominal.last_grew();
+                    match (&t.row(id).kind, w.nominal.height_of(t, id)) {
+                        (TypeKind::Named { definition, .. }, Some(height)) => {
+                            walked.height(*definition, height)
+                        }
+                        _ => walked.growth = true,
+                    }
+                    match crate::properties::expansion(t, &signature, &arguments) {
+                        Some(representation) => children.push(representation),
+                        None => walked.failed = true,
+                    }
+                }
+            }
+        }
+        stack.push(Frame {
+            key,
+            id,
+            inherited_unique,
+            unique,
+            plain_known: known,
+            serial,
+            children: children.into_iter(),
+            walked,
+            log_start,
+            entered,
         });
-        self.proofs.insert(key, entry.clone());
-        entry.value
+        Ok(None)
+    }
+
+    /// Complete `frame`: resolve its assumptions and memoize it when it is a fact.
+    fn finish(&mut self, w: &mut Walk, frame: Frame, sensitive: bool, root: bool) -> Walked {
+        let Frame {
+            key,
+            id,
+            inherited_unique,
+            serial,
+            mut walked,
+            log_start,
+            entered,
+            ..
+        } = frame;
+        if let Some((context, _)) = entered
+            && !walked.failed
+        {
+            w.nominal.leave(id, context);
+        }
+        // An assumption of this frame itself, or of a completed descendant,
+        // is discharged by this frame's completion.
+        let low = w.effective(walked.low);
+        walked.low = if low >= serial { NONE } else { low };
+        w.resolved[serial] = Some(walked.low);
+        let fact = !walked.growth
+            && !(sensitive && walked.saw_root)
+            && (walked.failed || walked.low == NONE);
+        if fact || root {
+            let entry = ProofEntry {
+                value: Ok(walked.verdict()),
+                reads: distinct(&self.log[log_start..]),
+                heights: walked.heights.clone().into(),
+                nonglobal: walked.nonglobal,
+                interior: fact && !(sensitive && root),
+            };
+            self.proofs.insert(key, entry);
+        }
+        let done = Visit::Done(w.done.len());
+        w.seen.insert((id, inherited_unique), done);
+        if let Some((context, Some(class))) = entered {
+            w.classes.insert((class, context), done);
+        }
+        w.done.push(walked.clone());
+        walked
     }
 
     /// Whether `part` is Plain: the contextual half of `projected_type`.
     pub fn plain(&mut self, part: TypeId) -> Result<bool, QueryError> {
-        if let Some(entry) = self.plain.get(&part).cloned() {
-            self.replay(&entry.reads);
-            return entry.value;
-        }
-        let entry = self.observed(|t, generics, lookup| {
-            structural_property(t, part, StructuralProperty::Plain, generics, &mut |d| {
-                lookup(d)
-            })
-        });
-        self.plain.insert(part, entry.clone());
-        entry.value
+        Ok(self.prove(part, Bound::Plain, crate::properties::STRUCTURAL)? == Sendability::Sendable)
     }
 
     /// OWN-8 projection of `part` through `owner`: the Plain proof here, the
@@ -445,7 +651,7 @@ impl<'q> ContextMemo<'q> {
         let value = self.compatible_uncached(expected, actual, relation, policy);
         let entry = Recorded {
             value,
-            reads: self.log[start..].into(),
+            reads: distinct(&self.log[start..]),
         };
         self.compatible.insert(key, entry.clone());
         entry.value
@@ -634,4 +840,175 @@ impl<'q> ContextMemo<'q> {
         }
         self.compatible_type(expected, actual, TypeRelation::Value)
     }
+}
+
+impl crate::properties::ProofContext for ContextMemo<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<Option<SignatureRef>, QueryError> {
+        ContextMemo::signature(self, definition)
+    }
+    fn plain(&mut self, id: TypeId) -> Result<bool, QueryError> {
+        ContextMemo::plain(self, id)
+    }
+}
+
+/// A row of main's proof worklist: its proof, and the walk state that
+/// identifies it (inherited uniqueness, a known Plain proof, root exemption).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ProofKey {
+    ty: TypeId,
+    bound: Bound,
+    flags: ProofFlags,
+    inherited_unique: bool,
+    plain_known: bool,
+    root: bool,
+}
+
+#[derive(Clone)]
+struct ProofEntry {
+    value: Result<Sendability, QueryError>,
+    reads: Box<[DefId]>,
+    /// Per declaration, the tallest instantiation the proof entered: a walk
+    /// with no active instantiation that short can reuse it, since none of
+    /// these can grow from its expansions.
+    heights: Box<[(DefId, usize)]>,
+    /// Some reached row has a non-global lifetime.
+    nonglobal: bool,
+    /// A fact inside other walks, not only as a whole proof.
+    interior: bool,
+}
+
+/// No enclosing frame.
+const NONE: usize = usize::MAX;
+
+/// A settled sub-proof as its enclosing frame joins it.
+#[derive(Clone)]
+struct Walked {
+    failed: bool,
+    deps: BTreeSet<TypeParameterRef>,
+    /// The outermost in-progress frame (by serial) the result assumed.
+    low: usize,
+    heights: Vec<(DefId, usize)>,
+    growth: bool,
+    nonglobal: bool,
+    saw_root: bool,
+}
+impl Default for Walked {
+    fn default() -> Self {
+        Self {
+            failed: false,
+            deps: BTreeSet::new(),
+            low: NONE,
+            heights: vec![],
+            growth: false,
+            nonglobal: false,
+            saw_root: false,
+        }
+    }
+}
+impl Walked {
+    fn from_entry(entry: &ProofEntry) -> Result<Self, QueryError> {
+        let mut walked = Walked {
+            heights: entry.heights.to_vec(),
+            nonglobal: entry.nonglobal,
+            ..Walked::default()
+        };
+        match entry.value.clone()? {
+            Sendability::Sendable => (),
+            Sendability::DependsOn(ps) => walked.deps.extend(ps),
+            Sendability::NotSendable => walked.failed = true,
+        }
+        Ok(walked)
+    }
+    fn verdict(&self) -> Sendability {
+        if self.failed {
+            Sendability::NotSendable
+        } else if self.deps.is_empty() {
+            Sendability::Sendable
+        } else {
+            Sendability::DependsOn(self.deps.iter().copied().collect())
+        }
+    }
+    fn height(&mut self, definition: DefId, height: usize) {
+        match self.heights.iter_mut().find(|(d, _)| *d == definition) {
+            Some((_, h)) => *h = (*h).max(height),
+            None => self.heights.push((definition, height)),
+        }
+    }
+    /// Join a settled part, whose assumptions resolve to `low`.
+    fn join(&mut self, part: &Walked, low: usize) {
+        self.failed |= part.failed;
+        self.deps.extend(part.deps.iter().copied());
+        self.low = self.low.min(low);
+        for (d, h) in &part.heights {
+            self.height(*d, *h);
+        }
+        self.growth |= part.growth;
+        self.nonglobal |= part.nonglobal;
+        self.saw_root |= part.saw_root;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Visit {
+    Active(usize),
+    Done(usize),
+}
+
+/// The state of one proof walk, shared by all its frames as main's worklist
+/// shares its visited set and nominal expansions.
+#[derive(Default)]
+struct Walk {
+    nominal: NominalExpansions,
+    seen: HashMap<(TypeId, bool), Visit>,
+    classes: HashMap<(TypeId, usize), Visit>,
+    done: Vec<Walked>,
+    /// Per frame serial: None while in progress, then its resolved `low`.
+    resolved: Vec<Option<usize>>,
+}
+impl Walk {
+    /// The in-progress frame an assumption on frame `serial` now rests on.
+    fn effective(&self, mut serial: usize) -> usize {
+        while serial != NONE {
+            match self.resolved[serial] {
+                None => return serial,
+                Some(low) => serial = low,
+            }
+        }
+        NONE
+    }
+    /// A part this walk already settled or is proving.
+    fn settled(&self, visit: Visit) -> Walked {
+        match visit {
+            Visit::Active(serial) => Walked {
+                low: serial,
+                ..Walked::default()
+            },
+            Visit::Done(i) => {
+                let mut walked = self.done[i].clone();
+                walked.low = self.effective(walked.low);
+                walked
+            }
+        }
+    }
+}
+
+struct Frame {
+    key: ProofKey,
+    id: TypeId,
+    inherited_unique: bool,
+    unique: bool,
+    plain_known: bool,
+    serial: usize,
+    children: std::vec::IntoIter<TypeId>,
+    walked: Walked,
+    log_start: usize,
+    /// The expansion context and class this frame entered.
+    entered: Option<(usize, Option<TypeId>)>,
+}
+
+/// A log range's reads, first occurrences only: replay records dependencies,
+/// and a dependency recorded once is recorded.
+fn distinct(log: &[DefId]) -> Box<[DefId]> {
+    let mut seen = HashSet::new();
+    log.iter().copied().filter(|d| seen.insert(*d)).collect()
 }

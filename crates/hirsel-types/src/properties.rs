@@ -209,6 +209,335 @@ fn implies(bounds: &[Bound], bound: Bound) -> bool {
                 .any(|b| matches!(b, Bound::Data | Bound::Key | Bound::Flat)))
         || (bound == Bound::Sendable && bounds.contains(&Bound::Flat))
 }
+/// The lookups and nested Plain proofs a proof step performs.
+pub(crate) trait ProofContext {
+    fn signature(&mut self, definition: DefId) -> Result<Option<SignatureRef>, QueryError>;
+    /// `id` is Plain, as `structural_property` proves it.
+    fn plain(&mut self, id: TypeId) -> Result<bool, QueryError>;
+}
+
+/// The flags of a `structural_property` proof.
+pub(crate) const STRUCTURAL: ProofFlags = ProofFlags {
+    check_root_locality: true,
+    use_evidence: true,
+    shared_storage: false,
+    handles: false,
+};
+
+struct Direct<'a, L> {
+    t: &'a TypeInterner,
+    generics: &'a GenericDeclarations,
+    lookup: &'a mut L,
+}
+impl<L: FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>> ProofContext for Direct<'_, L> {
+    fn signature(&mut self, definition: DefId) -> Result<Option<SignatureRef>, QueryError> {
+        (self.lookup)(definition)
+    }
+    fn plain(&mut self, id: TypeId) -> Result<bool, QueryError> {
+        Ok(prove_flags(
+            self.t,
+            id,
+            Bound::Plain,
+            self.generics,
+            STRUCTURAL,
+            self.lookup,
+        )? == Sendability::Sendable)
+    }
+}
+
+/// What one row of a proof decides locally.
+pub(crate) enum ProofStep {
+    /// The row fails the bound: so does the whole proof.
+    Fail,
+    /// The row holds once each part holds, in declaration order.
+    Parts(Vec<TypeId>),
+    /// A nominal row whose representation carries the proof, inside an
+    /// expansion the driver enters (and may assume coinductively).
+    Expand {
+        signature: SignatureRef,
+        arguments: SharedSlice<GenericArgument>,
+    },
+}
+
+/// The local obligations of `id` in a proof rooted at `root`: its verdict or
+/// the parts carrying the proof on, with the parts' inherited uniqueness and
+/// whether their Plain proof is already known (both updated in place).
+/// Parameter, callable and iterator dependencies join `dependencies`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn proof_step(
+    store: &TypeInterner,
+    root: TypeId,
+    id: TypeId,
+    inherited_unique: bool,
+    plain_known: &mut bool,
+    bound: Bound,
+    generics: &GenericDeclarations,
+    flags: ProofFlags,
+    dependencies: &mut BTreeSet<TypeParameterRef>,
+    context: &mut dyn ProofContext,
+) -> Result<(ProofStep, bool), QueryError> {
+    let ProofFlags {
+        check_root_locality,
+        use_evidence,
+        shared_storage,
+        handles,
+    } = flags;
+    let Some(row) = store.get(id) else {
+        return Ok((ProofStep::Fail, false));
+    };
+    let unique =
+        !shared_storage && (inherited_unique || row.modes.uniqueness == Uniqueness::Unique);
+    let fail = Ok((ProofStep::Fail, unique));
+    let done = Ok((ProofStep::Parts(vec![]), unique));
+    if (bound == Bound::Copyable && row.modes.multiplicity == Multiplicity::Once)
+        || (bound == Bound::Sendable
+            && !row.modes.relation.is_global()
+            && (id != root || check_root_locality))
+    {
+        return fail;
+    }
+    // MEM-12: an aggregate that does not opt in, inline arrays included,
+    // is flat only through a plain, pointer-free representation.
+    if bound == Bound::Flat
+        && !*plain_known
+        && matches!(
+            row.kind,
+            TypeKind::Tuple(_)
+                | TypeKind::Record(_)
+                | TypeKind::Variant(_)
+                | TypeKind::Builtin {
+                    kind: BuiltinType::Inline | BuiltinType::Simd,
+                    ..
+                }
+        )
+    {
+        if !context.plain(id)? {
+            return fail;
+        }
+        *plain_known = true;
+    }
+    // Current checked occurrence evidence is usable by consumers. Ordinary
+    // structural recomputation deliberately does not preserve a data summary.
+    if bound == Bound::Sendable
+        && use_evidence
+        && !shared_storage
+        && row.modes.sendability == Sendability::Sendable
+    {
+        return done;
+    }
+    let mut children: Vec<TypeId> = vec![];
+    match &row.kind {
+        TypeKind::Error => return fail,
+        TypeKind::Primitive(Primitive::String | Primitive::Bytes) => {
+            if matches!(bound, Bound::Plain | Bound::Flat) || (bound == Bound::Sendable && !unique)
+            {
+                return fail;
+            }
+        }
+        TypeKind::Primitive(_) => (),
+        TypeKind::Tuple(ts) => children.extend(ts.iter()),
+        TypeKind::Record(fs) => children.extend(fs.iter().map(|f| f.ty)),
+        TypeKind::Variant(vs) => {
+            children.extend(vs.iter().flat_map(|v| v.fields.iter().map(|f| f.1)))
+        }
+        TypeKind::Box(child) => {
+            if matches!(bound, Bound::Plain | Bound::Flat) || (bound == Bound::Sendable && !unique)
+            {
+                return fail;
+            }
+            children.push(*child);
+        }
+        TypeKind::Function(_) => {
+            if matches!(bound, Bound::Plain | Bound::Flat) {
+                return fail;
+            }
+            if bound == Bound::Sendable {
+                match &row.modes.sendability {
+                    Sendability::NotSendable => return fail,
+                    Sendability::DependsOn(ps) => dependencies.extend(ps),
+                    Sendability::Sendable => (),
+                }
+            }
+        }
+        TypeKind::Parameter(p) => {
+            let proven = matches!(generics.get(*p), Some(GenericParameter::Type { bounds, .. }) if implies(bounds, bound)
+                && (!shared_storage || bound != Bound::Sendable || implies(bounds, Bound::Plain) || implies(bounds, Bound::Flat)));
+            if !proven {
+                if bound == Bound::Sendable && !shared_storage {
+                    dependencies.insert(*p);
+                } else {
+                    return fail;
+                }
+            }
+        }
+        TypeKind::Named {
+            definition,
+            arguments,
+        } => {
+            let Some(signature) = context.signature(*definition)? else {
+                return fail;
+            };
+            let SignatureKind::Type(declaration) = &signature.kind else {
+                return fail;
+            };
+            if bound == Bound::Flat && declaration.capability.is_some() {
+                return fail;
+            }
+            if bound == Bound::Flat {
+                if declaration.resource {
+                    return fail;
+                }
+                if declaration.layout.flat || declaration.bounds.contains(&Bound::Flat) {
+                    return done;
+                }
+                // Plain excludes owned blocks, but can contain raw pointers.
+                // Non-alias nominal values also need the structural Flat proof
+                // of their actual representation below.
+                if !signature.metadata.alias && !*plain_known {
+                    if !context.plain(id)? {
+                        return fail;
+                    }
+                    // One Plain proof includes every owned child. Do not
+                    // re-prove each suffix of a finite deep Flat layout.
+                    *plain_known = true;
+                }
+            }
+            if row.is_heap_target(&signature.metadata.roles) {
+                return done;
+            }
+            if declaration.capability == Some(CapabilityKind::Scoped)
+                || (declaration.resource && bound != Bound::Sendable)
+                || (declaration.layout.flat && bound == Bound::Plain)
+            {
+                return fail;
+            }
+            if implies(&declaration.bounds, bound)
+                && (!shared_storage
+                    || bound != Bound::Sendable
+                    || implies(&declaration.bounds, Bound::Plain)
+                    || implies(&declaration.bounds, Bound::Flat))
+                || (declaration.layout.flat && bound == Bound::Sendable)
+            {
+                return done;
+            }
+            if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
+                return fail;
+            }
+            let arguments = arguments.clone();
+            return Ok((
+                ProofStep::Expand {
+                    signature,
+                    arguments,
+                },
+                unique,
+            ));
+        }
+        TypeKind::Builtin { kind, arguments } => {
+            if bound == Bound::Flat
+                && !matches!(
+                    kind,
+                    BuiltinType::Inline | BuiltinType::Simd | BuiltinType::Packed
+                )
+            {
+                return fail;
+            }
+            if handles
+                && matches!(
+                    kind,
+                    BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
+                )
+            {
+                return done;
+            }
+            if matches!(
+                kind,
+                BuiltinType::SlotId
+                    | BuiltinType::TypeShape
+                    | BuiltinType::Ptr
+                    | BuiltinType::FnPtr
+            ) {
+                // GEN-1 pointer bits are Plain; MODE-4 makes Plain values
+                // sendable. Phantom pointees are not retained payloads.
+                return done;
+            }
+            match bound {
+                Bound::Plain
+                    if !matches!(
+                        kind,
+                        BuiltinType::Inline | BuiltinType::Simd | BuiltinType::Packed
+                    ) =>
+                {
+                    return fail;
+                }
+                Bound::Copyable => {
+                    if matches!(
+                        kind,
+                        BuiltinType::Task
+                            | BuiltinType::Sender
+                            | BuiltinType::Receiver
+                            | BuiltinType::Region
+                            | BuiltinType::Iter
+                    ) {
+                        return fail;
+                    }
+                    // Copying a handle never copies its contents.
+                    if matches!(
+                        kind,
+                        BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
+                    ) {
+                        return done;
+                    }
+                }
+                Bound::Sendable => match kind {
+                    BuiltinType::Shared | BuiltinType::Sender | BuiltinType::Mutex => return done,
+                    BuiltinType::Receiver | BuiltinType::Task => return fail,
+                    BuiltinType::Iter => {
+                        match &row.modes.sendability {
+                            Sendability::Sendable => (),
+                            Sendability::DependsOn(ps) => dependencies.extend(ps),
+                            Sendability::NotSendable => return fail,
+                        }
+                        return done;
+                    }
+                    BuiltinType::Region
+                    | BuiltinType::Inline
+                    | BuiltinType::Simd
+                    | BuiltinType::Packed
+                    | BuiltinType::Atomic => (),
+                    _ if !unique => return fail,
+                    _ => (),
+                },
+                _ => (),
+            }
+            children.extend(arguments.iter().filter_map(|a| match a {
+                GenericArgument::Type(t) => Some(*t),
+                _ => None,
+            }));
+        }
+    }
+    Ok((ProofStep::Parts(children), unique))
+}
+
+/// The representation an entered nominal expansion proves, or None when the
+/// declaration has none or its actuals do not substitute.
+pub(crate) fn expansion(
+    store: &TypeInterner,
+    signature: &Signature,
+    arguments: &[GenericArgument],
+) -> Option<TypeId> {
+    let SignatureKind::Type(declaration) = &signature.kind else {
+        return None;
+    };
+    crate::graph::expand(
+        store,
+        declaration.representation?,
+        arguments,
+        &signature.metadata.roles,
+    )
+    .ok()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prove(
     source: &TypeInterner,
     root: TypeId,
@@ -220,7 +549,29 @@ pub(crate) fn prove(
     handles: bool,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
-    let store = source;
+    let flags = ProofFlags {
+        check_root_locality,
+        use_evidence,
+        shared_storage,
+        handles,
+    };
+    prove_flags(source, root, bound, generics, flags, lookup)
+}
+
+/// Main's worklist proof: one walk with a proof-wide visited set.
+fn prove_flags(
+    store: &TypeInterner,
+    root: TypeId,
+    bound: Bound,
+    generics: &GenericDeclarations,
+    flags: ProofFlags,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Sendability, QueryError> {
+    let mut context = Direct {
+        t: store,
+        generics,
+        lookup,
+    };
     let mut pending = vec![(root, false, false, false)];
     let mut seen = std::collections::HashSet::new();
     let mut nominal_roots = NominalExpansions::default();
@@ -233,280 +584,42 @@ pub(crate) fn prove(
         if !seen.insert((id, inherited_unique)) {
             continue;
         }
-        let Some(row) = store.get(id).cloned() else {
-            return Ok(Sendability::NotSendable);
-        };
-        let unique =
-            !shared_storage && (inherited_unique || row.modes.uniqueness == Uniqueness::Unique);
-        if (bound == Bound::Copyable && row.modes.multiplicity == Multiplicity::Once)
-            || (bound == Bound::Sendable
-                && !row.modes.relation.is_global()
-                && (id != root || check_root_locality))
-        {
-            return Ok(Sendability::NotSendable);
-        }
-        // MEM-12: an aggregate that does not opt in, inline arrays included,
-        // is flat only through a plain, pointer-free representation.
-        if bound == Bound::Flat
-            && !plain_known
-            && matches!(
-                row.kind,
-                TypeKind::Tuple(_)
-                    | TypeKind::Record(_)
-                    | TypeKind::Variant(_)
-                    | TypeKind::Builtin {
-                        kind: BuiltinType::Inline | BuiltinType::Simd,
-                        ..
-                    }
-            )
-        {
-            if prove(
-                store,
-                id,
-                Bound::Plain,
-                generics,
-                true,
-                true,
-                false,
-                false,
-                lookup,
-            )? != Sendability::Sendable
-            {
-                return Ok(Sendability::NotSendable);
-            }
-            plain_known = true;
-        }
-        // Current checked occurrence evidence is usable by consumers. Ordinary
-        // structural recomputation deliberately does not preserve a data summary.
-        if bound == Bound::Sendable
-            && use_evidence
-            && !shared_storage
-            && row.modes.sendability == Sendability::Sendable
-        {
-            continue;
-        }
-        let mut children = vec![];
-        match &row.kind {
-            TypeKind::Error => return Ok(Sendability::NotSendable),
-            TypeKind::Primitive(Primitive::String | Primitive::Bytes) => {
-                if matches!(bound, Bound::Plain | Bound::Flat)
-                    || (bound == Bound::Sendable && !unique)
-                {
-                    return Ok(Sendability::NotSendable);
-                }
-            }
-            TypeKind::Primitive(_) => (),
-            TypeKind::Tuple(ts) => children.extend(ts),
-            TypeKind::Record(fs) => children.extend(fs.iter().map(|f| &f.ty)),
-            TypeKind::Variant(vs) => {
-                children.extend(vs.iter().flat_map(|v| v.fields.iter().map(|f| &f.1)))
-            }
-            TypeKind::Box(child) => {
-                if matches!(bound, Bound::Plain | Bound::Flat)
-                    || (bound == Bound::Sendable && !unique)
-                {
-                    return Ok(Sendability::NotSendable);
-                }
-                children.push(child);
-            }
-            TypeKind::Function(_) => {
-                if matches!(bound, Bound::Plain | Bound::Flat) {
-                    return Ok(Sendability::NotSendable);
-                }
-                if bound == Bound::Sendable {
-                    match &row.modes.sendability {
-                        Sendability::NotSendable => return Ok(Sendability::NotSendable),
-                        Sendability::DependsOn(ps) => dependencies.extend(ps),
-                        Sendability::Sendable => (),
-                    }
-                }
-            }
-            TypeKind::Parameter(p) => {
-                let proven = matches!(generics.get(*p), Some(GenericParameter::Type { bounds, .. }) if implies(bounds, bound)
-                    && (!shared_storage || bound != Bound::Sendable || implies(bounds, Bound::Plain) || implies(bounds, Bound::Flat)));
-                if !proven {
-                    if bound == Bound::Sendable && !shared_storage {
-                        dependencies.insert(*p);
-                    } else {
-                        return Ok(Sendability::NotSendable);
-                    }
-                }
-            }
-            TypeKind::Named {
-                definition,
+        let (step, unique) = proof_step(
+            store,
+            root,
+            id,
+            inherited_unique,
+            &mut plain_known,
+            bound,
+            generics,
+            flags,
+            &mut dependencies,
+            &mut context,
+        )?;
+        match step {
+            ProofStep::Fail => return Ok(Sendability::NotSendable),
+            // Check declaration-order counterexamples before a later expanding
+            // recursive field can spend the operational proof budget.
+            ProofStep::Parts(children) => pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .map(|t| (t, unique, plain_known, false)),
+            ),
+            ProofStep::Expand {
+                signature,
                 arguments,
             } => {
-                let Some(signature) = lookup(*definition)? else {
-                    return Ok(Sendability::NotSendable);
-                };
-                let SignatureKind::Type(declaration) = &signature.kind else {
-                    return Ok(Sendability::NotSendable);
-                };
-                if bound == Bound::Flat && declaration.capability.is_some() {
-                    return Ok(Sendability::NotSendable);
-                }
-                if bound == Bound::Flat {
-                    if declaration.resource {
-                        return Ok(Sendability::NotSendable);
-                    }
-                    if declaration.layout.flat || declaration.bounds.contains(&Bound::Flat) {
-                        continue;
-                    }
-                    // Plain excludes owned blocks, but can contain raw pointers.
-                    // Non-alias nominal values also need the structural Flat proof
-                    // of their actual representation below.
-                    if !signature.metadata.alias && !plain_known {
-                        if prove(
-                            store,
-                            id,
-                            Bound::Plain,
-                            generics,
-                            true,
-                            true,
-                            false,
-                            false,
-                            lookup,
-                        )? != Sendability::Sendable
-                        {
-                            return Ok(Sendability::NotSendable);
-                        }
-                        // One Plain proof includes every owned child. Do not
-                        // re-prove each suffix of a finite deep Flat layout.
-                        plain_known = true;
-                    }
-                }
-                if row.is_heap_target(&signature.metadata.roles) {
-                    continue;
-                }
-                if declaration.capability == Some(CapabilityKind::Scoped)
-                    || (declaration.resource && bound != Bound::Sendable)
-                    || (declaration.layout.flat && bound == Bound::Plain)
-                {
-                    return Ok(Sendability::NotSendable);
-                }
-                if implies(&declaration.bounds, bound)
-                    && (!shared_storage
-                        || bound != Bound::Sendable
-                        || implies(&declaration.bounds, Bound::Plain)
-                        || implies(&declaration.bounds, Bound::Flat))
-                    || (declaration.layout.flat && bound == Bound::Sendable)
-                {
-                    continue;
-                }
-                if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
-                    return Ok(Sendability::NotSendable);
-                }
                 if !nominal_roots.enter(id, usize::from(unique), store)? {
                     continue;
                 }
                 pending.push((id, unique, plain_known, true));
-                let Some(representation) = declaration.representation else {
-                    return Ok(Sendability::NotSendable);
-                };
-                let representation = crate::graph::expand(
-                    store,
-                    representation,
-                    arguments,
-                    &signature.metadata.roles,
-                );
-                let Ok(representation) = representation else {
+                let Some(representation) = expansion(store, &signature, &arguments) else {
                     return Ok(Sendability::NotSendable);
                 };
                 pending.push((representation, unique, plain_known, false));
             }
-            TypeKind::Builtin { kind, arguments } => {
-                if bound == Bound::Flat {
-                    if !matches!(
-                        kind,
-                        BuiltinType::Inline | BuiltinType::Simd | BuiltinType::Packed
-                    ) {
-                        return Ok(Sendability::NotSendable);
-                    }
-                }
-                if handles
-                    && matches!(
-                        kind,
-                        BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
-                    )
-                {
-                    continue;
-                }
-                if matches!(
-                    kind,
-                    BuiltinType::SlotId
-                        | BuiltinType::TypeShape
-                        | BuiltinType::Ptr
-                        | BuiltinType::FnPtr
-                ) {
-                    // GEN-1 pointer bits are Plain; MODE-4 makes Plain values
-                    // sendable. Phantom pointees are not retained payloads.
-                    continue;
-                }
-                match bound {
-                    Bound::Plain
-                        if !matches!(
-                            kind,
-                            BuiltinType::Inline | BuiltinType::Simd | BuiltinType::Packed
-                        ) =>
-                    {
-                        return Ok(Sendability::NotSendable);
-                    }
-                    Bound::Copyable => {
-                        if matches!(
-                            kind,
-                            BuiltinType::Task
-                                | BuiltinType::Sender
-                                | BuiltinType::Receiver
-                                | BuiltinType::Region
-                                | BuiltinType::Iter
-                        ) {
-                            return Ok(Sendability::NotSendable);
-                        }
-                        // Copying a handle never copies its contents.
-                        if matches!(
-                            kind,
-                            BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic
-                        ) {
-                            continue;
-                        }
-                    }
-                    Bound::Sendable => match kind {
-                        BuiltinType::Shared | BuiltinType::Sender | BuiltinType::Mutex => continue,
-                        BuiltinType::Receiver | BuiltinType::Task => {
-                            return Ok(Sendability::NotSendable);
-                        }
-                        BuiltinType::Iter => {
-                            match &row.modes.sendability {
-                                Sendability::Sendable => (),
-                                Sendability::DependsOn(ps) => dependencies.extend(ps),
-                                Sendability::NotSendable => return Ok(Sendability::NotSendable),
-                            }
-                            continue;
-                        }
-                        BuiltinType::Region
-                        | BuiltinType::Inline
-                        | BuiltinType::Simd
-                        | BuiltinType::Packed
-                        | BuiltinType::Atomic => (),
-                        _ if !unique => return Ok(Sendability::NotSendable),
-                        _ => (),
-                    },
-                    _ => (),
-                }
-                children.extend(arguments.iter().filter_map(|a| match a {
-                    GenericArgument::Type(t) => Some(t),
-                    _ => None,
-                }));
-            }
         }
-        // Check declaration-order counterexamples before a later expanding
-        // recursive field can spend the operational proof budget.
-        pending.extend(
-            children
-                .into_iter()
-                .rev()
-                .map(|t| (*t, unique, plain_known, false)),
-        );
     }
     Ok(if dependencies.is_empty() {
         Sendability::Sendable
