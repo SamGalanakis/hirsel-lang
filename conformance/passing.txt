@@ -5009,6 +5009,17 @@ conformance/SEM/SEM-3-deflate-gzip-run.hir
 conformance/SEM/SEM-3-deflate-lazy-run.hir
 conformance/SEM/SEM-3-deflate-stream-run.hir
 conformance/SEM/SEM-3-deflate-zlib-run.hir
+conformance/SEM/SEM-3-diff-alternative-run.hir
+conformance/SEM/SEM-3-diff-histogram-1-run.hir
+conformance/SEM/SEM-3-diff-histogram-10-run.hir
+conformance/SEM/SEM-3-diff-histogram-2-run.hir
+conformance/SEM/SEM-3-diff-histogram-3-run.hir
+conformance/SEM/SEM-3-diff-histogram-4-run.hir
+conformance/SEM/SEM-3-diff-histogram-5-run.hir
+conformance/SEM/SEM-3-diff-histogram-6-run.hir
+conformance/SEM/SEM-3-diff-histogram-7-run.hir
+conformance/SEM/SEM-3-diff-histogram-8-run.hir
+conformance/SEM/SEM-3-diff-histogram-9-run.hir
 conformance/SEM/SEM-3-diff-pairs-1-run.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir

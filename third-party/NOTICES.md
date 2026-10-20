@@ -220,7 +220,9 @@ the license named in its row; the license texts follow once each.
 | uuid | `src/builder.rs` from_random_bytes and from_unix_timestamp_millis layouts; `src/parser.rs` test_parse_valid and test_parse_invalid inputs; `src/v7.rs` test_new and test_sorting | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | uuid-rs/uuid `276c23628a669ca9fca637f3326c21b114e88049` | MIT |
 | semver | `src/{parse,eval,impls,display}.rs` version and requirement parsing, prerelease precedence, comparator matching and display; `tests/test_version.rs` and `tests/test_version_req.rs` vectors | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | dtolnay/semver `280ebcb6edac3aa4cdc545dbff8a26c5ac4861fe` | MIT |
 | node-semver | `classes/range.js` parseRange, replaceCaret, replaceTilde, replaceXRange, hyphenReplace and testSet; `test/fixtures/{range-include,range-exclude,range-parse,comparisons}.js` rows without loose or includePrerelease | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | npm/node-semver `6e05b7637396ac66522cff8731f07cfe0ef49a29` | ISC |
-| Go standard library | `src/internal/diff/diff.go` tgs unique-line anchoring and longest increasing subsequence; `testdata/*.txt` input pairs (expected output from git) | `stdlib/std@1/diff.hir`, `conformance/SEM/SEM-3-diff-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| imara-diff | `src/myers.rs` and `src/myers/{preprocess,slice,middle_snake}.rs` Myers search with preprocessing and cost cutoff; `src/histogram.rs` and `src/histogram/lcs.rs` histogram diff; `src/lib.rs` common head and tail; `src/postprocess.rs` and `src/util.rs` hunk sliding without a slider heuristic; `src/tests.rs` myers_is_even and myers_is_odd vectors. Changes: worklists in place of recursion, a linked occurrence chain in place of the list pool, i64 positions | `stdlib/std@1/diff.hir`, `conformance/SEM/SEM-3-diff-*`, `crates/hirsel-driver/tests/fixtures/diff-large.hir` | pascalkuthe/imara-diff `f02e46a737c43c0d9c65a42e5e08046bd10fd739` | Apache-2.0 (text below, without the LLVM exception) |
+| Go standard library | `src/internal/diff/testdata/*.txt` input pairs (expected output from git and imara-diff) | `conformance/SEM/SEM-3-diff-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| git | `t/lib-diff-alternative.sh` test_diff_frobnitz and test_diff_unique inputs and expected output (test data only; no code adapted) | `conformance/SEM/SEM-3-diff-{pairs-4,context-2,alternative}*` | git/git 2.43.0 | GPL-2.0 (test data) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -273,6 +275,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - Datastar: Copyright (c) Star Federation
 - Protocol Buffers: Copyright 2008 Google Inc. All rights reserved.
 - protobuf-go: Copyright (c) 2018 The Go Authors. All rights reserved.
+- imara-diff: Copyright (c) Pascal Kuthe and imara-diff contributors
 - prost: Copyright Dan Burkert and Tokio contributors
 - grpc-go, tonic interop protos and helloworld.proto: Copyright 2014-2019 gRPC authors
 - tonic: Copyright 2019 gRPC authors (MIT)

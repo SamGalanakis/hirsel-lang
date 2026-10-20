@@ -225,6 +225,31 @@ fn zip_invalid_zeros_execute_std_source() {
     });
 }
 
+// A diff large enough to trip Myers' cost cutoff exceeds the corpus step
+// budget; the corpus covers every algorithm on short inputs.
+#[test]
+fn diff_large_vectors_execute_std_source() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diff-large.hir");
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            Some(1_000_000_000),
+            hirsel_engine::Verify::On,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
+    });
+}
+
 // zlib's output at window, block-split and stored-fallback scale runs only as
 // a built executable; the corpus covers every level on short inputs.
 #[test]

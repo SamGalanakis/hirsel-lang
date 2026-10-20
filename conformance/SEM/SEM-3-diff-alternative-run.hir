@@ -1,0 +1,87 @@
+// rule: SEM-3
+// expect: run
+// Inputs and expected unified diffs: git t/lib-diff-alternative.sh
+// test_diff_unique (uniq1 and uniq2, run by t4033-diff-patience.sh and
+// t4050-diff-histogram.sh; git 2.43.0 gives the same for myers and --minimal),
+// and imara-diff src/tests.rs myers_is_even and myers_is_odd
+// (pascalkuthe/imara-diff f02e46a7; the same after postprocess_no_heuristic,
+// and for Histogram), with names replaced.
+fn vectors() -> List[(String, String, diff.Algorithm, String)] uses {} {
+  [
+    (
+      "1\n2\n3\n4\n5\n6\n",
+      "a\nb\nc\nd\ne\nf\n",
+      Myers(),
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n-1\n-2\n-3\n-4\n-5\n-6\n+a\n+b\n+c\n+d\n+e\n+f\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n",
+      "a\nb\nc\nd\ne\nf\n",
+      MyersMinimal(),
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n-1\n-2\n-3\n-4\n-5\n-6\n+a\n+b\n+c\n+d\n+e\n+f\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n",
+      "a\nb\nc\nd\ne\nf\n",
+      Patience(),
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n-1\n-2\n-3\n-4\n-5\n-6\n+a\n+b\n+c\n+d\n+e\n+f\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n",
+      "a\nb\nc\nd\ne\nf\n",
+      Histogram(),
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n-1\n-2\n-3\n-4\n-5\n-6\n+a\n+b\n+c\n+d\n+e\n+f\n"
+    ),
+    (
+      "a\nb\nx\nx\ny\n",
+      "b\na\nx\ny\nx\n",
+      Myers(),
+      "--- old\n+++ new\n@@ -1,5 +1,5 @@\n-a\n b\n-x\n+a\n x\n y\n+x\n"
+    ),
+    (
+      "a\nb\nx\nx\ny\n",
+      "b\na\nx\ny\nx\n",
+      MyersMinimal(),
+      "--- old\n+++ new\n@@ -1,5 +1,5 @@\n-a\n b\n-x\n+a\n x\n y\n+x\n"
+    ),
+    (
+      "a\nb\nx\nx\ny\n",
+      "b\na\nx\ny\nx\n",
+      Histogram(),
+      "--- old\n+++ new\n@@ -1,5 +1,5 @@\n-a\n b\n-x\n+a\n x\n y\n+x\n"
+    ),
+    (
+      "a\nb\nx\ny\nx\n",
+      "b\na\nx\ny\n",
+      Myers(),
+      "--- old\n+++ new\n@@ -1,5 +1,4 @@\n-a\n b\n+a\n x\n y\n-x\n"
+    ),
+    (
+      "a\nb\nx\ny\nx\n",
+      "b\na\nx\ny\n",
+      MyersMinimal(),
+      "--- old\n+++ new\n@@ -1,5 +1,4 @@\n-a\n b\n+a\n x\n y\n-x\n"
+    ),
+    (
+      "a\nb\nx\ny\nx\n",
+      "b\na\nx\ny\n",
+      Histogram(),
+      "--- old\n+++ new\n@@ -1,5 +1,4 @@\n-a\n b\n+a\n x\n y\n-x\n"
+    )
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  let mut case: u64 = 0
+  for (old, new, algorithm, expected) in vectors() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, algorithm, 3) == expected,
+      case
+    )
+    let applied = diff.apply(old, expected)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    case += 1
+  }
+  Ok(())
+}

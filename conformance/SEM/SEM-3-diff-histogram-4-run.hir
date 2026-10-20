@@ -1,0 +1,74 @@
+// rule: SEM-3
+// expect: run
+// Inputs: the SEM-3-diff-pairs cases (Go src/internal/diff/testdata, golang/go
+// ebe2feef, and fixed pairs). Expected unified diffs are imara-diff's
+// (pascalkuthe/imara-diff f02e46a7) Algorithm::Histogram with
+// postprocess_no_heuristic, printed as git diff -U3 prints hunks.
+fn pairs() -> List[(String, String, String, String)] uses {} {
+  [
+    (
+      "function",
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      "--- old\n+++ new\n@@ -1,7 +1,12 @@\n #include <stdio.h>\n \n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n int main(void)\n {\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n     return 0;\n }\n"
+    )
+  ]
+}
+
+// Rebuilds `new` from `old` and an edit script, checking each run's positions.
+fn replay(old: List[String], new: List[String], script: List[diff.Edit]) -> bool uses {} {
+  let mut out: List[String] = []
+  let mut i: u64 = 0
+  let mut j: u64 = 0
+  for e in script {
+    match e {
+      Keep(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        for k in 0u64..n {
+          if old[a + k] != new[b + k] {
+            return false
+          }
+          list.push(mut out, unique old[a + k])
+        }
+        i += n
+        j += n
+      },
+      Delete(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        i += n
+      },
+      Insert(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        for k in 0u64..n {
+          list.push(mut out, unique new[b + k])
+        }
+        j += n
+      },
+    }
+  }
+  i == list.len(old) && out == new
+}
+
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  let mut case: u64 = 12
+  for (_, old, new, histogram) in pairs() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, Histogram(), 3) == histogram,
+      case
+    )
+    let applied = diff.apply(old, histogram)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    let a = diff.split_lines(old)
+    let b = diff.split_lines(new)
+    test.check_case(t, replay(a, b, diff.edits(a, b, Histogram())), case)
+    case += 1
+  }
+  Ok(())
+}

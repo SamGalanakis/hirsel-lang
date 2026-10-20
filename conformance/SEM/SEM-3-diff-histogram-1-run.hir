@@ -1,0 +1,88 @@
+// rule: SEM-3
+// expect: run
+// Inputs: the SEM-3-diff-pairs cases (Go src/internal/diff/testdata, golang/go
+// ebe2feef, and fixed pairs). Expected unified diffs are imara-diff's
+// (pascalkuthe/imara-diff f02e46a7) Algorithm::Histogram with
+// postprocess_no_heuristic, printed as git diff -U3 prints hunks.
+fn pairs() -> List[(String, String, String, String)] uses {} {
+  [
+    ("go/allnew", "", "a\nb\nc\n", "--- old\n+++ new\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n"),
+    ("go/allold", "a\nb\nc\n", "", "--- old\n+++ new\n@@ -1,3 +0,0 @@\n-a\n-b\n-c\n"),
+    (
+      "go/basic",
+      "a\nb\nc\nd\ne\nf\ng\n",
+      "w\na\nb\nx\ny\nz\ne\n",
+      "--- old\n+++ new\n@@ -1,7 +1,7 @@\n+w\n a\n b\n-c\n-d\n+x\n+y\n+z\n e\n-f\n-g\n"
+    ),
+    (
+      "go/dups",
+      "a\n\nb\n\nc\n\nd\n\ne\n\nf\n",
+      "a\n\nB\n\nC\n\nd\n\ne\n\nf\n",
+      "--- old\n+++ new\n@@ -1,8 +1,8 @@\n a\n \n-b\n+B\n \n-c\n+C\n \n d\n \n"
+    ),
+    (
+      "go/end",
+      "1\n2\n3\n4\n5\n6\n7\neight\nnine\nten\neleven\n",
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+      "--- old\n+++ new\n@@ -5,7 +5,6 @@\n 5\n 6\n 7\n-eight\n-nine\n-ten\n-eleven\n+8\n+9\n+10\n"
+    )
+  ]
+}
+
+// Rebuilds `new` from `old` and an edit script, checking each run's positions.
+fn replay(old: List[String], new: List[String], script: List[diff.Edit]) -> bool uses {} {
+  let mut out: List[String] = []
+  let mut i: u64 = 0
+  let mut j: u64 = 0
+  for e in script {
+    match e {
+      Keep(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        for k in 0u64..n {
+          if old[a + k] != new[b + k] {
+            return false
+          }
+          list.push(mut out, unique old[a + k])
+        }
+        i += n
+        j += n
+      },
+      Delete(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        i += n
+      },
+      Insert(a, b, n) => {
+        if a != i || b != j || n == 0 {
+          return false
+        }
+        for k in 0u64..n {
+          list.push(mut out, unique new[b + k])
+        }
+        j += n
+      },
+    }
+  }
+  i == list.len(old) && out == new
+}
+
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  let mut case: u64 = 0
+  for (_, old, new, histogram) in pairs() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, Histogram(), 3) == histogram,
+      case
+    )
+    let applied = diff.apply(old, histogram)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    let a = diff.split_lines(old)
+    let b = diff.split_lines(new)
+    test.check_case(t, replay(a, b, diff.edits(a, b, Histogram())), case)
+    case += 1
+  }
+  Ok(())
+}

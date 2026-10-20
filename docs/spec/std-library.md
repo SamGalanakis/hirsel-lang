@@ -3741,7 +3741,7 @@ sets joined by ` || `.
 `std@1/diff` compares sequences of lines, prints unified diffs and applies them:
 
 ```text
-Algorithm  = Myers | Patience
+Algorithm  = Myers | MyersMinimal | Histogram | Patience
 Edit       = Keep(u64, u64, u64) | Delete(u64, u64, u64) | Insert(u64, u64, u64)
 Patched    = { text: String, rejected: List[u64] }
 PatchError = Malformed(u64)
@@ -3756,19 +3756,29 @@ so lines compare whole and a missing final newline is a change. An edit script
 is a sequence of runs `(old index, new index, count)` covering both sides in
 order; a replacement is a Delete then an Insert.
 
-`Myers()` is a minimal diff: Myers' O(ND) algorithm with the linear-space middle
-snake (Myers 1986, section 4b). As in GNU diff and git, lines with no
-counterpart on the other side are changed outright, and a line matching at
-least sqrt(lines) others is changed too when it sits among such lines; each
-group of changed lines is then slid down past equal lines, merging groups it
-meets, and back up to the last place it lines up with a change on the other
-side. `Patience()` matches lines that occur exactly once on each side, takes
-their longest increasing run (Go `internal/diff`'s Szymanski LCS) as anchors,
-extends each anchor over equal neighbours and diffs the gaps the same way,
-falling back to Myers in a gap with no unique shared line. The output equals
-`git diff --no-indent-heuristic` with the same algorithm whenever git stays
-exact (its Myers abandons minimality only past an edit cost of 256 per split);
-Myers here is always minimal, in O((N + M) D) time and O(N + M) memory.
+The algorithms are ported from imara-diff (Apache-2.0). Each first keeps the
+common head and tail. `MyersMinimal()` is a minimal diff: Myers' O(ND) algorithm
+with the linear-space middle snake (Myers 1986, section 4b), after changing
+outright the lines with no counterpart on the other side and the lines matching
+at least sqrt(lines) others (at most 1024) that sit among more than three times
+as many such lines within 100 either way; it takes O((N + M) D) time and
+O(N + M) memory. `Myers()` is the same search with imara-diff's cost cutoff, as
+in git: once a split's search costs more than 256 it may stop at a run of 20
+equal lines far enough along, and past the square root of N + M (at least 256)
+it stops at the furthest point either direction reached, so very different
+inputs give a longer script quickly. `Histogram()` splits on the longest common
+run whose rarest line occurs least often on the old side, recursing on both
+sides, and falls back to `Myers()` where every shared line occurs more than 63
+times. `Patience()` (Bram Cohen's patience diff) matches the common head and
+tail, then lines that occur exactly once on each side, keeps their longest run in
+the same order on both as anchors and repeats between them, falling back to
+`Myers()` in a range with no unique shared line. Finally each group of changed
+lines, new side first, is slid up and down past equal lines, merging groups it
+meets, and left at the bottom unless it can line up with a change on the other
+side. The output equals imara-diff's with `postprocess_no_heuristic`. It also
+equals `git diff --no-indent-heuristic` with the same algorithm on every corpus
+input but one histogram case, where git anchors on another run; on large inputs
+git's Myers cost cutoff can pick a different split.
 
 `unified` prints `--- old_name`, `+++ new_name` and hunks headed
 `@@ -start,count +start,count @@`, omitting a count of one and numbering an empty

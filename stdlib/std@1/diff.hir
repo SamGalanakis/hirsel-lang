@@ -1,15 +1,17 @@
 // Line diffs, unified output and patch application.
-// Myers: E. W. Myers, "An O(ND) Difference Algorithm and Its Variations"
-// (Algorithmica 1, 1986), section 4b's linear-space middle snake, with the
-// preprocessing GNU diff describes (lines without a counterpart are changed
-// outright; lines matching many lines are dropped among them) and its
-// boundary shifting. Patience: the unique-line anchoring and longest common
-// subsequence of Go src/internal/diff/diff.go (tgs, after Szymanski), golang/go
-// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause), recursing between
-// anchors and falling back to Myers as Bram Cohen's patience diff does
-// (third-party/NOTICES.md). The output is checked against git diff
-// --no-indent-heuristic.
-pub type Algorithm = Myers | Patience
+// Myers and Histogram are ported from imara-diff (pascalkuthe/imara-diff
+// f02e46a737c43c0d9c65a42e5e08046bd10fd739, Apache-2.0, third-party/NOTICES.md):
+// src/myers.rs and src/myers/ for Myers' linear-space O(ND) search (E. W.
+// Myers, "An O(ND) Difference Algorithm and Its Variations", Algorithmica 1,
+// 1986) with its preprocessing and cost cutoff, src/histogram.rs and
+// src/histogram/ for histogram diff, src/lib.rs for the common head and tail,
+// and src/postprocess.rs without a slider heuristic for the final sliding.
+// Patience follows Bram Cohen's description of patience diff, with Myers
+// between anchors where none are found. The output is checked against
+// imara-diff and against git diff --no-indent-heuristic.
+/// `Myers()` stops minimizing a costly search the way git does; `MyersMinimal()`
+/// always finds a minimal script.
+pub type Algorithm = Myers | MyersMinimal | Histogram | Patience
 
 /// One run of an edit script: `Keep(old, new, count)` keeps `count` lines from
 /// `old[old]` and `new[new]`; `Delete(old, new, count)` drops `old[old..old +
@@ -61,10 +63,12 @@ pub fn split_lines(source: String) -> unique List[String] uses {} {
   take out
 }
 
-// Numbers each distinct line, so the algorithms compare integers.
+// Numbers each distinct line, so the algorithms compare integers; also returns
+// the number of distinct lines.
 fn numbered(old: List[String], new: List[String]) -> (
   unique List[u64],
-  unique List[u64]
+  unique List[u64],
+  u64
 ) uses {} {
   let mut ids: Map[String, u64] = core@1/map.empty()
   let mut a: List[u64] = []
@@ -75,7 +79,8 @@ fn numbered(old: List[String], new: List[String]) -> (
   for line in new {
     core@1/list.push(mut b, id(mut ids, line))
   }
-  (take a, take b)
+  let tokens = core@1/map.len(ids)
+  (take a, take b, tokens)
 }
 
 fn id(mut ids: Map[String, u64], line: String) -> u64 uses {} {
@@ -107,588 +112,1089 @@ fn index(value: i64) -> u64 uses {} {
   core@1/int.narrow(value)
 }
 
-// --- Myers ------------------------------------------------------------------
-// The integer square root estimate GNU diff and git use to bound how many
-// times a line may match before it counts as matching many.
+// --- Shared helpers ---------------------------------------------------------
+// imara-diff src/util.rs:285-335. Token ranges are passed as a list with a
+// start and an end instead of slices.
 @noalloc
-fn rough_sqrt(count: u64) -> u64 uses {} {
-  let mut n = count
-  let mut root: u64 = 1
+fn common_prefix(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64
+) -> u64 uses {} {
+  let mut off: u64 = 0
+  while start1 + off < end1 && start2 + off < end2 && a[start1 + off] == b[start2 + off] {
+    off += 1
+  }
+  off
+}
+
+@noalloc
+fn common_postfix(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64
+) -> u64 uses {} {
+  let mut off: u64 = 0
+  while end1 - off > start1 && end2 - off > start2 && a[end1 - off - 1] == b[end2 - off - 1] {
+    off += 1
+  }
+  off
+}
+
+// util.rs:332: 2 to the power of half the bit length of `value`.
+@noalloc
+fn sqrt(value: u64) -> u64 uses {} {
+  let mut bits: u64 = 0
+  let mut n = value
   while n > 0 {
-    root = root << 1
-    n = n >> 2
+    bits += 1
+    n = n >> 1
   }
-  root
+  let one: u64 = 1
+  one << bits / 2
 }
 
-fn counts(xs: List[u64]) -> unique Map[u64, u64] uses {} {
-  let mut out: Map[u64, u64] = core@1/map.empty()
-  for x in xs {
-    let seen = match core@1/map.get(out, x) {
-      Some(n) => n,
-      None() => 0,
-    }
-    core@1/map.insert(mut out, x, seen + 1)
+fn mark_range(mut changed: List[bool], start: u64, end: u64) -> () uses {} {
+  for i in start..end {
+    changed[i] = true
   }
-  take out
 }
 
-// 0: the line has no counterpart; 2: it matches at least sqrt(lines) others; 1: otherwise.
-fn classify(xs: List[u64], other: Map[u64, u64], start: u64, stop: u64) -> unique List[
-  u8
-] uses {} {
-  let mut limit = rough_sqrt(core@1/list.len(xs))
-  if limit > 1024 {
-    limit = 1024
+// --- Myers ------------------------------------------------------------------
+// imara-diff src/myers.rs, src/myers/preprocess.rs, src/myers/slice.rs and
+// src/myers/middle_snake.rs: Myers' linear-space search for the middle snake,
+// after dropping the lines the other side lacks, with a cost cutoff that
+// trades minimality for O(N + M) time on very different inputs.
+// preprocess.rs:66-86: how often a token occurs in the other file.
+type Occurrence = Absent | Present | Common
+
+// preprocess.rs:20-62.
+fn occurrences(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64
+) -> (unique List[Occurrence], unique List[Occurrence]) uses {} {
+  let mut limit1 = sqrt(end1 - start1)
+  if limit1 > 1024 {
+    limit1 = 1024
   }
-  let mut out: unique List[u8] = []
-  for i in 0u64..core@1/list.len(xs) {
-    let matched = match core@1/map.get(other, xs[i]) {
-      Some(n) => n,
-      None() => 0,
+  let mut limit2 = sqrt(end2 - start2)
+  if limit2 > 1024 {
+    limit2 = 1024
+  }
+  let mut buckets: u64 = 0
+  for i in start1..end1 {
+    if a[i] + 1 > buckets {
+      buckets = a[i] + 1
     }
-    let class: u8 = if i < start || i >= stop || matched == 0 {
+  }
+  for i in start2..end2 {
+    if b[i] + 1 > buckets {
+      buckets = b[i] + 1
+    }
+  }
+  let mut count1: List[u64] = []
+  let mut count2: List[u64] = []
+  for _ in 0u64..buckets {
+    core@1/list.push(mut count1, 0)
+    core@1/list.push(mut count2, 0)
+  }
+  for i in start1..end1 {
+    count1[a[i]] += 1
+  }
+  for i in start2..end2 {
+    count2[b[i]] += 1
+  }
+  let mut out1: unique List[Occurrence] = []
+  for i in start1..end1 {
+    core@1/list.push(mut out1, occurrence(count2[a[i]], limit1))
+  }
+  let mut out2: unique List[Occurrence] = []
+  for i in start2..end2 {
+    core@1/list.push(mut out2, occurrence(count1[b[i]], limit2))
+  }
+  (take out1, take out2)
+}
+
+@noalloc
+fn occurrence(count: u64, limit: u64) -> Occurrence uses {} {
+  if count == 0 {
+    Absent()
+  } else if count >= limit {
+    Common()
+  } else {
+    Present()
+  }
+}
+
+// preprocess.rs:134-180: a common token is dropped when, within 100 tokens
+// either way, it sits among tokens absent from the other file that outnumber
+// the common ones more than three to one.
+fn prune_common(status: List[Occurrence], pos: u64) -> bool uses {} {
+  let mut unmatched_before: u64 = 0
+  let mut common_before: u64 = 0
+  let start = std@1/u64.saturating_sub(pos, 100)
+  let mut i = pos
+  while i > start {
+    i -= 1
+    match status[i] {
+      Absent() => {
+        unmatched_before += 1
+      },
+      Common() => {
+        common_before += 1
+      },
+      Present() => break,
+    }
+  }
+  if unmatched_before == 0 {
+    return false
+  }
+  let mut end = pos + 100
+  if end > core@1/list.len(status) {
+    end = core@1/list.len(status)
+  }
+  let mut unmatched_after: u64 = 0
+  let mut common_after: u64 = 0
+  for j in pos..end {
+    match status[j] {
+      Absent() => {
+        unmatched_after += 1
+      },
+      Common() => {
+        common_after += 1
+      },
+      Present() => break,
+    }
+  }
+  if unmatched_after == 0 {
+    return false
+  }
+  unmatched_before + unmatched_after > 3 * (common_before + common_after)
+}
+
+// preprocess.rs:108-131: the tokens the search keeps and their original
+// indexes; the others are marked changed.
+fn prune(xs: List[u64], start: u64, status: List[Occurrence], mut changed: List[bool]) -> (
+  unique List[u64],
+  unique List[u64]
+) uses {} {
+  let mut tokens: unique List[u64] = []
+  let mut indices: unique List[u64] = []
+  for i in 0u64..core@1/list.len(status) {
+    let pruned = match status[i] {
+      Absent() => true,
+      Present() => false,
+      Common() => prune_common(status, i),
+    }
+    if pruned {
+      changed[start + i] = true
+    } else {
+      core@1/list.push(mut tokens, xs[start + i])
+      core@1/list.push(mut indices, start + i)
+    }
+  }
+  (take tokens, take indices)
+}
+
+// One direction of the middle snake search (middle_snake.rs:326-356): the
+// diagonals `kmin..=kmax` reached so far, within `dmin..=dmax`. The furthest
+// x position on diagonal k is kept in a shared vector at k + base.
+type Search {
+  back: bool,
+  kmin: i64,
+  kmax: i64,
+  dmin: i64,
+  dmax: i64,
+}
+
+// middle_snake.rs:316-319.
+const SNAKE_CNT: i64 = 20
+
+const K_HEUR: i64 = 4
+
+@noalloc
+fn x_at(v: List[i64], k: i64, base: i64) -> i64 uses {} {
+  v[index(k + base)]
+}
+
+fn set_x(mut v: List[i64], k: i64, base: i64, x: i64) -> () uses {} {
+  v[index(k + base)] = x
+}
+
+// middle_snake.rs:342-356.
+fn search(back: bool, len1: i64, len2: i64, mut v: List[i64], base: i64) -> Search uses {} {
+  let dmin = -len2
+  let dmax = len1
+  let kmid = if back {
+    dmin + dmax
+  } else {
+    0
+  }
+  set_x(
+    mut v,
+    kmid,
+    base,
+    if back {
+      len1
+    } else {
       0
-    } else if matched >= limit {
-      2
-    } else {
-      1
     }
-    core@1/list.push(mut out, class)
-  }
-  take out
-}
-
-// Whether a many-matching line sits inside a run of unmatched lines, within
-// 100 lines either way, dense enough that matching it would only scatter the
-// change.
-fn scattered(dis: List[u8], i: u64, start: u64, stop: u64) -> bool uses {} {
-  let mut low = start
-  if i - low > 100 {
-    low = i - 100
-  }
-  let mut high = stop
-  if high - 1 - i > 100 {
-    high = i + 101
-  }
-  let mut unmatched_low: u64 = 0
-  let mut many_low: u64 = 1
-  let mut r: u64 = 1
-  while r <= i - low {
-    let d = dis[i - r]
-    if d == 0 {
-      unmatched_low += 1
-    } else if d == 2 {
-      many_low += 1
-    } else {
-      break
-    }
-    r += 1
-  }
-  if unmatched_low == 0 {
-    return false
-  }
-  let mut unmatched_high: u64 = 0
-  let mut many_high: u64 = 1
-  r = 1
-  while i + r < high {
-    let d = dis[i + r]
-    if d == 0 {
-      unmatched_high += 1
-    } else if d == 2 {
-      many_high += 1
-    } else {
-      break
-    }
-    r += 1
-  }
-  if unmatched_high == 0 {
-    return false
-  }
-  let unmatched = unmatched_low + unmatched_high
-  let many = many_low + many_high
-  many * 4 < many + unmatched
-}
-
-// The indexes of the lines the search keeps; the others are marked changed.
-fn kept(dis: List[u8], start: u64, stop: u64, mut changed: List[bool]) -> unique List[
-  u64
-] uses {} {
-  let mut out: unique List[u64] = []
-  let mut i = start
-  while i < stop {
-    if dis[i] == 1 || dis[i] == 2 && !scattered(dis, i, start, stop) {
-      core@1/list.push(mut out, i)
-    } else {
-      changed[i] = true
-    }
-    i += 1
-  }
-  take out
+  )
+  Search(back: back, kmin: kmid, kmax: kmid, dmin: dmin, dmax: dmax)
 }
 
 @noalloc
-fn get(v: List[i64], d: i64, base: i64) -> i64 uses {} {
-  v[index(d + base)]
+fn contains(s: Search, k: i64) -> bool uses {} {
+  s.kmin <= k && k <= s.kmax
 }
 
-fn put(mut v: List[i64], d: i64, base: i64, value: i64) -> () uses {} {
-  v[index(d + base)] = value
+// middle_snake.rs:390-412: widen the diagonals by one each way, turning back
+// at the box edges; the diagonals just outside get a value that never wins.
+fn next_d(mut s: Search, mut v: List[i64], base: i64) -> () uses {} {
+  let outside: i64 = if s.back {
+    2147483647
+  } else {
+    -2147483648
+  }
+  if s.kmin > s.dmin {
+    s.kmin -= 1
+    set_x(mut v, s.kmin - 1, base, outside)
+  } else {
+    s.kmin += 1
+  }
+  if s.kmax < s.dmax {
+    s.kmax += 1
+    set_x(mut v, s.kmax + 1, base, outside)
+  } else {
+    s.kmax -= 1
+  }
 }
 
-@noalloc
-fn same(h1: List[u64], i: i64, h2: List[u64], j: i64) -> bool uses {} {
-  h1[index(i)] == h2[index(j)]
-}
+// What a pass found (middle_snake.rs:578-588): nothing, a snake longer than
+// SNAKE_CNT, or the point where the two searches meet.
+type Pass = Nothing | Snake | Found(i64, i64)
 
-// Myers' middle snake of the box [off1, lim1) x [off2, lim2), searched from both
-// corners at once; returns the point where the paths meet.
-fn middle(
+// middle_snake.rs:414-478, with the meeting test of myers.rs:129-131 and
+// :156-158: when `meet` is set, the pass stops where it overlaps `other`'s
+// furthest reach on the same diagonal.
+fn pass(
+  s: Search,
+  mut v: List[i64],
   h1: List[u64],
+  off1: u64,
+  len1: i64,
   h2: List[u64],
-  off1: i64,
-  lim1: i64,
-  off2: i64,
-  lim2: i64,
+  off2: u64,
+  len2: i64,
+  base: i64,
+  meet: bool,
+  other: Search,
+  w: List[i64]
+) -> Pass uses {} {
+  let mut res: Pass = Nothing()
+  let mut k = s.kmax
+  while k >= s.kmin {
+    let mut x1 = if s.back {
+      if x_at(v, k - 1, base) < x_at(v, k + 1, base) {
+        x_at(v, k - 1, base)
+      } else {
+        x_at(v, k + 1, base) - 1
+      }
+    } else if x_at(v, k - 1, base) >= x_at(v, k + 1, base) {
+      x_at(v, k - 1, base) + 1
+    } else {
+      x_at(v, k + 1, base)
+    }
+    let mut x2 = x1 - k
+    let off = if s.back {
+      if x1 > 0 && x2 > 0 {
+        wide(common_postfix(h1, off1, off1 + index(x1), h2, off2, off2 + index(x2)))
+      } else {
+        0
+      }
+    } else if x1 < len1 && x2 < len2 {
+      wide(
+        common_prefix(
+          h1,
+          off1 + index(x1),
+          off1 + index(len1),
+          h2,
+          off2 + index(x2),
+          off2 + index(len2)
+        )
+      )
+    } else {
+      0
+    }
+    if off > SNAKE_CNT {
+      res = Snake()
+    }
+    if s.back {
+      x1 -= off
+      x2 -= off
+    } else {
+      x1 += off
+      x2 += off
+    }
+    set_x(mut v, k, base, x1)
+    if meet && contains(other, k) {
+      let y = x_at(w, k, base)
+      if s.back && x1 <= y || !s.back && y <= x1 {
+        return Found(x1, x2)
+      }
+    }
+    k -= 2
+  }
+  res
+}
+
+// middle_snake.rs:480-511: the furthest point reached on any diagonal, as its
+// distance from the search's own corner and its x position.
+fn best_position(s: Search, v: List[i64], len1: i64, len2: i64, base: i64) -> (i64, i64) uses {} {
+  let mut best_distance: i64 = if s.back {
+    0x7fffffffffffffff
+  } else {
+    -1
+  }
+  let mut best_x1: i64 = if s.back {
+    2147483647
+  } else {
+    -1
+  }
+  let mut k = s.kmax
+  while k >= s.kmin {
+    let mut x1 = x_at(v, k, base)
+    if s.back && x1 < 0 {
+      x1 = 0
+    } else if !s.back && x1 > len1 {
+      x1 = len1
+    }
+    let mut x2 = x1 - k
+    if s.back && x2 < 0 {
+      x1 = k
+      x2 = 0
+    } else if !s.back && x2 > len2 {
+      x1 = len2 + k
+      x2 = len2
+    }
+    let distance = x1 + x2
+    if s.back && distance < best_distance || !s.back && distance > best_distance {
+      best_distance = distance
+      best_x1 = x1
+    }
+    k -= 2
+  }
+  (best_distance, best_x1)
+}
+
+// middle_snake.rs:513-573: past the cost threshold, the diagonal whose point
+// scores best (its distance from the corner plus its distance from the main
+// diagonal, above K_HEUR times the cost) and ends a run of SNAKE_CNT equal
+// tokens.
+fn good_snake(
+  s: Search,
+  v: List[i64],
+  ec: i64,
+  h1: List[u64],
+  off1: u64,
+  len1: i64,
+  h2: List[u64],
+  off2: u64,
+  len2: i64,
+  base: i64
+) -> Option[(i64, i64)] uses {} {
+  let n = SNAKE_CNT
+  let mut best_score: i64 = 0
+  let mut best1: i64 = 0
+  let mut best2: i64 = 0
+  let mut k = s.kmax
+  while k >= s.kmin {
+    let x1 = x_at(v, k, base)
+    let x2 = x1 - k
+    let inside = if s.back {
+      0 <= x1 && x1 < len1 - n && 0 <= x2 && x2 < len2 - n
+    } else {
+      n <= x1 && x1 < len1 && n <= x2 && x2 < len2
+    }
+    if inside {
+      let diagonal = if k < 0 {
+        -k
+      } else {
+        k
+      }
+      let distance = if s.back {
+        len1 - x1 + (len2 - x2)
+      } else {
+        x1 + x2
+      }
+      let score = distance + diagonal
+      if score > K_HEUR * ec && score > best_score {
+        let mut run = true
+        let mut i: i64 = 0
+        while run && i < n {
+          run = if s.back {
+            h1[off1 + index(x1 + i)] == h2[off2 + index(x2 + i)]
+          } else {
+            h1[off1 + index(x1 - 1 - i)] == h2[off2 + index(x2 - 1 - i)]
+          }
+          i += 1
+        }
+        if run {
+          best1 = x1
+          best2 = x2
+          best_score = score
+        }
+      }
+    }
+    k -= 2
+  }
+  if best_score > 0 {
+    Some((best1, best2))
+  } else {
+    None()
+  }
+}
+
+// myers.rs:116-236: where to split the box [off1, off1 + len1) x [off2, off2 +
+// len2), and whether each half must still be diffed minimally. Unless
+// `need_min`, a search costing more than `max_cost` stops at the furthest point
+// either direction reached, and one costing more than 256 stops early at a
+// good snake.
+fn split(
+  h1: List[u64],
+  off1: u64,
+  len1: i64,
+  h2: List[u64],
+  off2: u64,
+  len2: i64,
   mut forward: List[i64],
   mut backward: List[i64],
-  base: i64
-) -> (i64, i64) uses {} {
-  let dmin = off1 - lim2
-  let dmax = lim1 - off2
-  let fmid = off1 - off2
-  let bmid = lim1 - lim2
-  let odd = (fmid - bmid) % 2 != 0
-  let mut fmin = fmid
-  let mut fmax = fmid
-  let mut bmin = bmid
-  let mut bmax = bmid
-  put(mut forward, fmid, base, off1)
-  put(mut backward, bmid, base, lim1)
-  let far: i64 = 0x7fffffffffffffff
-  while true {
-    if fmin > dmin {
-      fmin -= 1
-      put(mut forward, fmin - 1, base, -1)
-    } else {
-      fmin += 1
+  base: i64,
+  need_min: bool,
+  max_cost: i64
+) -> (i64, i64, bool, bool) uses {} {
+  let mut f = search(false, len1, len2, mut forward, base)
+  let mut b = search(true, len1, len2, mut backward, base)
+  let odd = (len2 - len1) % 2 != 0
+  let mut ec: i64 = 0
+  while ec <= max_cost {
+    let mut found_snake = false
+    next_d(mut f, mut forward, base)
+    match pass(f, mut forward, h1, off1, len1, h2, off2, len2, base, odd, b, backward) {
+      Found(x1, x2) => return (x1, x2, true, true),
+      Snake() => {
+        found_snake = true
+      },
+      Nothing() => (),
     }
-    if fmax < dmax {
-      fmax += 1
-      put(mut forward, fmax + 1, base, -1)
-    } else {
-      fmax -= 1
+    next_d(mut b, mut backward, base)
+    match pass(b, mut backward, h1, off1, len1, h2, off2, len2, base, !odd, f, forward) {
+      Found(x1, x2) => return (x1, x2, true, true),
+      Snake() => {
+        found_snake = true
+      },
+      Nothing() => (),
     }
-    let mut d = fmax
-    while d >= fmin {
-      let mut i1 = if get(forward, d - 1, base) >= get(forward, d + 1, base) {
-        get(forward, d - 1, base) + 1
-      } else {
-        get(forward, d + 1, base)
-      }
-      let mut i2 = i1 - d
-      while i1 < lim1 && i2 < lim2 && same(h1, i1, h2, i2) {
-        i1 += 1
-        i2 += 1
-      }
-      put(mut forward, d, base, i1)
-      if odd && bmin <= d && d <= bmax && get(backward, d, base) <= i1 {
-        return (i1, i2)
-      }
-      d -= 2
+    if need_min {
+      continue
     }
-    if bmin > dmin {
-      bmin -= 1
-      put(mut backward, bmin - 1, base, far)
-    } else {
-      bmin += 1
-    }
-    if bmax < dmax {
-      bmax += 1
-      put(mut backward, bmax + 1, base, far)
-    } else {
-      bmax -= 1
-    }
-    d = bmax
-    while d >= bmin {
-      let mut i1 = if get(backward, d - 1, base) < get(backward, d + 1, base) {
-        get(backward, d - 1, base)
-      } else {
-        get(backward, d + 1, base) - 1
+    if found_snake && ec > 256 {
+      if let Some((x1, x2)) = good_snake(
+        f,
+        forward,
+        ec,
+        h1,
+        off1,
+        len1,
+        h2,
+        off2,
+        len2,
+        base
+      ) {
+        return (x1, x2, true, false)
       }
-      let mut i2 = i1 - d
-      while i1 > off1 && i2 > off2 && same(h1, i1 - 1, h2, i2 - 1) {
-        i1 -= 1
-        i2 -= 1
+      if let Some((x1, x2)) = good_snake(
+        b,
+        backward,
+        ec,
+        h1,
+        off1,
+        len1,
+        h2,
+        off2,
+        len2,
+        base
+      ) {
+        return (x1, x2, false, true)
       }
-      put(mut backward, d, base, i1)
-      if !odd && fmin <= d && d <= fmax && i1 <= get(forward, d, base) {
-        return (i1, i2)
-      }
-      d -= 2
     }
+    ec += 1
   }
-  (0, 0)
+  let (distance_forward, x1_forward) = best_position(f, forward, len1, len2, base)
+  let (distance_backward, x1_backward) = best_position(b, backward, len1, len2, base)
+  if distance_forward > len1 + len2 - distance_backward {
+    (x1_forward, distance_forward - x1_forward, true, false)
+  } else {
+    (x1_backward, distance_backward - x1_backward, false, true)
+  }
 }
 
-// A minimal diff of two numbered sequences: the changed flags of each side.
-fn myers(a: List[u64], b: List[u64]) -> (List[bool], List[bool]) uses {} {
-  let n1 = core@1/list.len(a)
-  let n2 = core@1/list.len(b)
-  let mut changed1 = flags(n1)
-  let mut changed2 = flags(n2)
-  let lim = if n1 < n2 {
-    n1
-  } else {
-    n2
+// myers.rs:21-107: preprocess, then split boxes until one side is empty.
+// A worklist replaces the recursion.
+fn myers(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64,
+  mut removed: List[bool],
+  mut added: List[bool],
+  minimal: bool
+) -> () uses {} {
+  let (status1, status2) = occurrences(a, start1, end1, b, start2, end2)
+  let (h1, rows1) = prune(a, start1, status1, mut removed)
+  let (h2, rows2) = prune(b, start2, status2, mut added)
+  let n1 = core@1/list.len(h1)
+  let n2 = core@1/list.len(h2)
+  let base = wide(n2) + 1
+  let mut max_cost = wide(sqrt(n1 + n2 + 3))
+  if max_cost < 256 {
+    max_cost = 256
   }
-  let mut head: u64 = 0
-  while head < lim && a[head] == b[head] {
-    head += 1
-  }
-  let mut tail: u64 = 0
-  while tail < lim - head && a[n1 - 1 - tail] == b[n2 - 1 - tail] {
-    tail += 1
-  }
-  let dis1 = classify(a, counts(b), head, n1 - tail)
-  let dis2 = classify(b, counts(a), head, n2 - tail)
-  let rows1 = kept(dis1, head, n1 - tail, mut changed1)
-  let rows2 = kept(dis2, head, n2 - tail, mut changed2)
-  let mut h1: List[u64] = []
-  for i in rows1 {
-    core@1/list.push(mut h1, a[i])
-  }
-  let mut h2: List[u64] = []
-  for i in rows2 {
-    core@1/list.push(mut h2, b[i])
-  }
-  let m1 = wide(core@1/list.len(h1))
-  let m2 = wide(core@1/list.len(h2))
-  let base = m2 + 1
   let mut forward: List[i64] = []
   let mut backward: List[i64] = []
-  for _ in 0u64..index(m1 + m2 + 3) {
+  for _ in 0u64..n1 + n2 + 3 {
     core@1/list.push(mut forward, 0)
     core@1/list.push(mut backward, 0)
   }
-  let mut boxes: List[(i64, i64, i64, i64)] = [(0, m1, 0, m2)]
-  while let Some((first1, last1, first2, last2)) = core@1/list.pop(mut boxes) {
-    let mut off1 = first1
-    let mut lim1 = last1
-    let mut off2 = first2
-    let mut lim2 = last2
-    while off1 < lim1 && off2 < lim2 && same(h1, off1, h2, off2) {
-      off1 += 1
-      off2 += 1
-    }
-    while off1 < lim1 && off2 < lim2 && same(h1, lim1 - 1, h2, lim2 - 1) {
-      lim1 -= 1
-      lim2 -= 1
-    }
-    if off1 == lim1 {
-      while off2 < lim2 {
-        changed2[rows2[index(off2)]] = true
-        off2 += 1
+  let mut boxes: List[(u64, u64, u64, u64, bool)] = [(0, n1, 0, n2, minimal)]
+  while let Some((first1, last1, first2, last2, need_min)) = core@1/list.pop(mut boxes) {
+    // slice.rs:265-271.
+    let head = common_prefix(h1, first1, last1, h2, first2, last2)
+    let tail = common_postfix(h1, first1 + head, last1, h2, first2 + head, last2)
+    let lo1 = first1 + head
+    let hi1 = last1 - tail
+    let lo2 = first2 + head
+    let hi2 = last2 - tail
+    if lo1 == hi1 {
+      for i in lo2..hi2 {
+        added[rows2[i]] = true
       }
-    } else if off2 == lim2 {
-      while off1 < lim1 {
-        changed1[rows1[index(off1)]] = true
-        off1 += 1
+    } else if lo2 == hi2 {
+      for i in lo1..hi1 {
+        removed[rows1[i]] = true
       }
     } else {
-      let (s1, s2) = middle(
+      let (x1, x2, min_lo, min_hi) = split(
         h1,
+        lo1,
+        wide(hi1 - lo1),
         h2,
-        off1,
-        lim1,
-        off2,
-        lim2,
+        lo2,
+        wide(hi2 - lo2),
         mut forward,
         mut backward,
-        base
+        base,
+        need_min,
+        max_cost
       )
-      core@1/list.push(mut boxes, (s1, lim1, s2, lim2))
-      core@1/list.push(mut boxes, (off1, s1, off2, s2))
+      core@1/list.push(mut boxes, (lo1 + index(x1), hi1, lo2 + index(x2), hi2, min_hi))
+      core@1/list.push(mut boxes, (lo1, lo1 + index(x1), lo2, lo2 + index(x2), min_lo))
     }
   }
-  (take changed1, take changed2)
+}
+
+// --- Histogram --------------------------------------------------------------
+// imara-diff src/histogram.rs and src/histogram/lcs.rs: split on the longest
+// common run whose rarest token occurs least often in the old side, and fall
+// back to Myers when every shared token occurs more than 63 times.
+// histogram.rs:9-11: occurrences tracked per token; later ones are ignored.
+const MAX_CHAIN_LEN: u64 = 63
+
+// The occurrences of each token in the old range, in order and at most
+// MAX_CHAIN_LEN + 1 of them, as list_pool.rs:225-260 keeps them: `first`
+// heads each token's chain, `next` links an index to the token's next one.
+type Chains {
+  count: List[u64],
+  first: List[u64],
+  last: List[u64],
+  next: List[u64],
+}
+
+// histogram.rs:61-65.
+fn populate(mut h: Chains, a: List[u64], start: u64, end: u64) -> () uses {} {
+  for i in start..end {
+    let t = a[i]
+    if h.count[t] <= MAX_CHAIN_LEN {
+      if h.count[t] == 0 {
+        h.first[t] = i
+      } else {
+        h.next[h.last[t]] = i
+      }
+      h.last[t] = i
+      h.count[t] += 1
+    }
+  }
+}
+
+fn clear(mut h: Chains, a: List[u64], start: u64, end: u64) -> () uses {} {
+  for i in start..end {
+    h.count[a[i]] = 0
+  }
+}
+
+// lcs.rs:143-152.
+type Lcs {
+  before_start: u64,
+  after_start: u64,
+  len: u64,
+}
+
+// lcs.rs:125-141 and :164-261, positions absolute. None when the run found
+// rests on a token occurring more than MAX_CHAIN_LEN times.
+fn find_lcs(
+  h: Chains,
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64
+) -> Option[Lcs] uses {} {
+  let mut lcs = Lcs(before_start: start1, after_start: start2, len: 0)
+  let mut min_occurrences = MAX_CHAIN_LEN + 1
+  let mut found_cs = false
+  let mut pos = start2
+  while pos < end2 {
+    let token = b[pos]
+    let seen = h.count[token]
+    if seen != 0 {
+      found_cs = true
+      if seen <= min_occurrences {
+        // lcs.rs:186-261.
+        let after_pos = pos
+        let mut next2 = after_pos + 1
+        let mut x1 = h.first[token]
+        let mut left = seen
+        while true {
+          let mut rarest = seen
+          let mut s1 = x1
+          let mut s2 = after_pos
+          while s1 > start1 && s2 > start2 && a[s1 - 1] == b[s2 - 1] {
+            s1 -= 1
+            s2 -= 1
+            let c = h.count[a[s1]]
+            if c < rarest {
+              rarest = c
+            }
+          }
+          let mut e1 = x1 + 1
+          let mut e2 = after_pos + 1
+          while e1 < end1 && e2 < end2 && a[e1] == b[e2] {
+            let c = h.count[a[e1]]
+            if c < rarest {
+              rarest = c
+            }
+            e1 += 1
+            e2 += 1
+          }
+          if next2 < e2 {
+            next2 = e2
+          }
+          let len = e2 - s2
+          if lcs.len < len || min_occurrences > rarest {
+            min_occurrences = rarest
+            lcs = Lcs(before_start: s1, after_start: s2, len: len)
+          }
+          // lcs.rs:248-257 skips to the next occurrence past e2, measured in
+          // relative positions on both sides.
+          let mut more = false
+          while left > 1 && !more {
+            x1 = h.next[x1]
+            left -= 1
+            more = x1 - start1 > e2 - start2
+          }
+          if !more {
+            break
+          }
+        }
+        pos = next2
+        continue
+      }
+    }
+    pos += 1
+  }
+  if !found_cs || min_occurrences <= MAX_CHAIN_LEN {
+    Some(lcs)
+  } else {
+    None()
+  }
+}
+
+// histogram.rs:67-117, with a worklist in place of the recursion.
+fn histogram(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64,
+  tokens: u64,
+  mut removed: List[bool],
+  mut added: List[bool]
+) -> () uses {} {
+  let mut h = Chains(count: [], first: [], last: [], next: [])
+  for _ in 0u64..tokens {
+    core@1/list.push(mut h.count, 0)
+    core@1/list.push(mut h.first, 0)
+    core@1/list.push(mut h.last, 0)
+  }
+  for _ in 0u64..core@1/list.len(a) {
+    core@1/list.push(mut h.next, 0)
+  }
+  let mut ranges: List[(u64, u64, u64, u64)] = [(start1, end1, start2, end2)]
+  while let Some((lo1, hi1, lo2, hi2)) = core@1/list.pop(mut ranges) {
+    if lo1 == hi1 {
+      mark_range(mut added, lo2, hi2)
+      continue
+    }
+    if lo2 == hi2 {
+      mark_range(mut removed, lo1, hi1)
+      continue
+    }
+    populate(mut h, a, lo1, hi1)
+    let found = find_lcs(h, a, lo1, hi1, b, lo2, hi2)
+    clear(mut h, a, lo1, hi1)
+    match found {
+      Some(lcs) => {
+        if lcs.len == 0 {
+          mark_range(mut added, lo2, hi2)
+          mark_range(mut removed, lo1, hi1)
+        } else {
+          core@1/list.push(
+            mut ranges,
+            (lcs.before_start + lcs.len, hi1, lcs.after_start + lcs.len, hi2)
+          )
+          core@1/list.push(mut ranges, (lo1, lcs.before_start, lo2, lcs.after_start))
+        }
+      },
+      None() => myers(a, lo1, hi1, b, lo2, hi2, mut removed, mut added, false),
+    }
+  }
 }
 
 // --- Patience ---------------------------------------------------------------
-// Each unique line of a range's old side that is also unique on its new side,
-// in old order; the longest run of them increasing on the new side anchors
-// the diff, and the gaps between anchors are diffed in turn.
-fn patience(a: List[u64], b: List[u64]) -> (List[bool], List[bool]) uses {} {
-  let mut changed1 = flags(core@1/list.len(a))
-  let mut changed2 = flags(core@1/list.len(b))
-  let mut ranges: List[(u64, u64, u64, u64)] = [
-    (0, core@1/list.len(a), 0, core@1/list.len(b))
-  ]
-  while let Some((l1, c1, l2, c2)) = core@1/list.pop(mut ranges) {
-    if c1 == 0 || c2 == 0 {
-      for k in l1..l1 + c1 {
-        changed1[k] = true
-      }
-      for k in l2..l2 + c2 {
-        changed2[k] = true
-      }
+// Bram Cohen's patience diff (https://bramcohen.livejournal.com/73318.html):
+// match the common head and tail, then the lines occurring exactly once on
+// each side, keeping the longest run of them in the same order on both
+// (patience sorting), and repeat between each pair of matched lines; a range
+// without such lines is diffed with Myers.
+fn patience(
+  a: List[u64],
+  start1: u64,
+  end1: u64,
+  b: List[u64],
+  start2: u64,
+  end2: u64,
+  mut removed: List[bool],
+  mut added: List[bool]
+) -> () uses {} {
+  let mut ranges: List[(u64, u64, u64, u64)] = [(start1, end1, start2, end2)]
+  while let Some((first1, last1, first2, last2)) = core@1/list.pop(mut ranges) {
+    let head = common_prefix(a, first1, last1, b, first2, last2)
+    let tail = common_postfix(a, first1 + head, last1, b, first2 + head, last2)
+    let lo1 = first1 + head
+    let hi1 = last1 - tail
+    let lo2 = first2 + head
+    let hi2 = last2 - tail
+    if lo1 == hi1 || lo2 == hi2 {
+      mark_range(mut removed, lo1, hi1)
+      mark_range(mut added, lo2, hi2)
       continue
     }
-    // Entry per distinct old line: its first old index, and its new index,
-    // -1 when absent and -2 when repeated on either side.
-    let mut entry: Map[u64, u64] = core@1/map.empty()
-    let mut old_at: List[u64] = []
-    let mut new_at: List[i64] = []
-    for i in l1..l1 + c1 {
-      match core@1/map.get(entry, a[i]) {
-        Some(e) => {
-          new_at[e] = -2
-        },
-        None() => {
-          core@1/map.insert(mut entry, a[i], core@1/list.len(old_at))
-          core@1/list.push(mut old_at, i)
-          core@1/list.push(mut new_at, -1)
-        },
+    // Per token: occurrences on each side, and its position on each side.
+    let mut seen1: Map[u64, (u64, u64)] = core@1/map.empty()
+    for i in lo1..hi1 {
+      let n = match core@1/map.get(seen1, a[i]) {
+        Some((c, _)) => c,
+        None() => 0,
       }
+      core@1/map.insert(mut seen1, a[i], (n + 1, i))
     }
-    let mut shared = false
-    for j in l2..l2 + c2 {
-      if let Some(e) = core@1/map.get(entry, b[j]) {
-        shared = true
-        if new_at[e] == -1 {
-          new_at[e] = wide(j)
-        } else {
-          new_at[e] = -2
+    let mut seen2: Map[u64, (u64, u64)] = core@1/map.empty()
+    for j in lo2..hi2 {
+      let n = match core@1/map.get(seen2, b[j]) {
+        Some((c, _)) => c,
+        None() => 0,
+      }
+      core@1/map.insert(mut seen2, b[j], (n + 1, j))
+    }
+    // The unique pairs in old order, as (old, new) positions.
+    let mut pairs1: List[u64] = []
+    let mut pairs2: List[u64] = []
+    for i in lo1..hi1 {
+      if let Some((c1, _)) = core@1/map.get(seen1, a[i]) {
+        if let Some((c2, j)) = core@1/map.get(seen2, a[i]) {
+          if c1 == 1 && c2 == 1 {
+            core@1/list.push(mut pairs1, i)
+            core@1/list.push(mut pairs2, j)
+          }
         }
       }
     }
-    if !shared {
-      for k in l1..l1 + c1 {
-        changed1[k] = true
-      }
-      for k in l2..l2 + c2 {
-        changed2[k] = true
-      }
+    let count = core@1/list.len(pairs1)
+    if count == 0 {
+      myers(a, lo1, hi1, b, lo2, hi2, mut removed, mut added, false)
       continue
     }
-    // Patience sorting: tails[k] ends the best increasing run of length k + 1.
-    let mut tails: List[u64] = []
-    let mut previous: List[i64] = []
-    for e in 0u64..core@1/list.len(old_at) {
-      core@1/list.push(mut previous, -1)
-      if new_at[e] < 0 {
-        continue
-      }
-      let mut low: i64 = -1
-      let mut high = wide(core@1/list.len(tails))
-      while low + 1 < high {
+    // Patience sorting: piles[p] holds the pair ending the best increasing
+    // run of length p + 1; back[e] is the pair before e in its run.
+    let mut piles: List[u64] = []
+    let mut back: List[u64] = []
+    for e in 0u64..count {
+      let mut low: u64 = 0
+      let mut high = core@1/list.len(piles)
+      while low < high {
         let mid = low + (high - low) / 2
-        if new_at[tails[index(mid)]] > new_at[e] {
-          high = mid
+        if pairs2[piles[mid]] < pairs2[e] {
+          low = mid + 1
         } else {
-          low = mid
+          high = mid
         }
       }
-      if low >= 0 {
-        previous[e] = wide(tails[index(low)])
-      }
-      let slot = index(low + 1)
-      if slot == core@1/list.len(tails) {
-        core@1/list.push(mut tails, e)
+      core@1/list.push(
+        mut back,
+        if low > 0 {
+          piles[low - 1]
+        } else {
+          count
+        }
+      )
+      if low == core@1/list.len(piles) {
+        core@1/list.push(mut piles, e)
       } else {
-        tails[slot] = e
+        piles[low] = e
       }
     }
-    if core@1/list.len(tails) == 0 {
-      let mut sub1: List[u64] = []
-      for i in l1..l1 + c1 {
-        core@1/list.push(mut sub1, a[i])
-      }
-      let mut sub2: List[u64] = []
-      for j in l2..l2 + c2 {
-        core@1/list.push(mut sub2, b[j])
-      }
-      let (f1, f2) = myers(sub1, sub2)
-      for k in 0u64..c1 {
-        changed1[l1 + k] = f1[k]
-      }
-      for k in 0u64..c2 {
-        changed2[l2 + k] = f2[k]
-      }
-      continue
+    // Queue the gaps between matched lines, last first.
+    let mut e = piles[core@1/list.len(piles) - 1]
+    let mut next1 = hi1
+    let mut next2 = hi2
+    while e != count {
+      core@1/list.push(mut ranges, (pairs1[e] + 1, next1, pairs2[e] + 1, next2))
+      next1 = pairs1[e]
+      next2 = pairs2[e]
+      e = back[e]
     }
-    let mut chain1: List[u64] = []
-    let mut chain2: List[u64] = []
-    let mut at = wide(tails[core@1/list.len(tails) - 1])
-    while at >= 0 {
-      let e = index(at)
-      core@1/list.push(mut chain1, old_at[e])
-      core@1/list.push(mut chain2, index(new_at[e]))
-      at = previous[e]
-    }
-    std@1/list.reverse(mut chain1)
-    std@1/list.reverse(mut chain2)
-    // Grow each anchor into its run of equal lines, and queue the gaps.
-    let end1 = l1 + c1
-    let end2 = l2 + c2
-    let mut line1 = l1
-    let mut line2 = l2
-    let mut k: u64 = 0
-    let count = core@1/list.len(chain1)
-    let mut walking = true
-    while walking {
-      let mut next1 = end1
-      let mut next2 = end2
-      if k < count {
-        next1 = chain1[k]
-        next2 = chain2[k]
-        while next1 > line1 && next2 > line2 && a[next1 - 1] == b[next2 - 1] {
-          next1 -= 1
-          next2 -= 1
-        }
-      }
-      while line1 < next1 && line2 < next2 && a[line1] == b[line2] {
-        line1 += 1
-        line2 += 1
-      }
-      if next1 > line1 || next2 > line2 {
-        core@1/list.push(mut ranges, (line1, next1 - line1, line2, next2 - line2))
-      }
-      if k >= count {
-        walking = false
-      } else {
-        while k + 1 < count && chain1[k + 1] == chain1[k] + 1 && chain2[k + 1] == chain2[k] + 1 {
-          k += 1
-        }
-        line1 = chain1[k] + 1
-        line2 = chain2[k] + 1
-        k += 1
-      }
-    }
+    core@1/list.push(mut ranges, (lo1, next1, lo2, next2))
   }
-  (take changed1, take changed2)
 }
 
-// --- Compaction -------------------------------------------------------------
-// Slides each group of changed lines of one side as far down as equal lines
-// allow, merging groups it meets, then back up to the last place it lines up
-// with a change on the other side, if it passed one.
-fn compact(xs: List[u64], mut changed: List[bool], other: List[bool]) -> () uses {} {
-  let n = core@1/list.len(xs)
-  let no = core@1/list.len(other)
-  let mut gs: u64 = 0
-  let mut ge: u64 = 0
-  while ge < n && changed[ge] {
-    ge += 1
-  }
-  let mut os: u64 = 0
-  let mut oe: u64 = 0
-  while oe < no && other[oe] {
-    oe += 1
-  }
-  while true {
-    if ge != gs {
-      let mut earliest = ge
-      let mut aligned: Option[u64] = None()
-      let mut size = ge - gs + 1
-      while size != ge - gs {
-        size = ge - gs
-        aligned = None()
-        // Up as far as possible.
-        while gs > 0 && xs[gs - 1] == xs[ge - 1] {
-          gs -= 1
-          changed[gs] = true
-          ge -= 1
-          changed[ge] = false
-          while gs > 0 && changed[gs - 1] {
-            gs -= 1
-          }
-          oe = os - 1
-          os = oe
-          while os > 0 && other[os - 1] {
-            os -= 1
-          }
-        }
-        earliest = ge
-        if oe > os {
-          aligned = Some(ge)
-        }
-        // Down as far as possible.
-        while ge < n && xs[gs] == xs[ge] {
-          changed[gs] = false
-          gs += 1
-          changed[ge] = true
-          ge += 1
-          while ge < n && changed[ge] {
-            ge += 1
-          }
-          os = oe + 1
-          oe = os
-          while oe < no && other[oe] {
-            oe += 1
-          }
-          if oe > os {
-            aligned = Some(ge)
-          }
-        }
-      }
-      if ge != earliest && aligned != None() {
-        while oe == os {
-          gs -= 1
-          changed[gs] = true
-          ge -= 1
-          changed[ge] = false
-          while gs > 0 && changed[gs - 1] {
-            gs -= 1
-          }
-          oe = os - 1
-          os = oe
-          while os > 0 && other[os - 1] {
-            os -= 1
-          }
-        }
-      }
+// --- Postprocessing ---------------------------------------------------------
+// imara-diff src/postprocess.rs with NoSliderHeuristic (slider_heuristic.rs:
+// 42-46) and src/util.rs:337-391: slide each group of changed lines on one
+// side up and down past equal lines, merging the groups it meets, and leave it
+// at the bottom unless it can line up with a change on the other side.
+// util.rs:369-374, as an offset from `pos`.
+fn next_change(marks: List[bool], pos: u64) -> Option[u64] uses {} {
+  let n = core@1/list.len(marks)
+  let mut i = pos
+  while i < n {
+    if marks[i] {
+      return Some(i - pos)
     }
-    if ge == n {
+    i += 1
+  }
+  None()
+}
+
+// util.rs:377-382.
+@noalloc
+fn hunk_end(marks: List[bool], pos: u64) -> u64 uses {} {
+  let n = core@1/list.len(marks)
+  let mut i = pos
+  while i < n && marks[i] {
+    i += 1
+  }
+  i
+}
+
+// util.rs:385-391.
+@noalloc
+fn hunk_start(marks: List[bool], pos: u64) -> u64 uses {} {
+  let mut i = pos
+  while i > 0 && marks[i - 1] {
+    i -= 1
+  }
+  i
+}
+
+// lib.rs Hunk (named Slider here): the changed ranges `before` (the other side) and
+// `after` (the side being slid).
+type Slider {
+  before_start: u64,
+  before_end: u64,
+  after_start: u64,
+  after_end: u64,
+}
+
+// util.rs:337-366: the next group of changes on the slid side, with the
+// other side's range positioned against it.
+fn next_hunk(mut h: Slider, removed: List[bool], added: List[bool]) -> bool uses {} {
+  let Some(off) = next_change(added, h.after_end) else {
+    return false
+  }
+  let mut off_before: u64 = 0
+  while true {
+    let unchanged = match next_change(removed, h.before_end) {
+      Some(u) => u,
+      None() => core@1/list.len(removed) - h.before_end,
+    }
+    if off_before + unchanged > off {
+      h.before_start = h.before_end + (off - off_before)
+      h.before_end = h.before_start
       break
     }
-    gs = ge + 1
-    ge = gs
-    while ge < n && changed[ge] {
-      ge += 1
+    off_before += unchanged
+    h.before_start = h.before_end + unchanged
+    h.before_end = hunk_end(removed, h.before_end + unchanged)
+    if off_before == off {
+      break
     }
-    os = oe + 1
-    oe = os
-    while oe < no && other[oe] {
-      oe += 1
+  }
+  h.after_start = h.after_end + off
+  h.after_end = hunk_end(added, h.after_start)
+  true
+}
+
+// postprocess.rs:136-151.
+fn slide_down(
+  mut h: Slider,
+  tokens: List[u64],
+  mut added: List[bool],
+  removed: List[bool]
+) -> bool uses {} {
+  if h.after_end >= core@1/list.len(tokens) || tokens[h.after_start] != tokens[h.after_end] {
+    return false
+  }
+  added[h.after_start] = false
+  added[h.after_end] = true
+  h.after_start += 1
+  h.after_end = hunk_end(added, h.after_end)
+  h.before_start = h.before_end + 1
+  h.before_end = hunk_end(removed, h.before_start)
+  true
+}
+
+// postprocess.rs:154-171.
+fn slide_up(
+  mut h: Slider,
+  tokens: List[u64],
+  mut added: List[bool],
+  removed: List[bool]
+) -> bool uses {} {
+  if h.after_start == 0 || tokens[h.after_start - 1] != tokens[h.after_end - 1] {
+    return false
+  }
+  added[h.after_start - 1] = true
+  added[h.after_end - 1] = false
+  h.after_end -= 1
+  h.after_start = hunk_start(added, h.after_start - 1)
+  h.before_end = h.before_start - 1
+  h.before_start = hunk_start(removed, h.before_start - 1)
+  true
+}
+
+// postprocess.rs:81-133.
+fn slide(tokens: List[u64], mut added: List[bool], removed: List[bool]) -> () uses {} {
+  let mut h = Slider(before_start: 0, before_end: 0, after_start: 0, after_end: 0)
+  while next_hunk(mut h, removed, added) {
+    let mut earliest_end: u64 = 0
+    let mut modification = false
+    while true {
+      while slide_up(mut h, tokens, mut added, removed) {}
+      earliest_end = h.after_end
+      modification = h.before_start != h.before_end
+      let size = h.after_end - h.after_start
+      while slide_down(mut h, tokens, mut added, removed) {
+        modification = modification || h.before_start != h.before_end
+      }
+      if size == h.after_end - h.after_start {
+        break
+      }
+    }
+    if h.after_end != earliest_end && modification {
+      while h.before_start == h.before_end && slide_up(
+        mut h,
+        tokens,
+        mut added,
+        removed
+      ) {}
     }
   }
 }
 
+// lib.rs:265-297: strip the common head and tail, diff the rest, then
+// postprocess.rs:18-46: slide the new side's groups, then the old side's.
 fn changes(old: List[String], new: List[String], algorithm: Algorithm) -> (
   List[bool],
   List[bool]
 ) uses {} {
-  let (a, b) = numbered(old, new)
-  let mut (f1, f2) = match algorithm {
-    Myers() => myers(a, b),
-    Patience() => patience(a, b),
+  let (a, b, tokens) = numbered(old, new)
+  let n1 = core@1/list.len(a)
+  let n2 = core@1/list.len(b)
+  let mut removed = flags(n1)
+  let mut added = flags(n2)
+  let head = common_prefix(a, 0, n1, b, 0, n2)
+  let tail = common_postfix(a, head, n1, b, head, n2)
+  let end1 = n1 - tail
+  let end2 = n2 - tail
+  match algorithm {
+    Myers() => myers(a, head, end1, b, head, end2, mut removed, mut added, false),
+    MyersMinimal() => myers(a, head, end1, b, head, end2, mut removed, mut added, true),
+    Histogram() => histogram(
+      a,
+      head,
+      end1,
+      b,
+      head,
+      end2,
+      tokens,
+      mut removed,
+      mut added
+    ),
+    Patience() => patience(a, head, end1, b, head, end2, mut removed, mut added),
   }
-  compact(a, mut f1, f2)
-  compact(b, mut f2, f1)
-  (take f1, take f2)
+  slide(b, mut added, removed)
+  slide(a, mut removed, added)
+  (take removed, take added)
 }
 
 /// The edit script turning `old` into `new`, as runs of kept, deleted and
-/// inserted lines (`Edit`). `Myers()` finds a minimal script by Myers'
-/// algorithm, after git: lines with no counterpart are changed outright, a line
-/// matching many others inside such changes is changed with them, and each
-/// change is slid down past equal lines, then back up to line up with a change
-/// on the other side. `Patience()` anchors the diff on lines that occur once
-/// on each side, as git's patience diff, falling back to Myers between anchors
-/// with none. Lines compare whole, terminators included. Unlike git, Myers
-/// never trades minimality for speed on costly inputs: time is O((N + M) D) and
-/// memory O(N + M) for N and M lines and D changed lines.
+/// inserted lines (`Edit`). Lines compare whole, terminators included; the
+/// common head and tail are kept first. `MyersMinimal()` finds a minimal script
+/// by Myers' algorithm after dropping lines the other side lacks (and lines
+/// matching many others among them), in O((N + M) D) time and O(N + M) memory
+/// for N and M lines and D changed lines. `Myers()` does the same but, as git
+/// does, gives up minimality to bound the search: past a cost of 256 a split
+/// may stop at a run of 20 equal lines, and past the square root of N + M (at
+/// least 256) it stops at the furthest point reached. `Histogram()` splits on the longest
+/// common run of the rarest lines, falling back to `Myers()` where every shared
+/// line occurs more than 63 times. `Patience()` anchors on lines that occur
+/// once on each side, falling back to `Myers()` between anchors with none.
+/// Then each change is slid down past equal lines, and back up to line up with
+/// a change on the other side, the new side first.
 pub fn edits(old: List[String], new: List[String], algorithm: Algorithm) -> unique List[
   Edit
 ] uses {} {
