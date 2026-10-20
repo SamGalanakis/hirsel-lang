@@ -3535,3 +3535,82 @@ their zero-based index and the rest apply. A body line other than ` `, `-`, `+`,
 `\` or an empty context line, a count mismatch or text after the last hunk is
 `Malformed` with its one-based patch line number. There is no fuzz, no reversed
 patch detection and no multi-file patch.
+
+## Retry and repeat schedules
+
+`std@1/schedule` describes the waits between operation calls. Its name covers
+both retries after errors and repeats after successes. It adapts Effect Schedule,
+AWS jitter, and the Go/Rust backoff libraries; [research and pinned source
+vectors](../research/std-schedule.md) record the choices.
+
+A `Schedule` is an opaque, copyable value. A driver deep-copies it before advancing,
+so the same policy can be reused independently. Durations, bases, factors and
+limits are `u64`; durations are nanoseconds. Growth saturates at `u64` maximum.
+
+```hirsel
+let policy = schedule.max_attempts(
+  schedule.max_elapsed(
+    schedule.capped(schedule.jittered(schedule.exponential(100000000, 2), Full()), 5000000000),
+    30000000000
+  ),
+  6
+)
+let outcome = schedule.retry(clock, random, policy, op, should_retry)
+```
+
+Constructors are `spaced(interval)`, `fixed(interval)`, `exponential(base,
+factor)` and `fibonacci(base)`. Exponential starts at `base`; Fibonacci starts
+`base, base, 2*base, 3*base`. Spaced waits a full interval after each operation.
+Fixed targets successive grid points measured from driver start, skipping
+missed ticks after slow work. When behind by more than a full interval it
+allows one immediate recurrence, then resumes the grid; zero is immediate. Zero bases and a
+zero factor are legal. No constructor draws randomness or reads time.
+
+Modifiers take a schedule first. `jittered(s, Full())` draws uniformly from
+`0..delay`; `Equal()` draws from `floor(delay/2)..delay`, inclusive integer
+endpoints. Singleton ranges draw nothing. `Decorrelated()` takes the first
+child delay as its stable base, initializes previous to base, and draws from
+`base..saturating(3*previous)`. The child still advances for its stop condition.
+`capped(s, max_delay)` limits emitted waits; when it surrounds decorrelated
+jitter, the capped wait becomes that branch's next previous value, as in AWS.
+Cap after jitter to bound actual sleeps; jitter after cap changes the sampling
+range and decorrelated jitter can then exceed that inner cap.
+
+`max_attempts(s, n)` permits at most `max(1,n)` total calls, including the
+immediate first call. `max_elapsed(s, ns)` includes time inside operations and
+allows further calls strictly before the elapsed limit. A wait reaching or
+exceeding that limit is rejected without sleeping. It rechecks time after a
+wait in case the host overshoots. It does not interrupt a running operation;
+use `task.scope_until` for that deadline. Wrapping a composition gives a global
+budget; wrapping its children gives independent branch budgets.
+
+`union(a,b)` chooses the shorter live delay and continues while either branch
+continues. `intersect(a,b)` chooses the longer delay and requires both branches.
+Both evaluate left then right once per decision and keep independent state;
+stopping is fused. Deterministic delay traces obey commutativity, associativity,
+idempotence and absorption. A stopped schedule is union's identity and
+intersect's absorbing element; forever-zero is intersect's identity. Independent
+jitter draws in separate branches preserve deterministic replay, but need not
+preserve these trace equalities. Sequential composition is omitted to keep the
+initial-operation and budget rules small.
+
+`retry[T,E](clock, random, schedule, op, should_retry)` calls `op()` immediately
+and returns `Ok((value, attempts))` on success. On every error,
+`should_retry(error)` decides whether to continue. Permanent errors and an
+exhausted schedule return `Error(GiveUp(last_error, attempts))`.
+`repeat[T,E](clock, random, schedule, op)` repeats successes, returning the last
+value and total calls when the schedule stops, and gives up immediately on an
+operation error. Callbacks may capture the operation's capabilities.
+
+Both return `Failure[E]`: `GiveUp(E,u64)` or
+`Interrupted(Option[E],u64,ScheduleError)`. An interrupted retry retains its last
+operation error; repeat uses `None()`. A clock failure before the initial call
+has zero attempts. `ScheduleError` distinguishes `Clock(ClockError)`,
+`Random(random.SampleError)` and `Sleep(time.SleepError)`.
+
+All time and entropy pass through the supplied `MonotonicClock` and `Random`.
+Waits use `time.sleep`, hence `clock.sleep_until`: scope cancellation interrupts
+the wait and returns `Sleep(Wait(Canceled(cause)))` without another call.
+`next(clock, random, mut schedule, start)` exposes the same state machine to
+custom drivers, returning `Result[Option[time.Duration], ScheduleError]`; pass
+the instant from before the initial operation. `None()` stays terminal.

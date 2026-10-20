@@ -1,0 +1,77 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let c = io.monotonic_clock(rt)?
+  let r = io.random(rt)?
+  let tasks = io.tasks(rt)?
+  let until = match time.deadline(c, time.Duration(nanoseconds: 1000)) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: until),
+    fn(s: Scope) -> bool {
+      let retried = schedule.retry(
+        c,
+        r,
+        schedule.spaced(5000),
+        fn() -> Result[(), u64] {
+          Error(7)
+        },
+        fn(e: u64) -> bool {
+          true
+        }
+      )
+      match retried {
+        Error(Interrupted(Some(7), 1, Sleep(Wait(Canceled(DeadlineExceeded()))))) => true,
+        _ => false,
+      }
+    }
+  )
+  failure.check(
+    match bounded {
+      Expired(ok) => ok,
+      _ => false,
+    },
+    Arithmetic()
+  )
+  match clock.monotonic(c) {
+    Ok(t) => failure.check(instant.ticks(t) == 1000, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  let next_until = match time.deadline(c, time.Duration(nanoseconds: 1000)) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let repeated = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: next_until),
+    fn(s: Scope) -> bool {
+      match schedule.repeat(
+        c,
+        r,
+        schedule.spaced(5000),
+        fn() -> Result[u64, ()] {
+          Ok(7)
+        }
+      ) {
+        Error(Interrupted(None(), 1, Sleep(Wait(Canceled(DeadlineExceeded()))))) => true,
+        _ => false,
+      }
+    }
+  )
+  failure.check(
+    match repeated {
+      Expired(ok) => ok,
+      _ => false,
+    },
+    Arithmetic()
+  )
+  match clock.monotonic(c) {
+    Ok(t) => failure.check(instant.ticks(t) == 2000, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

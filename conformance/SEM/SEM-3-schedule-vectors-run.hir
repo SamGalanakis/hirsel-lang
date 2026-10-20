@@ -1,0 +1,69 @@
+// rule: SEM-3
+// expect: run
+// grant: clock
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, Arithmetic())
+}
+
+fn vector(c: MonotonicClock, r: Random, s: schedule.Schedule, expected: List[u64]) -> Result[
+  (),
+  schedule.ScheduleError
+] {
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(e) => return Error(Clock(e)),
+  }
+  let mut current = unique s
+  for n in expected {
+    let next = schedule.next(c, r, mut current, start)?
+    match next {
+      Some(d) => check(d.nanoseconds == int.widen(n)),
+      None() => check(false),
+    }
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(_) => return Error(()),
+  }
+  let r = match io.random(rt) {
+    Ok(r) => r,
+    Error(_) => return Error(()),
+  }
+  let outcome = fn() -> Result[(), schedule.ScheduleError] {
+    // cenkalti/backoff and Rust backoff capped exponential vectors.
+    vector(
+      c,
+      r,
+      schedule.capped(schedule.exponential(500, 2), 5000),
+      [500, 1000, 2000, 4000, 5000, 5000, 5000, 5000, 5000, 5000]
+    )?
+    // tokio-retry Fibonacci, cap and overflow vectors.
+    vector(c, r, schedule.fibonacci(10), [10, 10, 20, 30, 50, 80])?
+    vector(c, r, schedule.capped(schedule.fibonacci(10), 50), [10, 10, 20, 30, 50, 50])?
+    vector(c, r, schedule.capped(schedule.fibonacci(20), 10), [10, 10])?
+    vector(
+      c,
+      r,
+      schedule.exponential(18446744073709551614, 2),
+      [18446744073709551614, 18446744073709551615, 18446744073709551615]
+    )?
+    vector(
+      c,
+      r,
+      schedule.fibonacci(18446744073709551614),
+      [18446744073709551614, 18446744073709551614, 18446744073709551615]
+    )?
+    Ok(())
+  }()
+  check(
+    match outcome {
+      Ok(()) => true,
+      Error(_) => false,
+    }
+  )
+  Ok(())
+}

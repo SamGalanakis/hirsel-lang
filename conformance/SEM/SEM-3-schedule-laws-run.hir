@@ -1,0 +1,98 @@
+// rule: SEM-3
+// expect: run
+// grant: clock
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, Arithmetic())
+}
+
+fn trace(c: MonotonicClock, r: Random, s: schedule.Schedule) -> Result[
+  List[Option[time.Duration]],
+  schedule.ScheduleError
+] {
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(e) => return Error(Clock(e)),
+  }
+  let mut state = unique s
+  let mut out: List[Option[time.Duration]] = []
+  let mut i: u64 = 0
+  while i < 7 {
+    list.push(mut out, schedule.next(c, r, mut state, start)?)
+    i += 1
+  }
+  Ok(take out)
+}
+
+fn laws(c: MonotonicClock, r: Random) -> Result[(), schedule.ScheduleError] {
+  let mut n: u64 = 0
+  while n < 5 {
+    let a = schedule.max_attempts(schedule.spaced(n), n)
+    let b = schedule.max_attempts(schedule.fibonacci(3), 4)
+    let d = schedule.max_attempts(schedule.capped(schedule.exponential(2, 3), 20), 6)
+    check(trace(c, r, schedule.union(a, b))? == trace(c, r, schedule.union(b, a))?)
+    check(
+      trace(c, r, schedule.intersect(a, b))? == trace(c, r, schedule.intersect(b, a))?
+    )
+    check(
+      trace(c, r, schedule.union(schedule.union(a, b), d))? == trace(
+        c,
+        r,
+        schedule.union(a, schedule.union(b, d))
+      )?
+    )
+    check(
+      trace(c, r, schedule.intersect(schedule.intersect(a, b), d))? == trace(
+        c,
+        r,
+        schedule.intersect(a, schedule.intersect(b, d))
+      )?
+    )
+    check(trace(c, r, schedule.union(a, a))? == trace(c, r, a)?)
+    check(trace(c, r, schedule.intersect(a, a))? == trace(c, r, a)?)
+    check(trace(c, r, schedule.union(a, schedule.intersect(a, b)))? == trace(c, r, a)?)
+    check(trace(c, r, schedule.intersect(a, schedule.union(a, b)))? == trace(c, r, a)?)
+    let stopped = schedule.max_attempts(schedule.spaced(0), 1)
+    check(trace(c, r, schedule.union(a, stopped))? == trace(c, r, a)?)
+    check(trace(c, r, schedule.intersect(a, stopped))? == trace(c, r, stopped)?)
+    check(trace(c, r, schedule.intersect(a, schedule.spaced(0)))? == trace(c, r, a)?)
+    n += 1
+  }
+  // A stopped branch in union must not contribute its old shorter interval.
+  check(
+    trace(
+      c,
+      r,
+      schedule.union(
+        schedule.max_attempts(schedule.spaced(1), 2),
+        schedule.max_attempts(schedule.spaced(9), 4)
+      )
+    )? == [
+      Some(time.Duration(nanoseconds: 1)),
+      Some(time.Duration(nanoseconds: 9)),
+      Some(time.Duration(nanoseconds: 9)),
+      None(),
+      None(),
+      None(),
+      None()
+    ]
+  )
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(_) => return Error(()),
+  }
+  let r = match io.random(rt) {
+    Ok(r) => r,
+    Error(_) => return Error(()),
+  }
+  check(
+    match laws(c, r) {
+      Ok(()) => true,
+      Error(_) => false,
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,97 @@
+// rule: SEM-3
+// expect: run
+// grant: clock
+// Exact SplitMix64 seed-0 + integer Lemire reference vectors; draws continue
+// across the three policies. See docs/research/std-schedule.md for AWS formulas.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, Arithmetic())
+}
+
+fn vector(c: MonotonicClock, r: Random, s: schedule.Schedule, expected: List[u64]) -> Result[
+  (),
+  schedule.ScheduleError
+] {
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(e) => return Error(Clock(e)),
+  }
+  let mut current = unique s
+  let mut elapsed: i128 = 0
+  for n in expected {
+    let Some(delay) = schedule.next(c, r, mut current, start)? else {
+      check(false)
+      return Ok(())
+    }
+    check(delay.nanoseconds == int.widen(n))
+    match time.sleep(c, delay) {
+      Ok(()) => {},
+      Error(e) => return Error(Sleep(e)),
+    }
+    elapsed += int.widen(n)
+    match time.elapsed(c, start) {
+      Ok(d) => check(d.nanoseconds == elapsed),
+      Error(e) => return Error(Clock(e)),
+    }
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(_) => return Error(()),
+  }
+  let r = match io.random(rt) {
+    Ok(r) => r,
+    Error(_) => return Error(()),
+  }
+  let outcome = fn() -> Result[(), schedule.ScheduleError] {
+    vector(
+      c,
+      r,
+      schedule.jittered(schedule.exponential(10, 2), Full()),
+      [9, 9, 1, 78, 17, 105]
+    )?
+    vector(
+      c,
+      r,
+      schedule.jittered(schedule.exponential(10, 2), Equal()),
+      [6, 18, 25, 79, 112, 282]
+    )?
+    vector(
+      c,
+      r,
+      schedule.capped(
+        schedule.jittered(schedule.exponential(10, 2), Decorrelated()),
+        40
+      ),
+      [21, 39, 40, 40, 40, 40]
+    )?
+    // Singleton ranges draw nothing, even through the full-u64 sampling path.
+    vector(c, r, schedule.jittered(schedule.spaced(0), Full()), [0, 0])?
+    vector(c, r, schedule.jittered(schedule.spaced(0), Equal()), [0])?
+    vector(c, r, schedule.jittered(schedule.spaced(0), Decorrelated()), [0])?
+    let start = match clock.monotonic(c) {
+      Ok(t) => t,
+      Error(e) => return Error(Clock(e)),
+    }
+    let mut entire = schedule.jittered(schedule.spaced(18446744073709551615), Full())
+    match schedule.next(c, r, mut entire, start)? {
+      Some(d) => check(d.nanoseconds == 3775962213208117092),
+      None() => check(false),
+    }
+    let mut odd = schedule.jittered(schedule.spaced(5), Equal())
+    match schedule.next(c, r, mut odd, start)? {
+      Some(d) => check(d.nanoseconds == 5),
+      None() => check(false),
+    }
+    Ok(())
+  }()
+  check(
+    match outcome {
+      Ok(()) => true,
+      Error(_) => false,
+    }
+  )
+  Ok(())
+}

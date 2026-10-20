@@ -1,0 +1,44 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"80","operation":"connect"}],"peers":[{"address":"example.com","port":80,"resolves_to":["127.0.0.1"],"tls":"plain","connections":["refused","refused",{"open":[{"send":[111,107]},"close"]}]}]}
+fn transient(e: NetError) -> bool uses {} {
+  match e {
+    ConnectionRefused() => true,
+    TimedOut() => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let c = io.monotonic_clock(rt)?
+  let r = io.random(rt)?
+  let n = io.net(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let policy = schedule.max_attempts(schedule.exponential(100, 2), 4)
+  let retried = schedule.retry(
+    c,
+    r,
+    policy,
+    fn() -> Result[u64, NetError] {
+      let mut stream = net.connect(n, "example.com", 80u16, Unbounded())?
+      let mut buf: List[u8] = []
+      let count = net.read(n, mut stream, mut buf, 2u64)?
+      failure.check(bytes.from_list(take buf) == b"ok", Arithmetic())
+      Ok(count)
+    },
+    transient
+  )
+  match retried {
+    Ok((count, attempts)) => failure.check(count == 2 && attempts == 3, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  match time.elapsed(c, start) {
+    Ok(d) => failure.check(d.nanoseconds == 300, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

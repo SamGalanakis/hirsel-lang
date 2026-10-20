@@ -496,7 +496,9 @@
     },
     {
       "path": "http_h2.hir",
-      "module": ["http"]
+      "module": [
+        "http"
+      ]
     },
     {
       "path": "http.hir",
@@ -998,6 +1000,12 @@
       "path": "schema.hir",
       "module": [
         "schema"
+      ]
+    },
+    {
+      "path": "schedule.hir",
+      "module": [
+        "schedule"
       ]
     }
   ],

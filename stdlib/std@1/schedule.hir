@@ -1,0 +1,417 @@
+// Effect Schedule's driver/composition, AWS jitter, and Rust tokio-retry's
+// saturating iterators, adapted to explicit Hirsel capabilities. See
+// docs/research/std-schedule.md for pinned sources and the integer conventions.
+pub type Jitter = Full | Equal | Decorrelated
+
+pub type ScheduleError = Clock(ClockError) | Random(random.SampleError) | Sleep(
+  time.SleepError
+)
+
+pub type Failure[E] = GiveUp(E, u64) | Interrupted(Option[E], u64, ScheduleError)
+
+type Rule = Spaced | Fixed | Exponential | Fibonacci | Jittered(Jitter) | Capped | Attempts | Elapsed | Union | Intersect
+
+// A fresh value is a reusable description; stepping mutates only the driver's
+// local copy. Children are owned, so separate drivers never share counters.
+pub opaque type Schedule: copyable + inert + noalloc_drop uses {} {
+  root: Node,
+}
+
+type Node {
+  rule: Rule,
+  children: List[Node],
+  delay: u64,
+  extra: u64,
+  ended: bool,
+  started: bool,
+}
+
+fn leaf(rule: Rule, delay: u64, extra: u64) -> Node uses {} {
+  Node(
+    rule: rule,
+    children: [],
+    delay: delay,
+    extra: extra,
+    ended: false,
+    started: false
+  )
+}
+
+fn wrap(rule: Rule, s: Schedule, limit: u64) -> Schedule uses {} {
+  Schedule(
+    root: Node(
+      rule: rule,
+      children: [unique s.root],
+      delay: limit,
+      extra: 0,
+      ended: false,
+      started: false
+    )
+  )
+}
+
+// All intervals and limits are nonnegative nanoseconds.
+pub fn spaced(interval: u64) -> Schedule uses {} {
+  Schedule(root: leaf(Spaced(), interval, 0))
+}
+
+// Maintain a cadence from the driver's start; run immediately when behind.
+// Missed ticks are skipped. Zero is immediate.
+pub fn fixed(interval: u64) -> Schedule uses {} {
+  Schedule(root: leaf(Fixed(), interval, interval))
+}
+
+pub fn exponential(base: u64, factor: u64) -> Schedule uses {} {
+  Schedule(root: leaf(Exponential(), base, factor))
+}
+
+pub fn fibonacci(base: u64) -> Schedule uses {} {
+  Schedule(root: leaf(Fibonacci(), base, 0))
+}
+
+pub fn jittered(s: Schedule, kind: Jitter) -> Schedule uses {} {
+  wrap(Jittered(kind), s, 0)
+}
+
+pub fn capped(s: Schedule, max_delay: u64) -> Schedule uses {} {
+  wrap(Capped(), s, max_delay)
+}
+
+// Includes the initial operation: zero and one both permit only that operation.
+pub fn max_attempts(s: Schedule, n: u64) -> Schedule uses {} {
+  wrap(
+    Attempts(),
+    s,
+    if n == 0 {
+      0
+    } else {
+      n - 1
+    }
+  )
+}
+
+// No further operation starts at or beyond this elapsed time. This bounds the
+// waits, not a running operation; use task.scope_until for an operation deadline.
+pub fn max_elapsed(s: Schedule, nanoseconds: u64) -> Schedule uses {} {
+  wrap(Elapsed(), s, nanoseconds)
+}
+
+fn pair(rule: Rule, a: Schedule, b: Schedule) -> Schedule uses {} {
+  Schedule(
+    root: Node(
+      rule: rule,
+      children: [unique a.root, unique b.root],
+      delay: 0,
+      extra: 0,
+      ended: false,
+      started: false
+    )
+  )
+}
+
+pub fn union(a: Schedule, b: Schedule) -> Schedule uses {} {
+  pair(Union(), a, b)
+}
+
+pub fn intersect(a: Schedule, b: Schedule) -> Schedule uses {} {
+  pair(Intersect(), a, b)
+}
+
+fn add(a: u64, b: u64) -> u64 uses {} {
+  match u64.checked_add(a, b) {
+    Some(n) => n,
+    None() => 18446744073709551615u64,
+  }
+}
+
+fn multiply(a: u64, b: u64) -> u64 uses {} {
+  match u64.checked_mul(a, b) {
+    Some(n) => n,
+    None() => 18446744073709551615u64,
+  }
+}
+
+fn minimum(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+fn maximum(a: u64, b: u64) -> u64 uses {} {
+  if a > b {
+    a
+  } else {
+    b
+  }
+}
+
+// Inclusive integer endpoints, including the entire u64 domain. A singleton
+// draws nothing; every other draw goes through Random and unbiased rejection.
+fn sample(r: Random, low: u64, high: u64) -> Result[u64, ScheduleError] {
+  if low == high {
+    return Ok(low)
+  }
+  let width = high - low
+  if width == 18446744073709551615u64 {
+    return match random.u64(r) {
+      Ok(n) => Ok(n),
+      Error(e) => Error(Random(Source(e))),
+    }
+  }
+  match random.below(r, width + 1) {
+    Ok(n) => Ok(low + n),
+    Error(e) => Error(Random(e)),
+  }
+}
+
+fn step(r: Random, mut s: Node, elapsed: u64) -> Result[Option[u64], ScheduleError] {
+  if s.ended {
+    return Ok(None())
+  }
+  let decision: Option[u64] = match s.rule {
+    Spaced() => Some(s.delay),
+    Fixed() => {
+      if s.delay == 0 {
+        Some(0)
+      } else {
+        // After a slow operation, skip missed ticks instead of bursting.
+        let target = if elapsed > s.extra {
+          elapsed
+        } else {
+          multiply(add(elapsed / s.delay, 1), s.delay)
+        }
+        s.extra = add(target, s.delay)
+        Some(target - elapsed)
+      }
+    },
+    Exponential() => {
+      let delay = s.delay
+      s.delay = multiply(delay, s.extra)
+      Some(delay)
+    },
+    Fibonacci() => {
+      let delay = s.delay
+      s.delay = add(delay, s.extra)
+      s.extra = delay
+      Some(delay)
+    },
+    Attempts() => {
+      if s.delay == 0 {
+        None()
+      } else {
+        s.delay -= 1
+        step(r, mut s.children[0], elapsed)?
+      }
+    },
+    Elapsed() => {
+      if elapsed >= s.delay {
+        None()
+      } else {
+        match step(r, mut s.children[0], elapsed)? {
+          Some(delay) => if delay >= s.delay - elapsed {
+            None()
+          } else {
+            Some(delay)
+          },
+          None() => None(),
+        }
+      }
+    },
+    Capped() => match step(r, mut s.children[0], elapsed)? {
+      Some(delay) => {
+        cap_feedback(mut s.children[0], s.delay)
+        Some(minimum(delay, s.delay))
+      },
+      None() => None(),
+    },
+    Jittered(kind) => match step(r, mut s.children[0], elapsed)? {
+      Some(delay) => {
+        let drawn = match kind {
+          Full() => sample(r, 0, delay)?,
+          Equal() => sample(r, delay / 2, delay)?,
+          Decorrelated() => {
+            // AWS: random(base, previous * 3). The first child delay is base;
+            // subsequent child delays advance but do not change that floor.
+            if !s.started {
+              s.delay = delay
+            }
+            sample(
+              r,
+              s.delay,
+              maximum(
+                s.delay,
+                multiply(
+                  if !s.started {
+                    s.delay
+                  } else {
+                    s.extra
+                  },
+                  3
+                )
+              )
+            )?
+          },
+        }
+        s.started = true
+        s.extra = drawn
+        Some(drawn)
+      },
+      None() => None(),
+    },
+    Union() => {
+      let a = step(r, mut s.children[0], elapsed)?
+      let b = step(r, mut s.children[1], elapsed)?
+      match a {
+        Some(x) => match b {
+          Some(y) => Some(minimum(x, y)),
+          None() => Some(x),
+        },
+        None() => b,
+      }
+    },
+    Intersect() => {
+      let a = step(r, mut s.children[0], elapsed)?
+      let b = step(r, mut s.children[1], elapsed)?
+      match a {
+        Some(x) => match b {
+          Some(y) => Some(maximum(x, y)),
+          None() => None(),
+        },
+        None() => None(),
+      }
+    },
+  }
+  if let None() = decision {
+    s.ended = true
+  }
+  Ok(decision)
+}
+
+// AWS feeds the capped emitted wait into the next decorrelated draw. Each
+// child keeps its own feedback when a cap surrounds a composition.
+fn cap_feedback(mut s: Node, cap: u64) -> () uses {} {
+  if let Jittered(Decorrelated()) = s.rule {
+    s.extra = minimum(s.extra, cap)
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(s.children) {
+    cap_feedback(mut s.children[i], cap)
+    i += 1
+  }
+}
+
+// Check after sleeping as well: another task or a host poll may overshoot.
+fn live(s: Node, elapsed: u64) -> bool uses {} {
+  if s.ended {
+    return false
+  }
+  match s.rule {
+    Elapsed() => elapsed < s.delay && live(s.children[0], elapsed),
+    Union() => live(s.children[0], elapsed) || live(s.children[1], elapsed),
+    Intersect() => live(s.children[0], elapsed) && live(s.children[1], elapsed),
+    Capped() => live(s.children[0], elapsed),
+    Attempts() => live(s.children[0], elapsed),
+    Jittered(_) => live(s.children[0], elapsed),
+    _ => true,
+  }
+}
+
+// Exposed for deterministic inspection and custom drivers. `start` must be the
+// instant before the initial operation. None is fused: it never restarts.
+pub fn next(clock: MonotonicClock, r: Random, mut s: Schedule, start: Instant of clock) -> Result[
+  Option[time.Duration],
+  ScheduleError
+] {
+  let elapsed = match time.elapsed(clock, start) {
+    Ok(d) => d.nanoseconds,
+    Error(e) => return Error(Clock(e)),
+  }
+  let ticks: u64 = core@1/int.narrow(elapsed)
+  match step(r, mut s.root, ticks)? {
+    Some(n) => Ok(Some(time.Duration(nanoseconds: core@1/int.widen(n)))),
+    None() => Ok(None()),
+  }
+}
+
+fn wait(clock: MonotonicClock, r: Random, mut s: Schedule, start: Instant of clock) -> Result[
+  bool,
+  ScheduleError
+] {
+  let Some(delay) = next(clock, r, mut s, start)? else {
+    return Ok(false)
+  }
+  match time.sleep(clock, delay) {
+    Ok(()) => {},
+    Error(e) => return Error(Sleep(e)),
+  }
+  let elapsed = match time.elapsed(clock, start) {
+    Ok(d) => d.nanoseconds,
+    Error(e) => return Error(Clock(e)),
+  }
+  Ok(live(s.root, core@1/int.narrow(elapsed)))
+}
+
+// The operation runs immediately. Classification is consulted on every error;
+// count includes that failed call. A wait failure retains the last error.
+pub fn retry[T, E](
+  clock: MonotonicClock,
+  r: Random,
+  schedule: Schedule,
+  op: fn() -> Result[T, E],
+  should_retry: fn(E) -> bool
+) -> Result[(T, u64), Failure[E]] {
+  let start = match core@1/clock.monotonic(clock) {
+    Ok(t) => t,
+    Error(e) => return Error(Interrupted(None(), 0, Clock(e))),
+  }
+  let mut s = unique schedule
+  let mut attempts: u64 = 0
+  while true {
+    attempts = add(attempts, 1)
+    match op() {
+      Ok(value) => return Ok((take value, attempts)),
+      Error(error) => {
+        if !should_retry(error) {
+          return Error(GiveUp(take error, attempts))
+        }
+        match wait(clock, r, mut s, start) {
+          Ok(true) => {},
+          Ok(false) => return Error(GiveUp(take error, attempts)),
+          Error(e) => return Error(Interrupted(Some(take error), attempts, e)),
+        }
+      },
+    }
+  }
+  // Unreachable, but the source checker requires a final expression.
+  Error(Interrupted(None(), attempts, Clock(Unavailable())))
+}
+
+// Repeat successes and return the last value and total calls on schedule stop.
+// An operation error stops immediately; a wait error has no operation error.
+pub fn repeat[T, E](
+  clock: MonotonicClock,
+  r: Random,
+  schedule: Schedule,
+  op: fn() -> Result[T, E]
+) -> Result[(T, u64), Failure[E]] {
+  let start = match core@1/clock.monotonic(clock) {
+    Ok(t) => t,
+    Error(e) => return Error(Interrupted(None(), 0, Clock(e))),
+  }
+  let mut s = unique schedule
+  let mut attempts: u64 = 0
+  while true {
+    attempts = add(attempts, 1)
+    match op() {
+      Error(error) => return Error(GiveUp(take error, attempts)),
+      Ok(value) => match wait(clock, r, mut s, start) {
+        Ok(true) => {},
+        Ok(false) => return Ok((take value, attempts)),
+        Error(e) => return Error(Interrupted(None(), attempts, e)),
+      },
+    }
+  }
+  Error(Interrupted(None(), attempts, Clock(Unavailable())))
+}

@@ -1,0 +1,222 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, Arithmetic())
+}
+
+fn stamps(c: MonotonicClock, r: Random, policy: schedule.Schedule, expected: List[u64]) -> Result[
+  (),
+  ClockError
+] {
+  let start = clock.monotonic(c)?
+  let last = expected[list.len(expected) - 1]
+  let retried = schedule.retry(
+    c,
+    r,
+    policy,
+    fn() -> Result[u64, ClockError] {
+      let now = clock.monotonic(c)?
+      let offset = instant.ticks(now) - instant.ticks(start)
+      let mut found = false
+      for stamp in expected {
+        if stamp == offset {
+          found = true
+        }
+      }
+      check(found)
+      if offset < last {
+        Error(Unavailable())
+      } else {
+        Ok(offset)
+      }
+    },
+    fn(e: ClockError) -> bool {
+      true
+    }
+  )
+  match retried {
+    Ok((offset, calls)) => check(offset == last && calls == list.len(expected)),
+    Error(_) => check(false),
+  }
+  Ok(())
+}
+
+fn exercise(c: MonotonicClock, r: Random) -> Result[(), ClockError] {
+  // Effect Schedule.test.ts timestamps, scaled from ms to ns.
+  stamps(
+    c,
+    r,
+    schedule.max_attempts(schedule.exponential(100, 2), 5),
+    [0, 100, 300, 700, 1500]
+  )?
+  stamps(
+    c,
+    r,
+    schedule.max_attempts(schedule.exponential(100, 3), 5),
+    [0, 100, 400, 1300, 4000]
+  )?
+  stamps(
+    c,
+    r,
+    schedule.max_attempts(schedule.fibonacci(100), 5),
+    [0, 100, 200, 400, 700]
+  )?
+  // A policy is reusable: each driver starts with fresh counters.
+  let policy = schedule.max_attempts(schedule.spaced(10), 3)
+  let begin = clock.monotonic(c)?
+  let first = schedule.repeat(
+    c,
+    r,
+    policy,
+    fn() -> Result[u64, ()] {
+      Ok(42)
+    }
+  )
+  let twice = schedule.repeat(
+    c,
+    r,
+    policy,
+    fn() -> Result[u64, ()] {
+      Ok(42)
+    }
+  )
+  check(first == Ok((42, 3)) && twice == Ok((42, 3)))
+  check(time.elapsed(c, begin)?.nanoseconds == 40)
+  // Zero and one max_attempts both permit the mandatory initial attempt.
+  check(
+    schedule.retry(
+      c,
+      r,
+      schedule.max_attempts(schedule.spaced(10), 0),
+      fn() -> Result[(), u64] {
+        Error(8)
+      },
+      fn(e: u64) -> bool {
+        true
+      }
+    ) == Error(GiveUp(8, 1))
+  )
+  check(
+    schedule.retry(
+      c,
+      r,
+      policy,
+      fn() -> Result[(), u64] {
+        Error(9)
+      },
+      fn(e: u64) -> bool {
+        false
+      }
+    ) == Error(GiveUp(9, 1))
+  )
+  check(
+    schedule.retry(
+      c,
+      r,
+      policy,
+      fn() -> Result[(), u64] {
+        Error(11)
+      },
+      fn(e: u64) -> bool {
+        true
+      }
+    ) == Error(GiveUp(11, 3))
+  )
+  check(
+    schedule.repeat(
+      c,
+      r,
+      policy,
+      fn() -> Result[(), u64] {
+        Error(12)
+      }
+    ) == Error(GiveUp(12, 1))
+  )
+  // Rust backoff's elapsed regression: operation time counts in the budget.
+  let regression_start = clock.monotonic(c)?
+  let regression_outcome = schedule.retry(
+    c,
+    r,
+    schedule.max_elapsed(schedule.spaced(500), 1000),
+    fn() -> Result[(), u64] {
+      match time.sleep(c, time.Duration(nanoseconds: 900)) {
+        Ok(()) => {},
+        Error(_) => check(false),
+      }
+      Error(13)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  check(regression_outcome == Error(GiveUp(13, 1)))
+  check(time.elapsed(c, regression_start)?.nanoseconds == 900)
+  let repeat_start = clock.monotonic(c)?
+  let repeated = schedule.repeat(
+    c,
+    r,
+    schedule.max_elapsed(schedule.spaced(100), 300),
+    fn() -> Result[u64, ()] {
+      Ok(4)
+    }
+  )
+  check(repeated == Ok((4, 3)))
+  check(time.elapsed(c, repeat_start)?.nanoseconds == 200)
+  // Elapsed zero still permits the first call, without a wait.
+  check(
+    schedule.repeat(
+      c,
+      r,
+      schedule.max_elapsed(policy, 0),
+      fn() -> Result[u64, ()] {
+        Ok(5)
+      }
+    ) == Ok((5, 1))
+  )
+  // Fixed cadence catches the next grid point after slow work; spaced waits 5.
+  let cadence_start = clock.monotonic(c)?
+  let mut fixed = schedule.fixed(5)
+  let mut spaced = schedule.spaced(5)
+  match schedule.next(c, r, mut fixed, cadence_start) {
+    Ok(Some(d)) => check(d.nanoseconds == 5),
+    _ => check(false),
+  }
+  match time.sleep(c, time.Duration(nanoseconds: 6)) {
+    Ok(()) => {},
+    Error(_) => check(false),
+  }
+  match schedule.next(c, r, mut fixed, cadence_start) {
+    Ok(Some(d)) => check(d.nanoseconds == 4),
+    _ => check(false),
+  }
+  match schedule.next(c, r, mut spaced, cadence_start) {
+    Ok(Some(d)) => check(d.nanoseconds == 5),
+    _ => check(false),
+  }
+  match time.sleep(c, time.Duration(nanoseconds: 20)) {
+    Ok(()) => {},
+    Error(_) => check(false),
+  }
+  match schedule.next(c, r, mut fixed, cadence_start) {
+    Ok(Some(d)) => check(d.nanoseconds == 0),
+    _ => check(false),
+  }
+  match schedule.next(c, r, mut fixed, cadence_start) {
+    Ok(Some(d)) => check(d.nanoseconds == 4),
+    _ => check(false),
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let c = io.monotonic_clock(rt)?
+  let r = io.random(rt)?
+  check(
+    match exercise(c, r) {
+      Ok(()) => true,
+      Error(_) => false,
+    }
+  )
+  Ok(())
+}
