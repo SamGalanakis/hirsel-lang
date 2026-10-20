@@ -1,0 +1,95 @@
+// rule: SEM-1
+// expect: run
+// Go time_test.go:1016-1043, invalid UTF-8 omitted (String is UTF-8);
+// seven i64 overflow rows succeed because Duration stores i128 nanoseconds.
+pub fn main(t: Test) -> Result[(), ()] {
+  let invalid: List[String] = [
+    "",
+    "3",
+    "-",
+    "s",
+    ".",
+    "-.",
+    ".s",
+    "+.s",
+    "1d",
+    "�",
+    "� hello � world",
+    "--1s",
+    "1s-2s",
+    "1e3s",
+    " 1s",
+    "1s ",
+    ".s",
+    "0.",
+    "00",
+    "1h0",
+    "1μ",
+    "1µsX"
+  ]
+  for text in invalid {
+    test.equal(t, duration.parse(text), Error(Invalid()))
+  }
+  test.equal(
+    t,
+    duration.parse("9223372036854775810ns"),
+    Ok(time.Duration(nanoseconds: 9223372036854775810i128))
+  )
+  test.equal(
+    t,
+    duration.parse("9223372036854775808ns"),
+    Ok(time.Duration(nanoseconds: 9223372036854775808i128))
+  )
+  test.equal(
+    t,
+    duration.parse("-9223372036854775809ns"),
+    Ok(time.Duration(nanoseconds: -9223372036854775809i128))
+  )
+  test.equal(
+    t,
+    duration.parse("9223372036854776us"),
+    Ok(time.Duration(nanoseconds: 9223372036854776000i128))
+  )
+  test.equal(
+    t,
+    duration.parse("3000000h"),
+    Ok(time.Duration(nanoseconds: 10800000000000000000i128))
+  )
+  test.equal(
+    t,
+    duration.parse("9223372036854775.808us"),
+    Ok(time.Duration(nanoseconds: 9223372036854775808i128))
+  )
+  test.equal(
+    t,
+    duration.parse("9223372036854ms775us808ns"),
+    Ok(time.Duration(nanoseconds: 9223372036854775808i128))
+  )
+  test.equal(
+    t,
+    duration.parse("170141183460469231731687303715884105728ns"),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    duration.parse("-170141183460469231731687303715884105729ns"),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    duration.parse("170141183460469231731687303715884105727ns1ns"),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    duration.parse("-170141183460469231731687303715884105728ns1ns"),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    duration.parse("47261439850130342147690918h251884105728ns"),
+    Error(OutOfRange())
+  )
+  test.equal(t, duration.parse("0.9ns0.9ns"), Ok(time.Duration(nanoseconds: 0)))
+  Ok(())
+}

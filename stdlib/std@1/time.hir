@@ -57,8 +57,27 @@ fn read_digits(bytes: Bytes, begin: u64, count: u64) -> Result[i128, scalar.Pars
   Ok(value)
 }
 
-// Contract-specific RFC3339 scanner; neither Zig epoch nor Rust std exposes one.
-// Date validation and day counts are the civil helpers of time_civil.hir.
+// jiff temporal/parser.rs:813-827 and strtime/parse.rs:497-513.
+@noalloc
+fn parse_second(second: i128) -> Result[i128, scalar.ParseError] uses {} {
+  if second > 60 {
+    return Error(Invalid())
+  }
+  Ok(
+    if second == 60 {
+      59
+    } else {
+      second
+    }
+  )
+}
+
+// RFC 3339 subset of jiff crates/jiff/src/fmt/temporal/parser.rs:524-623,
+// 768-838, commit fff640d47f72ca6d3a122678315bbd76488306fe (MIT;
+// third-party/NOTICES.md): date, bounded clock components, fraction, offset.
+// Require extended date/time, T/t, seconds and Z/z or ±HH:MM; omit Temporal's
+// basic dates, expanded years, incomplete clocks, comma and zone annotations.
+// Leap second 60 clamps to 59, shared with the strtime parser.
 @noalloc
 pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
@@ -74,8 +93,8 @@ pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   let day = read_digits(bytes, 8, 2)?
   let hour = read_digits(bytes, 11, 2)?
   let minute = read_digits(bytes, 14, 2)?
-  let second = read_digits(bytes, 17, 2)?
-  if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+  let second = parse_second(read_digits(bytes, 17, 2)?)?
+  if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 {
     return Error(Invalid())
   }
   let civil_year: i32 = core@1/int.narrow(year)

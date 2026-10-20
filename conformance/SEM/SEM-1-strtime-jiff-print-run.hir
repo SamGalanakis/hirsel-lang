@@ -1,0 +1,380 @@
+// rule: SEM-1
+// expect: run
+// All printer snapshot rows using the 12 unmodified supported directives.
+// Date-only, clock-only and offset-only values receive the other civil fields.
+// jiff fff640d47f72ca6d3a122678315bbd76488306fe (MIT).
+pub fn main(t: Test) -> Result[(), ()] {
+  // jiff strtime/printer.rs:1153.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-09T00:00:00")),
+        offset: None()
+      ),
+      "%d"
+    ),
+    Ok("09")
+  )
+  // jiff strtime/printer.rs:1178.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T09:00:00.000000000")),
+        offset: None()
+      ),
+      "%H"
+    ),
+    Ok("09")
+  )
+  // jiff strtime/printer.rs:1179.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T11:00:00.000000000")),
+        offset: None()
+      ),
+      "%H"
+    ),
+    Ok("11")
+  )
+  // jiff strtime/printer.rs:1180.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T23:00:00.000000000")),
+        offset: None()
+      ),
+      "%H"
+    ),
+    Ok("23")
+  )
+  // jiff strtime/printer.rs:1181.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00.000000000")),
+        offset: None()
+      ),
+      "%H"
+    ),
+    Ok("00")
+  )
+  // jiff strtime/printer.rs:1203.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:09:00.000000000")),
+        offset: None()
+      ),
+      "%M"
+    ),
+    Ok("09")
+  )
+  // jiff strtime/printer.rs:1204.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:11:00.000000000")),
+        offset: None()
+      ),
+      "%M"
+    ),
+    Ok("11")
+  )
+  // jiff strtime/printer.rs:1205.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:23:00.000000000")),
+        offset: None()
+      ),
+      "%M"
+    ),
+    Ok("23")
+  )
+  // jiff strtime/printer.rs:1206.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00.000000000")),
+        offset: None()
+      ),
+      "%M"
+    ),
+    Ok("00")
+  )
+  // jiff strtime/printer.rs:1213.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%m"
+    ),
+    Ok("07")
+  )
+  // jiff strtime/printer.rs:1214.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-12-14T00:00:00")),
+        offset: None()
+      ),
+      "%m"
+    ),
+    Ok("12")
+  )
+  // jiff strtime/printer.rs:1228.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%b"
+    ),
+    Ok("Jul")
+  )
+  // jiff strtime/printer.rs:1247.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(-14400)
+      ),
+      "%z"
+    ),
+    Ok("-0400")
+  )
+  // jiff strtime/printer.rs:1251.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(-18000)
+      ),
+      "%z"
+    ),
+    Ok("-0500")
+  )
+  // jiff strtime/printer.rs:1264.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(0)
+      ),
+      "%z"
+    ),
+    Ok("+0000")
+  )
+  // jiff strtime/printer.rs:1269.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(-14400)
+      ),
+      "%z"
+    ),
+    Ok("-0400")
+  )
+  // jiff strtime/printer.rs:1274.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(19800)
+      ),
+      "%z"
+    ),
+    Ok("+0530")
+  )
+  // jiff strtime/printer.rs:1279.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(19815)
+      ),
+      "%z"
+    ),
+    Ok("+053015")
+  )
+  // jiff strtime/printer.rs:1284.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(18015)
+      ),
+      "%z"
+    ),
+    Ok("+050015")
+  )
+  // jiff strtime/printer.rs:1294.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:09.000000000")),
+        offset: None()
+      ),
+      "%S"
+    ),
+    Ok("09")
+  )
+  // jiff strtime/printer.rs:1295.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:11.000000000")),
+        offset: None()
+      ),
+      "%S"
+    ),
+    Ok("11")
+  )
+  // jiff strtime/printer.rs:1296.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:23.000000000")),
+        offset: None()
+      ),
+      "%S"
+    ),
+    Ok("23")
+  )
+  // jiff strtime/printer.rs:1297.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00.000000000")),
+        offset: None()
+      ),
+      "%S"
+    ),
+    Ok("00")
+  )
+  // jiff strtime/printer.rs:1305.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00.123000000")),
+        offset: None()
+      ),
+      "%f"
+    ),
+    Ok("123")
+  )
+  // jiff strtime/printer.rs:1306.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00.000000000")),
+        offset: None()
+      ),
+      "%f"
+    ),
+    Ok("0")
+  )
+  // jiff strtime/printer.rs:1396.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%a"
+    ),
+    Ok("Sun")
+  )
+  // jiff strtime/printer.rs:1409.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%Y"
+    ),
+    Ok("2024")
+  )
+  // jiff strtime/printer.rs:1410.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("0024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%Y"
+    ),
+    Ok("0024")
+  )
+  // jiff strtime/printer.rs:1411.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("-000024-07-14T00:00:00")),
+        offset: None()
+      ),
+      "%Y"
+    ),
+    Ok("-024")
+  )
+  // jiff strtime/printer.rs:1438.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("-002025-01-13T00:00:00")),
+        offset: None()
+      ),
+      "%Y"
+    ),
+    Ok("-2025")
+  )
+  // jiff strtime/printer.rs:1439.
+  test.equal(
+    t,
+    time.format(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("-000025-01-13T00:00:00")),
+        offset: None()
+      ),
+      "%Y"
+    ),
+    Ok("-025")
+  )
+  Ok(())
+}

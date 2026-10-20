@@ -4529,6 +4529,8 @@ conformance/SEM/SEM-1-division-both-negative.hir
 conformance/SEM/SEM-1-division-negative-dividend.hir
 conformance/SEM/SEM-1-division-negative-divisor.hir
 conformance/SEM/SEM-1-division-positive.hir
+conformance/SEM/SEM-1-duration-go-errors-run.hir
+conformance/SEM/SEM-1-duration-go-run.hir
 conformance/SEM/SEM-1-exact-division-fail.hir
 conformance/SEM/SEM-1-exact-division-ok.hir
 conformance/SEM/SEM-1-float-from-int-input-bad.hir
@@ -4668,10 +4670,13 @@ conformance/SEM/SEM-1-std-integer-u8-policy-edges-1-run.hir
 conformance/SEM/SEM-1-std-integer-u8-policy-edges-2-run.hir
 conformance/SEM/SEM-1-std-integer-u8-policy-edges-3-run.hir
 conformance/SEM/SEM-1-std-integer-wide-products-run.hir
+conformance/SEM/SEM-1-strtime-jiff-parse-run.hir
+conformance/SEM/SEM-1-strtime-jiff-print-run.hir
 conformance/SEM/SEM-1-time-civil-text-run.hir
 conformance/SEM/SEM-1-time-date-arithmetic-run.hir
 conformance/SEM/SEM-1-time-date-calendar-run.hir
 conformance/SEM/SEM-1-time-date-roundtrip-run.hir
+conformance/SEM/SEM-1-time-jiff-temporal-run.hir
 conformance/SEM/SEM-1-time-offset-run.hir
 conformance/SEM/SEM-1-time-strftime-run.hir
 conformance/SEM/SEM-1-time-zone-dublin-run.hir

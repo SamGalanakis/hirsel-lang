@@ -1,0 +1,336 @@
+// rule: SEM-1
+// expect: run
+// All snapshot rows using only %Y %m %d %H %M %S %f %z %a %b %j %%.
+// Partial clocks/offsets are given a complete date: Hirsel returns DateTime.
+// jiff fff640d47f72ca6d3a122678315bbd76488306fe (MIT).
+pub fn main(t: Test) -> Result[(), ()] {
+  // jiff strtime/parse.rs:1234 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("1/1/0099", "%m/%d/%Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("0099-01-01T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1238 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("1/1/1999", "%m/%d/%Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("1999-01-01T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1242 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("12/31/9999", "%m/%d/%Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("9999-12-31T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1246 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("01/01/-9999", "%m/%d/%Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("-009999-01-01T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1250 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("sun 7/14/2024", "%a %m/%d/%Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1258 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("Jul 14 2024", "%b %d %Y"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1271 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("20240730", "%Y%m%d"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-30T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1275 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("09990730", "%Y%m%d"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("0999-07-30T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1279 (ok_parse_date).
+  test.equal(
+    t,
+    time.parse_with("9990111", "%Y%m%d"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("9990-11-01T00:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1378 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48", "%Y-%m-%d %H:%M"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1382 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48:59", "%Y-%m-%d %H:%M:%S"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:59")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1386 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48:60", "%Y-%m-%d %H:%M:%S"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:59")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1457 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48:01.1", "%Y-%m-%d %H:%M:%S.%f"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:01.1")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1483 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 09", "%Y-%m-%d %H"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T09:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1487 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14  9", "%Y-%m-%d %H"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T09:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1491 (ok_parse_time).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15", "%Y-%m-%d %H"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:00:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1535 (ok_parse_whitespace).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 1548", "%Y-%m-%d %H%M"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1539 (ok_parse_whitespace).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15\n48", "%Y-%m-%d %H%M"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1543 (ok_parse_whitespace).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15\t48", "%Y-%m-%d %H%M"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T15:48:00")),
+        offset: None()
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1582 (ok_parse_offset).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 +0530", "%Y-%m-%d %z"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(19800)
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1586 (ok_parse_offset).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 -0530", "%Y-%m-%d %z"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(-19800)
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1590 (ok_parse_offset).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 -0500", "%Y-%m-%d %z"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(-18000)
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1594 (ok_parse_offset).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 +053015", "%Y-%m-%d %z"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(19815)
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1598 (ok_parse_offset).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 +050015", "%Y-%m-%d %z"),
+    Ok(
+      time.BrokenDownTime(
+        datetime: test.expect_ok(t, date_time.parse("2024-07-14T00:00:00")),
+        offset: Some(18015)
+      )
+    )
+  )
+  // jiff strtime/parse.rs:1691 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 ", "%Y-%m-%d %M"), Error(Invalid()))
+  // jiff strtime/parse.rs:1695 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 a", "%Y-%m-%d %M"), Error(Invalid()))
+  // jiff strtime/parse.rs:1699 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 15", "%Y-%m-%d %M%S"), Error(Invalid()))
+  // jiff strtime/parse.rs:1703 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 Sun", "%Y-%m-%d %M%a"), Error(Invalid()))
+  // jiff strtime/parse.rs:1712 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 -10000", "%Y-%m-%d %Y"), Error(Invalid()))
+  // jiff strtime/parse.rs:1716 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 10000", "%Y-%m-%d %Y"), Error(Invalid()))
+  // jiff strtime/parse.rs:1724 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 Bad", "%Y-%m-%d %b"), Error(Invalid()))
+  // jiff strtime/parse.rs:1736 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 24", "%Y-%m-%d %H"), Error(Invalid()))
+  // jiff strtime/parse.rs:1740 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 60", "%Y-%m-%d %M"), Error(Invalid()))
+  // jiff strtime/parse.rs:1744 (err_parse).
+  test.equal(t, time.parse_with("2024-07-14 61", "%Y-%m-%d %S"), Error(Invalid()))
+  // jiff strtime/parse.rs:1817 (err_parse).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:59:01.", "%Y-%m-%d %H:%M:%S.%f"),
+    Error(Invalid())
+  )
+  // jiff strtime/parse.rs:1821 (err_parse).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:59:01", "%Y-%m-%d %H:%M:%S.%f"),
+    Error(Invalid())
+  )
+  // jiff strtime/parse.rs:1825 (err_parse).
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:59:01.a", "%Y-%m-%d %H:%M:%S.%f"),
+    Error(Invalid())
+  )
+  // jiff strtime/parse.rs:1912 (err_parse_date).
+  test.equal(t, time.parse_with("2024", "%Y"), Error(Invalid()))
+  // jiff strtime/parse.rs:1916 (err_parse_date).
+  test.equal(t, time.parse_with("7", "%m"), Error(Invalid()))
+  // jiff strtime/parse.rs:1920 (err_parse_date).
+  test.equal(t, time.parse_with("25", "%d"), Error(Invalid()))
+  // jiff strtime/parse.rs:1924 (err_parse_date).
+  test.equal(t, time.parse_with("2024-7", "%Y-%m"), Error(Invalid()))
+  // jiff strtime/parse.rs:1928 (err_parse_date).
+  test.equal(t, time.parse_with("2024-25", "%Y-%d"), Error(Invalid()))
+  // jiff strtime/parse.rs:1932 (err_parse_date).
+  test.equal(t, time.parse_with("7-25", "%m-%d"), Error(Invalid()))
+  // jiff strtime/parse.rs:1974 (err_parse_time).
+  test.equal(t, time.parse_with("2024-07-14 59", "%Y-%m-%d %M"), Error(Invalid()))
+  // jiff strtime/parse.rs:1978 (err_parse_time).
+  test.equal(t, time.parse_with("2024-07-14 59", "%Y-%m-%d %S"), Error(Invalid()))
+  // jiff strtime/parse.rs:1982 (err_parse_time).
+  test.equal(t, time.parse_with("2024-07-14 59:59", "%Y-%m-%d %M:%S"), Error(Invalid()))
+  // jiff strtime/parse.rs:1986 (err_parse_time).
+  test.equal(t, time.parse_with("2024-07-14 15:59", "%Y-%m-%d %H:%S"), Error(Invalid()))
+  // jiff strtime/parse.rs:2000 (err_parse_offset).
+  test.equal(t, time.parse_with("2024-07-14 +05:30", "%Y-%m-%d %z"), Error(Invalid()))
+  // jiff strtime/parse.rs:2017 (err_parse_offset).
+  test.equal(t, time.parse_with("2024-07-14 +05", "%Y-%m-%d %z"), Error(Invalid()))
+  // jiff strtime/parse.rs:2038 (err_parse_offset).
+  test.equal(t, time.parse_with("2024-07-14 +0530:15", "%Y-%m-%d %z"), Error(Invalid()))
+  Ok(())
+}

@@ -141,8 +141,8 @@ fn rfc3339_matches_independent_gregorian_and_offset_vectors() {
                 "match std@1/time.parse(\"{text}\") {{ Ok(value) => core@1/test.check(t, value.unix_nanoseconds == {nanos}i128), Error(_) => core@1/test.check(t, false) }}\n"
             );
         }
-        // Even an actual UTC leap-second date rejects 60 under Hirsel's contract.
-        source += "match std@1/time.parse(\"2016-12-31T23:59:60Z\") { Error(Invalid()) => (), _ => core@1/test.check(t, false) }\n";
+        // Temporal and strtime both clamp a leap second to the previous second.
+        source += "core@1/test.check(t, std@1/time.parse(\"2016-12-31T23:59:60Z\") == std@1/time.parse(\"2016-12-31T23:59:59Z\"))\n";
         let previous_second = unix_days(2016, 12, 31) * 86_400_000_000_000 + 86_399_000_000_000;
         source += &format!(
             "match std@1/time.parse(\"2016-12-31T23:59:59Z\") {{ Ok(value) => core@1/test.check(t, value.unix_nanoseconds == {previous_second}i128), Error(_) => core@1/test.check(t, false) }}\n"

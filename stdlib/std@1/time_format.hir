@@ -154,12 +154,17 @@ fn scan_number(bytes: Bytes, start: u64, most: u64) -> Result[
   let len = core@1/bytes.len(bytes)
   let mut value: i128 = 0
   let mut i = start
-  while i < len && i - start < most && bytes[i] >= b'0' && bytes[i] <= b'9' {
+  // jiff strtime/parse.rs:881-884 ignores numeric padding whitespace.
+  while i < len && ascii.is_space(bytes[i]) && bytes[i] != 11 {
+    i += 1
+  }
+  let begin = i
+  while i < len && i - begin < most && bytes[i] >= b'0' && bytes[i] <= b'9' {
     let digit: i128 = core@1/int.widen(bytes[i] - b'0')
     value = value * 10 + digit
     i += 1
   }
-  if i == start {
+  if i == begin {
     return Error(Invalid())
   }
   Ok((value, i))
@@ -199,7 +204,9 @@ fn small(value: Option[i128]) -> u8 uses {} {
   }
 }
 
-// Reads `text` by `pattern`. Literal bytes match exactly; %Y takes an optional
+// Reads `text` by `pattern`. Literal ASCII whitespace matches zero or more
+// input whitespace bytes (jiff strtime/parse.rs:201-220); other literals match
+// exactly. %Y takes an optional
 // sign and up to four digits, %m %d %H %M %S up to two, %j up to three, %f one
 // to nine, %z is ±HHMM[SS], %a and %b are English abbreviations in any case.
 // A second of 60 reads as 59.
@@ -227,6 +234,13 @@ pub fn parse_with(text: String, pattern: String) -> Result[
   let mut at: u64 = 0
   while i < spec_len {
     let byte = spec[i]
+    if ascii.is_space(byte) && byte != 11 {
+      while at < input_len && ascii.is_space(input[at]) && input[at] != 11 {
+        at += 1
+      }
+      i += 1
+      continue
+    }
     if byte != b'%' || i + 1 < spec_len && spec[i + 1] == b'%' {
       if at >= input_len || input[at] != byte {
         return Error(Invalid())
@@ -289,6 +303,9 @@ pub fn parse_with(text: String, pattern: String) -> Result[
         at = next
       },
       b'f' => {
+        if at < input_len && ascii.is_space(input[at]) {
+          return Error(Invalid())
+        }
         let (number, next) = scan_number(input, at, 9)?
         let mut scaled = number
         let mut digits = next - at
@@ -389,15 +406,12 @@ pub fn parse_with(text: String, pattern: String) -> Result[
   if minute != None() && hour == None() || second != None() && minute == None() || fraction != None() && second == None() {
     return Error(Invalid())
   }
-  // A leap second 60 reads as 59, as jiff's strtime parser does.
-  if small(hour) > 23 || small(minute) > 59 || small(second) > 60 {
+  if small(hour) > 23 || small(minute) > 59 {
     return Error(Invalid())
   }
-  let whole_second: u8 = if small(second) == 60 {
-    59
-  } else {
-    small(second)
-  }
+  let whole_second: u8 = core@1/int.narrow(
+    parse_second(core@1/int.widen(small(second)))?
+  )
   let nanosecond: u32 = match fraction {
     Some(n) => core@1/int.narrow(n),
     None() => 0,

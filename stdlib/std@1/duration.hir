@@ -7,8 +7,96 @@ pub fn from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {} {
   time.Duration(nanoseconds: wide_seconds * 1000000000 + wide_nanos)
 }
 
-// Contract-specific parser: neither referenced Zig nor Rust std has signed seconds-text parsing.
-// Accumulate unsigned magnitude with a prechecked bound; MIN is one larger.
+// Port of Go src/time/format.go:1555-1731 (leadingInt, leadingFraction,
+// unitMap, ParseDuration), commit 7f86f957633ee31a1c17a1eb8452ca7a3d9bc141.
+// Copyright The Go Authors; BSD-3-Clause (third-party/NOTICES.md).
+// Hirsel retains signed i128 nanoseconds and typed Invalid/OutOfRange errors.
+// Go's fractional conversion is a nonnegative f64 -> integer truncation. The
+// only core float-to-int primitive returns i32, so decode its IEEE significand;
+// the value is finite and at most one hour (3.6e12 nanoseconds).
+@noalloc
+fn fractional_nanos(fraction: u64, scale: f64, unit: u128) -> u128 uses {} {
+  let f: f64 = core@1/float.from_int(fraction)
+  let u: f64 = core@1/float.from_int(unit)
+  let bits = core@1/f64.bits(f * (u / scale))
+  let exponent = bits >> 52 & 2047u64
+  if exponent < 1023 {
+    return 0
+  }
+  let significand: u128 = core@1/int.widen(
+    bits & 4503599627370495u64 | 4503599627370496u64
+  )
+  let shift: u128 = core@1/int.widen(1075u64 - exponent)
+  significand >> shift
+}
+
+@noalloc
+fn leading_int(bytes: Bytes, start: u64, limit: u128) -> Result[
+  (u128, u64),
+  scalar.ParseError
+] uses {} {
+  let mut i = start
+  let mut whole: u128 = 0
+  while i < core@1/bytes.len(bytes) && ascii.is_digit(bytes[i]) {
+    let digit: u128 = core@1/int.widen(bytes[i] - b'0')
+    if whole > limit / 10 || whole == limit / 10 && digit > limit % 10 {
+      return Error(OutOfRange())
+    }
+    whole = whole * 10 + digit
+    i += 1
+  }
+  Ok((whole, i))
+}
+
+@noalloc
+fn leading_fraction(bytes: Bytes, start: u64) -> (u64, f64, u64) uses {} {
+  let mut i = start
+  let mut fraction: u64 = 0
+  let mut scale: f64 = 1.0
+  let mut full = false
+  while i < core@1/bytes.len(bytes) && ascii.is_digit(bytes[i]) {
+    let digit: u64 = core@1/int.widen(bytes[i] - b'0')
+    if !full {
+      if fraction > 922337203685477580u64 || fraction * 10 + digit > 9223372036854775808u64 {
+        full = true
+      } else {
+        fraction = fraction * 10 + digit
+        scale *= 10.0
+      }
+    }
+    i += 1
+  }
+  (fraction, scale, i)
+}
+
+@noalloc
+fn duration_unit(bytes: Bytes, start: u64) -> Result[(u128, u64), scalar.ParseError] uses {} {
+  let mut i = start
+  while i < core@1/bytes.len(bytes) && bytes[i] != b'.' && !ascii.is_digit(bytes[i]) {
+    i += 1
+  }
+  let spelling = core@1/bytes.slice(bytes, start, i)
+  let unit: u128 = if spelling == b"ns" {
+    1
+  } else if spelling == b"us" || spelling == b"\xc2\xb5s" || spelling == b"\xce\xbcs" {
+    1000
+  } else if spelling == b"ms" {
+    1000000
+  } else if spelling == b"s" {
+    1000000000
+  } else if spelling == b"m" {
+    60000000000
+  } else if spelling == b"h" {
+    3600000000000
+  } else {
+    return Error(Invalid())
+  }
+  Ok((unit, i))
+}
+
+// A sign followed by one or more decimal+unit components; bare signed zero
+// is special. Fractions may omit digits on either side of the decimal point,
+// but must contain at least one digit. Units are ns, us, µs, μs, ms, s, m, h.
 @noalloc
 pub fn parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
@@ -16,61 +104,48 @@ pub fn parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {} {
   if len == 0 {
     return Error(Invalid())
   }
-  let negative = bytes[0] == 45
-  let mut i: u64 = if negative || bytes[0] == 43 {
+  let negative = bytes[0] == b'-'
+  let mut i: u64 = if negative || bytes[0] == b'+' {
     1
   } else {
     0
   }
-  let begin = i
-  let mut seconds: u128 = 0
-  let mut overflow: bool = false
-  let bound = 170141183460469231731687303715u128
-  while i < len && bytes[i] >= 48 && bytes[i] <= 57 {
-    let digit: u128 = core@1/int.widen(bytes[i] - 48)
-    if seconds > bound / 10 || seconds == bound / 10 && digit > bound % 10 {
-      overflow = true
-    } else if !overflow {
-      seconds = seconds * 10 + digit
-    }
-    i += 1
+  if len - i == 1 && bytes[i] == b'0' {
+    return Ok(time.Duration(nanoseconds: 0))
   }
-  if i == begin {
+  if i == len {
     return Error(Invalid())
-  }
-  let mut fraction: u128 = 0
-  let mut digits: u64 = 0
-  if i < len && bytes[i] == 46 {
-    i += 1
-    while i < len && bytes[i] >= 48 && bytes[i] <= 57 {
-      if digits == 9 {
-        return Error(Invalid())
-      }
-      let digit: u128 = core@1/int.widen(bytes[i] - 48)
-      fraction = fraction * 10 + digit
-      digits += 1
-      i += 1
-    }
-    if digits == 0 {
-      return Error(Invalid())
-    }
-  }
-  if i >= len || bytes[i] != 115 || i + 1 != len {
-    return Error(Invalid())
-  }
-  while digits < 9 {
-    fraction *= 10
-    digits += 1
   }
   let limit = if negative {
     170141183460469231731687303715884105728u128
   } else {
     170141183460469231731687303715884105727u128
   }
-  if overflow || seconds == bound && fraction > limit % 1000000000 {
-    return Error(OutOfRange())
+  let mut magnitude: u128 = 0
+  while i < len {
+    let (whole, end) = leading_int(bytes, i, limit)?
+    let pre = end != i
+    i = end
+    let (fraction, scale, next) = if i < len && bytes[i] == b'.' {
+      leading_fraction(bytes, i + 1)
+    } else {
+      (0u64, 1.0f64, i)
+    }
+    if !pre && (next == i || next == i + 1) {
+      return Error(Invalid())
+    }
+    let (unit, last) = duration_unit(bytes, next)?
+    if whole > (limit - magnitude) / unit {
+      return Error(OutOfRange())
+    }
+    magnitude += whole * unit
+    let nanos = fractional_nanos(fraction, scale, unit)
+    if nanos > limit - magnitude {
+      return Error(OutOfRange())
+    }
+    magnitude += nanos
+    i = last
   }
-  let magnitude = seconds * 1000000000 + fraction
   let raw = if negative {
     core@1/int.wrapping_add(~magnitude, 1)
   } else {

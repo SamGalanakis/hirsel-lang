@@ -1,0 +1,205 @@
+// rule: SEM-1
+// expect: run
+// jiff temporal/parser.rs RFC3339-applicable date/clock/datetime snapshots.
+// Partial components receive a fixed date/time and Z. Non-RFC3339 forms
+// are rejection checks; bare-time ambiguity tests have no timestamp analogue.
+// Commit fff640d47f72ca6d3a122678315bbd76488306fe (MIT).
+pub fn main(t: Test) -> Result[(), ()] {
+  // jiff temporal/parser.rs:1544 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1559 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01[America/New_York]Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1579 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723000000000i128))
+  )
+  // jiff temporal/parser.rs:1599 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:03-05Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1625 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03-05[America/New_York]Z"),
+    Error(Invalid())
+  )
+  // jiff temporal/parser.rs:1656 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:03Z[America/New_York]Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1685 (ok_temporal_datetime_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03-01[America/New_York]Z"),
+    Error(Invalid())
+  )
+  // jiff temporal/parser.rs:1724 (ok_temporal_datetime_incomplete), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1744 (ok_temporal_datetime_incomplete), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T0102Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1764 (ok_temporal_datetime_incomplete), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:1792 (ok_temporal_datetime_separator), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01t01:02:03Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723000000000i128))
+  )
+  // jiff temporal/parser.rs:1812 (ok_temporal_datetime_separator), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01 01:02:03Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2028 (ok_date_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2010-03-14T00:00:00Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1268524800000000000i128))
+  )
+  // jiff temporal/parser.rs:2036 (ok_date_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("20100314T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2044 (ok_date_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2010-03-14T01:02:03Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1268528523000000000i128))
+  )
+  // jiff temporal/parser.rs:2052 (ok_date_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("-009999-03-14T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2060 (ok_date_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("+009999-03-14T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2073 (err_date_empty), RFC3339 wrapper.
+  test.equal(t, time.parse("T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2081 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("123T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2085 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("123aT00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2090 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("-9999T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2094 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("+9999T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2098 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("-99999T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2102 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("+99999T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2106 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("-99999aT00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2110 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("+999999T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2114 (err_date_year), RFC3339 wrapper.
+  test.equal(t, time.parse("-010000T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2122 (err_date_month), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2126 (err_date_month), RFC3339 wrapper.
+  test.equal(t, time.parse("2024T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2130 (err_date_month), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-13-01T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2134 (err_date_month), RFC3339 wrapper.
+  test.equal(t, time.parse("20241301T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2142 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-12-T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2146 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("202412T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2150 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-12-40T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2154 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-11-31T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2158 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-02-30T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2162 (err_date_day), RFC3339 wrapper.
+  test.equal(t, time.parse("2023-02-29T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2170 (err_date_separator), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-1231T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2174 (err_date_separator), RFC3339 wrapper.
+  test.equal(t, time.parse("202412-31T00:00:00Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2183 (ok_time_basic), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723000000000i128))
+  )
+  // jiff temporal/parser.rs:2192 (ok_time_basic), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T010203Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2207 (ok_time_fractional), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03.123456789Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723123456789i128))
+  )
+  // jiff temporal/parser.rs:2216 (ok_time_fractional), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T010203.123456789Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2226 (ok_time_fractional), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03.9Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723900000000i128))
+  )
+  // jiff temporal/parser.rs:2241 (ok_time_no_fractional), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02.123456789Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2256 (ok_time_leap), RFC3339 wrapper.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:60Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203779000000000i128))
+  )
+  // jiff temporal/parser.rs:2271 (ok_time_mixed_format), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:0203Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2280 (ok_time_mixed_format), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T0102:03Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2294 (err_time_empty), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01TZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2302 (err_time_hour), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01TaZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2306 (err_time_hour), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T1aZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2310 (err_time_hour), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T24Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2318 (err_time_minute), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2322 (err_time_minute), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:aZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2326 (err_time_minute), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:1aZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2330 (err_time_minute), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:60Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2338 (err_time_second), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2342 (err_time_second), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:aZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2346 (err_time_second), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:1aZ"), Error(Invalid()))
+  // jiff temporal/parser.rs:2350 (err_time_second), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:61Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2358 (err_time_fractional), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:03.Z"), Error(Invalid()))
+  // jiff temporal/parser.rs:2362 (err_time_fractional), RFC3339 wrapper.
+  test.equal(t, time.parse("2024-06-01T01:02:03.aZ"), Error(Invalid()))
+  // jiff fmt/offset.rs:672-691,903-927.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03Z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723000000000i128))
+  )
+  // jiff fmt/offset.rs:672-691,903-927.
+  test.equal(
+    t,
+    time.parse("2024-06-01T01:02:03z"),
+    Ok(time.Timestamp(unix_nanoseconds: 1717203723000000000i128))
+  )
+  // jiff fmt/offset.rs:672-691,903-927.
+  test.equal(t, time.parse("2024-06-01T01:02:03+05:a"), Error(Invalid()))
+  // jiff fmt/offset.rs:672-691,903-927.
+  test.equal(t, time.parse("2024-06-01T01:02:03+05:ab"), Error(Invalid()))
+  // jiff fmt/offset.rs:672-691,903-927.
+  test.equal(t, time.parse("2024-06-01T01:02:03-05:60"), Error(Invalid()))
+  test.equal(t, time.parse("2016-12-31T23:59:60Z"), time.parse("2016-12-31T23:59:59Z"))
+  let leap = test.expect_ok(t, time.parse("2016-12-31T23:59:60.123456789Z"))
+  test.equal(t, time.to_string(leap), Ok("2016-12-31T23:59:59.123456789Z"))
+  let parts = test.expect_ok(
+    t,
+    time.parse_with("2016-12-31T23:59:60.123456789+0000", "%Y-%m-%dT%H:%M:%S.%f%z")
+  )
+  test.equal(t, test.expect_ok(t, date_time.to_timestamp(parts.datetime, 0)), leap)
+  test.equal(
+    t,
+    time.parse("2017-01-01T00:59:60+01:00"),
+    time.parse("2016-12-31T23:59:59Z")
+  )
+  test.equal(t, time.parse("2000-01-01T00:00:61Z"), Error(Invalid()))
+  Ok(())
+}
