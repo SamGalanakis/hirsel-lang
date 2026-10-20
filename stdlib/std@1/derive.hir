@@ -1344,6 +1344,20 @@ fn json_into_of(mut w: Writer, ty: String, read: String, depth: String) -> Resul
   Error(f"no JSON form for {ty}")
 }
 
+// Go encoding/json/encode.go:1180-1183 caches quoted field names and
+// :733-739 appends them in one write (ebe2feefc400f813aefdc8a036e66d2619da6649).
+// Do that at comptime: encode JSON text, then encode that as a source string.
+// Field/type names are identifiers; JSON quote/backslash escapes also spell
+// Hirsel source literals. UTF-8 identifiers are copied unchanged.
+fn json_static(mut w: Writer, value: String, suffix: String) -> () uses {} {
+  let mut encoded: List[u8] = []
+  json.write_text_into(value, mut encoded)
+  text.append(mut encoded, suffix)
+  let mut source: List[u8] = []
+  json.write_text_into(text.finish_valid(take encoded), mut source)
+  put(mut w, f"std@1/text.append(mut out, {text.finish_valid(take source)})\n")
+}
+
 /// Write the same compact JSON as json_value followed by stringify_into,
 /// directly from a record or choice. Nested nominal types supply their own
 /// `<snake_name>_json_into` writer. Pass depth 0 at the root.
@@ -1366,10 +1380,7 @@ pub fn json_into[T](s: TypeShape[T]) -> Result[
           literal(mut w, "", "out", ",")
         }
         first = false
-        put(
-          mut w,
-          f"std@1/json.write_text_into(\"{f.name}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
-        )
+        json_static(mut w, f.name, ":")
         json_into_of(mut w, f.ty, f"value.{f.name}", "(depth + 1)")?
       }
       literal(mut w, "", "out", "}")
@@ -1381,12 +1392,13 @@ pub fn json_into[T](s: TypeShape[T]) -> Result[
         let names = binders("p", list.len(v.payload))
         put(mut w, f"{variant_form(v, names)} => {{\n")
         if kind == "unit" {
-          put(mut w, f"std@1/json.write_text_into(\"{v.name}\", mut out)\n")
+          json_static(mut w, v.name, "")
         } else {
           put(
             mut w,
-            f"std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{{\")\nstd@1/json.write_text_into(\"{v.name}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
+            "std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{\")\n"
           )
+          json_static(mut w, v.name, ":")
           if kind == "newtype" {
             json_into_of(mut w, v.payload[0].ty, names[0], "(depth + 1)")?
           } else {
@@ -1408,10 +1420,7 @@ pub fn json_into[T](s: TypeShape[T]) -> Result[
                 literal(mut w, "", "out", ",")
               }
               if struct_like {
-                put(
-                  mut w,
-                  f"std@1/json.write_text_into(\"{label_of(p)}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
-                )
+                json_static(mut w, label_of(p), ":")
               }
               json_into_of(mut w, p.ty, names[i], "(depth + 2)")?
               i += 1
