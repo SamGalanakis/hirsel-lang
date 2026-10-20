@@ -227,3 +227,25 @@ pub(crate) fn strip_modes(t: &TypeInterner, id: TypeId) -> TypeId {
 pub(crate) fn shape(t: &TypeInterner, id: TypeId) -> TypeId {
     normalize(t, id, |e| &e.shape, shape_row, false)
 }
+/// The receiving-contract normal form: the semantic form without the current
+/// sendability summary of rows whose contract does not state it. A directional
+/// comparison compares exact nested rows in this form, as main's walk did by
+/// giving each such actual row its expected row's summary.
+pub(crate) fn contract(t: &TypeInterner, id: TypeId) -> TypeId {
+    normalize(t, id, |e| &e.contract, contract_row, false)
+}
+fn contract_row(row: &Type) -> Type {
+    let mut row = semantic_row(row);
+    let stated = matches!(
+        row.kind,
+        TypeKind::Function(_)
+            | TypeKind::Builtin {
+                kind: BuiltinType::Iter,
+                ..
+            }
+    ) && row.sendability_requirement != SendabilityRequirement::Sendable;
+    if !stated {
+        row.modes.sendability = Sendability::Sendable;
+    }
+    row
+}

@@ -48,6 +48,7 @@ pub(crate) struct Entry {
     pub(crate) valid: OnceLock<Result<(), GraphError>>,
     pub(crate) strip_modes: OnceLock<TypeId>,
     pub(crate) shape: OnceLock<TypeId>,
+    pub(crate) contract: OnceLock<TypeId>,
     pub(crate) actual_key: OnceLock<Option<Arc<str>>>,
 }
 impl Entry {
@@ -58,6 +59,7 @@ impl Entry {
             valid: OnceLock::new(),
             strip_modes: OnceLock::new(),
             shape: OnceLock::new(),
+            contract: OnceLock::new(),
             actual_key: OnceLock::new(),
         }
     }

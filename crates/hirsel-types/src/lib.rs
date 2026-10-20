@@ -726,9 +726,11 @@ pub use table::*;
 mod actual_key;
 pub use actual_key::*;
 #[cfg(test)]
-mod reference;
+mod pool_tests;
 #[cfg(test)]
 mod prove_tests;
+#[cfg(test)]
+mod reference;
 #[cfg(test)]
 mod test_api;
 #[cfg(test)]

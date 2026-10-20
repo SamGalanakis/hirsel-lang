@@ -696,13 +696,15 @@ impl Variance {
         }
     }
 }
-/// The directional walk behind `ContextMemo::compatible`: the actual graph,
-/// whose root row `actual_root` the root reception rules already adjusted, is
-/// received where `expected` stands. Exact sub-comparisons that no policy can
+/// The directional walk behind `ContextMemo::compatible`: `actual`, whose root
+/// row the root reception rules already adjusted to `actual_root`, is received
+/// where `expected` stands. The adjusted row stands in for `actual`'s own row
+/// at the root pair only; payload membership names `actual`. Exact sub-comparisons that no policy can
 /// weaken are decided by semantic normal forms.
 pub(crate) fn directional_equal(
     t: &TypeInterner,
     expected: TypeId,
+    actual: TypeId,
     actual_root: Type,
     // A nested row of `actual` may carry a brand where `expected` names none.
     forget_brands: bool,
@@ -711,10 +713,11 @@ pub(crate) fn directional_equal(
     // rows may make the stronger promise along `Variance` edges.
     received: bool,
 ) -> Result<bool, GraphError> {
-    let b_root = t.intern(actual_root);
-    // Both complete graphs must be valid even if their roots immediately differ.
+    // Both complete graphs must be valid even if their roots immediately
+    // differ. The adjusted root keeps its row's kind and edges.
     t.validate(expected)?;
-    t.validate(b_root)?;
+    t.validate(actual)?;
+    let b_root = actual;
     let root = if received {
         Variance::Covariant
     } else {
@@ -729,21 +732,25 @@ pub(crate) fn directional_equal(
         }
         let adjusted_root = left == expected && right == b_root;
         if !adjusted_root && variance == Variance::Exact && !view && !forget_brands {
-            // Nothing below can weaken: this is semantic equality.
-            if t.sem(left) != t.sem(right) {
+            // Nothing below can weaken: this is equality of receiving
+            // contracts, current content summaries aside.
+            if crate::normal::contract(t, left) != crate::normal::contract(t, right) {
                 return Ok(false);
             }
             continue;
         }
         let children_view = view && payloads.is_some_and(|ids| ids.contains(&right));
         let left = t.row(left);
-        let right_row = t.row(right);
+        let right_row = if adjusted_root {
+            &actual_root
+        } else {
+            t.row(right)
+        };
         let mut expected_row = crate::normal::semantic_row(left);
         let mut actual = crate::normal::semantic_row(right_row);
         strip_edges(&mut expected_row);
         strip_edges(&mut actual);
-        if adjusted_root
-            && variance == Variance::Exact
+        if variance == Variance::Exact
             && (!matches!(
                 actual.kind,
                 TypeKind::Function(_)

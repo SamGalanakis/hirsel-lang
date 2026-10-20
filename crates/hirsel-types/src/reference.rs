@@ -437,3 +437,156 @@ pub fn compatible_storage_type(
         lookup,
     )
 }
+
+/// Main's two-graph shape walk with holes.
+pub fn shape_equal_with_holes(
+    a: &TypeInterner,
+    a_root: TypeId,
+    b: &TypeInterner,
+    b_root: TypeId,
+    hole: impl Fn(&TypeKind) -> bool,
+) -> Result<bool, GraphError> {
+    fn valid(source: &TypeInterner, root: TypeId) -> Result<(), GraphError> {
+        let mut pending = vec![(root, false)];
+        let mut active = HashSet::new();
+        let mut done = HashSet::new();
+        while let Some((id, exit)) = pending.pop() {
+            if exit {
+                active.remove(&id);
+                done.insert(id);
+                continue;
+            }
+            if done.contains(&id) {
+                continue;
+            }
+            if !active.insert(id) {
+                return Err(GraphError::StructuralCycle(id));
+            }
+            let row = source.get(id).ok_or(GraphError::MissingType(id))?;
+            pending.push((id, true));
+            let mut edge = |t| pending.push((t, false));
+            match &row.kind {
+                TypeKind::Tuple(ts) => ts.iter().copied().for_each(edge),
+                TypeKind::Record(fs) => fs.iter().for_each(|f| edge(f.ty)),
+                TypeKind::Variant(vs) => vs.iter().flat_map(|v| &v.fields).for_each(|f| edge(f.1)),
+                TypeKind::Box(t) => edge(*t),
+                TypeKind::Function(f) => {
+                    f.parameters.iter().for_each(|p| edge(p.ty));
+                    edge(f.result);
+                    if let Some(t) = f.error {
+                        edge(t);
+                    }
+                }
+                TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
+                    for argument in arguments {
+                        if let GenericArgument::Type(t) = argument {
+                            edge(*t);
+                        }
+                    }
+                }
+                TypeKind::Error => return Err(GraphError::RecoveryType(id)),
+                TypeKind::Primitive(_) | TypeKind::Parameter(_) => (),
+            }
+        }
+        Ok(())
+    }
+    fn arguments(
+        a: &[GenericArgument],
+        b: &[GenericArgument],
+        pending: &mut Vec<(TypeId, TypeId)>,
+    ) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(a, b)| match (a, b) {
+                (GenericArgument::Type(a), GenericArgument::Type(b)) => {
+                    pending.push((*a, *b));
+                    true
+                }
+                (GenericArgument::Size(a), GenericArgument::Size(b)) => a == b,
+                _ => false,
+            })
+    }
+    valid(a, a_root)?;
+    valid(b, b_root)?;
+    let mut pending = vec![(a_root, b_root)];
+    let mut seen = HashSet::new();
+    while let Some((a_id, b_id)) = pending.pop() {
+        if !seen.insert((a_id, b_id)) {
+            continue;
+        }
+        let a = &a.get(a_id).ok_or(GraphError::MissingType(a_id))?.kind;
+        let b = &b.get(b_id).ok_or(GraphError::MissingType(b_id))?.kind;
+        if hole(a) || hole(b) {
+            continue;
+        }
+        let equal = match (a, b) {
+            (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
+            (TypeKind::Parameter(a), TypeKind::Parameter(b)) => a == b,
+            (TypeKind::Tuple(a), TypeKind::Tuple(b)) => {
+                pending.extend(a.iter().copied().zip(b.iter().copied()));
+                a.len() == b.len()
+            }
+            (TypeKind::Box(a), TypeKind::Box(b)) => {
+                pending.push((*a, *b));
+                true
+            }
+            (
+                TypeKind::Named {
+                    definition: a,
+                    arguments: aa,
+                },
+                TypeKind::Named {
+                    definition: b,
+                    arguments: ba,
+                },
+            ) => a == b && arguments(aa, ba, &mut pending),
+            (
+                TypeKind::Builtin {
+                    kind: a,
+                    arguments: aa,
+                },
+                TypeKind::Builtin {
+                    kind: b,
+                    arguments: ba,
+                },
+            ) => a == b && arguments(aa, ba, &mut pending),
+            (TypeKind::Record(a), TypeKind::Record(b)) => {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        pending.push((a.ty, b.ty));
+                        a.name == b.name && a.growable == b.growable
+                    })
+            }
+            (TypeKind::Variant(a), TypeKind::Variant(b)) => {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        a.name == b.name
+                            && a.fields.len() == b.fields.len()
+                            && a.fields.iter().zip(&b.fields).all(|(a, b)| {
+                                pending.push((a.1, b.1));
+                                a.0 == b.0
+                            })
+                    })
+            }
+            (TypeKind::Function(a), TypeKind::Function(b)) => {
+                if a.generics != b.generics || a.parameters.len() != b.parameters.len() {
+                    return Ok(false);
+                }
+                pending.push((a.result, b.result));
+                match (a.error, b.error) {
+                    (Some(a), Some(b)) => pending.push((a, b)),
+                    (None, None) => (),
+                    _ => return Ok(false),
+                }
+                a.parameters.iter().zip(&b.parameters).all(|(a, b)| {
+                    pending.push((a.ty, b.ty));
+                    a.label == b.label && a.passing == b.passing
+                })
+            }
+            _ => false,
+        };
+        if !equal {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}

@@ -20,6 +20,7 @@ pub fn semantic_equal(t: &TypeInterner, a: TypeId, b: TypeId) -> Result<bool, Gr
 }
 
 fn differential(
+    t: &TypeInterner,
     what: &str,
     expected: TypeId,
     actual: TypeId,
@@ -27,10 +28,20 @@ fn differential(
     old: Result<bool, QueryError>,
 ) -> Result<bool, QueryError> {
     assert_eq!(
-        new, old,
-        "ContextMemo::{what} disagrees with main's relation for {expected:?} <- {actual:?}"
+        new,
+        old,
+        "ContextMemo::{what} disagrees with main's relation for {expected:?} <- {actual:?}\n{}",
+        dump(t, &[expected, actual])
     );
     new
+}
+
+/// The rows `roots` reach, one per line.
+fn dump(t: &TypeInterner, roots: &[TypeId]) -> String {
+    closure(t, roots.iter().copied())
+        .iter()
+        .map(|id| format!("{id:?}: {:?}\n", t.row(*id)))
+        .collect()
 }
 
 pub fn compatible_type(
@@ -47,7 +58,7 @@ pub fn compatible_type(
         memo.compatible_type(expected, actual, relation)
     };
     let old = crate::reference::compatible_type(t, expected, actual, relation, generics, lookup);
-    differential("compatible_type", expected, actual, new, old)
+    differential(t, "compatible_type", expected, actual, new, old)
 }
 
 pub fn compatible_handback_type(
@@ -62,7 +73,7 @@ pub fn compatible_handback_type(
         ContextMemo::new(t, generics, &mut f).handback(expected, actual)
     };
     let old = crate::reference::compatible_handback_type(t, expected, actual, generics, lookup);
-    differential("handback", expected, actual, new, old)
+    differential(t, "handback", expected, actual, new, old)
 }
 
 pub fn compatible_view_type_in(
@@ -79,7 +90,7 @@ pub fn compatible_view_type_in(
     };
     let old =
         crate::reference::compatible_view_type_in(t, expected, actual, relation, generics, lookup);
-    differential("view", expected, actual, new, old)
+    differential(t, "view", expected, actual, new, old)
 }
 
 pub fn compatible_storage_type(
@@ -94,7 +105,7 @@ pub fn compatible_storage_type(
         ContextMemo::new(t, generics, &mut f).storage(expected, actual)
     };
     let old = crate::reference::compatible_storage_type(t, expected, actual, generics, lookup);
-    differential("storage", expected, actual, new, old)
+    differential(t, "storage", expected, actual, new, old)
 }
 
 /// Main's `substitute_type_in_place` and `import_type`: transport in one interner.
