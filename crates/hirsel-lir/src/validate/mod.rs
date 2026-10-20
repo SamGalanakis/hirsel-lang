@@ -77,6 +77,83 @@ pub struct Inputs<'a> {
     pub discharge: Option<&'a crate::discharge::Discharge>,
 }
 
+/// Checks and identities shared by units that borrow the same immutable inputs.
+/// No unit or producer analysis is retained: each stage still reconstructs all
+/// of its structural and ownership facts. The borrows prevent a table, target
+/// or manifest mutation while its cached result can be used.
+///
+/// A context is Sync even when a worker's operation declarations are not.
+/// Operations and discharge evidence are always read from that check's Inputs.
+#[derive(Debug)]
+pub struct ValidationContext<'a> {
+    layouts: &'a LayoutTable,
+    target: &'a TargetSpec,
+    manifest: &'a Manifest,
+    layout_digest: std::sync::OnceLock<hirsel_syntax::ContentHash>,
+    manifest_digest: std::sync::OnceLock<hirsel_syntax::ContentHash>,
+    layout_errors: std::sync::OnceLock<Vec<crate::layout_validate::Violation>>,
+}
+
+impl<'a> ValidationContext<'a> {
+    pub fn new(inputs: &Inputs<'a>) -> Self {
+        Self {
+            layouts: inputs.layouts,
+            target: inputs.target,
+            manifest: inputs.manifest,
+            layout_digest: std::sync::OnceLock::new(),
+            manifest_digest: std::sync::OnceLock::new(),
+            layout_errors: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn matches(&self, inputs: &Inputs<'_>) -> bool {
+        std::ptr::eq(self.layouts, inputs.layouts)
+            && std::ptr::eq(self.target, inputs.target)
+            && std::ptr::eq(self.manifest, inputs.manifest)
+    }
+
+    fn layout_digest(&self) -> hirsel_syntax::ContentHash {
+        *self.layout_digest.get_or_init(|| self.layouts.digest())
+    }
+
+    /// Validate and seal a fresh stage input, sharing only immutable program
+    /// checks. Different input borrows take the ordinary independent path.
+    pub fn validate<S: Stage>(
+        &self,
+        unit: LirUnit<S>,
+        inputs: &Inputs<'_>,
+    ) -> Result<ValidatedUnit<S>, Box<Rejected<S>>> {
+        if !self.matches(inputs) {
+            return validate(unit, inputs);
+        }
+        let violations = self.check(&unit, inputs);
+        if !violations.is_empty() {
+            return Err(Box::new(Rejected { unit, violations }));
+        }
+        let raw = RawReceipt {
+            input: unit.header.input.clone(),
+            stage: S::KIND,
+            lir_version: unit.header.lir_version,
+            unit: unit.digest(),
+            target: self.layouts.target,
+            layouts: self.layout_digest(),
+            manifest: *self
+                .manifest_digest
+                .get_or_init(|| crate::snapshot::digest("manifest", self.manifest)),
+            validator_version: crate::VALIDATOR_VERSION,
+        };
+        Ok(ValidatedUnit::seal(unit, NativeReceipt::issue(raw)))
+    }
+
+    /// Every violation, with exactly the same ordering as `check`.
+    pub fn check<S: Stage>(&self, unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation> {
+        if !self.matches(inputs) {
+            return check(unit, inputs);
+        }
+        check_with_context(unit, inputs, self)
+    }
+}
+
 /// A rejected unit, returned with every violation found.
 #[derive(Debug)]
 pub struct Rejected<S> {
@@ -297,21 +374,7 @@ pub fn validate<S: Stage>(
     unit: LirUnit<S>,
     inputs: &Inputs<'_>,
 ) -> Result<ValidatedUnit<S>, Box<Rejected<S>>> {
-    let violations = check(&unit, inputs);
-    if !violations.is_empty() {
-        return Err(Box::new(Rejected { unit, violations }));
-    }
-    let raw = RawReceipt {
-        input: unit.header.input.clone(),
-        stage: S::KIND,
-        lir_version: unit.header.lir_version,
-        unit: unit.digest(),
-        target: inputs.layouts.target,
-        layouts: inputs.layouts.digest(),
-        manifest: crate::snapshot::digest("manifest", inputs.manifest),
-        validator_version: crate::VALIDATOR_VERSION,
-    };
-    Ok(ValidatedUnit::seal(unit, NativeReceipt::issue(raw)))
+    ValidationContext::new(inputs).validate(unit, inputs)
 }
 
 /// One non-generic entry per stage, so the stage-generic checker is
@@ -350,15 +413,28 @@ pub fn validate_ready(
 /// Every violation of `unit`, sorted. Later phases run only on a unit whose
 /// structure is sound, since they index by its facts.
 pub fn check<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation> {
-    if let Err(error) = unit.check_identity(inputs.layouts) {
+    ValidationContext::new(inputs).check(unit, inputs)
+}
+
+fn check_with_context<S: Stage>(
+    unit: &LirUnit<S>,
+    inputs: &Inputs<'_>,
+    context: &ValidationContext<'_>,
+) -> Vec<Violation> {
+    if let Err(error) = unit.check_identity_using(inputs.layouts, || context.layout_digest()) {
         return vec![Violation {
             site: Site::UNIT,
             kind: ViolationKind::Schema(schema_text(&error)),
         }];
     }
-    if let Err(errors) = crate::layout_validate::validate_table(inputs.layouts, inputs.target) {
+    let errors = context.layout_errors.get_or_init(|| {
+        crate::layout_validate::validate_table(inputs.layouts, inputs.target)
+            .err()
+            .unwrap_or_default()
+    });
+    if !errors.is_empty() {
         return errors
-            .into_iter()
+            .iter()
             .map(|e| Violation {
                 site: Site::UNIT,
                 kind: ViolationKind::Layout(format!(

@@ -1474,19 +1474,21 @@ impl<S: Stage> Lir<S> {
     pub fn check(self) -> Vec<ViolationKind> {
         let operations = self.operations.clone();
         let (unit, table, manifest) = self.finish();
-        validate::check(
-            &unit,
-            &Inputs {
-                discharge: None,
-                operations: &operations,
-                target: &TargetSpec::x86_64_unknown_linux_gnu(),
-                layouts: &table,
-                manifest: &manifest,
-            },
-        )
-        .into_iter()
-        .map(|v| v.kind)
-        .collect()
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let inputs = Inputs {
+            discharge: None,
+            operations: &operations,
+            target: &target,
+            layouts: &table,
+            manifest: &manifest,
+        };
+        let ordinary = validate::check(&unit, &inputs);
+        let context = validate::ValidationContext::new(&inputs);
+        // Every mutation and its accepted twin must agree when program checks
+        // are first computed, then reused by a later stage/unit check.
+        assert_eq!(context.check(&unit, &inputs), ordinary);
+        assert_eq!(context.check(&unit, &inputs), ordinary);
+        ordinary.into_iter().map(|v| v.kind).collect()
     }
 }
 

@@ -2494,6 +2494,15 @@ impl<S: Stage> LirUnit<S> {
     /// pool range lies inside the arena it names. This is referential integrity
     /// only; it never substitutes for a stage validator.
     pub fn check_identity(&self, layouts: &crate::LayoutTable) -> Result<(), SchemaError> {
+        self.check_identity_using(layouts, || layouts.digest())
+    }
+
+    /// The caller binds a precomputed digest to an immutable table borrow.
+    pub(crate) fn check_identity_using(
+        &self,
+        layouts: &crate::LayoutTable,
+        digest: impl FnOnce() -> ContentHash,
+    ) -> Result<(), SchemaError> {
         if self.header.stage != S::KIND {
             return Err(SchemaError::StageMismatch {
                 expected: S::KIND,
@@ -2511,7 +2520,7 @@ impl<S: Stage> LirUnit<S> {
         {
             return Err(SchemaError::Stale("layout table version"));
         }
-        if self.header.layouts != layouts.digest() || self.header.target != layouts.target {
+        if self.header.layouts != digest() || self.header.target != layouts.target {
             return Err(SchemaError::Stale("layout table digest"));
         }
         if self.blocks.len() != self.terminators.len() {
