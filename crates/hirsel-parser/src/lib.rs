@@ -5,7 +5,7 @@ hirsel_guard::install!();
 
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
-use hirsel_span::{Anchor, FileId, SourceMap, Span};
+use hirsel_span::{Anchor, FileId, FileSpan, SourceMap, Span};
 use hirsel_syntax::*;
 use std::sync::Arc;
 
@@ -50,6 +50,7 @@ pub fn parse(
     let mut parser = Parser {
         file,
         file_anchor: sources.file_anchor(file),
+        file_place: sources.anchor(sources.file_anchor(file)),
         local: None,
         tokens,
         significant,
@@ -123,6 +124,9 @@ struct Local {
 struct Parser<'a> {
     file: FileId,
     file_anchor: Anchor,
+    /// Where `file_anchor` stands, resolved once: the tape's own tokens are
+    /// relative to it, and the map's anchors grow with every item parsed.
+    file_place: Option<(FileId, u32)>,
     local: Option<Local>,
     tokens: Vec<Token>,
     significant: Vec<usize>,
@@ -152,8 +156,22 @@ impl Parser<'_> {
     }
     fn text_at(&self, offset: usize) -> &str {
         self.token(offset)
-            .and_then(|t| self.sources.slice(t.span))
+            .and_then(|t| self.slice(t.span))
             .unwrap_or("")
+    }
+    /// `SourceMap::slice`, reading a span of this file's own anchor without
+    /// looking the anchor up again.
+    fn slice(&self, span: Span) -> Option<&str> {
+        match self.file_place {
+            Some((file, base)) if span.anchor == self.file_anchor => {
+                self.sources.file_slice(FileSpan {
+                    file,
+                    start: base.saturating_add(span.start),
+                    end: base.saturating_add(span.end),
+                })
+            }
+            _ => self.sources.slice(span),
+        }
     }
     fn at(&self, word: &str) -> bool {
         // Spelling is only used for grammar terminals, never to classify identifiers.
@@ -279,7 +297,7 @@ impl Parser<'_> {
             .unwrap_or(self.tokens.len());
         self.tokens.get(first..end).unwrap_or(&[]).iter().any(|t| {
             matches!(t.kind, TokenKind::Trivia(TriviaKind::Newline))
-                || self.sources.slice(t.span).is_some_and(|s| s.contains('\n'))
+                || self.slice(t.span).is_some_and(|s| s.contains('\n'))
         })
     }
     fn continuing(&self) -> bool {
@@ -513,7 +531,7 @@ impl Parser<'_> {
                     if kind != TriviaKind::Space {
                         owned_end = i + 1;
                     }
-                    if self.sources.slice(t.span).is_some_and(|s| s.contains('\n')) {
+                    if self.slice(t.span).is_some_and(|s| s.contains('\n')) {
                         break;
                     }
                 }
@@ -529,7 +547,7 @@ impl Parser<'_> {
             .get(owned_start)
             .zip(self.tokens.get(owned_end.saturating_sub(1)))
             .and_then(|(a, b)| {
-                self.sources.slice(Span {
+                self.slice(Span {
                     end: b.span.end,
                     ..a.span
                 })

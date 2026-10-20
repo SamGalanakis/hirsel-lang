@@ -499,12 +499,12 @@ impl Parser<'_> {
             match t.kind {
                 TokenKind::Trivia(TriviaKind::Space | TriviaKind::Newline) => {}
                 TokenKind::Trivia(TriviaKind::DocLine) => {
-                    let text = self.sources.slice(t.span)?;
+                    let text = self.slice(t.span)?;
                     let text = text.strip_prefix("///")?;
                     docs.push(text.strip_prefix(' ').unwrap_or(text).trim_end().to_owned());
                 }
                 TokenKind::Trivia(TriviaKind::DocBlock) => {
-                    let text = self.sources.slice(t.span)?;
+                    let text = self.slice(t.span)?;
                     let text = text.strip_prefix("/**")?;
                     docs.push(text.strip_suffix("*/").unwrap_or(text).trim().to_owned());
                 }
