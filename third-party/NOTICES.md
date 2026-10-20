@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| hyper | HTTP/1 persistent dispatch, owned read buffer, keep-alive and pipelined-request vectors (`src/proto/h1/{dispatch,io}.rs`, `tests/server.rs`) | `stdlib/std@1/http_h2.hir`, `conformance/SEM/SEM-1-http-server-serial-handoff-run.hir` | hyperium/hyper `b07337878fe57b34b2065335ae8cae9ce5a780a0` | MIT (Copyright (c) 2014-2026 Sean McArthur) |
 | OpenTelemetry Protocol | OTLP JSON examples and protoc descriptor field/enum projection | `tools/tests/fixtures/obs-export`, `tools/obs_export_schema.py` | open-telemetry/opentelemetry-proto `09769935deb8b2ebcf73ad1e2142b691d17bf70b` | Apache-2.0 (license text also in fixture directory) |
 | serde_path_to_error | `tests/deserialize.rs::test_vec` nested sequence/field rejection path and `src/path.rs` unwind path composition design | `conformance/GEN/GEN-2-schema-boundary-run.hir`, `stdlib/std@1/schema.hir` | dtolnay/path-to-error `7aad3f59acd6d239615ee8b315e0c666915a13bf` | MIT |
 | Effect | Schedule delay composition and exponential/Fibonacci timestamp vectors, adapted to explicit capabilities | `stdlib/std@1/schedule.hir`, schedule conformance | Effect-TS/effect `e95695057b2446d5bc4de81bac0a77ef49d7a4c0` | MIT (Copyright (c) 2023 Effectful Technologies Inc) |
@@ -226,6 +227,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - toml-test: Copyright (c) 2018 TOML authors
 - toml_edit: Copyright (c) Individual contributors
 - mimalloc: Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen
+- hyper: Copyright (c) 2014-2026 Sean McArthur
 - httparse: Copyright (c) 2015-2026 Sean McArthur
 - rustls: Copyright (c) 2016 Joseph Birr-Pixton
 - ureq: Copyright (c) 2019 Martin Algesten

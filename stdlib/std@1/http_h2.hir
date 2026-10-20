@@ -1,3 +1,33 @@
+// Like hyper src/proto/h1/io.rs Buffered, the HTTP transport keeps one owned
+// byte buffer and a consume cursor. Owned fields let serial dispatch move it.
+type HttpInput {
+  bytes: unique List[u8],
+  offset: u64,
+}
+
+fn http_input_buffered(r: HttpInput) -> u64 uses {} {
+  core@1/list.len(r.bytes) - r.offset
+}
+
+fn http_input_contents(r: HttpInput) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i = r.offset
+  while i < core@1/list.len(r.bytes) {
+    core@1/list.push(mut out, r.bytes[i])
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+fn http_input_consume(mut r: HttpInput, count: u64) -> () uses {} {
+  let have = http_input_buffered(r)
+  r.offset += if count < have {
+    count
+  } else {
+    have
+  }
+}
+
 // HTTP adapter over the RFC 9113 Session. Header mapping and streaming follow
 // Go net/http/internal/http2/{transport,server}.go (ebe2feef), BSD-3-Clause
 // third-party/NOTICES.md.
@@ -6,7 +36,7 @@
 resource type HttpTransport: noalloc_drop uses {Net} {
   net: Net,
   stream: Stream of .net,
-  input: bufio.Reader,
+  input: HttpInput,
   version: Version,
   endpoint: Option[http2.Session],
   needs_preface: bool,
@@ -28,7 +58,7 @@ fn http_transport(
   HttpTransport(
     net: n,
     stream: take stream,
-    input: bufio.new(4096),
+    input: HttpInput(bytes: [], offset: 0),
     version: if h2 {
       Http2()
     } else {
@@ -71,8 +101,33 @@ fn http_transport_write(mut t: HttpTransport, data: Bytes) -> Result[(), HttpErr
   Ok(())
 }
 
+fn http_input_read(n: Net, mut stream: Stream of n, mut r: HttpInput, max: u64) -> Result[
+  u64,
+  HttpError
+] {
+  if max == 0 {
+    return Ok(0)
+  }
+  if r.offset != 0 {
+    let mut unread: List[u8] = []
+    let mut i = r.offset
+    while i < core@1/list.len(r.bytes) {
+      core@1/list.push(mut unread, r.bytes[i])
+      i += 1
+    }
+    r.bytes = take unread
+    r.offset = 0
+  }
+  let limit: u64 = if max < 4096 {
+    max
+  } else {
+    4096
+  }
+  Ok(core@1/net.read(n, mut stream, mut r.bytes, limit) ? http_net_error)
+}
+
 fn http_transport_read_more(mut t: HttpTransport, max: u64) -> Result[u64, HttpError] {
-  Ok(bufio.stream_read_more(t.net, mut t.stream, mut t.input, max) ? http_buffer_error)
+  http_input_read(t.net, mut t.stream, mut t.input, max)
 }
 
 fn http_transport_read_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Result[
@@ -144,7 +199,7 @@ fn http_h2_next_until(
 ) -> Result[http2.Event, HttpError] {
   http_h2_flush(mut t)?
   while true {
-    let data = bufio.contents(t.input)
+    let data = http_input_contents(t.input)
     if t.needs_preface {
       let expected = http2_wire.preface()
       let have = core@1/bytes.len(data)
@@ -162,7 +217,7 @@ fn http_h2_next_until(
         i += 1
       }
       if have >= 24 {
-        bufio.consume(mut t.input, 24)
+        http_input_consume(mut t.input, 24)
         t.needs_preface = false
         continue
       }
@@ -184,7 +239,7 @@ fn http_h2_next_until(
           return Error(Malformed(HeaderValue()))
         },
         Ok(Some((frame, end))) => {
-          bufio.consume(mut t.input, end)
+          http_input_consume(mut t.input, end)
           let outcome = http_h2_endpoint(
             mut t,
             fn(mut endpoint: http2.Session) -> Result[http2.Event, http2.Error] uses {} {
@@ -206,7 +261,7 @@ fn http_h2_next_until(
         Ok(None()) => (),
       }
     }
-    let have = bufio.buffered(t.input)
+    let have = http_input_buffered(t.input)
     if have >= 16393 {
       t.closed = true
       return Error(HeadTooLarge())
@@ -406,14 +461,14 @@ fn http_h2_fields(headers: List[Header]) -> Result[List[hpack.Field], HttpError]
   Ok(take fields)
 }
 
-fn http_h2_headers(fields: List[hpack.Field], config: Config) -> Result[
+fn http_h2_headers(fields: List[hpack.Field], max_headers: u64) -> Result[
   List[Header],
   HttpError
 ] uses {} {
   let mut headers: List[Header] = []
   for field in fields {
     if field.name[0] != 58 {
-      if core@1/list.len(headers) >= config.max_headers {
+      if core@1/list.len(headers) >= max_headers {
         return Error(HeadTooLarge())
       }
       core@1/list.push(
@@ -591,7 +646,7 @@ fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
     if status < 200 {
       continue
     }
-    let headers = http_h2_headers(fields, r.config)?
+    let headers = http_h2_headers(fields, r.config.max_headers)?
     let length: Option[u64] = match header(headers, "content-length") {
       None() => None(),
       Some(value) => match u64.parse(value) {
@@ -666,7 +721,7 @@ fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
         }
       },
       Headers(_, fields, true) => {
-        r.response_trailers = http_h2_headers(fields, r.config)?
+        r.response_trailers = http_h2_headers(fields, r.config.max_headers)?
         r.body_end = true
       },
       _ => {
@@ -722,7 +777,7 @@ fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -
     return Error(Malformed(HeaderValue()))
   }
   c.stream_id = id
-  let headers = http_h2_headers(fields, c.config)?
+  let headers = http_h2_headers(fields, c.config.max_headers)?
   let method = http_h2_value(fields, b":method")?
   let mut incoming = ServerRequest(
     method: unique method,
@@ -770,7 +825,7 @@ fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -
         ended = done
       },
       Headers(_, trailer_fields, true) => {
-        incoming.trailers = http_h2_headers(trailer_fields, c.config)?
+        incoming.trailers = http_h2_headers(trailer_fields, c.config.max_headers)?
         ended = true
       },
       _ => return Error(Truncated()),
@@ -923,6 +978,7 @@ pub fn request_protocol(r: Request) -> Version uses {} {
 pub opaque resource type ServerConnection: noalloc_drop uses {Net, Tasks} {
   tasks: Tasks,
   exchange: Option[HttpExchange],
+  sender: Sender[HttpTransfer],
   returned: Option[Receiver[HttpTransfer]],
   active: Atomic[u8],
 }
@@ -932,10 +988,14 @@ pub opaque resource type ServerConnection: noalloc_drop uses {Net, Tasks} {
 /// enables cleartext h2c; otherwise this uses HTTP/1.1.
 pub fn server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection {
   let active = core@1/atomic.create(tasks, 0u8)
+  let (sender, receiver): (Sender[HttpTransfer], Receiver[HttpTransfer]) = channel.open(
+    tasks
+  )
   ServerConnection(
     tasks: tasks,
     exchange: Some(http_exchange(tasks, unique active, n, take stream, config)),
-    returned: None(),
+    sender: take sender,
+    returned: Some(take receiver),
     active: active
   )
 }
@@ -973,12 +1033,17 @@ pub fn next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Re
   let mut exchange = match replace(mut c.exchange, None()) {
     Some(current) => take current,
     None() => {
+      // Restore the same receiver only after a successful return. Cancellation
+      // drops it and the queued transport, preserving fail-closed reception.
       let Some(receiver) = replace(mut c.returned, None()) else {
         return Ok(None())
       }
       let mut returned = take receiver
       match channel.receive(c.tasks, mut returned) {
-        Ok(current) => http_exchange_from_transfer(take current)?,
+        Ok(current) => {
+          c.returned = Some(take returned)
+          http_exchange_from_transfer(take current)?
+        },
         Error(Closed()) => return Ok(None()),
         Error(Canceled(cause)) => return Error(Net(Canceled(cause))),
       }
@@ -993,13 +1058,9 @@ pub fn next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Re
     },
   }
   core@1/atomic.store(c.tasks, c.active, 1u8)
-  let (sender, receiver): (Sender[HttpTransfer], Receiver[HttpTransfer]) = channel.open(
-    c.tasks
-  )
-  c.returned = Some(take receiver)
   let stream = ServerStream(
     tasks: unique c.tasks,
-    returned: take sender,
+    returned: core@1/sender.dup(c.tasks, c.sender),
     exchange: Some(http_exchange_transfer(take exchange)),
     version: incoming_request.version
   )
@@ -1024,12 +1085,15 @@ fn http_stream_return(mut s: ServerStream, take exchange: HttpExchange) -> Resul
 
 fn http_stream_state(s: ServerStream) -> u8 uses {} {
   match s.exchange {
-    Some(exchange) => core@1/shared.with(
-      exchange.data,
-      fn(data: HttpExchangeData) -> u8 uses {} {
-        data.state
-      }
-    ),
+    Some(exchange) => match exchange.data {
+      Serial(data) => data.state,
+      Multiplexed(data) => core@1/shared.with(
+        data,
+        fn(value: HttpExchangeData) -> u8 uses {} {
+          value.state
+        }
+      ),
+    },
     None() => 255u8,
   }
 }
@@ -1135,17 +1199,34 @@ fn http_server_reject(mut c: HttpExchange, error: HttpError) -> Result[(), HttpE
   http_respond(mut c, status, [], body, true)
 }
 
+// HTTP/1 dispatch follows hyper src/proto/h1/dispatch.rs:22-29,592-665
+// (b07337878fe57b34b2065335ae8cae9ce5a780a0): one in-flight response and a
+// persistent return path. Hirsel moves the branded socket with its request;
+// only the serial reader's owned unread storage crosses, never an h2 snapshot.
+type HttpSerialData {
+  config: HttpServerConfig,
+  state: u8,
+  keep_alive: bool,
+  served: bool,
+  version: Version,
+  head_request: bool,
+  input: HttpInput,
+  closed: bool,
+}
+
+type HttpTransferData = Serial(HttpSerialData) | Multiplexed(Shared[HttpExchangeData])
+
 // Only inert protocol state crosses through Shared. The branded socket moves;
 // opaque Reader/Session state needs no exposed representation or unchecked mode.
 type HttpExchangeData {
-  config: Config,
+  config: HttpServerConfig,
   state: u8,
   keep_alive: bool,
   served: bool,
   version: Version,
   head_request: bool,
   stream_id: u32,
-  input: bufio.Reader,
+  input: HttpInput,
   transport_version: Version,
   endpoint: Option[http2.Session],
   needs_preface: bool,
@@ -1161,7 +1242,7 @@ resource type HttpTransfer: noalloc_drop uses {Net, Tasks} {
   active: Atomic[u8],
   net: Net,
   stream: Stream of .net,
-  data: Shared[HttpExchangeData],
+  data: HttpTransferData,
 }
 @noalloc drop(self) {
   core@1/atomic.store(self.tasks, self.active, 3u8)
@@ -1193,8 +1274,28 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
     closed: closed,
     draining: draining
   ) = take transport
+  if transport_version != Http2() {
+    return HttpTransfer(
+      tasks: tasks,
+      active: active,
+      net: net,
+      stream: take stream,
+      data: Serial(
+        HttpSerialData(
+          config: take config,
+          state: state,
+          keep_alive: keep_alive,
+          served: served,
+          version: version,
+          head_request: head_request,
+          input: take input,
+          closed: closed
+        )
+      )
+    )
+  }
   let data = HttpExchangeData(
-    config: unique config,
+    config: config,
     state: state,
     keep_alive: keep_alive,
     served: served,
@@ -1216,7 +1317,7 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
     active: unique active,
     net: net,
     stream: take stream,
-    data: core@1/shared.freeze(take data)
+    data: Multiplexed(core@1/shared.freeze(take data))
   )
 }
 
@@ -1225,7 +1326,49 @@ fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
   HttpError
 ] {
   let HttpTransfer(tasks: tasks, active: active, net: net, stream: stream, data: frozen) = take transfer
-  let snapshot = match core@1/shared.thaw(take frozen) {
+  let shared = match take frozen {
+    Serial(data) => {
+      let HttpSerialData(
+        config: config,
+        state: state,
+        keep_alive: keep_alive,
+        served: served,
+        version: version,
+        head_request: head_request,
+        input: input,
+        closed: closed
+      ) = take data
+      let pending_limit = config.max_body_bytes
+      return Ok(
+        HttpExchange(
+          tasks: tasks,
+          active: active,
+          config: take config,
+          state: state,
+          keep_alive: keep_alive,
+          served: served,
+          version: version,
+          head_request: head_request,
+          stream_id: 0,
+          transport: HttpTransport(
+            net: net,
+            stream: take stream,
+            input: take input,
+            version: Http11(),
+            endpoint: None(),
+            needs_preface: false,
+            pending: [],
+            pending_bytes: 0,
+            pending_limit: pending_limit,
+            closed: closed,
+            draining: false
+          )
+        )
+      )
+    },
+    Multiplexed(data) => take data,
+  }
+  let snapshot = match core@1/shared.thaw(take shared) {
     Ok(data) => take data,
     Error(_) => {
       core@1/atomic.store(tasks, active, 3u8)

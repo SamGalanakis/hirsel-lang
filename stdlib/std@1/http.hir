@@ -896,15 +896,15 @@ fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
 
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
-    let buf = bufio.contents(r.transport.input)
+    let buf = http_input_contents(r.transport.input)
     if let Some((head, end)) = http_parse_head(buf, r.config)? {
       if end > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
-      bufio.consume(mut r.transport.input, end)
+      http_input_consume(mut r.transport.input, end)
       return Ok(take head)
     }
-    let have = bufio.buffered(r.transport.input)
+    let have = http_input_buffered(r.transport.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -1022,24 +1022,24 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 // Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
 fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   if r.chunk_suffix {
-    while bufio.buffered(r.transport.input) < 2 {
+    while http_input_buffered(r.transport.input) < 2 {
       if http_read_more(mut r, 4096)? == 0 {
         return Error(Truncated())
       }
     }
-    let suffix = bufio.contents(r.transport.input)
+    let suffix = http_input_contents(r.transport.input)
     if suffix[0] != 13 || suffix[1] != 10 {
       return Error(Chunk())
     }
-    bufio.consume(mut r.transport.input, 2)
+    http_input_consume(mut r.transport.input, 2)
     r.chunk_suffix = false
   }
   while true {
-    let buf = bufio.contents(r.transport.input)
+    let buf = http_input_contents(r.transport.input)
     match http_wire.parse_chunk_size(buf, 0) {
       Error(_) => return Error(Chunk()),
       Ok(Complete(consumed, size)) => {
-        bufio.consume(mut r.transport.input, consumed)
+        http_input_consume(mut r.transport.input, consumed)
         r.remaining = size
         if size == 0 {
           http_read_trailers(mut r)?
@@ -1049,7 +1049,7 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
       },
       Ok(Partial()) => (),
     }
-    let have = bufio.buffered(r.transport.input)
+    let have = http_input_buffered(r.transport.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -1073,14 +1073,14 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   let mut collected: List[u8] = []
   text.append(mut collected, "HTTP/1.1 200 OK\r\n")
   while true {
-    let count = bufio.buffered(r.transport.input)
-    let unread = bufio.contents(r.transport.input)
+    let count = http_input_buffered(r.transport.input)
+    let unread = http_input_contents(r.transport.input)
     let mut i: u64 = 0
     while i < count {
       core@1/list.push(mut collected, unread[i])
       i += 1
     }
-    bufio.consume(mut r.transport.input, count)
+    http_input_consume(mut r.transport.input, count)
     let buf = core@1/bytes.from_list(copy collected)
     if let Some((head, end)) = http_parse_head(buf, r.config)? {
       if end - 17 > r.config.max_head_bytes {
@@ -1128,7 +1128,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  if bufio.buffered(r.transport.input) == 0 {
+  if http_input_buffered(r.transport.input) == 0 {
     if http_read_more(
       mut r,
       if max > 4096 {
@@ -1144,20 +1144,20 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  let mut count = bufio.buffered(r.transport.input)
+  let mut count = http_input_buffered(r.transport.input)
   if count > max {
     count = max
   }
   if r.body_kind != 0 && count > r.remaining {
     count = r.remaining
   }
-  let data = bufio.contents(r.transport.input)
+  let data = http_input_contents(r.transport.input)
   let mut i: u64 = 0
   while i < count {
     core@1/list.push(mut out, data[i])
     i += 1
   }
-  bufio.consume(mut r.transport.input, count)
+  http_input_consume(mut r.transport.input, count)
   if r.body_kind != 0 {
     r.remaining -= count
     if r.remaining == 0 {
@@ -1368,7 +1368,7 @@ pub fn client_fetch(
     body: take data,
     url: unique r.url
   )
-  if r.reusable && r.body_kind != 0 && r.state == 4 && (http_is_h2(r.transport) || bufio.buffered(
+  if r.reusable && r.body_kind != 0 && r.state == 4 && (http_is_h2(r.transport) || http_input_buffered(
     r.transport.input
   ) == 0) && !r.transport.draining && c.config.max_idle_connections > 0 {
     let mut same_host: u64 = 0
@@ -1459,11 +1459,33 @@ pub fn client_send(
 // must finish before the next request can be received (RFC 9112 section 9).
 // state: ready=0, response pending=1, closed=2, request failed=3,
 // chunked response=4, close-delimited response=5, bodyless response=6.
+// Server dispatch carries only the limits used by request framing and IO.
+// Client roots, user-agent strings and pooling policy stay out of each stream.
+type HttpServerConfig {
+  max_head_bytes: u64,
+  max_body_bytes: u64,
+  max_headers: u64,
+  read_timeout: Option[time.Duration],
+  write_timeout: Option[time.Duration],
+  idle_timeout: Option[time.Duration],
+}
+
+fn http_server_config(config: Config) -> HttpServerConfig uses {} {
+  HttpServerConfig(
+    max_head_bytes: config.max_head_bytes,
+    max_body_bytes: config.max_body_bytes,
+    max_headers: config.max_headers,
+    read_timeout: config.read_timeout,
+    write_timeout: config.write_timeout,
+    idle_timeout: config.idle_timeout
+  )
+}
+
 resource type HttpExchange: noalloc_drop uses {Net, Tasks} {
   tasks: Tasks,
   active: Atomic[u8],
   transport: HttpTransport,
-  config: Config,
+  config: HttpServerConfig,
   state: u8,
   keep_alive: bool,
   served: bool,
@@ -1492,7 +1514,7 @@ fn http_exchange(
       Server(),
       config
     ),
-    config: unique config,
+    config: http_server_config(config),
     state: 0,
     keep_alive: false,
     served: false,
@@ -1589,7 +1611,7 @@ fn http_server_body(frame: http_wire.Framing, limit: u64) -> Result[
   )
 }
 
-fn http_server_trailers(buf: Bytes, start: u64, config: Config) -> Result[
+fn http_server_trailers(buf: Bytes, start: u64, config: HttpServerConfig) -> Result[
   Option[(List[Header], u64)],
   HttpError
 ] uses {} {
@@ -1670,7 +1692,7 @@ fn http_server_trailers(buf: Bytes, start: u64, config: Config) -> Result[
 
 // Returns exactly the consumed prefix. An incomplete size line, suffix or trailer
 // stays with the caller; payload bytes already decoded need never be buffered again.
-fn http_server_body_step(mut body: ServerBody, buf: Bytes, config: Config) -> Result[
+fn http_server_body_step(mut body: ServerBody, buf: Bytes, config: HttpServerConfig) -> Result[
   u64,
   HttpError
 ] uses {} {
@@ -1744,7 +1766,7 @@ fn http_server_body_step(mut body: ServerBody, buf: Bytes, config: Config) -> Re
 }
 
 // Parse the request head once, before incrementally consuming its body.
-fn http_server_head(buf: Bytes, config: Config) -> Result[
+fn http_server_head(buf: Bytes, config: HttpServerConfig) -> Result[
   Option[(ServerRequest, http_wire.Framing, u64)],
   HttpError
 ] uses {} {
@@ -1876,14 +1898,15 @@ pub fn parse_server_request(buf: Bytes, config: Config) -> Result[
   Option[(ServerRequest, u64)],
   HttpError
 ] uses {} {
-  let mut Some((incoming, frame, end)) = http_server_head(buf, config)? else {
+  let limits = http_server_config(config)
+  let mut Some((incoming, frame, end)) = http_server_head(buf, limits)? else {
     return Ok(None())
   }
   let mut body = http_server_body(frame, config.max_body_bytes)?
   let consumed = http_server_body_step(
     mut body,
     core@1/bytes.slice(buf, end, core@1/bytes.len(buf)),
-    config
+    limits
   )?
   if body.state != 5 {
     return Ok(None())
@@ -1995,7 +2018,7 @@ fn http_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> R
   // may carry over from the preceding request. HTTP/1.0 is the safe fallback.
   c.version = Http10()
   c.head_request = false
-  let mut idle = c.served && bufio.buffered(c.transport.input) == 0
+  let mut idle = c.served && http_input_buffered(c.transport.input) == 0
   // Validate the configuration and clock even when the connection starts idle.
   let initial_deadline = http_server_deadline(clock, c.config.read_timeout)?
   let mut deadline: Option[u64] = if idle {
@@ -2004,30 +2027,31 @@ fn http_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> R
     initial_deadline
   }
   while true {
-    let buf = bufio.contents(c.transport.input)
+    let buf = http_input_contents(c.transport.input)
     if let Some((parsed, frame, end)) = http_server_head(buf, c.config)? {
       let mut incoming = take parsed
       c.version = incoming.version
       c.head_request = incoming.method == "HEAD"
-      bufio.consume(mut c.transport.input, end)
+      http_input_consume(mut c.transport.input, end)
       let mut body = http_server_body(frame, c.config.max_body_bytes)?
       while body.state != 5 {
-        let unread = bufio.contents(c.transport.input)
+        let unread = http_input_contents(c.transport.input)
         let consumed = http_server_body_step(mut body, unread, c.config)?
-        bufio.consume(mut c.transport.input, consumed)
+        http_input_consume(mut c.transport.input, consumed)
         if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
           return Error(Truncated())
         }
       }
-      incoming.body = core@1/bytes.from_list(copy body.output)
-      incoming.trailers = copy body.trailers
+      let ServerBody(output: output, trailers: body_trailers, ..) = take body
+      incoming.body = core@1/bytes.from_list(take output)
+      incoming.trailers = take body_trailers
       c.keep_alive = incoming.keep_alive
       c.state = 1
       return Ok(take incoming)
     }
     let count = http_server_read_more(mut c, idle, clock, deadline)?
     if count == 0 {
-      if bufio.buffered(c.transport.input) == 0 {
+      if http_input_buffered(c.transport.input) == 0 {
         c.state = 2
         return Error(Closed())
       }

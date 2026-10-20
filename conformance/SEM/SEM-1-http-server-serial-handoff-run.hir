@@ -1,0 +1,162 @@
+// rule: SEM-1
+// expect: run
+// hyper tests/server.rs:691-728 keep_alive and :1072-1113 pipeline_disabled,
+// b07337878fe57b34b2065335ae8cae9ce5a780a0. Scripted reads remove the socket
+// timing race; an owned worker response and retained request exercise Hirsel.
+fn network(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(
+                b"POST / HTTP/1.1\r\nHost: example.domain\r\nContent-Length: 3\r\n\r\nabcGET /two HTTP/1.1\r\nHost: example.domain\r\n\r\nGET /quux HTTP/1.1\r\nHost: example.domain\r\nConnection: close\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 11\r\nConnection: keep-alive\r\n\r\nfoo bar baz"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n3\r\ntwo\r\n0\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 8\r\nConnection: close\r\n\r\nzar quux"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let tasks = test.tasks(t)
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = http.server_connection(tasks, n, take socket, http.default_config())
+  let Some((first, retained)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), http.HttpError] {
+      let child = task.async(
+        scope,
+        fn() -> Result[(), http.HttpError] {
+          let mut stream = take first
+          http.respond(mut stream, 200u16, [], b"foo bar baz", false)
+        }
+      )
+      task.await(scope, take child)
+    }
+  )?
+  let Some((second, incoming)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  test.check(t, incoming.target == "/two" && incoming.body == b"")
+  let mut streaming = take second
+  http.respond_head(mut streaming, 200u16, [])?
+  http.write_response_body(mut streaming, b"two")?
+  http.end_response_body(mut streaming)?
+  let Some((third, last)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  test.check(t, last.target == "/quux" && !last.keep_alive)
+  // The old, completed handle must not affect the newly checked-out response.
+  match http.respond(mut streaming, 200u16, [], b"bad", false) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  let mut responding = take third
+  http.respond(mut responding, 200u16, [], b"zar quux", false)?
+  test.check(t, retained.method == "POST" && retained.body == b"abc")
+  test.check(
+    t,
+    retained.target == "/" && http.header(retained.headers, "host") == Some(
+      "example.domain"
+    )
+  )
+  test.check(t, option.is_none(http.next_stream(mut c, None())?))
+  canceled_return(t)?
+  Ok(())
+}
+
+// A canceled receive must destroy the queued return packet. A second call
+// observes the dropped transport's EOF rather than retrying the canceled queue.
+fn canceled_return(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"GET / HTTP/1.1\r\n\r\n"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+              ),
+              Stall()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), http.HttpError] {
+      let (notice, ready): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let (wake, sleep): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        scope,
+        fn() -> Result[bool, http.HttpError] {
+          let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+          let mut c = http.server_connection(
+            tasks,
+            n,
+            take socket,
+            http.default_config()
+          )
+          let Some((owned, _)) = http.next_stream(mut c, None())? else {
+            return Error(Closed())
+          }
+          let mut response = take owned
+          http.respond(mut response, 200u16, [], b"ok", false)?
+          let mut tx = take notice
+          let _ = channel.send(tasks, mut tx, 1u8)
+          let mut gate = take sleep
+          let _ = channel.receive(tasks, mut gate)
+          let canceled = match http.next_stream(mut c, None()) {
+            Error(Net(Canceled(Requested()))) => true,
+            _ => false,
+          }
+          let closed = match http.next_stream(mut c, None()) {
+            Ok(None()) => true,
+            _ => false,
+          }
+          Ok(canceled && closed)
+        }
+      )
+      let mut rx = take ready
+      let _ = channel.receive(tasks, mut rx)
+      task.cancel(scope, child)
+      test.check(t, task.await(scope, take child)?)
+      let _ = wake
+      Ok(())
+    }
+  )
+}
