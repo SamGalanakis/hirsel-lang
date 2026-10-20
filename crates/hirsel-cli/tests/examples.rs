@@ -1000,10 +1000,7 @@ fn full_gate_todo_api_serves_every_route_and_persists() {
     );
     assert_eq!((status, body.as_str()), (200, created));
     let (status, _, body) = server.send(b"BAD\0 / HTTP/1.1\r\n\r\n");
-    assert_eq!(
-        (status, body.as_str()),
-        (400, "Bad Request")
-    );
+    assert_eq!((status, body.as_str()), (400, "Bad Request"));
 
     let listed = todo_api_concurrent_creates(&server, 3);
     assert_eq!(listed.matches("\"id\":").count(), 3, "{listed}");

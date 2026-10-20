@@ -1824,8 +1824,8 @@ verifies the server-side preface and flushes protocol responses before returning
 A failed write makes the connection unusable; EOF within a frame or preface is
 `Truncated`. Dropping the connection closes its owned stream.
 
-These explicit modules do not change `std@1/http`'s HTTP/1.1 client/server or
-negotiate ALPN. The `http` adapter supplies explicit h2c request/body integration; automatic HTTPS
+The explicit modules do not negotiate ALPN themselves. The `http` adapter maps
+request/body operations onto their Session for explicit h2c; automatic HTTPS
 selection still requires the TLS ALPN provider integration.
 
 ## Unicode scalar properties and simple case
