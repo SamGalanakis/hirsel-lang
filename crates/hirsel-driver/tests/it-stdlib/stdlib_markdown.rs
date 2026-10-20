@@ -24,7 +24,7 @@ fn run_vector(name: &str) {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{name}: {outcome:?}\n{}\n{}",
             String::from_utf8_lossy(&stdout),
