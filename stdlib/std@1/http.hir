@@ -1608,33 +1608,21 @@ pub fn detach(take s: ServerStream) -> Result[Detached, HttpError] {
   let Some(transfer) = replace(mut owned.exchange, None()) else {
     return Error(OutOfOrder())
   }
-  let HttpExchange(
-    tasks: tasks,
-    active: active,
-    transport: transport,
-    config: _,
-    state: _,
-    keep_alive: _,
-    served: _,
-    version: _,
-    head_request: _,
-    stream_id: _
-  ) = http_exchange_from_transfer(take transfer)?
-  let HttpTransport(
-    net: n,
-    stream: stream,
-    input: input,
-    version: _,
-    endpoint: _,
-    needs_preface: _,
-    pending: _,
-    pending_bytes: _,
-    pending_limit: _,
-    closed: _,
-    draining: _
-  ) = take transport
+  // As http_exchange_from_transfer, without rebuilding the exchange: the stream and
+  // its unread bytes leave, and the connection sees the exchange as gone.
+  let HttpTransfer(tasks: tasks, active: active, net: n, stream: stream, data: frozen) = take transfer
   core@1/atomic.store(tasks, active, 3u8)
-  Ok(Detached(net: n, stream: take stream, input: input))
+  let mut snapshot = match core@1/shared.thaw(take frozen) {
+    Ok(data) => take data,
+    Error(_) => return Error(Closed()),
+  }
+  Ok(
+    Detached(
+      net: n,
+      stream: take stream,
+      input: replace(mut snapshot.input, bufio.new(0))
+    )
+  )
 }
 
 // All Connection fields contribute tokens; close wins regardless of order.
