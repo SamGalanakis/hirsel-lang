@@ -1,0 +1,561 @@
+//! Typed reads: what a memo observed, keyed by what it read (design §1b).
+//! A memo is valid exactly when every read still observes the same value.
+use hirsel_intern::Symbol;
+use hirsel_syntax::{ContentHash, DefId, DefPath, FileContext, PackageId};
+use std::num::NonZeroU64;
+
+/// One revision of a session's inputs. Revision 1 is the first.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Revision(NonZeroU64);
+impl Revision {
+    pub const FIRST: Revision = Revision(NonZeroU64::MIN);
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+    pub fn next(self) -> Revision {
+        Revision(self.0.checked_add(1).expect("revision overflow"))
+    }
+    pub fn from_u64(n: u64) -> Option<Revision> {
+        NonZeroU64::new(n).map(Revision)
+    }
+}
+
+/// How often an input changes. Low is user package files, Medium is dependency
+/// packages, High is std, the core registry and the environment. A memo's
+/// durability is the minimum over everything it read.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Durability {
+    Low,
+    Medium,
+    High,
+}
+impl Durability {
+    pub const ALL: [Durability; 3] = [Durability::Low, Durability::Medium, Durability::High];
+}
+
+/// A package, by its `name@version` spelling.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PackageKey(pub Symbol);
+impl PackageKey {
+    pub fn of(package: &PackageId) -> Self {
+        Self(Symbol::intern(&format!(
+            "{}@{}",
+            package.name, package.version
+        )))
+    }
+}
+/// A module inside a package, by its dot-joined spelling (empty for the root).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ModuleKey(pub Symbol);
+impl ModuleKey {
+    pub fn of(modules: &[String]) -> Self {
+        Self(Symbol::intern(&modules.join(".")))
+    }
+}
+/// One name lookup: the file context it ran in and the path it spelled.
+/// Negative lookups are reads too.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LookupKey {
+    pub package: PackageKey,
+    pub module: ModuleKey,
+    /// The package a path names explicitly, if any.
+    pub qualifier: Option<PackageKey>,
+    /// The path's segments, dot-joined.
+    pub path: Symbol,
+}
+impl LookupKey {
+    pub fn of(context: &FileContext, qualifier: Option<&PackageId>, segments: &[String]) -> Self {
+        Self {
+            package: PackageKey::of(&context.package),
+            module: ModuleKey::of(&context.modules),
+            qualifier: qualifier.map(PackageKey::of),
+            path: Symbol::intern(&segments.join(".")),
+        }
+    }
+}
+
+/// Every input a memo can observe. Each read records the observed value's
+/// content hash (`Reads`).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ReadKey {
+    /// A signature's fingerprint.
+    Signature(DefId),
+    /// A failed signature's failed key.
+    FailedSignature(DefId),
+    /// A lookup's output, including a negative one.
+    Lookup(LookupKey),
+    /// The set of names a module declares.
+    NameSet(PackageKey, ModuleKey),
+    /// The private view's `ViewDigest`.
+    Representation(DefId),
+    /// An executed body's text hash.
+    ExecutedBody(DefId),
+    /// An executed definition's signature fingerprint.
+    ExecutedSignature(DefId),
+    /// A cited item's text hash.
+    CitedText(DefId),
+    /// H(count, then (file path, header hash) per candidate in source order);
+    /// read by every query keyed on the definition.
+    DeclarationCandidates(DefId),
+    /// V's digest of a view.
+    ValidationView(DefId),
+    /// The aggregate digest of the signature universe's V errors.
+    UniverseErrors,
+    /// The selected first heap role.
+    FirstHeap,
+    /// The query environment's hash.
+    Environment,
+}
+
+/// The kind of a read, for counters and durability rules.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ReadKind {
+    Signature,
+    FailedSignature,
+    Lookup,
+    NameSet,
+    Representation,
+    ExecutedBody,
+    ExecutedSignature,
+    CitedText,
+    DeclarationCandidates,
+    ValidationView,
+    UniverseErrors,
+    FirstHeap,
+    Environment,
+}
+impl ReadKind {
+    pub const ALL: [ReadKind; 13] = [
+        ReadKind::Signature,
+        ReadKind::FailedSignature,
+        ReadKind::Lookup,
+        ReadKind::NameSet,
+        ReadKind::Representation,
+        ReadKind::ExecutedBody,
+        ReadKind::ExecutedSignature,
+        ReadKind::CitedText,
+        ReadKind::DeclarationCandidates,
+        ReadKind::ValidationView,
+        ReadKind::UniverseErrors,
+        ReadKind::FirstHeap,
+        ReadKind::Environment,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            ReadKind::Signature => "signature",
+            ReadKind::FailedSignature => "failed signature",
+            ReadKind::Lookup => "lookup",
+            ReadKind::NameSet => "name set",
+            ReadKind::Representation => "representation",
+            ReadKind::ExecutedBody => "executed body",
+            ReadKind::ExecutedSignature => "executed signature",
+            ReadKind::CitedText => "cited text",
+            ReadKind::DeclarationCandidates => "declaration candidates",
+            ReadKind::ValidationView => "validation view",
+            ReadKind::UniverseErrors => "universe errors",
+            ReadKind::FirstHeap => "first heap",
+            ReadKind::Environment => "environment",
+        }
+    }
+}
+
+impl ReadKey {
+    pub fn kind(&self) -> ReadKind {
+        match self {
+            ReadKey::Signature(_) => ReadKind::Signature,
+            ReadKey::FailedSignature(_) => ReadKind::FailedSignature,
+            ReadKey::Lookup(_) => ReadKind::Lookup,
+            ReadKey::NameSet(..) => ReadKind::NameSet,
+            ReadKey::Representation(_) => ReadKind::Representation,
+            ReadKey::ExecutedBody(_) => ReadKind::ExecutedBody,
+            ReadKey::ExecutedSignature(_) => ReadKind::ExecutedSignature,
+            ReadKey::CitedText(_) => ReadKind::CitedText,
+            ReadKey::DeclarationCandidates(_) => ReadKind::DeclarationCandidates,
+            ReadKey::ValidationView(_) => ReadKind::ValidationView,
+            ReadKey::UniverseErrors => ReadKind::UniverseErrors,
+            ReadKey::FirstHeap => ReadKind::FirstHeap,
+            ReadKey::Environment => ReadKind::Environment,
+        }
+    }
+    /// The definition this read names, if any.
+    pub fn definition(&self) -> Option<DefId> {
+        match *self {
+            ReadKey::Signature(d)
+            | ReadKey::FailedSignature(d)
+            | ReadKey::Representation(d)
+            | ReadKey::ExecutedBody(d)
+            | ReadKey::ExecutedSignature(d)
+            | ReadKey::CitedText(d)
+            | ReadKey::DeclarationCandidates(d)
+            | ReadKey::ValidationView(d) => Some(d),
+            _ => None,
+        }
+    }
+    /// The package whose inputs this read observes; `None` for the environment
+    /// and V's universe-wide reads.
+    pub fn package(&self) -> Option<PackageKey> {
+        match self {
+            ReadKey::Lookup(l) => Some(l.package),
+            ReadKey::NameSet(p, _) => Some(*p),
+            _ => self
+                .definition()
+                .map(|d| PackageKey::of(&d.path().0.package)),
+        }
+    }
+    /// Persisted form: kind tag, then DefPaths and spellings, never session ids.
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        fn text(out: &mut Vec<u8>, s: &str) {
+            out.extend((s.len() as u32).to_le_bytes());
+            out.extend(s.as_bytes());
+        }
+        fn path(out: &mut Vec<u8>, d: DefId) {
+            encode_def_path(out, d.path());
+        }
+        out.push(self.kind() as u8);
+        match *self {
+            ReadKey::Signature(d)
+            | ReadKey::FailedSignature(d)
+            | ReadKey::Representation(d)
+            | ReadKey::ExecutedBody(d)
+            | ReadKey::ExecutedSignature(d)
+            | ReadKey::CitedText(d)
+            | ReadKey::DeclarationCandidates(d)
+            | ReadKey::ValidationView(d) => path(out, d),
+            ReadKey::Lookup(l) => {
+                text(out, l.package.0.as_str());
+                text(out, l.module.0.as_str());
+                match l.qualifier {
+                    Some(q) => {
+                        out.push(1);
+                        text(out, q.0.as_str());
+                    }
+                    None => out.push(0),
+                }
+                text(out, l.path.as_str());
+            }
+            ReadKey::NameSet(p, m) => {
+                text(out, p.0.as_str());
+                text(out, m.0.as_str());
+            }
+            ReadKey::UniverseErrors | ReadKey::FirstHeap | ReadKey::Environment => {}
+        }
+    }
+}
+
+/// A memo's reads: `(ReadKey, observed value)` sorted by key, one entry per key.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct Reads(Box<[(ReadKey, ContentHash)]>);
+
+/// Two observations of one key disagreed inside one evaluation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Inconsistent(pub ReadKey);
+
+impl Reads {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+    /// Sorts and de-duplicates; conflicting observations of one key are an error.
+    pub fn from_vec(mut reads: Vec<(ReadKey, ContentHash)>) -> Result<Self, Inconsistent> {
+        reads.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.0.cmp(&b.1.0)));
+        reads.dedup();
+        if let Some(w) = reads.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Err(Inconsistent(w[0].0));
+        }
+        Ok(Self(reads.into_boxed_slice()))
+    }
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &(ReadKey, ContentHash)> {
+        self.0.iter()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn get(&self, key: &ReadKey) -> Option<ContentHash> {
+        self.0
+            .binary_search_by(|(k, _)| k.cmp(key))
+            .ok()
+            .map(|i| self.0[i].1)
+    }
+    /// The union of two read sets (execution closure, design §1b).
+    pub fn union(&self, other: &Reads) -> Result<Reads, Inconsistent> {
+        let (mut a, mut b) = (self.0.iter().peekable(), other.0.iter().peekable());
+        let mut out = Vec::with_capacity(self.0.len() + other.0.len());
+        loop {
+            match (a.peek(), b.peek()) {
+                (Some(x), Some(y)) => match x.0.cmp(&y.0) {
+                    std::cmp::Ordering::Less => out.push(*a.next().unwrap()),
+                    std::cmp::Ordering::Greater => out.push(*b.next().unwrap()),
+                    std::cmp::Ordering::Equal => {
+                        if x.1 != y.1 {
+                            return Err(Inconsistent(x.0));
+                        }
+                        out.push(*a.next().unwrap());
+                        b.next();
+                    }
+                },
+                (Some(_), None) => out.extend(a.by_ref().copied()),
+                (None, Some(_)) => out.extend(b.by_ref().copied()),
+                (None, None) => break,
+            }
+        }
+        Ok(Self(out.into_boxed_slice()))
+    }
+    /// The minimum durability over every read, given each read's durability.
+    pub fn durability(&self, of: impl Fn(&ReadKey) -> Durability) -> Durability {
+        self.0
+            .iter()
+            .map(|(k, _)| of(k))
+            .min()
+            .unwrap_or(Durability::High)
+    }
+    /// The first read whose current value differs, by `current`.
+    pub fn first_changed(
+        &self,
+        mut current: impl FnMut(&ReadKey) -> Option<ContentHash>,
+    ) -> Option<ReadKey> {
+        self.0
+            .iter()
+            .find(|(k, v)| current(k) != Some(*v))
+            .map(|(k, _)| *k)
+    }
+    /// The canonical persisted encoding.
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        out.extend((self.0.len() as u32).to_le_bytes());
+        for (key, value) in self.0.iter() {
+            key.encode(out);
+            out.extend(value.0);
+        }
+    }
+    pub fn decode(input: &mut &[u8]) -> Option<Reads> {
+        let count = take_u32(input)? as usize;
+        let mut reads = Vec::with_capacity(count.min(1 << 16));
+        for _ in 0..count {
+            let key = decode_key(input)?;
+            let value = ContentHash(take(input, 32)?.try_into().ok()?);
+            reads.push((key, value));
+        }
+        Reads::from_vec(reads).ok()
+    }
+    /// The content hash of the canonical encoding.
+    pub fn digest(&self) -> ContentHash {
+        let mut bytes = vec![];
+        self.encode(&mut bytes);
+        ContentHash::of_parts("hirsel.reads.v1", [bytes.as_slice()])
+    }
+}
+
+/// Records reads during one evaluation (a task-local accumulator), then
+/// freezes them into `Reads`.
+#[derive(Clone, Debug, Default)]
+pub struct ReadsBuilder(Vec<(ReadKey, ContentHash)>);
+impl ReadsBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn record(&mut self, key: ReadKey, value: ContentHash) {
+        self.0.push((key, value));
+    }
+    /// Merges another memo's complete reads (execution closure by union).
+    pub fn merge(&mut self, reads: &Reads) {
+        self.0.extend(reads.iter().copied());
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn finish(self) -> Result<Reads, Inconsistent> {
+        Reads::from_vec(self.0)
+    }
+}
+
+fn take<'a>(input: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+    if input.len() < n {
+        return None;
+    }
+    let (head, tail) = input.split_at(n);
+    *input = tail;
+    Some(head)
+}
+fn take_u32(input: &mut &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes(take(input, 4)?.try_into().ok()?))
+}
+fn take_text<'a>(input: &mut &'a [u8]) -> Option<&'a str> {
+    let n = take_u32(input)? as usize;
+    std::str::from_utf8(take(input, n)?).ok()
+}
+fn take_def(input: &mut &[u8]) -> Option<DefId> {
+    Some(DefId::intern(&decode_def_path(input)?))
+}
+fn put_text(out: &mut Vec<u8>, s: &str) {
+    out.extend((s.len() as u32).to_le_bytes());
+    out.extend(s.as_bytes());
+}
+/// A DefPath's persisted form: package name and version, module count, modules, name.
+pub fn encode_def_path(out: &mut Vec<u8>, path: &DefPath) {
+    let item = &path.0;
+    put_text(out, &item.package.name);
+    put_text(out, &item.package.version);
+    out.extend((item.modules.len() as u32).to_le_bytes());
+    for module in &item.modules {
+        put_text(out, module);
+    }
+    put_text(out, &item.name);
+}
+pub fn decode_def_path(input: &mut &[u8]) -> Option<DefPath> {
+    let name = take_text(input)?.to_owned();
+    let version = take_text(input)?.to_owned();
+    let count = take_u32(input)? as usize;
+    let mut modules = Vec::with_capacity(count.min(64));
+    for _ in 0..count {
+        modules.push(take_text(input)?.to_owned());
+    }
+    Some(DefPath(hirsel_syntax::ItemPath {
+        package: PackageId { name, version },
+        modules,
+        name: take_text(input)?.to_owned(),
+    }))
+}
+fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
+    let tag = *take(input, 1)?.first()?;
+    let kind = *ReadKind::ALL.get(tag as usize)?;
+    Some(match kind {
+        ReadKind::Signature => ReadKey::Signature(take_def(input)?),
+        ReadKind::FailedSignature => ReadKey::FailedSignature(take_def(input)?),
+        ReadKind::Representation => ReadKey::Representation(take_def(input)?),
+        ReadKind::ExecutedBody => ReadKey::ExecutedBody(take_def(input)?),
+        ReadKind::ExecutedSignature => ReadKey::ExecutedSignature(take_def(input)?),
+        ReadKind::CitedText => ReadKey::CitedText(take_def(input)?),
+        ReadKind::DeclarationCandidates => ReadKey::DeclarationCandidates(take_def(input)?),
+        ReadKind::ValidationView => ReadKey::ValidationView(take_def(input)?),
+        ReadKind::Lookup => {
+            let package = PackageKey(Symbol::intern(take_text(input)?));
+            let module = ModuleKey(Symbol::intern(take_text(input)?));
+            let qualifier = match *take(input, 1)?.first()? {
+                0 => None,
+                1 => Some(PackageKey(Symbol::intern(take_text(input)?))),
+                _ => return None,
+            };
+            let path = Symbol::intern(take_text(input)?);
+            ReadKey::Lookup(LookupKey {
+                package,
+                module,
+                qualifier,
+                path,
+            })
+        }
+        ReadKind::NameSet => ReadKey::NameSet(
+            PackageKey(Symbol::intern(take_text(input)?)),
+            ModuleKey(Symbol::intern(take_text(input)?)),
+        ),
+        ReadKind::UniverseErrors => ReadKey::UniverseErrors,
+        ReadKind::FirstHeap => ReadKey::FirstHeap,
+        ReadKind::Environment => ReadKey::Environment,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_syntax::ItemPath;
+    fn def(name: &str) -> DefId {
+        DefId::intern(&DefPath(ItemPath {
+            package: PackageId {
+                name: "p".into(),
+                version: "1".into(),
+            },
+            modules: vec!["m".into()],
+            name: name.into(),
+        }))
+    }
+    fn h(s: &str) -> ContentHash {
+        ContentHash::of_bytes(s.as_bytes())
+    }
+
+    #[test]
+    fn reads_sort_by_spelling_union_and_reject_conflicts() {
+        let (a, b) = (def("a"), def("b"));
+        let one = Reads::from_vec(vec![
+            (ReadKey::Signature(b), h("b")),
+            (ReadKey::Signature(a), h("a")),
+            (ReadKey::Signature(a), h("a")),
+        ])
+        .unwrap();
+        assert_eq!(one.len(), 2);
+        assert_eq!(one.iter().next().unwrap().0, ReadKey::Signature(a));
+        let two = Reads::from_vec(vec![(ReadKey::ExecutedBody(a), h("body"))]).unwrap();
+        let both = one.union(&two).unwrap();
+        assert_eq!(both.len(), 3);
+        assert_eq!(both, two.union(&one).unwrap());
+        let conflict = Reads::from_vec(vec![(ReadKey::Signature(a), h("other"))]).unwrap();
+        assert_eq!(
+            one.union(&conflict),
+            Err(Inconsistent(ReadKey::Signature(a)))
+        );
+        assert!(
+            Reads::from_vec(vec![
+                (ReadKey::Signature(a), h("x")),
+                (ReadKey::Signature(a), h("y"))
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn encoding_round_trips_through_paths_not_ids() {
+        let context = FileContext {
+            package: PackageId {
+                name: "p".into(),
+                version: "1".into(),
+            },
+            modules: vec!["m".into(), "n".into()],
+        };
+        let reads = Reads::from_vec(vec![
+            (ReadKey::Signature(def("a")), h("1")),
+            (ReadKey::DeclarationCandidates(def("a")), h("2")),
+            (
+                ReadKey::Lookup(LookupKey::of(&context, None, &["x".into(), "y".into()])),
+                h("3"),
+            ),
+            (
+                ReadKey::NameSet(PackageKey::of(&context.package), ModuleKey::of(&[])),
+                h("4"),
+            ),
+            (ReadKey::Environment, h("5")),
+            (ReadKey::UniverseErrors, h("6")),
+        ])
+        .unwrap();
+        let mut bytes = vec![];
+        reads.encode(&mut bytes);
+        let mut input = bytes.as_slice();
+        assert_eq!(Reads::decode(&mut input), Some(reads.clone()));
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn durability_is_the_minimum_and_changes_are_found() {
+        let reads = Reads::from_vec(vec![
+            (ReadKey::Signature(def("a")), h("a")),
+            (ReadKey::Environment, h("e")),
+        ])
+        .unwrap();
+        let of = |k: &ReadKey| match k {
+            ReadKey::Environment => Durability::High,
+            _ => Durability::Low,
+        };
+        assert_eq!(reads.durability(of), Durability::Low);
+        assert_eq!(Reads::empty().durability(of), Durability::High);
+        assert_eq!(
+            reads.first_changed(|k| reads.get(k)),
+            None,
+            "unchanged reads verify"
+        );
+        assert_eq!(
+            reads.first_changed(|k| match k {
+                ReadKey::Environment => Some(h("e2")),
+                k => reads.get(k),
+            }),
+            Some(ReadKey::Environment)
+        );
+    }
+}
