@@ -212,5 +212,5 @@ pub fn manifest(input: &NativeInput) -> Result<Manifest, String> {
             Ok(row)
         })
         .collect::<Result<Vec<_>, String>>()?;
-    hirsel_rt::operations::manifest(rows)
+    hirsel_rt_operations::manifest(rows)
 }

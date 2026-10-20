@@ -27,6 +27,7 @@ hirsel-heapcheck = { path = "../hirsel-heapcheck" }
 hirsel-llvm = { path = "../hirsel-llvm" }
 hirsel-cranelift = { path = "../hirsel-cranelift" }
 hirsel-rt = { path = "../hirsel-rt" }
+hirsel-rt-operations = { path = "../hirsel-rt-operations" }
 hirsel-proof-export = { path = "../hirsel-proof-export" }
 hirsel-intern = { path = "../hirsel-intern" }
 serde_json = "1"

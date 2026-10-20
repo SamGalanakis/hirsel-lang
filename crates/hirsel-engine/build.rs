@@ -28,6 +28,8 @@ fn main() {
         "crates/hirsel-rt/src",
         "crates/hirsel-rt/include",
         "crates/hirsel-rt/Cargo.toml",
+        "crates/hirsel-rt-operations/src",
+        "crates/hirsel-rt-operations/Cargo.toml",
         "crates/hirsel-kernels/src",
         "crates/hirsel-kernels/Cargo.toml",
         "crates/hirsel-rc/src/library",

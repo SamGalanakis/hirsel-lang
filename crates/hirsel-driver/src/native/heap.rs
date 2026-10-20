@@ -19,7 +19,7 @@ mod filesystem;
 mod net;
 mod process;
 
-/// The Io operations with a native entry (`hirsel_rt::operations`), over
+/// The Io operations with a native entry (`hirsel_rt_operations`), over
 /// logical handles numbered as the runtime's adapter numbers them.
 #[derive(Clone)]
 struct Io {

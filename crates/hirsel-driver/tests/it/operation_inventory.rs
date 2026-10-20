@@ -160,11 +160,11 @@ fn network_operations_publish_their_current_engine_dispositions() {
                 .collect(),
             result_cleanup: CleanupEffect::NoAlloc,
         });
-        let native = hirsel_rt::operations::classify(row).unwrap();
+        let native = hirsel_rt_operations::classify(row).unwrap();
         // Fixed network entries are runtime primitives; read_into is a compiled body.
         assert_eq!(
             native.dispositions.native,
-            if name == "test.net" || hirsel_rt::operations::NET_EXPORTS.contains(&name) {
+            if name == "test.net" || hirsel_rt_operations::NET_EXPORTS.contains(&name) {
                 Disposition::RuntimePrimitive(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
             } else if name == "net.read_into" {
                 Disposition::Body

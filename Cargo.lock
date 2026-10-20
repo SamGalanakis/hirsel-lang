@@ -580,6 +580,7 @@ dependencies = [
  "hirsel-rc",
  "hirsel-resolve",
  "hirsel-rt",
+ "hirsel-rt-operations",
  "hirsel-run-config",
  "hirsel-signature",
  "hirsel-span",
@@ -846,6 +847,7 @@ dependencies = [
  "hirsel-proof-export",
  "hirsel-rc",
  "hirsel-rt",
+ "hirsel-rt-operations",
  "hirsel-run-config",
  "hirsel-span",
  "hirsel-syntax",
@@ -926,6 +928,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "hirsel-rt-operations"
+version = "0.1.0"
+dependencies = [
+ "hirsel-core-contract",
 ]
 
 [[package]]

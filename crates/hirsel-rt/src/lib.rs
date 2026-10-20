@@ -40,7 +40,6 @@ pub mod net;
 pub mod net_abi;
 pub mod net_host;
 pub mod net_tls;
-pub mod operations;
 pub mod process;
 pub mod program;
 pub mod readiness;

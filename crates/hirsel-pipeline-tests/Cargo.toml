@@ -30,6 +30,7 @@ hirsel-object-storage = { path = "../hirsel-object-storage" }
 hirsel-proof-export = { path = "../hirsel-proof-export" }
 hirsel-rc = { path = "../hirsel-rc" }
 hirsel-rt = { path = "../hirsel-rt" }
+hirsel-rt-operations = { path = "../hirsel-rt-operations" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }

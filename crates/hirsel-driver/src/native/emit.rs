@@ -216,7 +216,7 @@ pub(crate) fn emit_registered(
 
 /// Every call of a `RuntimePrimitive` operation must have exactly the
 /// physical signature its runtime export declares
-/// (`hirsel_rt::operations::HIRSEL_ABI_EXPORTS`): emission calls each at the
+/// (`hirsel_rt_operations::HIRSEL_ABI_EXPORTS`): emission calls each at the
 /// Hirsel ABI of its declaration, so an export with another shape would be
 /// called with the wrong arguments.
 pub fn check_runtime_calls(program: &ReadyProgram) -> Result<(), NativeError> {
@@ -224,7 +224,7 @@ pub fn check_runtime_calls(program: &ReadyProgram) -> Result<(), NativeError> {
     use hirsel_lir::abi_types::PhysicalType;
     use hirsel_lir::ir::Callee;
     use hirsel_lir::layout_types::SizeSpec;
-    use hirsel_rt::operations::{HIRSEL_ABI_EXPORTS, Physical};
+    use hirsel_rt_operations::{HIRSEL_ABI_EXPORTS, Physical};
     for unit in &program.units {
         let unit = unit.unit();
         for site in &unit.tables.calls {

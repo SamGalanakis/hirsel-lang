@@ -1,7 +1,6 @@
-//! hirsel-rt's native operation dispositions checked against the driver's registry inventory.
+//! hirsel-rt-operations' native operation dispositions checked against the driver's registry inventory.
 use hirsel_core_contract::*;
 use hirsel_engine::registry::BuiltinRegistry;
-use hirsel_rt::operations;
 use hirsel_types::{DropAllocation, PassingMode};
 use std::collections::BTreeSet;
 fn cleanup(value: &DropAllocation) -> CleanupEffect {
@@ -58,12 +57,12 @@ fn rows() -> Vec<OperationRow> {
 #[test]
 fn inventory_set_equality_and_digest_control() {
     let rows = rows();
-    let native = operations::manifest(rows.clone()).unwrap();
+    let native = hirsel_rt_operations::manifest(rows.clone()).unwrap();
     native
         .check_coverage(rows.iter().map(|r| r.id.clone()))
         .unwrap();
     assert_eq!(native.unclassified(Engine::Native).count(), 0);
-    let native_paths: BTreeSet<_> = operations::NATIVE_PATHS
+    let native_paths: BTreeSet<_> = hirsel_rt_operations::NATIVE_PATHS
         .iter()
         .map(|n| hirsel_syntax::DefPath::core(n))
         .collect();
@@ -75,7 +74,7 @@ fn inventory_set_equality_and_digest_control() {
         definition: hirsel_syntax::DefPath::core("new.operation"),
         declaration_digest: Default::default(),
     });
-    assert!(operations::manifest(rows.iter().cloned().chain([new.clone()])).is_err());
+    assert!(hirsel_rt_operations::manifest(rows.iter().cloned().chain([new.clone()])).is_err());
     assert!(
         native
             .check_coverage(rows.iter().map(|r| r.id.clone()).chain([new.id.clone()]))
@@ -138,7 +137,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::RuntimePrimitive(symbol.clone())
         );
         assert!(
-            operations::HIRSEL_ABI_EXPORTS
+            hirsel_rt_operations::HIRSEL_ABI_EXPORTS
                 .iter()
                 .any(|e| e.symbol == symbol)
         );
@@ -171,7 +170,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::RuntimePrimitive(symbol.into())
         );
         assert!(
-            operations::HIRSEL_ABI_EXPORTS
+            hirsel_rt_operations::HIRSEL_ABI_EXPORTS
                 .iter()
                 .any(|e| e.symbol == symbol)
         );
@@ -217,9 +216,9 @@ fn inventory_set_equality_and_digest_control() {
     }
     // Scalar intrinsics and the inline library operations are instructions; the array
     // reductions name a float family.
-    for &name in operations::SCALAR_INTRINSICS
+    for &name in hirsel_rt_operations::SCALAR_INTRINSICS
         .iter()
-        .chain(operations::INLINE_OPERATIONS)
+        .chain(hirsel_rt_operations::INLINE_OPERATIONS)
     {
         let row = native
             .rows()
@@ -269,14 +268,14 @@ fn inventory_set_equality_and_digest_control() {
         .unwrap()
         .clone();
     altered.ownership.as_mut().unwrap().parameters[1].passing = Passing::Borrow;
-    assert!(operations::classify(altered).is_err());
+    assert!(hirsel_rt_operations::classify(altered).is_err());
     let mut altered = rows[0].clone();
     altered.id.declaration_digest.0[0] ^= 1;
-    assert!(operations::classify(altered).is_err());
-    assert!(operations::manifest(rows.iter().cloned().chain([rows[0].clone()])).is_err());
+    assert!(hirsel_rt_operations::classify(altered).is_err());
+    assert!(hirsel_rt_operations::manifest(rows.iter().cloned().chain([rows[0].clone()])).is_err());
     let mut foreign = rows[0].clone();
     foreign.id.definition.0.package.name = "app".into();
-    assert!(operations::classify(foreign).is_err());
+    assert!(hirsel_rt_operations::classify(foreign).is_err());
     println!("{} inventory rows have native dispositions", native.len());
 }
 #[test]
@@ -300,7 +299,7 @@ fn declaration_digests_match_the_reviewed_native_inventory() {
                     .collect();
             format!(
                 "{name}\t{digest}\t{}\n",
-                operations::ownership_encoding(r.ownership.as_ref().unwrap())
+                hirsel_rt_operations::ownership_encoding(r.ownership.as_ref().unwrap())
             )
         })
         .collect::<String>();

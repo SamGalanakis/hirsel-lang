@@ -355,7 +355,7 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
 fn every_runtime_primitive_row_matches_its_export() {
     use hirsel_core_contract::{Disposition, Engine as ManifestEngine};
     use hirsel_lir::layout_types::ScalarKind;
-    use hirsel_rt::operations::HIRSEL_ABI_EXPORTS;
+    use hirsel_rt_operations::HIRSEL_ABI_EXPORTS;
     with_compiler_stack(|| {
         let program = checked(HELLO);
         let manifest = hirsel_driver::native::manifest(program.validated.snapshot()).unwrap();
@@ -380,7 +380,7 @@ fn every_runtime_primitive_row_matches_its_export() {
         }
         let mut used_exports = std::collections::BTreeSet::new();
         for row in manifest.rows() {
-            let classified = hirsel_rt::operations::classify(row.clone()).unwrap();
+            let classified = hirsel_rt_operations::classify(row.clone()).unwrap();
             if matches!(
                 classified.dispositions.native,
                 Disposition::RuntimePrimitive(_)
