@@ -699,6 +699,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-image"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-types",
+ "libc",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "hirsel-intern"
 version = "0.1.0"
 dependencies = [
