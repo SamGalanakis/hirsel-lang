@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use hirsel_run_config::{AdmittedRun, BoundRun};
 use hirsel_run_schema::{RunOutcome, RunRefusal};
@@ -58,6 +59,62 @@ impl Write for Sink {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         self.0.borrow_mut().flush()
+    }
+}
+
+/// An output stream that any thread may write: what a
+/// [`ConcurrentAdapter`](crate::io_concurrent::ConcurrentAdapter) writes to (design §6 Io).
+/// Clones share one storage, whose identity is its logical key ([`SendSink::storage`]).
+#[derive(Clone)]
+pub struct SendSink(Arc<Mutex<dyn Write + Send>>);
+impl SendSink {
+    pub fn new(output: impl Write + Send + 'static) -> Self {
+        Self(Arc::new(Mutex::new(output)))
+    }
+    /// A sink that keeps what the run writes, readable through the returned buffer.
+    pub fn capture() -> (Self, SendCaptured) {
+        let buffer = SendCaptured::default();
+        (Self::new(buffer.clone()), buffer)
+    }
+    /// The identity of this sink's storage, shared by its clones.
+    pub fn storage(&self) -> usize {
+        Arc::as_ptr(&self.0).cast::<()>() as usize
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, dyn Write + Send + 'static> {
+        // A writer that panicked mid-write leaves bytes, not broken invariants.
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+impl Write for SendSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.lock().write(bytes)
+    }
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        // One lock for the whole write, so concurrent writers never interleave within it.
+        self.lock().write_all(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.lock().flush()
+    }
+}
+
+/// What a [`SendSink::capture`] sink received.
+#[derive(Clone, Default)]
+pub struct SendCaptured(Arc<Mutex<Vec<u8>>>);
+impl SendCaptured {
+    pub fn bytes(&self) -> Vec<u8> {
+        self.0.lock().unwrap().clone()
+    }
+}
+impl Write for SendCaptured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
