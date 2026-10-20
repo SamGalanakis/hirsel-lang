@@ -14,10 +14,10 @@ fn type_actuals(lowered: &hirsel_rc::import::Lowered, id: InstanceId) -> Vec<Str
         .types
         .iter()
         .map(
-            |(_, ty)| match &view.substitution.store.get(*ty).unwrap().kind {
+            |(_, ty)| match &lowered.instances.types.get(*ty).unwrap().kind {
                 TypeKind::Primitive(p) => format!("{p:?}"),
                 TypeKind::Builtin { kind, .. } => format!("{kind:?}"),
-                TypeKind::Named { definition, .. } => definition.0.name.to_string(),
+                TypeKind::Named { definition, .. } => definition.path().0.name.to_string(),
                 other => format!("{other:?}"),
             },
         )
@@ -166,23 +166,24 @@ fn actuals_differing_only_in_relation_share_one_instance() {
     let hirsel_types::GenericArgument::Type(actual) = edge.arguments[0] else {
         panic!("a type actual");
     };
+    let types = program.types.clone();
     let mut related = edge.clone();
-    let mut row = related.types.get(actual).unwrap().clone();
+    let mut row = types.get(actual).unwrap().clone();
     row.modes.relation = hirsel_types::Relation::new([hirsel_types::Reach::Environment]);
-    let id = related.types.push(row);
+    let id = types.intern(row);
     related.arguments = vec![hirsel_types::GenericArgument::Type(id)];
     program.requirements.push(related);
     let mut qualified = edge.clone();
-    let mut row = qualified.types.get(actual).unwrap().clone();
+    let mut row = types.get(actual).unwrap().clone();
     row.sendability_requirement = hirsel_types::SendabilityRequirement::Sendable;
-    let id = qualified.types.push(row);
+    let id = types.intern(row);
     qualified.arguments = vec![hirsel_types::GenericArgument::Type(id)];
     program.requirements.push(qualified);
     let lowered = hirsel_rc::import::lower(&program, &target()).unwrap();
     assert_eq!(instances_of(&lowered, "count").len(), 1);
     // Twin: a different type actual is a different instance.
     let mut other = edge.clone();
-    let id = other.types.push(hirsel_types::Type::boolean());
+    let id = types.intern(hirsel_types::Type::boolean());
     other.arguments = vec![hirsel_types::GenericArgument::Type(id)];
     program.requirements.push(other);
     let lowered = hirsel_rc::import::lower(&program, &target()).unwrap();

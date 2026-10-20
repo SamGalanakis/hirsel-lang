@@ -106,15 +106,17 @@ Evidence is current for an obligation exactly when its recorded `(ObligationId, 
 equals the export's. The export header names the `TIR_VERSION`, compiler version, spec hash
 and interface version that produced it; a consumer that pins a checker also records them.
 
-## The export: `hirsel.tir.export.v6`
+## The export: `hirsel.tir.export.v7`
 
 ### PS-8: Encoding
 
 Version 6 carries TIR version 6 (size-generic constant signatures, constant-read size
 actuals, order-bearing empty SortedMap constructors, caller-attribution declaration
 metadata, the explicit tracked body set and indirect-call boundaries) and adds the analysis
-annotations section ([PS-17](#ps-17-analysis-annotations)); the TIR wire form and every
-TIR digest are those of version 5. Imports reject earlier formats.
+annotations section ([PS-17](#ps-17-analysis-annotations)). Version 7 writes each
+definition, signature and materialized value with its canonical type table, the closure of
+the type ids it names in first-encounter order, in place of its producer's type store; TIR
+digests change accordingly. Imports reject earlier formats.
 
 The export is one canonical text in the S-expression form of the `hirsel-codec` crate: one
 spelling per value, so decode-then-encode is byte-identical and two runs of one build on one
@@ -136,7 +138,7 @@ iteration order, file id, type-id provenance, address or host path appears.
 
 ### PS-9: Contents
 
-- **Header:** the format `hirsel.tir.export.v6`, `TIR_VERSION`, compiler version, spec hash,
+- **Header:** the format `hirsel.tir.export.v7`, `TIR_VERSION`, compiler version, spec hash,
   interface version, and the launch entry with its semantic program revision when the
   program declares one.
 - **Definitions,** sorted by `DefPath`: path, location table, TIR, TIR digest, references

@@ -219,9 +219,11 @@ the definition or anything it uses is called:
   signature, its declaration's tokens and the hashes of what its generator reads, so its
   hash changes when it is renamed.
 - A recursive group (a strongly connected component of the reference graph) is hashed
-  together. A reference into the group is written as a group marker. Each member is then
-  refined by the hashes of the members it references, in encoding order, until no member
-  splits from another, and its hash binds the group's sorted member hashes and its own.
+  together. A reference into the group is written as a group marker. Each member's key is
+  a rooted depth-first encoding of the group from that member: each member's text, then
+  its group references in encoding order, each written as the discovery ordinal of a
+  member already reached or as that member's encoding when first reached. Its hash is that
+  key under the definition-hash domain.
 
 Renaming a definition, local or module keeps every hash except those of the name-bound
 definitions listed above and their dependents. A body or signature
@@ -231,7 +233,7 @@ a type identity for checking or serialization: nominal identity stays with paths
 signature fingerprints, which a caller checks alongside it. The encoding is the
 [PS-8](proof-seam.md#ps-8-encoding) wire text with these substitutions, hashed with the
 length-framed SHA-256 of [PS-5](proof-seam.md#ps-5-tir-digest) under the domain
-`hirsel.definition.hash.v1` with `TIR_VERSION`. For the same definitions it is the same
+`hirsel.definition.hash.v2` with `TIR_VERSION`. For the same definitions it is the same
 on every machine and build, whether a package was checked from source or adopted from its
 precheck, and changes only with `TIR_VERSION` or the encoding. `hirsel hash` prints the hashes of a
 program's definitions, and the definition-hash query lists each call site with its
