@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// result (`fn() -> T in env`), so types that differ only in a mode are told
 /// apart.
 pub fn type_spelling(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     names: &GenericDeclarations,
     package: &PackageId,
@@ -24,14 +24,14 @@ pub fn type_spelling(
 /// core's, prints as each one's full path (`app@1/Map`, `core@1/Map`), so the
 /// two never read alike.
 pub fn type_spellings_apart(
-    store: &TypeStore,
+    store: &TypeInterner,
     [left, right]: [TypeId; 2],
     names: &GenericDeclarations,
     package: &PackageId,
     modes: bool,
 ) -> [String; 2] {
     let mut heads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut pending = vec![left, right];
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
@@ -52,7 +52,7 @@ pub fn type_spellings_apart(
                 arguments: args,
             } => {
                 heads
-                    .entry(short_name(definition, package))
+                    .entry(short_name(definition.path(), package))
                     .or_default()
                     .insert(definition.to_string());
                 pending.extend(arguments(args));
@@ -107,7 +107,7 @@ fn short_name(definition: &DefPath, package: &PackageId) -> String {
 }
 
 fn spelling(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     names: &GenericDeclarations,
     package: &PackageId,
@@ -145,7 +145,7 @@ fn spelling(
         parts.push(Part::Text("]".into()));
     }
     let mut output = String::new();
-    let mut active = BTreeSet::new();
+    let mut active = std::collections::HashSet::new();
     let mut binders: Vec<Vec<Option<String>>> = vec![];
     let mut pending = vec![Part::Type(root)];
     while let Some(part) = pending.pop() {
@@ -223,7 +223,7 @@ fn spelling(
                 definition,
                 arguments: args,
             } => {
-                let name = short_name(definition, package);
+                let name = short_name(definition.path(), package);
                 parts.push(Part::Text(if qualify.contains(&name) {
                     definition.to_string()
                 } else {
@@ -375,8 +375,8 @@ mod tests {
     use super::*;
     use hirsel_syntax::PassingMode;
 
-    fn function(store: &mut TypeStore, parameters: Vec<Parameter>, result: TypeId) -> TypeId {
-        store.push(Type::with_kind(TypeKind::Function(FunctionType {
+    fn function(store: &TypeInterner, parameters: Vec<Parameter>, result: TypeId) -> TypeId {
+        store.intern(Type::with_kind(TypeKind::Function(FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
             parameters: parameters.into(),
@@ -390,12 +390,12 @@ mod tests {
             foreign: None,
         })))
     }
-    fn related(store: &mut TypeStore, relation: Relation) -> TypeId {
+    fn related(store: &TypeInterner, relation: Relation) -> TypeId {
         let mut row = Type::with_kind(TypeKind::Primitive(Primitive::String));
         row.modes.relation = relation;
-        store.push(row)
+        store.intern(row)
     }
-    fn spell(store: &TypeStore, root: TypeId) -> String {
+    fn spell(store: &TypeInterner, root: TypeId) -> String {
         let package = PackageId {
             name: "fixture".into(),
             version: "1".into(),
@@ -407,11 +407,11 @@ mod tests {
     /// differently.
     #[test]
     fn function_types_spell_their_relations() {
-        let mut store = TypeStore::default();
-        let global = related(&mut store, Relation::global());
-        let environment = related(&mut store, Relation::environment());
-        let plain = function(&mut store, vec![], global);
-        let local = function(&mut store, vec![], environment);
+        let store = TypeInterner::new(None);
+        let global = related(&store, Relation::global());
+        let environment = related(&store, Relation::environment());
+        let plain = function(&store, vec![], global);
+        let local = function(&store, vec![], environment);
         assert_eq!(spell(&store, plain), "fn() -> String");
         assert_eq!(spell(&store, local), "fn() -> String in env");
 
@@ -419,7 +419,7 @@ mod tests {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(1))),
             fields: Default::default(),
         });
-        let both = related(&mut store, Relation::new([Reach::Environment, x]));
+        let both = related(&store, Relation::new([Reach::Environment, x]));
         let parameter = |name: &str, passing| Parameter {
             name: Some(name.into()),
             label: None,
@@ -427,7 +427,7 @@ mod tests {
             ty: global,
         };
         let borrowing = function(
-            &mut store,
+            &store,
             vec![
                 parameter("w", PassingMode::Take),
                 parameter("x", PassingMode::Mut),

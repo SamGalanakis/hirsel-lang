@@ -101,6 +101,12 @@ impl PartialOrd for Symbol {
     }
 }
 
+impl From<&str> for Symbol {
+    fn from(text: &str) -> Self {
+        Symbol::intern(text)
+    }
+}
+
 /// Persisted as its spelling; never as a session id.
 impl serde::Serialize for Symbol {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
