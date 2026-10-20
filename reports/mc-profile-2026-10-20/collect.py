@@ -29,6 +29,8 @@ def execute(name,enabled,round):
  argv=command(binary,env,d)
  before=cpu()
  if name!='tasks-app':
+  fixture=OUT/'input-root';fixture.mkdir(exist_ok=True)
+  env['HIRSEL_RT_ROOT']=str(fixture)
   env['HIRSEL_RT_TAPE']=str(d/'tape')
   r=subprocess.run(argv,env=env,cwd=ROOT,capture_output=True)
   (d/'stdout').write_bytes(r.stdout);(d/'stderr').write_bytes(r.stderr)
