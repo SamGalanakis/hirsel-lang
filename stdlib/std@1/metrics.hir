@@ -1,0 +1,599 @@
+// OpenTelemetry Rust SDK histogram/ValueMap reduction, adapted to explicit
+// deterministic bounded state and checked integers. See docs/research/std-metrics.md.
+@serializable
+pub type Kind = Counter | UpDownCounter | Gauge | Histogram
+
+@serializable
+pub type Descriptor {
+  scope: String,
+  version: String,
+  name: String,
+  kind: Kind,
+  unit: String,
+  labels: List[String],
+  bounds: List[u64],
+}
+
+@serializable
+pub type MetricConfig {
+  descriptors: List[Descriptor],
+  max_series: u64,
+  max_buckets: u64,
+  max_labels: u64,
+  max_label_bytes: u64,
+}
+
+@serializable
+pub type Number = Unsigned(u64) | Signed(i64)
+
+@serializable
+pub type Measurement {
+  descriptor: Descriptor,
+  labels: List[telemetry.Attribute],
+  value: Number,
+  exemplar: Option[telemetry.TraceContext],
+}
+
+pub opaque type CheckedMeasurement: copyable + inert + noalloc_drop uses {} {
+  data: Measurement,
+}
+
+pub type MetricError = Config | DescriptorConflict | InvalidDescriptor | InvalidLabels | InvalidValue | Arithmetic | UnknownInstrument | EvidenceMismatch | OrdinalGap | Complete | InvalidCheckpoint
+
+@serializable
+pub type Aggregate {
+  count: u64,
+  unsigned: u64,
+  signed: i64,
+  buckets: List[u64],
+}
+
+@serializable
+pub type Series {
+  labels: List[telemetry.Attribute],
+  aggregate: Aggregate,
+}
+
+@serializable
+pub type Instrument {
+  descriptor: Descriptor,
+  series: List[Series],
+  overflow: Aggregate,
+}
+
+@serializable
+pub type Snapshot {
+  instruments: List[Instrument],
+  complete: bool,
+}
+
+@serializable
+pub type EvidenceId {
+  capture: String,
+  sha256: String,
+}
+
+pub type Observation {
+  evidence: EvidenceId,
+  ordinal: u64,
+  measurement: Option[CheckedMeasurement],
+}
+
+pub opaque type Registry: copyable + inert + noalloc_drop uses {} {
+  config: MetricConfig,
+  state: Snapshot,
+  evidence: Option[EvidenceId],
+  next_ordinal: u64,
+}
+
+pub opaque type Checkpoint: copyable + inert + noalloc_drop uses {} {
+  registry: Registry,
+}
+
+/// A versioned plain projection, never an encoding of an opaque Registry.
+@serializable
+pub type CheckpointData {
+  reducer_version: u64,
+  evidence: EvidenceId,
+  next_ordinal: u64,
+  config: MetricConfig,
+  state: Snapshot,
+}
+
+fn valid_text(s: String, allow_empty: bool, limit: u64) -> bool uses {} {
+  let size = core@1/string.byte_len(s)
+  (allow_empty || size > 0) && size <= limit
+}
+
+fn check_descriptor(d: Descriptor) -> Result[(), MetricError] uses {} {
+  if !valid_text(d.scope, false, 128) || !valid_text(d.version, true, 128) || !valid_text(
+    d.name,
+    false,
+    128
+  ) || !valid_text(d.unit, true, 128) {
+    return Error(InvalidDescriptor())
+  }
+  if core@1/list.len(d.labels) > 32 || core@1/list.len(d.bounds) > 63 {
+    return Error(InvalidDescriptor())
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(d.labels) {
+    let key = d.labels[i]
+    if !valid_text(key, false, 128) || key == "trace_id" || key == "span_id" || key == "request_id" {
+      return Error(InvalidDescriptor())
+    }
+    if i > 0 && string.compare(d.labels[i - 1], key) >= 0 {
+      return Error(InvalidDescriptor())
+    }
+    i += 1
+  }
+  i = 1
+  while i < core@1/list.len(d.bounds) {
+    if d.bounds[i - 1] >= d.bounds[i] {
+      return Error(InvalidDescriptor())
+    }
+    i += 1
+  }
+  if d.kind != Histogram() && core@1/list.len(d.bounds) != 0 {
+    return Error(InvalidDescriptor())
+  }
+  Ok(())
+}
+
+/// Filters disallowed dimensions before validation. Exemplars never form keys.
+pub fn check_measurement(m: Measurement) -> Result[CheckedMeasurement, MetricError] uses {} {
+  check_descriptor(m.descriptor)?
+  let labels = telemetry.allow_fields(m.labels, m.descriptor.labels)
+  let metadata = match telemetry.check_metadata(
+    telemetry.Metadata(trace: unique m.exemplar, fields: take labels)
+  ) {
+    Ok(value) => value,
+    Error(_) => return Error(InvalidLabels()),
+  }
+  match (m.descriptor.kind, m.value) {
+    (Counter(), Unsigned(_)) => (),
+    (Histogram(), Unsigned(_)) => (),
+    (UpDownCounter(), Signed(_)) => (),
+    (Gauge(), Signed(_)) => (),
+    _ => return Error(InvalidValue()),
+  }
+  let canonical = Measurement(
+    descriptor: unique m.descriptor,
+    labels: unique metadata.fields,
+    value: m.value,
+    exemplar: unique metadata.trace
+  )
+  if core@1/bytes.len(core@1/codec.encode(canonical)) > 16384 {
+    return Error(InvalidLabels())
+  }
+  Ok(CheckedMeasurement(data: take canonical))
+}
+
+pub fn measurement_data(m: CheckedMeasurement) -> Measurement uses {} {
+  unique m.data
+}
+
+fn zero(d: Descriptor) -> Aggregate uses {} {
+  let mut buckets: List[u64] = []
+  if d.kind == Histogram() {
+    let mut i: u64 = 0
+    while i <= core@1/list.len(d.bounds) {
+      core@1/list.push(mut buckets, 0)
+      i += 1
+    }
+  }
+  Aggregate(count: 0, unsigned: 0, signed: 0, buckets: take buckets)
+}
+
+/// Registration is part of construction, so offline folds cannot grow descriptors.
+pub fn registry(config: MetricConfig) -> Result[Registry, MetricError] uses {} {
+  if core@1/list.len(config.descriptors) > 1024 || config.max_series > 1024 || config.max_buckets == 0 || config.max_buckets > 64 || config.max_labels > 32 || config.max_label_bytes > 4096 {
+    return Error(Config())
+  }
+  let mut instruments: List[Instrument] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(config.descriptors) {
+    let d = config.descriptors[i]
+    check_descriptor(d)?
+    if core@1/list.len(d.labels) > config.max_labels || d.kind == Histogram() && core@1/list.len(
+      d.bounds
+    ) + 1 > config.max_buckets {
+      return Error(Config())
+    }
+    let mut seen = false
+    let mut j: u64 = 0
+    while j < core@1/list.len(instruments) {
+      let old = instruments[j].descriptor
+      if old.scope == d.scope && old.name == d.name {
+        if old != d {
+          return Error(DescriptorConflict())
+        }
+        seen = true
+      }
+      j += 1
+    }
+    if !seen {
+      core@1/list.push(
+        mut instruments,
+        Instrument(descriptor: unique d, series: [], overflow: zero(d))
+      )
+    }
+    i += 1
+  }
+  Ok(
+    Registry(
+      config: unique config,
+      state: Snapshot(instruments: take instruments, complete: false),
+      evidence: None(),
+      next_ordinal: 0
+    )
+  )
+}
+
+fn add_unsigned(a: u64, b: u64) -> Result[u64, MetricError] uses {} {
+  match u64.checked_add(a, b) {
+    Some(n) => Ok(n),
+    None() => Error(Arithmetic()),
+  }
+}
+
+fn reduce(d: Descriptor, a: Aggregate, value: Number) -> Result[Aggregate, MetricError] uses {} {
+  let count = add_unsigned(a.count, 1)?
+  let mut unsigned = a.unsigned
+  let mut signed = a.signed
+  let mut buckets = unique a.buckets
+  match (d.kind, value) {
+    (Counter(), Unsigned(n)) => {
+      unsigned = add_unsigned(unsigned, n)?
+    },
+    (Histogram(), Unsigned(n)) => {
+      unsigned = add_unsigned(unsigned, n)?
+      let mut index: u64 = 0
+      while index < core@1/list.len(d.bounds) && d.bounds[index] < n {
+        index += 1
+      }
+      let next = add_unsigned(buckets[index], 1)?
+      buckets[index] = next
+    },
+    (UpDownCounter(), Signed(n)) => {
+      signed = match i64.checked_add(signed, n) {
+        Some(next) => next,
+        None() => return Error(Arithmetic()),
+      }
+    },
+    (Gauge(), Signed(n)) => {
+      signed = n
+    },
+    _ => return Error(InvalidValue()),
+  }
+  Ok(Aggregate(count: count, unsigned: unsigned, signed: signed, buckets: take buckets))
+}
+
+fn check_label_limits(config: MetricConfig, labels: List[telemetry.Attribute]) -> Result[
+  (),
+  MetricError
+] uses {} {
+  if core@1/list.len(labels) > config.max_labels {
+    return Error(InvalidLabels())
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(labels) {
+    let size = match labels[i].value {
+      Text(s) => core@1/string.byte_len(s),
+      Bytes(b) => core@1/bytes.len(b),
+      _ => 0,
+    }
+    if size > config.max_label_bytes {
+      return Error(InvalidLabels())
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn apply(mut r: Registry, m: CheckedMeasurement) -> Result[(), MetricError] uses {} {
+  let data = m.data
+  check_label_limits(r.config, data.labels)?
+  let mut i: u64 = 0
+  while i < core@1/list.len(r.state.instruments) {
+    let instrument = r.state.instruments[i]
+    if instrument.descriptor.scope == data.descriptor.scope && instrument.descriptor.name == data.descriptor.name {
+      if instrument.descriptor != data.descriptor {
+        return Error(DescriptorConflict())
+      }
+      let mut j: u64 = 0
+      while j < core@1/list.len(instrument.series) {
+        if instrument.series[j].labels == data.labels {
+          let next = reduce(data.descriptor, instrument.series[j].aggregate, data.value)?
+          r.state.instruments[i].series[j].aggregate = take next
+          return Ok(())
+        }
+        j += 1
+      }
+      if core@1/list.len(instrument.series) < r.config.max_series {
+        let next = reduce(data.descriptor, zero(data.descriptor), data.value)?
+        core@1/list.push(
+          mut r.state.instruments[i].series,
+          Series(labels: unique data.labels, aggregate: take next)
+        )
+      } else {
+        let next = reduce(data.descriptor, instrument.overflow, data.value)?
+        r.state.instruments[i].overflow = take next
+      }
+      return Ok(())
+    }
+    i += 1
+  }
+  Error(UnknownInstrument())
+}
+
+/// Local state only. Bound offline registries cannot mix unnumbered updates.
+pub fn record(mut r: Registry, m: CheckedMeasurement) -> Result[(), MetricError] uses {} {
+  if r.evidence != None() {
+    return Error(EvidenceMismatch())
+  }
+  apply(mut r, m)
+}
+
+pub fn snapshot(r: Registry) -> Snapshot uses {} {
+  unique r.state
+}
+
+fn check_evidence(e: EvidenceId) -> Result[(), MetricError] uses {} {
+  if !valid_text(e.capture, false, 256) || core@1/string.byte_len(e.sha256) != 64 {
+    return Error(EvidenceMismatch())
+  }
+  let mut i: u64 = 0
+  let name = core@1/string.as_bytes(e.capture)
+  while i < core@1/bytes.len(name) {
+    let b = name[i]
+    if b < 32 || b == 127 || b == 194 && i + 1 < core@1/bytes.len(name) && name[i + 1] >= 128 && name[i + 1] <= 159 {
+      return Error(EvidenceMismatch())
+    }
+    i += 1
+  }
+  i = 0
+  while i < 64 {
+    let b = core@1/string.as_bytes(e.sha256)[i]
+    if !(b >= 48 && b <= 57 || b >= 97 && b <= 102) {
+      return Error(EvidenceMismatch())
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+/// Contiguous zero-based ordinals include nonmetric observations. Repeated
+/// ordinals in the same immutable evidence are no-ops; gaps never silently skip.
+pub fn fold(mut r: Registry, event: Observation) -> Result[(), MetricError] uses {} {
+  check_evidence(event.evidence)?
+  match r.evidence {
+    Some(e) => if e != event.evidence {
+      return Error(EvidenceMismatch())
+    },
+    None() => {
+      let mut i: u64 = 0
+      while i < core@1/list.len(r.state.instruments) {
+        let instrument = r.state.instruments[i]
+        if core@1/list.len(instrument.series) > 0 || instrument.overflow.count > 0 {
+          return Error(EvidenceMismatch())
+        }
+        i += 1
+      }
+    },
+  }
+  if event.ordinal < r.next_ordinal {
+    return Ok(())
+  }
+  if event.ordinal != r.next_ordinal {
+    return Error(OrdinalGap())
+  }
+  if r.state.complete {
+    return Error(Complete())
+  }
+  let next = add_unsigned(r.next_ordinal, 1)?
+  match event.measurement {
+    Some(m) => apply(mut r, m)?,
+    None() => (),
+  }
+  r.evidence = Some(unique event.evidence)
+  r.next_ordinal = next
+  Ok(())
+}
+
+/// Call only after the evidence parser confirms its complete final boundary.
+pub fn complete(mut r: Registry, evidence: EvidenceId, next_ordinal: u64) -> Result[
+  (),
+  MetricError
+] uses {} {
+  check_evidence(evidence)?
+  if r.next_ordinal != next_ordinal {
+    return Error(OrdinalGap())
+  }
+  match r.evidence {
+    Some(e) => if e != evidence {
+      return Error(EvidenceMismatch())
+    },
+    None() => {
+      if next_ordinal != 0 {
+        return Error(EvidenceMismatch())
+      }
+      let mut i: u64 = 0
+      while i < core@1/list.len(r.state.instruments) {
+        let instrument = r.state.instruments[i]
+        if core@1/list.len(instrument.series) > 0 || instrument.overflow.count > 0 {
+          return Error(EvidenceMismatch())
+        }
+        i += 1
+      }
+    },
+  }
+  r.evidence = Some(unique evidence)
+  r.state.complete = true
+  Ok(())
+}
+
+pub fn checkpoint(r: Registry) -> Checkpoint uses {} {
+  Checkpoint(registry: unique r)
+}
+
+pub fn restore(c: Checkpoint, evidence: EvidenceId) -> Result[Registry, MetricError] uses {} {
+  check_evidence(evidence)?
+  if c.registry.evidence != Some(unique evidence) {
+    return Error(EvidenceMismatch())
+  }
+  Ok(unique c.registry)
+}
+
+pub fn checkpoint_data(c: Checkpoint) -> Result[CheckpointData, MetricError] uses {} {
+  match c.registry.evidence {
+    None() => Error(EvidenceMismatch()),
+    Some(e) => Ok(
+      CheckpointData(
+        reducer_version: 1,
+        evidence: unique e,
+        next_ordinal: c.registry.next_ordinal,
+        config: unique c.registry.config,
+        state: unique c.registry.state
+      )
+    ),
+  }
+}
+
+fn check_aggregate(d: Descriptor, a: Aggregate) -> Result[(), MetricError] uses {} {
+  if a.count == 0 && (a.unsigned != 0 || a.signed != 0) {
+    return Error(InvalidCheckpoint())
+  }
+  if d.kind == Histogram() {
+    if a.signed != 0 || core@1/list.len(a.buckets) != core@1/list.len(d.bounds) + 1 {
+      return Error(InvalidCheckpoint())
+    }
+    let mut count: u64 = 0
+    let mut i: u64 = 0
+    while i < core@1/list.len(a.buckets) {
+      count = add_unsigned(count, a.buckets[i])?
+      i += 1
+    }
+    if count != a.count {
+      return Error(InvalidCheckpoint())
+    }
+    // Products of two u64s fit u128. The already checked total count bounds
+    // both sums, including checkpoints representing very long executions.
+    let mut minimum: u128 = 0
+    let mut maximum: u128 = 0
+    i = 0
+    while i < core@1/list.len(a.buckets) {
+      let n: u128 = core@1/int.widen(a.buckets[i])
+      let mut lower: u64 = 0
+      if i > 0 {
+        if d.bounds[i - 1] == 18446744073709551615 {
+          if n != 0 {
+            return Error(InvalidCheckpoint())
+          }
+        } else {
+          lower = d.bounds[i - 1] + 1
+        }
+      }
+      let upper: u64 = if i < core@1/list.len(d.bounds) {
+        d.bounds[i]
+      } else {
+        18446744073709551615
+      }
+      let low: u128 = core@1/int.widen(lower)
+      let high: u128 = core@1/int.widen(upper)
+      minimum += n * low
+      maximum += n * high
+      i += 1
+    }
+    let sum: u128 = core@1/int.widen(a.unsigned)
+    if sum < minimum || sum > maximum {
+      return Error(InvalidCheckpoint())
+    }
+  } else {
+    if core@1/list.len(a.buckets) != 0 {
+      return Error(InvalidCheckpoint())
+    }
+    if d.kind == Counter() {
+      if a.signed != 0 {
+        return Error(InvalidCheckpoint())
+      }
+    } else {
+      if a.unsigned != 0 {
+        return Error(InvalidCheckpoint())
+      }
+    }
+  }
+  Ok(())
+}
+
+/// Revalidate decoded plain state before it can become a live reducer. Restarts
+/// bind the caller's evidence and all limits atomically with the consumed prefix.
+pub fn restore_data(data: CheckpointData, evidence: EvidenceId) -> Result[
+  Registry,
+  MetricError
+] uses {} {
+  check_evidence(evidence)?
+  if data.reducer_version != 1 || data.evidence != evidence {
+    return Error(InvalidCheckpoint())
+  }
+  let mut r = registry(data.config)?
+  if core@1/list.len(data.state.instruments) != core@1/list.len(r.state.instruments) {
+    return Error(InvalidCheckpoint())
+  }
+  let mut total: u64 = 0
+  let mut i: u64 = 0
+  while i < core@1/list.len(data.state.instruments) {
+    let instrument = data.state.instruments[i]
+    let d = instrument.descriptor
+    if d != r.state.instruments[i].descriptor || core@1/list.len(instrument.series) > data.config.max_series {
+      return Error(InvalidCheckpoint())
+    }
+    check_aggregate(d, instrument.overflow)?
+    if instrument.overflow.count > 0 && core@1/list.len(instrument.series) != data.config.max_series {
+      return Error(InvalidCheckpoint())
+    }
+    total = add_unsigned(total, instrument.overflow.count)?
+    let mut j: u64 = 0
+    while j < core@1/list.len(instrument.series) {
+      let series = instrument.series[j]
+      if series.aggregate.count == 0 {
+        return Error(InvalidCheckpoint())
+      }
+      check_aggregate(d, series.aggregate)?
+      total = add_unsigned(total, series.aggregate.count)?
+      let value: Number = if d.kind == Counter() || d.kind == Histogram() {
+        Unsigned(0)
+      } else {
+        Signed(0)
+      }
+      let checked = check_measurement(
+        Measurement(
+          descriptor: unique d,
+          labels: unique series.labels,
+          value: value,
+          exemplar: None()
+        )
+      )?
+      if checked.data.labels != series.labels {
+        return Error(InvalidCheckpoint())
+      }
+      check_label_limits(data.config, series.labels)?
+      let mut k: u64 = 0
+      while k < j {
+        if instrument.series[k].labels == series.labels {
+          return Error(InvalidCheckpoint())
+        }
+        k += 1
+      }
+      j += 1
+    }
+    i += 1
+  }
+  if total > data.next_ordinal {
+    return Error(InvalidCheckpoint())
+  }
+  r.state = unique data.state
+  r.evidence = Some(unique evidence)
+  r.next_ordinal = data.next_ordinal
+  Ok(take r)
+}

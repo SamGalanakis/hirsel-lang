@@ -1,0 +1,147 @@
+// rule: SEM-3
+// expect: run
+fn descriptor(kind: std@1/metrics.Kind, name: String, bounds: List[u64]) -> std@1/metrics.Descriptor uses {} {
+  std@1/metrics.Descriptor(
+    scope: "test",
+    version: "1",
+    name: unique name,
+    kind: kind,
+    unit: "1",
+    labels: ["a", "z"],
+    bounds: unique bounds
+  )
+}
+
+fn config(ds: List[std@1/metrics.Descriptor], series: u64) -> std@1/metrics.MetricConfig uses {} {
+  std@1/metrics.MetricConfig(
+    descriptors: unique ds,
+    max_series: series,
+    max_buckets: 8,
+    max_labels: 2,
+    max_label_bytes: 16
+  )
+}
+
+fn measured(
+  d: std@1/metrics.Descriptor,
+  value: std@1/metrics.Number,
+  labels: List[std@1/telemetry.Attribute]
+) -> std@1/metrics.CheckedMeasurement uses {} {
+  let checked = std@1/metrics.check_measurement(
+    std@1/metrics.Measurement(
+      descriptor: unique d,
+      labels: unique labels,
+      value: value,
+      exemplar: None()
+    )
+  )
+  let mut values: List[std@1/metrics.CheckedMeasurement] = []
+  match take checked {
+    Ok(m) => core@1/list.push(mut values, take m),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  copy values[0]
+}
+
+pub fn main() -> () uses {} {
+  let d = descriptor(Counter(), "c", [])
+  let a = std@1/telemetry.Attribute(name: "a", value: Text("ok"))
+  let z = std@1/telemetry.Attribute(name: "z", value: Bool(true))
+  let m = measured(
+    d,
+    Unsigned(1),
+    [copy z, copy a, std@1/telemetry.Attribute(name: "secret", value: Text("drop"))]
+  )
+  failure.check(
+    std@1/metrics.measurement_data(m).labels == [copy a, copy z],
+    TextInvariant()
+  )
+  failure.check(
+    std@1/results.error(
+      std@1/metrics.check_measurement(
+        std@1/metrics.Measurement(
+          descriptor: copy d,
+          labels: [copy a, copy a],
+          value: Unsigned(1),
+          exemplar: None()
+        )
+      )
+    ) == Some(InvalidLabels()),
+    TextInvariant()
+  )
+  let mut Ok(r) = std@1/metrics.registry(config([copy d], 1)) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let previous = std@1/metrics.snapshot(r)
+  let long = measured(
+    d,
+    Unsigned(1),
+    [std@1/telemetry.Attribute(name: "a", value: Text("01234567890123456"))]
+  )
+  failure.check(
+    std@1/metrics.record(mut r, long) == Error(InvalidLabels()),
+    TextInvariant()
+  )
+  failure.check(std@1/metrics.snapshot(r) == previous, TextInvariant())
+  let mut bad = unique d
+  bad.labels = ["trace_id"]
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(config([copy bad], 1))) == Some(
+      InvalidDescriptor()
+    ),
+    TextInvariant()
+  )
+  bad = unique d
+  bad.labels = ["z", "a"]
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(config([copy bad], 1))) == Some(
+      InvalidDescriptor()
+    ),
+    TextInvariant()
+  )
+  let mut cfg = config([copy d], 1025)
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(cfg)) == Some(Config()),
+    TextInvariant()
+  )
+  cfg.max_series = 1
+  cfg.max_labels = 1
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(cfg)) == Some(Config()),
+    TextInvariant()
+  )
+  let mut hist = descriptor(Histogram(), "h", [1, 1])
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(config([copy hist], 1))) == Some(
+      InvalidDescriptor()
+    ),
+    TextInvariant()
+  )
+  hist.bounds = [1, 2, 3]
+  cfg = config([copy hist], 1)
+  cfg.max_buckets = 3
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(cfg)) == Some(Config()),
+    TextInvariant()
+  )
+  let mut Ok(r2) = std@1/metrics.registry(config([copy d, copy d], 1)) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    core@1/list.len(std@1/metrics.snapshot(r2).instruments) == 1,
+    TextInvariant()
+  )
+  // Canonical order collapses permutations to one ordinary series.
+  failure.check(std@1/metrics.record(mut r2, m) == Ok(()), TextInvariant())
+  failure.check(
+    std@1/metrics.record(mut r2, measured(d, Unsigned(2), [copy a, copy z])) == Ok(()),
+    TextInvariant()
+  )
+  let snap = std@1/metrics.snapshot(r2)
+  failure.check(
+    core@1/list.len(snap.instruments[0].series) == 1 && snap.instruments[0].series[0].aggregate.count == 2 && snap.instruments[0].overflow.count == 0,
+    TextInvariant()
+  )
+}

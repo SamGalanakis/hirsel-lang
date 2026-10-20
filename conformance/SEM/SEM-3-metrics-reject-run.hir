@@ -1,0 +1,253 @@
+// rule: SEM-3
+// expect: run
+fn descriptor(kind: std@1/metrics.Kind, name: String, bounds: List[u64]) -> std@1/metrics.Descriptor uses {} {
+  std@1/metrics.Descriptor(
+    scope: "test",
+    version: "1",
+    name: unique name,
+    kind: kind,
+    unit: "1",
+    labels: ["a", "z"],
+    bounds: unique bounds
+  )
+}
+
+fn config(ds: List[std@1/metrics.Descriptor], series: u64) -> std@1/metrics.MetricConfig uses {} {
+  std@1/metrics.MetricConfig(
+    descriptors: unique ds,
+    max_series: series,
+    max_buckets: 8,
+    max_labels: 2,
+    max_label_bytes: 16
+  )
+}
+
+fn measured(
+  d: std@1/metrics.Descriptor,
+  value: std@1/metrics.Number,
+  labels: List[std@1/telemetry.Attribute]
+) -> std@1/metrics.CheckedMeasurement uses {} {
+  let checked = std@1/metrics.check_measurement(
+    std@1/metrics.Measurement(
+      descriptor: unique d,
+      labels: unique labels,
+      value: value,
+      exemplar: None()
+    )
+  )
+  let mut values: List[std@1/metrics.CheckedMeasurement] = []
+  match take checked {
+    Ok(m) => core@1/list.push(mut values, take m),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  copy values[0]
+}
+
+pub fn main() -> () uses {} {
+  let c = descriptor(Counter(), "c", [])
+  let h = descriptor(Histogram(), "h", [0, 1, 18446744073709551615])
+  let u = descriptor(UpDownCounter(), "u", [])
+  let mut Ok(r) = std@1/metrics.registry(config([copy c, copy h, copy u], 1)) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    std@1/metrics.record(mut r, measured(c, Unsigned(18446744073709551615), [])) == Ok(
+      ()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.record(mut r, measured(h, Unsigned(18446744073709551615), [])) == Ok(
+      ()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.record(mut r, measured(u, Signed(9223372036854775807), [])) == Ok(()),
+    TextInvariant()
+  )
+  let previous = std@1/metrics.snapshot(r)
+  failure.check(
+    std@1/metrics.record(mut r, measured(c, Unsigned(1), [])) == Error(Arithmetic()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.record(mut r, measured(h, Unsigned(1), [])) == Error(Arithmetic()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.record(mut r, measured(u, Signed(1), [])) == Error(Arithmetic()),
+    TextInvariant()
+  )
+  failure.check(std@1/metrics.snapshot(r) == previous, TextInvariant())
+  let mut Ok(negative) = std@1/metrics.registry(config([copy u], 0)) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    std@1/metrics.record(mut negative, measured(u, Signed(-9223372036854775808), [])) == Ok(
+      ()
+    ),
+    TextInvariant()
+  )
+  let before_negative = std@1/metrics.snapshot(negative)
+  failure.check(
+    std@1/metrics.record(mut negative, measured(u, Signed(-1), [])) == Error(
+      Arithmetic()
+    ),
+    TextInvariant()
+  )
+  failure.check(std@1/metrics.snapshot(negative) == before_negative, TextInvariant())
+  let mut conflict = unique c
+  conflict.unit = "ns"
+  failure.check(
+    std@1/results.error(std@1/metrics.registry(config([copy c, copy conflict], 1))) == Some(
+      DescriptorConflict()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.record(mut r, measured(conflict, Unsigned(0), [])) == Error(
+      DescriptorConflict()
+    ),
+    TextInvariant()
+  )
+  let unknown = descriptor(Counter(), "missing", [])
+  failure.check(
+    std@1/metrics.record(mut r, measured(unknown, Unsigned(0), [])) == Error(
+      UnknownInstrument()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/results.error(
+      std@1/metrics.check_measurement(
+        std@1/metrics.Measurement(
+          descriptor: c,
+          labels: [],
+          value: Signed(-1),
+          exemplar: None()
+        )
+      )
+    ) == Some(InvalidValue()),
+    TextInvariant()
+  )
+  // A failed fold does not consume its ordinal or bind evidence.
+  let e = std@1/metrics.EvidenceId(
+    capture: "test",
+    sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  )
+  let mut Ok(offline) = std@1/metrics.registry(config([copy c], 1)) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    std@1/metrics.fold(
+      mut offline,
+      std@1/metrics.Observation(
+        evidence: copy e,
+        ordinal: 0,
+        measurement: Some(measured(c, Unsigned(18446744073709551615), []))
+      )
+    ) == Ok(()),
+    TextInvariant()
+  )
+  let before_fold = std@1/metrics.checkpoint(offline)
+  failure.check(
+    std@1/metrics.fold(
+      mut offline,
+      std@1/metrics.Observation(
+        evidence: copy e,
+        ordinal: 1,
+        measurement: Some(measured(c, Unsigned(1), []))
+      )
+    ) == Error(Arithmetic()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.checkpoint_data(std@1/metrics.checkpoint(offline)) == std@1/metrics.checkpoint_data(
+      before_fold
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.fold(
+      mut offline,
+      std@1/metrics.Observation(evidence: copy e, ordinal: 1, measurement: None())
+    ) == Ok(()),
+    TextInvariant()
+  )
+  let Ok(data) = std@1/metrics.checkpoint_data(before_fold) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let mut malformed = unique data
+  malformed.reducer_version = 2
+  failure.check(
+    std@1/results.error(std@1/metrics.restore_data(malformed, e)) == Some(
+      InvalidCheckpoint()
+    ),
+    TextInvariant()
+  )
+  malformed = unique data
+  malformed.state.instruments[0].series[0].labels = [
+    std@1/telemetry.Attribute(name: "secret", value: Text("disallowed"))
+  ]
+  failure.check(
+    std@1/results.error(std@1/metrics.restore_data(malformed, e)) == Some(
+      InvalidCheckpoint()
+    ),
+    TextInvariant()
+  )
+  malformed = unique data
+  malformed.state.instruments[0].series[0].aggregate.buckets = [1]
+  failure.check(
+    std@1/results.error(std@1/metrics.restore_data(malformed, e)) == Some(
+      InvalidCheckpoint()
+    ),
+    TextInvariant()
+  )
+  malformed = unique data
+  malformed.state.instruments[0].series[0].aggregate.count = 0
+  failure.check(
+    std@1/results.error(std@1/metrics.restore_data(malformed, e)) == Some(
+      InvalidCheckpoint()
+    ),
+    TextInvariant()
+  )
+  malformed = unique data
+  malformed.next_ordinal = 0
+  failure.check(
+    std@1/results.error(std@1/metrics.restore_data(malformed, e)) == Some(
+      InvalidCheckpoint()
+    ),
+    TextInvariant()
+  )
+  // A bounded seed exercises count overflow without 2^64 corpus iterations.
+  let mut count_limit = unique data
+  count_limit.next_ordinal = 18446744073709551615
+  count_limit.state.instruments[0].series[0].aggregate.count = 18446744073709551615
+  let mut Ok(counted) = std@1/metrics.restore_data(count_limit, e) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let prior_count = std@1/metrics.checkpoint(counted)
+  failure.check(
+    std@1/metrics.fold(
+      mut counted,
+      std@1/metrics.Observation(
+        evidence: copy e,
+        ordinal: 18446744073709551615,
+        measurement: None()
+      )
+    ) == Error(Arithmetic()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/metrics.checkpoint_data(std@1/metrics.checkpoint(counted)) == std@1/metrics.checkpoint_data(
+      prior_count
+    ),
+    TextInvariant()
+  )
+}

@@ -3999,6 +3999,84 @@ fn handle(t: Telemetry, parent: Option[telemetry.TraceContext], order: Order)
 }
 ```
 
+### Integer metrics (`std@1/metrics`)
+
+`metrics` is source-only inert state. `registry(MetricConfig)` registers a
+bounded explicit descriptor list and preallocates one overflow aggregate per
+instrument. `record(mut Registry, CheckedMeasurement)` and offline
+`fold(mut Registry, Observation)` share the same reducer. No operation reads
+host time, calls an exporter, grants authority or uses process-global state.
+
+A `Descriptor` gives `scope`, `version`, `name`, `kind`, `unit`, sorted unique
+label allowlist `labels`, and strictly increasing unique u64 `bounds`.
+Kinds are u64 monotonic `Counter`, i64 `UpDownCounter`, i64 last-observation
+`Gauge`, and u64 fixed-bucket `Histogram`. Nonhistograms require empty bounds.
+Same scope/name registration coalesces identical descriptors and rejects
+incompatible ones, including different versions, units, labels or bounds.
+The unit is explicit inert text; durations use measured nonnegative nanoseconds
+and unit `ns`. No clock sample is inferred from event order.
+
+`check_measurement(Measurement)` validates the descriptor, removes labels outside
+its allowlist, then uses telemetry's metadata checking to reject duplicate keys,
+canonicalize UTF-8 order and enforce key/value limits. Counters and histograms
+require `Unsigned(u64)`; signed instruments require `Signed(i64)`. The complete
+HSC1 plain-data measurement is limited to 16 KiB before acceptance. Its optional
+trace `exemplar` is validated and captured as data; it does not affect reduction
+or dimensions. Reserved `trace_id`, `span_id` and `request_id` dimensions are
+rejected. `measurement_data` explicitly projects the opaque checked wrapper to
+its public serializable `Measurement`; the checked wrapper itself is not a codec
+schema.
+
+`MetricConfig` contains `descriptors`, `max_series`, `max_buckets`, `max_labels`,
+and `max_label_bytes`. Fixed ceilings are 1024 descriptors, 1024 normal series
+per instrument, 64 histogram intervals (63 bounds), 32 labels, 128 UTF-8 bytes
+per descriptor string or label key, and 4096 bytes per label text/byte value.
+`max_buckets` includes the final overflow interval and must be at least one;
+`max_labels` bounds descriptor allowlists and accepted label counts;
+`max_label_bytes` bounds individual retained text/byte values. Zero series
+routes every measurement to overflow. Zero labels or label bytes is allowed.
+
+The first `max_series` distinct canonical label sets in observation order are
+retained. Every later unseen set contributes once to the separate overflow
+aggregate, without retaining its labels. A later observation of a retained key
+still uses that key's aggregate. The empty label set consumes a normal slot.
+Snapshots list instruments in registration order and series in first-seen order.
+Histograms include exact upper boundaries, with a final interval above the last
+bound; empty bounds yield one interval. All aggregates count observations in
+u64. Counter/histogram sums are u64, UpDownCounter sums are i64, and Gauge stores
+the last i64 value. Bucket/count/sum arithmetic is checked. Any error leaves
+all registry state unchanged, including series admission and consumed ordinals.
+
+An offline `Observation` carries `EvidenceId {capture, sha256}`, zero-based
+`ordinal`, and `Option[CheckedMeasurement]`. Include nonmetric events as None.
+The capture identity is 1..256 UTF-8 bytes without control characters and digest is 64 lowercase hexadecimal
+characters. Tooling binds these to exact evidence bytes using the observation
+view's evidence identity; equal digests with different capture names are
+independent executions. Consume a contiguous prefix from ordinal zero. Earlier
+ordinals for the same immutable evidence are no-ops; gaps and identity changes
+fail. Once bound, a registry rejects unnumbered `record` calls; a populated
+local registry cannot start an offline fold. Snapshots start with `complete`
+false; `complete(mut r, evidence, next_ordinal)` marks a confirmed final boundary.
+An incomplete recording stays an explicitly incomplete prefix. Duplicate
+ordinals remain harmless after completion; new ordinals fail. Windows are
+explicit ordinal slices in separately configured registries, never collector
+time.
+
+`checkpoint` creates an opaque immutable checkpoint. `restore` verifies the
+expected evidence before resuming. `checkpoint_data` projects an evidence-bound
+checkpoint into serializable `CheckpointData`, containing `reducer_version`
+(currently 1), `evidence`, `next_ordinal`, `config` and `state`. Persist this as a
+single codec value. `restore_data` validates version, expected evidence,
+descriptor identity, limits, canonical unique series, aggregate shape, bucket
+count totals and total accepted measurements versus consumed ordinals before
+returning a usable Registry. No partial restore mutates a registry. Unbound
+local snapshots cannot be projected as evidence checkpoints. Replay a prefix
+again after restore without counting it twice. The evidence digest is a
+provenance binding, not an authentication mechanism for externally supplied
+checkpoint contents.
+
+Prior art and deviations: `docs/research/std-metrics.md`.
+
 ## Typed tables
 
 `Table` stores its bounded UTF-8 name in an inline byte array, so copied names

@@ -5372,6 +5372,10 @@ conformance/SEM/SEM-3-markdown-safe-9-run.hir
 conformance/SEM/SEM-3-markdown-safety-run.hir
 conformance/SEM/SEM-3-md5-boundary-run.hir
 conformance/SEM/SEM-3-md5-golden-run.hir
+conformance/SEM/SEM-3-metrics-fold-run.hir
+conformance/SEM/SEM-3-metrics-limits-run.hir
+conformance/SEM/SEM-3-metrics-reduce-run.hir
+conformance/SEM/SEM-3-metrics-reject-run.hir
 conformance/SEM/SEM-3-msgpack-containers-run.hir
 conformance/SEM/SEM-3-msgpack-import-001-run.hir
 conformance/SEM/SEM-3-msgpack-import-002-run.hir
@@ -6269,6 +6273,7 @@ conformance/SER/SER-1-lexical-generic-bound-bad.hir
 conformance/SER/SER-1-lexical-generic-bound-ok.hir
 conformance/SER/SER-1-local-annotation-bad.hir
 conformance/SER/SER-1-local-annotation-ok.hir
+conformance/SER/SER-1-metrics-opaque-bad.hir
 conformance/SER/SER-1-opaque-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-ok.hir

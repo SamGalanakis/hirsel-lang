@@ -1088,6 +1088,12 @@
       "module": [
         "telemetry"
       ]
+    },
+    {
+      "path": "metrics.hir",
+      "module": [
+        "metrics"
+      ]
     }
   ],
   "dependencies": []
