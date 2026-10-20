@@ -10,16 +10,21 @@
 //! one key names the same bytes in every program.
 //!
 //! An `ObjectStore` maps keys to stored unit fragments. Implementations (`none@1`,
-//! `dir@1`, `sim@1`) are selected by the host; none changes program meaning, only what
-//! is recompiled.
+//! `dir@1`, `sim@1`; `objects_by_name`) are selected by the host's run config; none
+//! changes program meaning, only what is recompiled. The heap checker and dump tooling
+//! use `none@1`.
 use crate::abi_types::FnAbiId;
 use crate::emission::EmitInputs;
 use crate::ir::{Inst, LirUnit};
 use crate::layout_types::LayoutId;
 use crate::stage::Ready;
 use hirsel_syntax::ContentHash;
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::SystemTime;
 
 /// The content key of one planned unit's object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -37,6 +42,326 @@ impl UnitKey {
 pub trait ObjectStore: Send + Sync {
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>>;
     fn put(&self, key: &UnitKey, value: &[u8]);
+}
+
+/// The store format version in `dir@1`'s directory name.
+pub const FORMAT: u32 = 1;
+
+/// The `dir@1` partition of one target, backend and opt level: objects of different
+/// partitions never share a directory, so a key collision across them is impossible.
+pub fn partition(target: &str, backend: &str, opt: &str) -> String {
+    format!("{target}-{backend}-{opt}")
+}
+
+/// `none@1`: stores nothing.
+#[derive(Debug, Default)]
+pub struct NoObjects;
+impl ObjectStore for NoObjects {
+    fn get(&self, _: &UnitKey) -> Option<Arc<[u8]>> {
+        None
+    }
+    fn put(&self, _: &UnitKey, _: &[u8]) {}
+}
+
+/// The default size cap of `dir@1`.
+pub const DEFAULT_CAP: u64 = 4 << 30;
+/// After this many bytes written in a process, `dir@1` enforces its cap.
+const GC_EVERY: u64 = 64 << 20;
+
+/// `dir@1`: one checksummed file per unit under
+/// `$XDG_CACHE_HOME/hirsel/objects-v<N>/<partition>`. Writes go to a temp file renamed
+/// into place, so readers never see a partial object and no lock is taken. A size cap
+/// is enforced by evicting the least recently used objects by mtime; a hit refreshes
+/// its object's mtime.
+#[derive(Debug)]
+pub struct DirObjects {
+    root: PathBuf,
+    cap: u64,
+    written: AtomicU64,
+    temp: AtomicU64,
+}
+
+/// What a collection found and removed.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GcReport {
+    pub entries: u64,
+    pub bytes: u64,
+    pub removed: u64,
+    pub removed_bytes: u64,
+}
+
+impl DirObjects {
+    /// The store at `root`, the directory of one partition.
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            cap: DEFAULT_CAP,
+            written: AtomicU64::new(0),
+            temp: AtomicU64::new(0),
+        }
+    }
+    pub fn with_cap(mut self, cap: u64) -> Self {
+        self.cap = cap;
+        self
+    }
+    /// `$XDG_CACHE_HOME/hirsel/objects-v<N>/<partition>`, else under `$HOME/.cache`.
+    pub fn default_location(partition: &str) -> Option<Self> {
+        let base = std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+        Some(Self::new(
+            base.join("hirsel")
+                .join(format!("objects-v{FORMAT}"))
+                .join(partition),
+        ))
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    fn path(&self, key: &UnitKey) -> PathBuf {
+        let hex = key.hex();
+        self.root.join(&hex[..2]).join(&hex)
+    }
+
+    /// Evicts least recently used objects until the store is within `cap`, and removes
+    /// temp files a crashed writer left behind.
+    pub fn gc(&self, cap: u64) -> GcReport {
+        let mut report = GcReport::default();
+        let mut files: Vec<(SystemTime, u64, PathBuf)> = vec![];
+        let Ok(shards) = fs::read_dir(&self.root) else {
+            return report;
+        };
+        for shard in shards.flatten() {
+            let shard = shard.path();
+            if shard.file_name().is_some_and(|n| n == "tmp") {
+                for stale in fs::read_dir(&shard).into_iter().flatten().flatten() {
+                    let old = stale
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age.as_secs() > 3600);
+                    if old {
+                        let _ = fs::remove_file(stale.path());
+                    }
+                }
+                continue;
+            }
+            for file in fs::read_dir(&shard).into_iter().flatten().flatten() {
+                if let Ok(meta) = file.metadata()
+                    && meta.is_file()
+                {
+                    let time = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                    files.push((time, meta.len(), file.path()));
+                }
+            }
+        }
+        report.entries = files.len() as u64;
+        report.bytes = files.iter().map(|f| f.1).sum();
+        // Oldest first; ties by path, so the order does not depend on readdir.
+        files.sort();
+        let mut total = report.bytes;
+        for (_, len, path) in files {
+            if total <= cap {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                total -= len;
+                report.removed += 1;
+                report.removed_bytes += len;
+            }
+        }
+        report
+    }
+    pub fn cap(&self) -> u64 {
+        self.cap
+    }
+}
+
+impl ObjectStore for DirObjects {
+    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+        let path = self.path(key);
+        let bytes = fs::read(&path).ok()?;
+        match unframe(&bytes) {
+            Some(payload) => {
+                // Refresh the LRU clock; failure only ages the entry.
+                if let Ok(file) = fs::File::options().append(true).open(&path) {
+                    let _ = file.set_modified(SystemTime::now());
+                }
+                Some(payload.into())
+            }
+            None => {
+                let _ = fs::remove_file(&path);
+                None
+            }
+        }
+    }
+    fn put(&self, key: &UnitKey, value: &[u8]) {
+        let path = self.path(key);
+        let temp_dir = self.root.join("tmp");
+        let framed = frame(value);
+        let write = || -> std::io::Result<()> {
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::create_dir_all(&temp_dir)?;
+            let temp = temp_dir.join(format!(
+                "{}.{}.{}",
+                key.hex(),
+                std::process::id(),
+                self.temp.fetch_add(1, Relaxed)
+            ));
+            fs::write(&temp, &framed)?;
+            fs::rename(&temp, &path).inspect_err(|_| {
+                let _ = fs::remove_file(&temp);
+            })
+        };
+        // A failed write is a later miss, never a build failure.
+        if write().is_ok() {
+            let before = self.written.fetch_add(framed.len() as u64, Relaxed);
+            if (before + framed.len() as u64) / GC_EVERY != before / GC_EVERY {
+                self.gc(self.cap);
+            }
+        }
+    }
+}
+
+/// Faults `sim@1` injects, each by operation ordinal (0-based, counted over gets and
+/// puts separately), so a test names exactly which operation fails.
+#[derive(Clone, Debug, Default)]
+pub struct SimFaults {
+    /// Puts that are silently lost (a crash before rename).
+    pub lose_puts: Vec<u64>,
+    /// Gets that return a corrupted payload, which the checksum rejects.
+    pub corrupt_gets: Vec<u64>,
+}
+
+/// `sim@1`: a deterministic in-memory store with an operation log and injectable
+/// faults. Payloads carry `dir@1`'s checksum framing, so corruption is detected the
+/// same way.
+#[derive(Debug, Default)]
+pub struct SimObjects {
+    state: Mutex<SimState>,
+}
+#[derive(Debug, Default)]
+struct SimState {
+    entries: HashMap<UnitKey, Vec<u8>>,
+    faults: SimFaults,
+    gets: u64,
+    puts: u64,
+    log: Vec<SimOp>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SimOp {
+    Hit(UnitKey),
+    Miss(UnitKey),
+    Corrupt(UnitKey),
+    Put(UnitKey),
+    Lost(UnitKey),
+}
+impl SimObjects {
+    pub fn with_faults(faults: SimFaults) -> Self {
+        Self {
+            state: Mutex::new(SimState {
+                faults,
+                ..Default::default()
+            }),
+        }
+    }
+    fn state(&self) -> std::sync::MutexGuard<'_, SimState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    pub fn log(&self) -> Vec<SimOp> {
+        self.state().log.clone()
+    }
+    pub fn len(&self) -> usize {
+        self.state().entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// The bytes stored, framing included.
+    pub fn bytes(&self) -> usize {
+        self.state().entries.values().map(Vec::len).sum()
+    }
+}
+impl ObjectStore for SimObjects {
+    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+        let mut state = self.state();
+        let ordinal = state.gets;
+        state.gets += 1;
+        let Some(mut framed) = state.entries.get(key).cloned() else {
+            state.log.push(SimOp::Miss(*key));
+            return None;
+        };
+        if state.faults.corrupt_gets.contains(&ordinal)
+            && let Some(last) = framed.last_mut()
+        {
+            *last ^= 0xff;
+        }
+        match unframe(&framed) {
+            Some(payload) => {
+                state.log.push(SimOp::Hit(*key));
+                Some(payload.into())
+            }
+            None => {
+                state.entries.remove(key);
+                state.log.push(SimOp::Corrupt(*key));
+                None
+            }
+        }
+    }
+    fn put(&self, key: &UnitKey, value: &[u8]) {
+        let mut state = self.state();
+        let ordinal = state.puts;
+        state.puts += 1;
+        if state.faults.lose_puts.contains(&ordinal) {
+            state.log.push(SimOp::Lost(*key));
+            return;
+        }
+        state.entries.insert(*key, frame(value));
+        state.log.push(SimOp::Put(*key));
+    }
+}
+
+const FRAME_MAGIC: &[u8; 8] = b"HIROBJ01";
+
+/// A stored payload: magic, length, SHA-256 of the payload, payload.
+fn frame(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len() + 48);
+    out.extend(FRAME_MAGIC);
+    out.extend((payload.len() as u64).to_le_bytes());
+    out.extend(ContentHash::of_parts("hirsel.object.payload.v1", [payload]).0);
+    out.extend(payload);
+    out
+}
+
+/// The payload of a framed record, or `None` on any mismatch.
+fn unframe(bytes: &[u8]) -> Option<&[u8]> {
+    let rest = bytes.strip_prefix(FRAME_MAGIC.as_slice())?;
+    let (len, rest) = rest.split_at_checked(8)?;
+    let (sum, payload) = rest.split_at_checked(32)?;
+    (u64::from_le_bytes(len.try_into().ok()?) as usize == payload.len()
+        && ContentHash::of_parts("hirsel.object.payload.v1", [payload]).0 == sum)
+        .then_some(payload)
+}
+
+/// The store a run-config provider name selects for `partition`: `none@1`, `dir@1`
+/// (at `root`, else the default cache directory) or `sim@1`.
+pub fn objects_by_name(
+    name: &str,
+    root: Option<PathBuf>,
+    partition: &str,
+) -> Result<Arc<dyn ObjectStore>, String> {
+    Ok(match name {
+        "none@1" => Arc::new(NoObjects),
+        "dir@1" => Arc::new(match root {
+            Some(root) => DirObjects::new(root.join(partition)),
+            None => DirObjects::default_location(partition)
+                .ok_or("dir@1: no cache directory (set XDG_CACHE_HOME or HOME)")?,
+        }),
+        "sim@1" => Arc::new(SimObjects::default()),
+        other => return Err(format!("unknown object store `{other}`")),
+    })
 }
 
 /// A layout or FnAbi index a unit names.
@@ -124,19 +449,24 @@ pub fn erased(unit: &LirUnit<Ready>) -> (LirUnit<Ready>, Vec<LayoutId>, Vec<FnAb
     (erased, layouts, abis)
 }
 
-/// The `UnitKey` of `unit`'s object as `toolchain` emits it with `inputs`, `debug`
-/// line tables and the small callee bodies `copies` (by their keys) copied in. Covers
-/// the erased unit (`erased`), the `LayoutKey`s and FnAbi keys of the ids it names, the
-/// static data it reads and the manifest rows of the operations it calls, the target,
-/// the options and every program-wide fact emission reads (`EmitInputs`), the versions
-/// and the unit's linkage. The error names an id outside the table.
-pub fn unit_key(
+/// The digest of everything `unit`'s object bytes are a function of when `toolchain`
+/// emits it with `inputs`, `debug` line tables and the small callee bodies `copies` (by
+/// their digests) copied in: the erased unit (`erased`), the `LayoutKey`s and FnAbi keys
+/// of the ids it names, the static data it reads and the manifest rows of the operations
+/// it calls, the target, the options and every program-wide fact emission reads
+/// (`EmitInputs`), the versions and the unit's linkage.
+///
+/// Unlike the `UnitKey`, which the plan computes before import from the unit's inputs,
+/// this needs the Ready unit. Two units with one digest emit the same bytes in any
+/// program; a store hit is checked against it under `VerifyStore::Recompute`. The
+/// error names an id outside the table.
+pub fn ready_digest(
     unit: &LirUnit<Ready>,
     inputs: &EmitInputs<'_>,
     toolchain: &str,
     debug: bool,
-    copies: &[UnitKey],
-) -> Result<UnitKey, String> {
+    copies: &[ContentHash],
+) -> Result<ContentHash, String> {
     let (erased, layouts, abis) = erased(unit);
     let mut parts: Vec<Vec<u8>> = vec![
         hirsel_codec::to_text(&erased).into_bytes(),
@@ -208,10 +538,98 @@ pub fn unit_key(
         }
     }
     for copy in copies {
-        parts.push(copy.0.0.to_vec());
+        parts.push(copy.0.to_vec());
     }
-    Ok(UnitKey(ContentHash::of_parts(
-        "hirsel.unit-key.v1",
+    Ok(ContentHash::of_parts(
+        "hirsel.ready-digest.v1",
         parts.iter().map(Vec::as_slice),
-    )))
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(n: u8) -> UnitKey {
+        UnitKey(ContentHash([n; 32]))
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "hirsel-objects-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn none_stores_nothing() {
+        let store = objects_by_name("none@1", None, "p").unwrap();
+        store.put(&key(1), b"object");
+        assert!(store.get(&key(1)).is_none());
+        assert!(objects_by_name("disk@9", None, "p").is_err());
+    }
+
+    #[test]
+    fn dir_round_trips_rejects_damage_and_evicts_least_recently_used() {
+        let root = scratch("dir");
+        let store = DirObjects::new(root.join(partition("x86_64-unknown-linux-gnu", "llvm", "O1")));
+        assert!(store.get(&key(1)).is_none());
+        store.put(&key(1), b"first object");
+        store.put(&key(2), b"second object");
+        assert_eq!(&*store.get(&key(1)).unwrap(), b"first object");
+        assert_eq!(&*store.get(&key(2)).unwrap(), b"second object");
+        // A damaged file is a miss, and is removed.
+        let path = store.path(&key(2));
+        let mut bytes = fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&path, bytes).unwrap();
+        assert!(store.get(&key(2)).is_none());
+        assert!(!path.exists());
+        // Eviction keeps the most recently used within the cap.
+        store.put(&key(3), b"third object");
+        let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        fs::File::options()
+            .append(true)
+            .open(store.path(&key(1)))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let one = fs::metadata(store.path(&key(3))).unwrap().len();
+        let report = store.gc(one);
+        assert_eq!((report.entries, report.removed), (2, 1));
+        assert!(store.get(&key(1)).is_none());
+        assert!(store.get(&key(3)).is_some());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sim_logs_and_injects_faults() {
+        let store = SimObjects::with_faults(SimFaults {
+            lose_puts: vec![1],
+            corrupt_gets: vec![1],
+        });
+        store.put(&key(1), b"a");
+        store.put(&key(2), b"b");
+        store.put(&key(3), b"c");
+        assert!(store.get(&key(1)).is_some());
+        assert!(store.get(&key(3)).is_none(), "the corrupted get");
+        assert!(store.get(&key(2)).is_none(), "the lost put");
+        assert_eq!(
+            store.log(),
+            [
+                SimOp::Put(key(1)),
+                SimOp::Lost(key(2)),
+                SimOp::Put(key(3)),
+                SimOp::Hit(key(1)),
+                SimOp::Corrupt(key(3)),
+                SimOp::Miss(key(2)),
+            ]
+        );
+        assert_eq!(store.len(), 1);
+    }
 }
