@@ -12,6 +12,7 @@ hirsel_guard::install!();
 mod c_entry;
 mod compare;
 mod context;
+mod debug;
 mod emit;
 mod glue;
 mod runtime;

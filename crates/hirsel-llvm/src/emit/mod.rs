@@ -50,6 +50,7 @@ use crate::context::{
 use crate::glue;
 use crate::scalar;
 use crate::{CodegenError, PINNED_LLVM, VerifyStage};
+use hirsel_lir::debug::Profile;
 
 mod bindings;
 mod blocks;
@@ -242,28 +243,40 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_object_profile(units, inputs, None)
+    emit_object_profile(units, inputs, Profile::default())
 }
 
-/// Emit optional DWARF line tables and, with measurement, source-site call scopes.
+/// Emits `units` as `emit_object` does, recording what `profile` asks for: each function's
+/// debug intervals (`ObjectArtifact::debug`, for the link's debug object; the object
+/// itself keeps no DWARF) and, under measurement with resolved sources, source-site call
+/// scopes.
 pub fn emit_object_profile(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&crate::ProfileSources>,
+    profile: Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested) = lower(units, inputs, sources, |module, machine| {
+    let (bytes, manifested, plan) = lower(units, inputs, profile, |module, machine| {
         optimize_and_emit(module, machine, inputs.opt)
     })?;
+    let (bytes, debug) = match plan {
+        Some(plan) => crate::debug::split(&bytes, &plan)
+            .map_err(|message| CodegenError::Object { message })?,
+        None => (bytes, Vec::new()),
+    };
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
     let mut artifact = artifact(file, manifested, inputs, &toolchain())
         .map_err(|problem| CodegenError::Manifest { problem })?;
-    if sources.is_some() {
+    if profile.debug || (inputs.measurement && profile.sources.is_some()) {
         artifact.reproducibility.options = ContentHash::of_parts(
-            "hirsel.profile-lines-options.v1",
-            [artifact.reproducibility.options.0.as_slice()],
+            "hirsel.profile-lines-options.v2",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                &[u8::from(profile.debug)],
+            ],
         );
     }
+    artifact.debug = debug;
     Ok(artifact)
 }
 
@@ -273,11 +286,11 @@ pub fn emit_optimized_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, None, |module, machine| {
+    lower(units, inputs, Profile::default(), |module, machine| {
         optimize(module, machine, inputs.opt)?;
         Ok(module.text())
     })
-    .map(|(text, _)| text)
+    .map(|(text, ..)| text)
 }
 
 /// The verified module text before optimization, for IR-level controls.
@@ -285,16 +298,19 @@ pub fn emit_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, None, |module, _| Ok(module.text())).map(|(text, _)| text)
+    lower(units, inputs, Profile::default(), |module, _| {
+        Ok(module.text())
+    })
+    .map(|(text, ..)| text)
 }
 
 /// Lowers `units` into one module for the target and hands it to `finish`.
 fn lower<T>(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&crate::ProfileSources>,
+    profile: Profile<'_>,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
-) -> Result<(T, Manifested), CodegenError> {
+) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
     for unit in units {
         check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
@@ -308,8 +324,10 @@ fn lower<T>(
         let context = Context::new();
         let module = Module::new(&context, "hirsel");
         module.set_target(&machine);
-        let debug =
-            sources.map(|_| crate::context::DebugInfo::new(&module, inputs.opt != OptLevel::None));
+        let debug = profile
+            .debug
+            .then(|| crate::context::DebugInfo::new(&module, inputs.opt != OptLevel::None));
+        let mut plan = crate::debug::DebugPlan::default();
         let mut functions = Vec::new();
         for unit in units {
             let unit = unit.unit();
@@ -363,6 +381,20 @@ fn lower<T>(
                 module.make_linkonce_odr(entry);
                 module.add_attribute(entry, AttributeSlot::Function, Attribute::InlineHint);
                 manifested.library.insert(body_name);
+                // The adapter has its unit's scope, so a body inlined into it keeps its
+                // locations.
+                if let Some(debug) = debug.as_ref() {
+                    let site = unit.tables.source_anchors
+                        [unit.blocks[unit.entry.index()].anchor.index()]
+                    .site;
+                    let column = plan.column(&unit.header.definition);
+                    let line = site.start.saturating_add(1);
+                    let scope = debug.function(entry, &unit.header.definition.to_string(), line);
+                    debug.locate_all(entry, scope, line, column);
+                    if !inputs.available_externally.contains(&unit.header.instance) {
+                        plan.functions.push((name.clone(), column - 1, site.start));
+                    }
+                }
                 entry
             };
             // A small source unit another object implements and exports: here only an
@@ -432,27 +464,32 @@ fn lower<T>(
             functions.push((unit, function, signature));
         }
         for (unit, function, signature) in functions {
+            let rooted = !signature.roots.is_empty();
             let mut emitter =
                 FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
-            if let (Some(debug), Some(source)) = (
-                debug.as_ref(),
-                sources.and_then(|s| s.get(&unit.header.definition)),
-            ) {
+            if let Some(debug) = debug.as_ref() {
                 let site =
                     unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-                let (line, _) = source
-                    .location(site.start)
-                    .map(|p| (p.line, p.column))
-                    .unwrap_or((1, 1));
-                let scope = debug.function(
-                    function,
-                    &source.logical_path().to_string_lossy(),
-                    &unit.header.definition.to_string(),
-                    line,
-                );
-                emitter.profile = Some((debug, scope, source));
-                debug.location(&emitter.prologue, scope, line, 1);
-                debug.location(&emitter.builder, scope, line, 1);
+                let column = plan.column(&unit.header.definition);
+                // Content-only locations: an item-relative offset plus one as the line.
+                let line = site.start.saturating_add(1);
+                let scope = debug.function(function, &unit.header.definition.to_string(), line);
+                if !inputs.available_externally.contains(&unit.header.instance) {
+                    // The scope is the body's: a library unit's behind its root adapter.
+                    let name = symbol_name(&unit.header.definition, Some(&unit.header.instance));
+                    let name = if rooted {
+                        format!("{name}{ROOTS_SUFFIX}")
+                    } else {
+                        name
+                    };
+                    plan.functions.push((name, column - 1, site.start));
+                }
+                emitter.debug = Some((debug, scope, column));
+                debug.location(&emitter.prologue, scope, line, column);
+                debug.location(&emitter.builder, scope, line, column);
+            }
+            if inputs.measurement {
+                emitter.measured = profile.sources.and_then(|s| s.get(&unit.header.definition));
             }
             emitter.emit()?;
         }
@@ -471,9 +508,10 @@ fn lower<T>(
         if let Some(debug) = &debug {
             debug.finalize();
         }
-        finish(&module, &machine)?
+        (finish(&module, &machine)?, profile.debug.then_some(plan))
     };
-    Ok((finished, manifested))
+    let (finished, plan) = finished;
+    Ok((finished, manifested, plan))
 }
 
 /// Defines `name`, the function-reference thunk of the definition entry `target`: the
@@ -746,11 +784,14 @@ struct FnEmitter<'m, 'a> {
     signature: Signature<'m, 'a>,
     manifested: &'a mut Manifested,
     builder: Builder<'m>,
-    profile: Option<(
+    /// With debug intervals: the function's scope and its item's column (`crate::debug`).
+    debug: Option<(
         &'a crate::context::DebugInfo<'m>,
         crate::context::DebugScope,
-        &'a crate::ProfileSource,
+        u32,
     )>,
+    /// Under measurement: the resolved source its instrumentation embeds.
+    measured: Option<&'a crate::ProfileSource>,
     /// Positioned at the end of the prologue, which holds every stack slot.
     prologue: Builder<'m>,
     prologue_block: BasicBlock<'m>,

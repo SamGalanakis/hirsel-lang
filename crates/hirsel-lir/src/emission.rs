@@ -524,6 +524,7 @@ fn checked_artifact(
             lir_version: crate::LIR_VERSION,
             runtime_abi_version: crate::RUNTIME_ABI_VERSION,
         },
+        debug: Vec::new(),
     })
 }
 

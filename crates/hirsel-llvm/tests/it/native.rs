@@ -703,9 +703,15 @@ fn heap_expected() -> String {
 #[ignore = "native: run by tools/check-native.sh"]
 fn every_target_executes_the_heap_probes() {
     let expected = heap_expected();
-    for target in TargetSpec::executed() {
-        for opt in OPTS {
-            let dir = scratch(&format!("heap-{}-{opt:?}", target.triple));
+    // With debug intervals recorded, each unit object is rebuilt without its DWARF
+    // (`hirsel_llvm`'s `debug::split`) and must run the same.
+    for (target, opt, debug) in TargetSpec::executed()
+        .into_iter()
+        .flat_map(|t| OPTS.map(|o| (t.clone(), o)))
+        .flat_map(|(t, o)| [(t.clone(), o, false), (t, o, true)])
+    {
+        {
+            let dir = scratch(&format!("heap-{}-{opt:?}-{debug}", target.triple));
             let (bytes, entries) = {
                 let input = input();
                 let program = heap_program(&target);
@@ -728,13 +734,14 @@ fn every_target_executes_the_heap_probes() {
                     measurement: false,
                     fuel: false,
                 };
-                (
-                    [
-                        emit_object(&program.units(), &inputs).unwrap().bytes,
-                        program.glue(),
-                    ],
-                    entries,
-                )
+                let profile = hirsel_lir::debug::Profile {
+                    debug,
+                    sources: None,
+                };
+                let object =
+                    hirsel_llvm::emit_object_profile(&program.units(), &inputs, profile).unwrap();
+                assert_eq!(object.debug.is_empty(), !debug);
+                ([object.bytes, program.glue()], entries)
             };
             std::fs::write(dir.join("entries.h"), entries).unwrap();
             let source = dir.join("heap_harness.c");
@@ -748,7 +755,7 @@ fn every_target_executes_the_heap_probes() {
             assert_eq!(
                 run(&target, &executable),
                 expected,
-                "{} {opt:?}",
+                "{} {opt:?} debug {debug}",
                 target.triple
             );
         }

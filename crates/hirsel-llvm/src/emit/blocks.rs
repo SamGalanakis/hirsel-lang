@@ -63,17 +63,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     }
 
     pub(super) fn profile_location(&mut self, site: SiteRange, operation: &str) -> Emitted {
-        let Some((debug, scope, source)) = self.profile else {
+        if let Some((debug, scope, item)) = self.debug {
+            debug.location(&self.builder, scope, site.start.saturating_add(1), item);
+        }
+        let Some(source) = self.measured else {
             return Ok(());
         };
         let Some(position) = source.location(site.start) else {
             return self.invalid("profile anchor is outside its source revision");
         };
         let (line, column) = (position.line, position.column);
-        debug.location(&self.builder, scope, line, column);
-        if !self.inputs.measurement {
-            return Ok(());
-        }
         let digest = ContentHash::of_parts(
             "hirsel.profile-site.v1",
             [

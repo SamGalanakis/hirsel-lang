@@ -184,10 +184,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         mut b: FunctionBuilder<'f>,
         sig: Sig<'a>,
     ) -> Self {
-        if em
-            .sources
-            .is_some_and(|s| s.contains_key(&unit.header.definition))
-        {
+        if em.debug {
             let site =
                 unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
             b.set_srcloc(ir::SourceLoc::new(site.start));
@@ -1176,11 +1173,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn source_location(&mut self, site: SiteRange) {
-        if self
-            .em
-            .sources
-            .is_some_and(|s| s.contains_key(self.definition()))
-        {
+        if self.em.debug {
             self.b.set_srcloc(ir::SourceLoc::new(site.start));
         }
     }

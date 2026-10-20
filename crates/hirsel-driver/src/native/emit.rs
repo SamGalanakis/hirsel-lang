@@ -219,8 +219,13 @@ pub(crate) fn emit_registered(
         measurement,
         fuel: program.fuel,
     };
+    // A debug build records intervals; the link's debug object resolves them.
+    let profile = hirsel_lir::debug::Profile {
+        debug: sources.is_some(),
+        sources,
+    };
     let emitted = match backend {
-        Backend::Llvm => hirsel_llvm::emit_object_profile(&units, &inputs, sources).map_err(|e| {
+        Backend::Llvm => hirsel_llvm::emit_object_profile(&units, &inputs, profile).map_err(|e| {
             let definition = match &e {
                 hirsel_llvm::CodegenError::Receipt { definition, .. }
                 | hirsel_llvm::CodegenError::Invalid { definition, .. }
@@ -231,7 +236,7 @@ pub(crate) fn emit_registered(
             };
             (definition, e.to_string())
         }),
-        Backend::Cranelift => hirsel_cranelift::emit_object_profile(&units, &inputs, sources)
+        Backend::Cranelift => hirsel_cranelift::emit_object_profile(&units, &inputs, profile)
             .map_err(|e| (e.definition().cloned(), e.to_string())),
     };
     emitted.map_err(|(definition, message)| NativeError {

@@ -781,6 +781,7 @@ dependencies = [
 name = "hirsel-llvm"
 version = "0.1.0"
 dependencies = [
+ "gimli",
  "hirsel-core-contract",
  "hirsel-graph",
  "hirsel-guard",
@@ -791,6 +792,7 @@ dependencies = [
  "hirsel-tir",
  "hirsel-types",
  "llvm-sys",
+ "object",
 ]
 
 [[package]]

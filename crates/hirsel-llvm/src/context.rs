@@ -651,13 +651,7 @@ impl<'context> Module<'context> {
         // this context.
         unsafe {
             let aliasee = LLVMConstIntToPtr(address.raw, self.ptr_type().raw);
-            let raw = LLVMAddAlias2(
-                self.raw,
-                self.int_type(8).raw,
-                0,
-                aliasee,
-                c_name.as_ptr(),
-            );
+            let raw = LLVMAddAlias2(self.raw, self.int_type(8).raw, 0, aliasee, c_name.as_ptr());
             LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
             LLVMSetVisibility(raw, llvm_sys::LLVMVisibility::LLVMHiddenVisibility);
         }
@@ -1731,11 +1725,13 @@ mod optimization_tests {
     }
 }
 
-/// DIBuilder owns deferred metadata until finalized before optimization.
+/// DIBuilder owns deferred metadata until finalized before optimization. Locations are
+/// content-only (`crate::debug`): one fixed file and compile unit per module.
 pub(crate) struct DebugInfo<'m> {
     raw: LLVMDIBuilderRef,
     module: &'m Module<'m>,
     optimized: bool,
+    file: LLVMMetadataRef,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct DebugScope(LLVMMetadataRef);
@@ -1752,47 +1748,22 @@ impl<'m> DebugInfo<'m> {
                     LLVMValueAsMetadata(module.const_int(module.int_type(32), version).raw),
                 );
             }
-            Self {
-                raw: LLVMCreateDIBuilder(module.raw),
-                module,
-                optimized,
-            }
-        }
-    }
-    pub(crate) fn function(
-        &self,
-        function: Function<'m>,
-        path: &str,
-        name: &str,
-        line: u32,
-    ) -> DebugScope {
-        // Keep the entire package-qualified name below a synthetic root. Using
-        // a host directory here would change both DWARF and the linked build ID.
-        let file = path;
-        let directory = hirsel_lir::profile::ProfileSource::COMPILATION_DIRECTORY;
-        let mut length = 0;
-        // SAFETY: LLVM returns the name bytes for the lifetime of the live function.
-        let link = unsafe {
-            let name = LLVMGetValueName2(function.value.raw, &mut length);
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name.cast(), length))
-        };
-        // SAFETY: all handles share a live context, and byte slices have the stated lengths.
-        unsafe {
+            let raw = LLVMCreateDIBuilder(module.raw);
+            let (name, directory, producer) = ("hirsel.sites", "/", "hirsel");
             let file = LLVMDIBuilderCreateFile(
-                self.raw,
-                file.as_ptr().cast(),
-                file.len(),
+                raw,
+                name.as_ptr().cast(),
+                name.len(),
                 directory.as_ptr().cast(),
                 directory.len(),
             );
-            let producer = "hirsel";
             LLVMDIBuilderCreateCompileUnit(
-                self.raw,
+                raw,
                 LLVMDWARFSourceLanguage::LLVMDWARFSourceLanguageC,
                 file,
                 producer.as_ptr().cast(),
                 producer.len(),
-                self.optimized as i32,
+                optimized as i32,
                 "".as_ptr().cast(),
                 0,
                 0,
@@ -1807,21 +1778,39 @@ impl<'m> DebugInfo<'m> {
                 "".as_ptr().cast(),
                 0,
             );
+            Self {
+                raw,
+                module,
+                optimized,
+                file,
+            }
+        }
+    }
+    /// The scope of `function`, the definition `name`, declared at content line `line`.
+    pub(crate) fn function(&self, function: Function<'m>, name: &str, line: u32) -> DebugScope {
+        let mut length = 0;
+        // SAFETY: LLVM returns the name bytes for the lifetime of the live function.
+        let link = unsafe {
+            let name = LLVMGetValueName2(function.value.raw, &mut length);
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name.cast(), length))
+        };
+        // SAFETY: all handles share a live context, and byte slices have the stated lengths.
+        unsafe {
             let ty = LLVMDIBuilderCreateSubroutineType(
                 self.raw,
-                file,
+                self.file,
                 ptr::null_mut(),
                 0,
                 LLVMDIFlagZero,
             );
             let scope = LLVMDIBuilderCreateFunction(
                 self.raw,
-                file,
+                self.file,
                 name.as_ptr().cast(),
                 name.len(),
                 link.as_ptr().cast(),
                 link.len(),
-                file,
+                self.file,
                 line,
                 ty,
                 0,
@@ -1851,6 +1840,35 @@ impl<'m> DebugInfo<'m> {
                 ptr::null_mut(),
             );
             LLVMSetCurrentDebugLocation2(builder.raw, location);
+        }
+    }
+    /// Places every instruction `function` has at `line` and `column` of `scope`: for a
+    /// function built without locations, whose calls must have one once it has a scope.
+    pub(crate) fn locate_all(
+        &self,
+        function: Function<'m>,
+        scope: DebugScope,
+        line: u32,
+        column: u32,
+    ) {
+        // SAFETY: the function, its blocks and instructions and the scope share this context.
+        unsafe {
+            let location = LLVMDIBuilderCreateDebugLocation(
+                self.module.context.raw,
+                line,
+                column,
+                scope.0,
+                ptr::null_mut(),
+            );
+            let mut block = llvm_sys::core::LLVMGetFirstBasicBlock(function.value.raw);
+            while !block.is_null() {
+                let mut instruction = llvm_sys::core::LLVMGetFirstInstruction(block);
+                while !instruction.is_null() {
+                    llvm_sys::debuginfo::LLVMInstructionSetDebugLoc(instruction, location);
+                    instruction = llvm_sys::core::LLVMGetNextInstruction(instruction);
+                }
+                block = llvm_sys::core::LLVMGetNextBasicBlock(block);
+            }
         }
     }
     pub(crate) fn finalize(&self) {

@@ -294,6 +294,8 @@ pub struct ObjectArtifact {
     pub relocations: Vec<Relocation>,
     pub abi: ContentHash,
     pub reproducibility: Reproducibility,
+    /// Each function's debug intervals, when the build records them (`debug::Profile`).
+    pub debug: Vec<crate::debug::DebugFunction>,
 }
 
 impl ObjectArtifact {
@@ -356,5 +358,6 @@ snapshot_struct!(ObjectArtifact {
     imports,
     relocations,
     abi,
-    reproducibility
+    reproducibility,
+    debug
 });

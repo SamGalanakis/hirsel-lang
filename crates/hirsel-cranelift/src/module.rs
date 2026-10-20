@@ -20,7 +20,7 @@ use hirsel_lir::ir::UnitOrigin;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, ScalarKind, TargetSpec};
 use hirsel_lir::object::ObjectFile;
 use hirsel_lir::runtime_abi::{CName, CType, RuntimeEntry};
-use hirsel_lir::stage::{ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
+use hirsel_lir::stage::{ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
 use hirsel_syntax::DefPath;
 
 use crate::CodegenError;
@@ -240,8 +240,9 @@ pub(crate) struct Emitter<'a> {
     pub(crate) anonymous: u64,
     /// With `Some`, each function's Cranelift IR as it is defined (`crate::emit_clif`).
     pub(crate) clif: Option<String>,
-    pub(crate) sources: Option<&'a hirsel_lir::profile::ProfileSources>,
-    debug_functions: Vec<crate::dwarf::DebugFunction>,
+    /// Whether functions get source locations and debug intervals (`debug::Profile`).
+    pub(crate) debug: bool,
+    debug_functions: Vec<hirsel_lir::debug::DebugFunction>,
 }
 
 pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
@@ -289,7 +290,7 @@ pub(crate) fn emit(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     clif: bool,
-    sources: Option<&hirsel_lir::profile::ProfileSources>,
+    profile: hirsel_lir::debug::Profile<'_>,
 ) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
     for unit in units {
         check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
@@ -298,7 +299,7 @@ pub(crate) fn emit(
         })?;
     }
     let mut emitter = Emitter::new(Inputs::units(inputs), clif)?;
-    emitter.sources = sources;
+    emitter.debug = profile.debug;
     let emitted: Vec<&ValidatedUnit<Ready>> = units
         .iter()
         .copied()
@@ -369,15 +370,12 @@ pub(crate) fn emit(
             crate::function::FnEmitter::new(&mut emitter, unit, builder, sig).emit()?;
         }
         emitter.compile(&name, id, &mut context)?;
-        if let Some(source) = sources.and_then(|s| s.get(&unit.header.definition)) {
-            emitter
-                .debug_functions
-                .push(crate::dwarf::DebugFunction::new(
-                    id,
-                    unit,
-                    source,
-                    context.compiled_code().expect("defined function"),
-                )?);
+        if emitter.debug {
+            emitter.debug_functions.push(crate::dwarf::intervals(
+                &name,
+                unit,
+                context.compiled_code().expect("defined function"),
+            ));
         }
         emitter.module.clear_context(&mut context);
     }
@@ -392,13 +390,20 @@ pub(crate) fn emit(
         debug_functions,
         ..
     } = emitter;
-    let mut product = module.finish();
-    crate::dwarf::write(&mut product, debug_functions)?;
+    let product = module.finish();
     let bytes = crate::object::finish(product)?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
     artifact(file, manifested, inputs, crate::TOOLCHAIN)
-        .map(|artifact| (artifact, clif))
+        .map(|artifact| {
+            (
+                ObjectArtifact {
+                    debug: debug_functions,
+                    ..artifact
+                },
+                clif,
+            )
+        })
         .map_err(|problem| CodegenError::Manifest { problem })
 }
 
@@ -466,7 +471,7 @@ impl<'a> Emitter<'a> {
             pending: Vec::new(),
             anonymous: 0,
             clif: clif.then(String::new),
-            sources: None,
+            debug: false,
             debug_functions: Vec::new(),
         })
     }

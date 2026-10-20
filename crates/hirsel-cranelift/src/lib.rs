@@ -20,6 +20,7 @@ mod data;
 mod dispatcher;
 mod drop;
 mod dwarf;
+pub use dwarf::{Resolved, debug_object};
 mod flat;
 mod foreign;
 mod function;
@@ -127,16 +128,18 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, None)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, Default::default())).map(|(artifact, _)| artifact)
 }
 
-/// Emits source line tables and subprogram entries when immutable source files are supplied.
+/// Emits `units` as `emit_object` does, recording what `profile` asks for beside the code:
+/// each function's debug intervals (`ObjectArtifact::debug`), for the link's
+/// `debug_object`. Cranelift embeds no measurement instrumentation.
 pub fn emit_object_profile(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&hirsel_lir::profile::ProfileSources>,
+    profile: hirsel_lir::debug::Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, sources)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, profile)).map(|(artifact, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -145,7 +148,8 @@ pub fn emit_clif(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true, None)).map(|(_, clif)| clif.unwrap_or_default())
+    caught(|| module::emit(units, inputs, true, Default::default()))
+        .map(|(_, clif)| clif.unwrap_or_default())
 }
 
 /// A panic in Cranelift or in this crate is a refused compilation, never a crash of the

@@ -1330,7 +1330,20 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
             lir_version: hirsel_lir::LIR_VERSION,
             runtime_abi_version: hirsel_lir::RUNTIME_ABI_VERSION,
         },
+        debug: vec![hirsel_lir::debug::DebugFunction::from_rows(
+            "hirsel_f".into(),
+            32,
+            vec![path("f"), path("g")],
+            4,
+            [(0, 8, 0, 4), (8, 12, 0, 4), (16, 20, 1, 9), (20, 20, 0, 1)],
+        )],
     };
+    assert!(artifact.debug[0].well_formed());
+    assert_eq!(
+        artifact.debug[0].ranges.len(),
+        2,
+        "rows of one site merge, a gap stays and an empty row is dropped"
+    );
     assert_round_trip(&artifact);
     let mut other = artifact.clone();
     other.reproducibility.lir_version += 1;
@@ -1580,8 +1593,8 @@ mod instance_keys {
     use super::*;
     use hirsel_types::{
         Brand, GenericArgument, Modes, Origin, OriginRoot, ParamId, ParameterRef, Primitive, Reach,
-        Relation, Sendability, Size, SizeParamId, SizeParameterRef, Type, TypeKind, TypeParamId,
-        TypeInterner, TypeParameterRef, Uniqueness,
+        Relation, Sendability, Size, SizeParamId, SizeParameterRef, Type, TypeInterner, TypeKind,
+        TypeParamId, TypeParameterRef, Uniqueness,
     };
 
     fn element(store: &TypeInterner, modes: Modes, brand: Brand) -> hirsel_types::TypeId {
