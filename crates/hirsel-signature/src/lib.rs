@@ -765,7 +765,10 @@ struct Normalizer<'a, 'b> {
     /// The group members' settled cleanup effects over their own parameters
     /// (`settle_group_drop`), read in place of their provisional summaries.
     group_drop: BTreeMap<ast::DefPath, DropAllocation>,
-    builtin_declarations: std::collections::HashMap<TypeId, SignatureRef>,
+    /// The core declaration each builtin row was resolved to. Interning merges
+    /// equal occurrences, so a row any occurrence spelled without a resolved
+    /// declaration maps to None: its authority stays unproved.
+    builtin_declarations: std::collections::HashMap<TypeId, Option<SignatureRef>>,
     active: BTreeSet<ast::TypeExprId>,
     aliases: BTreeSet<ast::DefPath>,
     /// Relation places lowered from a written arena placement (PROV-4).
@@ -1582,7 +1585,7 @@ impl Normalizer<'_, '_> {
                 let declaration = self.builtin_declarations.get(&id).cloned();
                 let id = self.types.intern(t);
                 if let Some(declaration) = declaration {
-                    self.builtin_declarations.insert(id, declaration);
+                    self.builtin_declaration(id, declaration);
                 }
                 id
             }
@@ -1668,9 +1671,7 @@ impl Normalizer<'_, '_> {
                             },
                             pos,
                         )?;
-                        if let Some(declaration) = declaration {
-                            self.builtin_declarations.insert(id, declaration);
-                        }
+                        self.builtin_declaration(id, declaration);
                         id
                     } else {
                         let d = self.definition(path, Some(id))?;
@@ -2639,6 +2640,18 @@ impl Normalizer<'_, '_> {
             fingerprint: Default::default(),
         })
     }
+    /// Record a builtin occurrence's declaration; an undeclared occurrence
+    /// poisons its row, whatever order the occurrences come in.
+    fn builtin_declaration(&mut self, id: TypeId, declaration: Option<SignatureRef>) {
+        match declaration {
+            Some(d) => {
+                self.builtin_declarations.entry(id).or_insert(Some(d));
+            }
+            None => {
+                self.builtin_declarations.insert(id, None);
+            }
+        }
+    }
     fn authority_proof(&self, root: TypeId, own: &AuthoritySummary) -> AuthoritySummary {
         let item = &self.input.syntax.item;
         let roles = self.roles();
@@ -2656,7 +2669,7 @@ impl Normalizer<'_, '_> {
                         Some(self.own_authority_view(own))
                     }
                     Some(path) => self.snapshots.get(path.path()).cloned(),
-                    None => self.builtin_declarations.get(&id).cloned(),
+                    None => self.builtin_declarations.get(&id).cloned().flatten(),
                 })
             },
         )

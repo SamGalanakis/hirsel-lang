@@ -701,9 +701,9 @@ impl Checker<'_, '_> {
         query: Row,
     ) -> Result<bool, QueryError> {
         let mut todo = vec![(vec![root], rows, query)];
-        while let Some((types, rows, (query, asked_choice))) = todo.pop() {
+        while let Some((columns, rows, (query, asked_choice))) = todo.pop() {
             work::count(Counter::BodyUsefulnessMatrices);
-            let rows: Vec<Row> = if types.is_empty() {
+            let rows: Vec<Row> = if columns.is_empty() {
                 rows
             } else {
                 rows.into_iter()
@@ -722,13 +722,13 @@ impl Checker<'_, '_> {
                     )
                     .collect()
             };
-            if !types.is_empty()
+            if !columns.is_empty()
                 && let Some(alternatives) = self.alternatives_of(query[0], &asked_choice)
             {
                 for alternative in alternatives {
                     let mut q = query.clone();
                     q[0] = Some(alternative);
-                    todo.push((types.clone(), rows.clone(), (q, asked_choice.clone())));
+                    todo.push((columns.clone(), rows.clone(), (q, asked_choice.clone())));
                 }
                 continue;
             }
@@ -738,11 +738,11 @@ impl Checker<'_, '_> {
             if rows.is_empty() {
                 return Ok(true);
             }
-            if types.is_empty() {
+            if columns.is_empty() {
                 continue;
             }
-            let first = types[0];
-            let rest = &types[1..];
+            let first = columns[0];
+            let rest = &columns[1..];
             let inspected = self.box_payload(first);
             let (_, repr) = self.representation(inspected)?;
             let mut choices: Option<Vec<(Tag, Vec<TypeId>)>> = match self.kind(repr) {

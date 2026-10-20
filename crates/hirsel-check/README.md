@@ -11,21 +11,22 @@ The driver composes checking, modes and
 The existing driver dev-dependency supplies registry signatures to internal body
 harnesses.
 
-Every expression has a checked type/use decision. All returned TypeIds belong
-to CheckedBody.types. No callee implementation is consulted. Record instantiated
+Every expression has a checked type/use decision. All returned TypeIds are rows
+of the session `TypeInterner` the caller passes in `Input.types`. No callee implementation is consulted. Record instantiated
 call edges for the driver's topology-independent GEN-5 graph check. Signature
 normalization belongs to [hirsel-signature](../hirsel-signature/README.md).
 
-`body::check_with_loop_protocols(body::LoopInput { body: Input { tree, item,
-context, resolution, signature }, protocols }, provider)` returns
+`body::check_with_loop_protocols(body::LoopInput { body: Input { types, memo,
+syntax, context, resolution, signature }, protocols }, provider)` returns
 `Result<body::Output, QueryError>`, containing checked rows and lowering plans. Inputs are one
 retained syntax snapshot and its declared signature. Recovery returns typed rows
 plus sorted rule/span diagnostics; callers must reject diagnostics before modes or
 lowering. Operational and unavailable provider failures propagate for retry.
 Every attempted signature query is retained in `CheckedBody.resolution.reads`;
 successful signature dependencies also appear in `QueryOutput.dependencies`.
-Callee implementations are never queried. All returned TypeIds belong to
-`CheckedBody.types`, imported/substituted using the shared graph helpers.
+Callee implementations are never queried. Declared rows are read in place (they
+are already session rows); generic substitution goes through `TypeMemo`, and
+projections through a `ContextMemo` bound to the body's generic declarations.
 
 An explicit Enter/AfterChild/Finish stack visits expressions in evaluation order.
 Each item carries expected type and a lexical function-frame index. Nested
@@ -150,8 +151,8 @@ field spellings, without querying them as definition paths.
 
 Generic graph substitution takes the declared `NominalRoles` and normalizes
 `FunctionType.error` from its substituted result, including nested callbacks.
-The shared `result_error` helper recognizes Result by nominal identity. Pure
-imports preserve existing channels; body checking needs no post-substitution repair.
+The shared `result_error` helper recognizes Result by nominal identity. Reading a
+declared row preserves its channels; body checking needs no post-substitution repair.
 
 Generic inference preserves context-derived and nested declared type arguments.
 Value-derived arguments use shared `generic_type_argument`; every complete actual
