@@ -32,6 +32,7 @@ usage() {
 cd "$(dirname "$0")/.."
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" HIRSEL_JOBS="${HIRSEL_JOBS:-4}" RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 buck2=.buck2/bin/buck2
+python3 tools/buck2/sync.py --if-stale
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 

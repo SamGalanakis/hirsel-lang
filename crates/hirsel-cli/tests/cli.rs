@@ -3160,8 +3160,7 @@ pub fn main(rt: Io) -> Result[(), LaunchError] {
     }
 }
 
-#[test]
-fn doc_std_manifest_prints_the_current_public_signature_page() {
+fn std_signature_page() -> Vec<u8> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("doc")
@@ -3170,7 +3169,21 @@ fn doc_std_manifest_prints_the_current_public_signature_page() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
-    assert_eq!(output.stdout, include_bytes!("../../../docs/api.md"));
+    output.stdout
+}
+
+#[test]
+fn doc_std_manifest_prints_the_public_signature_page() {
+    let page = String::from_utf8(std_signature_page()).unwrap();
+    assert!(page.starts_with("# Public API\n"), "{page}");
+    assert!(page.lines().any(|line| line.starts_with("## ")), "{page}");
+}
+
+/// Only tools/land writes docs/api.md, on the tip it pushes: the full gate
+/// checks main's page is what `hirsel doc` prints (FULL_GATE_SKIPS).
+#[test]
+fn full_gate_committed_index_is_what_doc_prints() {
+    assert_eq!(std_signature_page(), include_bytes!("../../../docs/api.md"));
 }
 
 #[test]

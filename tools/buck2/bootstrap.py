@@ -6,7 +6,10 @@
 prelude_overlay.py's checksum-pinned patches. The Rust toolchain, the LLVM tree and
 Reindeer come from their own bootstrap scripts. Pinned inputs come from the
 shared store in bootstrap_store.py when it is usable, and are otherwise
-downloaded into this checkout alone. Prints the client's path.
+downloaded into this checkout alone. Then sync.py generates the gitignored
+build files when the tree changed since it last did (generated.py), and the
+clone's `hirsel` merge driver is installed (merging.py). Prints the client's
+path.
 """
 import argparse
 from contextlib import contextmanager
@@ -23,6 +26,7 @@ import tempfile
 import urllib.request
 
 import bootstrap_store
+import merging
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = json.loads(Path(__file__).with_name('pins.json').read_text())
@@ -83,6 +87,9 @@ def prepare_tools(executable, lock_fd):
     if replaced:
         # A running daemon's file watcher can miss a replaced tree's new files.
         subprocess.run([str(executable), 'kill'], cwd=ROOT, capture_output=True)
+    subprocess.run([sys.executable, str(ROOT / 'tools/buck2/sync.py'), '--if-stale'], check=True, cwd=ROOT,
+                   stdout=subprocess.DEVNULL, pass_fds=(lock_fd,))
+    merging.install(ROOT)
 
 
 def prepare_client(args, state, lock_fd):

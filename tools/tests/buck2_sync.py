@@ -8,12 +8,70 @@ import sys
 import tempfile
 import unittest
 import json
+import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'buck2'))
 SPEC = importlib.util.spec_from_file_location('buck2_sync', Path(__file__).resolve().parents[1] / 'buck2/sync.py')
 sync = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sync)
+
+
+def git(root, *arguments):
+    subprocess.run(['git', *arguments], cwd=root, check=True, capture_output=True)
+
+
+class GeneratedFiles(unittest.TestCase):
+    """generated.py's stamp: the build inputs are current only for the tree they
+    were generated from."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        git(self.root, 'init', '-q', '-b', 'main')
+        (self.root / '.gitignore').write_text(''.join(f'/{path}\n' for path in sync.generated.BUILD_INPUTS)
+                                              + '/.buck2/\n')
+        (self.root / 'Cargo.toml').write_text('[workspace]\n')
+        git(self.root, 'add', '-A')
+        git(self.root, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'base')
+        self.generate()
+
+    def generate(self):
+        state = sync.generated.tree_state(self.root)
+        for path in sync.generated.BUILD_INPUTS:
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_text(path + '\n')
+        sync.generated.record(self.root, state)
+
+    def test_a_generated_tree_is_current_until_an_input_or_an_output_changes(self):
+        current = lambda: sync.generated.current(self.root)  # noqa: E731
+        self.assertTrue(current())
+        for change, undo in [(lambda: (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = []\n'),
+                              lambda: git(self.root, 'checkout', '--', 'Cargo.toml')),
+                             (lambda: (self.root / 'new.rs').write_text('fn f() {}\n'),
+                              lambda: (self.root / 'new.rs').unlink()),
+                             (lambda: (self.root / 'BUCK').write_text('edited\n'),
+                              lambda: (self.root / 'BUCK').write_text('BUCK\n')),
+                             (lambda: (self.root / 'third-party/BUCK').unlink(),
+                              lambda: (self.root / 'third-party/BUCK').write_text('third-party/BUCK\n'))]:
+            change()
+            self.assertFalse(current())
+            undo()
+            self.assertTrue(current())
+        # A commit moves HEAD's tree: the stamp names the old one.
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = []\n')
+        git(self.root, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-am', 'next')
+        self.assertFalse(current())
+        self.generate()
+        self.assertTrue(current())
+
+    def test_a_lane_change_touching_a_generated_file_is_refused_with_the_commands_that_drop_it(self):
+        self.assertEqual(sync.generated.refusal(['README.md', 'crates/a/src/lib.rs']), [])
+        refused = '\n'.join(sync.generated.refusal(['docs/api.md', 'BUCK', 'README.md']))
+        self.assertIn('no lane commits: BUCK, docs/api.md', refused)
+        self.assertIn('git checkout $(git merge-base HEAD origin/main) -- docs/api.md', refused)
+        self.assertIn('git rm -q --cached BUCK', refused)
 
 
 class NativePoolRouting(unittest.TestCase):
@@ -73,11 +131,23 @@ class SeededTests(unittest.TestCase):
 class ShardSizing(unittest.TestCase):
     def test_check_fails_on_cost_coverage_even_with_fresh_generated_files(self):
         with patch.object(sys, 'argv', ['sync.py', '--check']), \
-             patch.object(sync, 'REINDEER', Path(__file__)), patch.object(sync, 'GENERATED', []), \
-             patch.object(sync, 'generate'), patch.object(sync, 'check_cost_coverage', return_value=['costs missing']), \
+             patch.object(sync, 'REINDEER', Path(__file__)), patch.object(sync.generated, 'current', return_value=True), \
+             patch.object(sync, 'generate') as generate, \
+             patch.object(sync, 'check_cost_coverage', return_value=['costs missing']), \
              contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(sync.main(), 1)
         self.assertIn('costs missing', errors.getvalue())
+        generate.assert_not_called()
+
+    def test_if_stale_generates_and_stamps_only_a_changed_tree(self):
+        for fresh in (True, False):
+            with self.subTest(fresh=fresh), patch.object(sys, 'argv', ['sync.py', '--if-stale']), \
+                 patch.object(sync, 'REINDEER', Path(__file__)), \
+                 patch.object(sync.generated, 'current', return_value=fresh), \
+                 patch.object(sync.generated, 'tree_state', return_value='state'), \
+                 patch.object(sync.generated, 'record') as record, patch.object(sync, 'generate') as generate:
+                self.assertEqual(sync.main(), 0)
+                self.assertEqual((generate.called, record.called), (not fresh, not fresh))
 
     def test_granted_cpus_determine_shards(self):
         with tempfile.TemporaryDirectory() as scratch:

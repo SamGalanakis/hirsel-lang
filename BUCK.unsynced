@@ -1,0 +1,4 @@
+# Buck2 reads this only when the generated BUCK beside it is missing
+# ([buildfile] in .buckconfig): the build files are gitignored and derived from
+# the Cargo workspace (tools/buck2/generated.py).
+fail("The generated Buck2 build files are missing: run python3 tools/buck2/sync.py")

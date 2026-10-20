@@ -16,18 +16,16 @@ BATCH_MAX, as one batch in queue order, in a batch worktree beside the lock
 (`<lock dir>/batch-<clone>`):
 
 - fetch, and rebase each change onto the last (a change whose rebase
-  conflicts leaves the batch and is told which paths conflicted); conflicts in
-  generated and append-only files (tools/buck2/merging.py) are resolved rather
-  than stopping: docs/api.md and the root BUCK are regenerated, NOTICES rows
-  and package manifest entries from both sides are kept;
-- after each change, regenerate BUCK with sync.py when the change touches it,
-  and check that the rebased change keeps the identity tools/gate passed (a
-  change it does not keep must be gated again);
+  conflicts leaves the batch and is told which paths conflicted); the files
+  many lanes add to (NOTICES rows, package manifests, sorted ratchet and
+  expectation lists) merge with tools/buck2/merging.py rather than stopping;
+- after each change, regenerate the gitignored build files when stale
+  (tools/buck2/generated.py), and check that the rebased change keeps the
+  identity tools/gate passed (a change it does not keep must be gated again);
 - build the workspace (without the std precheck, a test), run Clippy and
-  check formatting and the build files once, on the batch's tip, every Buck2
-  command at pool priority LAND_PRIORITY in one daemon state; regenerate
-  docs/api.md with the built CLI in its own generated-only commit, 'Regenerate
-  the API index.'; push once;
+  check formatting once, on the batch's tip, every Buck2 command at pool
+  priority LAND_PRIORITY in one daemon state; regenerate docs/api.md with the
+  built CLI into the batch's last commit; push once;
 - on red, repeat only what failed (the targets the build report names, the
   Clippy twins with errors, the failed local checks) on the tip; a failure
   that does not repeat is a flake, named with its batch in the log and the
@@ -36,6 +34,10 @@ BATCH_MAX, as one batch in queue order, in a batch worktree beside the lock
   change that turns them red, tell that change's lane, and check the rest of
   the batch again in the next round. A push rejected because main moved
   repeats the round.
+
+No lane commits a generated file (generated.py): land refuses a change that
+touches docs/api.md or a gitignored build file before it queues, and says how
+to drop it. Only land writes docs/api.md.
 
 Each lane's land prints its outcome, moves its branch to main as pushed,
 prints what the gate ran for the change and why (its green record), and
@@ -132,15 +134,13 @@ def read_json(path):
 # ---------------------------------------------------------------- checks of a tree
 
 FORMATTING = 'formatting'
-BUILD_FILES = 'Buck2 build files match Cargo'
-LOCAL_CHECKS = {FORMATTING: [PY, 'tools/buck2/fmt.py', '--check'],
-                # No Buck2 command beside the build: one with another configuration
-                # waits for it, or makes it wait (each gate checked its test-cost coverage).
-                BUILD_FILES: [PY, 'tools/buck2/sync.py', '--check', '--files-only']}
+# No Buck2 command beside the build: one with another configuration waits for
+# it, or makes it wait. The build files are generated after each rebased change.
+LOCAL_CHECKS = {FORMATTING: [PY, 'tools/buck2/fmt.py', '--check']}
 
 
 def checks(probe=None):
-    """Build, Clippy, formatting and the build files on this tree, or only the
+    """Build, Clippy and formatting on this tree, or only the
     parts a red tip failed (`probe`): whether all pass, what failed, and the
     probe of what failed (None when a failure names no part to repeat alone)."""
     failed = []
@@ -198,8 +198,8 @@ def checks(probe=None):
 
 
 def regenerate_index(checked_head):
-    """Render the API index with the checked CLI, committing a changed page in
-    its own generated-only commit: whether it succeeded."""
+    """Render the API index with the checked CLI and amend a changed page into
+    the batch's last commit: whether it succeeded."""
     built = gating.buck2('build', '--show-json-output', CLI, capture_output=True, text=True)
     if built.returncode:
         say('land: cannot build the index generator\n' + gating.last_lines(built.stderr, 20))
@@ -232,12 +232,12 @@ def regenerate_index(checked_head):
         return True
     page.write_bytes(rendered.stdout)
     added = run('git', 'add', '--', 'docs/api.md')
-    committed = (run('git', 'commit', '-m', 'Regenerate the API index.', '--only', '--', 'docs/api.md')
+    committed = (run('git', 'commit', '-q', '--amend', '--no-edit', '--only', '--', 'docs/api.md', env=EDITOR)
                  if added.returncode == 0 else added)
     if committed.returncode:
         say('land: cannot commit the regenerated index\n' + committed.stderr)
         return False
-    say(f'land: regenerated docs/api.md in {head()[:12]} (generated docs only; no new gate)')
+    say(f'land: regenerated docs/api.md into {head()[:12]} (generated docs only; no new gate)')
     return True
 
 
@@ -293,22 +293,15 @@ def rebase_member(member, onto):
     tip = head()
     if tip == onto:
         return 'already', onto, []
-    paths = run('git', 'diff', '--name-only', onto, tip).stdout.split()
-    if 'BUCK' in paths:
-        synced = run(PY, 'tools/buck2/sync.py')
-        if synced.returncode:
-            return outcome('red', member, details=['land: FAIL  sync.py on the rebased change',
-                                                   gating.last_lines(synced.stdout + synced.stderr, 20)])
-        run('git', 'add', '-A')
-        if run('git', 'diff', '--cached', '--quiet').returncode:
-            run('git', 'commit', '-q', '--amend', '--no-edit', env=EDITOR)
-            resolved.append('BUCK (regenerated by sync.py)')
+    if (synced := gating.generated.ensure(ROOT)) is not None and synced.returncode:
+        return outcome('red', member, details=['land: FAIL  sync.py on the rebased change',
+                                               gating.last_lines(synced.stdout + synced.stderr, 20)])
     if added := gating.added_known_failures(run('git', 'diff', onto, tip, '--', gating.KNOWN_FAILURES).stdout):
         return outcome('refused', member, details=[
             f'the change adds rows to {gating.KNOWN_FAILURES}: ' + '; '.join(added),
             'known failures are added to main by the orchestrator, never by a lane\'s landing'])
     identity = gating.change_identity(onto)
-    crates = sorted(gating.Selection(onto).crates)
+    crates = sorted(gating.change_crates(onto))
     if identity != member['identity'] or crates != member['crates']:
         return outcome('stale', member, details=[
             f'the rebased change is not the one tools/gate passed (identity {member["identity"][:12]} '
@@ -341,7 +334,10 @@ def checked(tip, cache, probe=None):
         run('git', 'checkout', '-q', '--detach', tip)
         say(f'land: checking {tip[:12]}' + (' (the failed checks only)' if probe else ''))
         started = time.monotonic()
-        cache[key] = checks(probe)
+        if (synced := gating.generated.ensure(ROOT)) is not None and synced.returncode:
+            cache[key] = False, ['land: FAIL  sync.py', gating.last_lines(synced.stdout + synced.stderr, 20)], None
+        else:
+            cache[key] = checks(probe)
         BATCH['checks'].append(dict(tip=tip, passed=cache[key][0], seconds=round(time.monotonic() - started, 1),
                                     probe=probe is not None))
     return cache[key]
@@ -388,20 +384,22 @@ def expire_known_failures(owners):
 
 def push(tip, owners=()):
     """Expire the landing lanes' known failures, regenerate the index on a
-    checked tip and push it: 'pushed', 'moved' or 'failed'."""
+    checked tip and push it: ('pushed', the pushed commit, the commit the index
+    was amended into or None), or ('moved' or 'failed', details, None)."""
     run('git', 'checkout', '-q', '--detach', tip)
     if not expire_known_failures(set(owners)):
-        return 'failed', None
-    if not regenerate_index(head()):
-        return 'failed', None
+        return 'failed', None, None
+    last = head()
+    if not regenerate_index(last):
+        return 'failed', None, None
     pushed = run('git', 'push', 'origin', 'HEAD:main')
     if pushed.returncode == 0:
-        return 'pushed', head()
+        return 'pushed', head(), (last if head() != last else None)
     if any(marker in pushed.stderr for marker in REJECTED):
         say('land: main moved during the checks; rebasing the batch again')
-        return 'moved', None
+        return 'moved', None, None
     say('land: git push failed\n' + pushed.stderr)
-    return 'failed', pushed.stderr.strip()
+    return 'failed', pushed.stderr.strip(), None
 
 
 def land_batch(members, results):
@@ -452,7 +450,7 @@ def land_batch(members, results):
             del cache[(tip, json.dumps(None))]
             ok, _, probe = checked(tip, cache)
         if ok:
-            state, pushed = push(tip, [m.get('branch') for m, _, _ in rebased if m.get('branch')])
+            state, pushed, amended = push(tip, [m.get('branch') for m, _, _ in rebased if m.get('branch')])
             if state == 'moved':
                 pending = [member for member, _, _ in rebased]
                 continue
@@ -463,8 +461,10 @@ def land_batch(members, results):
             say(f'land: pushed {pushed[:12]} to main: {len(rebased)} changes')
             names = [member.get('branch') for member, _, _ in rebased]
             for position, (member, tip, landing) in enumerate(rebased, 1):
-                results[member['name']] = outcome('landed', member, tip=tip, pushed=pushed, batch=names,
-                                                  position=position, details=[], **landing)
+                # The last change's commit carries the regenerated index.
+                results[member['name']] = outcome('landed', member, tip=pushed if tip == amended else tip,
+                                                  pushed=pushed, batch=names, position=position, details=[],
+                                                  **landing)
             return
         culprit = first_red(rebased, main, probe, cache)
         if culprit is None:
@@ -706,10 +706,14 @@ def status():
 def gated_change():
     """Validate the green receipt without running any lane-local tests again."""
     base = gating.merge_base('origin/main')
+    if refused := gating.generated.refusal(gating.changed_paths(base, deleted=False)):
+        for line in refused:
+            say('land: ' + line)
+        raise SystemExit(1)
     identity = gating.change_identity(base)
     if not identity:
         return base, identity, None, []
-    crates = gating.Selection(base).crates
+    crates = gating.change_crates(base)
     if not gating.is_green(identity, crates):
         say(f'land: tools/gate has not passed this change (identity {identity[:12]}); '
             'run tools/gate, then tools/land')

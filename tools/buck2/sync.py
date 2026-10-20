@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Derive every Buck2 build file from the Cargo workspace.
 
-Cargo manifests and Cargo.lock are the source of truth. This script writes:
+Cargo manifests and Cargo.lock are the source of truth. This script writes
+generated.BUILD_INPUTS, all gitignored:
 
 - `third-party/Cargo.toml` and `third-party/Cargo.lock`: one standalone package
   that depends on every external crate a workspace member names, at the
@@ -9,7 +10,9 @@ Cargo manifests and Cargo.lock are the source of truth. This script writes:
 - `third-party/BUCK`, by running the pinned Reindeer over that manifest
   (`third-party/reindeer.toml`, `third-party/fixups/`);
 - the root `BUCK`: a library, binary, example, build script and test target
-  for every Cargo target of every workspace member.
+  for every Cargo target of every workspace member;
+- the `.bzl` files of measured requests and native pins, and the workspace
+  metadata a test reads.
 
 All first-party targets live in the root package, so a crate's source tree in a
 compile action keeps its repository layout and `include_str!("../../x")`
@@ -18,11 +21,12 @@ own directory are found by following literal `include*!` and `#[path]`
 references, plus the files an `include_str!(concat!("<prefix>", $arg))` macro
 names through the file's string literals.
 
-`--check` regenerates into a scratch directory and fails if any committed file
-differs, so a Cargo change that was not synced fails the gate. It then lists
-the sharded test binaries on the pool for their test-cost coverage;
-`--check --files-only` (tools/land) compares the files alone, with no Buck2
-command beside land's build.
+`--if-stale` regenerates only when the tree changed since the last generation
+(generated.py's stamp). `--check` does that, then lists the sharded test
+binaries on the pool for their test-cost coverage (`--files-only` skips the
+listing, which runs Buck2). `--root-buck <file>` writes
+only the root BUCK, without Reindeer: tools/gate compares a change's BUCK with
+its base's by target.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ import tempfile
 import tomllib
 
 from action_sizes_from_log import CALIBRATED_CPUS, CPU_CLASSES, MAX_CPUS, compile_cpus
+import generated
+from test_sizes_from_usage import requests_bzl
 
 
 # tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
@@ -162,10 +168,14 @@ PRECHECK = "//:hirsel-std-precheck"
 PRECHECKED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
 
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
-# discovery: every run outside the full gate skips them by name, and
-# `-c hirsel.full=true` runs them (tools/buck2/defs.bzl).
+# discovery, and the drift checks of what only tools/land writes: every run
+# outside the full gate skips them by name, and `-c hirsel.full=true` runs them
+# (tools/buck2/defs.bzl).
 FULL_GATE_SKIPS = {
-    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
+    # docs/api.md is current on main alone: tools/land writes it (generated.py).
+    "hirsel-cli-test-cli": ["full_gate_committed_index_is_what_doc_prints"],
+    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry",
+                              "api_index::full_gate_committed_index_is_the_rendered_page"],
     "hirsel-conformance-test-it": ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
 }
 
@@ -867,16 +877,22 @@ def generate(out_root: pathlib.Path) -> None:
     metadata_file = out_root / "tools/buck2/workspace-metadata.json"
     metadata_file.parent.mkdir(parents=True, exist_ok=True)
     metadata_file.write_text(json.dumps({"packages": packages}, indent=2, sort_keys=True) + "\n")
-    buck = first_party(meta)
-    check_classes(buck)
-    check_test_data(buck)
-    (out_root / "BUCK").write_text(buck, encoding="utf-8")
+    (out_root / "BUCK").write_text(root_buck(meta), encoding="utf-8")
     sizes = out_root / "tools/buck2/exec_sizes.bzl"
     sizes.parent.mkdir(parents=True, exist_ok=True)
     sizes.write_text(execution_sizes(), encoding="utf-8")
+    (out_root / "tools/buck2/test_sizes.bzl").write_text(
+        requests_bzl(json.loads((HERE / "test-sizes.json").read_text())), encoding="utf-8")
     pins = out_root / "tools/native-toolchain/pins.bzl"
     pins.parent.mkdir(parents=True, exist_ok=True)
     pins.write_text(native_toolchain_pins(), encoding="utf-8")
+
+
+def root_buck(meta: dict) -> str:
+    buck = first_party(meta)
+    check_classes(buck)
+    check_test_data(buck)
+    return buck
 
 
 def native_toolchain_pins() -> str:
@@ -899,32 +915,24 @@ def native_toolchain_pins() -> str:
             + "\nNATIVE = " + json.dumps({k: v for k, v in pins.items() if k != "schema"}, indent=4) + "\n")
 
 
-GENERATED = ["tools/buck2/workspace-metadata.json", "tools/native-toolchain/pins.bzl", "BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--check", action="store_true", help="fail if a generated file is not what the Cargo workspace says")
-    parser.add_argument("--files-only", action="store_true",
-                        help="with --check, compare the generated files without the pool's test-cost inventory "
-                             "(tools/land: each change's gate checked its coverage)")
+    parser.add_argument("--if-stale", action="store_true", help="regenerate only when the tree changed since the last generation")
+    parser.add_argument("--check", action="store_true",
+                        help="regenerate when stale, then check the sharded test binaries' test-cost coverage on the pool")
+    parser.add_argument("--files-only", action="store_true", help="with --check, skip the pool's test-cost inventory")
+    parser.add_argument("--root-buck", type=pathlib.Path, metavar="FILE", help="write only the root BUCK, to FILE")
     args = parser.parse_args()
+    if args.root_buck:
+        args.root_buck.write_text(root_buck(metadata(ROOT / "Cargo.toml")), encoding="utf-8")
+        return 0
     if not REINDEER.is_file():
         raise SystemExit("run tools/buck2/bootstrap.py first (Reindeer is missing)")
-    if not args.check:
+    if not ((args.if_stale or args.check) and generated.current(ROOT)):
+        state = generated.tree_state(ROOT)
         generate(ROOT)
-        return 0
-    with tempfile.TemporaryDirectory(prefix="hirsel-buck2-sync-") as raw:
-        scratch = pathlib.Path(raw)
-        generate(scratch)
-        stale = [path for path in GENERATED if not (ROOT / path).is_file()
-                 or (ROOT / path).read_bytes() != (scratch / path).read_bytes()]
-    if stale:
-        print("Buck2 build files are stale; run python3 tools/buck2/sync.py: " + ", ".join(stale), file=sys.stderr)
-        return 1
-    if args.files_only:
-        return 0
-    if errors := check_cost_coverage():
+        generated.record(ROOT, state)
+    if args.check and not args.files_only and (errors := check_cost_coverage()):
         print("\n".join(errors), file=sys.stderr)
         return 1
     return 0

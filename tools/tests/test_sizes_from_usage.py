@@ -30,7 +30,7 @@ class NativeSizes(unittest.TestCase):
             rows = json.loads((root / 'test-sizes.json').read_text())
             self.assertEqual(rows['gate-agree-native-full'], retained)
             self.assertEqual(rows['hirsel-cli-test-cli']['memory_kb'], 1310720)
-            self.assertIn('"gate-agree-native-full": [1, 4194304, ""]', (root / 'test_sizes.bzl').read_text())
+            self.assertIn('"gate-agree-native-full": [1, 4194304, ""]', sizes.requests_bzl(rows))
             before = (root / 'test-sizes.json').read_bytes()
             with patch.object(sizes, 'HERE', root), patch.object(sys, 'argv', [
                     'sizes', '--usage', str(usage), '--pss', str(trace), '--only', 'missing']):

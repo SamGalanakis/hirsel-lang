@@ -20,9 +20,9 @@ A changed path is one of:
   reach it (package_dependents); data every case reads its whole campaign
   (campaign_data).
 
-The generated root BUCK selects by target: the targets whose generated rule
-changed, and every test that depends on them. Its header changing is
-build-wide.
+The generated root BUCK (gitignored; gating.Selection compares the tree's with
+the base's) selects by target: the targets whose generated rule changed, and
+every test that depends on them. Its header changing is build-wide.
 """
 
 from __future__ import annotations
@@ -164,19 +164,21 @@ CRATE_TEST_DIRS = ('tests', 'benches', 'examples', 'proptest-regressions')
 
 # The gate's own tooling, with tests in tools/tests, and the native benchmark
 # harness, with tests in bench/native/tests. None is a build or test input
-# (sync.py --check proves that the generated build files do not change),
+# (what a change to sync.py alters in the generated BUCK selects by target),
 # except what the generated BUCK reads (bench/native/programs/**): that is
 # selected through its owners.
 TOOL_PATHS = (
     'tools/gate', 'tools/land', 'tools/capped', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
-        'event_logs', 'gating', 'graph', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
+        'event_logs', 'gating', 'generated', 'graph', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs',
+        'test_sizes_from_usage')),
     'tools/known-failures.tsv',
     'tools/buck2/test-sizes.json',
-    'tools/buck2/test_sizes.bzl',
     # Memory-guard stops, read only by test_sizes_from_usage.py.
     'tools/buck2/guard-stops.json',
+    # Which files the merge driver (tools/buck2/merging.py) merges.
+    '.gitattributes',
     'bench/native/**',
     'bench/multicore/**',
 )
@@ -187,6 +189,8 @@ BUILD_WIDE = (
     'Cargo.toml', 'rust-toolchain.toml', '.buckconfig', '.cargo/**', 'third-party/**',
     'tools/buck2/**',
 )
+# The measured test requests; sync.py derives test_sizes.bzl from them.
+TEST_SIZES = 'tools/buck2/test-sizes.json'
 # Under tools/ but read by particular tests: selected through their owners.
 # sync.py regenerates workspace-metadata.json beside the manifests and BUCK
 # rules that select a dependency change; hirsel-lir-test-it reads it.
@@ -216,7 +220,8 @@ class Classified:
     build_wide: list[str] = field(default_factory=list)
     # Paths whose Buck2 owners and their reverse dependencies are selected.
     owned: list[str] = field(default_factory=list)
-    # The root BUCK changed: True (header) or the names of changed targets.
+    # The generated root BUCK differs from the base's: True (header) or the
+    # names of changed targets.
     buck: bool | set[str] = False
     crates: set[str] = field(default_factory=set)
     campaigns: set[str] = field(default_factory=set)
@@ -272,8 +277,6 @@ def classify(paths, members, buck_text: str) -> Classified:
         graph_tooling = path.startswith('tools/buck2/') or path.rsplit('/', 1)[-1] in ('BUCK', 'defs.bzl')
         if graph_tooling:
             result.tools.append(path)
-        if path == 'BUCK':
-            continue  # by target, from the BUCK diff (buck_targets)
         if matches(path, DOCS) and not code_read(path, buck_text):
             result.docs.append(path)
         elif matches(path, TOOL_PATHS) and not code_read(path, buck_text):

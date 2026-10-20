@@ -16,9 +16,9 @@ The floor runs on every gate: documentation links and whitespace, the gate
 tooling's tests when it changed (the Lean model's checks when it or its
 vectors changed, the TLA+ model's TLC runs when it changed, the free-mode
 protocol's loom and GenMC models when they or the kernel source they compile
-changed), formatting, Clippy, the workspace build and the build-file check.
-They run before the gate queues for a slot, and a failure stops it there: a
-red floor never waits in the queue. Then, holding a slot, the test
+changed), formatting, Clippy, the workspace build and the build-file and
+test-cost check. They run before the gate queues for a slot, and a failure
+stops it there: a red floor never waits in the queue. Then, holding a slot, the test
 targets of every crate whose source changed and of every changed test file,
 and every changed or added corpus case with its twins. The chosen corpus
 cases run first, in their own invocation; when one fails, the gate stops
@@ -72,9 +72,11 @@ running. Output and the green receipt name the pool;
 tooling-only gates use no pool. `--status` prints each pool's cap, its holders
 and how long they have held, the queue in order, and this worktree's place.
 
-A passing change is remembered by its identity (gating.change_identity: the
-patch-id of the lane's own diff without the generated docs/api.md, and the
-crates it touches). When main moves under an unchanged change and it rebases
+A change that touches a generated file (tools/buck2/generated.py: docs/api.md,
+which only tools/land writes, or a gitignored build file) is refused before
+anything runs, with the commands that drop it. A passing change is remembered
+by its identity (gating.change_identity: the patch-id of the lane's own diff
+without the generated docs/api.md, and the crates it touches). When main moves under an unchanged change and it rebases
 cleanly, the next run only builds the workspace and checks formatting.
 
 --full runs every stage, including the budgeted agreement and native campaigns, the release
@@ -102,6 +104,8 @@ from gating import say  # noqa: E402
 import impact  # noqa: E402
 
 PY = sys.executable
+# Generating the build files (when stale) and the pool's test-cost coverage of them.
+BUILD_FILES = 'Buck2 build files and test-cost coverage'
 # This worktree's queue place (queue_stamp) and the clone's gate timings.
 QUEUE_STAMP = 'hirsel-gate-queue.json'
 STAMP_LIFETIME = 12 * 3600 * 10**9
@@ -450,6 +454,10 @@ def invoke(report, targets, log, results, *, first=False):
 def push_gate(base_ref, tokens, why, extend):
     started = time.monotonic()
     base = gating.merge_base(base_ref)
+    if refused := gating.generated.refusal(gating.changed_paths(base, deleted=False)):
+        for line in refused:
+            say('gate: ' + line)
+        return 1
     identity = gating.change_identity(base)
     if not identity:
         say(f'gate: the worktree does not differ from {base[:12]}; nothing to check')
@@ -539,7 +547,7 @@ def push_gate(base_ref, tokens, why, extend):
         floor_passed = build_first(report, log)
         if floor_passed and (c.tools or c.needs_buck2):
             # --check lists compiled cases on the pool, after preparation.
-            local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+            local.start(BUILD_FILES, [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
         local_rows(report, local.finish())
         local = None
         floor_seconds = time.monotonic() - started
@@ -684,7 +692,7 @@ def full_gate():
     for name, command in gating.tool_tests():
         stages.run(f'tool tests: {name}', command)
     stages.run('Buck2 toolchains and pool configuration', [PY, 'tools/buck2/prepare.py'])
-    stages.run('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check'])
+    stages.run(BUILD_FILES, [PY, 'tools/buck2/sync.py', '--check'])
     # Only the verdict matters here: the outputs stay on the pool.
     stages.run('workspace build', [*buck2, 'build', *config, '//:', '--materializations', 'none'])
     stages.run('workspace clippy', [PY, 'tools/buck2/clippy.py'])

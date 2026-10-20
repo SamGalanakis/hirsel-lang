@@ -1,0 +1,14 @@
+# Files many lanes add to: git merges them with tools/buck2/merging.py, the
+# `hirsel` merge driver bootstrap.py installs, so a rebase never stops on two
+# changes that each add to one.
+third-party/NOTICES.md merge=hirsel
+hirsel.json merge=hirsel
+conformance/passing.txt merge=hirsel
+conformance/pending.txt merge=hirsel
+crates/hirsel-engine/src/registry/review-table.txt merge=hirsel
+crates/hirsel-modes/src/authority/corpus/passing.txt merge=hirsel
+crates/hirsel-modes/src/authority/corpus/pending.txt merge=hirsel
+crates/hirsel-modes/src/ownership/tests/passing.txt merge=hirsel
+crates/hirsel-modes/src/ownership/tests/pending.txt merge=hirsel
+native-tests/library/operations.tsv merge=hirsel
+native-tests/regressions/*.txt merge=hirsel

@@ -252,7 +252,7 @@ class GateCommands(unittest.TestCase):
             (self.root / f'tools/tests/{test}.py').write_text('# fixture gate tests\n')
         (self.root / 'bench/native/tests/test_fixture.py').write_text(
             'import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        pass\n')
-        for helper in ('gating', 'graph', 'impact', 'event_logs'):
+        for helper in ('gating', 'generated', 'graph', 'impact', 'event_logs', 'test_sizes_from_usage'):
             (self.root / f'tools/buck2/{helper}.py').write_text((RUNNER.parent / f'buck2/{helper}.py').read_text())
         for helper in ('prepare', 'sync', 'clippy', 'fmt', 'conformance', 'agree'):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Make this checkout ready for Buck2: every pinned tool, and the execution configuration.
+"""Make this checkout ready for Buck2: every pinned tool, the generated build
+files, and the execution configuration.
 
-Runs bootstrap.py, then the optional remote-execution hook: the executable named by
-`$HIRSEL_BUCK2_REMOTE_CONFIG`, or `~/.config/hirsel/buck2-remote-config` when that
-exists, called with the checkout's root. The hook writes the gitignored
+Runs bootstrap.py, which also regenerates stale build files, then the optional
+remote-execution hook: the executable named by `$HIRSEL_BUCK2_REMOTE_CONFIG`, or
+`~/.config/hirsel/buck2-remote-config` when that exists, called with the
+checkout's root. The hook writes the gitignored
 `.buckconfig.local` for a private pool: its endpoint, credentials and the platform
 properties its workers match (`hirsel.remote_properties`), rewriting the file only
 when its content changes. Without a hook an existing `.buckconfig.local` is kept,

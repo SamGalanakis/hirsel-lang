@@ -75,6 +75,12 @@ def scratch_repo(root):
     git(root, 'config', 'user.name', 'Gate test')
 
 
+def bootstrap(tree):
+    """Generate a scratch tree's build files, as bootstrap.py does."""
+    subprocess.run([sys.executable, str(tree / 'tools/buck2/sync.py')], cwd=tree, check=True,
+                   env=os.environ | {'COMMANDS': os.devnull})
+
+
 def commit(root, files, message):
     for path, text in files.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
@@ -132,8 +138,8 @@ class Classification(unittest.TestCase):
 
     def test_sizing_evidence_and_generator_do_not_select_every_test(self):
         c = self.classify('tools/buck2/test_sizes_from_usage.py', 'tools/buck2/test-sizes.json',
-                          'tools/buck2/test_sizes.bzl', 'tools/buck2/guard-stops.json')
-        self.assertEqual(len(c.tools), 4)
+                          'tools/buck2/guard-stops.json')
+        self.assertEqual(len(c.tools), 3)
         self.assertFalse(c.needs_buck2)
 
     def test_workspace_metadata_selects_its_readers_not_everything(self):
@@ -153,7 +159,7 @@ class Classification(unittest.TestCase):
 
     def test_build_wide_inputs_select_everything(self):
         for path in ['Cargo.toml', '.buckconfig', 'tools/buck2/defs.bzl', 'tools/buck2/test_launcher.sh',
-                     'tools/buck2/prelude_overlay.py', 'third-party/BUCK', 'rust-toolchain.toml']:
+                     'tools/buck2/prelude_overlay.py', 'third-party/reindeer.toml', 'rust-toolchain.toml']:
             with self.subTest(path=path):
                 self.assertTrue(self.classify(path).everything)
         self.assertTrue(self.classify('crates/hirsel-gone/src/lib.rs').everything)
@@ -324,7 +330,7 @@ class Workspace(unittest.TestCase):
         buck = (REPO / 'BUCK').read_text()
         _, rules = impact.buck_rules(buck)
         for binary, cases in sync.FULL_GATE_SKIPS.items():
-            self.assertIn(f'    skips = {json.dumps(cases)},\n', rules[binary])
+            self.assertIn(f'    skips = {sync.starlark(cases)},\n', rules[binary])
 
 
 # A root BUCK for selections over the real repository: a library, its tests
@@ -1433,9 +1439,59 @@ class Merging(unittest.TestCase):
     def manifest(self, *paths):
         return merging.canonical({'schema': 1, 'sources': [{'path': path, 'module': [path[:-4]]} for path in paths]})
 
-    def test_generated_files_keep_mains_side_for_regeneration(self):
-        for path in merging.REGENERATED:
-            self.assertEqual(merging.resolve(path, 'a\n', 'main\n', 'lane\n'), 'main\n')
+    def test_sorted_list_entries_both_sides_add_or_remove_merge_in_key_order(self):
+        path = 'crates/hirsel-modes/src/ownership/tests/passing.txt'
+        base = 'a.hir\nc.hir\nd.hir\nf.hir\n'
+        self.assertEqual(merging.resolve(path, base, 'a.hir\nb2.hir\nc.hir\nf.hir\n', 'a.hir\nb1.hir\nc.hir\nd.hir\ne.hir\nf.hir\n'),
+                         'a.hir\nb1.hir\nb2.hir\nc.hir\ne.hir\nf.hir\n')
+        # Keyed rows: one key both sides changed stays a conflict.
+        table = 'crates/hirsel-engine/src/registry/review-table.txt'
+        self.assertEqual(merging.resolve(table, 'core@1/a | 1\n', 'core@1/a | 1\ncore@1/c | 3\n', 'core@1/a | 1\ncore@1/b | 2\n'),
+                         'core@1/a | 1\ncore@1/b | 2\ncore@1/c | 3\n')
+        self.assertIsNone(merging.resolve(table, 'core@1/a | 1\n', 'core@1/a | 2\n', 'core@1/a | 3\n'))
+        self.assertIsNone(merging.resolve('native-tests/library/operations.tsv', 'a\t1\n', 'a\t2\n', 'a\t3\n'))
+
+    def test_a_sorted_list_stretch_out_of_order_or_with_comments_stays_a_conflict(self):
+        path = 'native-tests/regressions/smoke.txt'
+        self.assertIsNone(merging.resolve(path, 'b\n', 'b\nz\na\n', 'b\ny\n'))
+        self.assertIsNone(merging.resolve(path, '# head\n', '# main\n', '# lane\n'))
+        # Between unsorted neighbours the order is unknown.
+        self.assertIsNone(merging.resolve(path, 'm\nc\n', 'm\nx\nc\n', 'm\ny\nc\n'))
+        self.assertIsNone(merging.resolve('README.md', 'a\n', 'a\nb\n', 'a\nc\n'))
+
+    def test_gitattributes_name_the_driver_for_exactly_the_resolvable_files(self):
+        listed = subprocess.run(['git', 'ls-files', '-z'], cwd=REPO, check=True, capture_output=True).stdout
+        paths = [path for path in os.fsdecode(listed).split('\0') if path]
+        attributes = subprocess.run(['git', 'check-attr', '--stdin', '-z', 'merge'], cwd=REPO, check=True,
+                                    capture_output=True, input=os.fsencode('\0'.join(paths))).stdout
+        fields = os.fsdecode(attributes).split('\0')
+        driven = {fields[i] for i in range(0, len(fields) - 2, 3) if fields[i + 2] == merging.DRIVER}
+        self.assertEqual(driven, {path for path in paths if merging.resolvable(path)})
+        self.assertIn('third-party/NOTICES.md', driven)
+
+    def test_the_driver_merges_a_lanes_own_rebase(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scratch_repo(root)
+            path = 'crates/hirsel-engine/src/registry/review-table.txt'
+            commit(root, {'.gitattributes': (REPO / '.gitattributes').read_text(), path: 'a | 1\nc | 1\n',
+                          'tools/buck2/merging.py': (TOOLS / 'buck2/merging.py').read_text()}, 'Base')
+            merging.install(root)
+            git(root, 'switch', '-q', '-c', 'lane')
+            commit(root, {path: 'a | 1\nb | 1\nc | 1\n'}, 'Lane')
+            git(root, 'switch', '-q', 'main')
+            commit(root, {path: 'a | 1\nbb | 1\nc | 1\n'}, 'Main')
+            git(root, 'switch', '-q', 'lane')
+            git(root, 'rebase', '-q', 'main')
+            self.assertEqual((root / path).read_text(), 'a | 1\nb | 1\nbb | 1\nc | 1\n')
+            # Both sides changing one entry keeps git's markers and stops the rebase.
+            commit(root, {path: 'a | 1\nb | 1\nbb | 1\nc | 2\n'}, 'Lane edit')
+            git(root, 'switch', '-q', 'main')
+            commit(root, {path: 'a | 1\nbb | 1\nc | 3\n'}, 'Main edit')
+            git(root, 'switch', '-q', 'lane')
+            stopped = subprocess.run(['git', 'rebase', '-q', 'main'], cwd=root, capture_output=True, text=True)
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertIn('<<<<<<< ', (root / path).read_text())
 
     def test_rows_both_sides_append_are_kept_mains_first(self):
         base = '| a |\n| b |\n'
@@ -1650,6 +1706,30 @@ if __name__ == "__main__":
     sys.exit(int(os.environ.get("FAIL_{upper}", "0")))
 '''
 
+# The scratch clone's sync.py: the root BUCK is buck.in, then a comment line per
+# crate test file (outside any rule, so it selects nothing), and the other build
+# inputs are placeholders; it stamps them as generated.py's sync.py does.
+FAKE_SYNC = FAKE_SCRIPT.replace('{name}', 'sync.py').replace('{upper}', 'SYNC').replace(
+    'if __name__ == "__main__":\n', '''if __name__ == "__main__":
+    from pathlib import Path
+    root = Path(os.environ.get("HIRSEL_LAND_TREE") or Path(__file__).resolve().parents[2])
+    def buck():
+        return (root / "buck.in").read_text() + "".join(
+            f"# input: {path.relative_to(root).as_posix()}\\n" for path in sorted(root.glob("crates/*/tests/**/*.rs")))
+    if sys.argv[1:2] == ["--root-buck"]:
+        Path(sys.argv[2]).write_text(buck())
+        sys.exit(0)
+''').replace('    sys.exit(int(os.environ.get("FAIL_SYNC", "0")))\n', '''    if os.environ.get("FAIL_SYNC"):
+        sys.exit(1)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import generated
+    state = generated.tree_state(root)
+    for path in generated.BUILD_INPUTS:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(buck() if path == "BUCK" else "# placeholder\\n")
+    generated.record(root, state)
+''')
+
 FAKE_HIRSEL = '''#!/usr/bin/env python3
 import fcntl
 import os
@@ -1676,7 +1756,7 @@ if os.environ.get("INDEX_PUSH_ONCE"):
         marker.touch()
         subprocess.run(["git", "-C", os.environ["INDEX_PUSH_ONCE"], "push", "-q", "origin", "HEAD:main"],
                        check=True, capture_output=True)
-sys.stdout.write(os.environ.get("INDEX_TEXT", Path("docs/catalogue.md").read_text()))
+sys.stdout.write(os.environ.get("INDEX_TEXT", "".join(p.read_text() for p in sorted(Path("docs").glob("catalogue*.md")))))
 '''
 
 FAKE_SCOPE = '''#!/usr/bin/env python3
@@ -1722,23 +1802,28 @@ class Scripts(unittest.TestCase):
         self.root = top / 'lane'
         self.root.mkdir()
         scratch_repo(self.root)
-        files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'BUCK': SCRIPT_BUCK, 'README.md': 'Hirsel\n',
+        files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'buck.in': SCRIPT_BUCK, 'README.md': 'Hirsel\n',
                  'docs/building.md': 'See [the grammar](grammar.md).\n', 'docs/grammar.md': 'grammar\n',
                  'docs/api.md': 'index\n', 'docs/catalogue.md': 'index\n',
                  'bench/native/tests/test_fixture.py': 'import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self): pass\n',
                  **{f'crates/{crate}/Cargo.toml': f'[package]\nname = "{crate}"\n' for crate in impact.CRATE_CAMPAIGNS},
-                 '.gitignore': (REPO / '.gitignore').read_text()}
+                 '.gitignore': (REPO / '.gitignore').read_text(),
+                 '.gitattributes': (REPO / '.gitattributes').read_text()}
         for name in ('gate', 'land'):
             files[f'tools/{name}'] = (TOOLS / name).read_text()
-        for name in ('gating', 'graph', 'impact', 'merging', 'clippy', 'agree', 'conformance', 'event_logs'):
+        for name in ('gating', 'generated', 'graph', 'impact', 'merging', 'clippy', 'agree', 'conformance',
+                     'event_logs', 'test_sizes_from_usage'):
             files[f'tools/buck2/{name}.py'] = (TOOLS / 'buck2' / f'{name}.py').read_text()
-        for name in ('sync', 'prepare', 'fmt'):
+        files['tools/buck2/sync.py'] = FAKE_SYNC
+        files['tools/buck2/test-sizes.json'] = '{}\n'
+        for name in ('prepare', 'fmt'):
             files[f'tools/buck2/{name}.py'] = FAKE_SCRIPT.replace('{name}', f'{name}.py').replace('{upper}', name.upper())
         files['tools/tests/ignored_tests.py'] = FAKE_SCRIPT.replace('{name}', 'ignored_tests.py').replace('{upper}', 'IGNORED')
         commit(self.root, files, 'Base')
         for name in ('gate', 'land'):
             (self.root / 'tools' / name).chmod(0o755)
         git(self.root, 'commit', '-q', '-am', 'Executable tools')
+        bootstrap(self.root)
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.parent.mkdir(parents=True)
         fake_bin = top / 'bin'
@@ -1859,7 +1944,8 @@ Local.start = traced_local_check
         self.daemon_change('gate')
         result, logged = self.run_tool('gate', '--suggest', env=self.daemon_env() | {'FAIL_QUERY': '1'})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((logged, self.daemon_trace()), ([], []))
+        # No Buck2 command: only the stale build files are generated, without a daemon.
+        self.assertEqual((logged, self.daemon_trace()), (['sync.py'], []))
         self.assertIn('1 test targets: a', result.stdout)
 
     def test_interactive_keep_daemon_is_an_explicit_opt_out(self):
@@ -2049,13 +2135,12 @@ Local.start = traced_local_check
         self.assertIn('land: pushed', result.stdout)
         self.assertEqual(git(self.origin, 'rev-parse', 'main'), git(self.root, 'rev-parse', 'HEAD'))
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
-        # Build and Clippy in one Buck2 command, formatting and build files beside it; no test.
+        # Build and Clippy in one Buck2 command, formatting beside it; no test.
         [build] = [row for row in logged if row.startswith('build ') and '--materializations none' in row]
         self.assertTrue(build.startswith('build -c hirsel.clippy=true -c buck2.test_builds_targets=true '
                                          '-c hirsel.priority=75 --materializations none --build-report '), build)
         self.assertTrue(build.endswith(' root//:a root//:a-clippy[clippy.txt]'), build)
         self.assertIn('fmt.py --check', logged)
-        self.assertIn('sync.py --check --files-only', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
         self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
         self.assertGreaterEqual(len(list((self.root / '.buck2/event-logs').glob('*.pb.zst'))), 2)
@@ -2076,10 +2161,9 @@ Local.start = traced_local_check
         self.assertTrue(buck2)
         for row in buck2:
             self.assertIn('-c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75', row)
-        # fmt.py's query shares the build's configuration; sync.py runs no Buck2 command.
+        # fmt.py's query shares the build's configuration.
         self.assertIn('fmt.py -c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75',
                       configs.read_text().splitlines())
-        self.assertIn('sync.py --check --files-only', logged)
         [build_set] = [query for query in queries.read_text().splitlines() if '_hirsel_precheck' in query]
         self.assertTrue(build_set.endswith(' - rdeps(root//:, kind("_hirsel_precheck", root//:))'), build_set)
         [row] = [json.loads(line) for line in (self.root / '.git/hirsel-land-batches.jsonl').read_text().splitlines()]
@@ -2197,8 +2281,12 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'a new export')
-        self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Regenerate the API index.')
-        self.assertEqual(git(self.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'), 'docs/api.md')
+        # The page rides in the batch's last commit: no separate index commit.
+        self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Readme')
+        self.assertEqual(git(self.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split(),
+                         ['README.md', 'docs/api.md'])
+        [landing] = (self.root / '.git/hirsel-landings.jsonl').read_text().splitlines()
+        self.assertEqual(json.loads(landing)['landed'], git(self.origin, 'rev-parse', 'main'))
         self.assertEqual(gating.green_records(self.root), records)
         self.assertIn('hirsel doc stdlib/std@1/hirsel.json', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
@@ -2241,7 +2329,8 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertIn('main moved during the checks', result.stdout)
         self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'a new export')
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
-        self.assertEqual(git(self.root, 'log', '--format=%s').splitlines().count('Regenerate the API index.'), 1)
+        self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
+        self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Readme')
         self.assertEqual(gating.green_records(self.root), records)
         self.assertEqual(logged.count('hirsel doc stdlib/std@1/hirsel.json'), 2)
         self.assertEqual(result.stdout.count('took land lock'), 1)
@@ -2282,6 +2371,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         git(self.root, 'worktree', 'add', '-q', '-b', name, str(tree), 'origin/main')
         (tree / '.buck2').mkdir()
         (tree / '.buck2/bin').symlink_to(self.root / '.buck2/bin')
+        bootstrap(tree)
         commit(tree, files, f'{name} change')
         gate = subprocess.run([str(tree / 'tools/gate'), '--why', 'docs only'], cwd=tree, env=self.env,
                               capture_output=True, text=True)
@@ -2400,27 +2490,88 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(),
                          ['api change', 'Readme'])
 
-    def test_append_only_and_generated_conflicts_resolve_and_others_stop_their_change(self):
-        self.sibling_pushes({'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n',
-                             'docs/api.md': 'index v1\n'})
+    def test_append_only_and_sorted_list_conflicts_resolve_and_others_stop_their_change(self):
+        passing = 'crates/hirsel-modes/src/ownership/tests/passing.txt'
+        notices = '| Source | License |\n|---|---|\n| zig | MIT |\n'
+        self.sibling_pushes({'third-party/NOTICES.md': notices, passing: 'a.hir\nz.hir\n'})
         git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
-        commit(self.root, {'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n| go | BSD |\n',
-                           'docs/api.md': 'index from the first lane\n', 'README.md': 'Hirsel, a language\n'},
-               'First')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
-        rows = self.lane('rows', {'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n'
-                                                            '| roc | UPL |\n',
-                                  'docs/api.md': 'index from the second lane\n'})
+        commit(self.root, {'third-party/NOTICES.md': notices + '| go | BSD |\n', passing: 'a.hir\nm.hir\nz.hir\n',
+                           'README.md': 'Hirsel, a language\n'}, 'First')
+        self.assertEqual(self.run_tool('gate', '--why', 'lists')[0].returncode, 0)
+        rows = self.lane('rows', {'third-party/NOTICES.md': notices + '| roc | UPL |\n',
+                                  passing: 'a.hir\nb.hir\nz.hir\n'})
         clash = self.lane('clash', {'README.md': 'Hirsel, the agent language\n'})
         results = self.queued_lands([self.root, rows, clash])
         self.assertEqual([status for status, _ in results], [0, 0, 1], ''.join(out for _, out in results))
-        self.assertIn('resolved on the rebase: docs/api.md, third-party/NOTICES.md', results[1][1])
+        self.assertIn(f'resolved on the rebase: {passing}, third-party/NOTICES.md', results[1][1])
         self.assertIn('conflicts in: README.md', results[2][1])
         self.assertEqual(git(self.origin, 'show', 'main:third-party/NOTICES.md'),
-                         '| Source | License |\n|---|---|\n| zig | MIT |\n| go | BSD |\n| roc | UPL |')
-        # The index is main's side, then regenerated from the landed tree.
-        self.assertEqual(git(self.origin, 'log', '-1', '--format=%s', 'main'), 'Regenerate the API index.')
+                         notices + '| go | BSD |\n| roc | UPL |')
+        self.assertEqual(git(self.origin, 'show', f'main:{passing}'), 'a.hir\nb.hir\nm.hir\nz.hir')
         self.assertEqual(git(clash, 'status', '--porcelain'), '')
+
+    def test_two_lanes_altering_the_generated_files_land_in_one_batch_without_a_conflict(self):
+        """Both changes alter the root BUCK and docs/api.md as generated; neither
+        commits them, so the batch has nothing to conflict on."""
+        before = git(self.origin, 'rev-parse', 'main')
+        main_buck = (self.root / 'BUCK').read_text()
+        commit(self.root, {'crates/hirsel-span/tests/it/one.rs': '#[test]\nfn one() {}\n',
+                           'docs/catalogue-one.md': 'one\n'}, 'One')
+        self.assertEqual(self.run_tool('gate', '--why', 'a test and an export')[0].returncode, 0)
+        other = self.lane('two', {'crates/hirsel-lexer/tests/it/two.rs': '#[test]\nfn two() {}\n',
+                                  'docs/catalogue-two.md': 'two\n'})
+        for tree, line in ((self.root, 'crates/hirsel-span/tests/it/one.rs'),
+                           (other, 'crates/hirsel-lexer/tests/it/two.rs')):
+            buck = (tree / 'BUCK').read_text()
+            self.assertNotEqual(buck, main_buck)
+            self.assertIn(f'# input: {line}', buck)
+            self.assertEqual(git(tree, 'status', '--porcelain'), '')
+        results = self.queued_lands([self.root, other])
+        self.assertEqual([status for status, _ in results], [0, 0], ''.join(out for _, out in results))
+        self.assertIn('(batch of 2: main, two)', results[1][1])
+        self.assertNotIn('resolved on the rebase', ''.join(out for _, out in results))
+        # One commit per change: the regenerated page rides in the last one.
+        self.assertEqual(git(self.origin, 'log', '--format=%s', f'{before}..main').splitlines(), ['two change', 'One'])
+        self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'one\ntwo\nindex')
+        self.assertEqual(git(self.origin, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'main').split(),
+                         ['crates/hirsel-lexer/tests/it/two.rs', 'docs/api.md', 'docs/catalogue-two.md'])
+        self.assertEqual(git(self.origin, 'ls-tree', '--name-only', 'main', 'BUCK'), '')
+        batch = next(Path(self.env['HIRSEL_LAND_LOCK_DIR']).glob('batch-*'))
+        buck = (batch / 'BUCK').read_text()
+        self.assertIn('# input: crates/hirsel-span/tests/it/one.rs', buck)
+        self.assertIn('# input: crates/hirsel-lexer/tests/it/two.rs', buck)
+
+    def test_gate_and_land_refuse_a_change_that_touches_a_generated_file(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        before = git(self.origin, 'rev-parse', 'main')
+        commit(self.root, {'docs/api.md': 'index by hand\n'}, 'Index')
+        for tool in ('gate', 'land'):
+            with self.subTest(tool=tool):
+                result, logged = self.run_tool(*([tool, '--why', 'docs only'] if tool == 'gate' else [tool]))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f'{tool}: the change touches generated files, which no lane commits: docs/api.md',
+                              result.stdout)
+                self.assertIn('git checkout $(git merge-base HEAD origin/main) -- docs/api.md', result.stdout)
+                self.assertFalse(any(row.split(' ')[0] in ('build', 'test') for row in logged), logged)
+        self.assertEqual(git(self.origin, 'rev-parse', 'main'), before)
+        self.assertFalse(list((Path(self.env['HIRSEL_LAND_LOCK_DIR']) / 'requests').glob('*.json'))
+                         if (Path(self.env['HIRSEL_LAND_LOCK_DIR']) / 'requests').exists() else [])
+        # A force-added build file is refused the same way.
+        git(self.root, 'add', '-f', 'BUCK')
+        git(self.root, 'commit', '-q', '-m', 'Build file')
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('docs/api.md, BUCK', result.stdout.replace('BUCK, docs/api.md', 'docs/api.md, BUCK'))
+        self.assertIn('git rm -q --cached BUCK', result.stdout)
+        # Dropped as told, the change lands on the gate it already passed.
+        base = git(self.root, 'merge-base', 'HEAD', 'origin/main')
+        git(self.root, 'checkout', base, '--', 'docs/api.md')
+        git(self.root, 'rm', '-q', '--cached', 'BUCK')
+        git(self.root, 'commit', '-q', '-m', 'Drop the generated files')
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'index')
 
     def test_the_chosen_corpus_cases_run_first_and_their_failure_stops_the_gate(self):
         # Enough other cases that one changed case is a slice, not the whole campaign.
@@ -2608,7 +2759,7 @@ hirsel_test(
     shards = 2,
 )
 '''
-        commit(self.root, {'BUCK': buck}, 'Declare front test')
+        commit(self.root, {'buck.in': buck}, 'Declare front test')
         git(self.root, 'push', '-q', 'origin', 'main')
         path = 'crates/hirsel-lexer/tests/front/net.rs'
         commit(self.root, {path: '#[test] fn net() {}'}, 'Test source')
@@ -2630,8 +2781,7 @@ hirsel_test(
         git(self.root, 'add', 'tools/tests/gate.py')
         git(self.root, 'commit', '-qm', 'Tooling test')
         git(self.root, 'push', '-q', 'origin', 'main')
-        for path, text in [('BUCK', SCRIPT_BUCK.replace('name = "a"', 'name = "b"')),
-                           ('tools/buck2/test-costs/new.tsv', 'case\t1\n'),
+        for path, text in [('tools/buck2/test-costs/new.tsv', 'case\t1\n'),
                            ('tools/buck2/defs.bzl', '# macro change\n')]:
             with self.subTest(path=path):
                 commit(self.root, {path: text}, 'Graph change')

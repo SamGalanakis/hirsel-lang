@@ -5,6 +5,40 @@ remote-execution pool (for example NativeLink, with a shared content-addressed
 cache). Cargo manifests and `Cargo.lock` stay the source of truth: `sync.py`
 derives every Buck2 build file from them, and `cargo build` keeps working.
 
+## Generated files
+
+No lane commits a generated file, so no rebase can conflict on one
+(`generated.py`):
+
+- **Build inputs are gitignored and generated on demand.** `sync.py` writes the
+  root and `third-party/` `BUCK`, `third-party/Cargo.{toml,lock}` and `lib.rs`,
+  `exec_sizes.bzl`, `test_sizes.bzl`, `workspace-metadata.json` and
+  `tools/native-toolchain/pins.bzl`. `bootstrap.py` (so `prepare.py`),
+  `tools/gate`, `tools/land`, `tools/bless.sh`, `tools/native-plants.py` and
+  the runtime benchmark harness run
+  `sync.py --if-stale`, which regenerates them only when the tree changed since
+  the last generation (a stamp in `.buck2/` of HEAD's tree and every path `git
+  status` reports). After you edit sources or rebase, run `prepare.py` or
+  `sync.py --if-stale` before a bare `.buck2/bin/buck2`. Where the root BUCK is
+  missing, Buck2 reads the committed `BUCK.unsynced` (`[buildfile]` in
+  `.buckconfig`), which fails saying to run `sync.py`. The files are
+  byte-identical to the committed ones they replace, so every action key, and
+  so remote execution and its cache, is unchanged.
+- **`docs/api.md` is committed, and only `tools/land` writes it**: it
+  regenerates the page with the built CLI on the batch's tip and amends it into
+  the batch's last commit. `tools/gate` and `tools/land` refuse a change that
+  touches it (or force-adds a build input) and print the commands that drop
+  it; the page's diff is not part of the gated identity. Its drift tests run in the
+  full gate (`FULL_GATE_SKIPS` in `sync.py`), on main.
+- **Files many lanes add to merge themselves.** `.gitattributes` gives
+  `third-party/NOTICES.md`, every `hirsel.json` and the sorted ratchet and
+  expectation lists (`SORTED_LISTS` in `merging.py`) the `hirsel` merge
+  driver, which `bootstrap.py` installs in the clone's config: appended rows
+  and entries either side adds stay, entries either side removes go, and only
+  two sides changing one entry stays a conflict. Lanes' own rebases and land's
+  batch rebase merge them alike.
+- `tools/known-failures.tsv` stays hand-edited, direct to main.
+
 ## Setup per checkout or worktree
 
 ```sh
@@ -127,16 +161,16 @@ python3 tools/buck2/conformance.py                # conformance shards and summe
 python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AGREE_SHARDS shards, summed JSON
 python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
-python3 tools/buck2/sync.py                       # after metadata or action-sizes.json changes
+python3 tools/buck2/sync.py --if-stale            # the generated build files, after any edit or rebase
 tools/gate --suggest                                 # what a change can affect
 tools/gate --tests suggested --why "<one line>"      # the per-push gate: its floor and the chosen tests (tools/land lands)
 ```
 
-`tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`.
-It commits a changed `docs/api.md` separately as `Regenerate the API index.`
-before pushing; this generated-only commit needs no new gate. Push retries
-regenerate after the next rebase. The gate retains the export-count and drift
-test, so source changes and their published signatures stay in agreement.
+`tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`
+and amends a changed `docs/api.md` into the batch's last commit; this needs no
+new gate. Push retries regenerate after the next rebase. Lane gates keep the
+index's export-count test; its drift tests, which compare the committed page,
+run in the full gate.
 
 Builds use Buck2's default isolation dir, `v2`: never pass
 `--isolation-dir` (or pass only `--isolation-dir v2`) and leave
@@ -292,15 +326,16 @@ the old copy.
   names, at its locked version with the features Cargo resolved for the
   workspace), `third-party/Cargo.lock` (from the workspace lock, so no version
   moves), `third-party/BUCK` (Reindeer, configured by
-  `third-party/reindeer.toml` and `third-party/fixups/`) and the root `BUCK`.
-  `sync.py --check` fails when any of them is stale: after a manifest or lock
-  change, and after a source adds or drops a literal `include*!` or `#[path]`
-  reference, or the corpus a manifest names (rerun `sync.py` and commit the
-  result).
+  `third-party/reindeer.toml` and `third-party/fixups/`) and the root `BUCK`,
+  all gitignored (Generated files above). The tree's generated `BUCK` is
+  compared by target with its base's, which `gating.base_buck` generates
+  with the base's own `sync.py --root-buck` once per commit: a manifest or
+  lock change, or a source adding or dropping a literal `include*!` or
+  `#[path]` reference, selects the targets whose rule changed.
 - Native and full-gate crate cases use the same pool execution path as ordinary
   tests. The runtime ABI symbol test reads the separately built production
   archive; the layering test reads `workspace-metadata.json`, generated from
-  Cargo's workspace graph by `sync.py` and checked for freshness. Neither
+  Cargo's workspace graph by `sync.py`. Neither
   invokes Cargo on a worker.
 - A pool test's passing verdict is cached by its action key. Test binaries
   whose sources draw random cases (`proptest!`, `SEEDED` in `sync.py`) run
@@ -450,7 +485,7 @@ python3 tools/buck2/sync.py
 Shard flags never select cases; only positional filters do, and a filtered
 run executes in shard 1.
 
-After checking generated files, `sync.py --check` lists each cost-balanced
+After regenerating stale build files, `sync.py --check` lists each cost-balanced
 binary's cases on the pool (including ignored and macro-generated cases, without
 running test bodies). It fails if more than 5% of the driver's cases have no
 cost row, or if listing fails. The stdlib, front, rc and rt binaries warn at
@@ -548,7 +583,8 @@ bundled`, and delete `prelude_overlay.py`, its pins, its test `tools/tests/prelu
 ## Measured test requests
 
 A pool test binary reserves what it measured using: `test_sizes.bzl`
-(`TEST_REQUESTS`, evidence in `test-sizes.json`) gives each binary, shared by
+(`TEST_REQUESTS`, which `sync.py` derives from the evidence in
+`test-sizes.json`) gives each binary, shared by
 its shards, one CPU while its p95 core use is at most 1.6 (a one-CPU action
 already runs up to the worker's slot share), otherwise two. No gate test asks
 for more: the pool holds its one reservation for a blocked multi-CPU action, so

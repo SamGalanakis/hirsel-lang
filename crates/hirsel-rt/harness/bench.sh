@@ -33,6 +33,7 @@ buck2="$root/.buck2/bin/buck2"
 build="$root/buck-out/tmp/rt-bench"
 mkdir -p "$build"
 if [[ "${HIRSEL_BENCH_PREBUILT:-0}" != 1 ]]; then
+  python3 "$root/tools/buck2/sync.py" --if-stale
   archives="$(cd "$root" && "$buck2" build //:hirsel-rt-archives --show-full-simple-output)"
   cflags=(-std=c11 -O3 -ffp-contract=off -Wall -Wextra -Werror)
   clang "${cflags[@]}" "$here/binarytrees.c" -o "$build/bt-malloc"

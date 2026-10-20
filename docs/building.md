@@ -23,7 +23,7 @@ coding agent. Its fixed goals:
 hirsel doc app/manifest.json                 # Markdown on stdout
 hirsel doc app/manifest.json -o app/api.md    # write a page
 hirsel doc app/manifest.json --json          # schema-1 JSON
-hirsel doc stdlib/std@1/hirsel.json -o docs/api.md
+hirsel doc stdlib/std@1/hirsel.json          # docs/api.md, which only tools/land writes
 ```
 
 `doc` accepts an explicit package manifest, including a library without an entry.
@@ -619,8 +619,10 @@ inventories with the owning tool and verify them with `--check` or an exact drif
 test; regenerate them after a merge instead of hand-merging their contents.
 `tools/bless.sh core-review native-inventory` regenerates the core review and
 native operation tables; the registry and native coverage tests check their
-identities and contracts. `tools/land` regenerates `docs/api.md`, whose drift test
-compares it with every public core and std export. The conformance ratchet checks
+identities and contracts. Only `tools/land` writes `docs/api.md`; the full gate's
+drift tests compare it with every public core and std export on main. Sorted
+lists such as these merge without conflicts when lanes add or remove different
+entries (the `hirsel` merge driver, `tools/buck2/merging.py`). The conformance ratchet checks
 each sorted, unique path in `conformance/passing.txt`; the full-gate counter
 checks every compiled test identity executes exactly once. Neither needs a total
 updated when another lane adds an item.
@@ -679,9 +681,12 @@ the pool within their measured reservations.
 ## Buck2
 
 The gate builds and tests with Buck2. Cargo manifests and `Cargo.lock` stay
-the source of truth: after editing a `Cargo.toml`, run
-`python3 tools/buck2/sync.py` to regenerate the BUCK files (`tools/gate`
-fails while they are stale). The toolchains (Rust, the pinned LLVM, Buck2 and
+the source of truth: the BUCK files and the other build inputs
+`tools/buck2/sync.py` derives are gitignored, and no change commits them
+(`tools/buck2/README.md`, Generated files). `prepare.py`, `tools/gate`,
+`tools/land` and `tools/bless.sh` regenerate them when the tree changed; before
+a bare `.buck2/bin/buck2` after an edit or a rebase, run
+`python3 tools/buck2/sync.py --if-stale`. The toolchains (Rust, the pinned LLVM, Buck2 and
 its prelude) come in hermetically; nothing is installed system-wide.
 
 ```sh
@@ -905,10 +910,11 @@ the lock (`batch-<clone>`, reused and prepared once). The batch runs
 origin/main's newest landing scripts, fetched when the batch starts, not the
 copy the leading lane started with, so a landed tooling fix holds from the
 next batch. It fetches, rebases each
-change onto the one before, builds the workspace, runs Clippy, formatting and
-the build-file check once on the batch's tip, regenerates the API index and
-pushes once. Every Buck2 command of the batch runs with one configuration
-(`fmt.py`'s query included, and `sync.py --check --files-only` runs none), so
+change onto the one before (regenerating the gitignored build files when
+stale), builds the workspace, runs Clippy and formatting once on the batch's
+tip, regenerates the API index into the batch's last commit and pushes once.
+Every Buck2 command of the batch runs with one configuration (`fmt.py`'s query
+included), so
 no command waits for another's daemon state, and at pool priority 75, above
 the gates' 50 (`tools/buck2/platforms.bzl`): on 2026-10-20, at 50, a batch's
 compiles spent 85-94% of their remote time queued behind the gates' test runs.
@@ -930,12 +936,16 @@ workspace, where bisecting with whole-workspace builds cost one per step, a
 full rebuild each because every prefix is a new tree. An out-of-band push
 that moves main repeats the round under the same lock.
 
-Rebase conflicts in generated and append-only files are resolved, not
-stopped on (`tools/buck2/merging.py`): `docs/api.md` and the root `BUCK` keep
-main's side and are regenerated (the index when land pushes, `BUCK` with
-`sync.py` after each change that touches it), rows both sides append to
-`third-party/NOTICES.md` are both kept, and package manifests (`hirsel.json`)
-merge their sources and dependencies structurally. Any other conflict takes
+No change commits a generated file, so no rebase conflicts on one: land
+refuses a change that touches `docs/api.md` or a gitignored build file before
+it queues, with the commands that drop it (the page's diff is not part of the
+gated identity, so dropping it needs no new gate). The files many lanes add to merge with
+`tools/buck2/merging.py`, the `hirsel` merge driver `.gitattributes` names, in
+a lane's own rebase and in land's alike: rows both sides append to
+`third-party/NOTICES.md` are both kept, package manifests (`hirsel.json`) merge
+their sources and dependencies structurally, and the sorted ratchet and
+expectation lists keep the entries either side adds and drop those either
+side removes. Any other conflict takes
 that change out of the batch: rebase it by hand, run `tools/gate --extend` on
 the result, and land again. A rebased change must keep the identity its gate
 passed; one that does not is sent back to be gated. Land never runs tests. It
@@ -949,12 +959,13 @@ beside it: its members and their outcomes, its rounds, and each check's tip,
 seconds and verdict. `tools/gate_land_stats.py` reports lands per hour, the
 waits, and batch time with what red batches spent after their first check.
 
-Land's index step runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
-changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
-This generated-only update needs no new gate; a push retry regenerates it
-after the next rebase. The export-count and drift test stays in the gate.
-Declarations picked up by a clean rebase therefore reach main with a current
-index without another manual refresh or gate.
+Land's index step runs the built `hirsel doc stdlib/std@1/hirsel.json` and amends a
+changed `docs/api.md` into the batch's last commit before pushing: no
+separate commit and no new gate; a push retry regenerates it after the next
+rebase. Lane gates keep the index's export-count test; the drift tests that
+compare the committed page run in the full gate, on main. Declarations picked
+up by a clean rebase therefore reach main with a current index without another
+manual refresh or gate.
 
 Changes to native code also run the filtered native matrix for the programs
 they add or touch on the pool. Focus runs book one CPU at lane priority:
@@ -993,8 +1004,10 @@ under Cranelift, LLVM O0 and LLVM O2, and the totals.
 Tests that execute the full native matrix or take about a minute or longer
 carry `#[ignore = "full gate"]` and a `full_gate_` name prefix. Keep their
 inputs and assertions intact; add a separate bounded smoke test when useful.
-Cases that call `full_matrix` only for discovery are skipped by name outside
-the full suite (`FULL_GATE_SKIPS` in `tools/buck2/sync.py`).
+Cases that call `full_matrix` only for discovery, and the drift tests of
+`docs/api.md` (current on main alone, since only `tools/land` writes it), are
+skipped by name outside the full suite (`FULL_GATE_SKIPS` in
+`tools/buck2/sync.py`).
 
 `tools/gate --full` is the full suite, run on demand at milestone cuts (nothing
 schedules it):

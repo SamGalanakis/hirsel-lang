@@ -5,6 +5,18 @@
 # Cargo build output
 /target/
 
+# Build inputs tools/buck2/sync.py derives (tools/buck2/generated.py): generated on
+# demand by bootstrap.py and every Buck2 entry point, never committed.
+/BUCK
+/third-party/BUCK
+/third-party/Cargo.toml
+/third-party/Cargo.lock
+/third-party/lib.rs
+/tools/buck2/exec_sizes.bzl
+/tools/buck2/test_sizes.bzl
+/tools/buck2/workspace-metadata.json
+/tools/native-toolchain/pins.bzl
+
 # Buck2: pinned tools, build outputs and the local remote-execution configuration.
 /.buck2/
 /buck-out/

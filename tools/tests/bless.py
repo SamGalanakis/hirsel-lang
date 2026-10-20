@@ -28,7 +28,9 @@ class CurrentTargets(unittest.TestCase):
     def run_bless(self, what, targets):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'tools').mkdir()
+            (root / 'tools/buck2').mkdir(parents=True)
+            # The generated build files are current; bless.sh asks sync.py first.
+            (root / 'tools/buck2/sync.py').write_text('')
             (root / '.buck2/bin').mkdir(parents=True)
             shutil.copyfile(ROOT / 'tools/bless.sh', root / 'tools/bless.sh')
             buck = root / '.buck2/bin/buck2'

@@ -1,5 +1,7 @@
 # Buck2 build of the Cargo workspace (tools/buck2/README.md). Cargo manifests and
-# Cargo.lock stay the source of truth; tools/buck2/sync.py derives every BUCK file.
+# Cargo.lock stay the source of truth; tools/buck2/sync.py derives the root and
+# third-party BUCK files, which are gitignored. Where one is missing, Buck2 reads
+# the committed BUCK.unsynced beside it, which fails saying to run sync.py.
 # Remote execution settings live in the ignored, generated .buckconfig.local.
 [cells]
 root = .
@@ -15,6 +17,8 @@ fbsource = none
 buck = none
 [external_cells]
 prelude = disabled
+[buildfile]
+name = BUCK,BUCK.unsynced
 [parser]
 target_platform_detector_spec = target:root//...->root//tools/buck2:dev target:toolchains//...->prelude//platforms:default
 [build]
