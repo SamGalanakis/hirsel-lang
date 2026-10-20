@@ -14,25 +14,45 @@ pub fn main(t: Test) -> Result[(), ()] {
         deque.push_front(mut q, state)
         list.push(mut oracle, state)
         let mut j = list.len(oracle) - 1
-        while j > 0 { list.swap(mut oracle, j, j - 1); j -= 1 }
+        while j > 0 {
+          list.swap(mut oracle, j, j - 1)
+          j -= 1
+        }
       } else if op < 4 {
         deque.push_back(mut q, state)
         list.push(mut oracle, state)
       } else if op == 4 {
-        let expected = if list.len(oracle) == 0 { None() } else { Some(list.remove(mut oracle, 0)) }
+        let expected: Option[u64] = if list.len(oracle) == 0 {
+          None()
+        } else {
+          Some(list.remove(mut oracle, 0))
+        }
         failure.check(deque.pop_front(mut q) == expected, Bounds())
       } else {
         failure.check(deque.pop_back(mut q) == list.pop(mut oracle), Bounds())
       }
       failure.check(deque.len(q) == list.len(oracle), Bounds())
-      failure.check(deque.get(q,list.len(oracle)) == None, Bounds())
-      let first = if list.len(oracle) == 0 { None() } else { Some(oracle[0]) }
-      let last = if list.len(oracle) == 0 { None() } else { Some(oracle[list.len(oracle) - 1]) }
+      failure.check(deque.get(q, list.len(oracle)) == None, Bounds())
+      let first: Option[u64] = if list.len(oracle) == 0 {
+        None()
+      } else {
+        Some(oracle[0])
+      }
+      let last: Option[u64] = if list.len(oracle) == 0 {
+        None()
+      } else {
+        Some(oracle[list.len(oracle) - 1])
+      }
       failure.check(deque.front(q) == first && deque.back(q) == last, Bounds())
-      for j in 0u64..list.len(oracle) { failure.check(deque.get(q,j) == Some(oracle[j]), Bounds()) }
+      for j in 0u64..list.len(oracle) {
+        failure.check(deque.get(q, j) == Some(oracle[j]), Bounds())
+      }
     }
     while list.len(oracle) > 0 {
-      failure.check(deque.pop_front(mut q) == Some(list.remove(mut oracle, 0)), Bounds())
+      failure.check(
+        deque.pop_front(mut q) == Some(list.remove(mut oracle, 0)),
+        Bounds()
+      )
     }
     failure.check(deque.pop_back(mut q) == None, Bounds())
   }

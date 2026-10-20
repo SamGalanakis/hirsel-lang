@@ -53,8 +53,8 @@ fn rust_btree_exhaustive_200_key_inclusive_ranges() {
     run_expanded(
         "SEM-5-std-ordered-map-range-run",
         &[
-            ("for i in [0i32,66,132,198]", "for i in 0i32..200i32"),
-            ("for j in [0i32,66,132,198,199]", "for j in i..200i32"),
+            ("for i in vector_1", "for i in 0i32..200i32"),
+            ("for j in vector_2", "for j in i..200i32"),
         ],
     );
 }
@@ -75,8 +75,8 @@ fn indexmap_long_keyed_model_against_ordered_map() {
     run_expanded(
         "SEM-5-std-keyed-indexmap-model-run",
         &[
-            ("1u64..3u64", "1u64..9u64"),
-            ("0u64..25u64", "0u64..200u64"),
+            ("1u64..2u64", "1u64..9u64"),
+            ("0u64..10u64", "0u64..200u64"),
             ("% 15", "% 31"),
             ("0u64..15u64", "0u64..31u64"),
         ],

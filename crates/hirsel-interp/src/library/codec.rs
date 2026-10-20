@@ -158,10 +158,12 @@ fn fields(value: &Value) -> R<Vec<&Value>> {
     if matches!(value, Value::Unit) {
         return Ok(vec![]);
     }
+    let keyed = matches!(value, Value::Map { .. } | Value::Set { .. });
     value
         .fields()
         .ok_or_else(|| invalid("codec aggregate"))?
         .iter()
+        .filter(|v| !keyed || v.is_some())
         .map(|v| v.as_ref().ok_or_else(|| invalid("codec moved field")))
         .collect()
 }

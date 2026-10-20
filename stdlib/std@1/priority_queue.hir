@@ -5,8 +5,8 @@ pub opaque type Heap[T]: () uses {T} {
   by: unique @noalloc fn(T, T) -> i32 uses {},
 }
 
-pub fn empty[T](take by: unique @noalloc fn(T, T) -> i32 uses {}) -> unique Heap[T] uses {} {
-  Heap(items: [], by: take by)
+pub fn empty[T](take by: @noalloc fn(T, T) -> i32 uses {}) -> unique Heap[T] uses {} {
+  Heap(items: [], by: unique by)
 }
 
 @noalloc
@@ -20,20 +20,37 @@ pub fn push[T](mut h: unique Heap[T], take value: unique T) -> () uses {h, value
 }
 
 fn up[T](mut items: unique List[unique T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
-  internal.heap_ops.sift_up(mut items, core@1/list.len(items) - 1,
-    fn(a: unique T, b: unique T) -> i32 uses {} { by(a, b) })
+  internal.heap_ops.sift_up(
+    mut items,
+    core@1/list.len(items) - 1,
+    fn(a: unique T, b: unique T) -> i32 uses {} {
+      by(a, b)
+    }
+  )
 }
 
-fn down[T](mut items: unique List[unique T], begin: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+fn down[T](
+  mut items: unique List[unique T],
+  begin: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
   // The shared kernel selects the larger child. Reverse arguments without
   // negating a potentially minimum i32 comparator result.
-  internal.heap_ops.sift(mut items, begin, core@1/list.len(items),
-    fn(a: unique T, b: unique T) -> i32 uses {} { by(b, a) })
+  internal.heap_ops.sift(
+    mut items,
+    begin,
+    core@1/list.len(items),
+    fn(a: unique T, b: unique T) -> i32 uses {} {
+      by(b, a)
+    }
+  )
 }
 
 pub fn pop[T](mut h: unique Heap[T]) -> unique Option[T] uses {h} {
   let count = core@1/list.len(h.items)
-  if count == 0 { return None() }
+  if count == 0 {
+    return None()
+  }
   core@1/list.swap(mut h.items, 0, count - 1)
   let item = core@1/list.pop(mut h.items)
   down(mut h.items, 0, h.by)
@@ -46,19 +63,23 @@ pub fn pop[T](mut h: unique Heap[T]) -> unique Option[T] uses {h} {
 // A copied observation is available for copyable elements; owned values
 // remain in the heap until pop transfers them.
 pub fn peek[T: copyable](h: Heap[T]) -> Option[T] in h uses {} {
-  if core@1/list.len(h.items) == 0 { None() } else { Some(copy h.items[0]) }
+  if core@1/list.len(h.items) == 0 {
+    None()
+  } else {
+    Some(copy h.items[0])
+  }
 }
 
 // Bottom-up heap construction, Zig fromOwnedSlice:161-176, O(n).
 pub fn from_list[T](
-  take by: unique @noalloc fn(T, T) -> i32 uses {},
-  take items: unique List[unique T]
-) -> unique Heap[T] uses {items} {
-  let mut items = take items
+  take by: @noalloc fn(T, T) -> i32 uses {},
+  take input: unique List[unique T]
+) -> unique Heap[T] uses {input} {
+  let mut items = take input
   let mut parent = core@1/list.len(items) / 2
   while parent > 0 {
     parent -= 1
     down(mut items, parent, by)
   }
-  Heap(items: take items, by: take by)
+  Heap(items: take items, by: unique by)
 }

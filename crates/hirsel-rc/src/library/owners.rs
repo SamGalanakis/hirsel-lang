@@ -124,10 +124,6 @@ impl Shape {
         let pair = self.add(TypeKind::Tuple(vec![k, v].into()));
         self.builtin(BuiltinType::List, &[pair])
     }
-    fn index(&mut self) -> TypeId {
-        let slot = self.primitive(Primitive::U32);
-        self.builtin(BuiltinType::List, &[slot])
-    }
 }
 
 /// The representation revision of a library shape: the library revision,

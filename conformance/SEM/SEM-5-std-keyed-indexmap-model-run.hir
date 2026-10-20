@@ -1,49 +1,70 @@
 // rule: SEM-5
 // expect: run
 // Indexmap 41a87088 tests/quick.rs:82-115, insertion_order/insert_remove.
-fn by(a:u64,b:u64) -> i32 uses {} { if a < b { -1 } else if a > b { 1 } else { 0 } }
+fn by(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
 
 pub fn main(t: Test) -> Result[(), ()] {
-  for seed in 1u64..3u64 {
-    let mut m: Map[u64,u64] = map.empty()
-    let mut s: Set[u64] = set.empty()
-    let mut oracle: ordered_map.OrderedMap[u64,u64] = ordered_map.empty(by)
+  for seed in 1u64..2u64 {
+    let mut m: unique Map[u64, u64] = map.empty()
+    let mut s: unique Set[u64] = set.empty()
+    let mut oracle: ordered_map.OrderedMap[u64, u64] = ordered_map.empty(by)
     let mut insertion: List[u64] = []
     let mut state = seed
-    for step in 0u64..25u64 {
+    for step in 0u64..10u64 {
       state = (state * 1664525 + 1013904223) % 4294967296
       let key = state / 65536 % 15
       if state % 3 == 0 {
-        let expected = ordered_map.remove(mut oracle,key)
-        failure.check(map.remove(mut m,key) == expected, Bounds())
-        failure.check(set.remove(mut s,key) == (expected != None), Bounds())
+        let expected = ordered_map.remove(mut oracle, key)
+        failure.check(map.remove(mut m, key) == expected, Bounds())
+        failure.check(set.remove(mut s, key) == (expected != None), Bounds())
         let mut i = 0u64
         while i < list.len(insertion) {
-          if insertion[i] == key { let _ = list.remove(mut insertion,i) } else { i += 1 }
+          if insertion[i] == key {
+            let _ = list.remove(mut insertion, i)
+          } else {
+            i += 1
+          }
         }
       } else {
-        if !ordered_map.contains(oracle,key) { list.push(mut insertion,key) }
-        ordered_map.insert(mut oracle,key,step)
-        map.insert(mut m,key,step)
-        set.insert(mut s,key)
+        if !ordered_map.contains(oracle, key) {
+          list.push(mut insertion, key)
+        }
+        ordered_map.insert(mut oracle, key, step)
+        map.insert(mut m, key, step)
+        set.insert(mut s, key)
       }
-      failure.check(map.len(m) == ordered_map.len(oracle) && set.len(s) == ordered_map.len(oracle), Bounds())
+      failure.check(
+        map.len(m) == ordered_map.len(oracle) && set.len(s) == ordered_map.len(oracle),
+        Bounds()
+      )
       for k in 0u64..15u64 {
-        failure.check(map.get(m,k) == ordered_map.get(oracle,k), Bounds())
-        failure.check(set.contains(s,k) == ordered_map.contains(oracle,k), Bounds())
+        failure.check(map.get(m, k) == ordered_map.get(oracle, k), Bounds())
+        failure.check(set.contains(s, k) == ordered_map.contains(oracle, k), Bounds())
       }
       let mut seen: List[u64] = []
-      for k in s { list.push(mut seen,k) }
+      for k in s {
+        list.push(mut seen, k)
+      }
       failure.check(seen == insertion, Bounds())
-      let snapshot = copy m
       let mut seenmap: List[u64] = []
-      for (k,v) in snapshot { list.push(mut seenmap,k); failure.check(ordered_map.get(oracle,k) == Some(v), Bounds()) }
+      for (k, v) in m {
+        list.push(mut seenmap, k)
+        failure.check(ordered_map.get(oracle, k) == Some(v), Bounds())
+      }
       failure.check(seenmap == insertion, Bounds())
     }
-    let snapshot = copy s
-    for key in insertion { failure.check(set.remove(mut s,key), Bounds()) }
-    failure.check(set.len(s) == 0 && set.len(snapshot) == ordered_map.len(oracle), Bounds())
+    for key in insertion {
+      failure.check(set.remove(mut s, key), Bounds())
+    }
+    failure.check(set.len(s) == 0, Bounds())
   }
-
   Ok(())
 }

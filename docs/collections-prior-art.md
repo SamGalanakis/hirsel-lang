@@ -22,6 +22,8 @@ The following deviations preserve Hirsel's ownership and API semantics:
   identify the layout change; encoded user values keep their existing wire
   format. The interpreter uses its existing host hash index over optional
   entries, with identical live-entry and insertion-order semantics.
+  The corpus model uses one short seed to fit the one-million-step budget;
+  the Rust driver runs eight seeds with 200 operations each.
 - The List oracle runs deterministic operation streams rather than Zig's
   byte-driven fuzzer and allocator. Hirsel has no injected allocator or
   bounded-buffer API. Slice operations are endpoint pushes; iterator values
@@ -33,7 +35,8 @@ The following deviations preserve Hirsel's ownership and API semantics:
   `get`, `front`, `back` and heap `peek` copy only copyable values; owned
   resources leave through the pop operations.
 - The heap comparator is a unique, no-allocation, capability-free callback.
-  All callers construct it once; `push` and `pop` accept no comparator.
+  Construction takes an ordinary owned callback and makes it unique once,
+  including captured context; `push` and `pop` accept no comparator.
   Zig's arbitrary-index removal regression runs directly on the shared
   kernels because the public heap has no arbitrary removal API. Iterator,
   allocator shrink and value-update APIs are not added; their storage or

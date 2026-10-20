@@ -3,19 +3,20 @@
 // Set uses Map tombstones; exercise empty, reinsertion and compaction.
 
 pub fn main(t: Test) -> Result[(), ()] {
-  let mut s: Set[u64] = set.empty()
+  let mut s: unique Set[u64] = set.empty()
   for round in 0u64..4u64 {
-    for i in 0u64..100u64 { set.insert(mut s,i) }
     for i in 0u64..100u64 {
-      failure.check(set.remove(mut s,i), Bounds())
-      failure.check(!set.remove(mut s,i), Bounds())
+      set.insert(mut s, i)
+    }
+    for i in 0u64..100u64 {
+      failure.check(set.remove(mut s, i), Bounds())
+      failure.check(!set.remove(mut s, i), Bounds())
       failure.check(set.len(s) == 99 - i, Bounds())
     }
   }
-  set.insert(mut s,7)
+  set.insert(mut s, 7)
   let mut expected: Set[u64] = set.empty()
-  set.insert(mut expected,7)
+  set.insert(mut expected, 7)
   failure.check(s == expected, Bounds())
-
   Ok(())
 }

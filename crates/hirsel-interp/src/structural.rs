@@ -149,16 +149,19 @@ fn compare_at(
                         return Ok(Some(ord));
                     }
                     let keyed = matches!(a, Value::Map { .. });
-                    let ac: Vec<_> = ac.iter().filter(|v| !keyed || v.is_some()).collect();
-                    let bc: Vec<_> = bc.iter().filter(|v| !keyed || v.is_some()).collect();
-                    work.push(Work::Length(ac.len(), bc.len()));
-                    for (a, b) in ac.into_iter().zip(bc).rev() {
+                    let live = |v: &&Option<Value>| !keyed || v.is_some();
+                    let an = ac.iter().filter(live).count();
+                    let bn = bc.iter().filter(live).count();
+                    work.push(Work::Length(an, bn));
+                    let first = work.len();
+                    for (a, b) in ac.iter().filter(live).zip(bc.iter().filter(live)) {
                         work.push(Work::Pair(
                             a.as_ref().ok_or(StructuralError::InvalidValue)?,
                             b.as_ref().ok_or(StructuralError::InvalidValue)?,
                             depth + 1,
                         ));
                     }
+                    work[first..].reverse();
                 } else {
                     let result = scalar::binary(BinaryOp::Eq, a.clone(), b.clone())
                         .map_err(|_| StructuralError::InvalidValue)?;
@@ -272,14 +275,10 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                 }
                 if let Some(fields) = children(v) {
                     let keyed = matches!(v, Value::Map { .. } | Value::Set { .. });
-                    let fields: Vec<_> = fields.iter().filter(|v| !keyed || v.is_some()).collect();
-                    bytes.extend_from_slice(&(fields.len() as u64).to_le_bytes());
-                    work.push(Work::Finish(
-                        bytes,
-                        fields.len(),
-                        matches!(v, Value::Set { .. }),
-                    ));
-                    for f in fields.iter().rev() {
+                    let count = fields.iter().filter(|v| !keyed || v.is_some()).count();
+                    bytes.extend_from_slice(&(count as u64).to_le_bytes());
+                    work.push(Work::Finish(bytes, count, matches!(v, Value::Set { .. })));
+                    for f in fields.iter().rev().filter(|v| !keyed || v.is_some()) {
                         work.push(Work::Enter(
                             f.as_ref().ok_or(StructuralError::InvalidValue)?,
                             d + 1,

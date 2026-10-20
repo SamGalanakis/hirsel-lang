@@ -99,9 +99,9 @@ fn map_and_set_drains_inspect_linearly_many_entries() {
                 std::fs::create_dir_all(&dir).unwrap();
                 let path = dir.join("main.hir");
                 let ty = if kind == "map" {
-                    "Map[u64,u64]"
+                    "unique Map[u64,u64]"
                 } else {
-                    "Set[u64]"
+                    "unique Set[u64]"
                 };
                 let insert = if kind == "map" {
                     "map.insert(mut out,i,i)"

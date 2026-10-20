@@ -818,8 +818,8 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         entries_layout,
         None,
     )?;
-    let (entries_view, entries_loan) = b.borrow(entries, false)?;
     let i = table::advance(&mut b, entries, first)?;
+    let (entries_view, entries_loan) = b.borrow(entries, false)?;
     let count = b.fresh(b.layout_of(i));
     b.push(Inst::SeqLen {
         result: count,

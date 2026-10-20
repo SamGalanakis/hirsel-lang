@@ -8,18 +8,15 @@
     {
       "path": "SEM-5-std-heap-ops-zig-run.hir",
       "module": []
-    }
-  ],
-  "dependencies": [
+    },
     {
-      "manifest": "../../stdlib/std@1/hirsel.json",
-      "package": {
-        "name": "std",
-        "version": "1"
-      },
-      "expose": []
+      "path": "../../stdlib/std@1/heap_ops.hir",
+      "module": [
+        "heap_ops"
+      ]
     }
   ],
+  "dependencies": [],
   "entry": {
     "module": [],
     "name": "main"

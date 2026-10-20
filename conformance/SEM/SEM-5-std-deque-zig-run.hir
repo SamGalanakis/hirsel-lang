@@ -3,7 +3,10 @@
 // Zig bff490a2 lib/std/deque.zig:374-517, 634+ (List oracle).
 pub fn main(t: Test) -> Result[(), ()] {
   let mut q: unique deque.Deque[i32] = deque.empty()
-  failure.check(deque.pop_front(mut q) == None && deque.pop_back(mut q) == None, Bounds())
+  failure.check(
+    deque.pop_front(mut q) == None && deque.pop_back(mut q) == None,
+    Bounds()
+  )
   deque.push_back(mut q, 1)
   deque.push_back(mut q, 2)
   deque.push_back(mut q, 3)
@@ -26,22 +29,53 @@ pub fn main(t: Test) -> Result[(), ()] {
   failure.check(deque.pop_back(mut q) == Some(2), Bounds())
   failure.check(deque.pop_back(mut q) == Some(1), Bounds())
   // Slice vectors expressed as endpoint pushes (there is no slice API).
-  for x in [3i32, 4, 5, 6, 7] { deque.push_back(mut q, x) }
-  for x in [2i32, 1, 0] { deque.push_front(mut q, x) }
+  let vector_1: Array[i32] = [3i32, 4, 5, 6, 7]
+  for x in vector_1 {
+    deque.push_back(mut q, x)
+  }
+  let vector_2: Array[i32] = [2i32, 1, 0]
+  for x in vector_2 {
+    deque.push_front(mut q, x)
+  }
   failure.check(deque.pop_front(mut q) == Some(0), Bounds())
   failure.check(deque.pop_front(mut q) == Some(1), Bounds())
   failure.check(deque.pop_back(mut q) == Some(7), Bounds())
   failure.check(deque.pop_back(mut q) == Some(6), Bounds())
-  for x in [1i32, 0] { deque.push_front(mut q, x) }
-  for x in [6i32, 7] { deque.push_back(mut q, x) }
-  for x in [0i32, 1, 2] { failure.check(deque.pop_front(mut q) == Some(x), Bounds()) }
-  for x in [7i32, 6] { failure.check(deque.pop_back(mut q) == Some(x), Bounds()) }
-  for x in [3i32, 4] { failure.check(deque.pop_front(mut q) == Some(x), Bounds()) }
+  let vector_3: Array[i32] = [1i32, 0]
+  for x in vector_3 {
+    deque.push_front(mut q, x)
+  }
+  let vector_4: Array[i32] = [6i32, 7]
+  for x in vector_4 {
+    deque.push_back(mut q, x)
+  }
+  let vector_5: Array[i32] = [0i32, 1, 2]
+  for x in vector_5 {
+    failure.check(deque.pop_front(mut q) == Some(x), Bounds())
+  }
+  let vector_6: Array[i32] = [7i32, 6]
+  for x in vector_6 {
+    failure.check(deque.pop_back(mut q) == Some(x), Bounds())
+  }
+  let vector_7: Array[i32] = [3i32, 4]
+  for x in vector_7 {
+    failure.check(deque.pop_front(mut q) == Some(x), Bounds())
+  }
   failure.check(deque.pop_back(mut q) == Some(5), Bounds())
   // The iterator's ordered-data vector, observed by draining endpoints.
-  for x in [5i32, 4, 3, 2, 1, 0] { deque.push_front(mut q, x) }
-  for i in 0u64..6u64 { failure.check(deque.get(q,i) == Some(int.narrow(i)), Bounds()) }
-  for x in 0i32..6i32 { failure.check(deque.pop_front(mut q) == Some(x), Bounds()) }
-  failure.check(deque.pop_front(mut q) == None && deque.pop_back(mut q) == None, Bounds())
+  let vector_8: Array[i32] = [5i32, 4, 3, 2, 1, 0]
+  for x in vector_8 {
+    deque.push_front(mut q, x)
+  }
+  for i in 0u64..6u64 {
+    failure.check(deque.get(q, i) == Some(int.narrow(i)), Bounds())
+  }
+  for x in 0i32..6i32 {
+    failure.check(deque.pop_front(mut q) == Some(x), Bounds())
+  }
+  failure.check(
+    deque.pop_front(mut q) == None && deque.pop_back(mut q) == None,
+    Bounds()
+  )
   Ok(())
 }

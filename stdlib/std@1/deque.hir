@@ -21,7 +21,11 @@ fn grow[T](mut q: unique Deque[T]) -> () uses {q} {
   if q.count < capacity {
     return
   }
-  let next = if capacity == 0 { 4u64 } else { capacity * 2 }
+  let next = if capacity == 0 {
+    4u64
+  } else {
+    capacity * 2
+  }
   let mut slots: unique List[unique Option[T]] = []
   for i in 0u64..next {
     core@1/list.push(mut slots, None())
@@ -70,7 +74,9 @@ pub fn pop_back[T](mut q: unique Deque[T]) -> unique Option[T] uses {q} {
 
 /// Copies the item at a logical index, without changing either endpoint.
 pub fn get[T: copyable](q: Deque[T], index: u64) -> Option[T] in q uses {} {
-  if index >= q.count { return None() }
+  if index >= q.count {
+    return None()
+  }
   match q.slots[(q.head + index) % core@1/list.len(q.slots)] {
     Some(value) => Some(copy value),
     None => None(),
@@ -82,5 +88,9 @@ pub fn front[T: copyable](q: Deque[T]) -> Option[T] in q uses {} {
 }
 
 pub fn back[T: copyable](q: Deque[T]) -> Option[T] in q uses {} {
-  if q.count == 0 { None() } else { get(q, q.count - 1) }
+  if q.count == 0 {
+    None()
+  } else {
+    get(q, q.count - 1)
+  }
 }
