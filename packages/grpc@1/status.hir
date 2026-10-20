@@ -1,0 +1,187 @@
+// gRPC status codes, statuses and the wire encodings of their trailers, adapted
+// from grpc-go codes/codes.go and internal/transport/http_util.go (Apache-2.0).
+
+/// The canonical gRPC status codes, numbered 0 to 16 in this order.
+pub type Code = OK | CANCELLED | UNKNOWN | INVALID_ARGUMENT | DEADLINE_EXCEEDED | NOT_FOUND | ALREADY_EXISTS | PERMISSION_DENIED | RESOURCE_EXHAUSTED | FAILED_PRECONDITION | ABORTED | OUT_OF_RANGE | UNIMPLEMENTED | INTERNAL | UNAVAILABLE | DATA_LOSS | UNAUTHENTICATED
+
+/// A call's outcome: its code, a message, and the metadata the peer sent with it
+/// (the response trailers on a client; trailers to send on a server).
+pub type Status {
+  code: Code,
+  message: String,
+  trailers: Metadata,
+}
+
+/// A status with `code` and `message` and no trailers.
+pub fn status(code: Code, message: String) -> Status uses {} {
+  Status(code: code, message: unique message, trailers: [])
+}
+
+/// An `INTERNAL` status.
+pub fn internal(message: String) -> Status uses {} {
+  status(INTERNAL(), message)
+}
+
+/// The `UNIMPLEMENTED` status of a request path that `service` does not serve,
+/// worded as grpc-go words it.
+pub fn unknown_method(path: String, service: String) -> Status uses {} {
+  let parts: Option[(String, String)] = match string.split_once(path, "/") {
+    Some((head, rest)) => if string.byte_len(head) == 0 {
+      match string.split_once(rest, "/") {
+        Some((a, b)) => Some((unique a, unique b)),
+        None() => None(),
+      }
+    } else {
+      None()
+    },
+    None() => None(),
+  }
+  match parts {
+    Some((svc, method_name)) => if svc == service {
+      status(UNIMPLEMENTED(), f"unknown method {method_name} for service {svc}")
+    } else {
+      status(UNIMPLEMENTED(), f"unknown service {svc}")
+    },
+    None() => status(UNIMPLEMENTED(), f"malformed method name: \"{path}\""),
+  }
+}
+
+/// The number of a code.
+pub fn code_number(code: Code) -> u32 uses {} {
+  match code {
+    OK() => 0,
+    CANCELLED() => 1,
+    UNKNOWN() => 2,
+    INVALID_ARGUMENT() => 3,
+    DEADLINE_EXCEEDED() => 4,
+    NOT_FOUND() => 5,
+    ALREADY_EXISTS() => 6,
+    PERMISSION_DENIED() => 7,
+    RESOURCE_EXHAUSTED() => 8,
+    FAILED_PRECONDITION() => 9,
+    ABORTED() => 10,
+    OUT_OF_RANGE() => 11,
+    UNIMPLEMENTED() => 12,
+    INTERNAL() => 13,
+    UNAVAILABLE() => 14,
+    DATA_LOSS() => 15,
+    UNAUTHENTICATED() => 16,
+  }
+}
+
+const CODES: List[Code] = [
+  OK(),
+  CANCELLED(),
+  UNKNOWN(),
+  INVALID_ARGUMENT(),
+  DEADLINE_EXCEEDED(),
+  NOT_FOUND(),
+  ALREADY_EXISTS(),
+  PERMISSION_DENIED(),
+  RESOURCE_EXHAUSTED(),
+  FAILED_PRECONDITION(),
+  ABORTED(),
+  OUT_OF_RANGE(),
+  UNIMPLEMENTED(),
+  INTERNAL(),
+  UNAVAILABLE(),
+  DATA_LOSS(),
+  UNAUTHENTICATED()
+]
+
+/// The code with a number; numbers above 16 are `UNKNOWN`, as gRPC specifies.
+pub fn code_of(number: u32) -> Code uses {} {
+  let n: u64 = int.widen(number)
+  if n < list.len(CODES) {
+    return CODES[n]
+  }
+  UNKNOWN()
+}
+
+/// The canonical name of a code, such as `DEADLINE_EXCEEDED`.
+pub fn code_name(code: Code) -> unique String uses {} {
+  let names: List[String] = [
+    "OK",
+    "CANCELLED",
+    "UNKNOWN",
+    "INVALID_ARGUMENT",
+    "DEADLINE_EXCEEDED",
+    "NOT_FOUND",
+    "ALREADY_EXISTS",
+    "PERMISSION_DENIED",
+    "RESOURCE_EXHAUSTED",
+    "FAILED_PRECONDITION",
+    "ABORTED",
+    "OUT_OF_RANGE",
+    "UNIMPLEMENTED",
+    "INTERNAL",
+    "UNAVAILABLE",
+    "DATA_LOSS",
+    "UNAUTHENTICATED"
+  ]
+  let n: u64 = int.widen(code_number(code))
+  unique names[n]
+}
+
+fn hex_digit(v: u8) -> u8 uses {} {
+  if v < 10 {
+    b'0' + v
+  } else {
+    b'A' + v - 10
+  }
+}
+
+fn hex_value(b: u8) -> Option[u8] uses {} {
+  if b >= b'0' && b <= b'9' {
+    Some(b - b'0')
+  } else if b >= b'a' && b <= b'f' {
+    Some(b - b'a' + 10)
+  } else if b >= b'A' && b <= b'F' {
+    Some(b - b'A' + 10)
+  } else {
+    None()
+  }
+}
+
+/// The `grpc-message` encoding of a status message: bytes outside printable
+/// ASCII, and `%`, are percent-encoded.
+pub fn encode_message(message: String) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  for b in string.as_bytes(message) {
+    if b >= b' ' && b <= b'~' && b != b'%' {
+      list.push(mut out, b)
+    } else {
+      list.push(mut out, b'%')
+      list.push(mut out, hex_digit(b >> 4))
+      list.push(mut out, hex_digit(b & 15))
+    }
+  }
+  bytes.from_list(take out)
+}
+
+/// Decodes `grpc-message`; a malformed escape stays as written, and invalid
+/// UTF-8 is replaced, as grpc-go does.
+pub fn decode_message(data: Bytes) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let len = bytes.len(data)
+  let mut i: u64 = 0
+  while i < len {
+    let b = data[i]
+    if b == b'%' && i + 2 < len {
+      match (hex_value(data[i + 1]), hex_value(data[i + 2])) {
+        (Some(hi), Some(lo)) => {
+          list.push(mut out, hi << 4 | lo)
+          i += 3
+          continue
+        },
+        _ => (),
+      }
+    }
+    list.push(mut out, b)
+    i += 1
+  }
+  match text.finish(take out) {
+    Ok(s) => s,
+    Error(_) => "invalid UTF-8 in grpc-message",
+  }
+}

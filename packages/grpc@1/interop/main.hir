@@ -1,0 +1,552 @@
+// The gRPC interop test server and client (grpc/grpc doc/interop-test-descriptions.md),
+// ported from grpc-go interop/test_utils.go (Apache-2.0), against the grpc.testing
+// service generated into testing.hir from proto/.
+//
+//   interop server --port=N
+//   interop client --server_host=H --server_port=N --test_case=NAME
+
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Usage(String) | Network(
+  NetError
+) | Failed(String) | Rpc(grpc.Status)
+
+const INITIAL_KEY: String = "x-grpc-test-echo-initial"
+
+const TRAILING_KEY: String = "x-grpc-test-echo-trailing-bin"
+
+const REQUEST_SIZES: List[i32] = [27182, 8, 1828, 45904]
+
+const RESPONSE_SIZES: List[i32] = [31415, 9, 2653, 58979]
+
+fn zeros(size: i32) -> unique Bytes uses {} {
+  let mut body: List[u8] = []
+  let mut i: i32 = 0
+  while i < size {
+    list.push(mut body, 0)
+    i += 1
+  }
+  bytes.from_list(take body)
+}
+
+fn payload(size: i32) -> testing.Payload uses {} {
+  testing.Payload(type_: COMPRESSABLE(), body: zeros(size), unknown_fields: b"")
+}
+
+fn body_size(p: Option[testing.Payload]) -> u64 uses {} {
+  match p {
+    Some(x) => bytes.len(x.body),
+    None() => 0,
+  }
+}
+
+fn widen(n: i32) -> u64 uses {} {
+  if n < 0 {
+    0
+  } else {
+    let wide: i64 = int.widen(n)
+    int.truncate(wide)
+  }
+}
+
+// Server.
+// Echoes the test metadata keys back as response header and trailer metadata.
+fn echo_metadata(mut call: grpc.ServerCall) -> () {
+  let initial = grpc.get(grpc.request_metadata(call), INITIAL_KEY)
+  let trailing = grpc.get(grpc.request_metadata(call), TRAILING_KEY)
+  if let Some(v) = initial {
+    grpc.set_header(mut call, INITIAL_KEY, v)
+  }
+  if let Some(v) = trailing {
+    grpc.set_trailer(mut call, TRAILING_KEY, v)
+  }
+}
+
+fn echo_status(requested: Option[testing.EchoStatus]) -> Result[(), grpc.Status] uses {} {
+  match requested {
+    Some(s) => if s.code != 0 {
+      let number: u32 = if s.code < 0 {
+        2
+      } else {
+        int.narrow(widen(s.code))
+      }
+      Error(grpc.status(grpc.code_of(number), s.message))
+    } else {
+      Ok(())
+    },
+    None() => Ok(()),
+  }
+}
+
+fn unary_call(request: testing.SimpleRequest, mut call: grpc.ServerCall) -> Result[
+  testing.SimpleResponse,
+  grpc.Status
+] {
+  echo_metadata(mut call)
+  echo_status(request.response_status)?
+  let mut response = testing.default_SimpleResponse()
+  response.payload = Some(payload(request.response_size))
+  Ok(take response)
+}
+
+fn sleep_micros(clock: Option[MonotonicClock], micros: i32) -> () {
+  if micros <= 0 {
+    return
+  }
+  if let Some(c) = clock {
+    let _ = time.sleep(c, duration.from_parts(0, micros * 1000))
+  }
+}
+
+fn respond_all(
+  clock: Option[MonotonicClock],
+  params: List[testing.ResponseParameters],
+  mut call: grpc.ServerCall
+) -> Result[(), grpc.Status] {
+  for p in params {
+    sleep_micros(clock, p.interval_us)
+    let mut response = testing.default_StreamingOutputCallResponse()
+    response.payload = Some(payload(p.size))
+    testing.TestService_StreamingOutputCall_respond(mut call, response)?
+  }
+  Ok(())
+}
+
+fn streaming_input_call(mut call: grpc.ServerCall) -> Result[
+  testing.StreamingInputCallResponse,
+  grpc.Status
+] {
+  let mut sum: u64 = 0
+  while true {
+    let Some(request) = testing.TestService_StreamingInputCall_request(mut call)? else {
+      break
+    }
+    sum += body_size(request.payload)
+  }
+  let mut response = testing.default_StreamingInputCallResponse()
+  response.aggregated_payload_size = int.narrow(sum)
+  Ok(take response)
+}
+
+fn full_duplex_call(clock: Option[MonotonicClock], mut call: grpc.ServerCall) -> Result[
+  (),
+  grpc.Status
+] {
+  echo_metadata(mut call)
+  while true {
+    let Some(request) = testing.TestService_FullDuplexCall_request(mut call)? else {
+      break
+    }
+    echo_status(request.response_status)?
+    respond_all(clock, request.response_parameters, mut call)?
+  }
+  Ok(())
+}
+
+fn half_duplex_call(clock: Option[MonotonicClock], mut call: grpc.ServerCall) -> Result[
+  (),
+  grpc.Status
+] {
+  let mut requests: List[testing.StreamingOutputCallRequest] = []
+  while true {
+    let Some(request) = testing.TestService_HalfDuplexCall_request(mut call)? else {
+      break
+    }
+    list.push(mut requests, take request)
+  }
+  for request in requests {
+    respond_all(clock, request.response_parameters, mut call)?
+  }
+  Ok(())
+}
+
+fn handle(clock: Option[MonotonicClock], mut call: grpc.ServerCall) -> Result[
+  (),
+  grpc.Status
+] {
+  testing.serve_TestService(
+    mut call,
+    fn(request: testing.Empty, mut c: grpc.ServerCall) -> Result[
+      testing.Empty,
+      grpc.Status
+    ] {
+      Ok(testing.default_Empty())
+    },
+    fn(request: testing.SimpleRequest, mut c: grpc.ServerCall) -> Result[
+      testing.SimpleResponse,
+      grpc.Status
+    ] {
+      unary_call(request, mut c)
+    },
+    fn(request: testing.SimpleRequest, mut c: grpc.ServerCall) -> Result[
+      testing.SimpleResponse,
+      grpc.Status
+    ] {
+      unary_call(request, mut c)
+    },
+    fn(request: testing.StreamingOutputCallRequest, mut c: grpc.ServerCall) -> Result[
+      (),
+      grpc.Status
+    ] {
+      echo_status(request.response_status)?
+      respond_all(clock, request.response_parameters, mut c)
+    },
+    fn(mut c: grpc.ServerCall) -> Result[
+      testing.StreamingInputCallResponse,
+      grpc.Status
+    ] {
+      streaming_input_call(mut c)
+    },
+    fn(mut c: grpc.ServerCall) -> Result[(), grpc.Status] {
+      full_duplex_call(clock, mut c)
+    },
+    fn(mut c: grpc.ServerCall) -> Result[(), grpc.Status] {
+      half_duplex_call(clock, mut c)
+    },
+    fn(request: testing.Empty, mut c: grpc.ServerCall) -> Result[
+      testing.Empty,
+      grpc.Status
+    ] {
+      Error(grpc.status(UNIMPLEMENTED(), ""))
+    }
+  )
+}
+
+fn serve_connection(n: Net, clock: Option[MonotonicClock], take stream: Stream of n) -> Result[
+  (),
+  grpc.Status
+] {
+  let mut options = grpc.server_options()
+  options.clock = clock
+  grpc.serve(
+    n,
+    take stream,
+    options,
+    fn(mut call: grpc.ServerCall) -> Result[(), grpc.Status] {
+      handle(clock, mut call)
+    }
+  )
+}
+
+fn server(rt: Io, port: u16) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let clock: Option[MonotonicClock] = match io.monotonic_clock(rt) {
+    Ok(c) => Some(c),
+    Error(_) => None(),
+  }
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(s: Scope) -> Result[(), AppError] {
+      let mut accepting = take listener
+      while true {
+        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let child = task.async(
+          s,
+          fn() -> bool {
+            match serve_connection(n, clock, take stream) {
+              Ok(()) => true,
+              Error(_) => false,
+            }
+          }
+        )
+        task.detach(s, take child)
+      }
+      Ok(())
+    }
+  )
+}
+
+// Client.
+fn check(ok: bool, what: String) -> Result[(), AppError] uses {} {
+  if ok {
+    Ok(())
+  } else {
+    Error(Failed(unique what))
+  }
+}
+
+fn empty_unary(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let reply = testing.TestService_EmptyCall(
+    mut conn,
+    testing.default_Empty(),
+    grpc.call_options()
+  ) ? Rpc
+  check(reply == testing.default_Empty(), "EmptyCall returned a non-empty message")
+}
+
+fn large_unary(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut request = testing.default_SimpleRequest()
+  request.response_size = 314159
+  request.payload = Some(payload(271828))
+  let reply = testing.TestService_UnaryCall(mut conn, request, grpc.call_options()) ? Rpc
+  check(
+    body_size(reply.payload) == 314159,
+    f"UnaryCall returned {body_size(reply.payload)} bytes"
+  )
+}
+
+fn client_streaming(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut call = testing.TestService_StreamingInputCall_start(
+    mut conn,
+    grpc.call_options()
+  ) ? Rpc
+  let mut sum: u64 = 0
+  for size in REQUEST_SIZES {
+    let mut request = testing.default_StreamingInputCallRequest()
+    request.payload = Some(payload(size))
+    testing.TestService_StreamingInputCall_send(mut conn, call, request) ? Rpc
+    sum += widen(size)
+  }
+  let reply = testing.TestService_StreamingInputCall_finish(mut conn, mut call) ? Rpc
+  check(
+    widen(reply.aggregated_payload_size) == sum,
+    f"aggregated size {reply.aggregated_payload_size}, want {sum}"
+  )
+}
+
+fn output_request(sizes: List[i32]) -> testing.StreamingOutputCallRequest uses {} {
+  let mut request = testing.default_StreamingOutputCallRequest()
+  for size in sizes {
+    let mut p = testing.default_ResponseParameters()
+    p.size = size
+    list.push(mut request.response_parameters, take p)
+  }
+  take request
+}
+
+fn server_streaming(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let request = output_request(RESPONSE_SIZES)
+  let mut call = testing.TestService_StreamingOutputCall_start(
+    mut conn,
+    request,
+    grpc.call_options()
+  ) ? Rpc
+  let mut index: u64 = 0
+  while true {
+    let Some(reply) = testing.TestService_StreamingOutputCall_receive(
+      mut conn,
+      mut call
+    ) ? Rpc else {
+      break
+    }
+    check(index < list.len(RESPONSE_SIZES), "too many responses")?
+    check(
+      body_size(reply.payload) == widen(RESPONSE_SIZES[index]),
+      f"response {index} has {body_size(reply.payload)} bytes"
+    )?
+    index += 1
+  }
+  check(index == list.len(RESPONSE_SIZES), f"got {index} responses")
+}
+
+fn ping_pong(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut index: u64 = 0
+  while index < list.len(REQUEST_SIZES) {
+    let mut request = output_request([RESPONSE_SIZES[index]])
+    request.payload = Some(payload(REQUEST_SIZES[index]))
+    testing.TestService_FullDuplexCall_send(mut conn, call, request) ? Rpc
+    let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc else {
+      return Error(Failed("the call ended early"))
+    }
+    check(
+      body_size(reply.payload) == widen(RESPONSE_SIZES[index]),
+      f"response {index} has {body_size(reply.payload)} bytes"
+    )?
+    index += 1
+  }
+  grpc.close_send(mut conn, call) ? Rpc
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  check(option.is_none(last), "a response after the last request")
+}
+
+fn cancel_after_begin(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut call = testing.TestService_StreamingInputCall_start(
+    mut conn,
+    grpc.call_options()
+  ) ? Rpc
+  grpc.cancel(mut conn, mut call)
+  match testing.TestService_StreamingInputCall_finish(mut conn, mut call) {
+    Ok(_) => Error(Failed("a canceled call succeeded")),
+    Error(s) => check(
+      s.code == CANCELLED(),
+      f"canceled call ended {grpc.code_name(s.code)}"
+    ),
+  }
+}
+
+fn timeout_on_sleeping_server(mut conn: grpc.ClientConn, clock: MonotonicClock) -> Result[
+  (),
+  AppError
+] {
+  let at = match time.deadline(clock, duration.from_parts(0, 1000000)) {
+    Ok(a) => a,
+    Error(_) => return Error(Failed("no deadline")),
+  }
+  let mut options = grpc.call_options()
+  options.deadline = Some(Deadline(clock: clock, at: at))
+  let mut call = match testing.TestService_FullDuplexCall_start(mut conn, options) {
+    Ok(c) => c,
+    Error(s) => return check(
+      s.code == DEADLINE_EXCEEDED(),
+      f"start ended {grpc.code_name(s.code)}"
+    ),
+  }
+  let mut request = testing.default_StreamingOutputCallRequest()
+  request.payload = Some(payload(27182))
+  let _ = testing.TestService_FullDuplexCall_send(mut conn, call, request)
+  match testing.TestService_FullDuplexCall_receive(mut conn, mut call) {
+    Ok(_) => Error(Failed("a call past its deadline succeeded")),
+    Error(s) => check(
+      s.code == DEADLINE_EXCEEDED(),
+      f"call ended {grpc.code_name(s.code)}"
+    ),
+  }
+}
+
+fn echo_request() -> testing.EchoStatus uses {} {
+  testing.EchoStatus(code: 2, message: "test status message", unknown_fields: b"")
+}
+
+fn status_code_and_message(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut request = testing.default_SimpleRequest()
+  request.response_status = Some(echo_request())
+  match testing.TestService_UnaryCall(mut conn, request, grpc.call_options()) {
+    Ok(_) => return Error(Failed("UnaryCall succeeded")),
+    Error(s) => check(
+      s.code == UNKNOWN() && s.message == "test status message",
+      f"UnaryCall ended {grpc.code_name(s.code)}: {s.message}"
+    )?,
+  }
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut stream_request = testing.default_StreamingOutputCallRequest()
+  stream_request.response_status = Some(echo_request())
+  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ? Rpc
+  grpc.close_send(mut conn, call) ? Rpc
+  match testing.TestService_FullDuplexCall_receive(mut conn, mut call) {
+    Ok(_) => Error(Failed("FullDuplexCall succeeded")),
+    Error(s) => check(
+      s.code == UNKNOWN() && s.message == "test status message",
+      f"FullDuplexCall ended {grpc.code_name(s.code)}: {s.message}"
+    ),
+  }
+}
+
+const TRAILING_VALUE: Bytes = b"\x0a\x0b\x0a\x0b\x0a\x0b"
+
+fn check_metadata(headers: grpc.Metadata, trailers: grpc.Metadata) -> Result[
+  (),
+  AppError
+] uses {} {
+  let initial = grpc.get_all(headers, INITIAL_KEY)
+  check(
+    list.len(initial) == 1 && initial[0] == b"test_initial_metadata_value",
+    "initial metadata was not echoed"
+  )?
+  let trailing = grpc.get_all(trailers, TRAILING_KEY)
+  check(
+    list.len(trailing) == 1 && trailing[0] == TRAILING_VALUE,
+    "trailing metadata was not echoed"
+  )
+}
+
+fn custom_metadata(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut options = grpc.call_options()
+  grpc.add(mut options.metadata, INITIAL_KEY, b"test_initial_metadata_value")
+  grpc.add(mut options.metadata, TRAILING_KEY, TRAILING_VALUE)
+  let mut request = testing.default_SimpleRequest()
+  request.response_size = 1
+  request.payload = Some(payload(1))
+  let reply = testing.TestService_UnaryCall_reply(mut conn, request, options) ? Rpc
+  check(body_size(reply.message.payload) == 1, "UnaryCall returned the wrong payload")?
+  check_metadata(reply.headers, reply.trailers)?
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, options) ? Rpc
+  let mut stream_request = output_request([1])
+  stream_request.payload = Some(payload(1))
+  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ? Rpc
+  let first = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  check(option.is_some(first), "FullDuplexCall returned no response")?
+  grpc.close_send(mut conn, call) ? Rpc
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  check(option.is_none(last), "a response after the last request")?
+  check_metadata(grpc.response_headers(call), grpc.response_trailers(call))
+}
+
+fn client(rt: Io, host: String, port: u16, test_case: String) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let mut conn = grpc.dial(n, host, port, Some(tasks))
+  if test_case == "empty_unary" {
+    empty_unary(mut conn)
+  } else if test_case == "large_unary" {
+    large_unary(mut conn)
+  } else if test_case == "client_streaming" {
+    client_streaming(mut conn)
+  } else if test_case == "server_streaming" {
+    server_streaming(mut conn)
+  } else if test_case == "ping_pong" {
+    ping_pong(mut conn)
+  } else if test_case == "cancel_after_begin" {
+    cancel_after_begin(mut conn)
+  } else if test_case == "timeout_on_sleeping_server" {
+    timeout_on_sleeping_server(mut conn, clock)
+  } else if test_case == "status_code_and_message" {
+    status_code_and_message(mut conn)
+  } else if test_case == "custom_metadata" {
+    custom_metadata(mut conn)
+  } else {
+    Error(Usage(f"unsupported test case {test_case}"))
+  }
+}
+
+fn flag(args: Args, name: String) -> Result[Option[String], AppError] {
+  let prefix = f"--{name}="
+  let mut i: u64 = 1
+  while i < arg.len(args) {
+    let a = arg.text(args, i) ? Arguments
+    if string.starts_with(a, prefix) {
+      let Some((_, value)) = string.split_once(a, "=") else {
+        return Ok(None())
+      }
+      return Ok(Some(unique value))
+    }
+    i += 1
+  }
+  Ok(None())
+}
+
+fn port_flag(args: Args, name: String) -> Result[u16, AppError] {
+  let Some(text_value) = flag(args, name)? else {
+    return Error(Usage(f"--{name} is required"))
+  }
+  match u16.parse(text_value) {
+    Ok(p) => Ok(p),
+    Error(_) => Error(Usage(f"--{name} is not a port")),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let usage = "usage: interop server --port=N | interop client --server_host=H --server_port=N --test_case=NAME"
+  if arg.len(args) < 1 {
+    return Error(Usage(usage))
+  }
+  let mode = arg.text(args, 0) ? Arguments
+  if mode == "server" {
+    return server(rt, port_flag(args, "port")?)
+  }
+  if mode != "client" {
+    return Error(Usage(usage))
+  }
+  let host = match flag(args, "server_host")? {
+    Some(h) => h,
+    None() => "127.0.0.1",
+  }
+  let port = port_flag(args, "server_port")?
+  let Some(test_case) = flag(args, "test_case")? else {
+    return Error(Usage("--test_case is required"))
+  }
+  client(rt, host, port, test_case)?
+  let stdout = io.stdout(rt) ? Grant
+  let _ = out.print(stdout, f"{test_case}: passed\n")
+  Ok(())
+}

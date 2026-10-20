@@ -1,0 +1,98 @@
+// Vectors from grpc-go internal/grpcutil/encode_duration_test.go and
+// internal/transport/http_util_test.go.
+
+@test
+fn timeouts(t: Test) {
+  test.check(t, encode_timeout(0) == "0n")
+  test.check(t, encode_timeout(10) == "10n")
+  test.check(t, encode_timeout(99999999) == "99999999n")
+  test.check(t, encode_timeout(100000000) == "100000u")
+  test.check(t, encode_timeout(1000000000) == "1000000u")
+  test.check(t, encode_timeout(99999999000) == "99999999u")
+  test.check(t, encode_timeout(100000000000) == "100000m")
+  test.check(t, encode_timeout(100000000001) == "100001m")
+  test.check(t, encode_timeout(100000000000000) == "100000S")
+  test.check(t, decode_timeout(b"1000000m") == Some(1000000000000u64))
+  test.check(t, decode_timeout(b"20S") == Some(20000000000u64))
+  test.check(t, decode_timeout(b"1H") == Some(3600000000000u64))
+  test.check(t, decode_timeout(b"5") == None())
+  test.check(t, decode_timeout(b"1x") == None())
+  test.check(t, decode_timeout(b"123456789S") == None())
+  test.check(t, decode_timeout(b"99999999H") == Some(18446744073709551615u64))
+}
+
+@test
+fn messages(t: Test) {
+  test.check(t, encode_message("") == b"")
+  test.check(t, encode_message("Hello") == b"Hello")
+  test.check(t, encode_message("\u{0}") == b"%00")
+  test.check(t, encode_message("%") == b"%25")
+  test.check(t, encode_message("\u{1F600}") == b"%F0%9F%98%80")
+  test.check(t, decode_message(b"Hello") == "Hello")
+  test.check(t, decode_message(b"H%61o") == "Hao")
+  test.check(t, decode_message(b"H%6") == "H%6")
+  test.check(t, decode_message(b"%G0") == "%G0")
+  test.check(t, decode_message(b"%E7%B3%BB%E7%BB%9F") == "\u{7CFB}\u{7EDF}")
+}
+
+@test
+fn codes(t: Test) {
+  test.check(t, code_number(DEADLINE_EXCEEDED()) == 4)
+  test.check(t, code_of(16) == UNAUTHENTICATED())
+  test.check(t, code_of(17) == UNKNOWN())
+  test.check(t, code_name(UNIMPLEMENTED()) == "UNIMPLEMENTED")
+}
+
+@test
+fn metadata_fields(t: Test) {
+  let mut md: Metadata = []
+  add(mut md, "X-Grpc-Test-Echo-Initial", b"test_initial_metadata_value")
+  add(mut md, "x-grpc-test-echo-trailing-bin", b"\xab\xab\xab")
+  let fields = match header_fields(md) {
+    Ok(f) => f,
+    Error(_) => [],
+  }
+  test.check(t, list.len(fields) == 2)
+  test.check(t, fields[0].name == b"x-grpc-test-echo-initial")
+  test.check(t, fields[1].value == b"q6ur")
+  let back = match from_fields(fields) {
+    Ok(m) => m,
+    Error(_) => [],
+  }
+  test.check(t, get(back, "x-grpc-test-echo-trailing-bin") == Some(b"\xab\xab\xab"))
+  let mut bad: Metadata = []
+  add(mut bad, "grpc-status", b"0")
+  test.check(
+    t,
+    match header_fields(bad) {
+      Ok(_) => false,
+      Error(_) => true,
+    }
+  )
+}
+
+@test
+fn framing(t: Test) {
+  test.check(t, frame(b"", false) == b"\x00\x00\x00\x00\x00")
+  test.check(t, frame(b"abc", false) == b"\x00\x00\x00\x00\x03abc")
+  test.check(t, frame(b"abc", true)[0] == 1)
+}
+
+@test
+fn unknown_methods(t: Test) {
+  test.check(
+    t,
+    unknown_method(
+      "/grpc.testing.TestService/UnimplementedCall",
+      "grpc.testing.TestService"
+    ).message == "unknown method UnimplementedCall for service grpc.testing.TestService"
+  )
+  test.check(
+    t,
+    unknown_method(
+      "/grpc.testing.UnimplementedService/UnimplementedCall",
+      "grpc.testing.TestService"
+    ).message == "unknown service grpc.testing.UnimplementedService"
+  )
+  test.check(t, unknown_method("nope", "a.B").code == UNIMPLEMENTED())
+}

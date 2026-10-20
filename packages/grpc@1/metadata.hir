@@ -1,0 +1,207 @@
+// Call metadata (custom headers and trailers) and the grpc-timeout encoding, after
+// grpc-go metadata/metadata.go and internal/grpcutil/encode_duration.go (Apache-2.0).
+
+/// One metadata entry. Keys are lowercase; a key ending in `-bin` holds arbitrary
+/// bytes, sent base64-encoded; other values are printable ASCII.
+pub type Entry {
+  key: String,
+  value: Bytes,
+}
+
+/// Metadata in the order it was added or received; a key may repeat.
+pub type Metadata = List[Entry]
+
+/// Appends an entry.
+pub fn add(mut md: Metadata, key: String, value: Bytes) -> () uses {} {
+  list.push(mut md, Entry(key: string.ascii_lower(key), value: unique value))
+}
+
+/// The first value of `key`.
+pub fn get(md: Metadata, key: String) -> Option[Bytes] uses {} {
+  for e in md {
+    if e.key == key {
+      return Some(unique e.value)
+    }
+  }
+  None()
+}
+
+/// Every value of `key`, in order.
+pub fn get_all(md: Metadata, key: String) -> List[Bytes] uses {} {
+  let mut out: List[Bytes] = []
+  for e in md {
+    if e.key == key {
+      list.push(mut out, unique e.value)
+    }
+  }
+  take out
+}
+
+// Headers gRPC itself sends or consumes, which metadata cannot carry.
+fn reserved(key: String) -> bool uses {} {
+  key == "content-type" || key == "te" || key == "grpc-status" || key == "grpc-message" || key == "grpc-timeout" || key == "grpc-encoding" || key == "grpc-accept-encoding" || key == "user-agent" || string.starts_with(
+    key,
+    ":"
+  )
+}
+
+fn valid_key(key: String) -> bool uses {} {
+  let data = string.as_bytes(key)
+  if bytes.len(data) == 0 {
+    return false
+  }
+  for b in data {
+    if !(b >= b'a' && b <= b'z' || b >= b'0' && b <= b'9' || b == b'-' || b == b'_' || b == b'.') {
+      return false
+    }
+  }
+  true
+}
+
+fn binary(key: String) -> bool uses {} {
+  string.ends_with(key, "-bin")
+}
+
+/// HTTP/2 header fields for metadata, refusing reserved or malformed keys and
+/// non-printable values of non-binary keys.
+pub fn header_fields(md: Metadata) -> Result[List[hpack.Field], Status] uses {} {
+  let mut fields: List[hpack.Field] = []
+  for e in md {
+    if !valid_key(e.key) || reserved(e.key) {
+      return Error(status(INTERNAL(), f"invalid metadata key \"{e.key}\""))
+    }
+    let value = if binary(e.key) {
+      string.as_bytes(base64.encode(e.value, Standard(), Omitted()))
+    } else {
+      for b in e.value {
+        if b < b' ' || b > b'~' {
+          return Error(status(INTERNAL(), f"invalid value of metadata key \"{e.key}\""))
+        }
+      }
+      unique e.value
+    }
+    list.push(
+      mut fields,
+      hpack.Field(
+        name: unique string.as_bytes(e.key),
+        value: unique value,
+        sensitive: false
+      )
+    )
+  }
+  Ok(take fields)
+}
+
+/// The metadata among received header fields: every non-reserved field, with
+/// `-bin` values base64-decoded (padded or not).
+pub fn from_fields(fields: List[hpack.Field]) -> Result[Metadata, Status] uses {} {
+  let mut md: Metadata = []
+  for f in fields {
+    let key = match string.from_bytes(unique f.name) {
+      Ok(k) => k,
+      Error(_) => return Error(status(INTERNAL(), "non-UTF-8 header name")),
+    }
+    if reserved(key) {
+      continue
+    }
+    let value = if binary(key) {
+      let text_value = match string.from_bytes(unique f.value) {
+        Ok(t) => t,
+        Error(_) => return Error(status(INTERNAL(), f"invalid base64 in {key}")),
+      }
+      let padding: base64.Padding = if string.byte_len(text_value) % 4 == 0 {
+        Required()
+      } else {
+        Omitted()
+      }
+      match base64.decode(text_value, Standard(), padding) {
+        Ok(b) => b,
+        Error(_) => return Error(status(INTERNAL(), f"invalid base64 in {key}")),
+      }
+    } else {
+      unique f.value
+    }
+    list.push(mut md, Entry(key: take key, value: take value))
+  }
+  Ok(take md)
+}
+
+/// The value of a header field.
+pub fn field(fields: List[hpack.Field], name: String) -> Option[Bytes] uses {} {
+  for f in fields {
+    if f.name == string.as_bytes(name) {
+      return Some(unique f.value)
+    }
+  }
+  None()
+}
+
+const MAX_TIMEOUT_VALUE: u64 = 99999999
+
+fn ceil_div(n: u64, d: u64) -> u64 uses {} {
+  if n % d > 0 {
+    n / d + 1
+  } else {
+    n / d
+  }
+}
+
+/// The `grpc-timeout` value for a remaining interval: at most eight digits and
+/// the finest unit that fits, rounding up.
+pub fn encode_timeout(nanoseconds: u64) -> unique String uses {} {
+  if nanoseconds == 0 {
+    return "0n"
+  }
+  let units: List[(u64, String)] = [
+    (1, "n"),
+    (1000, "u"),
+    (1000000, "m"),
+    (1000000000, "S"),
+    (60000000000, "M")
+  ]
+  for (scale, unit) in units {
+    let d = ceil_div(nanoseconds, scale)
+    if d <= MAX_TIMEOUT_VALUE {
+      return f"{d}{unit}"
+    }
+  }
+  f"{ceil_div(nanoseconds, 3600000000000)}H"
+}
+
+/// The interval of a `grpc-timeout` value in nanoseconds, saturating.
+pub fn decode_timeout(value: Bytes) -> Option[u64] uses {} {
+  let len = bytes.len(value)
+  if len < 2 || len > 9 {
+    return None()
+  }
+  let unit = value[len - 1]
+  let scale: u64 = if unit == b'H' {
+    3600000000000
+  } else if unit == b'M' {
+    60000000000
+  } else if unit == b'S' {
+    1000000000
+  } else if unit == b'm' {
+    1000000
+  } else if unit == b'u' {
+    1000
+  } else if unit == b'n' {
+    1
+  } else {
+    return None()
+  }
+  let mut n: u64 = 0
+  let mut i: u64 = 0
+  while i < len - 1 {
+    let b = value[i]
+    if b < b'0' || b > b'9' {
+      return None()
+    }
+    n = n * 10 + int.widen(b - b'0')
+    i += 1
+  }
+  if n > 18446744073709551615 / scale {
+    return Some(18446744073709551615)
+  }
+  Some(n * scale)
+}

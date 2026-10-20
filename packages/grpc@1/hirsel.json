@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "grpc",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "status.hir",
+      "module": [
+        "grpc"
+      ]
+    },
+    {
+      "path": "metadata.hir",
+      "module": [
+        "grpc"
+      ]
+    },
+    {
+      "path": "transport.hir",
+      "module": [
+        "grpc"
+      ]
+    },
+    {
+      "path": "server.hir",
+      "module": [
+        "grpc"
+      ]
+    },
+    {
+      "path": "client.hir",
+      "module": [
+        "grpc"
+      ]
+    },
+    {
+      "path": "tests.hir",
+      "module": [
+        "grpc"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,380 @@
+// The server side of gRPC: one connection's calls, served in arrival order by a
+// handler, following grpc-go server.go and internal/transport/http2_server.go
+// (Apache-2.0). A server runs one `serve` per accepted connection, typically
+// each in its own task.
+
+/// Server settings: the largest request message accepted, whether responses are
+/// gzip-compressed when the client accepts it, and the clock that turns a
+/// request's `grpc-timeout` into `ServerCall.deadline`.
+pub type ServerOptions {
+  max_message: u64,
+  compress: bool,
+  clock: Option[MonotonicClock],
+}
+
+/// Defaults: 4 MiB requests, no response compression, no deadlines.
+pub fn server_options() -> ServerOptions uses {} {
+  ServerOptions(max_message: DEFAULT_MAX_MESSAGE, compress: false, clock: None())
+}
+
+/// One call being served. `method` is the request path, such as
+/// `/helloworld.Greeter/SayHello`; `metadata` holds the request's custom headers.
+/// Set `headers` and `trailers` to send response metadata.
+pub opaque resource type ServerCall: () uses {Net, MonotonicClock} {
+  transport: Transport,
+  id: u32,
+  method: String,
+  metadata: Metadata,
+  deadline: Option[Deadline],
+  timeout: Option[u64],
+  gzip_in: bool,
+  gzip_out: bool,
+  max_message: u64,
+  headers: Metadata,
+  trailers: Metadata,
+  sent_headers: bool,
+  received_end: bool,
+}
+
+/// The request path, `/package.Service/Method`.
+pub fn method(c: ServerCall) -> String in c uses {} {
+  c.method
+}
+
+/// The request's custom metadata.
+pub fn request_metadata(c: ServerCall) -> Metadata in c uses {} {
+  c.metadata
+}
+
+/// The request's deadline on the server's clock, when the client sent
+/// `grpc-timeout` and the server has a clock. Bound work with
+/// `task.scope_until(tasks, deadline, ...)`.
+pub fn deadline(c: ServerCall) -> Option[Deadline] uses {} {
+  c.deadline
+}
+
+/// The interval the client allowed, in nanoseconds, as sent in `grpc-timeout`.
+pub fn timeout(c: ServerCall) -> Option[u64] uses {} {
+  c.timeout
+}
+
+/// Adds response header metadata; it is sent with the first message.
+pub fn set_header(mut c: ServerCall, key: String, value: Bytes) -> () uses {} {
+  add(mut c.headers, key, value)
+}
+
+/// Adds response trailer metadata, sent with the status.
+pub fn set_trailer(mut c: ServerCall, key: String, value: Bytes) -> () uses {} {
+  add(mut c.trailers, key, value)
+}
+
+fn server_header_fields(c: ServerCall) -> Result[List[hpack.Field], Status] uses {} {
+  let mut fields: List[hpack.Field] = [
+    hpack.Field(name: b":status", value: b"200", sensitive: false),
+    hpack.Field(name: b"content-type", value: b"application/grpc", sensitive: false)
+  ]
+  if c.gzip_out {
+    list.push(
+      mut fields,
+      hpack.Field(name: b"grpc-encoding", value: b"gzip", sensitive: false)
+    )
+  }
+  for f in header_fields(c.headers)? {
+    list.push(mut fields, unique f)
+  }
+  Ok(take fields)
+}
+
+fn send_headers(mut c: ServerCall) -> Result[(), Status] {
+  if c.sent_headers {
+    return Ok(())
+  }
+  let fields = server_header_fields(c)?
+  match http2.write_headers(mut c.transport.conn, c.id, fields, false) {
+    Ok(()) => (),
+    Error(e) => return Error(transport_status(e)),
+  }
+  c.sent_headers = true
+  Ok(())
+}
+
+/// Sends one response message.
+pub fn send_response(mut c: ServerCall, message: Bytes) -> Result[(), Status] {
+  send_headers(mut c)?
+  let framed = frame(message, c.gzip_out)
+  write_all(mut c.transport, c.id, framed, false)
+}
+
+/// The next request message, or `None` once the client has finished sending.
+/// A reset stream is `CANCELLED`.
+pub fn receive_request(mut c: ServerCall) -> Result[Option[Bytes], Status] {
+  while true {
+    if let Some(m) = take_message(mut c.transport, c.id, c.max_message, c.gzip_in)? {
+      return Ok(Some(take m))
+    }
+    let Some(i) = inbox_index(c.transport, c.id) else {
+      return Error(status(INTERNAL(), "stream disappeared"))
+    }
+    if let Some(code) = c.transport.inboxes[i].reset {
+      return Error(status(CANCELLED(), f"stream reset by client (code {code})"))
+    }
+    if c.transport.inboxes[i].end {
+      if list.len(c.transport.inboxes[i].data) > 0 {
+        return Error(status(INTERNAL(), "request ended inside a message"))
+      }
+      c.received_end = true
+      return Ok(None())
+    }
+    match pump(mut c.transport) {
+      Ok(()) => (),
+      Error(e) => return Error(transport_status(e)),
+    }
+  }
+  Ok(None())
+}
+
+/// The only request of a call with one request: an error when the client sends
+/// none or more than one.
+pub fn receive_unary(mut c: ServerCall) -> Result[Bytes, Status] {
+  let message = match receive_request(mut c)? {
+    Some(m) => m,
+    None() => return Error(internal("grpc: expected a request message, got none")),
+  }
+  match receive_request(mut c)? {
+    Some(_) => Error(internal("grpc: expected one request message, got more")),
+    None() => Ok(take message),
+  }
+}
+
+/// Whether the client reset the call.
+pub fn canceled(c: ServerCall) -> bool uses {} {
+  match inbox_index(c.transport, c.id) {
+    Some(i) => option.is_some(c.transport.inboxes[i].reset),
+    None() => false,
+  }
+}
+
+fn status_fields(s: Status, trailers: Metadata) -> Result[List[hpack.Field], Status] uses {} {
+  let mut fields: List[hpack.Field] = [
+    hpack.Field(
+      name: b"grpc-status",
+      value: unique string.as_bytes(u32.to_string(code_number(s.code))),
+      sensitive: false
+    )
+  ]
+  if string.byte_len(s.message) > 0 {
+    list.push(
+      mut fields,
+      hpack.Field(
+        name: b"grpc-message",
+        value: encode_message(s.message),
+        sensitive: false
+      )
+    )
+  }
+  for f in header_fields(trailers)? {
+    list.push(mut fields, unique f)
+  }
+  for f in header_fields(s.trailers)? {
+    list.push(mut fields, unique f)
+  }
+  Ok(take fields)
+}
+
+// Sends the status: as trailers after the response headers, or as one
+// trailers-only HEADERS frame when nothing was sent.
+fn finish_server(mut c: ServerCall, outcome: Status) -> Result[(), http2.Error] {
+  if canceled(c) {
+    return Ok(())
+  }
+  let mut fields: List[hpack.Field] = []
+  if !c.sent_headers {
+    list.push(
+      mut fields,
+      hpack.Field(name: b":status", value: b"200", sensitive: false)
+    )
+    list.push(
+      mut fields,
+      hpack.Field(name: b"content-type", value: b"application/grpc", sensitive: false)
+    )
+    match header_fields(c.headers) {
+      Ok(extra) => {
+        for f in extra {
+          list.push(mut fields, unique f)
+        }
+      },
+      Error(_) => (),
+    }
+  }
+  let trailer_fields = match status_fields(outcome, c.trailers) {
+    Ok(f) => f,
+    Error(bad) => match status_fields(bad, []) {
+      Ok(f) => f,
+      Error(_) => [],
+    },
+  }
+  for f in trailer_fields {
+    list.push(mut fields, unique f)
+  }
+  http2.write_headers(mut c.transport.conn, c.id, fields, true)?
+  // A client still sending is told the response is complete.
+  if !c.received_end {
+    let _ = http2.reset_stream(mut c.transport.conn, c.id, NoError())
+  }
+  Ok(())
+}
+
+fn request_call(take t: Transport, id: u32, options: ServerOptions) -> Result[
+  ServerCall,
+  (Transport, Status)
+] {
+  let Some(i) = inbox_index(t, id) else {
+    return Error((take t, status(INTERNAL(), "stream disappeared")))
+  }
+  let fields = match t.inboxes[i].headers {
+    Some(f) => unique f,
+    None() => [],
+  }
+  let method_name = match field(fields, ":path") {
+    Some(p) => match string.from_bytes(take p) {
+      Ok(s) => s,
+      Error(_) => "",
+    },
+    None() => "",
+  }
+  let content_type = option.unwrap_or(field(fields, "content-type"), b"")
+  let grpc_type = content_type == b"application/grpc" || bytes.len(content_type) > 16 && (content_type[16] == b'+' || content_type[16] == b';') && bytes.slice(
+    content_type,
+    0,
+    16
+  ) == b"application/grpc"
+  let metadata = match from_fields(fields) {
+    Ok(md) => md,
+    Error(s) => return Error((take t, s)),
+  }
+  let gzip_in = match field(fields, "grpc-encoding") {
+    Some(e) => if e == b"gzip" {
+      true
+    } else if e == b"identity" {
+      false
+    } else {
+      return Error((take t, status(UNIMPLEMENTED(), "unsupported grpc-encoding")))
+    },
+    None() => false,
+  }
+  let accepts_gzip = match field(fields, "grpc-accept-encoding") {
+    Some(a) => match string.from_bytes(take a) {
+      Ok(s) => string.contains(s, "gzip"),
+      Error(_) => false,
+    },
+    None() => false,
+  }
+  let allowed = match field(fields, "grpc-timeout") {
+    Some(v) => decode_timeout(v),
+    None() => None(),
+  }
+  let call_deadline: Option[Deadline] = match (options.clock, allowed) {
+    (Some(clock), Some(nanos)) => match clock.monotonic(clock) {
+      Ok(now) => match instant.checked_add(clock, now, nanos) {
+        Some(at) => Some(Deadline(clock: clock, at: at)),
+        None() => None(),
+      },
+      Error(_) => None(),
+    },
+    _ => None(),
+  }
+  let call = ServerCall(
+    transport: take t,
+    id: id,
+    method: take method_name,
+    metadata: take metadata,
+    deadline: call_deadline,
+    timeout: allowed,
+    gzip_in: gzip_in,
+    gzip_out: options.compress && accepts_gzip,
+    max_message: options.max_message,
+    headers: [],
+    trailers: [],
+    sent_headers: false,
+    received_end: false
+  )
+  if !grpc_type {
+    let mut refused = take call
+    return Error(
+      (
+        take_transport(take refused),
+        status(UNKNOWN(), "content-type is not application/grpc")
+      )
+    )
+  }
+  Ok(take call)
+}
+
+fn take_transport(take c: ServerCall) -> Transport {
+  let ServerCall(transport: t, ..) = take c
+  take t
+}
+
+/// Serves the calls of one accepted connection until the client closes it,
+/// running `handler` for each call in turn. The handler's `Error` becomes the
+/// call's status; `Ok` sends status `OK`. Messages for other calls that arrive
+/// while one is served wait in their stream's inbox.
+pub fn serve(
+  n: Net,
+  take stream: Stream of n,
+  options: ServerOptions,
+  handler: fn(mut ServerCall) -> Result[(), Status]
+) -> Result[(), Status] {
+  let mut t = transport(n, take stream, true)
+  while true {
+    let Some(id) = next_fresh(mut t) else {
+      match pump(mut t) {
+        Ok(()) => continue,
+        Error(Closed()) => return Ok(()),
+        Error(Truncated()) => return Ok(()),
+        Error(e) => return Error(transport_status(e)),
+      }
+    }
+    let mut call = match request_call(take t, id, options) {
+      Ok(c) => c,
+      Error((back, refusal)) => {
+        t = take back
+        let mut fields: List[hpack.Field] = [
+          hpack.Field(name: b":status", value: b"200", sensitive: false),
+          hpack.Field(
+            name: b"content-type",
+            value: b"application/grpc",
+            sensitive: false
+          )
+        ]
+        match status_fields(refusal, []) {
+          Ok(more) => {
+            for f in more {
+              list.push(mut fields, unique f)
+            }
+          },
+          Error(_) => (),
+        }
+        match http2.write_headers(mut t.conn, id, fields, true) {
+          Ok(()) => (),
+          Error(e) => return Error(transport_status(e)),
+        }
+        close_inbox(mut t, id)
+        continue
+      },
+    }
+    let outcome = match handler(mut call) {
+      Ok(()) => status(OK(), ""),
+      Error(s) => s,
+    }
+    let finished = finish_server(mut call, outcome)
+    t = take_transport(take call)
+    close_inbox(mut t, id)
+    match finished {
+      Ok(()) => (),
+      Error(Closed()) => return Ok(()),
+      Error(e) => return Error(transport_status(e)),
+    }
+  }
+  Ok(())
+}

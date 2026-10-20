@@ -1,0 +1,535 @@
+// The client side of gRPC, following grpc-go clientconn.go, stream.go and
+// internal/transport/http2_client.go (Apache-2.0). A `ClientConn` owns one HTTP/2
+// connection to `host:port` and opens one stream per call; after a transport
+// failure or an expired deadline it reconnects on the next call.
+
+/// Per-call settings: metadata to send, an optional deadline, gzip compression
+/// of request messages, and the largest response message accepted.
+pub type CallOptions {
+  metadata: Metadata,
+  deadline: Option[Deadline],
+  compress: bool,
+  max_message: u64,
+}
+
+/// No metadata, no deadline, no compression, 4 MiB responses.
+pub fn call_options() -> CallOptions uses {} {
+  CallOptions(
+    metadata: [],
+    deadline: None(),
+    compress: false,
+    max_message: DEFAULT_MAX_MESSAGE
+  )
+}
+
+/// A connection to one server. `tasks` bounds blocking waits by call deadlines
+/// (`task.scope_until`); without it deadlines are only sent as `grpc-timeout`.
+pub opaque resource type ClientConn: () uses {Net, Tasks, MonotonicClock} {
+  network: Net,
+  host: String,
+  port: u16,
+  tasks: Option[Tasks],
+  transport: Option[Transport],
+}
+
+/// A channel to `host:port` over plaintext HTTP/2 (h2c with prior knowledge),
+/// connecting on its first call.
+pub fn dial(n: Net, host: String, port: u16, tasks: Option[Tasks]) -> ClientConn {
+  ClientConn(network: n, host: unique host, port: port, tasks: tasks, transport: None())
+}
+
+/// One call on a channel. `headers` holds the response header metadata once
+/// it arrives.
+pub type ClientCall {
+  id: u32,
+  deadline: Option[Deadline],
+  compress: bool,
+  gzip_in: bool,
+  max_message: u64,
+  headers: Option[Metadata],
+  done: Option[Status],
+}
+
+/// A unary call's result: the response and the server's header and trailer metadata.
+pub type Reply[T] {
+  message: T,
+  headers: Metadata,
+  trailers: Metadata,
+}
+
+fn connected(mut ch: ClientConn) -> Result[(), Status] {
+  if option.is_some(ch.transport) {
+    return Ok(())
+  }
+  let n = ch.network
+  match net.connect(n, ch.host, ch.port, Unbounded()) {
+    Ok(stream) => {
+      ch.transport = Some(transport(n, take stream, false))
+      Ok(())
+    },
+    Error(_) => Error(status(UNAVAILABLE(), f"cannot connect to {ch.host}:{ch.port}")),
+  }
+}
+
+fn now_past(d: Deadline) -> bool {
+  match clock.monotonic(d.clock) {
+    Ok(now) => time.compare(d.clock, now, d.at) >= 0,
+    Error(_) => false,
+  }
+}
+
+fn remaining(d: Deadline) -> u64 {
+  match clock.monotonic(d.clock) {
+    Ok(now) => {
+      let left = time.between(d.clock, now, d.at)
+      if left.nanoseconds <= 0 {
+        0
+      } else if left.nanoseconds > 18446744073709551615 {
+        18446744073709551615
+      } else {
+        int.narrow(left.nanoseconds)
+      }
+    },
+    Error(_) => 0,
+  }
+}
+
+fn expired() -> Status uses {} {
+  status(DEADLINE_EXCEEDED(), "context deadline exceeded")
+}
+
+// Reads one event for the channel's transport, bounded by `until` when the
+// channel has tasks. A failed read drops the connection, and so does an expired
+// wait, since a canceled read leaves its frame state unknown; the next call
+// reconnects.
+fn pump_until(mut ch: ClientConn, until: Option[Deadline]) -> Result[(), Status] {
+  if let Some(d) = until {
+    if now_past(d) {
+      ch.transport = None()
+      return Error(expired())
+    }
+  }
+  let bound: Option[(Tasks, Deadline)] = match (ch.tasks, until) {
+    (Some(tasks), Some(d)) => Some((tasks, d)),
+    _ => None(),
+  }
+  let Some(taken) = option.remove(mut ch.transport) else {
+    return Error(status(UNAVAILABLE(), "connection lost"))
+  }
+  let Some((tasks, d)) = bound else {
+    let mut live = take taken
+    return match pump(mut live) {
+      Ok(()) => {
+        ch.transport = Some(take live)
+        Ok(())
+      },
+      Error(e) => Error(transport_status(e)),
+    }
+  }
+  let bounded = task.scope_until(
+    tasks,
+    d,
+    fn(s: Scope) -> (Result[(), http2.Error], Transport) {
+      let mut live = take taken
+      let outcome = pump(mut live)
+      (outcome, take live)
+    }
+  )
+  match take bounded {
+    Finished((outcome, live)) => match outcome {
+      Ok(()) => {
+        ch.transport = Some(take live)
+        Ok(())
+      },
+      Error(e) => Error(transport_status(e)),
+    },
+    // The connection is abandoned: a read cut short may leave its frame state
+    // unknown.
+    Expired((_, abandoned)) => {
+      close_transport(take abandoned)
+      Error(expired())
+    },
+  }
+}
+
+fn close_transport(take t: Transport) -> () {
+  let _ = t
+}
+
+/// Starts a call of `method` (`/package.Service/Method`), sending its headers.
+pub fn start(mut ch: ClientConn, method_path: String, options: CallOptions) -> Result[
+  ClientCall,
+  Status
+] {
+  if let Some(d) = options.deadline {
+    if now_past(d) {
+      return Error(expired())
+    }
+  }
+  connected(mut ch)?
+  let authority = f"{ch.host}:{ch.port}"
+  let mut fields: List[hpack.Field] = [
+    hpack.Field(name: b":method", value: b"POST", sensitive: false),
+    hpack.Field(name: b":scheme", value: b"http", sensitive: false),
+    hpack.Field(
+      name: b":path",
+      value: unique string.as_bytes(method_path),
+      sensitive: false
+    ),
+    hpack.Field(
+      name: b":authority",
+      value: unique string.as_bytes(authority),
+      sensitive: false
+    ),
+    hpack.Field(name: b"content-type", value: b"application/grpc", sensitive: false),
+    hpack.Field(name: b"te", value: b"trailers", sensitive: false),
+    hpack.Field(name: b"user-agent", value: b"grpc-hirsel/1", sensitive: false),
+    hpack.Field(name: b"grpc-accept-encoding", value: b"gzip", sensitive: false)
+  ]
+  if options.compress {
+    list.push(
+      mut fields,
+      hpack.Field(name: b"grpc-encoding", value: b"gzip", sensitive: false)
+    )
+  }
+  if let Some(d) = options.deadline {
+    list.push(
+      mut fields,
+      hpack.Field(
+        name: b"grpc-timeout",
+        value: unique string.as_bytes(encode_timeout(remaining(d))),
+        sensitive: false
+      )
+    )
+  }
+  for f in header_fields(options.metadata)? {
+    list.push(mut fields, unique f)
+  }
+  let Some(t) = option.remove(mut ch.transport) else {
+    return Error(status(UNAVAILABLE(), "not connected"))
+  }
+  let mut live = take t
+  let opened = http2.start(mut live.conn, fields, false)
+  let id = match opened {
+    Ok(id) => id,
+    Error(e) => return Error(transport_status(e)),
+  }
+  ch.transport = Some(take live)
+  Ok(
+    ClientCall(
+      id: id,
+      deadline: options.deadline,
+      compress: options.compress,
+      gzip_in: false,
+      max_message: options.max_message,
+      headers: None(),
+      done: None()
+    )
+  )
+}
+
+/// The response header metadata, once the server's headers have arrived.
+pub fn response_headers(call: ClientCall) -> Metadata uses {} {
+  match call.headers {
+    Some(h) => unique h,
+    None() => [],
+  }
+}
+
+/// The response trailer metadata, once the call has finished.
+pub fn response_trailers(call: ClientCall) -> Metadata uses {} {
+  match call.done {
+    Some(s) => unique s.trailers,
+    None() => [],
+  }
+}
+
+fn with_transport(mut ch: ClientConn) -> Result[Transport, Status] {
+  match option.remove(mut ch.transport) {
+    Some(t) => Ok(take t),
+    None() => Error(status(UNAVAILABLE(), "connection lost")),
+  }
+}
+
+/// Sends one request message, gzip-compressed when the call's options say so.
+pub fn send_request(mut ch: ClientConn, call: ClientCall, message: Bytes) -> Result[
+  (),
+  Status
+] {
+  if let Some(s) = call.done {
+    if s.code != OK() {
+      return Error(unique s)
+    }
+    return Error(internal("send after the call finished"))
+  }
+  let mut t = with_transport(mut ch)?
+  let outcome = write_all(mut t, call.id, frame(message, call.compress), false)
+  ch.transport = Some(take t)
+  outcome
+}
+
+/// Half-closes the call: the server sees the end of the requests.
+pub fn close_send(mut ch: ClientConn, call: ClientCall) -> Result[(), Status] {
+  if let Some(s) = call.done {
+    if s.code != OK() {
+      return Error(unique s)
+    }
+    return Ok(())
+  }
+  let mut t = with_transport(mut ch)?
+  let outcome = write_all(mut t, call.id, b"", true)
+  ch.transport = Some(take t)
+  outcome
+}
+
+fn cancel_stream(mut ch: ClientConn, id: u32) -> () {
+  if let Some(t) = option.remove(mut ch.transport) {
+    let mut live = take t
+    let _ = http2.reset_stream(mut live.conn, id, Cancel())
+    close_inbox(mut live, id)
+    ch.transport = Some(take live)
+  }
+}
+
+/// Cancels the call: resets its stream with CANCEL.
+pub fn cancel(mut ch: ClientConn, mut call: ClientCall) -> () {
+  cancel_stream(mut ch, call.id)
+  call.done = Some(status(CANCELLED(), "context canceled"))
+}
+
+fn trailer_status(fields: List[hpack.Field]) -> Status uses {} {
+  let code = match field(fields, "grpc-status") {
+    Some(v) => match string.from_bytes(take v) {
+      Ok(s) => match u32.parse(s) {
+        Ok(n) => code_of(n),
+        Error(_) => UNKNOWN(),
+      },
+      Error(_) => UNKNOWN(),
+    },
+    None() => return status(
+      INTERNAL(),
+      "server closed the stream without sending trailers"
+    ),
+  }
+  let message = match field(fields, "grpc-message") {
+    Some(m) => decode_message(m),
+    None() => "",
+  }
+  let trailers = match from_fields(fields) {
+    Ok(md) => md,
+    Error(_) => [],
+  }
+  Status(code: code, message: take message, trailers: take trailers)
+}
+
+fn http_status(fields: List[hpack.Field]) -> Option[Status] uses {} {
+  let Some(code) = field(fields, ":status") else {
+    return Some(status(INTERNAL(), "response without :status"))
+  }
+  if code == b"200" {
+    return None()
+  }
+  // grpc-go maps HTTP statuses to codes for responses that are not gRPC.
+  let mapped: Code = if code == b"400" {
+    INTERNAL()
+  } else if code == b"401" {
+    UNAUTHENTICATED()
+  } else if code == b"403" {
+    PERMISSION_DENIED()
+  } else if code == b"404" {
+    UNIMPLEMENTED()
+  } else if code == b"429" || code == b"502" || code == b"503" || code == b"504" {
+    UNAVAILABLE()
+  } else {
+    UNKNOWN()
+  }
+  let text_code = match string.from_bytes(take code) {
+    Ok(s) => s,
+    Error(_) => "?",
+  }
+  Some(status(mapped, f"unexpected HTTP status code {text_code}"))
+}
+
+// An owned snapshot of a call's inbox.
+type View {
+  headers: Option[List[hpack.Field]],
+  trailers: Option[List[hpack.Field]],
+  end: bool,
+  reset: Option[u32],
+}
+
+fn view(ch: ClientConn, id: u32) -> Option[View] uses {} {
+  let Some(t) = ch.transport else {
+    return None()
+  }
+  let Some(i) = inbox_index(t, id) else {
+    return Some(View(headers: None(), trailers: None(), end: false, reset: None()))
+  }
+  Some(
+    View(
+      headers: unique t.inboxes[i].headers,
+      trailers: unique t.inboxes[i].trailers,
+      end: t.inboxes[i].end,
+      reset: t.inboxes[i].reset
+    )
+  )
+}
+
+fn done(mut call: ClientCall, take s: Status) -> Result[Option[Bytes], Status] uses {} {
+  call.done = Some(unique s)
+  if s.code == OK() {
+    Ok(None())
+  } else {
+    Error(take s)
+  }
+}
+
+fn forget(mut ch: ClientConn, id: u32) -> () uses {} {
+  if let Some(taken) = option.remove(mut ch.transport) {
+    let mut live = take taken
+    close_inbox(mut live, id)
+    ch.transport = Some(take live)
+  }
+}
+
+/// The next response message, or `None` when the server has finished with
+/// status OK. A non-OK status is the `Error`; it carries the trailers.
+pub fn receive_response(mut ch: ClientConn, mut call: ClientCall) -> Result[
+  Option[Bytes],
+  Status
+] {
+  if let Some(s) = call.done {
+    if s.code == OK() {
+      return Ok(None())
+    }
+    return Error(unique s)
+  }
+  while true {
+    let Some(state) = view(ch, call.id) else {
+      return done(mut call, status(UNAVAILABLE(), "connection lost"))
+    }
+    if option.is_none(call.headers) {
+      if let Some(fields) = state.headers {
+        if let Some(bad) = http_status(fields) {
+          forget(mut ch, call.id)
+          return done(mut call, take bad)
+        }
+        call.gzip_in = field(fields, "grpc-encoding") == Some(b"gzip")
+        let md = match from_fields(fields) {
+          Ok(md) => md,
+          Error(_) => [],
+        }
+        call.headers = Some(take md)
+        // A trailers-only response carries the status in its only HEADERS.
+        if state.end && option.is_none(state.trailers) && option.is_some(
+          field(fields, "grpc-status")
+        ) {
+          forget(mut ch, call.id)
+          return done(mut call, trailer_status(fields))
+        }
+      }
+    }
+    if option.is_some(call.headers) {
+      let Some(taken) = option.remove(mut ch.transport) else {
+        return done(mut call, status(UNAVAILABLE(), "connection lost"))
+      }
+      let mut live = take taken
+      let message = take_message(mut live, call.id, call.max_message, call.gzip_in)
+      ch.transport = Some(take live)
+      match take message {
+        Ok(Some(m)) => return Ok(Some(take m)),
+        Ok(None()) => (),
+        Error(s) => {
+          cancel_stream(mut ch, call.id)
+          return done(mut call, take s)
+        },
+      }
+    }
+    if let Some(code) = state.reset {
+      forget(mut ch, call.id)
+      return done(mut call, status(INTERNAL(), f"stream reset by server (code {code})"))
+    }
+    if state.end {
+      let s = match state.trailers {
+        Some(fields) => trailer_status(fields),
+        None() => status(
+          INTERNAL(),
+          "server closed the stream without sending trailers"
+        ),
+      }
+      forget(mut ch, call.id)
+      return done(mut call, take s)
+    }
+    // A deadline that passed between reads cancels only this stream.
+    if let Some(d) = call.deadline {
+      if now_past(d) {
+        cancel_stream(mut ch, call.id)
+        return done(mut call, expired())
+      }
+    }
+    match pump_until(mut ch, call.deadline) {
+      Ok(()) => (),
+      Error(s) => return done(mut call, take s),
+    }
+  }
+  Ok(None())
+}
+
+/// The status of a finished call, reading and discarding any remaining responses.
+pub fn finish_call(mut ch: ClientConn, mut call: ClientCall) -> Status {
+  while true {
+    match receive_response(mut ch, mut call) {
+      Ok(Some(_)) => (),
+      Ok(None()) => {
+        return match call.done {
+          Some(s) => unique s,
+          None() => status(OK(), ""),
+        }
+      },
+      Error(s) => return take s,
+    }
+  }
+  status(OK(), "")
+}
+
+/// The only response of a call with one response: an error when the call ends
+/// without one or sends a second.
+pub fn receive_one(mut ch: ClientConn, mut call: ClientCall) -> Result[Bytes, Status] {
+  let message = match receive_response(mut ch, mut call)? {
+    Some(m) => m,
+    None() => return Error(
+      internal("cardinality violation: expected a response, got none")
+    ),
+  }
+  match receive_response(mut ch, mut call)? {
+    Some(_) => {
+      cancel_stream(mut ch, call.id)
+      Error(internal("cardinality violation: expected one response, got more"))
+    },
+    None() => Ok(take message),
+  }
+}
+
+/// A unary call: one request, one response.
+pub fn unary(
+  mut ch: ClientConn,
+  method_path: String,
+  request: Bytes,
+  options: CallOptions
+) -> Result[Reply[Bytes], Status] {
+  let mut call = start(mut ch, method_path, options)?
+  let mut t = with_transport(mut ch)?
+  let sent = write_all(mut t, call.id, frame(request, options.compress), true)
+  ch.transport = Some(take t)
+  sent?
+  let message = receive_one(mut ch, mut call)?
+  let trailers = match call.done {
+    Some(s) => unique s.trailers,
+    None() => [],
+  }
+  let headers = match call.headers {
+    Some(h) => unique h,
+    None() => [],
+  }
+  Ok(Reply(message: take message, headers: take headers, trailers: take trailers))
+}

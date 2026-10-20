@@ -1,0 +1,278 @@
+// gRPC over one std@1/http2 connection: per-stream inboxes for events that arrive
+// while another stream is being served, the length-prefixed message framing of
+// the gRPC HTTP/2 protocol (PROTOCOL-HTTP2.md in grpc/grpc), optional gzip, and
+// flow-controlled writes. Adapted from grpc-go internal/transport (Apache-2.0).
+
+/// The largest message a peer may send unless options say otherwise: 4 MiB.
+pub const DEFAULT_MAX_MESSAGE: u64 = 4194304
+
+// What has arrived on one stream and is not yet consumed.
+type Inbox {
+  id: u32,
+  headers: Option[List[hpack.Field]],
+  trailers: Option[List[hpack.Field]],
+  data: List[u8],
+  end: bool,
+  reset: Option[u32],
+}
+
+/// One HTTP/2 connection carrying gRPC calls.
+pub opaque resource type Transport: () uses {Net} {
+  conn: http2.Connection,
+  inboxes: List[Inbox],
+  // Streams whose request headers arrived and no call has taken yet (servers).
+  fresh: List[u32],
+  server: bool,
+  goaway: bool,
+}
+
+fn transport(n: Net, take stream: Stream of n, server: bool) -> Transport {
+  let role: http2.Role = if server {
+    Server()
+  } else {
+    Client()
+  }
+  Transport(
+    conn: http2.connection(n, take stream, role, 65536),
+    inboxes: [],
+    fresh: [],
+    server: server,
+    goaway: false
+  )
+}
+
+fn inbox_index(t: Transport, id: u32) -> Option[u64] uses {} {
+  let mut i: u64 = 0
+  while i < list.len(t.inboxes) {
+    if t.inboxes[i].id == id {
+      return Some(i)
+    }
+    i += 1
+  }
+  None()
+}
+
+fn open_inbox(mut t: Transport, id: u32) -> u64 uses {} {
+  match inbox_index(t, id) {
+    Some(i) => i,
+    None() => {
+      list.push(
+        mut t.inboxes,
+        Inbox(
+          id: id,
+          headers: None(),
+          trailers: None(),
+          data: [],
+          end: false,
+          reset: None()
+        )
+      )
+      list.len(t.inboxes) - 1
+    },
+  }
+}
+
+// The oldest stream whose request no call has taken yet.
+fn next_fresh(mut t: Transport) -> Option[u32] uses {} {
+  if list.len(t.fresh) == 0 {
+    return None()
+  }
+  let first = t.fresh[0]
+  let mut rest: List[u32] = []
+  let mut i: u64 = 1
+  while i < list.len(t.fresh) {
+    list.push(mut rest, t.fresh[i])
+    i += 1
+  }
+  t.fresh = take rest
+  Some(first)
+}
+
+// Forgets a finished stream.
+fn close_inbox(mut t: Transport, id: u32) -> () uses {} {
+  let mut kept: List[Inbox] = []
+  for inbox in t.inboxes {
+    if inbox.id != id {
+      list.push(mut kept, unique inbox)
+    }
+  }
+  t.inboxes = take kept
+}
+
+fn transport_status(e: http2.Error) -> Status uses {} {
+  let message = match e {
+    Net(_) => "connection failed",
+    Truncated() => "connection closed mid-frame",
+    InvalidPreface() => "invalid HTTP/2 preface",
+    Wire(_) => "HTTP/2 protocol error",
+    Closed() => "connection closed",
+    InvalidHeaders() => "invalid HTTP/2 headers",
+    UnknownStream() => "unknown HTTP/2 stream",
+    WouldBlock() => "HTTP/2 flow control blocked",
+  }
+  status(UNAVAILABLE(), message)
+}
+
+// Reads one HTTP/2 event and files it in its stream's inbox.
+fn pump(mut t: Transport) -> Result[(), http2.Error] {
+  let event = http2.next_event(mut t.conn)?
+  match take event {
+    Headers(id, fields, end) => {
+      let fresh = option.is_none(inbox_index(t, id))
+      let i = open_inbox(mut t, id)
+      if option.is_none(t.inboxes[i].headers) {
+        t.inboxes[i].headers = Some(take fields)
+        if fresh && t.server {
+          list.push(mut t.fresh, id)
+        }
+      } else {
+        t.inboxes[i].trailers = Some(take fields)
+      }
+      if end {
+        t.inboxes[i].end = true
+      }
+    },
+    Data(id, payload, flow, end) => {
+      let i = open_inbox(mut t, id)
+      for b in payload {
+        list.push(mut t.inboxes[i].data, b)
+      }
+      if end {
+        t.inboxes[i].end = true
+      }
+      if flow > 0 {
+        http2.release_body(mut t.conn, id, flow)?
+      }
+    },
+    Reset(id, code) => {
+      let i = open_inbox(mut t, id)
+      t.inboxes[i].reset = Some(code)
+    },
+    Goaway(_, _) => {
+      t.goaway = true
+    },
+    _ => (),
+  }
+  Ok(())
+}
+
+// The next complete length-prefixed message of a stream, decompressed, or None
+// when its buffered bytes hold no complete message yet.
+fn take_message(mut t: Transport, id: u32, max: u64, gzip: bool) -> Result[
+  Option[Bytes],
+  Status
+] {
+  let Some(i) = inbox_index(t, id) else {
+    return Ok(None())
+  }
+  let have = list.len(t.inboxes[i].data)
+  if have < 5 {
+    return Ok(None())
+  }
+  let flag = t.inboxes[i].data[0]
+  let mut size: u64 = 0
+  let mut k: u64 = 1
+  while k < 5 {
+    let b: u64 = int.widen(t.inboxes[i].data[k])
+    size = size << 8 | b
+    k += 1
+  }
+  if size > max {
+    return Error(
+      status(
+        RESOURCE_EXHAUSTED(),
+        f"received message larger than max ({size} vs. {max})"
+      )
+    )
+  }
+  if have < 5 + size {
+    return Ok(None())
+  }
+  let mut message: List[u8] = []
+  list.reserve(mut message, size)
+  let mut rest: List[u8] = []
+  let mut j: u64 = 5
+  while j < have {
+    if j < 5 + size {
+      list.push(mut message, t.inboxes[i].data[j])
+    } else {
+      list.push(mut rest, t.inboxes[i].data[j])
+    }
+    j += 1
+  }
+  t.inboxes[i].data = take rest
+  let body = bytes.from_list(take message)
+  if flag == 0 {
+    return Ok(Some(take body))
+  }
+  if flag != 1 {
+    return Error(status(INTERNAL(), f"invalid message compression flag {flag}"))
+  }
+  if !gzip {
+    return Error(status(INTERNAL(), "compressed message without grpc-encoding"))
+  }
+  match flate.gzip_decode(body, max) {
+    Ok(plain) => Ok(Some(plain)),
+    Error(_) => Error(status(INTERNAL(), "invalid gzip message")),
+  }
+}
+
+/// The length-prefixed form of a message, gzip-compressed when `gzip`.
+pub fn frame(message: Bytes, gzip: bool) -> unique Bytes uses {} {
+  let body = if gzip {
+    flate.gzip_encode(message, 6)
+  } else {
+    unique message
+  }
+  let size = bytes.len(body)
+  let mut out: List[u8] = []
+  list.reserve(mut out, size + 5)
+  list.push(
+    mut out,
+    if gzip {
+      1u8
+    } else {
+      0u8
+    }
+  )
+  let mut shift: u64 = 32
+  while shift > 0 {
+    shift -= 8
+    list.push(mut out, int.truncate(size >> shift & 255))
+  }
+  for b in body {
+    list.push(mut out, b)
+  }
+  bytes.from_list(take out)
+}
+
+// Writes `data` on a stream, waiting for flow-control credit as needed and filing
+// the events read meanwhile. `end` closes the stream's sending side.
+fn write_all(mut t: Transport, id: u32, data: Bytes, end: bool) -> Result[(), Status] {
+  let len = bytes.len(data)
+  let mut at: u64 = 0
+  while true {
+    if let Some(i) = inbox_index(t, id) {
+      if let Some(code) = t.inboxes[i].reset {
+        return Error(status(CANCELLED(), f"stream reset by peer (code {code})"))
+      }
+    }
+    let rest = bytes.slice(data, at, len)
+    match http2.write_body(mut t.conn, id, rest, end) {
+      Ok(n) => {
+        at += n
+        if at == len {
+          return Ok(())
+        }
+        if n == 0 {
+          match pump(mut t) {
+            Ok(()) => (),
+            Error(e) => return Error(transport_status(e)),
+          }
+        }
+      },
+      Error(e) => return Error(transport_status(e)),
+    }
+  }
+  Ok(())
+}
