@@ -233,10 +233,22 @@ fn uuid_v7_reads_the_wall_clock() {
             simulation.grants.insert("WallClock".into());
             simulation.wall = wall;
             let mut stdout = Vec::new();
-            let outcome =
-                run_path_with_step_budget(&path, simulation, None, &mut stdout, &mut Vec::new())
-                    .unwrap();
-            assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+            let outcome = run_path_with_step_budget(
+                &path,
+                simulation,
+                None,
+                hirsel_engine::Verify::On,
+                &mut stdout,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                ),
+                "{outcome:?}"
+            );
             assert_eq!(String::from_utf8(stdout).unwrap(), expected, "wall {wall}");
         }
     });
