@@ -219,6 +219,10 @@ conformance/CAP/CAP-2-sender-operation-ok.hir
 conformance/CAP/CAP-2-std-stream-file-authority-bad.hir
 conformance/CAP/CAP-2-std-stream-file-authority-ok.hir
 conformance/CAP/CAP-2-std-stream-inert-ok.hir
+conformance/CAP/CAP-2-stream-bytes-file-authority-bad.hir
+conformance/CAP/CAP-2-stream-bytes-file-authority-ok.hir
+conformance/CAP/CAP-2-stream-bytes-net-authority-bad.hir
+conformance/CAP/CAP-2-stream-bytes-net-authority-ok.hir
 conformance/CAP/CAP-2-task-operation-bad.hir
 conformance/CAP/CAP-2-task-operation-ok.hir
 conformance/CAP/CAP-2-testhelpers-property-accept.hir
@@ -941,6 +945,7 @@ conformance/DROP/DROP-2-std-sorted-map-remove-run.hir
 conformance/DROP/DROP-2-std-stream-prefix-run.hir
 conformance/DROP/DROP-2-std-stream-retained-run.hir
 conformance/DROP/DROP-2-std-stream-sink-run.hir
+conformance/DROP/DROP-2-stream-bytes-write-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-law-resource-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-resource-fail.hir
@@ -6037,6 +6042,11 @@ conformance/SEM/SEM-4-set-source-after-take.hir
 conformance/SEM/SEM-4-set-take.hir
 conformance/SEM/SEM-4-source-after-consume-bad.hir
 conformance/SEM/SEM-4-source-after-consume-ok.hir
+conformance/SEM/SEM-4-stream-bytes-file-run.hir
+conformance/SEM/SEM-4-stream-bytes-http-run.hir
+conformance/SEM/SEM-4-stream-bytes-net-run.hir
+conformance/SEM/SEM-4-stream-bytes-upload-run.hir
+conformance/SEM/SEM-4-stream-bytes-write-run.hir
 conformance/SEM/SEM-4-view-return-direct-run.hir
 conformance/SEM/SEM-4-view-return-graphemes-run.hir
 conformance/SEM/SEM-4-view-return-opaque-run.hir

@@ -1,0 +1,8 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 7
+fn inert[T: inert](take value: T) -> () uses {} {}
+
+fn probe(dir: Dir, take file: File of dir, limit: stream.ChunkLimit) -> () uses {dir, file} {
+  let flow = stream.file_chunks(dir, take file, limit)
+  inert(take flow)
+}

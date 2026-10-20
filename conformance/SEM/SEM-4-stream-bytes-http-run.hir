@@ -1,0 +1,122 @@
+// rule: SEM-4
+// expect: run
+// One-byte bodies preserve UTF-8 bytes and HTTP framing/truncation errors.
+pub type Error = Http(http.HttpError) | Config(stream.StreamConfigError)
+
+fn body(n: Net) -> Result[http.Request, http.HttpError] {
+  let mut request = http.request(
+    n,
+    http.default_config(),
+    Get(),
+    "http://example.com",
+    []
+  )?
+  http.send_bodiless(mut request)?
+  let _ = http.receive_head(mut request)?
+  Ok(take request)
+}
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\n\xc3\xa9\r\n1\r\nz\r\n0\r\nX-End: yes\r\n\r\n"
+              ),
+              Close()
+            ]
+          ),
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nx"), Close()]),
+          Open(
+            [
+              Send(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nxBAD"),
+              Close()
+            ]
+          ),
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nx"), Stall()])
+        ]
+      )
+    ],
+    []
+  )
+  let limit = stream.chunk_limit(1) ? Config
+  let mut chunks = stream.http_chunks(body(n) ? Http, limit)
+  let mut out: List[u8] = []
+  let mut count: u64 = 0
+  while let Some(item) = stream.next(mut chunks) {
+    let data = item ? Http
+    test.check(t, bytes.len(data) == 1)
+    bytes.append(mut out, data)
+    count += 1
+  }
+  test.check(t, count == 4 && bytes.from_list(take out) == b"a\xc3\xa9z")
+  test.check(
+    t,
+    match stream.next(mut chunks) {
+      None => true,
+      _ => false,
+    }
+  )
+  let mut truncated = stream.http_chunks(body(n) ? Http, limit)
+  test.check(
+    t,
+    match stream.next(mut truncated) {
+      Some(Ok(data)) => data == b"x",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut truncated) {
+      Some(Error(Truncated())) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut truncated) {
+      None => true,
+      _ => false,
+    }
+  )
+  let mut malformed = stream.http_chunks(body(n) ? Http, limit)
+  test.check(
+    t,
+    match stream.next(mut malformed) {
+      Some(Ok(data)) => data == b"x",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut malformed) {
+      Some(Error(Chunk())) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut malformed) {
+      None => true,
+      _ => false,
+    }
+  )
+  let first = stream.take_n(stream.http_chunks(body(n) ? Http, limit), 1)
+  let size = stream.try_fold(
+    take first,
+    0u64,
+    fn(take size: u64, take data: Bytes) -> Result[u64, http.HttpError] {
+      Ok(size + bytes.len(data))
+    }
+  ) ? Http
+  test.check(t, size == 1)
+  Ok(())
+}

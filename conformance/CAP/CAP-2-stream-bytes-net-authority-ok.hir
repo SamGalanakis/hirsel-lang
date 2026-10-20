@@ -1,0 +1,8 @@
+// rule: CAP-2
+// expect: accept
+fn inert[T: inert](take value: T) -> () uses {} {}
+
+fn probe(net: Net, take socket: Stream of net, limit: stream.ChunkLimit) -> () uses {net, socket} {
+  let flow = stream.net_chunks(net, take socket, limit)
+  let _ = stream.to_iter(take flow)
+}

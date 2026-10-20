@@ -2673,6 +2673,92 @@ terminal pull behavior and source/callback authority, but raw iterator operators
 `Iter[Result[T, E]]` alone makes no terminal-error guarantee; `from_results`
 normalizes it before exposing a `Flow`. Pure iteration remains `Iter[T]`.
 
+## Bounded byte streams
+
+The `stream` namespace also provides owned byte adapters over `Flow`:
+
+```text
+fn stream.chunk_limit(bytes: u64) -> Result[stream.ChunkLimit, stream.StreamConfigError] uses {}
+@captures(dir, file)
+fn stream.file_chunks(dir: Dir, take file: File of dir, limit: stream.ChunkLimit)
+  -> stream.Flow[Bytes, FileError] uses {dir, file}
+@captures(net, socket)
+fn stream.net_chunks(net: Net, take socket: Stream of net, limit: stream.ChunkLimit)
+  -> stream.Flow[Bytes, NetError] uses {net, socket}
+@captures(request)
+fn stream.http_chunks(take request: http.Request, limit: stream.ChunkLimit)
+  -> stream.Flow[Bytes, http.HttpError] uses {request}
+```
+
+`ChunkLimit` is opaque, copyable, inert checked data. `chunk_limit` rejects zero
+and values above 65536 with `InvalidChunkLimit()`, before any I/O. The ceiling is
+explicit library policy, independent of providers and engines. Construction of
+an adapter neither reads nor spawns. Each pull makes one bounded read against the
+same owned handle; it never reopens a path. It yields `1..limit` bytes, including
+positive short reads, or ends at a zero read. Errors, including cancellation,
+remain terminal errors rather than EOF. UTF-8 code points and application records
+can cross chunks; these adapters do no decoding, framing or rechunking. A UDP
+zero-length datagram requires a separate message adapter.
+
+`http_chunks` takes a Request whose response head has already been received. It
+calls `http.read_body`, preserves framing and truncation errors, and yields raw
+body bytes without decompression. It owns the Request and discards trailers.
+Callers needing trailers or connection recovery keep the Request and use the
+manual read/trailers protocol. Ended retained flows still own their handles;
+consuming a prefix through a sink destroys the complete pipeline at return.
+
+The byte sinks are consuming terminal operations:
+
+```text
+type stream.WriteError[E, W] = Source(E) | Write(W) | InvalidWrite
+fn stream.write_to[S, E, W](take input: stream.Flow[Bytes, E], take destination: S,
+  write: fn(mut S, Bytes) -> Result[u64, W]) -> Result[S, stream.WriteError[E, W]]
+  uses {input, destination, write}
+fn stream.file_sink[E](dir: Dir, take destination: AtomicFile of dir,
+  take input: stream.Flow[Bytes, E]) -> Result[(), stream.WriteError[E, FileError]]
+  uses {dir, destination, input}
+fn stream.net_sink[E](net: Net, take socket: Stream of net,
+  take input: stream.Flow[Bytes, E]) -> Result[(), stream.WriteError[E, NetError]]
+  uses {net, socket, input}
+fn stream.http_upload[E](take request: http.Request, take input: stream.Flow[Bytes, E],
+  trailers: List[http.Header]) -> Result[http.Request, stream.WriteError[E, http.HttpError]]
+  uses {request, input}
+```
+
+`write_to` borrows each remaining suffix to its writer and repeats partial writes
+until the chunk is finished, before the next source pull. Empty input chunks are
+skipped. A callback returning zero for nonempty input, or more than offered,
+returns `InvalidWrite()`; an error may follow an accepted prefix. Source and
+writer errors are separate typed outcomes. On clean EOF the destination is
+returned for explicit finish/commit; on error both destination and source are
+destroyed. Callbacks are scoped to the call and can suspend; an arbitrary callback
+can allocate or retain data outside the sink's own accounting.
+
+`file_sink` uses atomic-file `write_all` and commits only after clean upstream
+EOF. Source/write errors abort through drop, preserving the old destination.
+`net_sink` uses the existing partial-write loop in `net.write_all` and closes its
+owned socket on every exit. `http_upload` writes each chunk completely through
+`http.write_request_body`, calls `end_request_body` with the explicit trailers
+only after clean upstream EOF, and returns the Request for receiving its response.
+Source/write errors drop the Request without a successful terminator. Finish and
+commit errors are `Write`; drop discards close errors under DROP-3/4. A prefix
+flow's clean end deliberately finishes its prefix upload or file output.
+
+These operations introduce no queue, parser carry, implicit task or tape event.
+A source uses a fresh byte-list builder for each read and transfers the converted
+Bytes to its caller. It retains no previous chunk. A sequential sink retains at
+most one complete input chunk, including its full backing allocation while a
+suffix is being written; a small slice does not reduce that charge. Conversion
+can temporarily hold both the initialized builder bytes and the output bytes;
+builder spare capacity, metadata, provider scratch and user-held aliases are
+additional storage. HTTP additionally retains its Request's existing bounded
+head/framing/transport buffers (and HTTP/2 frame state), independent of chunk size.
+Thus a chunk ceiling alone is not a total heap/RSS ceiling or a bound on arbitrary
+source/writer callbacks. Framing/CSV/JSON carry and output-record limits belong to
+explicit bounded parsing operations. None of these APIs collects an unbounded
+stream. Requests, accepted prefixes, chunk boundaries, errors and destruction
+follow the existing core contracts and replay unchanged.
+
 ## Bounded regular expressions
 
 `regex` compiles immutable source patterns and searches strings without authority:

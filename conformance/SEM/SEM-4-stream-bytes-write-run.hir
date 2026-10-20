@@ -1,0 +1,166 @@
+// rule: SEM-4
+// expect: run
+// Partial writers accept one byte. A new pull must see the previous chunk done.
+type Source {
+  tasks: Tasks,
+  written: Atomic[u64],
+  retained: Atomic[u64],
+  index: u64,
+}
+
+type Writer {
+  tasks: Tasks,
+  written: Atomic[u64],
+  retained: Atomic[u64],
+  calls: u64,
+  peak_backing: u64,
+}
+
+fn pull(mut s: Source) -> Option[Result[Bytes, u64]] {
+  failure.check(atomic.load(s.tasks, s.written) == s.index * 4, Bounds())
+  failure.check(atomic.load(s.tasks, s.retained) == 0, Bounds())
+  if s.index == 2 {
+    return None
+  }
+  s.index += 1
+  let mut backing: List[u8] = [97u8, 195u8, 169u8, 122u8]
+  while list.len(backing) < 64 {
+    list.push(mut backing, 0u8)
+  }
+  let data = bytes.from_list(take backing)
+  atomic.store(s.tasks, s.retained, bytes.len(data))
+  Some(Ok(bytes.slice(data, 0, 4)))
+}
+
+fn one(mut w: Writer, data: Bytes) -> Result[u64, u64] {
+  let count = atomic.load(w.tasks, w.written)
+  failure.check(bytes.len(data) == 4 - count % 4, Bounds())
+  failure.check(data[0] == b"a\xc3\xa9z"[count % 4], Bounds())
+  // Four visible bytes retain all 64 backing bytes. Count the complete backing,
+  // including during partial writes, rather than the shrinking suffix length.
+  let retained = atomic.load(w.tasks, w.retained)
+  failure.check(retained == 64, Bounds())
+  if retained > w.peak_backing {
+    w.peak_backing = retained
+  }
+  if count % 4 == 3 {
+    atomic.store(w.tasks, w.retained, 0u64)
+  }
+  w.calls += 1
+  atomic.store(w.tasks, w.written, count + 1)
+  Ok(1)
+}
+
+@preserves_captures(i)
+fn single(mut i: u64) -> Result[Option[Bytes], u64] {
+  i += 1
+  if i == 1 {
+    Ok(Some(b"data"))
+  } else {
+    Error(17)
+  }
+}
+
+@preserves_captures(i)
+fn empty(mut i: u64) -> Result[Option[Bytes], u64] {
+  i += 1
+  if i == 1 {
+    Ok(Some(b""))
+  } else {
+    Ok(None)
+  }
+}
+
+fn zero(mut n: u64, data: Bytes) -> Result[u64, u64] {
+  Ok(0)
+}
+
+fn oversized(mut n: u64, data: Bytes) -> Result[u64, u64] {
+  Ok(bytes.len(data) + 1)
+}
+
+fn fail(mut n: u64, data: Bytes) -> Result[u64, u64] {
+  Error(19)
+}
+
+fn all(mut n: u64, data: Bytes) -> Result[u64, u64] {
+  n += bytes.len(data)
+  Ok(bytes.len(data))
+}
+
+pub fn main(t: Test, rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let written: Atomic[u64] = atomic.create(tasks, 0u64)
+  let retained: Atomic[u64] = atomic.create(tasks, 0u64)
+  let source = stream.from_results(
+    iter.from(
+      take Source(tasks: tasks, written: written, retained: retained, index: 0),
+      pull
+    )
+  )
+  let output = stream.write_to(
+    take source,
+    take Writer(
+      tasks: tasks,
+      written: written,
+      retained: retained,
+      calls: 0,
+      peak_backing: 0
+    ),
+    one
+  )
+  match take output {
+    Ok(w) => test.check(
+      t,
+      w.calls == 8 && w.peak_backing == 64 && atomic.load(tasks, written) == 8
+    ),
+    Error(_) => test.check(t, false),
+  }
+  test.check(
+    t,
+    match stream.write_to(stream.from(take 0u64, single), take 0u64, zero) {
+      Error(InvalidWrite()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.write_to(stream.from(take 0u64, single), take 0u64, oversized) {
+      Error(InvalidWrite()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.write_to(stream.from(take 0u64, single), take 0u64, fail) {
+      Error(Write(19)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.write_to(stream.from(take 0u64, single), take 0u64, all) {
+      Error(Source(17)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.write_to(stream.from(take 0u64, empty), take 0u64, zero) {
+      Ok(0) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.write_to(
+      stream.take_n(stream.from(take 0u64, single), 0),
+      take 0u64,
+      fail
+    ) {
+      Ok(0) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,48 @@
+// rule: DROP-2
+// expect: run
+// stdout: write 4
+// stdout: source
+// stdout: destination
+// stdout: returned
+resource type Source {
+  out: Stdout,
+  polled: bool,
+}
+drop(s) {
+  let _ = out.print(s.out, "source\n")
+}
+
+resource type Destination {
+  out: Stdout,
+}
+drop(d) {
+  let _ = out.print(d.out, "destination\n")
+}
+
+fn read(mut s: Source) -> Option[Result[Bytes, u64]] {
+  failure.check(!s.polled, Bounds())
+  s.polled = true
+  Some(Ok(b"data"))
+}
+
+fn fail(mut d: Destination, data: Bytes) -> Result[u64, u64] {
+  let _ = out.print(d.out, f"write {bytes.len(data)}\n")
+  Error(19)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let source = stream.from_results(
+    iter.from(take Source(out: output, polled: false), read)
+  )
+  let outcome = stream.write_to(take source, take Destination(out: output), fail)
+  failure.check(
+    match take outcome {
+      Error(Write(19)) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let _ = out.print(output, "returned\n")
+  Ok(())
+}

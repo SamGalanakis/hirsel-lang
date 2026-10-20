@@ -1,0 +1,95 @@
+// rule: SEM-4
+// expect: run
+pub type Error = Http(http.HttpError) | Upload(stream.WriteError[u64, http.HttpError])
+
+@preserves_captures(i)
+fn data(mut i: u64) -> Result[Option[Bytes], u64] {
+  i += 1
+  if i == 1 {
+    Ok(Some(b"hi"))
+  } else {
+    Ok(None)
+  }
+}
+
+@preserves_captures(i)
+fn broken(mut i: u64) -> Result[Option[Bytes], u64] {
+  i += 1
+  if i == 1 {
+    Ok(Some(b"hi"))
+  } else {
+    Error(17)
+  }
+}
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\nX-End: yes\r\n\r\n"
+              ),
+              Send(b"HTTP/1.1 204 No Content\r\n\r\n"),
+              Close()
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n"
+              ),
+              Stall()
+            ]
+          ),
+          Open([Reset()])
+        ]
+      )
+    ],
+    []
+  )
+  let request = http.request(n, http.default_config(), Post(), "http://example.com", []) ? Http
+  let mut sent = stream.http_upload(
+    take request,
+    stream.from(take 0u64, data),
+    [http.Header(name: "X-End", value: "yes")]
+  ) ? Upload
+  let head = http.receive_head(mut sent) ? Http
+  test.check(t, head.status == 204u16)
+  let request2 = http.request(
+    n,
+    http.default_config(),
+    Post(),
+    "http://example.com",
+    []
+  ) ? Http
+  test.check(
+    t,
+    match stream.http_upload(take request2, stream.from(take 0u64, broken), []) {
+      Error(Source(17)) => true,
+      _ => false,
+    }
+  )
+  let request3 = http.request(
+    n,
+    http.default_config(),
+    Post(),
+    "http://example.com",
+    []
+  ) ? Http
+  test.check(
+    t,
+    match stream.http_upload(take request3, stream.from(take 0u64, data), []) {
+      Error(Write(Net(ConnectionReset()))) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

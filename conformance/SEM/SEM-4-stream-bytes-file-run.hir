@@ -1,0 +1,83 @@
+// rule: SEM-4
+// expect: run
+// Tokio ce685ee io_reader_stream.rs: short reads, error once, repeated EOF.
+pub type Error = File(FileError) | Config(stream.StreamConfigError) | Sink(
+  stream.WriteError[FileError, FileError]
+)
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let dir = test.dir(t, [(path.of("in"), b"a\xc3\xa9z"), (path.of("out"), b"old")])
+  let limit = stream.chunk_limit(1) ? Config
+  test.check(
+    t,
+    match stream.chunk_limit(0) {
+      Error(_) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.chunk_limit(65537) {
+      Error(_) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.chunk_limit(18446744073709551615) {
+      Error(_) => true,
+      _ => false,
+    }
+  )
+  let source = file.open(dir, path.of("in")) ? File
+  let chunks = stream.file_chunks(dir, take source, limit)
+  // The cursor keeps the opened file, even if its old pathname is rebound.
+  file.rename(dir, path.of("in"), path.of("moved")) ? File
+  file.write_bytes(dir, path.of("in"), take b"replacement") ? File
+  let destination = file.create_atomic(dir, path.of("out")) ? File
+  stream.file_sink(dir, take destination, take chunks) ? Sink
+  let mut stored = file.open(dir, path.of("out")) ? File
+  let mut bytes: List[u8] = []
+  let _ = file.read(dir, mut stored, mut bytes, 32) ? File
+  test.check(t, bytes.from_list(take bytes) == b"a\xc3\xa9z")
+  let aborting: Iter[Result[Bytes, FileError]] = iter.from(
+    take 0u64,
+    fn(mut i: u64) -> Option[Result[Bytes, FileError]] {
+      i += 1
+      if i == 1 {
+        Some(Ok(b"prefix"))
+      } else {
+        Some(Error(NotFound()))
+      }
+    }
+  )
+  let aborted = file.create_atomic(dir, path.of("out")) ? File
+  test.check(
+    t,
+    match stream.file_sink(dir, take aborted, stream.from_results(take aborting)) {
+      Error(Source(NotFound())) => true,
+      _ => false,
+    }
+  )
+  let mut unchanged = file.open(dir, path.of("out")) ? File
+  let mut old: List[u8] = []
+  let _ = file.read(dir, mut unchanged, mut old, 32) ? File
+  test.check(t, bytes.from_list(take old) == b"a\xc3\xa9z")
+  let empty = file.create(dir, path.of("empty")) ? File
+  let mut ended = stream.file_chunks(dir, take empty, limit)
+  test.check(
+    t,
+    match stream.next(mut ended) {
+      None => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut ended) {
+      None => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

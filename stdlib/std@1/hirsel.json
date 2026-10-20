@@ -1050,6 +1050,12 @@
         "internal",
         "format"
       ]
+    },
+    {
+      "path": "stream_bytes.hir",
+      "module": [
+        "stream"
+      ]
     }
   ],
   "dependencies": []

@@ -1,0 +1,188 @@
+// Tokio ce685ee ReaderStream: one read per pull, short reads are items,
+// error/EOF fuse. Fresh buffers avoid retaining a larger previous allocation.
+pub type StreamConfigError = InvalidChunkLimit()
+
+/// A positive chunk ceiling, at most 65536 bytes. Construction performs no I/O.
+pub opaque type ChunkLimit: plain + sendable + inert + noalloc_drop uses {} {
+  bytes: u64,
+}
+
+pub fn chunk_limit(bytes: u64) -> Result[ChunkLimit, StreamConfigError] uses {} {
+  if bytes == 0 || bytes > 65536 {
+    return Error(InvalidChunkLimit())
+  }
+  Ok(ChunkLimit(bytes: bytes))
+}
+
+type FileChunks {
+  dir: Dir,
+  file: File of .dir,
+  max: u64,
+}
+
+fn file_chunk(mut s: FileChunks) -> Option[Result[Bytes, FileError]] uses {s} {
+  let mut buffer: List[u8] = []
+  let count = match core@1/file.read(s.dir, mut s.file, mut buffer, s.max) {
+    Ok(n) => n,
+    Error(e) => return Some(Error(take e)),
+  }
+  if count == 0 {
+    None
+  } else {
+    Some(Ok(core@1/bytes.from_list(take buffer)))
+  }
+}
+
+/// Own the exact branded file; read only on demand, with no path reopening.
+@captures(dir, file)
+pub fn file_chunks(dir: Dir, take file: File of dir, limit: ChunkLimit) -> Flow[
+  Bytes,
+  FileError
+] uses {dir, file} {
+  from_results(
+    core@1/iter.from(
+      take FileChunks(dir: dir, file: take file, max: limit.bytes),
+      file_chunk
+    )
+  )
+}
+
+type NetChunks {
+  net: Net,
+  socket: Stream of .net,
+  max: u64,
+}
+
+fn net_chunk(mut s: NetChunks) -> Option[Result[Bytes, NetError]] uses {s} {
+  let mut buffer: List[u8] = []
+  let count = match core@1/net.read(s.net, mut s.socket, mut buffer, s.max) {
+    Ok(n) => n,
+    Error(e) => return Some(Error(take e)),
+  }
+  if count == 0 {
+    None
+  } else {
+    Some(Ok(core@1/bytes.from_list(take buffer)))
+  }
+}
+
+/// Own a byte-stream socket, yielding short reads unchanged. This is not UDP.
+@captures(net, socket)
+pub fn net_chunks(net: Net, take socket: Stream of net, limit: ChunkLimit) -> Flow[
+  Bytes,
+  NetError
+] uses {net, socket} {
+  from_results(
+    core@1/iter.from(
+      take NetChunks(net: net, socket: take socket, max: limit.bytes),
+      net_chunk
+    )
+  )
+}
+
+type HttpChunks {
+  request: http.Request,
+  max: u64,
+}
+
+fn http_chunk(mut s: HttpChunks) -> Option[Result[Bytes, http.HttpError]] uses {s} {
+  let mut buffer: List[u8] = []
+  let count = match http.read_body(mut s.request, mut buffer, s.max) {
+    Ok(n) => n,
+    Error(e) => return Some(Error(take e)),
+  }
+  if count == 0 {
+    None
+  } else {
+    Some(Ok(core@1/bytes.from_list(take buffer)))
+  }
+}
+
+/// Consume an already prepared response body as raw bytes; discard trailers.
+@captures(request)
+pub fn http_chunks(take request: http.Request, limit: ChunkLimit) -> Flow[
+  Bytes,
+  http.HttpError
+] uses {request} {
+  from_results(
+    core@1/iter.from(
+      take HttpChunks(request: take request, max: limit.bytes),
+      http_chunk
+    )
+  )
+}
+
+/// Source and writer errors remain distinct; invalid progress is never EOF.
+pub type WriteError[E, W] = Source(E) | Write(W) | InvalidWrite
+
+/// Consume each chunk fully before pulling again. Return the owned destination
+/// only on clean EOF, so callers can explicitly commit/finish it.
+pub fn write_to[S, E, W](
+  take input: Flow[Bytes, E],
+  take destination: S,
+  write: fn(mut S, Bytes) -> Result[u64, W]
+) -> Result[S, WriteError[E, W]] uses {input, destination, write} {
+  let mut output = take destination
+  let items = to_iter(take input)
+  for item in take items {
+    let chunk = item ? Source
+    let length = core@1/bytes.len(chunk)
+    let mut offset: u64 = 0
+    while offset < length {
+      let remaining = core@1/bytes.slice(chunk, offset, length)
+      let count = write(mut output, remaining) ? Write
+      if count == 0 || count > length - offset {
+        return Error(InvalidWrite())
+      }
+      offset += count
+    }
+  }
+  Ok(take output)
+}
+
+/// Commit an owned atomic file only after clean upstream EOF; drop aborts.
+pub fn file_sink[E](
+  dir: Dir,
+  take destination: AtomicFile of dir,
+  take input: Flow[Bytes, E]
+) -> Result[(), WriteError[E, FileError]] uses {dir, destination, input} {
+  let mut output = take destination
+  let items = to_iter(take input)
+  for item in take items {
+    let chunk = item ? Source
+    core@1/file.write_all(dir, mut output, chunk) ? Write
+  }
+  core@1/file.commit(dir, take output) ? Write
+  Ok(())
+}
+
+/// Consume a socket and all partial writes; drop closes it on every exit.
+pub fn net_sink[E](net: Net, take socket: Stream of net, take input: Flow[Bytes, E]) -> Result[
+  (),
+  WriteError[E, NetError]
+] uses {net, socket, input} {
+  let mut output = take socket
+  let items = to_iter(take input)
+  for item in take items {
+    let chunk = item ? Source
+    core@1/net.write_all(net, mut output, chunk) ? Write
+  }
+  Ok(())
+}
+
+/// Finish a streaming upload only on clean EOF. On success return the Request
+/// for receive_head; errors drop/abort it without a successful terminator.
+pub fn http_upload[E](
+  take request: http.Request,
+  take input: Flow[Bytes, E],
+  trailers: List[http.Header]
+) -> Result[http.Request, WriteError[E, http.HttpError]] uses {request, input} {
+  let mut output = take request
+  let items = to_iter(take input)
+  for item in take items {
+    let chunk = item ? Source
+    http.write_request_body(mut output, chunk) ? Write
+  }
+  http.end_request_body(mut output, trailers) ? Write
+  Ok(take output)
+}

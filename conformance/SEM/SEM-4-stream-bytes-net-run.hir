@@ -1,0 +1,113 @@
+// rule: SEM-4
+// expect: run
+// Tokio ReaderStream short-read/error/end vectors, including split UTF-8.
+pub type Error = Net(NetError) | Config(stream.StreamConfigError) | Sink(
+  stream.WriteError[NetError, NetError]
+)
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open([Send(b"a"), Send(b"\xc3"), Send(b"\xa9"), Send(b"z"), Close()]),
+          Open([Send(b"ok"), Reset()]),
+          Open([Send(b"x"), Stall()]),
+          Open([Expect(b"a\xc3\xa9z"), Close()]),
+          Open([Stall()])
+        ]
+      )
+    ],
+    []
+  )
+  let limit = stream.chunk_limit(8) ? Config
+  let socket = net.connect(n, "example.com", 80u16, None()) ? Net
+  let mut chunks = stream.net_chunks(n, take socket, limit)
+  let mut combined: List[u8] = []
+  let mut count: u64 = 0
+  let mut peak: u64 = 0
+  while let Some(item) = stream.next(mut chunks) {
+    let data = item ? Net
+    let size = bytes.len(data)
+    test.check(t, size == 1)
+    if size > peak {
+      peak = size
+    }
+    bytes.append(mut combined, data)
+    count += 1
+  }
+  test.check(
+    t,
+    count == 4 && peak == 1 && bytes.from_list(take combined) == b"a\xc3\xa9z"
+  )
+  test.check(
+    t,
+    match stream.next(mut chunks) {
+      None => true,
+      _ => false,
+    }
+  )
+  let broken = net.connect(n, "example.com", 80u16, None()) ? Net
+  let mut errors = stream.net_chunks(n, take broken, limit)
+  test.check(
+    t,
+    match stream.next(mut errors) {
+      Some(Ok(data)) => data == b"ok",
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut errors) {
+      Some(Error(ConnectionReset())) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut errors) {
+      None => true,
+      _ => false,
+    }
+  )
+  let early = net.connect(n, "example.com", 80u16, None()) ? Net
+  let first = stream.take_n(stream.net_chunks(n, take early, limit), 1)
+  let outbound = net.connect(n, "example.com", 80u16, None()) ? Net
+  // The one chunk of the first source is x; a separate source supplies upload data.
+  let prefix = stream.try_fold(
+    take first,
+    0u64,
+    fn(take total: u64, take data: Bytes) -> Result[u64, NetError] {
+      Ok(total + bytes.len(data))
+    }
+  ) ? Net
+  test.check(t, prefix == 1)
+  let data: Iter[Result[Bytes, NetError]] = iter.from(
+    take 0u64,
+    fn(mut i: u64) -> Option[Result[Bytes, NetError]] {
+      i += 1
+      if i == 1 {
+        Some(Ok(b"a\xc3\xa9z"))
+      } else {
+        None
+      }
+    }
+  )
+  stream.net_sink(n, take outbound, stream.from_results(take data)) ? Sink
+  let idle = net.connect(n, "example.com", 80u16, None()) ? Net
+  let zero = stream.take_n(stream.net_chunks(n, take idle, limit), 0)
+  let count = stream.try_fold(
+    take zero,
+    0u64,
+    fn(take n: u64, take data: Bytes) -> Result[u64, NetError] {
+      Ok(n + bytes.len(data))
+    }
+  ) ? Net
+  test.check(t, count == 0)
+  Ok(())
+}
