@@ -1,0 +1,95 @@
+// rule: SEM-3
+// expect: run
+// Go crc32_generic.go:53,75-90 cutoff and tail boundaries, checked against
+// independent bit-at-a-time IEEE and Castagnoli remainders (no lookup tables).
+fn check(data: Bytes, ieee: u32, castagnoli: u32) -> () {
+  failure.check(std@1/crc32.digest(data) == ieee, TextInvariant())
+  failure.check(std@1/crc32c.digest(data) == castagnoli, TextInvariant())
+  let n = bytes.len(data)
+  let first = if n < 7 {
+    n
+  } else {
+    7u64
+  }
+  let second = if n < 16 {
+    n
+  } else {
+    16u64
+  }
+  let mut a = std@1/crc32.new()
+  let mut b = std@1/crc32c.new()
+  let parts: Array[Bytes] = [
+    bytes.slice(data, 0, first),
+    b"",
+    bytes.slice(data, first, second),
+    bytes.slice(data, second, n)
+  ]
+  for part in parts {
+    std@1/crc32.update(mut a, part)
+    std@1/crc32c.update(mut b, part)
+  }
+  failure.check(std@1/crc32.finish(take a) == ieee, TextInvariant())
+  failure.check(std@1/crc32c.finish(take b) == castagnoli, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let data = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\x00"
+  let cases: Array[(u64, u32, u32)] = [
+    (0, 0x00000000, 0x00000000),
+    (1, 0xd202ef8d, 0x527d5351),
+    (2, 0x36de2269, 0x030af4d1),
+    (3, 0x0854897f, 0x92fd4bfa),
+    (4, 0x8bb98613, 0xd9331aa3),
+    (5, 0x515ad3cc, 0x2425b106),
+    (6, 0x30ebcf4a, 0x41098514),
+    (7, 0xad5809f9, 0xa359ed4c),
+    (8, 0x88aa689f, 0x8a2cbc3b),
+    (9, 0xbce14302, 0x7144c5a8),
+    (10, 0x456cd746, 0x022c2131),
+    (11, 0xad2d8ee1, 0xfb159dfa),
+    (12, 0x9270c965, 0x5383aaba),
+    (13, 0xe6fe46b8, 0xc69a45da),
+    (14, 0x69ef56c8, 0x55a24c54),
+    (15, 0xa06c675e, 0x68ef03f6),
+    (16, 0xcecee288, 0xd9c908eb),
+    (17, 0x2c183a19, 0x38435e17),
+    (18, 0xdcf57f85, 0x74e4f7e7),
+    (19, 0xbcb51c15, 0x9496cccf),
+    (20, 0x3bddffa4, 0xcc79ebe6),
+    (21, 0x195881fe, 0x40e43538),
+    (22, 0xe5c38cfc, 0xcda87569),
+    (23, 0x92382767, 0x7d3b930d),
+    (24, 0x8295a696, 0x29bc8795),
+    (25, 0xd880d40c, 0x6f8a987d),
+    (26, 0xbf078bb2, 0xf44eddb4),
+    (27, 0x0ab0c3dc, 0x5cba170d),
+    (28, 0xd708085d, 0x64dec9c1),
+    (29, 0xd30e9683, 0x3ee220e0),
+    (30, 0xc5665f58, 0x1e0592d7),
+    (31, 0x4d786d77, 0xe95cabcb),
+    (32, 0x91267e8a, 0x46dd794e),
+    (33, 0xe4908305, 0x9f85a26d),
+    (63, 0xdbdea683, 0x7a873004),
+    (64, 0x100ece8c, 0xfb6d36eb),
+    (65, 0x40c06fd8, 0x694420fa),
+    (127, 0xdec481aa, 0x6c31bd0c),
+    (128, 0x24650d57, 0x30d9c515),
+    (129, 0xca91cdf7, 0xf514629f),
+    (255, 0xd32f9ba0, 0x8953c482),
+    (256, 0x29058c73, 0x9c44184b),
+    (257, 0x1b27ca87, 0x8a13a1ce)
+  ]
+  for (n, a, b) in cases {
+    check(bytes.slice(data, 0, n), a, b)
+  }
+  let mut builder: List[u8] = [255u8]
+  for byte in data {
+    list.push(mut builder, byte)
+  }
+  let mut state = std@1/crc32.new()
+  std@1/crc32.update(mut state, b"prefix")
+  std@1/crc32.update_list(mut state, builder, 2)
+  std@1/crc32.update_list(mut state, builder, 18446744073709551615u64)
+  failure.check(std@1/crc32.finish(take state) == 0x80a1fa44u32, TextInvariant())
+  Ok(())
+}

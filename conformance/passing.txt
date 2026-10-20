@@ -4916,6 +4916,7 @@ conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-constant-time-run.hir
 conformance/SEM/SEM-3-cookie-run.hir
 conformance/SEM/SEM-3-crc32-golden-run.hir
+conformance/SEM/SEM-3-crc32-slicing-run.hir
 conformance/SEM/SEM-3-crc32c-golden-run.hir
 conformance/SEM/SEM-3-csv-run.hir
 conformance/SEM/SEM-3-decimal-text-run.hir
