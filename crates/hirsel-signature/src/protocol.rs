@@ -310,7 +310,7 @@ fn specialize(
                 .get_mut(p.parameter().0 as usize)
                 .ok_or_else(error)?;
             if let Some(GenericArgument::Type(old)) = slot {
-                if !shape_equal(t, *old, actual).unwrap_or(false) {
+                if !t.shape_eq(*old, actual).unwrap_or(false) {
                     return Err(error());
                 }
             } else if slot.is_some() {
@@ -360,7 +360,7 @@ fn specialize(
                 }
                 pending.push((x.result, y.result, depth + 1));
             }
-            _ if shape_equal(t, formal, actual).unwrap_or(false) => (),
+            _ if t.shape_eq(formal, actual).unwrap_or(false) => (),
             _ => return Err(error()),
         }
     }
