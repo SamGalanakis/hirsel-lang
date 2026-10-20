@@ -836,3 +836,29 @@ fn native_null_pointer_boundaries_match_on_both_backends() {
         }
     });
 }
+
+#[test]
+fn dependency_cards_distinguish_modeled_and_unmodeled_foreign_reach() {
+    with_compiler_stack(|| {
+        for (name, foreign, expected) in [
+            ("card-modeled", deterministic_add(), "no_unmodeled_ffi"),
+            (
+                "card-unmodeled",
+                json!({"link":["demo"],"headers_checked":true,"wrappers":[]}),
+                "unreplayable",
+            ),
+        ] {
+            let dir = fixture(name, foreign);
+            let path = launch(&dir, json!([select_lib()]));
+            let report = COMPILER.dependency_cards(&path, Some("lib@1")).unwrap();
+            let safety = &report["cards"][0]["determinism"]["reached_by_you"];
+            assert_eq!(safety["externs"], json!(["lib@1/demo_add"]));
+            assert_eq!(safety["replay"], expected);
+            assert_eq!(
+                report["cards"][0]["determinism"]["unsafe_ffi_package"],
+                true
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    });
+}

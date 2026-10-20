@@ -1027,3 +1027,10 @@ skipped by name outside the full suite (`FULL_GATE_SKIPS` in
 appends to `alarms.log` in `$HIRSEL_MAIN_RUNS` when main gets no commit for
 40 minutes while lane worktrees are moving; run it from whatever loop watches
 the lanes.
+
+## Inspecting dependencies
+
+`hirsel deps card <manifest.json> [--package name@version[/module]] [--json]`
+reports computed authority, weight, public API exposure, replay constraints and
+health. See [Dependency cards for agents](dependency-cards.md) for field semantics,
+cache reuse and optional verified code-store provenance.

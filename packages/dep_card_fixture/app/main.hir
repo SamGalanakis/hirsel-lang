@@ -1,0 +1,7 @@
+pub fn main(rt: Io) -> Result[(), OutputError] uses {rt} {
+  let output = match io.stdout(rt) { Ok(output) => output, Error(_) => return Ok(()) }
+  middle.relay(output)
+}
+pub fn expose(value: leaf.Token) -> leaf.Token uses {} {
+  value
+}

@@ -1,0 +1,37 @@
+Dependency cards for app@1 (reach: entry)
+
+leaf@1
+  Authority (whole public API): core@1/Net, core@1/Stdout
+    operations: core@1/net/connect, core@1/out/print
+    unresolved authority: core@1/net/connect, core@1/out/print
+  Authority (reached by you): core@1/Stdout
+    operations: core@1/out/print
+    unresolved authority: core@1/out/print
+  Weight: 1 / 4 definitions, 1 / 1 source units reached
+    dependencies: none
+    cost estimate: 30 source tokens; check 30, lower 30, native build 30; 0 prechecked definitions (timings unavailable)
+  Exposure: leaf@1/leaf/Token in app@1/expose
+  Replay (whole public API): no_unmodeled_ffi; externs: none; Unsafe operations: none
+    provider capability contracts: core@1/Net, core@1/Stdout (implementations selected by run record)
+  Replay (reached by you): no_unmodeled_ffi; externs: none; Unsafe operations: none
+    provider capability contracts: core@1/Stdout (implementations selected by run record)
+  Health: 1 own tests; 1 corpus cases; last gate unavailable
+    code-store provenance: unavailable (no store selected)
+
+middle@1
+  Authority (whole public API): core@1/Net, core@1/Stdout
+    operations: core@1/net/connect, core@1/out/print
+    unresolved authority: core@1/net/connect, core@1/out/print
+  Authority (reached by you): core@1/Stdout
+    operations: core@1/out/print
+    unresolved authority: core@1/out/print
+  Weight: 1 / 2 definitions, 1 / 1 source units reached
+    dependencies: leaf@1
+    cost estimate: 28 source tokens; check 28, lower 28, native build 28; 0 prechecked definitions (timings unavailable)
+  Exposure: none
+  Replay (whole public API): no_unmodeled_ffi; externs: none; Unsafe operations: none
+    provider capability contracts: core@1/Net, core@1/Stdout (implementations selected by run record)
+  Replay (reached by you): no_unmodeled_ffi; externs: none; Unsafe operations: none
+    provider capability contracts: core@1/Stdout (implementations selected by run record)
+  Health: 0 own tests; 0 corpus cases; last gate unavailable
+    code-store provenance: unavailable (no store selected)

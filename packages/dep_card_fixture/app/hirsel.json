@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../middle/hirsel.json",
+      "package": {
+        "name": "middle",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../leaf/hirsel.json",
+      "package": {
+        "name": "leaf",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

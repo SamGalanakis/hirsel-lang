@@ -1,0 +1,110 @@
+{
+  "cards": [
+    {
+      "authority": {
+        "reached_by_you": {
+          "capabilities": [],
+          "operations": [],
+          "unresolved": [
+            "core@1/bytes/append",
+            "core@1/bytes/from_list",
+            "core@1/bytes/len",
+            "core@1/bytes/slice",
+            "core@1/char/from_u32",
+            "core@1/char/to_u32",
+            "core@1/int/narrow",
+            "core@1/int/widen",
+            "core@1/list/push",
+            "core@1/map/empty",
+            "core@1/map/get",
+            "core@1/map/insert",
+            "core@1/string/as_bytes",
+            "core@1/string/from_bytes"
+          ]
+        },
+        "whole_public_api": {
+          "capabilities": [],
+          "operations": [],
+          "unresolved": [
+            "core@1/bytes/append",
+            "core@1/bytes/from_list",
+            "core@1/bytes/len",
+            "core@1/bytes/slice",
+            "core@1/char/from_u32",
+            "core@1/char/to_u32",
+            "core@1/int/narrow",
+            "core@1/int/widen",
+            "core@1/list/len",
+            "core@1/list/push",
+            "core@1/map/empty",
+            "core@1/map/get",
+            "core@1/map/insert",
+            "core@1/string/as_bytes",
+            "core@1/string/from_bytes"
+          ]
+        }
+      },
+      "determinism": {
+        "reached_by_you": {
+          "externs": [],
+          "provider_requirements": [],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        },
+        "unsafe_ffi_package": false,
+        "whole_public_api": {
+          "externs": [],
+          "provider_requirements": [],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        }
+      },
+      "exposure": [],
+      "health": {
+        "corpus_cases": 0,
+        "last_gate": null,
+        "provenance": null,
+        "tests": 0,
+        "unavailable": {
+          "last_gate": "no content-bound package test receipt in the build cache",
+          "provenance": "source manifests do not select a code store"
+        }
+      },
+      "package": "std@1/json",
+      "public_functions": [
+        "std@1/json/parse",
+        "std@1/json/stringify",
+        "std@1/json/stringify_into"
+      ],
+      "weight": {
+        "cost": {
+          "basis": "source_token_work_estimate",
+          "build_ms": null,
+          "check_ms": null,
+          "check_source_tokens": 0,
+          "lower_source_tokens": 0,
+          "native_build_source_tokens": 2051,
+          "prechecked_definitions": 12,
+          "reached_source_tokens": 2051
+        },
+        "definitions": {
+          "reached": 12,
+          "total": 17
+        },
+        "transitive_dependencies": [],
+        "units": {
+          "reached": 1,
+          "total": 1
+        }
+      }
+    }
+  ],
+  "reach_basis": "entry",
+  "root_package": "card_json@1",
+  "roots": [
+    "card_json@1/main"
+  ],
+  "schema_version": 1
+}

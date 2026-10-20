@@ -11,6 +11,7 @@ use hirsel_engine::{
     PhaseAdapters, RunOutcome, SimulationConfig, ToolError,
 };
 pub mod api_index;
+pub mod dependency_card;
 pub mod native;
 mod network;
 pub mod observation_view;

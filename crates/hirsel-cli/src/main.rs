@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
 
 mod allocator;
 mod execution_policy;
@@ -43,6 +43,12 @@ enum Command {
     /// `tapes check <tape>...`: the joined check over linked tapes (RUN-11).
     Tapes {
         tapes: Vec<OsString>,
+    },
+    DepsCard {
+        manifest: OsString,
+        package: Option<String>,
+        code_store: Option<OsString>,
+        json: bool,
     },
     Doc {
         manifest: OsString,
@@ -433,6 +439,37 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 return Err("tapes check requires at least one tape".into());
             }
             Command::Tapes { tapes }
+        }
+        Some(Value(command)) if command == "deps" => {
+            if args.value()? != "card" {
+                return Err("deps requires card".into());
+            }
+            let (mut manifest, mut package, mut code_store, mut json) = (None, None, None, false);
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("json") if !json => json = true,
+                    Long("code-store") if code_store.is_none() => code_store = Some(args.value()?),
+                    Long("package") if package.is_none() => {
+                        package = Some(
+                            args.value()?
+                                .into_string()
+                                .map_err(|_| "--package requires UTF-8")?,
+                        )
+                    }
+                    Value(file)
+                        if manifest.is_none() && !file.to_string_lossy().starts_with('-') =>
+                    {
+                        manifest = Some(file)
+                    }
+                    arg => return Err(arg.unexpected()),
+                }
+            }
+            Command::DepsCard {
+                manifest: manifest.ok_or("deps card requires a package manifest")?,
+                package,
+                code_store,
+                json,
+            }
         }
         Some(Value(command)) if command == "doc" => {
             let (mut manifest, mut output, mut json) = (None, None, false);
@@ -946,6 +983,28 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 }
                 Err(error) => run_error(error, json),
             };
+        }
+        Command::DepsCard {
+            manifest,
+            package,
+            code_store,
+            json,
+        } => {
+            match hirsel_driver::dependency_card::cards(
+                Path::new(&manifest),
+                package.as_deref(),
+                code_store.as_deref().map(Path::new),
+            ) {
+                Ok(report) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+                    } else {
+                        print!("{}", hirsel_engine::render_dependency_cards(&report));
+                    }
+                    return 0;
+                }
+                Err(error) => return tool_error(error, json),
+            }
         }
         Command::Doc {
             manifest,

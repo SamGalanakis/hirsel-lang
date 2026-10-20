@@ -1,0 +1,3 @@
+// rule: LANG-6
+// expect: check
+pub fn token(value: leaf.Token) -> leaf.Token uses {} { value }

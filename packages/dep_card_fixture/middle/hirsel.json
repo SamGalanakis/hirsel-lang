@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "middle",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "middle.hir",
+      "module": [
+        "middle"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../leaf/hirsel.json",
+      "package": {
+        "name": "leaf",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

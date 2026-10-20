@@ -1,0 +1,6 @@
+pub fn relay(output: Stdout) -> Result[(), OutputError] uses {output} {
+  leaf.emit(output)
+}
+pub fn unused(n: Net) -> Result[Stream of n, NetError] uses {n} {
+  leaf.connect(n)
+}

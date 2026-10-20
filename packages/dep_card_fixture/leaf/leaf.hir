@@ -1,0 +1,11 @@
+pub type Token { value: u64 }
+pub fn emit(output: Stdout) -> Result[(), OutputError] uses {output} {
+  out.print(output, "card")
+}
+pub fn connect(n: Net) -> Result[Stream of n, NetError] uses {n} {
+  net.connect(n, "example.com", 80u16, Unbounded())
+}
+@test
+fn own_test() -> () uses {} {
+  failure.check(1u64 == 1u64, Arithmetic())
+}

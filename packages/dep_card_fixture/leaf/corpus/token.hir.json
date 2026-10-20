@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "leaf_corpus",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "token.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../hirsel.json",
+      "package": {
+        "name": "leaf",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

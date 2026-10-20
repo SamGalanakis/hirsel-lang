@@ -585,6 +585,7 @@ dependencies = [
  "hirsel-check",
  "hirsel-check-protocol",
  "hirsel-codec",
+ "hirsel-code-store",
  "hirsel-core-contract",
  "hirsel-cranelift",
  "hirsel-diag",

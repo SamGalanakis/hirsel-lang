@@ -1,4 +1,7 @@
 //! PROG-1: explicit source packages. No directory discovery or std fallback.
+mod dependency_card;
+pub use dependency_card::render_dependency_cards;
+
 use crate::*;
 use hirsel_resolve::DependencyExposure;
 use hirsel_syntax::PackageId;

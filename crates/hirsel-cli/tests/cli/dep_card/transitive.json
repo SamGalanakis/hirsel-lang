@@ -1,0 +1,195 @@
+{
+  "cards": [
+    {
+      "authority": {
+        "reached_by_you": {
+          "capabilities": [
+            "core@1/Stdout"
+          ],
+          "operations": [
+            "core@1/out/print"
+          ],
+          "unresolved": [
+            "core@1/out/print"
+          ]
+        },
+        "whole_public_api": {
+          "capabilities": [
+            "core@1/Net",
+            "core@1/Stdout"
+          ],
+          "operations": [
+            "core@1/net/connect",
+            "core@1/out/print"
+          ],
+          "unresolved": [
+            "core@1/net/connect",
+            "core@1/out/print"
+          ]
+        }
+      },
+      "determinism": {
+        "reached_by_you": {
+          "externs": [],
+          "provider_requirements": [
+            "core@1/Stdout"
+          ],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        },
+        "unsafe_ffi_package": false,
+        "whole_public_api": {
+          "externs": [],
+          "provider_requirements": [
+            "core@1/Net",
+            "core@1/Stdout"
+          ],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        }
+      },
+      "exposure": [
+        {
+          "signatures": [
+            "app@1/expose"
+          ],
+          "type": "leaf@1/leaf/Token"
+        }
+      ],
+      "health": {
+        "corpus_cases": 1,
+        "last_gate": null,
+        "provenance": null,
+        "tests": 1,
+        "unavailable": {
+          "last_gate": "no content-bound package test receipt in the build cache",
+          "provenance": "source manifests do not select a code store"
+        }
+      },
+      "package": "leaf@1",
+      "public_functions": [
+        "leaf@1/leaf/connect",
+        "leaf@1/leaf/emit"
+      ],
+      "weight": {
+        "cost": {
+          "basis": "source_token_work_estimate",
+          "build_ms": null,
+          "check_ms": null,
+          "check_source_tokens": 30,
+          "lower_source_tokens": 30,
+          "native_build_source_tokens": 30,
+          "prechecked_definitions": 0,
+          "reached_source_tokens": 30
+        },
+        "definitions": {
+          "reached": 1,
+          "total": 4
+        },
+        "transitive_dependencies": [],
+        "units": {
+          "reached": 1,
+          "total": 1
+        }
+      }
+    },
+    {
+      "authority": {
+        "reached_by_you": {
+          "capabilities": [
+            "core@1/Stdout"
+          ],
+          "operations": [
+            "core@1/out/print"
+          ],
+          "unresolved": [
+            "core@1/out/print"
+          ]
+        },
+        "whole_public_api": {
+          "capabilities": [
+            "core@1/Net",
+            "core@1/Stdout"
+          ],
+          "operations": [
+            "core@1/net/connect",
+            "core@1/out/print"
+          ],
+          "unresolved": [
+            "core@1/net/connect",
+            "core@1/out/print"
+          ]
+        }
+      },
+      "determinism": {
+        "reached_by_you": {
+          "externs": [],
+          "provider_requirements": [
+            "core@1/Stdout"
+          ],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        },
+        "unsafe_ffi_package": false,
+        "whole_public_api": {
+          "externs": [],
+          "provider_requirements": [
+            "core@1/Net",
+            "core@1/Stdout"
+          ],
+          "replay": "no_unmodeled_ffi",
+          "unmodeled_foreign_callers": [],
+          "unsafe_operations": []
+        }
+      },
+      "exposure": [],
+      "health": {
+        "corpus_cases": 0,
+        "last_gate": null,
+        "provenance": null,
+        "tests": 0,
+        "unavailable": {
+          "last_gate": "no content-bound package test receipt in the build cache",
+          "provenance": "source manifests do not select a code store"
+        }
+      },
+      "package": "middle@1",
+      "public_functions": [
+        "middle@1/middle/relay",
+        "middle@1/middle/unused"
+      ],
+      "weight": {
+        "cost": {
+          "basis": "source_token_work_estimate",
+          "build_ms": null,
+          "check_ms": null,
+          "check_source_tokens": 28,
+          "lower_source_tokens": 28,
+          "native_build_source_tokens": 28,
+          "prechecked_definitions": 0,
+          "reached_source_tokens": 28
+        },
+        "definitions": {
+          "reached": 1,
+          "total": 2
+        },
+        "transitive_dependencies": [
+          "leaf@1"
+        ],
+        "units": {
+          "reached": 1,
+          "total": 1
+        }
+      }
+    }
+  ],
+  "reach_basis": "entry",
+  "root_package": "app@1",
+  "roots": [
+    "app@1/main"
+  ],
+  "schema_version": 1
+}

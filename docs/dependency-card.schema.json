@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hirsel.dev/schemas/dependency-card-v1.json",
+  "title": "Hirsel dependency cards v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "root_package": {
+      "type": "string"
+    },
+    "reach_basis": {
+      "enum": [
+        "entry",
+        "public_api"
+      ]
+    },
+    "roots": {
+      "$ref": "#/$defs/strings"
+    },
+    "cards": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/card"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "root_package",
+    "reach_basis",
+    "roots",
+    "cards"
+  ],
+  "$defs": {
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/strings"
+        },
+        "operations": {
+          "$ref": "#/$defs/strings"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/strings"
+        }
+      },
+      "required": [
+        "capabilities",
+        "operations",
+        "unresolved"
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reached": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total",
+        "reached"
+      ]
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "const": "source_token_work_estimate"
+        },
+        "reached_source_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_source_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lower_source_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "native_build_source_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prechecked_definitions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_ms": {
+          "type": "null"
+        },
+        "build_ms": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "basis",
+        "reached_source_tokens",
+        "check_source_tokens",
+        "lower_source_tokens",
+        "native_build_source_tokens",
+        "prechecked_definitions",
+        "check_ms",
+        "build_ms"
+      ]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "externs": {
+          "$ref": "#/$defs/strings"
+        },
+        "unsafe_operations": {
+          "$ref": "#/$defs/strings"
+        },
+        "unmodeled_foreign_callers": {
+          "$ref": "#/$defs/strings"
+        },
+        "replay": {
+          "enum": [
+            "no_unmodeled_ffi",
+            "unreplayable"
+          ]
+        },
+        "provider_requirements": {
+          "$ref": "#/$defs/strings"
+        }
+      },
+      "required": [
+        "externs",
+        "unsafe_operations",
+        "unmodeled_foreign_callers",
+        "replay",
+        "provider_requirements"
+      ]
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "signature_verified": {
+          "enum": [
+            true,
+            null
+          ]
+        }
+      },
+      "required": [
+        "definition",
+        "hash",
+        "present",
+        "signature_verified"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "signature_policy": {
+          "type": "string"
+        },
+        "trusted_keys": {
+          "$ref": "#/$defs/strings"
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/object"
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "signature_policy",
+        "trusted_keys",
+        "objects"
+      ]
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "type": "string"
+        },
+        "public_functions": {
+          "$ref": "#/$defs/strings"
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "whole_public_api": {
+              "$ref": "#/$defs/authority"
+            },
+            "reached_by_you": {
+              "$ref": "#/$defs/authority"
+            }
+          },
+          "required": [
+            "whole_public_api",
+            "reached_by_you"
+          ]
+        },
+        "weight": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "definitions": {
+              "$ref": "#/$defs/counts"
+            },
+            "units": {
+              "$ref": "#/$defs/counts"
+            },
+            "transitive_dependencies": {
+              "$ref": "#/$defs/strings"
+            },
+            "cost": {
+              "$ref": "#/$defs/cost"
+            }
+          },
+          "required": [
+            "definitions",
+            "units",
+            "transitive_dependencies",
+            "cost"
+          ]
+        },
+        "exposure": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "signatures": {
+                "$ref": "#/$defs/strings"
+              }
+            },
+            "required": [
+              "type",
+              "signatures"
+            ]
+          }
+        },
+        "determinism": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "whole_public_api": {
+              "$ref": "#/$defs/safety"
+            },
+            "reached_by_you": {
+              "$ref": "#/$defs/safety"
+            },
+            "unsafe_ffi_package": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "whole_public_api",
+            "reached_by_you",
+            "unsafe_ffi_package"
+          ]
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "corpus_cases": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_gate": {
+              "type": "null"
+            },
+            "provenance": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/provenance"
+                }
+              ]
+            },
+            "unavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "last_gate": {
+                  "type": "string"
+                },
+                "provenance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "last_gate"
+              ]
+            }
+          },
+          "required": [
+            "tests",
+            "corpus_cases",
+            "last_gate",
+            "provenance",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "package",
+        "public_functions",
+        "authority",
+        "weight",
+        "exposure",
+        "determinism",
+        "health"
+      ]
+    }
+  }
+}
