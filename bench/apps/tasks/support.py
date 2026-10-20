@@ -58,8 +58,10 @@ class Server:
                            TASKS_STORE='files', TASKS_DURABILITY='volatile', TASKS_HOST='127.0.0.1',
                            HIRSEL_JOBS='1')
         environment.update(extra_env or {})
-        if kind == 'hirsel':
+        if kind in ('hirsel', 'hirsel-recorded'):
             command = [str(hirsel_binary), '--hirsel-grants', json.dumps(grants(directory, port)), '--port', str(port), '--log-level', 'error']
+            if kind == 'hirsel-recorded':
+                command = [command[0], '--hirsel-record', str(directory.parent / (directory.name + '.tape')), *command[1:]]
         else:
             command = [str(RUST), '--port', str(port)]
         if heap:

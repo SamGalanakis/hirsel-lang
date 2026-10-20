@@ -19,7 +19,16 @@ sys.path.insert(0, str(ROOT / 'bench/micro'))
 from measure import bootstrap_ratio, ratio, schedule, timing_lock, perf_counts
 
 EVENTS = 'task-clock,cycles,instructions,cycles:u,instructions:u'
-KINDS = ['hirsel', 'rust', 'rust-one-worker']
+KINDS = ['hirsel', 'hirsel-recorded', 'rust', 'rust-one-worker']
+
+
+def is_hirsel(kind):
+    return kind in ('hirsel', 'hirsel-recorded')
+
+
+def per_request(row, metric):
+    count = 1 if row['operation'] in ('cold', 'restart', 'sse') else row['completed']
+    return row['perf'][metric] / count
 
 
 def run(command, **kwargs):
@@ -73,16 +82,21 @@ def counters(path):
 
 
 class AttachedPerf:
-    def __init__(self, pid, directory):
-        self.control = directory / 'control'
-        self.ack = directory / 'ack'
+    def __init__(self, pid, directory, record=False):
+        self.record = record
+        prefix = 'record-' if record else ''
+        self.control = directory / (prefix + 'control')
+        self.ack = directory / (prefix + 'ack')
         os.mkfifo(self.control)
         os.mkfifo(self.ack)
         # RDWR avoids FIFO-open deadlock, acknowledgements synchronize measurement.
         self.control_fd = os.open(self.control, os.O_RDWR)
         self.ack_fd = os.open(self.ack, os.O_RDWR)
-        self.output = directory / 'perf.csv'
-        self.process = subprocess.Popen(['perf', 'stat', '-x', ';', '-o', str(self.output), '-e', EVENTS,
+        self.output = directory / ('profile.data' if record else 'perf.csv')
+        command = (['perf', 'record', '-e', 'cycles:u', '-c', '1000000', '-m', '16M',
+                    '-g', '--call-graph', 'dwarf,8192'] if record else
+                   ['perf', 'stat', '-x', ';', '-e', EVENTS])
+        self.process = subprocess.Popen([*command, '-o', str(self.output),
             '-p', str(pid), '-D', '-1', '--control', f'fifo:{self.control},{self.ack}'], stderr=subprocess.PIPE)
 
     def send(self, command):
@@ -101,7 +115,7 @@ class AttachedPerf:
         self.ack.unlink()
         if self.process.returncode not in (0, -signal.SIGINT):
             raise RuntimeError(error.decode())
-        return counters(self.output)
+        return None if self.record else counters(self.output)
 
 
 def sample(kind, operation, rate, args, directory, round_number, profile=False):
@@ -126,7 +140,7 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
         first_ms = (time.monotonic_ns() - marker['started_ns']) / 1e6
         idle_rss = rss(pid)
         result = {'kind': kind, 'operation': operation, 'rate': rate, 'round': round_number,
-                  'first_ms': first_ms, 'idle_rss': idle_rss, 'binary_bytes': (args.binary if kind == 'hirsel' else RUST).stat().st_size,
+                  'first_ms': first_ms, 'idle_rss': idle_rss, 'binary_bytes': (args.binary if is_hirsel(kind) else RUST).stat().st_size,
                   'sibling_before': before}
         if operation not in ('cold', 'restart'):
             client = subprocess.Popen([str(CAPPED), '--timeout', '600', 'taskset', '-c', '7',
@@ -135,7 +149,10 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
                 env=dict(os.environ, HIRSEL_JOBS='1'))
             assert line(client, 120) == 'ready'
             if profile:
-                recording = subprocess.Popen(['perf', 'record', '-F', '199', '-g', '--call-graph', 'dwarf,8192', '-p', str(pid), '-o', str(directory / 'profile.data')], stderr=open(directory / 'record.log', 'wb'))
+                recording = AttachedPerf(pid, directory, record=True)
+                # A short fan-out can finish before perf has attached. The ack makes
+                # attachment/enable a barrier, just like the comparison counters.
+                recording.send('enable')
             perf = AttachedPerf(pid, directory)
             before = sibling()
             result['sibling_before'] = before
@@ -152,20 +169,30 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
                 raise RuntimeError((directory / 'client.log').read_text())
             result['load_rss'] = rss(pid)
             if recording:
-                recording.send_signal(signal.SIGINT)
-                recording.wait(30)
+                recording.send('disable')
+                recording.stop()
                 recording = None
-                result['profile'] = subprocess.check_output(['perf', 'report', '-i', str(directory / 'profile.data'), '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '1', '-F', 'overhead,symbol'], text=True)
+                result['profile'] = subprocess.check_output(['perf', 'report', '-i', str(directory / 'profile.data'), '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '0', '-F', 'overhead,symbol'], text=True)
             denominator = 1 if operation == 'sse' else result['completed']
             result['instructions_per_request'] = result['perf']['instructions'] / denominator
             result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000 / denominator
         server.stop()
+        if kind == 'hirsel-recorded':
+            tape = directory / 'data.tape'
+            if not tape.is_file():
+                raise RuntimeError('recorded participant produced no tape')
+            result['tape_bytes'] = tape.stat().st_size
+            with tape.open('rb') as source:
+                result['tape_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
+            # The exact fixture and commands reproduce tapes; keep their hashes and sizes.
+            tape.unlink()
+            tape.with_name(tape.name + '.timing.json').unlink(missing_ok=True)
         if lifetime:
             result['perf'] = counters(lifetime)
             result['instructions_per_request'] = result['perf']['instructions']
             result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000
             if profile:
-                result['profile'] = subprocess.check_output(['perf', 'report', '-i', str(directory / 'profile.data'), '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '1', '-F', 'overhead,symbol'], text=True)
+                result['profile'] = subprocess.check_output(['perf', 'report', '-i', str(directory / 'profile.data'), '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '0', '-F', 'overhead,symbol'], text=True)
         after = measured_after if operation not in ('cold', 'restart') else sibling()
         result['sibling_after'] = after
         result['sibling_busy_share'] = (after['busy'] - before['busy']) / max(1, after['total'] - before['total'])
@@ -174,9 +201,8 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
         if client and client.poll() is None:
             client.terminate()
             client.wait(30)
-        if recording and recording.poll() is None:
-            recording.send_signal(signal.SIGINT)
-            recording.wait(30)
+        if recording:
+            recording.stop()
         if perf:
             perf.stop()
         server.stop(check=False)
@@ -195,7 +221,7 @@ def startup_profile(kind, operation, args, directory):
     finally:
         server.stop()
     output = subprocess.check_output([str(CAPPED), '--timeout', '60', 'perf', 'report', '-i', str(directory / 'profile.data'),
-                                      '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '1', '-F', 'overhead,symbol'], text=True)
+                                      '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '0', '-F', 'overhead,symbol'], text=True)
     shutil.rmtree(data)
     return output
 
@@ -261,13 +287,36 @@ def profile_excerpt(key, value):
     return '\n'.join(headers + ['', *[re.sub(r'\s+-\s+-\s*$', '', line) for line in symbols[:20]]]) or value
 
 
+def profile_costs(profile):
+    """Disjoint flat symbol buckets; inline RC and memcpy callers need annotation."""
+    costs = dict(increments=0.0, decrements=0.0, destruction=0.0,
+                 cow_detaches=0.0, explicit_deep_copy=0.0, recording=0.0)
+    for overhead, symbol in re.findall(r'^\s+(\d+\.\d+)%  \[.\] (\S+)', profile, re.M):
+        category = None
+        if 'hirsel_rt_v2_dup' in symbol or 'hirsel_rt_v2_root_dup' in symbol:
+            category = 'increments'
+        elif 'drop_last' in symbol:
+            category = 'destruction'
+        elif 'release_block' in symbol or 'hirsel_rt_v2_release' in symbol or 'hirsel_rt_v2_root_release' in symbol:
+            category = 'decrements'
+        elif 'detach_sized' in symbol or 'hirsel_rt_v2_detach' in symbol:
+            category = 'cow_detaches'
+        elif any(name in symbol for name in ('copy_graph', 'clone_block', 'copy_held', 'hirsel_rt_v2_unique_copy')):
+            category = 'explicit_deep_copy'
+        elif any(name in symbol for name in ('Journaled', 'TapeJournal', 'RecordingWriter', 'render_tape', 'render_recording', 'journal')):
+            category = 'recording'
+        if category:
+            costs[category] += float(overhead)
+    return costs
+
+
 def report(document, path):
     rows = document['samples']
     text = ['# Tasks benchmark results', '', 'Generated by `bench/apps/tasks/bench`; raw samples: [results.json](results.json).', '',
         f"Session: {document['session']}; git {document['git']}; seed {document['seed']}; {document['rounds']} rounds.",
         f"Offered rates {document['rates']} req/s, {document['seconds']} s per cell. Each participant stops its sweep at the first capacity knee; every measured cell has ten fresh processes. 10,000 tasks except empty cold start.",
         'Server CPU31; client CPU7; SMT sibling CPU15 busy counters retained for each sample. Rust current_thread and multi_thread/one worker have core parity.', '',
-        'Instruction ratios are the verdict. Ratios below are Hirsel / Rust current_thread with paired bootstrap 95% CIs. All timing ratios belong to this session.', '']
+        'Instruction ratios are the verdict. Ratios below are Hirsel / Rust one-worker with paired bootstrap 95% CIs. All timing ratios belong to this session.', '']
     if set(r['operation'] for r in rows) != {'cold', 'restart', 'list', 'search', 'create', 'update', 'sse'}:
         text += ['**Partial workload selection: omitted operations have no result or verdict.**', '']
     if any(sum((r['operation'], r['rate'], r['kind']) == cell for r in rows) != document['rounds'] for cell in set((r['operation'], r['rate'], r['kind']) for r in rows)):
@@ -293,14 +342,14 @@ def report(document, path):
     text += ['', '| Operation / rate | Instructions ratio | User instructions ratio | Cycles ratio | task-clock ratio | Hirsel / Rust IPC; IPC ratio CI |', '|---|---|---|---|---|---|']
     for op, rate in cells:
         a = {r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'hirsel')}
-        b = {r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')}
+        b = {r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust-one-worker')}
         keys = sorted(a.keys() & b.keys())
         if not keys:
             continue
         ratios = []
         for metric in ['instructions', 'instructions:u', 'cycles', 'task-clock']:
-            left = [a[n]['perf'][metric] for n in keys]
-            right = [b[n]['perf'][metric] for n in keys]
+            left = [per_request(a[n], metric) for n in keys]
+            right = [per_request(b[n], metric) for n in keys]
             low, high = bootstrap_ratio(left, right, document['seed'], draws=2000)
             ratios.append(f'{ratio(left, right):.3f} [{low:.3f}, {high:.3f}]')
         ipc_a = statistics.median(a[n]['perf']['instructions'] / a[n]['perf']['cycles'] for n in keys)
@@ -309,14 +358,24 @@ def report(document, path):
         ipc_right = [b[n]['perf']['instructions'] / b[n]['perf']['cycles'] for n in keys]
         ipc_low, ipc_high = bootstrap_ratio(ipc_left, ipc_right, document['seed'], draws=2000)
         text += [f"| {op} / {rate} | {' | '.join(ratios)} | {ipc_a:.3f} / {ipc_b:.3f}; {ratio(ipc_left, ipc_right):.3f} [{ipc_low:.3f}, {ipc_high:.3f}] |"]
-    text += ['', 'Cold start is process-cold with an empty revision-1 snapshot and warm host page cache; restart uses a 10k-task snapshot. The launch marker excludes perf startup but includes its own final marker write and exec.', '', 'Binary bytes: ' + ', '.join(f"{kind} {next((r['binary_bytes'] for r in rows if r['kind'] == kind), 'unavailable')}" for kind in KINDS) + '.', '',
-             'Rust baseline noise (current_thread instructions/request; median absolute deviation / median and range):']
+    text += ['', 'Recording overhead (recorded / plain, per-request medians):', '', '| Operation / rate | Instructions | Cycles | Idle RSS |', '|---|---:|---:|---:|']
     for op, rate in cells:
-        values = [r['instructions_per_request'] for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')]
+        groups = [[r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, kind)]
+                  for kind in ('hirsel-recorded', 'hirsel')]
+        if all(groups):
+            ratios = [statistics.median(per_request(r, metric) for r in groups[0]) /
+                      statistics.median(per_request(r, metric) for r in groups[1])
+                      for metric in ('instructions', 'cycles')]
+            memory = statistics.median(r['idle_rss'] for r in groups[0]) / statistics.median(r['idle_rss'] for r in groups[1])
+            text += [f'| {op}/{rate} | {ratios[0]:.3f} | {ratios[1]:.3f} | {memory:.3f} |']
+    text += ['', 'Cold start is process-cold with an empty revision-1 snapshot and warm host page cache; restart uses a 10k-task snapshot. The launch marker excludes perf startup but includes its own final marker write and exec.', '', 'Binary bytes: ' + ', '.join(f"{kind} {next((r['binary_bytes'] for r in rows if r['kind'] == kind), 'unavailable')}" for kind in KINDS) + '.', '',
+             'Rust baseline noise (one-worker instructions/request; median absolute deviation / median and range):']
+    for op, rate in cells:
+        values = [r['instructions_per_request'] for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust-one-worker')]
         if values:
             median = statistics.median(values)
             mad = statistics.median(abs(v - median) for v in values) / median
-            cpu_values = [r['cpu_s_per_request'] for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')]
+            cpu_values = [r['cpu_s_per_request'] for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust-one-worker')]
             cpu_median = statistics.median(cpu_values)
             cpu_mad = statistics.median(abs(v - cpu_median) for v in cpu_values) / cpu_median
             text += [f'- {op}/{rate}: instruction MAD {mad:.2%}, range {min(values):.0f}–{max(values):.0f}; CPU/request MAD {cpu_mad:.2%}.']
@@ -326,7 +385,7 @@ def report(document, path):
             cells_for_op = sorted(set(r['rate'] for r in rows if r['kind'] == kind and r['operation'] == op))
             knee = next((rate for rate in cells_for_op if statistics.median(r['requests_per_s'] for r in rows if (r['kind'], r['operation'], r['rate']) == (kind, op, rate)) < .9 * rate), None)
             text += [f'- {kind}/{op}: {knee if knee else "not reached in measured sweep"}.']
-    text += ['', 'Metrics above 1.2× Rust current_thread (empirical paired-session medians):', '',
+    text += ['', 'Metrics above 1.2× Rust one-worker (empirical paired-session medians):', '',
              '| Trigger | Metric | Hirsel / Rust | Cause and classification |', '|---|---|---:|---|']
     annotations = document.get('attribution', {})
     gaps = 0
@@ -334,7 +393,7 @@ def report(document, path):
                'binary_bytes', 'p50_us', 'p99_us', 'p999_us', 'max_us']
     for op, rate in cells:
         left = [r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'hirsel')]
-        right = [r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')]
+        right = [r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust-one-worker')]
         if not left or not right:
             continue
         for metric in metrics:
@@ -361,7 +420,14 @@ def report(document, path):
         text += [f'<a id="cause-{category}"></a>', f'**{category}**: {explanation}', '']
     text += ['', 'Minimal triggers use the fixture generated by `fixture(data, 10000)` and routes shown in each attribution. CPU profiles contain limited samples for short operations and incomplete unwinds across native fiber switches; flat symbol attribution is stronger than their full call chains. Causes identify measured mechanisms, not a percentage decomposition of every gap.', '', 'CPU and latency evidence comes from separate `perf record` runs; heap evidence is a separate heaptrack run over the same 10k seed and a full list render plus 100 SSE subscriptions. Neither profiling run contributes timing comparisons.',
              'Low offered-rate cells have few requests: histogram tail values are empirical order statistics, not a claim of a production tail-latency bound. CPU15 busy samples are retained; time/cycle conclusions require an idle-sibling rerun when interference is present.', '']
-    text += ['Profile evidence:', '']
+    text += ['Profile attribution (flat self samples, percent of the profile event):', '',
+             '| Profile | RC increment slow paths | RC decrement/dispatch | Destruction | COW detach entries | Explicit deep copy | Recording symbols |',
+             '|---|---:|---:|---:|---:|---:|---:|']
+    for key, value in document.get('profiles', {}).items():
+        if not key.endswith('/heap'):
+            costs = profile_costs(value)
+            text += ['| ' + key + ' | ' + ' | '.join(f'{v:.2f}%' for v in costs.values()) + ' |']
+    text += ['', 'Operation profiles sample user cycles; startup profiles sample user instructions. These disjoint symbol buckets are lower bounds: ordinary RC increments/decrements are also emitted inline in application/stdlib symbols; release dispatch includes checks, and destruction is shown separately. Explicit unique graph copies are separate from COW detach entries. Sequence growth mixes capacity changes with COW and is not charged entirely to COW. memcpy without a complete caller chain is unattributed. A zero bucket means no samples resolved there, not zero execution cost. Raw profiles retain all symbols and lost-sample counts.', '', 'Profile evidence:', '']
     profiles = document.get('profiles', {})
     for key, value in profiles.items():
         text += [f'`{key}` (excerpt; full profile in results.json):', '', '```text', profile_excerpt(key, value), '```', '']
@@ -374,6 +440,7 @@ def report(document, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--kinds', default=','.join(KINDS), help='comma-separated participants')
     parser.add_argument('--rounds', type=int, default=10)
     parser.add_argument('--seconds', type=float, default=3)
     parser.add_argument('--rates', default='1,4,16,64,256,1024')
@@ -385,6 +452,10 @@ def main():
     parser.add_argument('--heap-only', action='store_true', help='append non-timing heap evidence to a saved session')
     parser.add_argument('--only', default='cold,restart,list,search,create,update,sse')
     args = parser.parse_args()
+    selected = args.kinds.split(',')
+    if set(selected) - set(KINDS):
+        parser.error('unknown participant')
+    KINDS[:] = selected
     os.sched_setaffinity(0, {7})
     if args.report_only or args.heap_only or args.startup_profiles_only:
         document = json.loads((APP / 'results.json').read_text())
@@ -398,7 +469,7 @@ def main():
                 archive = APP / 'build' / (document['session'].replace(':', '') + '-startup')
                 archive.mkdir(exist_ok=True)
                 for op in ('cold', 'restart'):
-                    for kind in ('hirsel', 'rust'):
+                    for kind in KINDS:
                         document['profiles'][f'{kind}/{op}'] = startup_profile(kind, op, args, archive / f'{kind}-{op}')
                 profile = sample('rust', 'sse', 1000, args, archive / 'rust-sse', -1, profile=True)
                 document['profiles']['rust/sse'] = profile['profile']
@@ -412,7 +483,7 @@ def main():
                         error['server_log'] = log.read_text().strip()
                 archive = APP / 'build' / (document['session'].replace(':', '') + '-heap')
                 archive.mkdir(exist_ok=True)
-                for kind in ('hirsel', 'rust'):
+                for kind in KINDS:
                     if f'{kind}/heap' not in document['profiles']:
                         document['profiles'][f'{kind}/heap'] = memory_profile(kind, args, archive / kind)
             (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
@@ -441,7 +512,7 @@ def main():
     document['client_sha256'] = hashlib.sha256((APP / 'rust/target/release/load').read_bytes()).hexdigest()
     document['rustc'] = subprocess.check_output(['rustc', '--version'], text=True).strip()
     document['perf_version'] = subprocess.check_output(['perf', '--version'], text=True).strip()
-    document['binaries'] = {k: hashlib.sha256((args.binary if k == 'hirsel' else RUST).read_bytes()).hexdigest() for k in KINDS}
+    document['binaries'] = {k: hashlib.sha256((args.binary if is_hirsel(k) else RUST).read_bytes()).hexdigest() for k in KINDS}
     operations = args.only.split(',')
     archive = APP / 'build' / session.replace(':', '')
     archive.mkdir(parents=True)
@@ -478,7 +549,7 @@ def main():
         (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
     for op in operations:
         rate = 0 if op in ('cold', 'restart') else 100 if op == 'sse' else min(16, max(args.rates))
-        for kind in ('hirsel', 'rust'):
+        for kind in KINDS:
             try:
                 if op in ('cold', 'restart'):
                     document['profiles'][f'{kind}/{op}'] = startup_profile(kind, op, args, archive / f'profile-{kind}-{op}')
@@ -490,7 +561,7 @@ def main():
                 document['errors'].append(dict(cell=f'profile-{kind}-{op}', error=str(error)))
     (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
     report(document, APP / 'RESULTS.md')
-    for kind in ('hirsel', 'rust'):
+    for kind in KINDS:
         try:
             document['profiles'][f'{kind}/heap'] = memory_profile(kind, args, archive / f'heap-{kind}')
         except Exception as error:

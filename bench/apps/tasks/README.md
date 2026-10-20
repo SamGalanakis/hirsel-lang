@@ -8,7 +8,7 @@ No system packages or load tools are installed. The load generator is the
 `load` binary in the same pinned Cargo project (reqwest + HdrHistogram).
 
 Defaults: ten rounds, three-second open-loop cells at 1, 4, 16, 64, 256 and 1024 requests/s,
-10,000 persisted tasks, three participants (Hirsel, Rust current_thread, Rust
+10,000 persisted tasks, four participants (Hirsel plain, Hirsel recorded with the same binary and default recording level, Rust current_thread, Rust
 multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Each
 participant’s sweep stops at its first capacity knee. Rates can be
 selected with `--rates 1,4,16,64`; cells that cannot keep up retain their corrected
@@ -35,7 +35,7 @@ Each cell has server `perf stat` task-clock, cycles, instructions and user-only
 cycles/instructions. Operation counters attach with `-p` and explicit enable/disable
 acknowledgements, excluding startup and initial subscriptions. Cold/restart
 counters cover process lifetime through shutdown. The instruction ratio is the
-verdict. Ratios, IPC, cycles and task-clock have paired bootstrap confidence
+verdict. Ratios use Rust one-worker; recorded/plain overhead is reported separately. Ratios, IPC, cycles and task-clock have paired bootstrap confidence
 intervals; Rust baseline variation is reported. Binary size is on-disk ELF bytes,
 including the matching release profiles' debug sections. File durability is
 volatile (the common cheap default); every acknowledged mutation has atomically
@@ -69,3 +69,16 @@ binary hashes. The generator applies them only to matching binaries; a new
 binary requires fresh profile review. Full profiles remain in `results.json`,
 with compact excerpts in `RESULTS.md`. `--startup-profiles-only` refreshes separate
 startup profiles and never changes the ten-round measurement samples.
+
+`--kinds hirsel,hirsel-recorded,rust-one-worker` selects the parity and recording
+comparison directly. Native executables spell the CLI's `--record` option
+`--hirsel-record <tape>`. No level override is passed. Per-request ratios divide
+each participant's counters by its own completed requests; this matters at a
+capacity knee. SSE counters remain per mutation. Completed sample tapes are
+hashed and sized before deletion to bound disk use.
+
+Profiles use user-cycle samples for operations and user-instruction samples for
+startup. The flat RC increment, decrement/dispatch, destructor, COW entry and
+explicit-copy buckets are disjoint lower bounds. Inlined RC remains in enclosing
+Hirsel functions; do not treat missing symbols as zero overhead. Profiles and
+heaptrack are diagnostics outside the timing session.
