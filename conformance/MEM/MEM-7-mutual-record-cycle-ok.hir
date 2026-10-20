@@ -1,0 +1,11 @@
+// rule: MEM-7
+// expect: accept
+// One box on the cycle gives two records recursive through each other a
+// finite layout.
+type Person {
+  employer: box Company,
+}
+
+type Company {
+  founder: Option[Person],
+}

@@ -1,0 +1,10 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 5
+// Two records holding each other inline have no finite layout.
+type Person {
+  employer: Company,
+}
+
+type Company {
+  founder: Person,
+}

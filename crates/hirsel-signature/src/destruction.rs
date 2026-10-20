@@ -50,6 +50,9 @@ impl Normalizer<'_, '_> {
                             .map_or(DropAllocation::NoAlloc, |r| self.drop_visit(r, active));
                     }
                 }
+                if let Some(effect) = self.group_drop.get(definition) {
+                    return specialized_cleanup(effect, arguments, |t| self.drop_visit(t, active));
+                }
                 let Some(Signature {
                     kind: SignatureKind::Type(def),
                     types,
@@ -61,6 +64,103 @@ impl Normalizer<'_, '_> {
                 declared_cleanup(def, types, arguments, |t| self.drop_visit(t, active))
             }
         })
+    }
+
+    /// A recursive group's cleanup effects are one fixed point over its
+    /// members' representations, as a lone recursive declaration's is over
+    /// its own (`drop_visit`): every member starts nonallocating over its own
+    /// parameters and joins what its fields reach, until no member's effect
+    /// grows. A cycle itself performs only MEM-3 release. Provisional members
+    /// carry no finalizer promise or declared bounds, so a resource, opaque or
+    /// capability member stays allocating.
+    pub(super) fn settle_group_drop(&mut self) {
+        if self.group.is_empty() {
+            return;
+        }
+        let Some(own_root) = self.own_representation else {
+            return;
+        };
+        let own = self.own_definition();
+        let mut effects: BTreeMap<ast::DefPath, DropAllocation> = self
+            .group
+            .keys()
+            .chain([&own])
+            .map(|d| (d.clone(), DropAllocation::NoAlloc))
+            .collect();
+        loop {
+            self.group_drop = effects.clone();
+            let mut next = BTreeMap::new();
+            for (definition, member) in &self.group {
+                let effect = match &member.kind {
+                    SignatureKind::Type(d)
+                        if !d.resource
+                            && d.capability.is_none()
+                            && member.metadata.visibility != ast::Visibility::PublicOpaque =>
+                    {
+                        d.representation
+                            .map_or(DropAllocation::MayAllocate, |root| {
+                                self.member_drop(
+                                    &member.types,
+                                    &GenericDeclarations::signature(&d.generics),
+                                    root,
+                                    &mut BTreeSet::new(),
+                                )
+                            })
+                    }
+                    _ => DropAllocation::MayAllocate,
+                };
+                next.insert(definition.clone(), effect);
+            }
+            // Members reach this declaration through its entry; it reaches
+            // itself directly (`drop_kind`).
+            next.insert(own.clone(), self.drop_summary(own_root));
+            if next == effects {
+                self.group_drop.remove(&own);
+                return;
+            }
+            effects = next;
+        }
+    }
+
+    /// `drop_visit` over another member's provisional graph, whose type
+    /// parameters are that member's own.
+    fn member_drop(
+        &self,
+        types: &TypeStore,
+        generics: &GenericDeclarations,
+        id: TypeId,
+        active: &mut BTreeSet<TypeId>,
+    ) -> DropAllocation {
+        if !active.insert(id) {
+            return DropAllocation::NoAlloc;
+        }
+        let Some(row) = types.get(id) else {
+            return DropAllocation::MayAllocate;
+        };
+        let result = cleanup_summary(&row.kind, |leaf| match leaf {
+            CleanupLeaf::Component(t) => self.member_drop(types, generics, t, active),
+            CleanupLeaf::Parameter(p) => parameter_cleanup(generics, p),
+            CleanupLeaf::Nominal(definition, arguments) => {
+                if let Some(effect) = self.group_drop.get(definition) {
+                    return specialized_cleanup(effect, arguments, |t| {
+                        self.member_drop(types, generics, t, active)
+                    });
+                }
+                let Some(Signature {
+                    kind: SignatureKind::Type(def),
+                    types: declared,
+                    ..
+                }) = self.snapshots.get(definition).map(|s| s.as_ref())
+                else {
+                    return DropAllocation::MayAllocate;
+                };
+                declared_cleanup(def, declared, arguments, |t| {
+                    self.member_drop(types, generics, t, active)
+                })
+            }
+        });
+        active.remove(&id);
+        result
     }
 
     /// Publish a fresh immutable graph with complete summaries, including nominal

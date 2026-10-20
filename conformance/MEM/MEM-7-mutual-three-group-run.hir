@@ -1,0 +1,43 @@
+// rule: MEM-7
+// expect: run
+// Three declarations recursive through each other, through a box, a List
+// and a variant payload.
+type Doc {
+  title: String,
+  body: Option[box Section],
+}
+
+type Section {
+  blocks: List[Block],
+}
+
+type Block = Text(u64) | Embed(Doc)
+
+fn words(d: Doc) -> u64 {
+  match d.body {
+    Some(s) => block_words(s.blocks),
+    None() => 0,
+  }
+}
+
+fn block_words(blocks: List[Block]) -> u64 {
+  let mut sum = 0u64
+  for b in blocks {
+    sum = sum + match b {
+      Text(n) => n,
+      Embed(d) => words(d),
+    }
+  }
+  sum
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let note = Doc(title: "note", body: Some(box Section(blocks: [Text(4)])))
+  let empty = Doc(title: "empty", body: None())
+  let doc = Doc(
+    title: "doc",
+    body: Some(box Section(blocks: [Text(3), Embed(note), Embed(empty)]))
+  )
+  test.check(t, words(doc) == 7)
+  Ok(())
+}

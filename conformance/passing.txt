@@ -768,6 +768,7 @@ conformance/CT/CT-5-std-derive-float-hash-bad.hir
 conformance/CT/CT-5-std-derive-float-hash-ok.hir
 conformance/CT/CT-5-std-derive-generic-run.hir
 conformance/CT/CT-5-std-derive-modules-run.hir
+conformance/CT/CT-5-std-derive-mutual-group-run.hir
 conformance/CT/CT-5-std-derive-nested-deriver-bad.hir
 conformance/CT/CT-5-std-derive-nested-deriver-ok.hir
 conformance/CT/CT-5-std-derive-nested-option-bad.hir
@@ -1141,6 +1142,8 @@ conformance/GEN/GEN-1-nested-nominal-key-ok.hir
 conformance/GEN/GEN-1-noalloc-drop-copyable-bad.hir
 conformance/GEN/GEN-1-noalloc-drop-declared-ok.hir
 conformance/GEN/GEN-1-noalloc-drop-map-ok.hir
+conformance/GEN/GEN-1-noalloc-drop-mutual-group-bad.hir
+conformance/GEN/GEN-1-noalloc-drop-mutual-group-ok.hir
 conformance/GEN/GEN-1-noalloc-drop-nominal-map-ok.hir
 conformance/GEN/GEN-1-noalloc-drop-nominal-sortedmap-bad.hir
 conformance/GEN/GEN-1-noalloc-drop-plain-ok.hir
@@ -2496,9 +2499,15 @@ conformance/MEM/MEM-7-inline-record.hir
 conformance/MEM/MEM-7-json-member-stringify-bad.hir
 conformance/MEM/MEM-7-json-member-stringify-run.hir
 conformance/MEM/MEM-7-mutual-box-group-run.hir
+conformance/MEM/MEM-7-mutual-fn-group-run.hir
 conformance/MEM/MEM-7-mutual-generic-group-run.hir
 conformance/MEM/MEM-7-mutual-inline-group-bad.hir
 conformance/MEM/MEM-7-mutual-list-group-run.hir
+conformance/MEM/MEM-7-mutual-map-group-run.hir
+conformance/MEM/MEM-7-mutual-option-box-group-run.hir
+conformance/MEM/MEM-7-mutual-record-cycle-bad.hir
+conformance/MEM/MEM-7-mutual-record-cycle-ok.hir
+conformance/MEM/MEM-7-mutual-three-group-run.hir
 conformance/MEM/MEM-7-nested-option-field-bad.hir
 conformance/MEM/MEM-7-nested-option-field-run.hir
 conformance/MEM/MEM-7-packed.hir

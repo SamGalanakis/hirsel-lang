@@ -42,8 +42,11 @@ provisional signatures, never their published ones. A header (`GroupStage::Heade
 needs no other declaration; a representation reads the others' headers; a published
 signature reads the others' representations. Members are then read as a declaration
 reads itself: no import, no dependency, empty declared bounds (proofs through them
-stay conservative, as for direct recursion), and one least fixed point of authority
-over the group. The published signature carries the group's key in
+stay conservative, as for direct recursion), one least fixed point of authority over
+the group, and one fixed point of cleanup effects over the members' own parameters
+(`settle_group_drop`), so `noalloc_drop` holds for a group exactly as for a lone
+recursive declaration. A resource, opaque or capability member carries no finalizer
+promise or declared bound while provisional and stays allocating. The published signature carries the group's key in
 `metadata.recursive_group` instead of the members' fingerprints.
 
 Normalization computes structural cleanup, including generic DependsOn conjunctions,

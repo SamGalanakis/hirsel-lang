@@ -93,6 +93,7 @@ fn normalize_inner(
         snapshots: BTreeMap::new(),
         group: BTreeMap::new(),
         group_key: None,
+        group_drop: BTreeMap::new(),
         builtin_declarations: BTreeMap::new(),
         active: BTreeSet::new(),
         aliases: BTreeSet::new(),
@@ -329,6 +330,7 @@ fn normalize_inner(
                 return Ok(provisional(&n, item, &attrs, *flavor, repr));
             }
             n.settle_group_authority();
+            n.settle_group_drop();
             let opaque = item.visibility == ast::Visibility::PublicOpaque;
             if opaque {
                 n.dependencies = public_deps.clone();
@@ -718,6 +720,9 @@ struct Normalizer<'a, 'b> {
     /// dependencies: `group_key` covers them.
     group: BTreeMap<ast::DefPath, SignatureRef>,
     group_key: Option<ast::ContentHash>,
+    /// The group members' settled cleanup effects over their own parameters
+    /// (`settle_group_drop`), read in place of their provisional summaries.
+    group_drop: BTreeMap<ast::DefPath, DropAllocation>,
     builtin_declarations: BTreeMap<TypeId, SignatureRef>,
     active: BTreeSet<ast::TypeExprId>,
     aliases: BTreeSet<ast::DefPath>,

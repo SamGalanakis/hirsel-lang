@@ -1,0 +1,69 @@
+// rule: CT-5
+// expect: run
+// stdout: {"Items":[[{"name":"a","value":{"Number":[1]}},{"name":"c","value":{"Items":[[{"name":"b","value":"Null"}]]}}]]}
+// stdout: round trip equal: true
+// stdout: Items([Member(name: a, value: Number(1)), Member(name: c, value: Items([Member(name: b, value: Null)]))])
+// Derivers of declarations recursive through each other call each other.
+type Value = Null | Number(i64) | Items(List[Member])
+
+type Member {
+  name: String,
+  value: Value,
+}
+
+fn value_to_json(v: Value) -> json.Value uses {} = comptime derive.json_value(
+  shape(Value)
+)
+
+fn value_from_json(j: json.Value) -> Result[unique Value, String] uses {} = comptime derive.from_json(
+  shape(Value)
+)
+
+fn value_equal(a: Value, b: Value) -> bool uses {} = comptime derive.equal(shape(Value))
+
+fn value_format(v: Value, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Value)
+)
+
+fn member_to_json(m: Member) -> json.Value uses {} = comptime derive.json_value(
+  shape(Member)
+)
+
+fn member_from_json(j: json.Value) -> Result[unique Member, String] uses {} = comptime derive.from_json(
+  shape(Member)
+)
+
+fn member_format(m: Member, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Member)
+)
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let inner: Value = Items([Member(name: "b", value: Null)])
+  let v: Value = Items(
+    [Member(name: "a", value: Number(1)), Member(name: "c", value: inner)]
+  )
+  match json.stringify(value_to_json(v)) {
+    Ok(s) => {
+      let _ = out.print(out, f"{s}\n")
+    },
+    Error(_) => {
+      let _ = out.print(out, "?\n")
+    },
+  }
+  match value_from_json(value_to_json(v)) {
+    Ok(back) => {
+      let _ = out.print(
+        out,
+        f"round trip equal: {bool.to_string(value_equal(v, back))}\n"
+      )
+      let mut buffer: List[u8] = []
+      value_format(back, mut buffer)
+      let _ = out.print(out, f"{text.finish_valid(take buffer)}\n")
+    },
+    Error(e) => {
+      let _ = out.print(out, f"error: {e}\n")
+    },
+  }
+  Ok(())
+}

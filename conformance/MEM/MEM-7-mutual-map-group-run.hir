@@ -1,0 +1,34 @@
+// rule: MEM-7
+// expect: run
+// Two records recursive through each other's Map values need no box.
+type Scope {
+  bindings: Map[String, Binding],
+}
+
+type Binding {
+  value: i64,
+  nested: Map[String, Scope],
+}
+
+fn total(s: Scope) -> i64 {
+  let mut sum = 0i64
+  for (_, b) in s.bindings {
+    sum = sum + b.value
+    for (_, inner) in b.nested {
+      sum = sum + total(inner)
+    }
+  }
+  sum
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut leaf: Map[String, Binding] = map.empty()
+  map.insert(mut leaf, "x", Binding(value: 2, nested: map.empty()))
+  let mut scopes: Map[String, Scope] = map.empty()
+  map.insert(mut scopes, "inner", Scope(bindings: take leaf))
+  let mut top: Map[String, Binding] = map.empty()
+  map.insert(mut top, "f", Binding(value: 1, nested: take scopes))
+  map.insert(mut top, "g", Binding(value: 4, nested: map.empty()))
+  test.check(t, total(Scope(bindings: take top)) == 7)
+  Ok(())
+}

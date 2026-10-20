@@ -1633,6 +1633,7 @@ impl Fixture {
             snapshots,
             group: BTreeMap::new(),
             group_key: None,
+            group_drop: BTreeMap::new(),
             builtin_declarations: BTreeMap::new(),
             active: BTreeSet::new(),
             aliases: BTreeSet::new(),

@@ -1,0 +1,16 @@
+// rule: GEN-1
+// expect: accept
+// Generic declarations recursive through each other drop without allocating
+// when their arguments do: their cleanup effects are one fixed point.
+fn need[T: noalloc_drop](take x: T) -> () {}
+
+type Tree[K] = Leaf | Node(List[Entry[K]])
+
+type Entry[K] {
+  key: K,
+  children: Tree[K],
+}
+
+fn probe(take x: Tree[u64]) {
+  need(take x)
+}
