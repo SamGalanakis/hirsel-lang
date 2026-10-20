@@ -11,6 +11,24 @@
 //! The runs of one execution (RUN-12) share one Readiness, so an idle execution sleeps on
 //! every run's interests at once. Each run's handle is [`tagged`](Readiness::tagged): its
 //! tokens carry the run's tag in bits 48 to 61, and it reports only its own tokens.
+//!
+//! The epoll layer follows mio's selector (mio a88e5e11 `src/sys/unix/selector/epoll.rs`):
+//! descriptors are registered edge-triggered (`interests_to_epoll`, :129-145) and stay
+//! registered between operations, so a connection that blocks request after request costs
+//! one `epoll_ctl` per park instead of the MOD, ADD and DEL a level-triggered set that drops
+//! idle descriptors needs. Deviations, each for a reason of this runtime:
+//! - Keyed by descriptor, not by token: an event names a descriptor and is fanned out to
+//!   the tokens waiting on it, since a read and a write of one socket park under two tokens
+//!   and epoll holds one registration per descriptor.
+//! - Re-armed with `EPOLL_CTL_MOD` at every park instead of registered once. Providers own
+//!   and close their descriptors (sockets, resolver and process wakeups, a retried
+//!   connect's socket) without telling Readiness, so a park cannot know whether its
+//!   descriptor number still names the registered file. MOD answers that (ENOENT: it was
+//!   closed, so ADD) and, edge-triggered, re-evaluates readiness, so data that arrived while
+//!   no token watched the descriptor is reported at once. This takes the place of tokio's
+//!   per-resource readiness bits cleared on WouldBlock (`runtime/io/scheduled_io.rs`
+//!   `clear_readiness`, :372). Register-once would save that one call per park; the
+//!   measurement is in the crate README.
 use crate::id_map::{IdMap, IdSet};
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
@@ -44,8 +62,9 @@ struct ReadyState {
     touched: IdSet,
     /// The epoll set, created at the first descriptor interest.
     epoll: Option<OwnedFd>,
-    /// Each registered descriptor's tokens and the events each waits for; the descriptor's
-    /// registration is the union.
+    /// Each watched descriptor's tokens and the events each waits for; the descriptor's
+    /// registration is the union. A descriptor no token watches keeps its registration and
+    /// loses its row; its events are then ignored.
     fds: IdMap<Vec<(u64, libc::c_short)>>,
     /// Deadlines by time, then token; an entry whose token no longer has that deadline is
     /// stale and skipped.
@@ -343,8 +362,9 @@ impl ReadyState {
             }
             let mut always = !watched && !timed && !delivery;
             if let Some((fd, events)) = interest {
-                // Re-registered on every park, even unchanged: a descriptor closed and
-                // reopened under the same number left the epoll set when it closed.
+                // Re-armed on every park, even unchanged: a descriptor closed and reopened
+                // under the same number left the epoll set when it closed, and an edge that
+                // came while no token watched it was dropped; MOD re-reports current readiness.
                 let entry = self.fds.entry(fd as u64).or_default();
                 match entry.iter_mut().find(|(t, _)| *t == token) {
                     Some(row) => row.1 = events,
@@ -378,19 +398,10 @@ impl ReadyState {
         };
         rows.retain(|(t, _)| *t != token);
         if rows.is_empty() {
+            // The registration stays for the descriptor's next park (mio keeps a source
+            // registered until it is dropped). Edge-triggered, an idle descriptor never
+            // wakes the set, and closing it removes it from the set.
             self.fds.remove(&(fd as u64));
-            if let Some(epoll) = &self.epoll {
-                // A descriptor already closed left the set by itself (ENOENT or EBADF).
-                // SAFETY: plain epoll control call on our own set.
-                unsafe {
-                    libc::epoll_ctl(
-                        epoll.as_raw_fd(),
-                        libc::EPOLL_CTL_DEL,
-                        fd,
-                        std::ptr::null_mut(),
-                    )
-                };
-            }
         } else {
             let union = rows.iter().fold(0, |all, (_, e)| all | *e);
             // An unwatchable or closed descriptor cannot be registered; its remaining
@@ -406,8 +417,8 @@ impl ReadyState {
             }
         }
     }
-    /// Watch `fd` for `events` (poll(2) bits, which epoll shares): modify its registration,
-    /// adding it when absent. False when epoll cannot watch the descriptor.
+    /// Watch `fd` for `events` (poll(2) bits, which epoll shares), edge-triggered: modify its
+    /// registration, adding it when absent. False when epoll cannot watch the descriptor.
     fn control(&mut self, fd: libc::c_int, events: libc::c_short) -> Result<bool, AdapterError> {
         let epoll = match &self.epoll {
             Some(epoll) => epoll.as_raw_fd(),
@@ -423,7 +434,7 @@ impl ReadyState {
             }
         };
         let mut event = libc::epoll_event {
-            events: events as u16 as u32,
+            events: events as u16 as u32 | libc::EPOLLET as u32,
             u64: fd as u64,
         };
         for op in [libc::EPOLL_CTL_MOD, libc::EPOLL_CTL_ADD] {
@@ -633,5 +644,186 @@ impl WaitLog {
     /// The parked token of wait `ordinal`.
     pub(crate) fn token_of(&self, ordinal: u64) -> Option<u64> {
         self.ordinals.get(&ordinal).copied()
+    }
+}
+
+/// Readiness vectors ported from mio a88e5e11 `tests/` (file:line per test) and the cases
+/// this runtime's deviations add: descriptor-keyed fan-out and the re-arm at every park.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    fn pair() -> (UnixStream, UnixStream) {
+        let (watched, peer) = UnixStream::pair().unwrap();
+        watched.set_nonblocking(true).unwrap();
+        (watched, peer)
+    }
+    /// The request under `token` would block on `fd` and its task parks.
+    fn park(readiness: &Readiness, token: u64, fd: &UnixStream, events: libc::c_short) {
+        readiness.enter(token);
+        readiness.pending().interest = Some((fd.as_raw_fd(), events));
+        readiness.parked(token);
+    }
+    fn would_block(mut stream: &UnixStream) -> bool {
+        stream.read(&mut [0; 64]).unwrap_err().kind() == std::io::ErrorKind::WouldBlock
+    }
+
+    /// mio tests/poll.rs:120 readiness_is_reregistered_after_would_block.
+    #[test]
+    fn readiness_is_reported_again_after_would_block() {
+        let readiness = Readiness::default();
+        let (mut watched, mut peer) = pair();
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        peer.write_all(b"hello").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [1]);
+        assert_eq!(watched.read(&mut [0; 16]).unwrap(), 5);
+        assert!(would_block(&watched));
+        // The re-issued request blocked again under its token.
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        peer.write_all(b"again").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [1]);
+    }
+
+    /// mio tests/poll.rs:66 zero_duration_polls_events: a scheduling point never sleeps
+    /// but still asks the kernel.
+    #[test]
+    fn a_scheduling_point_reports_ready_descriptors_without_waiting() {
+        let readiness = Readiness::default();
+        let streams: Vec<_> = (0..3).map(|_| pair()).collect();
+        for (token, (watched, _)) in (1..).zip(&streams) {
+            park(&readiness, token, watched, libc::POLLOUT);
+        }
+        assert_eq!(readiness.ready().unwrap(), [1, 2, 3]);
+    }
+
+    /// mio tests/registering.rs:225 registering_after_deregistering: a finished wait keeps
+    /// the descriptor registered, and the next wait on it is answered, not stale.
+    #[test]
+    fn a_descriptor_waits_again_after_its_last_wait_finished() {
+        let readiness = Readiness::default();
+        let (mut watched, mut peer) = pair();
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        readiness.finish(1);
+        park(&readiness, 2, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        peer.write_all(b"x").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [2]);
+        watched.read_exact(&mut [0]).unwrap();
+    }
+
+    /// Edge-triggered, an edge that came while no token watched the descriptor was
+    /// consumed by a scheduling point; the park re-arms the registration, so data already
+    /// waiting is reported (tokio runtime/io/scheduled_io.rs:372 keeps readiness until a
+    /// WouldBlock clears it for the same reason).
+    #[test]
+    fn data_that_arrived_while_unwatched_is_reported_at_the_next_park() {
+        let readiness = Readiness::default();
+        let (watched, mut peer) = pair();
+        let (other, _other_peer) = pair();
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        readiness.finish(1);
+        // Another descriptor keeps the set in use, so this scheduling point harvests the
+        // unwatched descriptor's edge and drops it.
+        park(&readiness, 2, &other, libc::POLLIN);
+        peer.write_all(b"x").unwrap();
+        assert!(readiness.ready().unwrap().is_empty());
+        park(&readiness, 3, &watched, libc::POLLIN);
+        assert_eq!(readiness.ready().unwrap(), [3]);
+    }
+
+    /// mio tests/poll.rs:47 add_then_drop, and a descriptor number reused after close (a
+    /// connect retrying the next address under one token): the new file is registered.
+    #[test]
+    fn a_closed_and_reused_descriptor_number_is_watched_anew() {
+        let readiness = Readiness::default();
+        let (first, _first_peer) = pair();
+        let number = first.as_raw_fd();
+        park(&readiness, 1, &first, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        // Closed while its token still waits: the file leaves the epoll set by itself.
+        drop(first);
+        let (second, mut second_peer) = pair();
+        assert_eq!(
+            second.as_raw_fd(),
+            number,
+            "the lowest free number is reused"
+        );
+        park(&readiness, 1, &second, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        second_peer.write_all(b"x").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [1]);
+        readiness.finish(1);
+        drop(second);
+        let (third, mut third_peer) = pair();
+        assert_eq!(third.as_raw_fd(), number);
+        park(&readiness, 2, &third, libc::POLLIN);
+        third_peer.write_all(b"y").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [2]);
+    }
+
+    /// mio tests/unix_stream.rs:316 unix_stream_shutdown_write, from the reading side: a
+    /// peer's close ends a read wait (EPOLLHUP and EPOLLRDHUP are reported with EPOLLIN).
+    #[test]
+    fn a_peer_close_ends_a_read_wait() {
+        let readiness = Readiness::default();
+        let (watched, peer) = pair();
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        drop(peer);
+        assert!(readiness.wait().unwrap());
+        assert_eq!(readiness.ready().unwrap(), [1]);
+        assert_eq!((&watched).read(&mut [0; 4]).unwrap(), 0);
+    }
+
+    /// Keyed by descriptor: a read and a write of one socket park under two tokens, and
+    /// each is reported only for its own direction.
+    #[test]
+    fn a_read_and_a_write_of_one_descriptor_are_reported_apart() {
+        let readiness = Readiness::default();
+        let (mut watched, mut peer) = pair();
+        peer.set_nonblocking(true).unwrap();
+        let chunk = [0u8; 4096];
+        while watched.write(&chunk).is_ok() {}
+        park(&readiness, 1, &watched, libc::POLLOUT);
+        park(&readiness, 2, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        peer.write_all(b"x").unwrap();
+        assert_eq!(readiness.ready().unwrap(), [2]);
+        watched.read_exact(&mut [0]).unwrap();
+        readiness.finish(2);
+        let mut sink = vec![0u8; 1 << 16];
+        while peer.read(&mut sink).is_ok() {}
+        assert!(readiness.wait().unwrap());
+        assert_eq!(readiness.ready().unwrap(), [1]);
+    }
+
+    /// A registration kept for an idle descriptor never wakes the idle wait again: with
+    /// data unread and no token watching it, the wait sleeps to the next deadline.
+    #[test]
+    fn an_unwatched_ready_descriptor_does_not_wake_the_idle_wait() {
+        let readiness = Readiness::default();
+        let (watched, mut peer) = pair();
+        let (other, _other_peer) = pair();
+        park(&readiness, 1, &watched, libc::POLLIN);
+        assert!(readiness.ready().unwrap().is_empty());
+        readiness.finish(1);
+        park(&readiness, 2, &other, libc::POLLIN);
+        peer.write_all(b"x").unwrap();
+        // The first scheduling point takes the unwatched edge.
+        assert!(readiness.ready().unwrap().is_empty());
+        readiness.enter(3);
+        readiness.pending().deadline = Some(Instant::now() + Duration::from_millis(20));
+        readiness.parked(3);
+        let start = Instant::now();
+        assert!(readiness.wait().unwrap());
+        assert!(start.elapsed() >= Duration::from_millis(15));
+        assert_eq!(readiness.ready().unwrap(), [3]);
+        drop(watched);
     }
 }

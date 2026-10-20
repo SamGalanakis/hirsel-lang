@@ -1105,11 +1105,31 @@ HTTP response, the request after a keep-alive response) is sent at once instead 
 for the peer's delayed ACK of an earlier segment.
 `readiness::Readiness` holds every parked host operation's descriptor interest and deadline
 under its token: the interests a provider recorded are registered in one persistent epoll
-set (a descriptor's registration is the union of its tokens' events, re-registered at every
-park because a closed and reopened descriptor number left the set), deadlines in a timer
-heap. `ready` reports the parked tokens whose descriptor epoll finds ready, whose deadline
-passed, or which wait on nothing epoll can watch (a regular file), with no syscall per
-parked token; the idle-only `wait` is one `epoll_wait` until the earliest deadline.
+set, deadlines in a timer heap. `ready` reports the parked tokens whose descriptor epoll
+finds ready, whose deadline passed, or which wait on nothing epoll can watch (a regular
+file), with no syscall per parked token; the idle-only `wait` is one `epoll_wait` until the
+earliest deadline.
+
+Cooperative readiness follows mio's epoll selector (`src/sys/unix/selector/epoll.rs`):
+registrations are edge-triggered and outlive the operation that made them, so an idle
+keep-alive connection stays in the set without waking it. Two deviations: a registration is
+keyed by descriptor (the union of its tokens' events, fanned out per token) because a read
+and a write of one socket park under two tokens; and every park re-arms it with one
+`EPOLL_CTL_MOD` (ADD on ENOENT) instead of registering once, because providers close their
+descriptors without telling Readiness and a reused number must be registered anew. MOD on an
+edge-triggered registration also re-reports readiness that arrived while no token watched.
+Measured on the module itself (one request/response connection whose read blocks each
+round, N idle parked connections, instructions per round user+kernel, median of 10
+interleaved seeded rounds of 50,000, CPU 31):
+
+| registration | 0 idle | 100 idle | 1000 idle | cycles (1000 idle) |
+|---|---|---|---|---|
+| level-triggered, removed when the last token finishes (MOD, ADD, DEL per wait) | 25,420 | 25,738 | 25,788 | 58,207 |
+| edge-triggered, kept, re-armed per park (this) | 20,009 | 20,299 | 20,106 | 43,895 |
+| edge-triggered, registered once (mio; needs every provider to deregister before close) | 18,925 | 18,843 | 19,079 | 41,297 |
+
+Register-once would save a further 1,100 instructions per wait (5%), at the price of a
+hang whenever a provider closes a descriptor without telling Readiness.
 `host_stdin::CooperativeStdin` pins a close-on-exec duplicate of descriptor 0 at admission:
 a pipe, socket or character device becomes nonblocking (restored on drop) and an empty
 read records POLLIN interest; a regular file or block device is read directly and always
