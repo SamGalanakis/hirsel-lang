@@ -735,7 +735,9 @@ impl<'a> Layouts<'a> {
             DropStep::ActiveVariant { variants, .. } => variants
                 .iter()
                 .any(|(_, steps)| self.steps_destructible(layout, steps, seen)),
-            DropStep::Release { offset } | DropStep::Environment { offset } => {
+            DropStep::Release { offset }
+            | DropStep::ReleaseRoot { offset }
+            | DropStep::Environment { offset } => {
                 match self.field_at(layout, *offset) {
                     Some(child) => self.destructible_in(child, seen),
                     // An environment or child we cannot see may finalize.
@@ -785,7 +787,7 @@ impl<'a> Layouts<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => false,
-            DropStep::Thaw { .. } => true,
+            DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..

@@ -44,7 +44,7 @@ use crate::layout_types::{
 use crate::runtime_abi::{
     LAYOUT_DYNAMIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
     STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
-    STEP_RELEASE_LAST, STEP_TAG, STEP_THAW, WHOLE_VALUE,
+    STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, WHOLE_VALUE,
 };
 
 /// Whether `record`'s arena blocks omit the extent before their header ([`LAYOUT_NO_EXTENT`]):
@@ -85,6 +85,9 @@ pub enum StepKind {
     Column,
     /// Restore ordinary counts in the frozen value at `offset`, of `layout`.
     Thaw,
+    /// Release the `Shared` root at `offset` under the root count contract; never a tail
+    /// release.
+    ReleaseRoot,
 }
 
 impl StepKind {
@@ -100,6 +103,7 @@ impl StepKind {
             Self::Loop => STEP_LOOP,
             Self::Column => STEP_COLUMN,
             Self::Thaw => STEP_THAW,
+            Self::ReleaseRoot => STEP_RELEASE_ROOT,
         }
     }
 }
@@ -616,6 +620,7 @@ impl Lower<'_> {
         Ok(scan.iter().all(|step| {
             let at = match step {
                 ScanStep::Counted { offset }
+                | ScanStep::Root { offset }
                 | ScanStep::Uncounted { offset }
                 | ScanStep::SliceOwner { offset }
                 | ScanStep::Environment { offset }
@@ -699,6 +704,9 @@ impl Lower<'_> {
                 }
                 DropStep::Release { offset } | DropStep::Environment { offset } => {
                     self.push(StepKind::Release, at + offset);
+                }
+                DropStep::ReleaseRoot { offset } => {
+                    self.push(StepKind::ReleaseRoot, at + offset);
                 }
                 DropStep::CloseHandle { offset } => {
                     self.push(StepKind::CloseHandle, at + offset);

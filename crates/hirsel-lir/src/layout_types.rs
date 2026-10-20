@@ -429,6 +429,9 @@ pub enum InitializedBytes {
 pub enum ScanStep {
     /// A counted block reference.
     Counted { offset: u64 },
+    /// A `Shared` root reference (MEM-11): a counted block whose count is the exact root
+    /// count, added to only by `hirsel_rt_v2_root_dup`'s contract (runtime ABI 25).
+    Root { offset: u64 },
     /// A reference into uncounted storage: lifetime/domain metadata, no counter.
     Uncounted { offset: u64 },
     /// A slice's backing owner.
@@ -470,6 +473,9 @@ pub enum DropStep {
     Finalize,
     /// Release one counted holder.
     Release { offset: u64 },
+    /// Release one `Shared` root (MEM-11) through `hirsel_rt_v2_root_release`, never the
+    /// inline count edge: the root count is exact and its releases may be deferred.
+    ReleaseRoot { offset: u64 },
     /// Drop an inline child with its own layout.
     Child { offset: u64, layout: LayoutId },
     /// Drop the active variant's steps; the ordinal is read as `form`.
@@ -787,6 +793,7 @@ snapshot_enum!(ScanStep {
         element
     },
     Columns(columns),
+    Root { offset },
 });
 snapshot_enum!(DropStep {
     Finalize,
@@ -813,6 +820,7 @@ snapshot_enum!(DropStep {
         element
     },
     ColumnsReverse(columns),
+    ReleaseRoot { offset },
 });
 snapshot_struct!(SoaColumns {
     count_offset,

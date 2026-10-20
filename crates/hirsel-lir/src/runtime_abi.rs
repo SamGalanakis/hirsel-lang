@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
@@ -42,10 +42,19 @@ pub const HEADER_SIZE: u64 = 8;
 /// release kills the block; `COUNT_IMMORTAL` is sticky and never written; any other value
 /// loses a holder by a store of `count - 1`. A holder is added by the runtime, or inline
 /// below the context's dup bound ([`CTX_DUP_MAX_OFFSET`]).
+///
+/// **`Shared` root exception** (runtime ABI 25, MEM-11): a root block's count is its exact
+/// root count, atomic and never saturating. A root is added inline only by a CAS of
+/// `count + 1` below the dup bound, else by `hirsel_rt_v2_root_dup`; every root release calls
+/// `hirsel_rt_v2_root_release` (or reaches a walk's [`STEP_RELEASE_ROOT`]), never the inline
+/// edge. Past the run's finite maximum the header holds [`ROOT_OVERFLOW`].
 pub const COUNT_OFFSET: u64 = 0;
 pub const COUNT_UNIQUE: u64 = 1;
 /// The count value of an immortal block: sticky, never wraps.
 pub const COUNT_IMMORTAL: u64 = u32::MAX as u64;
+/// The header count of a `Shared` root whose exact count the runtime keeps (runtime ABI 25):
+/// at or above every dup bound, so an inline CAS dup never reaches it.
+pub const ROOT_OVERFLOW: u64 = u32::MAX as u64;
 /// The count of a tracked arena block (a List, Array, Map or Set in an arena, MEM-6,
 /// runtime ABI 11, 12 for a Map's or Set's) that is unshared: a write may change it in place, though it is never unique.
 /// A dup makes it [`COUNT_ARENA_SHARED`]. Like the immortal count, neither is ever
@@ -155,7 +164,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 12;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 13;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -213,6 +222,10 @@ pub const STEP_THAW: u32 = 9;
 /// loop. When it kills its child the dying block is freed at once and the child takes its
 /// place (a tail release); compiled drop glue frees in the same order.
 pub const STEP_RELEASE_LAST: u32 = 10;
+/// Release the `Shared` root reference stored at `offset` (descriptor version 13, MEM-11)
+/// under the root count contract (`hirsel_rt_v2_root_release`): exact, never the inline edge,
+/// and deferred where the run's mode defers root releases. Never a tail release.
+pub const STEP_RELEASE_ROOT: u32 = 11;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix
 /// bits in the eight-byte header and a reserved four-byte shadow.
 pub const STEP_CURSOR_BITS: u32 = 24;
@@ -415,6 +428,8 @@ pub enum RuntimeEntry {
     Detach,
     Freeze,
     Thaw,
+    RootDup,
+    RootRelease,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,
@@ -532,7 +547,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 69] = [
+    pub const ALL: [RuntimeEntry; 71] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -562,6 +577,8 @@ impl RuntimeEntry {
         Self::Detach,
         Self::Freeze,
         Self::Thaw,
+        Self::RootDup,
+        Self::RootRelease,
         Self::Finalize,
         Self::FinalizeBegin,
         Self::FinalizeEnd,
@@ -794,6 +811,8 @@ impl RuntimeEntry {
             ),
             Self::Freeze => ("hirsel_rt_v2_freeze", VOID, const { &[CTX, BLOCK] }),
             Self::Thaw => ("hirsel_rt_v2_thaw", VOID, const { &[CTX, BLOCK] }),
+            Self::RootDup => ("hirsel_rt_v2_root_dup", VOID, const { &[CTX, BLOCK] }),
+            Self::RootRelease => ("hirsel_rt_v2_root_release", VOID, const { &[CTX, BLOCK] }),
             Self::Finalize => (
                 "hirsel_rt_v2_finalize",
                 U8,
@@ -1118,6 +1137,8 @@ snapshot_enum!(RuntimeEntry {
     Detach,
     Freeze,
     Thaw,
+    RootDup,
+    RootRelease,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,

@@ -17,7 +17,8 @@
 //! absent, the root Io grants no mount and no projection),
 //! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks; with it, in the diagnostic archive,
 //! `HIRSEL_RT_TRACE_ROOTS` names a file receiving every live `Shared` root's count at every
-//! scheduling point, `crate::root_trace`) and `HIRSEL_RT_OBSERVATION` (a file
+//! scheduling point, `crate::root_trace`, and `HIRSEL_RT_COUNT_MAX` sets the run's count bound,
+//! `Config::count_max`, so roots reach the exact overflow table) and `HIRSEL_RT_OBSERVATION` (a file
 //! that receives the observation record below), `HIRSEL_RT_TAPE` (a file that receives the
 //! real Io completion tape) and `HIRSEL_RT_REPLAY` (a recorded tape: Io is then the
 //! simulated adapter, which accepts exactly the recorded requests in order, and a mismatch,
@@ -1904,7 +1905,7 @@ pub(crate) unsafe fn execute(
         } else {
             0
         },
-        count_max: 0,
+        count_max: count_max(),
         heap_idle_cap: 0,
         close_handle: Some(hirsel_rt_v2_io_close),
         // Only placement receives the hash seed (SEM-5).
@@ -2342,4 +2343,16 @@ fn clock_outcome<T: std::fmt::Display>(kind: &str, value: &Result<T, ClockError>
         Err(ClockError::Unavailable) => format!("{kind} unavailable"),
         Err(ClockError::OutOfRange) => format!("{kind} out_of_range"),
     }
+}
+
+/// The run's count bound: `HIRSEL_RT_COUNT_MAX` in the diagnostic archive, else the full width.
+fn count_max() -> u64 {
+    #[cfg(feature = "diagnostic")]
+    if let Some(max) = std::env::var("HIRSEL_RT_COUNT_MAX")
+        .ok()
+        .and_then(|max| max.parse().ok())
+    {
+        return max;
+    }
+    0
 }

@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 12;
+pub const LAYOUT_VERSION: u32 = 13;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -99,6 +99,10 @@ pub const STEP_THAW: u32 = 9;
 /// kills its child, the dying block is freed at once and the child takes its place (a tail
 /// release), so a chain drains without suspending a block per link.
 pub const STEP_RELEASE_LAST: u32 = 10;
+/// Release the `Shared` root reference stored at `offset` (version 13) under the root count
+/// contract ([`crate::roots`]): exact, and deferred where the run's mode defers root releases.
+/// Never a tail release.
+pub const STEP_RELEASE_ROOT: u32 = 11;
 
 /// Whether a step releases the counted reference at its offset.
 #[inline(always)]
@@ -313,7 +317,7 @@ fn check_frame(
         };
         framed(steps, start, end, &mut |slot_at| {
             let slot = &steps[slot_at];
-            if releases(slot.kind)
+            if (releases(slot.kind) || slot.kind == STEP_RELEASE_ROOT)
                 && control < slot.offset.saturating_add(8)
                 && slot.offset < control.saturating_add(width)
                 && !exclusive(control_at, slot_at)
@@ -338,7 +342,7 @@ fn check_frame(
             fault("a leaf drop step has a span");
         }
         match step.kind {
-            STEP_RELEASE | STEP_RELEASE_LAST | STEP_CLOSE_HANDLE => {
+            STEP_RELEASE | STEP_RELEASE_LAST | STEP_RELEASE_ROOT | STEP_CLOSE_HANDLE => {
                 if step.kind == STEP_RELEASE_LAST && loops > 0 {
                     fault("a last release inside a loop");
                 }
@@ -534,6 +538,7 @@ unsafe fn consume_edge(ctx: &mut TaskCtx, child: *mut Header) -> bool {
     unsafe {
         if ctx.heap().diagnostic {
             check_live_block(ctx, child);
+            check_not_root(ctx, child);
         }
         #[cfg(feature = "measurement")]
         {
@@ -978,6 +983,12 @@ unsafe fn run_step(
                     return child;
                 }
             }
+            STEP_RELEASE_ROOT => {
+                let child = at.cast::<*mut Header>().read_unaligned();
+                if crate::roots::consume(ctx, child) {
+                    return child;
+                }
+            }
             STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
                 if variant_inactive(step, at) {
                     *pc += step.span as usize;
@@ -1176,6 +1187,7 @@ unsafe fn check_root(ctx: &TaskCtx, block: *mut Header, layout: *const Layout, m
     unsafe {
         check_layout(layout);
         check_live_block(ctx, block);
+        check_not_root(ctx, block);
         if ctx.descriptor((*block).index()) != layout {
             fault("header/layout mismatch: the block's header names a different layout");
         }
@@ -1184,6 +1196,18 @@ unsafe fn check_root(ctx: &TaskCtx, block: *mut Header, layout: *const Layout, m
         }
         if !mask.is_null() && (*block).count != 1 {
             fault("a partially initialized block has more than one holder");
+        }
+    }
+}
+
+/// Fault on an ordinary count operation reaching a `Shared` root, whose count only
+/// [`crate::roots`] touches (diagnostic mode).
+#[cold]
+pub(crate) unsafe fn check_not_root(ctx: &TaskCtx, block: *mut Header) {
+    // SAFETY: caller passes a live block.
+    unsafe {
+        if (*block).domain() == DOMAIN_HEAP && crate::shared::is_root(ctx, block) {
+            fault("an ordinary count operation reached a Shared root");
         }
     }
 }
@@ -1213,6 +1237,24 @@ pub(crate) unsafe fn release_block(
             (*block).count = count - 1;
             return STATUS_OK;
         }
+        drop_last(ctx, block, mask, anchor, operation_site)
+    }
+}
+
+/// T04 DropLast + T16 Free: the caller consumed the last credit of `block`; drain everything
+/// that dies.
+///
+/// # Safety
+/// `block` is a live block of `ctx` whose last credit the caller consumed.
+pub(crate) unsafe fn drop_last(
+    ctx: &mut TaskCtx,
+    block: *mut Header,
+    mask: *const u64,
+    anchor: u64,
+    operation_site: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
         // A scalar/byte payload has no work, including when reached through
         // an erased String/Bytes owner, and neither has a partly moved block whose mask leaves
         // no step live. T04 DropLast + T16 Free need neither dead-header cursor setup nor a

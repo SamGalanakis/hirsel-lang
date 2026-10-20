@@ -22,6 +22,10 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             let block = self.load_ptr(place.ptr);
             return self.dup_block(block);
         }
+        if let LayoutKind::Shared { .. } = record.kind {
+            let block = self.load_ptr(place.ptr);
+            return self.root_dup_block(block);
+        }
         self.dup_scan(place.ptr, &record.scan)
     }
 
@@ -33,6 +37,10 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 | ScanStep::Environment { offset } => {
                     let block = self.load_ty(PTR, base, *offset);
                     self.dup_block(block)?;
+                }
+                ScanStep::Root { offset } => {
+                    let block = self.load_ty(PTR, base, *offset);
+                    self.root_dup_block(block)?;
                 }
                 ScanStep::Uncounted { .. } | ScanStep::Handle { .. } => {}
                 ScanStep::Inline { offset, layout } => {

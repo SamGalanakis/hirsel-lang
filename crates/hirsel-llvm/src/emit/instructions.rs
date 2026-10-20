@@ -895,6 +895,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Inst::Dup { value } => {
                 self.invalidate_uniqueness();
                 let block = self.get(value)?;
+                if self.is_root_value(value)? {
+                    return self.root_dup_block(block);
+                }
                 self.dup_block(block)
             }
             Inst::Dispose { token } => {
@@ -1576,6 +1579,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.builder.br(done);
                 self.builder.position(done);
                 Ok(())
+            }
+            // A root release never fails: a frozen graph runs no finalizer (MEM-11).
+            Inst::Release { value, .. } if self.is_root_value(value)? => {
+                let release = self.runtime(RuntimeEntry::RootRelease)?;
+                let block = self.get(value)?;
+                self.builder.call(release, &[self.context, block]);
+                Ok(())
+            }
+            Inst::Reset { value, .. } if self.is_root_value(value)? => {
+                self.invalid("a reset of a Shared root, which is never a reuse donor")
             }
             Inst::Release {
                 value,

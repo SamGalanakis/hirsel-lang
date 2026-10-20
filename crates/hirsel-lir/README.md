@@ -732,3 +732,10 @@ consume the same existing caller-site mechanism.
 Runtime ABI 24 adds the `$intrinsic.SharedThawTurn` operation export
 `hirsel_rt_v2_thaw_turn`, which `shared.thaw`'s compiled body calls instead of an inline
 `IsUnique` on its root, so free mode can record and replay the answer.
+
+Runtime ABI 25 makes `Shared` root counts exact and atomic (lane R3). Layout
+version 6 marks root slots with `ScanStep::Root` and `DropStep::ReleaseRoot`,
+which `hirsel-layout` derives for every `Shared` reference and which descriptor
+version 13 lowers to `STEP_RELEASE_ROOT`. Both emitters add a root with
+`hirsel_rt_v2_root_dup` (LLVM inline by a CAS below the dup bound) and give one
+up only with `hirsel_rt_v2_root_release`; glue never releases a root inline.

@@ -1,4 +1,5 @@
-//! Plain task-local reference counts (MEM-1, OWN-6).
+//! Plain task-local reference counts (MEM-1, OWN-6). A `Shared` root's count is exact and
+//! atomic, and only [`crate::roots`] touches it.
 //!
 //! A count is a non-atomic `u32` in the block header. The configured bound `max` is D's model
 //! parameter (`proofs/rc`, `Config.max`): finite counts are `1 .. max - 1`, and a dup that would
@@ -70,6 +71,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut TaskCtx, block: *mut Header)
         }
         if ctx.heap().diagnostic {
             check_live_block(ctx, block);
+            crate::release::check_not_root(ctx, block);
             if (*ctx.descriptor((*block).index())).finalizer.is_some() {
                 fault("a dup of a block whose layout has a finalizer: resources are noncopyable");
             }

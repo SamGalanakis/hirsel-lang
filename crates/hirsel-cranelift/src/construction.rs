@@ -733,6 +733,14 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         Ok(())
     }
 
+    /// T03 Dup of the `Shared` root `block`: `hirsel_rt_v2_root_dup`, whose CAS keeps the
+    /// count exact (runtime ABI 25).
+    pub(crate) fn root_dup_block(&mut self, block: Value) -> Emitted {
+        let context = self.context;
+        self.rt(RuntimeEntry::RootDup, &[context, block])?;
+        Ok(())
+    }
+
     /// `hirsel_rt_v2_reuse` of `token` as a heap block of `layout`.
     fn reuse_block(
         &mut self,

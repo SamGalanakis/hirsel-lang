@@ -497,6 +497,22 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 
+    /// T03 Dup of the `Shared` root `block`: an inline CAS below the context's dup bound,
+    /// else `hirsel_rt_v2_root_dup` (runtime ABI 25).
+    pub(super) fn root_dup_block(&mut self, block: Value<'m>) -> Emitted {
+        let dup = self.runtime(RuntimeEntry::RootDup)?;
+        crate::runtime::root_dup(&self.builder, self.function, dup, self.context, block);
+        Ok(())
+    }
+
+    /// Whether `value` is a `Shared` root reference, whose count only the root entries touch.
+    pub(super) fn is_root_value(&self, value: ValueId) -> Emitted<bool> {
+        Ok(matches!(
+            self.layout(self.value_type(value)?.layout)?.kind,
+            LayoutKind::Shared { .. }
+        ))
+    }
+
     /// T13 Reuse of `token` as a heap block of `layout` with `extent` payload bytes: the
     /// block, or `failure` when `hirsel_rt_v2_reuse` reports one.
     pub(super) fn reuse_block(

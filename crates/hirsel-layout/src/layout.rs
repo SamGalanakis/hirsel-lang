@@ -2553,6 +2553,8 @@ impl<'o> LayoutBuilder<'o> {
                 let payload = self.frozen(walk, value)?;
                 let mut record = self.block_record(key, payload);
                 record.kind = LayoutKind::Shared { payload };
+                record.scan = vec![ScanStep::Root { offset: 0 }];
+                record.drop = vec![DropStep::ReleaseRoot { offset: 0 }];
                 Ok(record)
             }
             BuiltinType::Inline => {
@@ -3230,6 +3232,7 @@ fn flat_tag_size(programs: Vec<(u32, Vec<SizeTerm>)>) -> Result<SizeSpec, Layout
 fn drop_offset(step: &DropStep) -> Option<u64> {
     match step {
         DropStep::Release { offset }
+        | DropStep::ReleaseRoot { offset }
         | DropStep::Child { offset, .. }
         | DropStep::Thaw { offset, .. }
         | DropStep::Environment { offset }

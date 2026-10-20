@@ -2,7 +2,7 @@
 //! every live `Shared` root, keyed by the running task's spawn path and that task's
 //! scheduling-point ordinal. A root is named by its freeze ordinal in the run, so the
 //! interpreter's trace (`hirsel_interp::library`) names the same roots and the two can be
-//! compared line by line: both engines must have the same holders of every root at every
+//! compared line by line. Counts are exact, overflowed ones included: both engines must have the same holders of every root at every
 //! operation.
 //!
 //! A harness launch enables it with `HIRSEL_RT_TRACE_ROOTS` (a file receiving one line per
@@ -91,7 +91,7 @@ pub(crate) unsafe fn point(ctx: &mut TaskCtx) {
         line.push_str(&format!(" {ordinal}:"));
         for &(root, block) in &t.roots {
             // SAFETY: a traced root is live until it is retired.
-            let count = unsafe { (*(block as *mut Header)).count };
+            let count = unsafe { crate::roots::count(ctx, block as *mut Header) };
             line.push_str(&format!(" {root}={count}"));
         }
         line.push('\n');

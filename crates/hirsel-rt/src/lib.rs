@@ -76,6 +76,7 @@ pub mod region;
 pub mod release;
 #[cfg(feature = "diagnostic")]
 mod root_trace;
+pub mod roots;
 pub mod shared;
 pub mod stop;
 mod sync;
@@ -101,11 +102,13 @@ pub use release::{
     LAYOUT_MAGIC, LAYOUT_NO_EXTENT, LAYOUT_SEQUENCE, LAYOUT_SEQUENTIAL, LAYOUT_UNSAFE_FFI,
     LAYOUT_UNTRACKED_BELOW, LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout, NO_OFFSET,
     STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
-    STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_TAG, STEP_THAW, Step, WHOLE_VALUE,
+    STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, Step,
+    WHOLE_VALUE,
 };
+pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

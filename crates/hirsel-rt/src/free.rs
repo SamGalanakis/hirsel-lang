@@ -11,9 +11,10 @@
 //! - **Phases.** An op that cannot wait publishes (k, done); a waiting op (receive, take,
 //!   join, `await_any`, `cancel_all`, scope exit) publishes (k, entered) before it parks and
 //!   (k, done) once it acts; a print runs entered, claimed, ended 0 and done.
-//! - **Releases.** Compiled code releases `Shared` roots at once (deferral is lane R3's); at
-//!   width 1 an immediate release is by the sole holder or invisible until the releaser's next
-//!   op, so it changes no thaw outcome.
+//! - **Releases.** A `Shared` release that does not find its root's count at 1 joins the
+//!   releasing task's pending list ([`crate::roots`]), which the entered phase of its next op
+//!   applies, walking the roots it frees and applying those walks' nested releases at once
+//!   (Amendment F0-1). A task's end applies the rest, so no cleanup phase remains.
 //! - **Replay.** A phase the cut does not admit parks its task for good, as does reaching the
 //!   cut. A phase whose record names a predecessor waits replay-pending: it parks until a
 //!   publish, then checks again. A run whose every task waits ends Blocked, and the replay's
@@ -119,6 +120,7 @@ pub(crate) fn enter(ctx: *mut TaskCtx, first: Phase) -> bool {
     if !free.session.admits(&path, first) {
         crate::tasks::park_final(ctx);
     }
+    crate::roots::apply_pending(ctx);
     if first == Phase::Entered && !free.session.admits(&path, Phase::Done) {
         publish(ctx, Phase::Entered);
         crate::tasks::park_final(ctx);
@@ -278,6 +280,7 @@ pub(crate) fn close(ctx: *mut TaskCtx, handle: Handle, outcome: &str) -> Option<
     if !free.session.admits(&at, Phase::Done) {
         return Some(false);
     }
+    crate::roots::apply_pending(ctx);
     touch(ctx, handle, outcome);
     let free = self::free(ctx).unwrap();
     if let Err(error) = free.session.publish(&at, Phase::Done) {
@@ -312,6 +315,7 @@ pub(crate) fn print<T>(
     if !free.session.admits(&at, Phase::Entered) {
         crate::tasks::park_final(ctx);
     }
+    crate::roots::apply_pending(ctx);
     // SAFETY: the context is live.
     let shielded = unsafe { (*ctx).shield } != 0;
     let cause = if shielded {
@@ -355,20 +359,27 @@ pub(crate) fn print<T>(
     Some(result)
 }
 
-/// A task's end op: entered, then done. Its releases already ran.
+/// A task's end op: entered, whose entry applies the task's pending releases (walking the
+/// roots they free in the phase, so no cleanup phase remains), then done.
 pub(crate) fn end(ctx: *mut TaskCtx, task: &[u32]) {
-    let Some(free) = free(ctx) else {
+    let Some(free) = self::free(ctx) else {
         return;
     };
     free.session.begin(task);
     for phase in [Phase::Entered, Phase::Done] {
+        let free = self::free(ctx).unwrap();
         if !free.session.admits(task, phase) {
             return;
         }
+        if phase == Phase::Entered {
+            crate::roots::apply_pending(ctx);
+        }
+        let free = self::free(ctx).unwrap();
         if let Err(error) = free.session.publish(task, phase) {
             diverged(ctx, error);
         }
     }
+    let free = self::free(ctx).unwrap();
     let woken = std::mem::take(&mut free.retrying);
     crate::tasks::wake_all(ctx, &woken);
 }

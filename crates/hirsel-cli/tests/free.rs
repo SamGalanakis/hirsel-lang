@@ -19,13 +19,15 @@ const GRANTS: &str =
 const FUEL_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@1","fuel":200000}}"#;
 
 /// Each trace, its grants and the live outcome every recording of it ends with.
-const TRACES: [(&str, &str, &str); 6] = [
+const TRACES: [(&str, &str, &str); 8] = [
     ("gap", GRANTS, "returned"),
     ("finite_release", FUEL_GRANTS, "fuel"),
     ("mutex_cycle", GRANTS, "returned"),
     ("parked_receive", GRANTS, "blocked"),
     ("nested_root", GRANTS, "returned"),
     ("acquire_reply", GRANTS, "returned"),
+    ("coalesced_root", GRANTS, "returned"),
+    ("thaw_race", GRANTS, "returned"),
 ];
 
 /// The recording seeds, and the seed each replay runs under instead. Every native run
@@ -45,6 +47,8 @@ fn source(name: &str) -> &'static str {
         "parked_receive" => include_str!("free/parked_receive.hir"),
         "nested_root" => include_str!("free/nested_root.hir"),
         "acquire_reply" => include_str!("free/acquire_reply.hir"),
+        "coalesced_root" => include_str!("free/coalesced_root.hir"),
+        "thaw_race" => include_str!("free/thaw_race.hir"),
         _ => unreachable!("no trace {name}"),
     }
 }
@@ -208,6 +212,7 @@ fn the_racing_traces_reach_both_outcomes_and_replay_on_every_engine() {
         for (name, outcomes) in [
             ("mutex_cycle", ["thawed\n", "shared\n"]),
             ("acquire_reply", ["a first\n", "b first\n"]),
+            ("thaw_race", ["thawed\n", "shared\n"]),
         ] {
             for engine in ENGINES {
                 scope.spawn(move || {
@@ -223,6 +228,20 @@ fn the_racing_traces_reach_both_outcomes_and_replay_on_every_engine() {
                     }
                 });
             }
+        }
+    });
+}
+
+/// Repeated dup and drop of one root in one segment leave the root to the joiner on every
+/// engine (lane R3): the deferred releases coalesce and the child's end applies them.
+#[test]
+fn coalesced_root_releases_reach_the_joiners_thaw_on_every_engine() {
+    std::thread::scope(|scope| {
+        for engine in ENGINES {
+            scope.spawn(move || {
+                let recorded = record(engine, "coalesced_root", GRANTS, 1, false);
+                assert_eq!(recorded.stdout, "thawed\n", "{}", recorded.what);
+            });
         }
     });
 }

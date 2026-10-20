@@ -1,10 +1,9 @@
 //! `Shared[T]` roots (MEM-11).
 //!
 //! A root is a heap block whose payload descriptor carries [`LAYOUT_FROZEN`]: the frozen value
-//! lies inline at offset 0, and the block's header count is the root count. Compiled code adds
-//! and gives up roots with the ordinary count word contract, since one cooperative scheduler
-//! runs every task of a run on one heap; a threaded scheduler must make exactly these counts
-//! atomic. While a root lives, every counted block the value reaches is immortal
+//! lies inline at offset 0, and the block's header count is the root count: exact and atomic,
+//! touched only through [`crate::roots`] (`hirsel_rt_v2_root_dup`, `hirsel_rt_v2_root_release`
+//! and the walks' `STEP_RELEASE_ROOT`). While a root lives, every counted block the value reaches is immortal
 //! ([`COUNT_IMMORTAL`]): a read that copies a part writes no count, and copy on write detaches
 //! instead of writing in place. Freezing stops at static and region blocks, which are never
 //! written, and at nested roots, which keep their own counts.
@@ -142,7 +141,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut TaskCtx, block: *mut Header
         if ctx.heap().diagnostic {
             check_live_block(ctx, block);
         }
-        if (*block).count != 1 {
+        if !crate::roots::sole(block) {
             fault("a thaw of a root that is not the last");
         }
         if let Some(layout) = frozen_value(ctx, block) {
@@ -155,9 +154,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut TaskCtx, block: *mut Header
 
 /// `$intrinsic.SharedThawTurn(root) -> bool`: whether the borrowed root is the last, which
 /// `shared.thaw`'s compiled body tests before it thaws or gives the root back. Outside free
-/// mode it is the count test alone and not a yield. In free mode it is an op: its answer is
-/// recorded live and replayed (a recorded `Ok` waits until the root is the last), and it
-/// yields.
+/// mode it is the exact count test alone and not a yield. In free mode it is an op whose
+/// entered phase applies the task's pending releases first: its answer is recorded live and
+/// replayed (a recorded `Ok` waits until the root is the last), and it yields.
 ///
 /// # Safety
 /// `ctx` is live, `out` writable and `root` a live root block of it.
@@ -167,8 +166,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw_turn(
     out: *mut u8,
     root: *mut Header,
 ) -> u8 {
-    // SAFETY: caller contract; the borrowed root stays live through any wait.
-    let last = || unsafe { (*root).count == 1 };
+    // SAFETY: caller contract; the borrowed root stays live through any wait. The sole-holder
+    // test acquires every other holder's release before the thaw restores interior counts; an
+    // overflowed root is never the last.
+    let last = || unsafe { crate::roots::sole(root) };
     let answer = if crate::free::enter(ctx, hirsel_free::phase::Phase::Done) {
         let answer = crate::free::thaw(ctx, last);
         crate::free::done(ctx);

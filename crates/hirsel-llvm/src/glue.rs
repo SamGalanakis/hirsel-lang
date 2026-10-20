@@ -62,6 +62,8 @@ pub(crate) struct Runtime<'m> {
     pub(crate) free: Function<'m>,
     /// `hirsel_rt_v2_close_handle`.
     pub(crate) close_handle: Function<'m>,
+    /// `hirsel_rt_v2_root_release`.
+    pub(crate) root_release: Function<'m>,
     pub(crate) measure_release: Option<Function<'m>>,
     /// The program builds tracked arena blocks (MEM-6), which a release leaves alone.
     pub(crate) tracking: bool,
@@ -96,9 +98,11 @@ fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
     steps.iter().all(|step| match step {
         // A Shared root's frozen payload thaws in the runtime's walk.
         DropStep::Finalize | DropStep::ColumnsReverse(_) | DropStep::Thaw { .. } => false,
-        DropStep::Release { .. } | DropStep::Environment { .. } | DropStep::CloseHandle { .. } => {
-            true
-        }
+        // A Shared root's release is a runtime call under the root count contract.
+        DropStep::Release { .. }
+        | DropStep::ReleaseRoot { .. }
+        | DropStep::Environment { .. }
+        | DropStep::CloseHandle { .. } => true,
         DropStep::ActiveVariant { variants, .. } => {
             variants.iter().all(|(_, steps)| plain(layouts, steps))
         }
@@ -186,6 +190,8 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
                 }
                 _ => false,
             },
+            // A frozen graph runs no finalizer and closes nothing (MEM-11).
+            DropStep::ReleaseRoot { .. } => true,
             DropStep::ActiveVariant {
                 tag_offset,
                 variants,
@@ -681,6 +687,16 @@ impl<'m, 'g> Walk<'m, 'g> {
                     return self.tail_release(block, None);
                 }
                 self.release(block, None)
+            }
+            DropStep::ReleaseRoot { offset } => {
+                // Never a tail release: the runtime may defer it, and the walk frees the
+                // releasing block after it, as `STEP_RELEASE_ROOT` does.
+                let block = self
+                    .builder
+                    .load(ptr_ty, self.at(base, *offset), word(*offset));
+                self.builder
+                    .call(self.runtime.root_release, &[self.context, block]);
+                Ok(())
             }
             DropStep::CloseHandle { offset } => {
                 // The Io adapter closes the handle, shielded; a failing close is recorded and

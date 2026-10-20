@@ -413,3 +413,23 @@ fn releasing_pointer_free_storage_never_enters_the_drain() {
         }
     }
 }
+
+#[test]
+fn a_speculative_turn_defers_root_releases_to_its_retirement() {
+    let root = layout(8, &[], LAYOUT_FROZEN);
+    let ctx = Ctx::new(&[&root], true);
+    let block = ctx.alloc(0, 8, 8);
+    unsafe {
+        crate::roots::hirsel_rt_v2_root_dup(ctx.0, block);
+        (*ctx.0).roots.speculative = true;
+        crate::roots::hirsel_rt_v2_root_release(ctx.0, block);
+        crate::roots::hirsel_rt_v2_root_release(ctx.0, block);
+        assert_eq!(
+            crate::roots::count(&*ctx.0, block),
+            2,
+            "a non-head turn's root releases wait for its retirement"
+        );
+        crate::roots::retire(&mut *ctx.0);
+    }
+    assert_eq!(ctx.live(), 0, "retirement applies them in program order");
+}

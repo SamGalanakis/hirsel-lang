@@ -1,0 +1,43 @@
+// Repeated dup and drop of one root inside one segment (lane R3): each drop finds the count
+// above 1, so it joins the child's pending list, coalesced per root, and a dup that reaches
+// the runtime cancels one instead of adding; the child's end applies what is left, and the
+// joiner's thaw after the join sees count 1.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "root"
+  let s: Shared[String] = shared.freeze(take built)
+  let held = copy s
+  let ok = task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      let child = task.async(
+        scope,
+        fn() -> () {
+          let mine = take held
+          let mut i: u64 = 0
+          while i < 5000 {
+            let again = copy mine
+            discard(take again)
+            i += 1
+          }
+          discard(take mine)
+        }
+      )
+      task.await(scope, take child)
+      match shared.thaw(take s) {
+        Ok(text) => text == "root",
+        Error(root) => {
+          discard(take root)
+          false
+        },
+      }
+    }
+  )
+  let _ = out.print(out, if ok { "thawed\n" } else { "shared\n" })
+  Ok(())
+}

@@ -212,7 +212,7 @@ impl<'a> Lay<'a> {
                     .peekable();
                 fields.peek().is_none() || fields.any(|f| self.destructible_in(f.layout, seen))
             }
-            DropStep::Release { offset } => self
+            DropStep::Release { offset } | DropStep::ReleaseRoot { offset } => self
                 .0
                 .field_at(layout, *offset)
                 .is_none_or(|c| self.destructible_in(c, seen)),
@@ -260,7 +260,7 @@ impl<'a> Lay<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => false,
-            DropStep::Thaw { .. } => true,
+            DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..

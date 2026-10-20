@@ -384,10 +384,7 @@ pub(crate) unsafe fn tracked_move(
         if (*layout).step_count != 0 {
             if shared {
                 crate::copy::holders(layout, crate::alloc::payload(fresh), &mut |held| {
-                    crate::count::hirsel_rt_v2_dup(
-                        raw,
-                        held.cast::<*mut Header>().read_unaligned(),
-                    );
+                    crate::roots::dup_holder(raw, held.cast::<*mut Header>().read_unaligned());
                 });
             } else {
                 crate::alloc::payload(block).cast::<u64>().write(0);

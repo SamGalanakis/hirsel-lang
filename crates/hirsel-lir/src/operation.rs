@@ -217,6 +217,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
                 }
                 ScanStep::Columns(c) => columns(c, refs),
                 ScanStep::Counted { .. }
+                | ScanStep::Root { .. }
                 | ScanStep::Uncounted { .. }
                 | ScanStep::SliceOwner { .. }
                 | ScanStep::Environment { .. }
@@ -240,6 +241,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
                 DropStep::ColumnsReverse(c) => columns(c, refs),
                 DropStep::Finalize
                 | DropStep::Release { .. }
+                | DropStep::ReleaseRoot { .. }
                 | DropStep::Environment { .. }
                 | DropStep::CloseHandle { .. } => {}
             }

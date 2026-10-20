@@ -154,7 +154,10 @@ impl Layouts {
         }
         r.copy = CopyRecipe::NotCopyable;
         let id = self.block(frozen);
-        self.get_mut(id).kind = LayoutKind::Shared { payload: frozen };
+        let r = self.get_mut(id);
+        r.kind = LayoutKind::Shared { payload: frozen };
+        r.scan = vec![ScanStep::Root { offset: 0 }];
+        r.drop = vec![DropStep::ReleaseRoot { offset: 0 }];
         id
     }
 
@@ -206,11 +209,16 @@ impl Layouts {
                     for step in &r.scan {
                         scan.push(match step {
                             ScanStep::Counted { .. } => ScanStep::Counted { offset: fl.offset },
+                            ScanStep::Root { .. } => ScanStep::Root { offset: fl.offset },
                             _ => ScanStep::Uncounted { offset: fl.offset },
                         });
                     }
                     if !r.drop.is_empty() {
-                        drop.push(DropStep::Release { offset: fl.offset });
+                        drop.push(if matches!(r.kind, LayoutKind::Shared { .. }) {
+                            DropStep::ReleaseRoot { offset: fl.offset }
+                        } else {
+                            DropStep::Release { offset: fl.offset }
+                        });
                     }
                 }
                 LayoutKind::Callable { .. } => {

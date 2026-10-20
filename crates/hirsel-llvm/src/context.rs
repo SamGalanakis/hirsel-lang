@@ -1123,6 +1123,43 @@ impl<'m> Builder<'m> {
         }
     }
 
+    /// A monotonic (relaxed) atomic load of `of` from `address`, aligned to its width.
+    pub(crate) fn load_relaxed(&self, of: Type<'m>, address: Value<'m>, align: u32) -> Value<'m> {
+        // SAFETY: the address is a pointer of this module and `of` an integer type.
+        unsafe {
+            let load = LLVMBuildLoad2(self.raw, of.raw, address.raw, NO_NAME);
+            LLVMSetAlignment(load, align);
+            LLVMSetOrdering(
+                load,
+                llvm_sys::LLVMAtomicOrdering::LLVMAtomicOrderingMonotonic,
+            );
+            value(load)
+        }
+    }
+
+    /// A monotonic compare-exchange of `expected` for `new` at `address`: whether it stored.
+    pub(crate) fn cmpxchg_relaxed(
+        &self,
+        address: Value<'m>,
+        expected: Value<'m>,
+        new: Value<'m>,
+    ) -> Value<'m> {
+        use llvm_sys::LLVMAtomicOrdering::LLVMAtomicOrderingMonotonic as Monotonic;
+        // SAFETY: the operands belong to this module; `expected` and `new` share an integer type.
+        unsafe {
+            let pair = LLVMBuildAtomicCmpXchg(
+                self.raw,
+                address.raw,
+                expected.raw,
+                new.raw,
+                Monotonic,
+                Monotonic,
+                0,
+            );
+            value(LLVMBuildExtractValue(self.raw, pair, 1, NO_NAME))
+        }
+    }
+
     pub(crate) fn load_access(
         &self,
         of: Type<'m>,

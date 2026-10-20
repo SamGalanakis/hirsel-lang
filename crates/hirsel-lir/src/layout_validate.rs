@@ -227,8 +227,8 @@ impl<'a> Validator<'a> {
                 self.wrapper(
                     &s,
                     r,
-                    &[ScanStep::Counted { offset: 0 }],
-                    &[DropStep::Release { offset: 0 }],
+                    &[ScanStep::Root { offset: 0 }],
+                    &[DropStep::ReleaseRoot { offset: 0 }],
                 );
                 self.copy(&s, r, CopyRecipe::Dup);
                 if !matches!(self.get(*payload).kind, LayoutKind::Frozen { .. }) {

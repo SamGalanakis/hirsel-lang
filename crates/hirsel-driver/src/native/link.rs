@@ -1970,7 +1970,11 @@ fn launch_impl(
         command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());
     }
     if fixture.trace_roots {
-        command.env("HIRSEL_RT_TRACE_ROOTS", &roots);
+        // At a count bound of 3 every root past two holders lives in the runtime's overflow
+        // table, so the trace checks exact counts through entry to and exit from it.
+        command
+            .env("HIRSEL_RT_TRACE_ROOTS", &roots)
+            .env("HIRSEL_RT_COUNT_MAX", "3");
     }
     // A live launch selects record and replay by flag; harness launches by environment.
     match tape {

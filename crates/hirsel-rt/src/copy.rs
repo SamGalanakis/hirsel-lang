@@ -46,7 +46,8 @@ use crate::release::{
 };
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
-    STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_TAG, STEP_THAW, Step, variant_inactive,
+    STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, Step,
+    variant_inactive,
 };
 use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
@@ -142,7 +143,7 @@ pub(crate) unsafe fn holders(
                 pc += 1;
                 let at = base.wrapping_add(step.offset as usize);
                 match step.kind {
-                    STEP_RELEASE | STEP_RELEASE_LAST => visit(at),
+                    STEP_RELEASE | STEP_RELEASE_LAST | STEP_RELEASE_ROOT => visit(at),
                     STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
                         if variant_inactive(step, at) {
                             pc += step.span as usize;
@@ -280,7 +281,7 @@ unsafe fn copy_graph(
             }
             // A Shared root is never copied: the copy holds one more root (MEM-11).
             if crate::shared::is_root(&*raw, child) {
-                crate::count::hirsel_rt_v2_dup(raw, child);
+                crate::roots::hirsel_rt_v2_root_dup(raw, child);
                 return;
             }
             let target = match copies.get(child) {
@@ -607,7 +608,7 @@ pub(crate) unsafe fn detach_sized(
                 if diagnostic {
                     check_live_block(ctx, child);
                 }
-                crate::count::hirsel_rt_v2_dup(raw, child);
+                crate::roots::dup_holder(raw, child);
             },
         );
         // Not unique, so the credit never frees it.
@@ -685,7 +686,7 @@ pub(crate) unsafe fn copy_held(
                 if diagnostic {
                     check_live_block(ctx, child);
                 }
-                crate::count::hirsel_rt_v2_dup(raw, child);
+                crate::roots::dup_holder(raw, child);
             },
         );
         let index = (*copy).index();

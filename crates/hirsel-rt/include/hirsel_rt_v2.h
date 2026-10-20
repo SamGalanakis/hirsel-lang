@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 24
+#define HIRSEL_RT_V2_ABI_VERSION 25
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -40,10 +40,16 @@ extern "C" {
  * sticky and is never written. Any other value loses one holder by a store of count - 1. A holder
  * is added by hirsel_rt_v2_dup, or inline under the compiled fast path contract below. The
  * descriptor word at LAYOUT_OFFSET stores its 29-bit program index,
- * storage kind and dead-wide-cursor flag. */
+ * storage kind and dead-wide-cursor flag.
+ * Shared root exception (ABI 25, MEM-11): a root block's count is its exact root count. It is
+ * atomic, never saturates and is never released inline: a holder is added by a CAS of count + 1
+ * while count < the u32 at CTX_DUP_MAX_OFFSET, else by hirsel_rt_v2_root_dup, and every release
+ * calls hirsel_rt_v2_root_release (or reaches a walk's STEP_RELEASE_ROOT). Past the run's finite
+ * maximum the header holds ROOT_OVERFLOW and the exact count lives in the runtime. */
 #define HIRSEL_RT_V2_COUNT_OFFSET 0
 #define HIRSEL_RT_V2_COUNT_UNIQUE 1
 #define HIRSEL_RT_V2_COUNT_IMMORTAL UINT32_MAX
+#define HIRSEL_RT_V2_ROOT_OVERFLOW UINT32_MAX
 /* A tracked arena block (a List or Array in an arena, MEM-6, ABI 11, or a Map's or Set's block,
  * ABI 12) counts ARENA_UNIQUE while
  * unshared, which a write may change in place though it is never unique, and ARENA_SHARED once a
@@ -129,7 +135,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 12
+#define HIRSEL_RT_V2_LAYOUT_VERSION 13
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -176,6 +182,9 @@ extern "C" {
 /* A RELEASE after which its value runs nothing more (version 11): when it kills its child, the
  * dying block is freed at once and the child takes its place (a tail release). Never in a loop. */
 #define HIRSEL_RT_V2_STEP_RELEASE_LAST 10
+/* Release the Shared root reference at offset under the root count contract (version 13): exact,
+ * and deferred where the run's mode defers root releases. Never a tail release. */
+#define HIRSEL_RT_V2_STEP_RELEASE_ROOT 11
 #define HIRSEL_RT_V2_STEP_CURSOR_BITS 24
 #define HIRSEL_RT_V2_WHOLE_VALUE UINT32_MAX
 #define HIRSEL_RT_V2_NO_OFFSET UINT64_MAX
@@ -535,6 +544,10 @@ uint8_t hirsel_rt_v2_detach(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, u
  * static blocks and nested roots; thaw (of the last root) restores each to one holder. */
 void hirsel_rt_v2_freeze(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 void hirsel_rt_v2_thaw(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+/* Root counts (ABI 25): add one root past the inline CAS's bound, exactly; give up one root by the
+ * run's mode, walking the root when it was the last and the release applies now. */
+void hirsel_rt_v2_root_dup(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+void hirsel_rt_v2_root_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 
 /* Finalizers. */
 uint8_t hirsel_rt_v2_finalize(hirsel_rt_v2_ctx *ctx, uint32_t index, void *value,

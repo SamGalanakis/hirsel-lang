@@ -133,6 +133,8 @@ pub struct TaskCtx {
     pub(crate) region: *mut crate::region::Region,
     /// The freeze and thaw walks' block stack, kept between walks (MEM-11).
     pub(crate) frozen: Vec<*mut Header>,
+    /// The task's root releases that have not taken effect yet (`crate::roots`).
+    pub(crate) roots: crate::roots::TaskRoots,
     /// The chain the task's last `task.isolate` caught, which its body reads (`isolate.rs`).
     pub(crate) isolated: Vec<crate::failure::Chained>,
     /// The task's innermost extern call while it is switched out (`crate::foreign`).
@@ -176,6 +178,8 @@ pub(crate) struct RunShared {
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     /// Free mode's session and test channel (`crate::free`).
     pub(crate) free: Option<Box<crate::free::Free>>,
+    /// The exact counts of roots past the finite maximum (`crate::roots`).
+    pub(crate) root_overflow: crate::roots::Overflow,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -196,6 +200,7 @@ impl TaskCtx {
             failure: FailureState::default(),
             region: ptr::null_mut(),
             frozen: Vec::new(),
+            roots: Default::default(),
             isolated: Vec::new(),
             foreign: crate::foreign::ForeignScope::NONE,
             #[cfg(feature = "measurement")]
@@ -555,6 +560,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         failure_table: None,
         schedule: Default::default(),
         free: None,
+        root_overflow: Default::default(),
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

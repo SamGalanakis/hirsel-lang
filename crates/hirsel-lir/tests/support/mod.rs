@@ -449,6 +449,8 @@ pub fn table() -> LayoutTable {
     layouts.push(frozen);
     let mut shared = block(&t, l::FROZEN);
     shared.kind = LayoutKind::Shared { payload: l::FROZEN };
+    shared.scan = vec![ScanStep::Root { offset: 0 }];
+    shared.drop = vec![DropStep::ReleaseRoot { offset: 0 }];
     layouts.push(shared);
     let mut env_blk = record(&t, LayoutKind::Aggregate, 8, 8);
     env_blk.fields = vec![field(0, 0, l::BLK)];

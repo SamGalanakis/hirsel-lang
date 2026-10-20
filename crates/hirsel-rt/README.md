@@ -208,10 +208,19 @@ Invariants and boundary:
   one regrows in its arena instead, its old block emptied rather than freed.
 - `Shared[T]` roots (MEM-11, runtime ABI 8, `shared.rs`): a root is a heap block whose payload
   descriptor carries `LAYOUT_FROZEN` and holds the frozen value inline at offset 0; its header
-  count is the root count, so compiled `Dup`, `Release` and the uniqueness test add, give up
-  and count roots with the ordinary count word contract. That is sound only because one
-  cooperative scheduler runs every task of a run on one heap: roots cross task boundaries as
-  pointer moves, and no two threads touch a count. `hirsel_rt_v2_freeze(ctx, root)` walks the
+  count is the root count. Root counts are exact and atomic (runtime ABI 25, `roots.rs`, S-4,
+  S-5): compiled code adds a root by a CAS below the dup bound, else `hirsel_rt_v2_root_dup`,
+  and gives one up only through `hirsel_rt_v2_root_release` or a walk's `STEP_RELEASE_ROOT`
+  (step 11; layouts say which slots are roots with `ScanStep::Root`/`DropStep::ReleaseRoot`).
+  Past the run's finite maximum the header holds `ROOT_OVERFLOW` and the exact count lives in
+  the run's overflow table, so a root never saturates. A release applies at once at width 1;
+  a non-head ordered turn defers it to its retirement (`roots::retire`, the ordered
+  executor's hook); in free mode a release that does not find the count at 1 joins the task's
+  pending list, coalesced per root and cancelled by a later dup that reaches the runtime, which
+  the next op's entered phase applies (Amendment F0-1: that phase's walks release nested roots
+  at once). `thaw_turn` answers by the exact count read with acquire ordering, so an overflowed
+  root is never the last. Diagnostic mode faults on an ordinary count operation reaching a
+  root. `hirsel_rt_v2_freeze(ctx, root)` walks the
   value through its scan steps and makes every counted heap block it reaches `COUNT_IMMORTAL`
   (static and region blocks, never written, and nested roots, which keep their own counts, are
   skipped), so a read that copies a part writes no count and copy on write detaches. A
@@ -222,9 +231,8 @@ Invariants and boundary:
   the last, restores the counts the same way, and the caller moves the value out and frees the
   root shallowly. Both walks keep their stack in the run context and never recurse.
   `unique_copy` dups a root it reaches instead of copying it: copying never traverses a
-  frozen graph. A threaded scheduler would need atomic root counts (the compiled fast paths
-  and the runtime entries alike) and a frozen graph whose blocks no thread's heap reclaims
-  before the last root's thaw or release.
+  frozen graph. A threaded scheduler also needs a frozen graph whose blocks no thread's heap
+  reclaims before the last root's thaw or release.
 - Keyed hashing (SEM-5, runtime ABI 21): `hash_begin(ctx)` reads the run's
   configured seed. Scalar leaves use one-shot `hash_bytes`; a composite creates
   one 48-byte SipHash-1-3 state with `hash_init`, streams its framed leaves with

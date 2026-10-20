@@ -11,6 +11,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let block = self.load(Shape::Scalar(ScalarKind::Pointer), place);
             return self.dup_block(block);
         }
+        if let LayoutKind::Shared { .. } = record.kind {
+            let block = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+            return self.root_dup_block(block);
+        }
         self.dup_scan(place, &record.scan)
     }
 
@@ -25,6 +29,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let align = place.align.min(low_bit(*offset)).min(8);
                     let block = self.builder.load(ptr_ty, at, align);
                     self.dup_block(block)?;
+                }
+                ScanStep::Root { offset } => {
+                    let at = self.builder.offset(place.ptr, self.const_u64(*offset));
+                    let align = place.align.min(low_bit(*offset)).min(8);
+                    let block = self.builder.load(ptr_ty, at, align);
+                    self.root_dup_block(block)?;
                 }
                 ScanStep::Uncounted { .. } | ScanStep::Handle { .. } => {}
                 ScanStep::Inline { offset, layout } => {
@@ -135,6 +145,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .filter(|step| {
                 let offset = match step {
                     DropStep::Release { offset }
+                    | DropStep::ReleaseRoot { offset }
                     | DropStep::Environment { offset }
                     | DropStep::CloseHandle { offset }
                     | DropStep::Child { offset, .. } => Some(*offset),
@@ -192,6 +203,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             release: self.runtime(RuntimeEntry::Release)?,
             free: self.runtime(RuntimeEntry::Free)?,
             close_handle: self.runtime(RuntimeEntry::CloseHandle)?,
+            root_release: self.runtime(RuntimeEntry::RootRelease)?,
             measure_release,
             tracking: self.tracking(),
         };

@@ -6447,6 +6447,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         while let Some((base, step)) = work.pop() {
             match step {
                 ScanStep::Counted { offset }
+                | ScanStep::Root { offset }
                 | ScanStep::SliceOwner { offset }
                 | ScanStep::Environment { offset } => {
                     if owning {
@@ -8955,10 +8956,15 @@ impl<'p, S: Stage> Machine<'p, S> {
             let target = targets.iter().position(|(offset, id, _)| match step {
                 DropStep::Child { offset: at, layout } => offset == at && id == layout,
                 DropStep::Release { offset: at }
+                | DropStep::ReleaseRoot { offset: at }
                 | DropStep::Environment { offset: at }
                 | DropStep::CloseHandle { offset: at } => self.record(*id).ok().is_some_and(|r| {
                     r.drop.iter().any(|candidate| match (step, candidate) {
                         (DropStep::Release { .. }, DropStep::Release { offset: relative })
+                        | (
+                            DropStep::ReleaseRoot { .. },
+                            DropStep::ReleaseRoot { offset: relative },
+                        )
                         | (
                             DropStep::Environment { .. },
                             DropStep::Environment { offset: relative },
@@ -9182,7 +9188,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                         self.bind_parameter_slots(&mut frame, &[Some((base, None))])?;
                         return Ok(Some(Activity::Frame(Box::new(frame))));
                     }
-                    DropStep::Release { offset } => {
+                    // A root's count is exact in the ledger, so its release is the cell's.
+                    DropStep::Release { offset } | DropStep::ReleaseRoot { offset } => {
                         if !gated(offset) {
                             self.release_cell(base.at(offset), child_mask, &mut d.work)?;
                         }

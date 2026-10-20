@@ -229,6 +229,7 @@ fn read_unsigned(bytes: &[u8], at: u64, scalar: ScalarKind) -> Result<u64, Layou
 pub fn scan_order(step: &ScanStep) -> u64 {
     match step {
         ScanStep::Counted { offset }
+        | ScanStep::Root { offset }
         | ScanStep::Uncounted { offset }
         | ScanStep::SliceOwner { offset }
         | ScanStep::Inline { offset, .. }
@@ -265,6 +266,7 @@ pub fn borrowed_scan<'r>(
     for step in &child.scan {
         match step {
             ScanStep::Counted { offset }
+            | ScanStep::Root { offset }
             | ScanStep::Uncounted { offset }
             | ScanStep::SliceOwner { offset }
             | ScanStep::Environment { offset } => out.push(ScanStep::Uncounted {
@@ -368,6 +370,9 @@ pub fn shift_scan(step: &ScanStep, by: u64) -> ScanStep {
         ScanStep::Counted { offset } => ScanStep::Counted {
             offset: offset + by,
         },
+        ScanStep::Root { offset } => ScanStep::Root {
+            offset: offset + by,
+        },
         ScanStep::Uncounted { offset } => ScanStep::Uncounted {
             offset: offset + by,
         },
@@ -426,6 +431,9 @@ pub fn shift_drop(step: &DropStep, by: u64) -> DropStep {
     match step {
         DropStep::Finalize => DropStep::Finalize,
         DropStep::Release { offset } => DropStep::Release {
+            offset: offset + by,
+        },
+        DropStep::ReleaseRoot { offset } => DropStep::ReleaseRoot {
             offset: offset + by,
         },
         DropStep::Child { offset, layout } => DropStep::Child {

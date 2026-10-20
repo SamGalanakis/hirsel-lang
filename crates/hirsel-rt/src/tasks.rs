@@ -681,6 +681,13 @@ pub(crate) fn wake_all(ctx: *mut TaskCtx, tasks: &[u32]) {
     }
 }
 
+/// Whether the running task's end op has run (a holding child's later drops follow it).
+pub(crate) fn current_ended(ctx: *mut TaskCtx) -> bool {
+    let s = scheduler(ctx);
+    let current = s.current;
+    s.task(current).ended
+}
+
 /// The running task's spawn path.
 pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
     let s = scheduler(ctx);

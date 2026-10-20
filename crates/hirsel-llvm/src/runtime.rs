@@ -44,6 +44,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::FailureReanchor => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // Dup can update saturation/measurement bookkeeping as well as the count.
         R::Dup => (MemoryEffects::ReadWrite, false, &[0, 1]),
+        // A root dup may key the block in the overflow table, so the block is not nocapture.
+        R::RootDup => (MemoryEffects::ReadWrite, false, &[0]),
         // Failure bookkeeping can allocate/deallocate, hence memory(readwrite)
         // and no willreturn promise; the record's scalar contents are copied.
         R::FailureBegin | R::FailureClear | R::IsolateCatch => {
@@ -65,6 +67,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::Trim
         | R::Alloc
         | R::Release
+        | R::RootRelease
         | R::Free
         | R::Reset
         | R::Reuse
@@ -406,6 +409,39 @@ pub(crate) fn dup<'m>(
     let more = builder.binary(BinOp::Add, count, module.const_int(i32_ty, 1));
     builder.store_access(more, at, 4, Access::Count);
     builder.br(done);
+    builder.position(slow);
+    builder.call(runtime, &[context, block]);
+    builder.br(done);
+    builder.position(done);
+}
+
+/// T03 Dup of a `Shared` root under the root count contract (runtime ABI 25,
+/// `hirsel_rt_v2.h`): a count below the context's dup bound gains a root by a relaxed CAS of
+/// `count + 1`, retried while another holder changes it; anything else (the overflow state, the
+/// finite maximum, and every count when the bound is zero) goes to `hirsel_rt_v2_root_dup`.
+pub(crate) fn root_dup<'m>(
+    builder: &crate::context::Builder<'m>,
+    function: Function<'m>,
+    runtime: Function<'m>,
+    context: crate::context::Value<'m>,
+    block: crate::context::Value<'m>,
+) {
+    use crate::context::{BinOp, IntPredicate};
+    use hirsel_lir::runtime_abi::{COUNT_OFFSET, CTX_DUP_MAX_OFFSET};
+    let module = builder.module();
+    let (i32_ty, i64_ty) = (module.int_type(32), module.int_type(64));
+    let word = |n: u64| module.const_int(i64_ty, n.into());
+    let bound = builder.load(i32_ty, builder.offset(context, word(CTX_DUP_MAX_OFFSET)), 4);
+    let at = builder.offset(block, word(COUNT_OFFSET));
+    let [retry, inline, slow, done] = std::array::from_fn(|_| module.append_block(function));
+    builder.br(retry);
+    builder.position(retry);
+    let count = builder.load_relaxed(i32_ty, at, 4);
+    builder.cold_cond_br(builder.icmp(IntPredicate::Uge, count, bound), slow, inline);
+    builder.position(inline);
+    let more = builder.binary(BinOp::Add, count, module.const_int(i32_ty, 1));
+    let stored = builder.cmpxchg_relaxed(at, count, more);
+    builder.cond_br(stored, done, retry);
     builder.position(slow);
     builder.call(runtime, &[context, block]);
     builder.br(done);

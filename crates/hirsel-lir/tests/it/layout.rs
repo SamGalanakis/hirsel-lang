@@ -137,6 +137,7 @@ fn run_drop(
         match step {
             DropStep::Finalize => out.push((base, "finalize")),
             DropStep::Release { offset } => out.push((base + offset, "release")),
+            DropStep::ReleaseRoot { offset } => out.push((base + offset, "release root")),
             DropStep::Environment { offset } => out.push((base + offset, "environment")),
             DropStep::CloseHandle { offset } => out.push((base + offset, "close")),
             DropStep::Child { offset, layout } => {
@@ -1962,6 +1963,7 @@ fn renumber_scan(s: &mut ScanStep, map: &impl Fn(&mut LayoutId)) {
         ScanStep::Sequence { element, .. } | ScanStep::Repeat { element, .. } => map(element),
         ScanStep::Columns(c) => renumber_columns(c, map),
         ScanStep::Counted { .. }
+        | ScanStep::Root { .. }
         | ScanStep::Uncounted { .. }
         | ScanStep::SliceOwner { .. }
         | ScanStep::Environment { .. }
@@ -1982,6 +1984,7 @@ fn renumber_drop(d: &mut DropStep, map: &impl Fn(&mut LayoutId)) {
         DropStep::ColumnsReverse(c) => renumber_columns(c, map),
         DropStep::Finalize
         | DropStep::Release { .. }
+        | DropStep::ReleaseRoot { .. }
         | DropStep::Environment { .. }
         | DropStep::CloseHandle { .. } => {}
     }

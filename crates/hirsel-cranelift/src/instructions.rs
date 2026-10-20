@@ -268,6 +268,9 @@ impl FnEmitter<'_, '_, '_> {
             }
             Inst::Dup { value } => {
                 let block = self.get1(value)?;
+                if self.is_root_value(value)? {
+                    return self.root_dup_block(block);
+                }
                 self.dup_block(block)
             }
             Inst::Dispose { token } => {
@@ -510,6 +513,16 @@ impl FnEmitter<'_, '_, '_> {
                 let pointer = self.get(value)?;
                 self.define(result, pointer)
             }
+            // A root release never fails: a frozen graph runs no finalizer (MEM-11).
+            Inst::Release { value, .. } if self.is_root_value(value)? => {
+                let block = self.get1(value)?;
+                let context = self.context;
+                self.rt(RuntimeEntry::RootRelease, &[context, block])?;
+                Ok(())
+            }
+            Inst::Reset { value, .. } if self.is_root_value(value)? => {
+                self.invalid("a reset of a Shared root, which is never a reuse donor")
+            }
             Inst::Release {
                 value,
                 layout,
@@ -688,6 +701,14 @@ impl FnEmitter<'_, '_, '_> {
 
     /// Whether the counted block `block` has one holder.
     /// The `Frozen` payload layout of a `Shared` root reference value.
+    /// Whether `value` is a `Shared` root reference, whose count only the root entries touch.
+    pub(crate) fn is_root_value(&self, value: ValueId) -> Emitted<bool> {
+        Ok(matches!(
+            self.layout(self.value_type(value)?.layout)?.kind,
+            LayoutKind::Shared { .. }
+        ))
+    }
+
     fn frozen_payload(&self, value: ValueId) -> Emitted<LayoutId> {
         match self.layout(self.value_type(value)?.layout)?.kind {
             LayoutKind::Shared { payload } => Ok(payload),

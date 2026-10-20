@@ -22,6 +22,7 @@ mod recorder_overlap;
 mod recording;
 mod regions;
 mod release;
+mod roots;
 #[path = "../support/mod.rs"]
 mod support;
 mod tape_property;
