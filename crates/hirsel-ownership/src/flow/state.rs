@@ -362,8 +362,7 @@ impl Checker<'_, '_> {
                         Context::Copy => ty.is_some_and(|ty| self.stable_creation_copy(ty)),
                         // Invoking a many-use callable borrows it.
                         Context::Invoke => ty.is_some_and(|ty| {
-                            self.t.get(ty).unwrap().modes.multiplicity
-                                == Multiplicity::Many
+                            self.t.get(ty).unwrap().modes.multiplicity == Multiplicity::Many
                         }),
                         _ => self.closed_effect(&selection, relation, ty),
                     };

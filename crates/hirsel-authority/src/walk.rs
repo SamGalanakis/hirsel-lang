@@ -2640,11 +2640,18 @@ mod limit_tests {
                     .collect::<Vec<_>>();
                 let root = f.ty(TypeKind::Tuple(fields.into()));
                 let syntax = f.syntax(None);
+                let generics = f.body.resolution.generic_declarations.clone();
+                let reader = hirsel_modes::reader::Reader::new(&mut f.provider, &f.signature);
+                let mut lookup = |d: DefId| Ok(reader.borrow_mut().read(d).ok());
+                let memo = ContextMemo::new(f.types, &generics, &mut lookup);
                 let mut c = Checker::new(
+                    f.types,
+                    &f.memo,
                     &syntax,
                     &f.signature,
                     f.body,
-                    &mut f.provider,
+                    &reader,
+                    memo,
                     &f.intrinsics,
                 );
                 assert_eq!(c.contains_resource(root), resource);
@@ -2669,11 +2676,18 @@ mod limit_tests {
                 );
             }
             let syntax = f.syntax(None);
+            let generics = f.body.resolution.generic_declarations.clone();
+            let reader = hirsel_modes::reader::Reader::new(&mut f.provider, &f.signature);
+            let mut lookup = |d: DefId| Ok(reader.borrow_mut().read(d).ok());
+            let memo = ContextMemo::new(f.types, &generics, &mut lookup);
             let mut c = Checker::new(
+                f.types,
+                &f.memo,
                 &syntax,
                 &f.signature,
                 f.body,
-                &mut f.provider,
+                &reader,
+                memo,
                 &f.intrinsics,
             );
             assert!(!c.contains_resource(root));

@@ -952,7 +952,13 @@ impl InitialStorage {
         }
         storage
     }
-    fn refresh(&mut self, t: &TypeInterner, index: usize, body: &CheckedBody, properties: &PropertyTable) {
+    fn refresh(
+        &mut self,
+        t: &TypeInterner,
+        index: usize,
+        body: &CheckedBody,
+        properties: &PropertyTable,
+    ) {
         work::count(Counter::OwnershipInitializedRows);
         let binding = &body.bindings[index];
         let declared = t.get(binding.ty).unwrap().modes.relation.clone();
@@ -991,7 +997,8 @@ impl InitialStorage {
         );
     }
     pub(super) fn postcondition_inputs(
-        &mut self, t: &TypeInterner,
+        &mut self,
+        t: &TypeInterner,
         syntax: &ItemSyntax,
         owner: NameSite,
         body: &mut CheckedBody,
@@ -1353,7 +1360,8 @@ fn join_sendability(current: Sendability, actual: Sendability) -> Sendability {
     }
 }
 /// Flow refines a row's lifetime; its placement stays the row's own.
-fn publish_row(t: &TypeInterner, 
+fn publish_row(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     properties: &mut PropertyTable,
     root: TypeId,
@@ -1388,7 +1396,8 @@ fn shared_parts_row(
         shared_part_row(t, body, properties, root, path)
     })
 }
-fn shared_part_row(t: &TypeInterner, 
+fn shared_part_row(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     properties: &mut PropertyTable,
     ty: TypeId,
@@ -1458,7 +1467,8 @@ fn fold_part_locality(
 
 /// Borrowed frame inputs whose proof is consumed at a qualified call. This is
 /// private capture validation, separate from generic signature admissibility.
-pub(super) fn capture_crossing_uses(t: &TypeInterner, 
+pub(super) fn capture_crossing_uses(
+    t: &TypeInterner,
     body: &CheckedBody,
     graphs: &[Graph],
     rows: &super::source_rows::SourceRows,
@@ -1565,7 +1575,8 @@ pub(super) fn capture_crossing_uses(t: &TypeInterner,
     Ok(result)
 }
 
-pub(super) fn check(t: &TypeInterner, 
+pub(super) fn check(
+    t: &TypeInterner,
     syntax: &ItemSyntax,
     own: &Signature,
     body: &mut CheckedBody,
@@ -1764,7 +1775,8 @@ pub(super) fn check(t: &TypeInterner,
     for (expression, modes) in checker.modes {
         if let Some(index) = checker.source_rows.expression(expression) {
             let ty = publish_row(
-                t, checker.body,
+                t,
+                checker.body,
                 checker.properties,
                 checker.body.expressions[index].ty,
                 modes,
@@ -1823,7 +1835,8 @@ pub(super) fn check(t: &TypeInterner,
     for (pattern, modes) in checker.pattern_modes {
         let index = checker.pattern_indices[&pattern];
         checker.body.patterns[index].ty = publish_row(
-            t, checker.body,
+            t,
+            checker.body,
             checker.properties,
             checker.body.patterns[index].ty,
             modes,
@@ -1835,7 +1848,8 @@ pub(super) fn check(t: &TypeInterner,
     for (binding, modes) in checker.binding_modes {
         let previous = checker.body.bindings[binding].ty;
         let ty = publish_row(
-            t, checker.body,
+            t,
+            checker.body,
             checker.properties,
             previous,
             modes,
@@ -2030,11 +2044,13 @@ impl Checker<'_, '_> {
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::NotSendable;
         let root = self.intern(row);
-        value.modes.sendability = self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
-        .unwrap_or_else(|error| {
-            *self.proof_error.borrow_mut() = Some(error);
-            Sendability::NotSendable
-        });
+        value.modes.sendability = self
+            .signatures
+            .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
+            .unwrap_or_else(|error| {
+                *self.proof_error.borrow_mut() = Some(error);
+                Sendability::NotSendable
+            });
     }
     fn may_capture(&self, expression: ExprId) -> bool {
         self.ty(expression)
@@ -2273,8 +2289,9 @@ impl Checker<'_, '_> {
             row.modes = modes;
             self.intern(row)
         };
-        self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
-        .unwrap_or(Sendability::NotSendable)
+        self.signatures
+            .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
+            .unwrap_or(Sendability::NotSendable)
     }
     /// MODE-4: a global construction whose every part currently crosses
     /// crosses too, as V proves a construction field by field. The typed row
@@ -2622,9 +2639,7 @@ impl Checker<'_, '_> {
         if self.property(expression).is_some_and(|p| p.plain) {
             // Plain reads copy a value, not an owner's blocks (MODE-1/OWN-8).
             // Freshness and container modes cannot change that scalar evidence.
-            let declared = &self.t.get(self.ty(expression).unwrap())
-                .unwrap()
-                .modes;
+            let declared = &self.t.get(self.ty(expression).unwrap()).unwrap().modes;
             value.modes.relation = Relation::global();
             value.modes.uniqueness = declared.uniqueness;
             // MODE-4: a structural plain proof establishes sendability even
@@ -2925,8 +2940,7 @@ impl Checker<'_, '_> {
         let mut lookup = |d: DefId| Ok(self.signatures.cached(d));
         // A bodyless core declaration has no checked body.
         let checked = !path.package_is("core", "1");
-        let Some(inputs) = parametric_inputs(self.t, function, checked, &mut lookup)
-        else {
+        let Some(inputs) = parametric_inputs(self.t, function, checked, &mut lookup) else {
             return false;
         };
         arguments
@@ -3017,10 +3031,7 @@ impl Checker<'_, '_> {
         let [parameter] = function.parameters.as_slice() else {
             return;
         };
-        if self.t.get(parameter.ty)
-            .map(|row| row.modes.uniqueness)
-            != Some(Uniqueness::Unique)
-        {
+        if self.t.get(parameter.ty).map(|row| row.modes.uniqueness) != Some(Uniqueness::Unique) {
             return;
         }
         let Some(TypeKind::Named { arguments, .. }) = self
@@ -3116,9 +3127,7 @@ impl Checker<'_, '_> {
         }
         let mut held = BTreeSet::new();
         for (index, slot) in state.slots.entries() {
-            if slot.available & LIVE != 0
-                && !self.properties[self.body.bindings[index].ty].plain
-            {
+            if slot.available & LIVE != 0 && !self.properties[self.body.bindings[index].ty].plain {
                 held.extend(
                     self.reached_bindings(state, &slot.value)
                         .into_iter()
@@ -3158,8 +3167,7 @@ impl Checker<'_, '_> {
                 && state.slots[index].available == LIVE
                 && (promised
                     || self.unique_proof.is_none()
-                        && self.t.get(binding.ty).unwrap().modes.uniqueness
-                            == Uniqueness::Unique)
+                        && self.t.get(binding.ty).unwrap().modes.uniqueness == Uniqueness::Unique)
                 && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
                 && !(state.slots[index].value.borrow_only && !held.contains(&index))
                 && !self.properties[binding.ty].plain
@@ -3598,9 +3606,7 @@ impl Checker<'_, '_> {
                 // A task closure copies its other free uses too (CLO-3), so a
                 // noncopyable capture must be taken there as well.
                 let task = metadata.is_some_and(|m| m.context == CaptureContext::Task);
-                if !self.properties[ty].scoped_capability
-                    && !self.properties[ty].copyable
-                {
+                if !self.properties[ty].scoped_capability && !self.properties[ty].copyable {
                     self.report(
                         const { RuleId::of("OWN-5") },
                         closure,
@@ -3668,9 +3674,12 @@ impl Checker<'_, '_> {
             captured.modes = part.modes.clone();
             let captured = self.intern(captured);
             let proof = if usage == UseKind::Copy {
-                self.signatures.prove_cached(|memo| hirsel_modes::proofs::sendability_after_sharing(memo, captured))
+                self.signatures.prove_cached(|memo| {
+                    hirsel_modes::proofs::sendability_after_sharing(memo, captured)
+                })
             } else {
-                self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, captured))
+                self.signatures
+                    .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, captured))
             }
             .unwrap_or_else(|error| {
                 *self.proof_error.borrow_mut() = Some(error);
@@ -3709,8 +3718,12 @@ impl Checker<'_, '_> {
                     ty.sendability_requirement = SendabilityRequirement::None;
                     if !plain && !flat {
                         let root = self.intern(ty.clone());
-                        ty.modes.sendability = self.signatures.prove_cached(|memo| hirsel_modes::proofs::sendability_after_sharing(memo, root))
-                        .unwrap_or(Sendability::NotSendable);
+                        ty.modes.sendability = self
+                            .signatures
+                            .prove_cached(|memo| {
+                                hirsel_modes::proofs::sendability_after_sharing(memo, root)
+                            })
+                            .unwrap_or(Sendability::NotSendable);
                     }
                 }
                 // CLO-1: the body knows a borrowed capture as a borrowed
@@ -3832,7 +3845,7 @@ impl Checker<'_, '_> {
                         explanation: Explanation {
                             required: Some(required),
                             root: Some(hirsel_modes::explain::root_key(
-c.own.definition.path(),
+                                c.own.definition.path(),
                                 ("locality", (2u8, first)),
                             )),
                             ..Explanation::default()
@@ -3881,7 +3894,7 @@ c.own.definition.path(),
                         message: "share the counted part before its owner's block ends".into(),
                     }),
                     root: Some(hirsel_modes::explain::root_key(
-c.own.definition.path(),
+                        c.own.definition.path(),
                         ("block part", tail.0),
                     )),
                     ..Explanation::default()
@@ -4133,7 +4146,9 @@ c.own.definition.path(),
                     // A field's invocation count is its own contract. The
                     // aggregate owner's Many mode cannot make a Once part
                     // repeatable or copyable.
-                    value.modes.multiplicity = self.t.get(self.ty(*expression).unwrap())
+                    value.modes.multiplicity = self
+                        .t
+                        .get(self.ty(*expression).unwrap())
                         .unwrap()
                         .modes
                         .multiplicity;
@@ -4336,9 +4351,7 @@ c.own.definition.path(),
                     && (!property.copyable || value.modes.multiplicity == Multiplicity::Once)
                 {
                     let generic = matches!(
-                        self.t.get(self.ty(*expression).unwrap())
-                            .unwrap()
-                            .kind,
+                        self.t.get(self.ty(*expression).unwrap()).unwrap().kind,
                         TypeKind::Parameter(_)
                     );
                     if let Some(d) = self.report(
@@ -4444,7 +4457,9 @@ c.own.definition.path(),
                     // OWN-8 carries locality from the owner, but sendability
                     // belongs to the checked part (a flat owner's counted
                     // field is not itself a flat value).
-                    value.modes.sendability = self.t.get(self.ty(*expression).unwrap())
+                    value.modes.sendability = self
+                        .t
+                        .get(self.ty(*expression).unwrap())
                         .unwrap()
                         .modes
                         .sendability
@@ -4580,10 +4595,7 @@ c.own.definition.path(),
                 // source, and a scoped placement is the bound (PROV-4). The
                 // authority pass published the joined row.
                 if let (Some(joined), Some(source)) = (self.ty(*expression), self.ty(*child)) {
-                    if self
-                        .arenas
-                        .unplaced_scoped(self.t, joined, source)
-                    {
+                    if self.arenas.unplaced_scoped(self.t, joined, source) {
                         value.modes.relation = Relation::environment();
                         value.loans.insert(
                             Kind::Bound,
@@ -4970,9 +4982,7 @@ c.own.definition.path(),
                         } else if !property.shared {
                             if let Some(root) = value.aliased() {
                                 state.slots[root].value.share();
-                                if !self.properties[self.body.bindings[root].ty]
-                                    .sendable_aliased
-                                {
+                                if !self.properties[self.body.bindings[root].ty].sendable_aliased {
                                     state.slots[root].value.modes.sendability =
                                         Sendability::NotSendable;
                                     state.slots[root]
@@ -5207,7 +5217,8 @@ c.own.definition.path(),
                         .pattern_indices
                         .get(&pattern)
                         .map(|index| {
-                            self.t.get(self.body.patterns[*index].ty)
+                            self.t
+                                .get(self.body.patterns[*index].ty)
                                 .unwrap()
                                 .modes
                                 .clone()
@@ -5235,8 +5246,7 @@ c.own.definition.path(),
                             physical_modes.relation = if self.properties[declared].plain {
                                 Relation::global()
                             } else {
-                                let locality =
-                                    &self.t.get(declared).unwrap().modes.relation;
+                                let locality = &self.t.get(declared).unwrap().modes.relation;
                                 if self.arenas.global(locality) {
                                     parent_modes.relation
                                 } else {
@@ -5322,7 +5332,9 @@ c.own.definition.path(),
                                 if let Some(&row) =
                                     self.pattern_indices.get(&pattern).filter(|_| self.emit)
                                 {
-                                    let mut modes = self.t.get(self.body.patterns[row].ty)
+                                    let mut modes = self
+                                        .t
+                                        .get(self.body.patterns[row].ty)
                                         .unwrap()
                                         .modes
                                         .clone();
@@ -5649,7 +5661,9 @@ c.own.definition.path(),
                     .binding_modes
                     .get(&place.binding)
                     .unwrap_or(
-                        &self.t.get(self.body.bindings[place.binding].ty)
+                        &self
+                            .t
+                            .get(self.body.bindings[place.binding].ty)
                             .unwrap()
                             .modes,
                     )
@@ -5679,8 +5693,7 @@ c.own.definition.path(),
                     expression_type(self.body, *expression, self.source_rows)
                 } {
                     let mut requirement = self.t.get(storage).unwrap().modes.clone();
-                    requirement.sendability =
-                        crossing_requirement(self.t.get(storage).unwrap());
+                    requirement.sendability = crossing_requirement(self.t.get(storage).unwrap());
                     requirement.uniqueness = Uniqueness::Aliased;
                     requirement.multiplicity = Multiplicity::Once;
                     if requirement.sendability == Sendability::Sendable {
@@ -5725,8 +5738,7 @@ c.own.definition.path(),
                     }
                 }
                 if self.emit {
-                    let ty = self.t.get(self.body.bindings[place.binding].ty)
-                        .unwrap();
+                    let ty = self.t.get(self.body.bindings[place.binding].ty).unwrap();
                     // Arena and region receivers detach even when uniqueness
                     // alone would update them in place.
                     let arena_or_region = self.arenas.placed(&ty.modes.relation);
@@ -5823,9 +5835,7 @@ c.own.definition.path(),
                     // The root now reaches the stored counted aliases. Plain
                     // bits and Shared boundaries do not share its owned graph.
                     state.slots[place.binding].value.share();
-                    if !self.properties[self.body.bindings[place.binding].ty]
-                        .sendable_aliased
-                    {
+                    if !self.properties[self.body.bindings[place.binding].ty].sendable_aliased {
                         state.slots[place.binding].value.modes.sendability =
                             Sendability::NotSendable;
                         state.slots[place.binding]
@@ -5892,8 +5902,7 @@ c.own.definition.path(),
                                 || self
                                     .ty(*callee)
                                     .and_then(|ty| {
-                                        let TypeKind::Function(function) =
-                                            &self.t.get(ty)?.kind
+                                        let TypeKind::Function(function) = &self.t.get(ty)?.kind
                                         else {
                                             return None;
                                         };
@@ -6380,7 +6389,9 @@ c.own.definition.path(),
                                         .join_lifetime(&value.modes.relation, &part.modes.relation);
                                 }
                                 if self.arenas.placed(
-                                    &self.t.get(self.body.bindings[index].ty)
+                                    &self
+                                        .t
+                                        .get(self.body.bindings[index].ty)
                                         .unwrap()
                                         .modes
                                         .relation,
@@ -6391,10 +6402,7 @@ c.own.definition.path(),
                                 value.read_through(part);
                                 value.inherit_crossing_borrows(part);
                                 if self.ty(*expression).is_some_and(|ty| {
-                                    matches!(
-                                        self.t.get(ty).unwrap().kind,
-                                        TypeKind::Function(_)
-                                    )
+                                    matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_))
                                 }) {
                                     value.inherit_callable_captures(part);
                                 }
@@ -6433,10 +6441,7 @@ c.own.definition.path(),
                             }
                             value.inherit_crossing_borrows(&retained);
                             if self.ty(*expression).is_some_and(|ty| {
-                                matches!(
-                                    self.t.get(ty).unwrap().kind,
-                                    TypeKind::Function(_)
-                                )
+                                matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_))
                             }) {
                                 value.inherit_callable_captures(&retained);
                             }
@@ -6445,8 +6450,7 @@ c.own.definition.path(),
                                     self.join_lifetime(&value.modes.relation, &part.modes.relation);
                             }
                             let placed = self.ty(arg.value).is_some_and(|ty| {
-                                self.arenas
-                                    .placed(&self.t.get(ty).unwrap().modes.relation)
+                                self.arenas.placed(&self.t.get(ty).unwrap().modes.relation)
                             });
                             let source = place(self.body, arg.value, self.source_rows);
                             // An arena-only argument, computed, named or
@@ -6599,9 +6603,7 @@ c.own.definition.path(),
                             } else {
                                 state.slots[root].value.share();
                             }
-                            if !self.properties[self.body.bindings[root].ty]
-                                .sendable_aliased
-                            {
+                            if !self.properties[self.body.bindings[root].ty].sendable_aliased {
                                 state.slots[root].value.modes.sendability =
                                     Sendability::NotSendable;
                                 state.slots[root]
@@ -6660,9 +6662,7 @@ c.own.definition.path(),
                     {
                         for root in value.content.summary().bindings(Kind::Read) {
                             state.slots[root].value.share();
-                            if !self.properties[self.body.bindings[root].ty]
-                                .sendable_aliased
-                            {
+                            if !self.properties[self.body.bindings[root].ty].sendable_aliased {
                                 state.slots[root].value.modes.sendability =
                                     Sendability::NotSendable;
                                 state.slots[root]
@@ -6733,8 +6733,7 @@ c.own.definition.path(),
                 let parametric =
                     self.parametric_unique(*callee, arguments, requirements, &unique_arguments);
                 for (storage, mutable, argument) in &loans {
-                    let declared = self.t.get(self.body.bindings[storage.binding].ty)
-                        .unwrap();
+                    let declared = self.t.get(self.body.bindings[storage.binding].ty).unwrap();
                     let preserves_state = arguments.iter().zip(requirements).any(|(arg, req)| {
                         arg.value == *argument
                             && req.as_ref().is_some_and(|r| {
@@ -6785,14 +6784,12 @@ c.own.definition.path(),
                         // Only its checked fixed contract (or structural Plain)
                         // supplies an outgoing proof; fresh input alone does not.
                         let crossing = crossing_requirement(declared);
-                        state.slots[storage.binding].value.modes.sendability = if self.properties
-                            [self.body.bindings[storage.binding].ty]
-                        .plain
-                        {
-                            Sendability::Sendable
-                        } else {
-                            crossing
-                        };
+                        state.slots[storage.binding].value.modes.sendability =
+                            if self.properties[self.body.bindings[storage.binding].ty].plain {
+                                Sendability::Sendable
+                            } else {
+                                crossing
+                            };
                     } else if *mutable {
                         let preserves_crossing =
                             arguments
@@ -6976,14 +6973,12 @@ c.own.definition.path(),
             let SignatureKind::Type(declaration) = &signature.kind else {
                 return None;
             };
-            let TypeKind::Variant(variants) =
-                &self.t.get(declaration.representation?)?.kind
-            else {
+            let TypeKind::Variant(variants) = &self.t.get(declaration.representation?)?.kind else {
                 return None;
             };
-            let error = variants
-                .iter()
-                .position(|variant| variant.name.as_str() == "Error" && variant.fields.len() == 1)?;
+            let error = variants.iter().position(|variant| {
+                variant.name.as_str() == "Error" && variant.fields.len() == 1
+            })?;
             Some((error as u32, *payload))
         }) else {
             *self.proof_error.borrow_mut() = Some(QueryError::Operational(OperationalFailure {
@@ -7035,7 +7030,8 @@ c.own.definition.path(),
         let SignatureKind::Function(function) = &signature.kind else {
             return false;
         };
-        self.t.get(function.result)
+        self.t
+            .get(function.result)
             .is_some_and(|row| row.modes.relation.is_global())
     }
     /// The locality a returned value needs to leave this frame as `result`
@@ -7556,14 +7552,11 @@ c.own.definition.path(),
                 return false;
             };
             ty = child;
-            let unique = self.t.get(ty)
+            let unique = self
+                .t
+                .get(ty)
                 .is_some_and(|row| row.modes.uniqueness == Uniqueness::Unique);
-            if unique
-                && !self
-                    .properties
-                    .get(ty)
-                    .is_some_and(|p| p.plain || p.shared)
-            {
+            if unique && !self.properties.get(ty).is_some_and(|p| p.plain || p.shared) {
                 return true;
             }
         }

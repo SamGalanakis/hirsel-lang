@@ -96,7 +96,7 @@ impl SignatureProvider for Provider {
     }
 }
 pub struct Fixture {
-    pub types: std::sync::Arc<TypeInterner>,
+    pub types: &'static std::sync::Arc<TypeInterner>,
     pub memo: TypeMemo,
     pub tree: SyntaxTree,
     pub body: CheckedBody,
@@ -107,7 +107,7 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new() -> Self {
-        let types = TypeInterner::new(None);
+        let types = session_arc();
         let unit = types.intern(type_row(TypeKind::Tuple(vec![].into())));
         let signature = Signature {
             definition: DefId::intern(&path("example")),
@@ -444,6 +444,19 @@ impl Fixture {
             &[],
         )
     }
+}
+/// The session interner every fixture's rows share.
+pub fn session_arc() -> &'static std::sync::Arc<TypeInterner> {
+    static SESSION: std::sync::OnceLock<std::sync::Arc<TypeInterner>> = std::sync::OnceLock::new();
+    SESSION.get_or_init(|| TypeInterner::new(None))
+}
+pub fn session() -> &'static TypeInterner {
+    session_arc()
+}
+/// The structural memo shared with the session interner.
+pub fn session_memo() -> &'static TypeMemo {
+    static MEMO: std::sync::OnceLock<TypeMemo> = std::sync::OnceLock::new();
+    MEMO.get_or_init(TypeMemo::new)
 }
 pub fn parameter(ty: TypeId, passing: PassingMode) -> hirsel_types::Parameter {
     hirsel_types::Parameter {

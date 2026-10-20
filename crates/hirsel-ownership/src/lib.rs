@@ -14,8 +14,8 @@ mod tests;
 use hirsel_diag::Diagnostic;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
-use hirsel_syntax::{ExprId, ItemSyntax};
 use hirsel_syntax::DefId;
+use hirsel_syntax::{ExprId, ItemSyntax};
 use hirsel_types::*;
 
 /// A binding row is the storage identity; nested parameter ordinals are scoped.
@@ -99,7 +99,9 @@ pub fn check_ownership_with_clauses(
     let memo = ContextMemo::new(t, &generics, &mut read);
     let cached_memo = ContextMemo::new(t, &generics, &mut cached);
     let mut signatures = properties::Signatures::new(m, &reader, memo, cached_memo);
-    let mut graphs = cfg::build(t, syntax, signature, body, captures, clauses, results, &rows)?;
+    let mut graphs = cfg::build(
+        t, syntax, signature, body, captures, clauses, results, &rows,
+    )?;
     let projection_lifetimes =
         properties::projection_lifetimes(t, body, signature, &mut signatures)?;
     let pattern_declarations =
@@ -134,8 +136,7 @@ pub fn check_ownership_with_clauses(
             }
         }
     }
-    let result_sharing =
-        properties::result_sharing(t, body, &graphs, &mut signatures, &rows)?;
+    let result_sharing = properties::result_sharing(t, body, &graphs, &mut signatures, &rows)?;
     let mut mutation_sites = Vec::new();
     let mut facts = OwnershipFacts {
         captures: captures.to_vec(),
@@ -188,7 +189,8 @@ pub fn check_ownership_with_clauses(
             let mut proof_facts = facts.clone();
             let mut proof_diagnostics = Vec::new();
             flow::check(
-                t, syntax,
+                t,
+                syntax,
                 signature,
                 &mut proof_body,
                 &signatures,
@@ -225,7 +227,8 @@ pub fn check_ownership_with_clauses(
     }
     for graph in &graphs {
         let checked = flow::check(
-            t, syntax,
+            t,
+            syntax,
             signature,
             body,
             &signatures,
@@ -245,7 +248,8 @@ pub fn check_ownership_with_clauses(
             None,
         )?;
         initial_storage.postcondition_inputs(
-            t, syntax,
+            t,
+            syntax,
             graph.owner,
             body,
             &mut properties,
@@ -350,12 +354,7 @@ pub fn check_ownership_with_clauses(
         })
         .cloned()
         .collect();
-    properties::identity_projections(
-        t,
-        body,
-        &mut facts.identity_fields,
-        &mut signatures,
-    )?;
+    properties::identity_projections(t, body, &mut facts.identity_fields, &mut signatures)?;
     // Flow refines modes without changing Plain. Reuse those classified rows;
     // normalization and replacement storage can derive further structural rows.
     // The published rows are the final tables' graphs and the facts' rows.
@@ -432,7 +431,8 @@ fn suffix(rule: &str) -> u32 {
 
 /// Build internal clause headers from independently checked formal rows.
 /// Entry clauses keep entry modes; postconditions carry continuing-exit modes.
-pub fn checked_clause_types(t: &TypeInterner, 
+pub fn checked_clause_types(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     clauses: &[(ExprId, TypeId)],
 ) -> Result<Vec<TypeId>, GraphError> {

@@ -138,14 +138,14 @@ impl Checker<'_, '_> {
                 incoming_slot == slot
                     && match (
                         &self.t.get(selected_ty).unwrap().kind,
-                        &self.t.get(self.body.bindings[selected].ty)
-                            .unwrap()
-                            .kind,
+                        &self.t.get(self.body.bindings[selected].ty).unwrap().kind,
                     ) {
                         (TypeKind::Parameter(relayed), TypeKind::Parameter(incoming)) => {
                             relayed == incoming
                         }
-                        _ => self.t.semantic_eq(selected_ty, self.body.bindings[selected].ty),
+                        _ => self
+                            .t
+                            .semantic_eq(selected_ty, self.body.bindings[selected].ty),
                     }
                     && selected_inputs
                         .as_ref()
@@ -153,7 +153,9 @@ impl Checker<'_, '_> {
                     && callback_inputs
                         .as_ref()
                         .is_some_and(|inputs| inputs.contains(&callback))
-                    && self.t.semantic_eq(callback_ty, self.body.bindings[callback].ty)
+                    && self
+                        .t
+                        .semantic_eq(callback_ty, self.body.bindings[callback].ty)
             }) {
                 return false;
             }

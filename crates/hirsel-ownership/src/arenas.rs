@@ -65,7 +65,12 @@ impl Arenas {
     /// Whether `holder`, at its root or any part, is an unplaced local join of
     /// scoped content `value` holds at the same position (PROV-4). The content
     /// is then bounded by the frame that made the join, as its placement was.
-    pub(crate) fn unplaced_scoped(&self, store: &TypeInterner, holder: TypeId, value: TypeId) -> bool {
+    pub(crate) fn unplaced_scoped(
+        &self,
+        store: &TypeInterner,
+        holder: TypeId,
+        value: TypeId,
+    ) -> bool {
         let (Some(h), Some(v)) = (store.get(holder), store.get(value)) else {
             return false;
         };

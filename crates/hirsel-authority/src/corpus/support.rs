@@ -1,3 +1,4 @@
+pub(super) use crate::test_support::{session, session_memo};
 use hirsel_diag::Diagnostic;
 use hirsel_intern::Symbol;
 use hirsel_resolve::{ManifestFixture, ManifestIndex};
@@ -36,7 +37,8 @@ pub(super) fn context() -> ast::FileContext {
     }
 }
 impl SignatureProvider for Registry {
-    fn signature(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, definition: ast::DefId) -> Result<SignatureRef, QueryError> {
+        let path = definition.path();
         self.reads.push(path.clone());
         self.signatures
             .get(path)
@@ -85,11 +87,9 @@ fn type_signature(
     cap: Option<CapabilityKind>,
     representation: Option<TypeKind>,
 ) -> Signature {
-    let mut types = TypeStore::default();
-    let repr = representation.map(|r| types.push(row(r)));
+    let repr = representation.map(|r| session().intern(row(r)));
     Signature {
-        definition: path(name),
-        types,
+        definition: ast::DefId::intern(&path(name)),
         metadata: SignatureMetadata {
             visibility: ast::Visibility::Public,
             roles: NominalRoles {
@@ -143,7 +143,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     {
         registry
             .signatures
-            .insert(signature.definition.clone(), signature.clone());
+            .insert(signature.definition.path().clone(), signature.clone());
     }
     for name in [
         "Io",
@@ -323,7 +323,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         if matches!(name, "iter.from" | "iter.map") {
             let signature = Arc::make_mut(registry.signatures.get_mut(&p).unwrap());
             if let SignatureKind::Function(f) = &mut signature.kind {
-                let mut result = signature.types.get(f.result).unwrap().clone();
+                let mut result = session().row(f.result).clone();
                 result.erased_captures = Some(ErasedCaptures::FromArguments(
                     vec![
                         ParameterRef::bound(ParamId(0)).into(),
@@ -331,7 +331,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
                     ]
                     .into(),
                 ));
-                f.result = signature.types.push(result);
+                f.result = session().intern(result);
             }
         }
         // E currently over-restricts SortedMap: restore the section-22 header.
@@ -346,12 +346,12 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     }
     let mut signature = type_signature("$intrinsic.heap", vec![], None, None);
     let mut result = row(TypeKind::Named {
-        definition: path("Arena"),
+        definition: ast::DefId::intern(&path("Arena")),
         arguments: vec![].into(),
     });
     result.allocation_target = Some(AllocationTarget::Heap);
     result.modes.sendability = Sendability::Sendable;
-    let result = signature.types.push(result);
+    let result = session().intern(result);
     signature.kind = SignatureKind::Function(FunctionType {
         state_promises: Default::default(),
         generics: vec![].into(),
@@ -367,7 +367,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     });
     registry
         .signatures
-        .insert(signature.definition.clone(), Arc::new(signature));
+        .insert(signature.definition.path().clone(), Arc::new(signature));
     registry
 }
 pub(super) fn normalize_file(
@@ -418,7 +418,13 @@ pub(super) fn normalize_file(
     for _ in 0..file.items.len() + 1 {
         let mut next = vec![];
         for syntax in pending {
-            let r = hirsel_resolve::resolve_item(file, syntax, &registry.index.clone(), registry);
+            let r = hirsel_resolve::resolve_item(
+                file,
+                syntax,
+                &registry.index.clone(),
+                session(),
+                registry,
+            );
             let item = &syntax.item;
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
@@ -426,6 +432,8 @@ pub(super) fn normalize_file(
             };
             match hirsel_signature::normalize(
                 hirsel_check_protocol::header::Input {
+                    types: session(),
+                    memo: session_memo(),
                     syntax,
                     context: &ctx,
                     resolution: &r,

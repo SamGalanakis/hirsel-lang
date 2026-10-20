@@ -266,8 +266,7 @@ impl Checker<'_, '_> {
             provided: provenance.facts,
             root: provenance
                 .root
-                .map(|root| root_key(
-self.own.definition.path(), ("locality", root))),
+                .map(|root| root_key(self.own.definition.path(), ("locality", root))),
             ..Explanation::default()
         };
         if let (Some(cause), Some(index)) = (explanation.cause().cloned(), provenance.binding) {
@@ -322,11 +321,9 @@ self.own.definition.path(), ("locality", root))),
         let content = value.content.summary();
         let mut pending: Pending = Explanation {
             required: Some(Fact::new(Requirement::ResultNoTemporary, result, &[])),
-            root: content
-                .scopes()
-                .next()
-                .map(|(_, scope, _)| root_key(
-self.own.definition.path(), ("locality", (2u8, scope)))),
+            root: content.scopes().next().map(|(_, scope, _)| {
+                root_key(self.own.definition.path(), ("locality", (2u8, scope)))
+            }),
             ..Explanation::default()
         }
         .into();
@@ -371,8 +368,7 @@ self.own.definition.path(), ("locality", (2u8, scope)))),
         let (name, _) = self.binding_site(index);
         let mut pending: Pending = Explanation {
             required: Some(required),
-            root: Some(root_key(
-self.own.definition.path(), ("moved", index))),
+            root: Some(root_key(self.own.definition.path(), ("moved", index))),
             provided: vec![Fact::new(
                 Cause::Uninitialised,
                 self.span_of(read),

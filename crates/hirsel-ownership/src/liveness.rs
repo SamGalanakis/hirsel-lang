@@ -87,8 +87,7 @@ impl Liveness<'_> {
     /// A binding can hold a loan unless it is Plain (Plain values hold only
     /// identity loans, which PROV-1 tracks separately).
     fn holder(&self, binding: usize) -> Option<Holder> {
-        (!self.properties[self.body.bindings[binding].ty].plain)
-            .then_some(Holder::Binding(binding))
+        (!self.properties[self.body.bindings[binding].ty].plain).then_some(Holder::Binding(binding))
     }
     /// Destroying a value that may contain a resource runs user code (DROP-2);
     /// copyable values have no user-visible destruction (DROP-1).

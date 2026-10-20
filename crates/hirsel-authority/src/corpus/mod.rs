@@ -153,6 +153,7 @@ fn real_phase_corpus_ratchet() {
                         &file,
                         id,
                         &registry.index.clone(),
+                        support::session(),
                         &mut registry,
                     );
                     if let Some(d) = resolution.query.diagnostics.first() {
@@ -166,6 +167,8 @@ fn real_phase_corpus_ratchet() {
                     let output = body::check_with_loop_protocols(
                         body::LoopInput {
                             body: body::Input {
+                                types: support::session(),
+                                memo: support::session_memo(),
                                 syntax: id,
                                 context: &support::context(),
                                 resolution: &resolution,
@@ -202,11 +205,13 @@ fn real_phase_corpus_ratchet() {
                                     id.tree.expressions[row.expression.0 as usize].origin.span
                                 ),
                                 id.tree.expressions[row.expression.0 as usize].kind,
-                                checked.value.types.get(row.ty)
+                                support::session().get(row.ty)
                             );
                         }
                     }
                     let out = check_file_with_clauses(
+                        support::session(),
+                        support::session_memo(),
                         id,
                         &sig,
                         checked.value,
@@ -355,8 +360,13 @@ fn check_source_phases(
     let mut registry = support::registry(&file);
     support::normalize_file(&file, &mut registry).unwrap();
     let item = last_function(&file);
-    let resolution =
-        hirsel_resolve::resolve_item(&file, item, &registry.index.clone(), &mut registry);
+    let resolution = hirsel_resolve::resolve_item(
+        &file,
+        item,
+        &registry.index.clone(),
+        support::session(),
+        &mut registry,
+    );
     assert!(
         resolution.query.diagnostics.is_empty(),
         "{:?}",
@@ -366,6 +376,8 @@ fn check_source_phases(
     let output = body::check_with_loop_protocols(
         body::LoopInput {
             body: body::Input {
+                types: support::session(),
+                memo: support::session_memo(),
                 syntax: item,
                 context: &support::context(),
                 resolution: &resolution,
@@ -379,6 +391,8 @@ fn check_source_phases(
     let checked = output.checked;
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let out = check_file_with_clauses(
+        support::session(),
+        support::session_memo(),
         item,
         &signature,
         checked.value.clone(),
@@ -431,7 +445,7 @@ fn result_types_cover_formal_named_frames_and_inferred_closures() {
             .unwrap()
             .1;
         assert!(matches!(
-            out.body.types.get(result).unwrap().kind,
+            support::session().get(result).unwrap().kind,
             TypeKind::Primitive(Primitive::U64)
         ));
         if let NameSite::Expression(e) = owner {
@@ -441,7 +455,7 @@ fn result_types_cover_formal_named_frames_and_inferred_closures() {
                 .iter()
                 .find(|c| c.expression == e)
                 .unwrap();
-            let TypeKind::Function(f) = &out.body.types.get(info.ty).unwrap().kind else {
+            let TypeKind::Function(f) = &support::session().get(info.ty).unwrap().kind else {
                 panic!()
             };
             assert_eq!(result, f.result);
@@ -472,7 +486,7 @@ fn named_frame_result_origins_resolve_the_outer_declaring_scope() {
                 .find(|(site, _)| *site == owner)
                 .unwrap()
                 .1;
-            let root = out.body.types.get(result).unwrap().brand.alternatives[0]
+            let root = support::session().get(result).unwrap().brand.alternatives[0]
                 .root
                 .clone();
             let OriginRoot::Parameter(parameter) = root else {
@@ -504,7 +518,7 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .find(|c| c.expression == body_expression)
         .unwrap();
     assert!(matches!(
-        out.body.types.get(info.ty).unwrap().kind,
+        support::session().get(info.ty).unwrap().kind,
         TypeKind::Function(_)
     ));
     let parameters: Vec<_> = out
@@ -519,6 +533,8 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .collect();
     assert!(!parameters.is_empty());
     let owned = hirsel_ownership::check_ownership_with_clauses(
+        support::session(),
+        support::session_memo(),
         item,
         &signature,
         &mut out.body,
@@ -539,9 +555,9 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
             .find(|binding| binding.owner == owner && binding.binding == name)
             .unwrap();
         assert!(
-            semantic_equal(&out.body.types, declared, &out.body.types, binding.ty).unwrap(),
+            support::session().semantic_eq(declared, binding.ty),
             "local function initialization changed its parameter modes: {:?}",
-            out.body.types.get(binding.ty)
+            support::session().get(binding.ty)
         );
     }
     let function = out
@@ -554,7 +570,11 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         })
         .unwrap();
     assert_eq!(
-        out.body.types.get(function.ty).unwrap().modes.uniqueness,
+        support::session()
+            .get(function.ty)
+            .unwrap()
+            .modes
+            .uniqueness,
         Uniqueness::Unique
     );
 
@@ -565,7 +585,7 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .find(|c| c.expression == body_expression)
         .unwrap();
     assert!(matches!(
-        out.body.types.get(info.ty).unwrap().kind,
+        support::session().get(info.ty).unwrap().kind,
         TypeKind::Function(_)
     ));
     let result = out
@@ -575,7 +595,7 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .find(|e| e.expression == body_expression)
         .unwrap();
     assert!(matches!(
-        out.body.types.get(result.ty).unwrap().kind,
+        support::session().get(result.ty).unwrap().kind,
         TypeKind::Primitive(Primitive::U32)
     ));
 }

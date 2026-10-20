@@ -84,3 +84,6 @@ pub fn sendability_after_sharing(
     };
     memo.prove(root, Bound::Sendable, flags)
 }
+
+#[cfg(test)]
+mod tests;

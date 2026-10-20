@@ -1,10 +1,10 @@
+use hirsel_modes::reader::Reader;
+use hirsel_syntax::DefId;
 use hirsel_syntax::DefPath;
 use hirsel_type_analysis::representation::{
     RepresentationError, RepresentationFailure, expand_representation,
 };
 use hirsel_types::*;
-use hirsel_modes::reader::Reader;
-use hirsel_syntax::DefId;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
@@ -295,13 +295,10 @@ pub(super) fn normalize(
         // These rows now carry current content facts, not structural guesses.
         // Canonicalize inert qualifiers without rederiving (and resurrecting)
         // evidence from a declaration or default permission.
-        let replacement = canonical_current_type(
-            t,
-            *root,
-            &body.resolution.generic_declarations,
-            &mut |d| signatures.read(d, &mut body.resolution.reads)
-                        .map(Some),
-        )?;
+        let replacement =
+            canonical_current_type(t, *root, &body.resolution.generic_declarations, &mut |d| {
+                signatures.read(d, &mut body.resolution.reads).map(Some)
+            })?;
         normalized.insert(*root, replacement);
         *root = replacement;
         Ok(())
@@ -384,8 +381,7 @@ pub(super) fn identity_projections(
         // binding's final row, which flow may have refined since J recorded it.
         let mut parent = root;
         for (_, part) in projections {
-            let mut lookup = |d| signatures.read(d, &mut body.resolution.reads)
-                        .map(Some);
+            let mut lookup = |d| signatures.read(d, &mut body.resolution.reads).map(Some);
             let placed = placed_part_type(t, parent, *part, &declarations, &mut lookup)?;
             let m = signatures.m;
             *part = signatures.prove(&mut body.resolution.reads, |memo| {
@@ -576,13 +572,8 @@ pub(super) fn projection_lifetimes(
             let mut parts = vec![];
             let mut counted_path = false;
             for step in &place.projections {
-                let kind = physical_layout(
-                    &mut layouts,
-                    t,
-                    ty,
-                    &mut body.resolution.reads,
-                    signatures,
-                )?;
+                let kind =
+                    physical_layout(&mut layouts, t, ty, &mut body.resolution.reads, signatures)?;
                 counted_path |= matches!(
                     &kind,
                     TypeKind::Box(_)
@@ -641,10 +632,7 @@ pub(super) fn projection_lifetimes(
                     next,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
-                    &mut |path| {
-                        signatures.read(path, &mut body.resolution.reads)
-                            .map(Some)
-                    },
+                    &mut |path| signatures.read(path, &mut body.resolution.reads).map(Some),
                 )?;
                 parts.push((t.get(next).unwrap().modes.relation.clone(), plain));
                 ty = next;
@@ -736,13 +724,8 @@ pub(super) fn field_loan_places(
             let mut found = true;
             let mut parts = vec![];
             for field in &path {
-                let kind = physical_layout(
-                    &mut layouts,
-                    t,
-                    ty,
-                    &mut body.resolution.reads,
-                    signatures,
-                )?;
+                let kind =
+                    physical_layout(&mut layouts, t, ty, &mut body.resolution.reads, signatures)?;
                 ty = match kind {
                     TypeKind::Box(payload) if *field == 0 => payload,
                     TypeKind::Record(fields) if (*field as usize) < fields.len() => {
@@ -761,10 +744,7 @@ pub(super) fn field_loan_places(
                     ty,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
-                    &mut |path| {
-                        signatures.read(path, &mut body.resolution.reads)
-                            .map(Some)
-                    },
+                    &mut |path| signatures.read(path, &mut body.resolution.reads).map(Some),
                 )?;
                 parts.push((t.get(ty).unwrap().modes.relation.clone(), plain));
             }
