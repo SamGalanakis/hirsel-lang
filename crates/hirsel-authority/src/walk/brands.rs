@@ -418,7 +418,7 @@ impl Checker<'_> {
         }
         let fields = self.constructor_fields(leaf, expected)?;
         let mut pending: Vec<_> = fields.iter().map(|field| field.ty).collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -742,7 +742,7 @@ impl Checker<'_> {
     /// Where an origin named anywhere in this value's type ended.
     pub(super) fn ended(&self, root: TypeId) -> Option<Span> {
         let mut todo = vec![root];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -771,7 +771,7 @@ impl Checker<'_> {
             return actual;
         }
         let mut changed = false;
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
         for (part, contract) in ap.iter().zip(&bp) {
             let mut branded = self.part_brands(*part, *contract);
             let row = self.t.get(branded).unwrap();
@@ -825,7 +825,7 @@ impl Checker<'_> {
         }
         let (ap, bp) = (a.kind.value_parts(), b.kind.value_parts());
         if ap.len() == bp.len() && !ap.is_empty() {
-            let mut map = HashMap::new();
+            let mut map = HashMap::default();
             for (part, source) in ap.iter().zip(&bp) {
                 map.insert(*part, self.adopt_brands(*part, *source));
             }

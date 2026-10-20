@@ -223,49 +223,15 @@ fn rewrite_parameter_graph(
         if !active.insert(id) {
             return Err(GraphError::StructuralCycle(id));
         }
-        let mut t = store.get(id).ok_or(GraphError::MissingType(id))?.clone();
-        let original = t.clone();
+        let original = store.get(id).ok_or(GraphError::MissingType(id))?;
+        let mut t = original.clone();
         map(id, &mut t, depth)?;
-        let mut edge = |id, depth| walk(store, id, depth, map, memo, active);
-        match &mut t.kind {
-            TypeKind::Tuple(ts) => {
-                for t in ts {
-                    *t = edge(*t, depth)?;
-                }
-            }
-            TypeKind::Record(fs) => {
-                for f in fs {
-                    f.ty = edge(f.ty, depth)?;
-                }
-            }
-            TypeKind::Variant(vs) => {
-                for v in vs {
-                    for (_, t) in &mut v.fields {
-                        *t = edge(*t, depth)?;
-                    }
-                }
-            }
-            TypeKind::Box(t) => *t = edge(*t, depth)?,
-            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for a in arguments {
-                    if let GenericArgument::Type(t) = a {
-                        *t = edge(*t, depth)?;
-                    }
-                }
-            }
-            TypeKind::Function(f) => {
-                for p in &mut f.parameters {
-                    p.ty = edge(p.ty, depth + 1)?;
-                }
-                f.result = edge(f.result, depth + 1)?;
-                if let Some(t) = &mut f.error {
-                    *t = edge(*t, depth + 1)?;
-                }
-            }
-            _ => (),
-        }
+        let child_depth = depth + u32::from(matches!(t.kind, TypeKind::Function(_)));
+        t.kind = t
+            .kind
+            .try_map_edges(|id| walk(store, id, child_depth, map, memo, active))?;
         active.remove(&id);
-        let out = if t == original { id } else { store.intern(t) };
+        let out = if &t == original { id } else { store.intern(t) };
         memo.insert((id, depth), out);
         Ok(out)
     }

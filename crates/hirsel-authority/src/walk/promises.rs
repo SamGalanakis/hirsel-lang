@@ -4,7 +4,7 @@ impl Checker<'_> {
     pub(super) fn validate_header(&mut self, f: &FunctionType, span: Span) -> bool {
         let mut valid = true;
         for id in f.parameters.iter().map(|p| p.ty).chain([f.result]) {
-            valid &= self.header_type(self.t, id, f, span, &mut HashSet::new());
+            valid &= self.header_type(self.t, id, f, span, &mut HashSet::default());
         }
         valid
     }
@@ -501,7 +501,7 @@ impl Checker<'_> {
     /// what it holds, so function types are not entered.
     pub(super) fn retains_scoped_placement(&mut self, ty: TypeId) -> bool {
         let mut pending = vec![ty];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -542,7 +542,7 @@ impl Checker<'_> {
             .into_iter()
             .zip(types.get(expected).unwrap().kind.value_parts())
             .collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut forgotten = false;
         while let Some((a, b)) = pending.pop() {
             if !seen.insert((a, b)) {
@@ -606,7 +606,7 @@ impl Checker<'_> {
             .into_iter()
             .zip(store.get(expected).unwrap().kind.value_parts())
             .collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut different = false;
         while let Some((a, b)) = pending.pop() {
             if !seen.insert((a, b)) {
@@ -831,7 +831,7 @@ impl Checker<'_> {
     ) -> bool {
         let root = (actual, expected);
         let mut pending = vec![(actual, expected)];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some((actual, expected)) = pending.pop() {
             if !seen.insert((actual, expected)) {
                 continue;
@@ -982,7 +982,7 @@ impl Checker<'_> {
     /// is silent here; this is the conservative reading (spec #92).
     fn keeps_exact_promises(&mut self, actual: TypeId, expected: TypeId, span: Span) -> bool {
         let mut pending = vec![(actual, expected)];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some((actual, expected)) = pending.pop() {
             if !seen.insert((actual, expected)) {
                 continue;

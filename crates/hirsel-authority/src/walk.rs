@@ -6,7 +6,9 @@ use hirsel_diag::{Label, Obligation, RuleId};
 use hirsel_modes::reader::Reader;
 use hirsel_syntax::{Argument, ExprKind, ItemKind, StmtKind, UnaryOp};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 mod brands;
 mod calls;
 mod causes;
@@ -407,12 +409,12 @@ impl<'a> Checker<'a> {
             iteration_sources: BTreeMap::new(),
             identity_paths,
             branded_paths,
-            layouts: HashMap::new(),
+            layouts: HashMap::default(),
             expression_partitions: BTreeMap::new(),
             part_holdings: BTreeMap::new(),
             carrier_places: BTreeMap::new(),
             field_holdings: BTreeMap::new(),
-            invalid: HashMap::new(),
+            invalid: HashMap::default(),
             brand_inputs: BTreeMap::new(),
             indexed_brand_rows: 0,
             mut_parameters,
@@ -1242,7 +1244,7 @@ impl<'a> Checker<'a> {
                 let mut branch_identities = Vec::new();
                 let mut changes = before_changes.clone();
                 let mut branch_types = Vec::new();
-                let mut invalid = HashMap::new();
+                let mut invalid = HashMap::default();
                 let mut results = Vec::new();
                 let pending_before = self.pending_tasks.clone();
                 let mut pending_after = BTreeMap::new();

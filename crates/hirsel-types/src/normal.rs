@@ -8,34 +8,73 @@ use std::sync::OnceLock;
 impl TypeKind {
     /// This kind with every `graph_edges` edge replaced, in that order.
     pub fn map_edges(&self, mut edge: impl FnMut(TypeId) -> TypeId) -> TypeKind {
+        self.try_map_edges(|id| Ok::<_, std::convert::Infallible>(edge(id)))
+            .unwrap()
+    }
+
+    /// Keep shared child arrays until an edge actually changes. Most modes
+    /// rewrites only touch qualifiers, or find the row already normalized.
+    pub(crate) fn try_map_edges<E>(
+        &self,
+        mut edge: impl FnMut(TypeId) -> Result<TypeId, E>,
+    ) -> Result<TypeKind, E> {
         let mut kind = self.clone();
-        match &mut kind {
-            TypeKind::Tuple(ts) => ts.iter_mut().for_each(|t| *t = edge(*t)),
-            TypeKind::Box(t) => *t = edge(*t),
-            TypeKind::Record(fs) => fs.iter_mut().for_each(|f| f.ty = edge(f.ty)),
-            TypeKind::Variant(vs) => vs
-                .iter_mut()
-                .flat_map(|v| v.fields.iter_mut())
-                .for_each(|f| f.1 = edge(f.1)),
-            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for argument in arguments.iter_mut() {
-                    if let GenericArgument::Type(t) = argument {
-                        *t = edge(*t);
+        match (self, &mut kind) {
+            (Self::Tuple(old), Self::Tuple(ts)) => {
+                for (i, &id) in old.iter().enumerate() {
+                    let new = edge(id)?;
+                    if new != id {
+                        ts[i] = new;
                     }
                 }
             }
-            TypeKind::Function(f) => {
-                for parameter in f.parameters.iter_mut() {
-                    parameter.ty = edge(parameter.ty);
-                }
-                f.result = edge(f.result);
-                if let Some(error) = &mut f.error {
-                    *error = edge(*error);
+            (Self::Box(_), Self::Box(t)) => *t = edge(*t)?,
+            (Self::Record(old), Self::Record(fs)) => {
+                for (i, field) in old.iter().enumerate() {
+                    let new = edge(field.ty)?;
+                    if new != field.ty {
+                        fs[i].ty = new;
+                    }
                 }
             }
-            TypeKind::Primitive(_) | TypeKind::Parameter(_) | TypeKind::Error => (),
+            (Self::Variant(old), Self::Variant(vs)) => {
+                for (i, variant) in old.iter().enumerate() {
+                    for (j, &(_, id)) in variant.fields.iter().enumerate() {
+                        let new = edge(id)?;
+                        if new != id {
+                            vs[i].fields[j].1 = new;
+                        }
+                    }
+                }
+            }
+            (
+                Self::Named { arguments: old, .. } | Self::Builtin { arguments: old, .. },
+                Self::Named { arguments, .. } | Self::Builtin { arguments, .. },
+            ) => {
+                for (i, argument) in old.iter().enumerate() {
+                    if let GenericArgument::Type(id) = argument {
+                        let new = edge(*id)?;
+                        if new != *id {
+                            arguments[i] = GenericArgument::Type(new);
+                        }
+                    }
+                }
+            }
+            (Self::Function(old), Self::Function(f)) => {
+                for (i, parameter) in old.parameters.iter().enumerate() {
+                    let new = edge(parameter.ty)?;
+                    if new != parameter.ty {
+                        f.parameters[i].ty = new;
+                    }
+                }
+                f.result = edge(f.result)?;
+                if let Some(error) = &mut f.error {
+                    *error = edge(*error)?;
+                }
+            }
+            _ => (),
         }
-        kind
+        Ok(kind)
     }
 }
 
@@ -248,4 +287,43 @@ fn contract_row(row: &Type) -> Type {
         row.modes.sendability = Sendability::Sendable;
     }
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_rewrites_preserve_unchanged_children_and_callback_order() {
+        let t = TypeInterner::new(None);
+        let a = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+        let b = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U16)));
+        let original = TypeKind::Tuple([a, b, a].into());
+        let mut visited = vec![];
+        let unchanged = original.map_edges(|id| {
+            visited.push(id);
+            id
+        });
+        assert_eq!(visited, [a, b, a]);
+        let (TypeKind::Tuple(before), TypeKind::Tuple(after)) = (&original, &unchanged) else {
+            unreachable!()
+        };
+        assert_eq!(before.storage_identity(), after.storage_identity());
+        let changed = original.map_edges(|id| if id == a { b } else { id });
+        let TypeKind::Tuple(children) = changed else {
+            unreachable!()
+        };
+        assert_eq!(children.as_slice(), [b, b, b]);
+        assert_eq!(before.as_slice(), [a, b, a]);
+        assert_ne!(before.storage_identity(), children.storage_identity());
+        visited.clear();
+        assert_eq!(
+            original.try_map_edges(|id| {
+                visited.push(id);
+                if id == b { Err("stop") } else { Ok(id) }
+            }),
+            Err("stop")
+        );
+        assert_eq!(visited, [a, b]);
+    }
 }

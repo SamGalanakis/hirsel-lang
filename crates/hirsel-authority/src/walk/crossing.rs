@@ -144,9 +144,9 @@ impl Checker<'_> {
     pub(super) fn contains_resource(&mut self, root: TypeId) -> bool {
         let store = self.t;
         let mut pending = vec![(root, false)];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut nominal_roots = hirsel_types::NominalExpansions::default();
-        let mut checked_closures = HashSet::new();
+        let mut checked_closures = HashSet::default();
         while let Some((t, exit)) = pending.pop() {
             if exit {
                 nominal_roots.leave(t, 0);

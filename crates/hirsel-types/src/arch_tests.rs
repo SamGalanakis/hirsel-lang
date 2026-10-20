@@ -334,6 +334,65 @@ fn projection_depends_on_the_bound_and_the_private_view_it_is_proven_under() {
 }
 
 #[test]
+fn data_and_view_policy_memos_replay_reads_and_stay_in_their_context() {
+    let t = TypeInterner::new(None);
+    let byte = primitive(&t, Primitive::U8);
+    let hidden = t.intern(row(TypeKind::Named {
+        definition: def("Hidden"),
+        arguments: vec![].into(),
+    }));
+    let mut visible = (*nominal(Some(byte), vec![])).clone();
+    visible.definition = def("Hidden");
+    let mut opaque = visible.clone();
+    opaque.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+    for view in [visible, opaque] {
+        let expected = view.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque;
+        let view = Arc::new(view);
+        let generics = GenericDeclarations::default();
+        let reads = std::cell::RefCell::new(vec![]);
+        let mut lookup = |definition| {
+            reads.borrow_mut().push(definition);
+            Ok(Some(view.clone()))
+        };
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        assert_eq!(memo.data(hidden).unwrap(), expected);
+        assert_eq!(*reads.borrow(), [def("Hidden")]);
+        reads.borrow_mut().clear();
+        assert_eq!(memo.data(hidden).unwrap(), expected);
+        assert_eq!(
+            *reads.borrow(),
+            [def("Hidden")],
+            "a Data hit replays its read"
+        );
+        let policy = memo.view_policy(hidden).unwrap();
+        assert_eq!(policy.forget_brands, expected);
+        reads.borrow_mut().clear();
+        assert_eq!(memo.view_policy(hidden).unwrap(), policy);
+        assert_eq!(
+            *reads.borrow(),
+            [def("Hidden")],
+            "a policy hit replays its read"
+        );
+        let set = memo.payload_set([hidden, byte, hidden]);
+        assert_eq!(set, memo.payload_set([byte, hidden]));
+    }
+    let parameter = t.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    for bounds in [vec![Bound::Data], vec![]] {
+        let expected = !bounds.is_empty();
+        let generics = GenericDeclarations::signature(&[GenericParameter::Type {
+            name: "T".into(),
+            bounds: bounds.into(),
+        }]);
+        let mut lookup = |_| Ok(None);
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        assert_eq!(memo.data(parameter).unwrap(), expected);
+        assert_eq!(memo.data(parameter).unwrap(), expected);
+    }
+}
+
+#[test]
 fn instantiation_never_reuses_a_result_across_signature_or_private_shape_edits() {
     let t = TypeInterner::new(None);
     let memo = TypeMemo::new();
@@ -522,7 +581,11 @@ fn concurrent_interning_gives_every_row_one_id() {
         let mut out = vec![];
         for i in 0..10_000u32 {
             // Half the rows are shared by every thread, half are this thread's.
-            let n = if i % 2 == 0 { i } else { 100_000 + i * 8 + thread };
+            let n = if i % 2 == 0 {
+                i
+            } else {
+                100_000 + i * 8 + thread
+            };
             let leaf = t.intern(row(TypeKind::Builtin {
                 kind: BuiltinType::Inline,
                 arguments: vec![

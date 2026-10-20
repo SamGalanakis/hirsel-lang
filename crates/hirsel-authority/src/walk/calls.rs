@@ -1832,8 +1832,14 @@ impl Checker<'_> {
                 .iter()
                 .zip(args)
                 .filter_map(|(p, a)| {
-                    (!occurrences(self.t, p.ty, TypeParamId(i as u32), 0, &mut HashSet::new())
-                        .is_empty())
+                    (!occurrences(
+                        self.t,
+                        p.ty,
+                        TypeParamId(i as u32),
+                        0,
+                        &mut HashSet::default(),
+                    )
+                    .is_empty())
                     .then(|| Label {
                         span: self.span(a.value),
                         message: "generic parameter instantiation failed".into(),
@@ -1841,8 +1847,13 @@ impl Checker<'_> {
                 })
                 .collect();
             for (p, arg) in f.parameters.iter().zip(args) {
-                for path in occurrences(self.t, p.ty, TypeParamId(i as u32), 0, &mut HashSet::new())
-                {
+                for path in occurrences(
+                    self.t,
+                    p.ty,
+                    TypeParamId(i as u32),
+                    0,
+                    &mut HashSet::default(),
+                ) {
                     let Some(mut actual) = self.ty(arg.value) else {
                         continue;
                     };
@@ -2418,7 +2429,7 @@ impl Checker<'_> {
                 }
             }
         }
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut occurrences: BTreeMap<u32, Vec<TypeId>> = BTreeMap::new();
         while let Some((formal, actual, depth)) = pending.pop() {
             if !seen.insert((formal, actual, depth)) {
@@ -3154,7 +3165,7 @@ impl Checker<'_> {
         let owner_site = self.lexical.site(owner);
         let mut owned_brand = false;
         let mut stack = vec![f.result];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(t) = stack.pop() {
             if !seen.insert(t) {
                 continue;

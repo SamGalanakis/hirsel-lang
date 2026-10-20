@@ -780,10 +780,10 @@ fn normalize_graph(
             _ => (generics.clone(), binders.to_vec()),
         };
         let child_contract = contract || matches!(row.kind, TypeKind::Function(_));
-        let mut edge = |t: &mut TypeId| -> Result<(), QueryError> {
-            *t = visit(
+        row.kind = row.kind.try_map_edges(|ty| {
+            visit(
                 store,
-                *t,
+                ty,
                 &child_generics,
                 mode,
                 root,
@@ -792,46 +792,8 @@ fn normalize_graph(
                 memo,
                 active,
                 lookup,
-            )?;
-            Ok(())
-        };
-        match &mut row.kind {
-            TypeKind::Tuple(ts) => {
-                for t in ts {
-                    edge(t)?;
-                }
-            }
-            TypeKind::Record(fs) => {
-                for f in fs {
-                    edge(&mut f.ty)?;
-                }
-            }
-            TypeKind::Variant(vs) => {
-                for v in vs {
-                    for (_, t) in &mut v.fields {
-                        edge(t)?;
-                    }
-                }
-            }
-            TypeKind::Box(t) => edge(t)?,
-            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for a in arguments {
-                    if let GenericArgument::Type(t) = a {
-                        edge(t)?;
-                    }
-                }
-            }
-            TypeKind::Function(f) => {
-                for p in &mut f.parameters {
-                    edge(&mut p.ty)?;
-                }
-                edge(&mut f.result)?;
-                if let Some(t) = &mut f.error {
-                    edge(t)?;
-                }
-            }
-            _ => (),
-        }
+            )
+        })?;
         let mut current = if store.get(id) == Some(&row) {
             id
         } else {

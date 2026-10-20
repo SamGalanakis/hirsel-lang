@@ -8,7 +8,10 @@ use crate::encoding::{Encoder, EncodingError, canonical_encoding};
 use crate::*;
 use hirsel_intern::IdHasher;
 use hirsel_syntax::{Bound, ContentHash};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap as StdHashMap, HashSet as StdHashSet};
+
+type HashMap<K, V, S = IdHasher> = StdHashMap<K, V, S>;
+type HashSet<K> = StdHashSet<K, IdHasher>;
 use std::hash::{BuildHasher, Hash};
 use std::sync::{PoisonError, RwLock};
 
@@ -267,8 +270,10 @@ pub struct ContextMemo<'q> {
     /// Whole proofs and the interior sub-proofs that are facts.
     proofs: HashMap<ProofKey, ProofEntry>,
     compatible: HashMap<(TypeId, TypeId, TypeRelation, CompatPolicy), Recorded<bool>>,
+    equality: HashMap<(TypeId, Bound), Recorded<bool>>,
+    view_policies: HashMap<TypeId, Recorded<CompatPolicy>>,
     payload_ids: HashMap<Vec<TypeId>, PayloadSetId>,
-    payload_sets: Vec<HashSet<TypeId>>,
+    payload_sets: Vec<StdHashSet<TypeId>>,
     hits: u64,
 }
 
@@ -283,9 +288,11 @@ impl<'q> ContextMemo<'q> {
             generics,
             lookup,
             log: vec![],
-            proofs: HashMap::new(),
-            compatible: HashMap::new(),
-            payload_ids: HashMap::new(),
+            proofs: HashMap::default(),
+            compatible: HashMap::default(),
+            equality: HashMap::default(),
+            view_policies: HashMap::default(),
+            payload_ids: HashMap::default(),
             payload_sets: vec![],
             hits: 0,
         }
@@ -616,9 +623,9 @@ impl<'q> ContextMemo<'q> {
 
     /// Intern an owned-payload set for a `CompatPolicy`.
     pub fn payload_set(&mut self, ids: impl IntoIterator<Item = TypeId>) -> PayloadSetId {
-        let set: HashSet<TypeId> = ids.into_iter().collect();
+        let set: StdHashSet<TypeId> = ids.into_iter().collect();
         let mut key: Vec<TypeId> = set.iter().copied().collect();
-        key.sort_by_key(|id| format!("{id:?}"));
+        key.sort_unstable_by_key(|id| id.to_raw());
         if let Some(id) = self.payload_ids.get(&key) {
             return *id;
         }
@@ -763,13 +770,30 @@ impl<'q> ContextMemo<'q> {
     /// Data may forget nested brands, and owned payload edges may weaken nested
     /// uniqueness. Payload classification reads declarations.
     pub fn view_policy(&mut self, actual: TypeId) -> Result<CompatPolicy, QueryError> {
+        if let Some(entry) = self.view_policies.get(&actual).cloned() {
+            self.replay(&entry.reads);
+            return entry.value;
+        }
+        let start = self.log.len();
+        let value = self.view_policy_uncached(actual);
+        self.view_policies.insert(
+            actual,
+            Recorded {
+                value: value.clone(),
+                reads: distinct(&self.log[start..]),
+            },
+        );
+        value
+    }
+
+    fn view_policy_uncached(&mut self, actual: TypeId) -> Result<CompatPolicy, QueryError> {
         let data = self.prove_bound(actual, Bound::Data)?;
         // Only owned payload edges are covariant. A callable's header, phantom
         // argument or interior-mutable cell remains the same contract even when
         // the containing value is taken. Nominal Data excludes hidden callbacks.
-        let mut payloads = HashSet::new();
+        let mut payloads = HashSet::default();
         let mut pending = vec![actual];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
@@ -807,12 +831,24 @@ impl<'q> ContextMemo<'q> {
         })
     }
 
+    /// The Data representation proof, under this query's declarations and view.
+    pub fn data(&mut self, ty: TypeId) -> Result<bool, QueryError> {
+        self.prove_bound(ty, Bound::Data)
+    }
+
     /// Data/Key structural equality proof (`structural_equality`), recorded.
     fn prove_bound(&mut self, ty: TypeId, bound: Bound) -> Result<bool, QueryError> {
-        self.observed(|t, generics, lookup| {
+        let key = (ty, bound);
+        if let Some(entry) = self.equality.get(&key).cloned() {
+            self.replay(&entry.reads);
+            return entry.value;
+        }
+        let entry = self.observed(|t, generics, lookup| {
             structural_equality(t, ty, bound, generics, &mut |d| lookup(d))
-        })
-        .value
+        });
+        let value = entry.value.clone();
+        self.equality.insert(key, entry);
+        value
     }
 
     /// The non-writing view relation (main's `compatible_view_type_in`).
@@ -1010,6 +1046,6 @@ struct Frame {
 /// A log range's reads, first occurrences only: replay records dependencies,
 /// and a dependency recorded once is recorded.
 fn distinct(log: &[DefId]) -> Box<[DefId]> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     log.iter().copied().filter(|d| seen.insert(*d)).collect()
 }

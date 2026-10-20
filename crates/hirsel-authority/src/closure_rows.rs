@@ -1,7 +1,7 @@
 //! Keyed construction facts with the original replacement/insertion order.
 use super::*;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     ops::{Deref, DerefMut},
 };
 pub(super) struct OrderedRows<T> {
@@ -46,13 +46,13 @@ impl<T> OrderedRows<T> {
 }
 pub(super) struct ClosureRows {
     rows: OrderedRows<ClosureInfo>,
-    types: HashMap<TypeId, BTreeSet<u64>>,
+    types: std::collections::HashMap<TypeId, BTreeSet<u64>, hirsel_intern::IdHasher>,
 }
 impl ClosureRows {
     pub fn new(values: Vec<ClosureInfo>) -> Self {
         let mut out = Self {
             rows: OrderedRows::new(),
-            types: HashMap::new(),
+            types: Default::default(),
         };
         for value in values {
             out.insert(value.expression, value);

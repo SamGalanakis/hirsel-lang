@@ -6,7 +6,8 @@ use hirsel_type_analysis::representation::{
 };
 use hirsel_types::*;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 
 /// The signature reads of the ownership query and its contextual memo. Every
 /// read goes through the query's `Reader`; first reads are recorded into the
@@ -198,11 +199,7 @@ pub(super) fn classify_row(
     };
     let flat = signatures.prove(reads, |memo| proofs::flat(memo, root))?;
     let copy_detaches = signatures.prove(reads, |memo| proofs::copy_detaches(memo, root))?;
-    let declarations = body.resolution.generic_declarations.clone();
-    let reads = &mut body.resolution.reads;
-    let data = structural_equality(t, root, Bound::Data, &declarations, &mut |d| {
-        signatures.read(d, reads).map(Some)
-    })?;
+    let data = signatures.prove(reads, |memo| memo.data(root))?;
     // Flow can invalidate the root's uniqueness after J has proved a
     // generic bound. Cache the same structural proof without that root
     // evidence; locality is checked separately at the call.
@@ -261,18 +258,19 @@ pub(super) fn result_sharing(
     let declarations = body.resolution.generic_declarations.clone();
     let mut reads = std::collections::BTreeSet::new();
     for graph in graphs {
-        for expression in &graph.expressions {
-            let Some(ty) = super::cfg::expression_type(body, *expression, rows) else {
-                continue;
-            };
-            if structural_property(
-                t,
-                ty,
-                StructuralProperty::Copyable,
-                &declarations.with_copyable(&graph.result_shareable),
-                &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
-            )? {
-                reads.insert(*expression);
+        let expressions: Vec<_> = graph
+            .expressions
+            .iter()
+            .filter_map(|&expression| {
+                super::cfg::expression_type(body, expression, rows).map(|ty| (expression, ty))
+            })
+            .collect();
+        let declarations = declarations.with_copyable(&graph.result_shareable);
+        let mut lookup = |d| signatures.read(d, &mut body.resolution.reads).map(Some);
+        let mut memo = ContextMemo::new(t, &declarations, &mut lookup);
+        for (expression, ty) in expressions {
+            if hirsel_modes::proofs::property(&mut memo, ty, StructuralProperty::Copyable)? {
+                reads.insert(expression);
             }
         }
     }
@@ -288,7 +286,7 @@ pub(super) fn normalize(
     physical: &mut [(hirsel_syntax::ExprId, TypeId)],
     signatures: &mut Signatures,
 ) -> Result<(), QueryError> {
-    let mut normalized = HashMap::new();
+    let mut normalized = HashMap::default();
     let mut normalize = |root: &mut TypeId| -> Result<(), QueryError> {
         if let Some(replacement) = normalized.get(root) {
             *root = *replacement;
@@ -477,7 +475,7 @@ pub(super) fn pattern_declarations(
         .map(|p| (p.pattern, p.ty))
         .collect();
     let mut result = BTreeMap::new();
-    let mut layouts = Layouts::new();
+    let mut layouts = Layouts::default();
     while let Some((pattern, ty)) = pending.pop() {
         let row = &rows[&pattern];
         if let PatternDecisionKind::Or(alternatives) = &row.kind {
@@ -539,7 +537,7 @@ pub(super) fn projection_lifetimes(
         .iter()
         .map(|e| (e.expression, e.ty))
         .collect();
-    let mut layouts = Layouts::new();
+    let mut layouts = Layouts::default();
     let outcome = (|| {
         for place in &body.places {
             if place.projections.is_empty() {
@@ -719,7 +717,7 @@ pub(super) fn field_loan_places(
         }
     }
     let mut result = BTreeMap::new();
-    let mut layouts = Layouts::new();
+    let mut layouts = Layouts::default();
     let outcome = (|| {
         for (argument, path, mut ty) in requests {
             let mut found = true;
@@ -795,7 +793,7 @@ mod limit_tests {
             let mut signatures = Signatures::new(&f.memo, &reader, memo, cached_memo);
             assert_eq!(
                 physical_layout(
-                    &mut Layouts::new(),
+                    &mut Layouts::default(),
                     f.types,
                     root,
                     &mut reads,

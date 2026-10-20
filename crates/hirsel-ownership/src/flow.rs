@@ -823,35 +823,29 @@ impl State {
         }
     }
     fn join(&mut self, other: &Self, slots: &mut SlotJoins) -> bool {
-        let old = self.clone();
-        // Repeated ordered subtree pairs keep the exact existing slot result.
-        let changed_slots = self.slots.join_cached(&other.slots, slots);
+        // The slot join reports its change directly. Compare only the values
+        // we merge rather than deep-cloning every map in the incoming state.
+        let mut changed = self.slots.join_cached(&other.slots, slots);
         for (key, value) in &other.values {
             if let Some(old) = self.values.get_mut(key) {
+                let before = old.clone();
                 old.join(value);
+                changed |= *old != before;
             } else {
                 self.values.insert(*key, value.clone());
+                changed = true;
             }
         }
-        self.iteration_loans.extend(
-            other
-                .iteration_loans
-                .iter()
-                .map(|(source, place)| (*source, place.clone())),
-        );
-        self.argument_loans.extend(
-            other
-                .argument_loans
-                .iter()
-                .map(|(argument, loan)| (*argument, loan.clone())),
-        );
-        self.argument_conflicts
-            .extend(other.argument_conflicts.iter().copied());
-        changed_slots
-            || self.values != old.values
-            || self.iteration_loans != old.iteration_loans
-            || self.argument_loans != old.argument_loans
-            || self.argument_conflicts != old.argument_conflicts
+        for (source, place) in &other.iteration_loans {
+            changed |= self.iteration_loans.insert(*source, place.clone()).as_ref() != Some(place);
+        }
+        for (argument, loan) in &other.argument_loans {
+            changed |= self.argument_loans.insert(*argument, loan.clone()).as_ref() != Some(loan);
+        }
+        for &conflict in &other.argument_conflicts {
+            changed |= self.argument_conflicts.insert(conflict);
+        }
+        changed
     }
 }
 /// Primary frame inputs shared across the definition's ownership graphs. Source
@@ -1289,6 +1283,15 @@ struct Checker<'a, 's> {
     constants: BTreeMap<ExprId, Option<Value>>,
     /// The callable type this graph implements, once computed.
     callable: std::cell::OnceCell<Option<(FunctionType, bool)>>,
+    /// Declared payload paths read only this graph's fixed generic context
+    /// and the signatures retained before flow; transfers cannot change them.
+    crossing_receipts: std::cell::RefCell<
+        std::collections::HashMap<
+            TypeId,
+            Result<Vec<(Vec<Projection>, bool)>, QueryError>,
+            hirsel_intern::IdHasher,
+        >,
+    >,
 }
 
 /// The diagnostic of a `@preserves_unique` body that cannot prove its promise.
@@ -1670,6 +1673,7 @@ pub(super) fn check(
         diagnostics,
         emit: false,
         callable: std::cell::OnceCell::new(),
+        crossing_receipts: Default::default(),
         proof_error: std::cell::RefCell::new(None),
         modes: BTreeMap::new(),
         forwarded: BTreeMap::new(),
@@ -7342,32 +7346,41 @@ impl Checker<'_, '_> {
     /// aggregate is constructed (MODE-2, MODE-3). Locality is not required of
     /// a part: it lives in its owner's (OWN-8).
     fn crossing_receipts(&self, root: TypeId) -> Vec<(Vec<Projection>, bool)> {
-        owned_crossing_receipts(
-            self.t,
-            root,
-            &self.body.resolution.generic_declarations,
-            &mut |d| Ok(self.signatures.cached(d)),
-        )
-        .unwrap_or_else(|error| {
-            *self.proof_error.borrow_mut() = Some(error);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(path, independent)| {
-            (
-                path.into_iter()
-                    .map(|p| match p {
-                        OwnedTypePart::Field(f) => Projection::Field(f),
-                        OwnedTypePart::VariantField { variant, field } => {
-                            Projection::VariantField { variant, field }
-                        }
-                        OwnedTypePart::Elements => Projection::Elements,
-                    })
-                    .collect(),
-                independent,
-            )
-        })
-        .collect()
+        let mut receipts = self.crossing_receipts.borrow_mut();
+        receipts
+            .entry(root)
+            .or_insert_with(|| {
+                owned_crossing_receipts(
+                    self.t,
+                    root,
+                    &self.body.resolution.generic_declarations,
+                    &mut |d| Ok(self.signatures.cached(d)),
+                )
+                .map(|paths| {
+                    paths
+                        .into_iter()
+                        .map(|(path, independent)| {
+                            (
+                                path.into_iter()
+                                    .map(|p| match p {
+                                        OwnedTypePart::Field(f) => Projection::Field(f),
+                                        OwnedTypePart::VariantField { variant, field } => {
+                                            Projection::VariantField { variant, field }
+                                        }
+                                        OwnedTypePart::Elements => Projection::Elements,
+                                    })
+                                    .collect(),
+                                independent,
+                            )
+                        })
+                        .collect()
+                })
+            })
+            .clone()
+            .unwrap_or_else(|error| {
+                *self.proof_error.borrow_mut() = Some(error);
+                Vec::new()
+            })
     }
     fn required_nested_crossing(
         &mut self,
