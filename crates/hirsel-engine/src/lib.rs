@@ -20,6 +20,7 @@ pub mod registry;
 pub use phases::*;
 mod diagnostics;
 pub mod memo;
+pub mod store;
 pub use memo::{Durability, ReadKey, Reads, ReadsBuilder, Revision};
 mod generic_graph;
 mod layered;
