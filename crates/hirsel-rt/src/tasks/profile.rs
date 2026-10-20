@@ -222,6 +222,8 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::TlsAccept { .. } => "TlsAccept",
         Request::TlsPeer { .. } => "TlsPeer",
         Request::TlsProtocol { .. } => "TlsProtocol",
+        Request::NetSplit { .. } => "NetSplit",
+        Request::NetJoin { .. } => "NetJoin",
         Request::TlsClose { .. } => "TlsClose",
         Request::Listen { .. } => "Listen",
         Request::Accept { .. } => "Accept",

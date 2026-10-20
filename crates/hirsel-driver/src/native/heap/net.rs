@@ -345,6 +345,16 @@ impl Io {
         args: &[OpValue],
         cancellation: Option<u32>,
     ) -> Option<OpOutcome> {
+        // A half's operations are its stream's, on the half's own handle.
+        let (module, name) = match (module, name) {
+            (Some("read_half"), "read" | "read_into")
+            | (Some("write_half"), "write" | "write_all") => (Some("net"), name),
+            (Some("read_half"), "set_timeout") => (Some("net"), "set_read_timeout"),
+            (Some("write_half"), "set_timeout") => (Some("net"), "set_write_timeout"),
+            (Some("read_half" | "write_half"), "close") => (Some("net"), "close"),
+            (Some("$intrinsic"), "ReadHalfReadInto") => (Some("$intrinsic"), "NetReadInto"),
+            other => other,
+        };
         let request = match (module, name, args) {
             (Some("test"), "net", [OpValue::Handle(test), peers, listeners])
                 if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
@@ -468,6 +478,20 @@ impl Io {
             },
             (Some("net"), "close", [_, s]) => R::Close {
                 handle: self.network_id(s)?,
+            },
+            (Some("write_half"), "shutdown", [n, w]) => R::Shutdown {
+                net: self.network_id(n)?,
+                stream: self.network_id(w)?,
+                how: ShutdownHow::Write,
+            },
+            (Some("net"), "split", [n, s]) => R::NetSplit {
+                net: self.network_id(n)?,
+                stream: self.network_id(s)?,
+            },
+            (Some("net"), "join", [n, r, w]) => R::NetJoin {
+                net: self.network_id(n)?,
+                read: self.network_id(r)?,
+                write: self.network_id(w)?,
             },
             (Some("tls"), "close", [n, s]) => R::TlsClose {
                 net: self.network_id(n)?,
@@ -635,6 +659,13 @@ impl Io {
             }),
             C::Count(r) => result(r, |n| bits(ScalarKind::U64, n)),
             C::Address(r) => result(r, address),
+            C::Halves(r) => {
+                let (read, write) = r.ok()?;
+                OpValue::Aggregate(vec![
+                    self.network_handle(read, true),
+                    self.network_handle(write, true),
+                ])
+            }
             C::Addresses(r) => result(r, |a| {
                 OpValue::Sequence(a.into_iter().map(address).collect())
             }),
@@ -643,6 +674,17 @@ impl Io {
             }),
             C::Unit(Ok(())) => OpValue::Unit,
             // A scripted client's unmet Expect (docs/spec/core-library.md).
+            C::Checked(false) if name == "join" => {
+                for half in &args[1..3] {
+                    if let OpValue::Handle(h) = half {
+                        self.network_handles.remove(h);
+                    }
+                }
+                return Some(OpOutcome::Complete {
+                    result: Err("LANG-9".into()),
+                    consumed: vec![1, 2],
+                });
+            }
             C::Checked(false) if name == "close" || module == Some("tls") => {
                 if let OpValue::Handle(h) = args[1] {
                     self.network_handles.remove(&h);
@@ -655,10 +697,21 @@ impl Io {
             C::Checked(false) => return Some(OpOutcome::Fail("LANG-9".into())),
             _ => return Some(OpOutcome::Unsupported),
         };
+        if module == Some("net") && name == "join" {
+            for half in &args[1..3] {
+                if let OpValue::Handle(h) = half {
+                    self.network_handles.remove(h);
+                }
+            }
+            return Some(OpOutcome::Complete {
+                result: Ok(value),
+                consumed: vec![1, 2],
+            });
+        }
         let consumed = module == Some("tls")
             && !matches!(name, "peer" | "negotiated_protocol")
             && (name == "close" || matches!(value, OpValue::Variant { tag: 1, .. }))
-            || matches!(module, Some("net" | "udp")) && name == "close";
+            || matches!(module, Some("net" | "udp")) && matches!(name, "close" | "split");
         Some(if consumed {
             if let OpValue::Handle(h) = args[1] {
                 self.network_handles.remove(&h);

@@ -1756,6 +1756,13 @@ pub(crate) unsafe fn execute(
                     {
                         return Err(format!("the network script: {error:?}"));
                     }
+                    // A scripted read parks until another task's request advances the
+                    // script: cooperative waits park it and the tape records the wait
+                    // (DET-1), as the reference's host launch does.
+                    if net_script.is_some() && std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_none()
+                    {
+                        io.set_cooperative(crate::readiness::Readiness::default());
+                    }
                     let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
                         Some(path) => match io.prepare_recording_with_files(
                             std::path::Path::new(&path),

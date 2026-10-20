@@ -785,6 +785,8 @@ fn network_and_process_resources_are_sendable_noncopyable_and_close_without_allo
     let registry = BuiltinRegistry::new();
     for (name, capability) in [
         ("Stream", "Net"),
+        ("ReadHalf", "Net"),
+        ("WriteHalf", "Net"),
         ("Listener", "Net"),
         ("UdpSocket", "Net"),
         ("Child", "Proc"),
@@ -842,6 +844,8 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         "net.unix_connect",
         "net.unix_listen",
         "net.accept",
+        "net.split",
+        "net.join",
         "tls.connect",
         "tls.connect_as",
         "tls.connect_with",
@@ -851,31 +855,42 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         let SignatureKind::Function(function) = &signature.kind else {
             panic!("{name}")
         };
-        let TypeKind::Named { arguments, .. } = &signature.types.get(function.result).unwrap().kind
-        else {
-            panic!("{name}")
+        // A split returns its two halves, both branded by the Net; the others a Result.
+        let payloads = match &signature.types.get(function.result).unwrap().kind {
+            TypeKind::Tuple(fields) if name == "net.split" => fields.to_vec(),
+            TypeKind::Named { arguments, .. } => {
+                let GenericArgument::Type(payload) = arguments[0] else {
+                    panic!("{name}")
+                };
+                if name == "net.accept" {
+                    let TypeKind::Tuple(fields) = &signature.types.get(payload).unwrap().kind
+                    else {
+                        panic!("{name}")
+                    };
+                    vec![fields[0]]
+                } else {
+                    vec![payload]
+                }
+            }
+            _ => panic!("{name}"),
         };
-        let GenericArgument::Type(payload) = arguments[0] else {
-            panic!("{name}")
-        };
-        let payload = if name == "net.accept" {
-            let TypeKind::Tuple(fields) = &signature.types.get(payload).unwrap().kind else {
-                panic!("{name}")
-            };
-            fields[0]
-        } else {
-            payload
-        };
-        assert_eq!(
-            signature.types.get(payload).unwrap().brand.alternatives,
-            [Origin {
-                root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
-                fields: Default::default()
-            }]
-        );
+        for payload in payloads {
+            assert_eq!(
+                signature.types.get(payload).unwrap().brand.alternatives,
+                [Origin {
+                    root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
+                    fields: Default::default()
+                }],
+                "{name}"
+            );
+        }
     }
     for name in [
         "net.close",
+        "net.split",
+        "net.join",
+        "read_half.close",
+        "write_half.close",
         "udp.close",
         "tls.connect",
         "tls.connect_as",

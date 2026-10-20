@@ -1,0 +1,37 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// The halves of a TLS stream share its one session: plaintext flows through each direction
+// and the joined stream keeps its TLS state. A ConnectTls stream split before its handshake
+// carries no plaintext through either half.
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 443u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Certificate(["example.com"]),
+        connections: [Open([Expect(b"ping"), Send(b"pong")]), Open([Send(b"x")])]
+      )
+    ],
+    []
+  )
+  let s = net.connect(n, "example.com", 443u16, Unbounded())?
+  let secure = tls.connect(n, take s, "example.com", WebPki())?
+  let mut (r, w) = net.split(n, take secure)
+  write_half.write_all(n, mut w, b"ping")?
+  let mut buf: List[u8] = []
+  test.check(t, read_half.read(n, mut r, mut buf, 8u64)? == 4u64)
+  test.check(t, bytes.from_list(take buf) == b"pong")
+  let joined = net.join(n, take r, take w)?
+  test.check(t, tls.negotiated_protocol(n, joined)? == None())
+  tls.close(n, take joined)?
+  let early = net.connect(n, "example.com", 443u16, Unbounded())?
+  let mut (r2, w2) = net.split(n, take early)
+  test.check(t, write_half.write(n, mut w2, b"x") == Error(NotGranted()))
+  let mut none: List[u8] = []
+  test.check(t, read_half.read(n, mut r2, mut none, 8u64) == Error(NotGranted()))
+  Ok(())
+}

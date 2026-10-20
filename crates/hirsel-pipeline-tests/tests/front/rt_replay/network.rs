@@ -596,6 +596,15 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
             )
         }
         R::TlsPeer { net, stream } => ("tls.peer", vec![n(*net), s(*stream)]),
+        R::NetSplit { net, stream } => ("net.split", vec![n(*net), s(*stream)]),
+        R::NetJoin { net, read, write } => (
+            "net.join",
+            vec![
+                n(*net),
+                handle("ReadHalf", *read),
+                handle("WriteHalf", *write),
+            ],
+        ),
         R::TlsProtocol { net, stream } => ("tls.negotiated_protocol", vec![n(*net), s(*stream)]),
         R::TlsClose { net, stream } => ("tls.close", vec![n(*net), s(*stream)]),
         R::Listen { net, addr } => ("net.listen", vec![n(*net), address(*addr)]),
@@ -754,6 +763,12 @@ pub fn decode(schema: &C, value: Value, updates: &[(usize, Value)]) -> C {
             _ => panic!("upgraded Stream or Option[String] result"),
         })),
         C::Address(_) => C::Address(result(value).map(addr)),
+        C::Halves(_) => C::Halves({
+            let Value::Tuple(mut fields) = value else {
+                panic!("split halves")
+            };
+            Ok((id(fields[0].take().unwrap()), id(fields[1].take().unwrap())))
+        }),
         C::Addresses(_) => C::Addresses(result(value).map(|v| {
             collection::elements(&v, BuiltinType::List)
                 .unwrap()

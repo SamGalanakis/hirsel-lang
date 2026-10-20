@@ -623,6 +623,92 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
     }
 }
 
+/// `net.split(n, take s) -> (ReadHalf of n, WriteHalf of n)`: the stream transfers at entry
+/// and the halves' IDs fill the tuple, read first.
+/// # Safety
+/// Context bound; n readable; s the address of a live Stream ID the call consumes; out
+/// writable for two words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_split(
+    ctx: *mut TaskCtx,
+    _destination: *mut u8,
+    out: *mut [u64; 2],
+    n: *const u64,
+    s: *mut u64,
+) -> u8 {
+    let stream = unsafe { s.read() };
+    unsafe { s.write(0) };
+    let request = Request::NetSplit {
+        net: unsafe { n.read() },
+        stream,
+    };
+    match unsafe { call(ctx, request) } {
+        Some(Completion::Halves(Ok((read, write)))) => {
+            unsafe { out.write([read, write]) };
+            STATUS_OK
+        }
+        Some(_) => mismatch(),
+        None => STATUS_FAILURE,
+    }
+}
+
+/// `net.join(n, take r, take w) -> Result[Stream of n, NetError]`: both halves transfer at
+/// entry; halves of different connections are dropped and the result is `InvalidInput`.
+/// # Safety
+/// Context bound; n readable; r and w the addresses of live half IDs the call consumes;
+/// out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_join(
+    ctx: *mut TaskCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    r: *mut u64,
+    w: *mut u64,
+) -> u8 {
+    let (read, write) = unsafe { (r.read(), w.read()) };
+    unsafe {
+        r.write(0);
+        w.write(0);
+    }
+    let request = Request::NetJoin {
+        net: unsafe { n.read() },
+        read,
+        write,
+    };
+    let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    let Completion::NetHandle(value) = completion else {
+        mismatch()
+    };
+    unsafe { out.write(NetWordResult::of(value)) };
+    STATUS_OK
+}
+
+/// `write_half.shutdown(n, mut w) -> Result[(), NetError]`: the write direction's shutdown.
+/// # Safety
+/// Context bound; n readable; w exclusive; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_write_half_shutdown(
+    ctx: *mut TaskCtx,
+    _destination: *mut u8,
+    out: *mut NetUnitResult,
+    n: *const u64,
+    w: *mut u64,
+) -> u8 {
+    let request = Request::Shutdown {
+        net: unsafe { n.read() },
+        stream: unsafe { w.read() },
+        how: ShutdownHow::Write,
+    };
+    let Some(Completion::NetUnit(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetUnitResult::of(value)) };
+    STATUS_OK
+}
+
 /// `net.listen(n, addr) -> Result[Listener of n, NetError]`.
 /// # Safety
 /// Context bound; n and addr readable; out writable.

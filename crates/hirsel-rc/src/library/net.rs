@@ -1,6 +1,7 @@
-//! `net.read_into`. A runtime symbol cannot
-//! name the size `k`, so one body per `k` calls `$intrinsic.NetReadInto[k]`, the
-//! fixed runtime entry `hirsel_rt_v2_net_read_into`, with the buffer's address and `k`.
+//! `net.read_into` and `read_half.read_into`. A runtime symbol cannot
+//! name the size `k`, so one body per `k` calls `$intrinsic.NetReadInto[k]` (or
+//! `$intrinsic.ReadHalfReadInto[k]`), the fixed runtime entry `hirsel_rt_v2_net_read_into`,
+//! with the buffer's address and `k`.
 
 use super::builder::{Body, Cx};
 use super::{BINDER, LibraryBody};
@@ -16,12 +17,17 @@ type R<T> = Result<T, PassError>;
 
 pub static READ_INTO: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("net.read_into"),
-    build: read_into,
+    build: |cx| read_into(cx, "$intrinsic.NetReadInto"),
 };
 
-fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+pub static HALF_READ_INTO: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("read_half.read_into"),
+    build: |cx| read_into(cx, "$intrinsic.ReadHalfReadInto"),
+};
+
+fn read_into(cx: &mut Cx<'_>, intrinsic: &str) -> R<LirUnit<Value>> {
     let k = cx.size_actual(0)?;
-    let path = hirsel_syntax::DefPath::core("$intrinsic.NetReadInto");
+    let path = hirsel_syntax::DefPath::core(intrinsic);
     let operation = cx
         .program
         .operations

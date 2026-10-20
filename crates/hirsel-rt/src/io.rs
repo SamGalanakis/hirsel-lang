@@ -488,6 +488,17 @@ pub enum Request {
         net: u64,
         stream: u64,
     },
+    /// `net.split`: the stream's halves, read then write.
+    NetSplit {
+        net: u64,
+        stream: u64,
+    },
+    /// `net.join`: the halves' connection again, when they are one connection's halves.
+    NetJoin {
+        net: u64,
+        read: u64,
+        write: u64,
+    },
     TlsConnect {
         net: u64,
         stream: u64,
@@ -665,6 +676,8 @@ pub enum Completion {
     /// negotiated, if any.
     Protocol(Result<Option<String>, NetError>),
     Address(Result<SocketAddr, NetError>),
+    /// `net.split`: the read half and the write half.
+    Halves(Result<(u64, u64), NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_schema::ProcessOutcome),
     /// `proc.pipeline`.
@@ -948,6 +961,9 @@ pub(crate) struct State {
     pub(crate) tls_servers: BTreeMap<u64, crate::net::TlsServer>,
     /// The TLS engine, once a TLS entry handed it over (`Adapter::tls`).
     pub(crate) tls: crate::net_tls::Engine,
+    /// The Stream grant of each split connection, keyed by stream, with the number of its
+    /// halves still alive.
+    pub(crate) split_streams: crate::id_map::IdMap<(crate::handles::Grant, u8)>,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_schema::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
@@ -990,6 +1006,7 @@ impl Default for State {
             tls_identities: BTreeMap::new(),
             tls_servers: BTreeMap::new(),
             tls: Default::default(),
+            split_streams: Default::default(),
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
@@ -1164,7 +1181,12 @@ impl State {
         if is_net_request(request)
             || matches!(request, Request::Close { handle } if matches!(
                 self.handles.rows.get(handle),
-                Some(Grant::Stream { .. } | Grant::Listener { .. } | Grant::UdpSocket { .. })
+                Some(
+                    Grant::Stream { .. }
+                        | Grant::Half { .. }
+                        | Grant::Listener { .. }
+                        | Grant::UdpSocket { .. }
+                )
             ))
         {
             // Network outcomes are provider inputs, never injected file faults.

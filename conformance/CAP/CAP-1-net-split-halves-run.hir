@@ -1,0 +1,75 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// Split halves: each serves its own direction, a write half's shutdown and either half's
+// drop leave the other direction working, the halves of one stream join into it again,
+// and the halves of two streams do not join: both are consumed as if dropped.
+fn scripted(t: Test) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open([Send(b"ab"), Expect(b"x"), Send(b"cd"), Expect(b"yz")]),
+          Open([Expect(b"q"), Send(b"later")]),
+          Open([Send(b"z")]),
+          Open([])
+        ]
+      )
+    ],
+    []
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = scripted(t)
+  // A split and joined stream.
+  let first = net.connect(n, "example.com", 80u16, Unbounded())?
+  let mut (r, w) = net.split(n, take first)
+  let mut two: Inline[u8, 2] = [0u8, 0u8]
+  test.check(t, read_half.read_into(n, mut r, mut two)? == 2u64)
+  test.check(t, two == [97u8, 98u8])
+  write_half.write_all(n, mut w, b"x")?
+  let mut joined = net.join(n, take r, take w)?
+  let mut buffer: List[u8] = []
+  test.check(t, net.read(n, mut joined, mut buffer, 8u64)? == 2u64)
+  test.check(t, bytes.from_list(take buffer) == b"cd")
+  test.check(t, net.write(n, mut joined, b"yz")? == 2u64)
+  net.close(n, take joined)
+  // The write direction shuts down and drops while the read half reads on.
+  let second = net.connect(n, "example.com", 80u16, Unbounded())?
+  let mut (r2, w2) = net.split(n, take second)
+  test.check(t, read_half.set_timeout(n, mut r2, Nanos(0u64)) == Error(InvalidInput()))
+  test.check(t, write_half.set_timeout(n, mut w2, Nanos(0u64)) == Error(InvalidInput()))
+  read_half.set_timeout(n, mut r2, Nanos(1000000u64))?
+  write_half.set_timeout(n, mut w2, Unbounded())?
+  let mut early: List[u8] = []
+  test.check(t, read_half.read(n, mut r2, mut early, 8u64) == Error(TimedOut()))
+  write_half.write_all(n, mut w2, b"q")?
+  write_half.shutdown(n, mut w2)?
+  test.check(t, write_half.write(n, mut w2, b"!") == Error(BrokenPipe()))
+  write_half.close(n, take w2)
+  let mut late: List[u8] = []
+  test.check(t, read_half.read(n, mut r2, mut late, 8u64)? == 5u64)
+  test.check(t, read_half.read(n, mut r2, mut late, 8u64)? == 0u64)
+  test.check(t, bytes.from_list(take late) == b"later")
+  read_half.close(n, take r2)
+  // Halves of two streams.
+  let third = net.connect(n, "example.com", 80u16, Unbounded())?
+  let fourth = net.connect(n, "example.com", 80u16, Unbounded())?
+  let mut (r3, w3) = net.split(n, take third)
+  let mut (r4, w4) = net.split(n, take fourth)
+  let mismatched = match net.join(n, take r3, take w4) {
+    Error(InvalidInput()) => true,
+    _ => false,
+  }
+  test.check(t, mismatched)
+  test.check(t, write_half.write(n, mut w3, b"w")? == 1u64)
+  let mut rest: List[u8] = []
+  test.check(t, read_half.read(n, mut r4, mut rest, 8u64)? == 0u64)
+  Ok(())
+}

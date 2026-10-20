@@ -130,8 +130,9 @@ pub const BODIES: &[&LibraryBody] = &[
     &sorted::I128,
     &iter::FROM_STEP,
     &iter::MAP_STEP,
-    // net (net-t2): net.read_into over its fixed runtime entry.
+    // net (net-t2): net.read_into and read_half.read_into over their fixed runtime entry.
     &net::READ_INTO,
+    &net::HALF_READ_INTO,
     // tasks (tasks-native): structured concurrency over the scheduler's entries.
     &tasks::SCOPE,
     &tasks::SCOPE_UNTIL,

@@ -1,0 +1,66 @@
+// rule: CAP-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"localhost","service":"7","operation":"connect"}],"peers":[{"address":"localhost","port":7,"resolves_to":["127.0.0.1"],"tls":"plain","connections":[{"open":[{"expect":[104,105]},{"send":[104,105]},{"expect":[33]},{"send":[33]},"close"]}]}]}
+// stdout: ok
+// A split stream's halves move into two tasks: the reader waits on the echo of what the
+// writer sends until the peer closes. Dropping the write half first leaves the read half
+// reading; the connection closes with the second half.
+pub type EchoError = Grant(GrantError) | Network(NetError) | Output(OutputError)
+
+fn reader(n: Net, take r: ReadHalf of n) -> bool {
+  let mut half = take r
+  let mut received: List[u8] = []
+  let mut open = true
+  while open {
+    open = match read_half.read(n, mut half, mut received, 8u64) {
+      Ok(count) => count > 0u64,
+      Error(_) => false,
+    }
+  }
+  bytes.from_list(take received) == b"hi!"
+}
+
+fn writer(n: Net, take w: WriteHalf of n) -> bool {
+  let mut half = take w
+  let first = write_half.write_all(n, mut half, b"hi") == Ok(())
+  let second = write_half.write(n, mut half, b"!") == Ok(1u64)
+  first && second
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), EchoError] {
+  let tasks = io.tasks(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let stream = net.connect(n, "localhost", 7u16, Unbounded()) ? Network
+  let (read, write) = net.split(n, take stream)
+  let (echoed, sent) = task.scope(
+    tasks,
+    fn(s: Scope) -> (bool, bool) {
+      let mine = take read
+      let yours = take write
+      let reading = task.async(
+        s,
+        fn() -> bool {
+          reader(n, take mine)
+        }
+      )
+      let writing = task.async(
+        s,
+        fn() -> bool {
+          writer(n, take yours)
+        }
+      )
+      let sent = task.await(s, take writing)
+      (task.await(s, take reading), sent)
+    }
+  )
+  out.print(
+    stdout,
+    if sent && echoed {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? Output
+  Ok(())
+}

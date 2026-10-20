@@ -486,7 +486,9 @@ ready records, before re-issuing any of them, one `ready` event per such wait in
 order, naming the wait by its creation ordinal (waits are numbered in the order their
 requests first parked) and the number of scheduling points it waited through since its task
 parked or it was last ready; scheduling points that find nothing ready are not recorded.
-Replay parks a task where its request recorded `blocked`, finds a wait ready exactly at its
+A request parked on a scripted world, which no host event readies, is ready at the first
+scheduling point after another network request completes, and parks again if the script
+still holds it. Replay parks a task where its request recorded `blocked`, finds a wait ready exactly at its
 recorded scheduling point and never waits for the host, so a recorded schedule replays in either engine. Cancellation is derived from
 the schedule and is not recorded.
 
@@ -522,7 +524,12 @@ protocol that the request's own list could not select. Replay re-derives the ser
 the material the program supplies again, and a different chain or trust set refuses. A
 `tls.peer` request records the stream, and its completion the DER chain it returned, which
 replay returns without cryptography. A `tls.negotiated_protocol` request records the stream,
-and its completion the protocol, which replay re-derives from the recorded handshake. Recordings are secret-bearing: they hold plaintext
+and its completion the protocol, which replay re-derives from the recorded handshake. A
+`net.split` request records the stream, and its completion the two half handles, read
+first; an operation on a half records the half's handle, never the stream's; a `net.join`
+request records both halves, and its completion
+the stream or `InvalidInput()`. Replay re-derives each half's stream and direction and
+refuses a half operation of the other direction. Recordings are secret-bearing: they hold plaintext
 and granted `Env` values.
 
 Replay returns recorded completions without sockets, name resolution or cryptography. Each

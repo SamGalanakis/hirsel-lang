@@ -113,6 +113,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "$intrinsic.InlineConsume_open"
             | "$intrinsic.InlineConsume_next"
             | "net.read_into"
+            | "read_half.read_into"
             | "task.scope"
             | "task.scope_until"
             | "task.async"
@@ -251,6 +252,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "net.set_write_timeout"
         | "net.peer_addr"
         | "net.close"
+        | "net.split"
+        | "net.join"
         | "tls.connect"
         | "tls.connect_as"
         | "tls.connect_with"
@@ -260,6 +263,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "tls.close" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // `net.read_into`'s compiled body calls this with its buffer's size.
         "$intrinsic.NetReadInto" => Some("hirsel_rt_v2_net_read_into".into()),
+        // A half's operations are its stream's entries on the half's handle.
+        name if HALF_EXPORTS.iter().any(|(n, _)| *n == name) => HALF_EXPORTS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, symbol)| (*symbol).into()),
         // The task runtime (`tasks.rs`) behind the compiled task bodies.
         "$intrinsic.TaskScopeEnter" => Some("hirsel_rt_v2_task_scope_enter".into()),
         "$intrinsic.TaskScopeExit" => Some("hirsel_rt_v2_task_scope_exit".into()),
@@ -385,6 +393,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "watcher.next"
             | "test.dir_event"
     ) || NET_EXPORTS.contains(&name.as_str())
+        || HALF_EXPORTS.iter().any(|(n, _)| *n == name)
         || name == "$intrinsic.NetReadInto"
     {
         row.failure = Some(hirsel_core_contract::RuleCode("CAP-2".into()));
@@ -396,6 +405,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "net.write"
             | "net.write_all"
             | "net.close"
+            | "net.join"
+            | "write_half.write"
+            | "write_half.write_all"
+            | "read_half.close"
+            | "write_half.close"
             | "tls.connect"
             | "tls.connect_as"
             | "tls.connect_with"
@@ -451,6 +465,8 @@ pub const NET_EXPORTS: &[&str] = &[
     "net.set_write_timeout",
     "net.peer_addr",
     "net.close",
+    "net.split",
+    "net.join",
     "tls.connect",
     "tls.connect_as",
     "tls.connect_with",
@@ -458,6 +474,23 @@ pub const NET_EXPORTS: &[&str] = &[
     "tls.peer",
     "tls.negotiated_protocol",
     "tls.close",
+];
+
+/// The `net.split` halves' operations and their entries: each is its stream operation's
+/// entry on the half's handle, except a write half's shutdown, which names no direction.
+pub const HALF_EXPORTS: &[(&str, &str)] = &[
+    ("read_half.read", "hirsel_rt_v2_net_read"),
+    ("$intrinsic.ReadHalfReadInto", "hirsel_rt_v2_net_read_into"),
+    ("read_half.set_timeout", "hirsel_rt_v2_net_set_read_timeout"),
+    ("read_half.close", "hirsel_rt_v2_net_close"),
+    ("write_half.write", "hirsel_rt_v2_net_write"),
+    ("write_half.write_all", "hirsel_rt_v2_net_write_all"),
+    ("write_half.shutdown", "hirsel_rt_v2_write_half_shutdown"),
+    (
+        "write_half.set_timeout",
+        "hirsel_rt_v2_net_set_write_timeout",
+    ),
+    ("write_half.close", "hirsel_rt_v2_net_close"),
 ];
 
 pub(crate) const MAP_BODIES: &[&str] = &[
@@ -1073,6 +1106,27 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_net_close",
         destination: false,
         result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_net_split",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_net_join",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_write_half_shutdown",
+        destination: true,
+        result: Some((16, 4)),
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
@@ -1905,6 +1959,17 @@ pub const NATIVE_PATHS: &[&str] = &[
     "net.set_write_timeout",
     "net.peer_addr",
     "net.close",
+    "net.split",
+    "net.join",
+    "read_half.read",
+    "read_half.read_into",
+    "read_half.set_timeout",
+    "read_half.close",
+    "write_half.write",
+    "write_half.write_all",
+    "write_half.shutdown",
+    "write_half.set_timeout",
+    "write_half.close",
     "tls.connect",
     "tls.connect_as",
     "tls.connect_with",
@@ -1934,6 +1999,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.MapInsertionOrder_open",
     "$intrinsic.MapInsertionOrder_advance",
     "$intrinsic.NetReadInto",
+    "$intrinsic.ReadHalfReadInto",
     "$intrinsic.TaskScopeEnter",
     "$intrinsic.TaskScopeExit",
     "$intrinsic.TaskScopeEnterUntil",

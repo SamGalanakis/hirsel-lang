@@ -545,6 +545,32 @@ fn result(value: NetResult<Value>) -> Result<Value, NetFault> {
     })
 }
 impl Simulation {
+    /// A half's Net and stream.
+    fn half(&self, v: &Value) -> Result<(u64, u64), Error> {
+        let Value::Handle { kind, id } = v else {
+            return Err(invalid("half representation"));
+        };
+        let id = self.id(v, kind)?;
+        match self.grants.get(&id) {
+            Some(Grant::Half { net, stream, .. }) => Ok((*net, *stream)),
+            _ => Err(invalid("half grant")),
+        }
+    }
+    /// Drop a half: no network effect while its sibling lives; the last half closes the
+    /// connection as dropping the stream would, with its Test report.
+    pub(super) fn close_half(&mut self, id: u64) -> Option<String> {
+        let Some(Grant::Half { stream, .. }) = self.grants.remove(&id) else {
+            return None;
+        };
+        if self
+            .grants
+            .values()
+            .any(|g| matches!(g, Grant::Half { stream: s, .. } if *s == stream))
+        {
+            return None;
+        }
+        self.close_net(stream)
+    }
     /// Close a scripted stream or listener: the Test report when a client it
     /// leaves still expects bytes (docs/spec/core-library.md, scripted peers).
     pub(super) fn close_net(&mut self, id: u64) -> Option<String> {
@@ -589,7 +615,17 @@ impl Simulation {
         }
         Ok(id)
     }
+    /// A stream, or a half's stream: the connection its operations act on.
     fn stream_id(&self, n: u64, v: &Value) -> Result<u64, Error> {
+        if let Value::Handle { kind, .. } = v
+            && matches!(kind.as_str(), "ReadHalf" | "WriteHalf")
+        {
+            let (net, stream) = self.half(v)?;
+            if net != n {
+                return Err(invalid("wrong half Net"));
+            }
+            return Ok(stream);
+        }
         let id = self.id(v, "Stream")?;
         if self.net_streams.get(&id).is_none_or(|s| s.net != n) {
             return Err(invalid("wrong stream Net"));
@@ -643,6 +679,101 @@ impl Simulation {
                 Ok(stream)
             }
         }
+    }
+    /// `net.split`, `net.join` and a half's close; `None` for every other operation.
+    fn split_call(
+        &mut self,
+        name: &str,
+        net: u64,
+        call: &OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let a = &*call.arguments;
+        let (value, report, consumed) = match name {
+            "net.split" => {
+                let stream = self.stream_id(net, arg(a, 1)?)?;
+                if !matches!(self.grants.get(&stream), Some(Grant::Stream { .. })) {
+                    return Err(invalid("split of a half"));
+                }
+                self.grants.remove(&stream);
+                let read = self.handle(
+                    "ReadHalf",
+                    Grant::Half {
+                        net,
+                        stream,
+                        write: false,
+                    },
+                );
+                let write = self.handle(
+                    "WriteHalf",
+                    Grant::Half {
+                        net,
+                        stream,
+                        write: true,
+                    },
+                );
+                (Value::Tuple(vec![Some(read), Some(write)]), None, vec![1])
+            }
+            "net.join" => {
+                let (read_net, reading) = self.half(arg(a, 1)?)?;
+                let (write_net, writing) = self.half(arg(a, 2)?)?;
+                if read_net != net || write_net != net {
+                    return Err(invalid("wrong half Net"));
+                }
+                let ids = [
+                    self.id(arg(a, 1)?, "ReadHalf")?,
+                    self.id(arg(a, 2)?, "WriteHalf")?,
+                ];
+                if reading == writing {
+                    for id in ids {
+                        self.grants.remove(&id);
+                    }
+                    self.grants.insert(reading, Grant::Stream { net });
+                    let stream = Value::Handle {
+                        kind: "Stream".into(),
+                        id: reading,
+                    };
+                    (ok(stream), None, vec![1, 2])
+                } else {
+                    // Mismatched halves are consumed as if dropped.
+                    let report = ids.into_iter().find_map(|id| self.close_half(id));
+                    (
+                        result(Err(NetFault::InvalidInput)).map_err(|_| invalid("join"))?,
+                        report,
+                        vec![1, 2],
+                    )
+                }
+            }
+            "read_half.close" | "write_half.close" => {
+                let (_, _) = self.half(arg(a, 1)?)?;
+                let Value::Handle { id, .. } = arg(a, 1)? else {
+                    unreachable!()
+                };
+                (Value::Unit, self.close_half(*id), vec![1])
+            }
+            _ => return Ok(None),
+        };
+        if let Some(report) = report {
+            cx.stdout.extend_from_slice(report.as_bytes());
+            let failure = super::dispatch::fail(call, cx, "LANG-9", "scripted net client unmet");
+            self.record(
+                "Net",
+                name,
+                encode_arguments(a),
+                b"failure:LANG-9".to_vec(),
+                cx,
+            )?;
+            return Ok(Some(OperationResult::Failed(failure)));
+        }
+        self.record("Net", name, encode_arguments(a), encode_value(&value), cx)?;
+        let mut result = OperationResult::returned(value);
+        if let OperationResult::Complete {
+            consumed: taken, ..
+        } = &mut result
+        {
+            taken.extend(consumed);
+        }
+        Ok(Some(result))
     }
     pub(super) fn net_call(
         &mut self,
@@ -720,6 +851,20 @@ impl Simulation {
             return Ok(OperationResult::returned(value));
         }
         let (net, world, ruleset) = self.net_grant(arg(a, 0)?)?;
+        if let Some(result) = self.split_call(name, net, call, cx)? {
+            return Ok(result);
+        }
+        // A half's operations are its stream's, on the half's own handle.
+        let name = match name {
+            "read_half.read" => "net.read",
+            "read_half.read_into" => "net.read_into",
+            "read_half.set_timeout" => "net.set_read_timeout",
+            "write_half.write" => "net.write",
+            "write_half.write_all" => "net.write_all",
+            "write_half.shutdown" => "net.shutdown",
+            "write_half.set_timeout" => "net.set_write_timeout",
+            name => name,
+        };
         let mut updates = vec![];
         let mut recorded = None;
         let outcome = 'operation: {
@@ -1494,7 +1639,11 @@ impl Simulation {
                             }
                         }
                         "net.shutdown" => {
-                            let (tag, f) = variant_fields(arg(a, 2)?)?;
+                            // A write half's shutdown names no direction.
+                            let (tag, f) = match a.get(2) {
+                                Some(how) => variant_fields(how)?,
+                                None => (1, &[][..]),
+                            };
                             if tag > 2 || !f.is_empty() {
                                 return Err(invalid("Shutdown representation"));
                             }

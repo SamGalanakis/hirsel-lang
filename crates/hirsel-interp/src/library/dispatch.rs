@@ -1520,6 +1520,31 @@ impl Operations for Library {
             self.tasks.drop_set(id);
             return Ok(());
         }
+        if matches!(kind, "ReadHalf" | "WriteHalf") {
+            if !matches!(
+                self.simulation.grants.get(&id),
+                Some(super::simulation::Grant::Half { .. })
+            ) {
+                return Ok(());
+            }
+            let report = self.simulation.close_half(id);
+            if let Some(report) = &report {
+                context.stdout.extend_from_slice(report.as_bytes());
+                self.drop_failure = Some(("LANG-9".into(), "scripted net client unmet".into()));
+            }
+            self.simulation.record(
+                "Net",
+                "net.close",
+                id.to_le_bytes().to_vec(),
+                if report.is_some() {
+                    b"failure:LANG-9".to_vec()
+                } else {
+                    vec![]
+                },
+                context,
+            )?;
+            return Ok(());
+        }
         if matches!(kind, "Stream" | "Listener" | "UdpSocket") {
             let open = if kind == "Stream" {
                 self.simulation.net_streams.contains_key(&id)
@@ -1776,7 +1801,7 @@ primary_operations! { self, call, context, name, a, value;
         if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
         return result.map(Some); },
     Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
-    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept" | "tls.peer" | "tls.negotiated_protocol" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
+    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "net.split" | "net.join" | "read_half.read" | "read_half.read_into" | "read_half.set_timeout" | "read_half.close" | "write_half.write" | "write_half.write_all" | "write_half.shutdown" | "write_half.set_timeout" | "write_half.close" | "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept" | "tls.peer" | "tls.negotiated_protocol" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
         return self.network_call(name, &call, context).map(Some);
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted
@@ -1793,7 +1818,7 @@ primary_operations! { self, call, context, name, a, value;
         return result.map(Some);
     },
     Unavailable: "$intrinsic.MappedView" | "$intrinsic.MappedCheck" => { return Err(Error::Unavailable(format!("{name} is an entry of mapped.with's compiled body; the reference executes mapped.with"))); },
-    Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
+    Unavailable: "$intrinsic.NetReadInto" | "$intrinsic.ReadHalfReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of a read_into's compiled body; the reference executes the read_into"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),
     Primitive: "runner.entry_path" => match arg(a, 0)? {
         Value::FunctionReference(entry) => Value::String(entry.definition.to_string()),

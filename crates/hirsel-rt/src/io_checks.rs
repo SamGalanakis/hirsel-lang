@@ -10,9 +10,12 @@ use hirsel_run_schema::Access;
 pub(crate) fn net_completion(request: &R, error: NetError) -> C {
     match request {
         R::Resolve { .. } => C::Addresses(Err(error)),
-        R::UdpBind { .. } | R::Connect { .. } | R::ConnectAddr { .. } | R::UnixConnect { .. } => {
-            C::NetHandle(Err(error))
-        }
+        R::UdpBind { .. }
+        | R::Connect { .. }
+        | R::ConnectAddr { .. }
+        | R::UnixConnect { .. }
+        | R::NetJoin { .. } => C::NetHandle(Err(error)),
+        R::NetSplit { .. } => C::Halves(Err(error)),
         R::UnixListen { .. } => C::Listened(Err(error)),
         R::Accept { .. } => C::Accepted(Err(error)),
         R::NetRead { .. } => C::NetBytes(Err(error)),

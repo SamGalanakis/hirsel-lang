@@ -226,6 +226,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         TlsAccept { net: n.wrapping_add(17), stream: n.wrapping_add(28), server: hirsel_rt::net::TlsServerDigest { identities: vec![digest], clients: match n % 3 { 0 => hirsel_rt::net::ClientAuth::Anonymous, 1 => hirsel_rt::net::ClientAuth::Request(digest), _ => hirsel_rt::net::ClientAuth::Require(digest) }, alpn: alpn.clone() } },
         TlsPeer { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         TlsProtocol { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
+        NetSplit { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
+        NetJoin { net: n.wrapping_add(17), read: n.wrapping_add(31), write: n.wrapping_add(32) },
         TlsClose { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         Listen { net: n.wrapping_add(17), addr: addr },
         Accept { net: n.wrapping_add(17), listener: n.wrapping_add(13) },
@@ -328,6 +330,10 @@ fn completions(n: u64) -> Vec<Completion> {
             net_error.clone()
         )),
         Completion::Address(result!(addr, net_error.clone())),
+        Completion::Halves(result!(
+            (n.wrapping_add(31), n.wrapping_add(32)),
+            net_error.clone()
+        )),
         Completion::Accepted(result!((n, addr), net_error)),
         Completion::Process(if n % 2 == 0 {
             ProcessOutcome::Output {
@@ -405,6 +411,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::Certificates(_) => (),
             Completion::Protocol(_) => (),
             Completion::Address(_) => (),
+            Completion::Halves(_) => (),
             Completion::Accepted(_) => (),
             Completion::Process(_) => (),
             Completion::Pipeline(_) => (),

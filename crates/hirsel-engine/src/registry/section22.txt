@@ -95,6 +95,17 @@ fn net.connect_addr(n: Net, addr: SocketAddr, timeout: NetTimeout) -> Result[Str
 @preserves_captures(s) N fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]
 N fn net.peer_addr(n: Net, s: Stream of n) -> Result[SocketAddr, NetError]
 N fn net.close(n: Net, take s: Stream of n) -> ()
+fn net.split(n: Net, take s: Stream of n) -> (ReadHalf of n, WriteHalf of n)
+fn net.join(n: Net, take r: ReadHalf of n, take w: WriteHalf of n) -> Result[Stream of n, NetError]
+fn read_half.read(n: Net, mut r: ReadHalf of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]
+N fn read_half.read_into[k: size](n: Net, mut r: ReadHalf of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]
+N fn read_half.set_timeout(n: Net, mut r: ReadHalf of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn read_half.close(n: Net, take r: ReadHalf of n) -> ()
+N fn write_half.write(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[u64, NetError]
+N fn write_half.write_all(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[(), NetError]
+N fn write_half.shutdown(n: Net, mut w: WriteHalf of n) -> Result[(), NetError]
+N fn write_half.set_timeout(n: Net, mut w: WriteHalf of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn write_half.close(n: Net, take w: WriteHalf of n) -> ()
 fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]
 fn tls.connect_as(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots, identity: TlsIdentity) -> Result[Stream of n, NetError]
 fn tls.connect_with(n: Net, take s: Stream of n, server_name: String, client: TlsClient) -> Result[Stream of n, NetError]

@@ -186,6 +186,12 @@ pub(crate) enum Grant {
         stdin_open: bool,
         group: bool,
     },
+    /// A `net.split` half of stream `stream`, whose grant waits aside in `split`.
+    Half {
+        net: u64,
+        stream: u64,
+        write: bool,
+    },
     UdpSocket {
         net: u64,
     },
@@ -305,6 +311,12 @@ pub enum ObservedGrant {
     Child {
         process: u64,
     },
+    /// A `net.split` half of stream `stream`, whose grant waits aside in `split`.
+    Half {
+        net: u64,
+        stream: u64,
+        write: bool,
+    },
     UdpSocket {
         net: u64,
     },
@@ -366,6 +378,11 @@ impl Simulation {
                             rules: rules.clone(),
                         },
                         Grant::Stream { net } => ObservedGrant::Stream { net: *net },
+                        Grant::Half { net, stream, write } => ObservedGrant::Half {
+                            net: *net,
+                            stream: *stream,
+                            write: *write,
+                        },
                         Grant::Proc { world, rules } => ObservedGrant::Proc {
                             world: *world,
                             rules: rules.clone(),
@@ -948,6 +965,9 @@ impl Simulation {
             && match self.grants.get(id) {
                 Some(Grant::Net { .. }) => kind == "Net",
                 Some(Grant::Stream { .. }) => kind == "Stream",
+                Some(Grant::Half { write, .. }) => {
+                    kind == if *write { "WriteHalf" } else { "ReadHalf" }
+                }
                 Some(Grant::Proc { .. }) => kind == "Proc",
                 Some(Grant::Child { group, .. }) => {
                     kind == if *group { "ChildGroup" } else { "Child" }

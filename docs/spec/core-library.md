@@ -133,6 +133,17 @@ fn net.connect_addr(n: Net, addr: SocketAddr, timeout: NetTimeout) -> Result[Str
 @preserves_captures(s) N fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]
 N fn net.peer_addr(n: Net, s: Stream of n) -> Result[SocketAddr, NetError]
 N fn net.close(n: Net, take s: Stream of n) -> ()
+fn net.split(n: Net, take s: Stream of n) -> (ReadHalf of n, WriteHalf of n)
+fn net.join(n: Net, take r: ReadHalf of n, take w: WriteHalf of n) -> Result[Stream of n, NetError]
+fn read_half.read(n: Net, mut r: ReadHalf of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]
+N fn read_half.read_into[k: size](n: Net, mut r: ReadHalf of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]
+N fn read_half.set_timeout(n: Net, mut r: ReadHalf of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn read_half.close(n: Net, take r: ReadHalf of n) -> ()
+N fn write_half.write(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[u64, NetError]
+N fn write_half.write_all(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[(), NetError]
+N fn write_half.shutdown(n: Net, mut w: WriteHalf of n) -> Result[(), NetError]
+N fn write_half.set_timeout(n: Net, mut w: WriteHalf of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn write_half.close(n: Net, take w: WriteHalf of n) -> ()
 fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]
 fn tls.connect_as(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots, identity: TlsIdentity) -> Result[Stream of n, NetError]
 fn tls.connect_with(n: Net, take s: Stream of n, server_name: String, client: TlsClient) -> Result[Stream of n, NetError]
@@ -517,7 +528,10 @@ watcher of the tree.
 
 `Stream`, `Listener` and `UdpSocket` are noncopyable, sendable resources carrying `Net` authority,
 branded by the `Net` that produced them (`Stream of n`, `Listener of n`, `UdpSocket of n`). Their finalizers
-are `@noalloc`, close the socket, discard close errors and send no TLS `close_notify`. The
+are `@noalloc`, close the socket, discard close errors and send no TLS `close_notify`.
+`ReadHalf` and `WriteHalf`, the halves `net.split` makes of a `Stream`, are noncopyable,
+sendable resources branded like it (`ReadHalf of n`, `WriteHalf of n`); their `@noalloc`
+finalizers close the socket only with the second half ([split streams](#network)). The
 network data types are root core types, with variant ordinals in the order written:
 
 ```text
@@ -747,6 +761,7 @@ empty rule list is allowed and permits nothing.
 | `net.connect(n, host, port, t)` | `(host, port, Connect())` or `(host, port, ConnectTls())` |
 | `net.connect_addr(n, addr, t)` | a rule whose address is the canonical literal of `addr.ip`, with `addr.port`; a host-name rule never authorizes a raw address |
 | stream operations | the stream's own grant |
+| `net.split(n, take s)`, `net.join(n, take r, take w)` and half operations | the stream's own grant |
 | `tls.connect(n, take s, server_name, roots)`, `tls.connect_as(n, take s, server_name, roots, identity)`, `tls.connect_with(n, take s, server_name, client)` | on a `ConnectTls` stream, `server_name` equal to the rule's address |
 | `tls.accept(n, take s, server)` | on a stream accepted on a listener of `n` |
 | `tls.peer(n, s)`, `tls.negotiated_protocol(n, s)` | the stream's own grant |
@@ -774,6 +789,24 @@ any are available, or returns 0 at end of stream; `net.read_into` writes a prefi
 partial write. A new stream has `Unbounded()` read and write timeouts; an expired timeout
 returns `TimedOut()` and leaves the stream usable. `net.shutdown` follows the host's
 half-close semantics. `net.close` and dropping a stream are the same effect.
+
+`net.split` divides a stream into its read half and its write half, each owned and sent on
+its own, so one task can read while another writes; it never blocks or fails, and has no
+network effect. `read_half.read`, `read_half.read_into` and `read_half.set_timeout` are
+`net.read`, `net.read_into` and `net.set_read_timeout` on the stream; `write_half.write`,
+`write_half.write_all` and `write_half.set_timeout` are `net.write`, `net.write_all` and
+`net.set_write_timeout`, and `write_half.shutdown` is `net.shutdown` with `Write()`. Each
+keeps that operation's rules, errors, timeouts and cancellation, including a TLS-only
+stream's `NotGranted()` before its handshake; the halves of a TLS stream share its one
+session. One half's operation never waits on the other's: a read blocked on the read half
+is unaffected by writes, shutdown, timeouts or the drop of the write half, and a blocked
+write by the read half. `read_half.close`, `write_half.close` and dropping a half have no
+network effect while the other half lives; dropping the second half is dropping the stream,
+the same effect as `net.close`, including a scripted client's `Expect` check. `net.join`
+consumes both halves: when they are the halves of one stream it returns that stream, with
+its timeouts and TLS state; otherwise it returns `InvalidInput()` and drops both, as if each
+were dropped. TLS operations, `net.peer_addr` and `net.shutdown` of the read direction take
+only a whole stream.
 
 `tls.connect` performs a TLS 1.2 or 1.3 client handshake on the stream, with `server_name`
 as both SNI and verification name, verifying the peer's chain against `roots`: `WebPki()` is
@@ -863,8 +896,9 @@ again while its closed connections remain in `TIME_WAIT`. They do not set
 `AddrInUse()`. `net.accept` returns a connected stream and its peer address.
 
 The blocking network operations are `resolve`, `connect`, `connect_addr`, `unix_connect`,
-`read`, `read_into`, `write`, `write_all`, `accept`, `tls.connect`, `tls.connect_as`,
-`tls.connect_with`, `tls.accept` and `tls.close`. Each is a
+`read`, `read_into`, `write`, `write_all`, their half forms (`read_half.read`,
+`read_half.read_into`, `write_half.write`, `write_half.write_all`), `accept`,
+`tls.connect`, `tls.connect_as`, `tls.connect_with`, `tls.accept` and `tls.close`. Each is a
 cancellation point only before it has an effect: a read before any byte is received, a
 write before any byte is accepted, a connect or handshake before any packet is sent. The
 others never return `Canceled`. A canceled `tls.connect`, `tls.connect_as`,
@@ -977,6 +1011,11 @@ listens on that IP have no scripted clients.
   nothing, so a read times out or never completes. The end of the steps is `Close()`.
 - Written bytes accumulate and are compared with the next `Expect(b)` once `b`'s length of
   them exist; a mismatch is `Reset()` at that point. Writes are otherwise accepted.
+- A read at an `Expect` waits for the program's own writes: a split stream's read half,
+  read in one task while another task writes through the write half, completes once those
+  writes meet the `Expect` and the peer's next `Send` is reached. A read that only the
+  program's writes can complete, with no task left to write, never completes
+  ([CONC-8](concurrency.md#conc-8-global-quiescence)).
 - `net.listen` on a scripted listener's address succeeds. A second listen on the same
   nonzero address while the first listener is open is `AddrInUse()`. A granted listen
   on an address with no scripted listener has no clients. `net.local_addr` is the assigned listen address, including

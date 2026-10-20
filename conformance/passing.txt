@@ -49,6 +49,9 @@ conformance/CAP/CAP-1-net-script-roundtrip-run.hir
 conformance/CAP/CAP-1-net-scripted-listen-granted-run.hir
 conformance/CAP/CAP-1-net-scripted-listen-ungranted-run.hir
 conformance/CAP/CAP-1-net-scripted-server-run.hir
+conformance/CAP/CAP-1-net-split-echo-run.hir
+conformance/CAP/CAP-1-net-split-halves-run.hir
+conformance/CAP/CAP-1-net-split-tls-run.hir
 conformance/CAP/CAP-1-net-timeout-run.hir
 conformance/CAP/CAP-1-net-tls-accept-grant-run.hir
 conformance/CAP/CAP-1-net-tls-accept-identity-run.hir

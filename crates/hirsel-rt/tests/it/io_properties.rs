@@ -107,6 +107,8 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::Shutdown { .. } => false,
             Request::SetTimeout { .. } => false,
             Request::PeerAddr { .. } => false,
+            Request::NetSplit { .. } => false,
+            Request::NetJoin { .. } => false,
             Request::TlsConnect { .. } => true,
             Request::TlsAccept { .. } => true,
             Request::TlsPeer { .. } => false,

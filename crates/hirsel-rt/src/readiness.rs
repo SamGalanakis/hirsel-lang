@@ -75,6 +75,13 @@ struct ReadyState {
     always: IdSet,
     /// Tokens the idle wait found ready, for the next scheduling point.
     woken: IdSet,
+    /// Parked tokens waiting on a scripted world, which no host event readies: each is
+    /// ready once a network request completes after it blocked, since that request may
+    /// have advanced the script (a write a parked read's peer expects).
+    scripted: IdSet,
+    /// The number of network requests completed so far: the progress epoch a scripted
+    /// wait compares against the one it blocked at.
+    progress: u64,
 }
 /// One parked operation's interest plus the progress a retried network
 /// operation keeps across readiness waits (CooperativeNet).
@@ -95,6 +102,8 @@ pub(crate) struct Pending {
     parked: bool,
     /// It waits for a delivery, not for a descriptor or deadline.
     delivery: bool,
+    /// It waits on a scripted world ([`Readiness::scripted`]) since this progress epoch.
+    scripted: Option<u64>,
     /// What the epoll set and the timer heaps hold for this token.
     registered: Option<(libc::c_int, libc::c_short)>,
     timer: Option<Instant>,
@@ -132,6 +141,16 @@ impl Readiness {
             state.woken.insert(token);
         }
     }
+    /// The request blocked under the entered token waits on a scripted world.
+    pub(crate) fn scripted(&self) {
+        let progress = self.0.borrow().progress;
+        self.pending().scripted = Some(progress);
+    }
+    /// A network request completed: parked scripted waits are retried at the next
+    /// scheduling point.
+    pub(crate) fn progressed(&self) {
+        self.0.borrow_mut().progress += 1;
+    }
     /// Harness-only virtual time: samples are stable while runnable work remains.
     pub(crate) fn virtual_clock(ticks: u64) -> Self {
         let readiness = Self::default();
@@ -158,6 +177,7 @@ impl Readiness {
         let mut state = self.0.borrow_mut();
         state.touched.remove(&token);
         state.always.remove(&token);
+        state.scripted.remove(&token);
         state.woken.remove(&token);
         if let Some(pending) = state.pending.remove(&token)
             && let Some((fd, _)) = pending.registered
@@ -236,11 +256,15 @@ impl Readiness {
             .chain(state.always.members_unordered())
             .any(|t| self.own(t) && state.pending.get(&t).is_some_and(|p| p.parked)))
     }
-    /// Every token found ready so far: the idle wait's findings, the descriptors epoll
-    /// reports ready now, and the passed deadlines.
+    /// Every token found ready so far: the idle wait's findings, the scripted waits a
+    /// network request completed after, the descriptors epoll reports ready now, and the
+    /// passed deadlines.
     fn poll(state: &mut ReadyState) -> Result<IdSet, AdapterError> {
         state.sync()?;
         let mut ready = std::mem::take(&mut state.woken);
+        for token in state.progressed_scripts() {
+            ready.insert(token);
+        }
         if !state.fds.is_empty() {
             state.epoll_events(0, &mut ready)?;
         }
@@ -284,6 +308,9 @@ impl Readiness {
     pub fn wait(&self) -> Result<bool, AdapterError> {
         let mut state = self.0.borrow_mut();
         state.sync()?;
+        if !state.progressed_scripts().is_empty() {
+            return Ok(true);
+        }
         if let Some(now) = state.virtual_time {
             let next = state.next_virtual();
             if let Some(next) = next {
@@ -324,6 +351,19 @@ impl Readiness {
 }
 
 impl ReadyState {
+    /// The scripted waits a network request completed after: each may be ready now, and
+    /// a re-issue that blocks again waits for the next one.
+    fn progressed_scripts(&self) -> Vec<u64> {
+        self.scripted
+            .members_unordered()
+            .filter(|token| {
+                self.pending
+                    .get(token)
+                    .and_then(|pending| pending.scripted)
+                    .is_some_and(|since| since < self.progress)
+            })
+            .collect()
+    }
     /// Register the interest and deadline of every token a provider touched.
     fn sync(&mut self) -> Result<(), AdapterError> {
         let mut touched = std::mem::take(&mut self.touched);
@@ -331,8 +371,12 @@ impl ReadyState {
             let Some(pending) = self.pending.get_mut(&token) else {
                 continue;
             };
-            let (interest, registered, delivery) =
-                (pending.interest, pending.registered, pending.delivery);
+            let (interest, registered, delivery, scripted) = (
+                pending.interest,
+                pending.registered,
+                pending.delivery,
+                pending.scripted.is_some(),
+            );
             let mut timers = Vec::new();
             if let Some(deadline) = pending.deadline
                 && pending.timer != Some(deadline)
@@ -360,7 +404,10 @@ impl ReadyState {
             {
                 self.unregister(token, fd);
             }
-            let mut always = !watched && !timed && !delivery;
+            if scripted {
+                self.scripted.insert(token);
+            }
+            let mut always = !watched && !timed && !delivery && !scripted;
             if let Some((fd, events)) = interest {
                 // Re-armed on every park, even unchanged: a descriptor closed and reopened
                 // under the same number left the epoll set when it closed, and an edge that
@@ -825,5 +872,26 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_millis(15));
         assert_eq!(readiness.ready().unwrap(), [3]);
         drop(watched);
+    }
+
+    /// A scripted wait is ready once a network request completes after it blocked, even
+    /// when a scheduling point ran between that progress and its task's park, and a
+    /// re-issue that blocks again waits for the next progress.
+    #[test]
+    fn scripted_waits_keep_progress_made_before_their_park() {
+        let readiness = Readiness::default();
+        readiness.enter(1);
+        readiness.scripted();
+        readiness.progressed();
+        assert_eq!(readiness.ready().unwrap(), Vec::<u64>::new());
+        readiness.parked(1);
+        assert_eq!(readiness.ready().unwrap(), [1]);
+        readiness.enter(1);
+        readiness.scripted();
+        assert_eq!(readiness.ready().unwrap(), Vec::<u64>::new());
+        assert!(!readiness.wait().unwrap());
+        readiness.progressed();
+        assert!(readiness.wait().unwrap());
+        assert_eq!(readiness.ready().unwrap(), [1]);
     }
 }

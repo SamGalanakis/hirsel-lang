@@ -31,6 +31,13 @@ pub enum Grant {
         tls: bool,
         protocol: Option<String>,
     },
+    /// A `net.split` half: one direction of connection `stream`, whose Stream grant the
+    /// State holds aside while either half lives.
+    Half {
+        net: u64,
+        stream: u64,
+        write: bool,
+    },
     UdpSocket {
         net: u64,
     },

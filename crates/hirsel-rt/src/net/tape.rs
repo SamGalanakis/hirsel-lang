@@ -304,6 +304,8 @@ pub(crate) fn render_request(request: &Request) -> String {
             timeout: t,
         } => format!("set_timeout {net} {stream} {} {}", which(*w), timeout(t)),
         R::PeerAddr { net, stream } => format!("peer_addr {net} {stream}"),
+        R::NetSplit { net, stream } => format!("net_split {net} {stream}"),
+        R::NetJoin { net, read, write } => format!("net_join {net} {read} {write}"),
         R::TlsConnect {
             net,
             stream,
@@ -385,6 +387,7 @@ pub(crate) fn render_completion(completion: &Completion) -> String {
         ),
         C::Protocol(v) => format!("protocol {}", outcome(v, protocol)),
         C::Address(v) => format!("address {}", outcome(v, address)),
+        C::Halves(v) => format!("halves {}", outcome(v, |(r, w)| format!("{r} {w}"))),
         C::Accepted(v) => format!(
             "accepted {}",
             outcome(v, |(id, peer)| format!("{id} {}", address(peer)))
@@ -477,6 +480,15 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         ["peer_addr", n, s] => R::PeerAddr {
             net: number(n)?,
             stream: number(s)?,
+        },
+        ["net_split", n, s] => R::NetSplit {
+            net: number(n)?,
+            stream: number(s)?,
+        },
+        ["net_join", n, r, w] => R::NetJoin {
+            net: number(n)?,
+            read: number(r)?,
+            write: number(w)?,
         },
         ["tls_connect", n, s, name, r, rest @ ..] => {
             let (identity, rest) = match rest {
@@ -594,6 +606,10 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         })?),
         ["protocol", r @ ..] => C::Protocol(parse_outcome(r, |w| parse_protocol(one(w)?))?),
         ["address", r @ ..] => C::Address(parse_outcome(r, |w| parse_address(one(w)?))?),
+        ["halves", r @ ..] => C::Halves(parse_outcome(r, |w| match w {
+            [read, write] => Ok((number(read)?, number(write)?)),
+            _ => Err("bad tape halves".into()),
+        })?),
         ["accepted", r @ ..] => C::Accepted(parse_outcome(r, |w| match w {
             [id, peer] => Ok((number(id)?, parse_address(peer)?)),
             _ => Err("bad tape accepted".into()),

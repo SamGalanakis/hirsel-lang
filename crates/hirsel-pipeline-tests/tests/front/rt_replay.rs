@@ -321,6 +321,8 @@ pub fn replay_interpreter_with_fixture(
                 | Request::TlsAccept { .. }
                 | Request::TlsPeer { .. }
                 | Request::TlsProtocol { .. }
+                | Request::NetSplit { .. }
+                | Request::NetJoin { .. }
                 | Request::TlsClose { .. }
                 | Request::Listen { .. }
                 | Request::UnixConnect { .. }
@@ -471,6 +473,7 @@ pub fn replay_interpreter_with_fixture(
                 | Completion::Count(_)
                 | Completion::NetUnit(_)
                 | Completion::Protocol(_)
+                | Completion::Halves(_)
                 | Completion::Address(_)
                 | Completion::Addresses(_) => network::decode(&event.completion, value, &arguments),
                 _ => decode(&event.completion, value),
@@ -508,6 +511,13 @@ pub fn replay_interpreter_with_fixture(
                         },
                         hirsel_rt::handles::Grant::Stream { net, .. } => {
                             ObservedGrant::Stream { net: *net }
+                        }
+                        hirsel_rt::handles::Grant::Half { net, stream, write } => {
+                            ObservedGrant::Half {
+                                net: *net,
+                                stream: *stream,
+                                write: *write,
+                            }
                         }
                         hirsel_rt::handles::Grant::UdpSocket { net } => {
                             ObservedGrant::UdpSocket { net: *net }

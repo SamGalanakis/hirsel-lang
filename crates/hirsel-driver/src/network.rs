@@ -1516,6 +1516,17 @@ impl HostLibrary {
         token: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        // A half's operations are its stream's, on the half's own handle.
+        let name = match name {
+            "read_half.read" => "net.read",
+            "read_half.read_into" => "net.read_into",
+            "read_half.set_timeout" => "net.set_read_timeout",
+            "write_half.write" => "net.write",
+            "write_half.write_all" => "net.write_all",
+            "write_half.set_timeout" => "net.set_write_timeout",
+            "read_half.close" | "write_half.close" => "net.close",
+            name => name,
+        };
         let request = match name {
             "io.net" => R::Net { io: 1 },
             "net.narrow" => R::NetNarrow {
@@ -1639,6 +1650,20 @@ impl HostLibrary {
             },
             "net.close" | "udp.close" => R::Close {
                 handle: self.id(&a[1])?,
+            },
+            "write_half.shutdown" => R::Shutdown {
+                net: self.id(&a[0])?,
+                stream: self.id(&a[1])?,
+                how: ShutdownHow::Write,
+            },
+            "net.split" => R::NetSplit {
+                net: self.id(&a[0])?,
+                stream: self.id(&a[1])?,
+            },
+            "net.join" => R::NetJoin {
+                net: self.id(&a[0])?,
+                read: self.id(&a[1])?,
+                write: self.id(&a[2])?,
             },
             "tls.close" => R::TlsClose {
                 net: self.id(&a[0])?,
@@ -1792,6 +1817,10 @@ impl HostLibrary {
                 Value::Tuple(vec![Some(self.handle(id, "Stream")), Some(address(addr))])
             }),
             C::Address(r) => result(r, address),
+            C::Halves(Ok((read, write))) => Value::Tuple(vec![
+                Some(self.handle(read, "ReadHalf")),
+                Some(self.handle(write, "WriteHalf")),
+            ]),
             C::Addresses(r) => result(r, |a| {
                 sequence(BuiltinType::List, a.into_iter().map(address))
             }),
@@ -1847,6 +1876,13 @@ impl HostLibrary {
                 {
                     self.handles.remove(&id);
                 }
+                if name == "net.join" {
+                    for v in &a[1..3] {
+                        if let Value::Handle { id, .. } = v {
+                            self.handles.remove(id);
+                        }
+                    }
+                }
                 return hirsel_interp::library::process::script_failure(
                     cx,
                     "scripted net client unmet",
@@ -1854,8 +1890,16 @@ impl HostLibrary {
             }
             _ => return Err(invalid()),
         };
+        if name == "net.join" {
+            for v in &a[1..3] {
+                if let Value::Handle { id, .. } = v {
+                    self.handles.remove(id);
+                }
+            }
+        }
         if (name == "net.close"
             || name == "udp.close"
+            || name == "net.split"
             || name == "tls.close"
             || matches!(
                 name,
@@ -1865,10 +1909,13 @@ impl HostLibrary {
         {
             self.handles.remove(&id);
         }
-        let consumed = if matches!(
+        let consumed = if name == "net.join" {
+            vec![1, 2]
+        } else if matches!(
             name,
             "net.close"
                 | "udp.close"
+                | "net.split"
                 | "tls.close"
                 | "tls.connect"
                 | "tls.connect_as"
@@ -2293,7 +2340,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 )?;
                 return self.host_network(&name, call.arguments, cx).map(Some);
             }
-            if (name.starts_with("net.") || name.starts_with("tls.") || name.starts_with("udp."))
+            if (name.starts_with("net.")
+                || name.starts_with("tls.")
+                || name.starts_with("udp.")
+                || name.starts_with("read_half.")
+                || name.starts_with("write_half."))
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 return self.host_network(&name, call.arguments, cx).map(Some);
@@ -2314,6 +2365,8 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         if matches!(
             kind,
             "Stream"
+                | "ReadHalf"
+                | "WriteHalf"
                 | "Listener"
                 | "UdpSocket"
                 | "File"

@@ -513,6 +513,8 @@ pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
             | R::Shutdown { .. }
             | R::SetTimeout { .. }
             | R::PeerAddr { .. }
+            | R::NetSplit { .. }
+            | R::NetJoin { .. }
             | R::TlsConnect { .. }
             | R::TlsAccept { .. }
             | R::TlsPeer { .. }
@@ -538,6 +540,8 @@ fn provided<T>(value: Provided<T>) -> Provided<T> {
 }
 
 struct StreamGrant {
+    /// The connection providers know: the stream itself, or a half's stream.
+    id: u64,
     world: NetWorld,
     address: String,
     operation: NetOperation,
@@ -594,10 +598,22 @@ impl crate::io::State {
             _ => Err(AdapterError::InvalidHandle(net)),
         }
     }
-    /// The stream's own grant, reached only through the Net that brands it (PROV-1).
+    /// The stream's own grant, reached only through the Net that brands it (PROV-1). A
+    /// half reaches its connection's grant.
     fn stream_grant(&self, net: u64, stream: u64) -> Result<StreamGrant, AdapterError> {
         let (_, world) = self.net_grant(net)?;
-        match self.handles.rows.get(&stream) {
+        let (id, grant) = match self.handles.rows.get(&stream) {
+            Some(crate::handles::Grant::Half {
+                net: owner,
+                stream: connection,
+                ..
+            }) if *owner == net => (
+                *connection,
+                self.split_streams.get(connection).map(|(grant, _)| grant),
+            ),
+            grant => (stream, grant),
+        };
+        match grant {
             Some(crate::handles::Grant::Stream {
                 net: owner,
                 address,
@@ -605,12 +621,88 @@ impl crate::io::State {
                 tls,
                 ..
             }) if *owner == net => Ok(StreamGrant {
+                id,
                 world,
                 address: address.clone(),
                 operation: *operation,
                 tls: *tls,
             }),
             _ => Err(AdapterError::InvalidHandle(stream)),
+        }
+    }
+    /// Whether a network request is served by a scripted world, whose waits no host event
+    /// readies.
+    pub(crate) fn scripted(&self, request: &crate::io::Request) -> bool {
+        use crate::io::Request as R;
+        let net = match request {
+            R::NetNarrow { net, .. }
+            | R::Resolve { net, .. }
+            | R::Connect { net, .. }
+            | R::ConnectAddr { net, .. }
+            | R::UdpBind { net, .. }
+            | R::UdpSend { net, .. }
+            | R::UdpRecv { net, .. }
+            | R::NetRead { net, .. }
+            | R::NetWrite { net, .. }
+            | R::NetWriteAll { net, .. }
+            | R::Shutdown { net, .. }
+            | R::SetTimeout { net, .. }
+            | R::PeerAddr { net, .. }
+            | R::NetSplit { net, .. }
+            | R::NetJoin { net, .. }
+            | R::TlsConnect { net, .. }
+            | R::TlsAccept { net, .. }
+            | R::TlsPeer { net, .. }
+            | R::TlsProtocol { net, .. }
+            | R::TlsClose { net, .. }
+            | R::Listen { net, .. }
+            | R::Accept { net, .. }
+            | R::LocalAddr { net, .. }
+            | R::UnixConnect { net, .. }
+            | R::UnixListen { net, .. } => *net,
+            _ => return false,
+        };
+        self.net_grant(net)
+            .is_ok_and(|(_, world)| matches!(world, NetWorld::Script(_)))
+    }
+    /// A half serves only its own direction's operations; a whole stream serves them all.
+    fn half_serves(&self, request: &crate::io::Request, handle: u64) -> bool {
+        use crate::io::Request as R;
+        match self.handles.rows.get(&handle) {
+            Some(crate::handles::Grant::Half { write: false, .. }) => matches!(
+                request,
+                R::NetRead { .. }
+                    | R::SetTimeout {
+                        which: TimeoutKind::Read,
+                        ..
+                    }
+            ),
+            Some(crate::handles::Grant::Half { write: true, .. }) => matches!(
+                request,
+                R::NetWrite { .. }
+                    | R::NetWriteAll { .. }
+                    | R::Shutdown {
+                        how: ShutdownHow::Write,
+                        ..
+                    }
+                    | R::SetTimeout {
+                        which: TimeoutKind::Write,
+                        ..
+                    }
+            ),
+            _ => true,
+        }
+    }
+    /// A half of `net`: its connection and direction.
+    fn half(&self, net: u64, handle: u64) -> Result<(u64, bool), AdapterError> {
+        self.net_grant(net)?;
+        match self.handles.rows.get(&handle) {
+            Some(crate::handles::Grant::Half {
+                net: owner,
+                stream,
+                write,
+            }) if *owner == net => Ok((*stream, *write)),
+            _ => Err(AdapterError::InvalidHandle(handle)),
         }
     }
     /// The listener's world and the operation of the rule that opened it.
@@ -763,6 +855,25 @@ impl crate::io::State {
                     None
                 }
             }
+            R::NetSplit { net, stream } => {
+                self.stream_grant(*net, *stream)?;
+                if !matches!(
+                    self.handles.rows.get(stream),
+                    Some(crate::handles::Grant::Stream { .. })
+                ) {
+                    return Err(AdapterError::InvalidHandle(*stream));
+                }
+                None
+            }
+            R::NetJoin { net, read, write } => {
+                let (reading, false) = self.half(*net, *read)? else {
+                    return Err(AdapterError::InvalidHandle(*read));
+                };
+                let (writing, true) = self.half(*net, *write)? else {
+                    return Err(AdapterError::InvalidHandle(*write));
+                };
+                (reading != writing).then_some(NetError::InvalidInput)
+            }
             R::NetRead { net, stream, .. }
             | R::NetWrite { net, stream, .. }
             | R::NetWriteAll { net, stream, .. }
@@ -775,6 +886,9 @@ impl crate::io::State {
             | R::TlsAccept { net, stream, .. }
             | R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
+                if !self.half_serves(request, *stream) {
+                    return Err(AdapterError::InvalidHandle(*stream));
+                }
                 let invalid_tls = match request {
                     R::TlsConnect {
                         server_name,
@@ -869,6 +983,15 @@ impl crate::io::State {
                 let closed = self.execute_net(host, &R::Close { handle: *stream })?;
                 if matches!(closed, C::Checked(false)) {
                     return Ok(closed);
+                }
+            }
+            // Mismatched halves are consumed as if dropped.
+            if let R::NetJoin { read, write, .. } = request {
+                for handle in [*read, *write] {
+                    let closed = self.execute_net(host, &R::Close { handle })?;
+                    if matches!(closed, C::Checked(false)) {
+                        return Ok(closed);
+                    }
                 }
             }
             return Ok(crate::io_checks::net_completion(request, error));
@@ -1090,6 +1213,7 @@ impl crate::io::State {
             | R::PeerAddr { net, stream }
             | R::TlsPeer { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
+                let stream = &grant.id;
                 let provider = self.world(grant.world, host)?;
                 let completion = match request {
                     R::NetRead { max, .. } => {
@@ -1129,6 +1253,35 @@ impl crate::io::State {
                     return Ok(C::Checked(false));
                 }
                 Ok(completion)
+            }
+            R::NetSplit { net, stream } => {
+                // The connection's grant waits aside for its halves; no provider is consulted.
+                let grant = self
+                    .handles
+                    .rows
+                    .remove(stream)
+                    .ok_or(AdapterError::InvalidHandle(*stream))?;
+                self.split_streams.insert(*stream, (grant, 2));
+                let half = |write| Grant::Half {
+                    net: *net,
+                    stream: *stream,
+                    write,
+                };
+                let read = self.handles.insert(half(false));
+                let write = self.handles.insert(half(true));
+                Ok(C::Halves(Ok((read, write))))
+            }
+            R::NetJoin { read, write, .. } => {
+                let Some(Grant::Half { stream, .. }) = self.handles.rows.remove(read) else {
+                    return Err(AdapterError::InvalidHandle(*read));
+                };
+                self.handles.rows.remove(write);
+                let (grant, _) = self
+                    .split_streams
+                    .remove(&stream)
+                    .ok_or(AdapterError::InvalidHandle(stream))?;
+                self.handles.rows.insert(stream, grant);
+                Ok(C::NetHandle(Ok(stream)))
             }
             R::TlsProtocol { net, stream } => {
                 // Handshake state only: no provider is consulted.
@@ -1276,6 +1429,29 @@ impl crate::io::State {
                 Ok(C::Address(provided(
                     self.world(world, host)?.local_addr(*listener),
                 )?))
+            }
+            R::Close { handle: half }
+                if matches!(self.handles.rows.get(half), Some(Grant::Half { .. })) =>
+            {
+                // A half's drop has no network effect; the last one closes its connection.
+                let Some(Grant::Half { stream, .. }) = self.handles.rows.remove(half) else {
+                    unreachable!()
+                };
+                let live = &mut self
+                    .split_streams
+                    .get_mut(&stream)
+                    .ok_or(AdapterError::InvalidHandle(stream))?
+                    .1;
+                *live -= 1;
+                if *live > 0 {
+                    return Ok(C::Unit(Ok(())));
+                }
+                let (grant, _) = self
+                    .split_streams
+                    .remove(&stream)
+                    .ok_or(AdapterError::InvalidHandle(stream))?;
+                self.handles.rows.insert(stream, grant);
+                self.execute_net(host, &R::Close { handle: stream })
             }
             R::Close { handle } => {
                 self.pem_validity.remove(handle);

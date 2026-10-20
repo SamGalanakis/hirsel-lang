@@ -3275,6 +3275,7 @@ fn read_write(
             (1, 2)
         } else if path.is_core("file.read")
             || path.is_core("net.read")
+            || path.is_core("read_half.read")
             || path.is_core("udp.recv_from")
         {
             (2, 3)

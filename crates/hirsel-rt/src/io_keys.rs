@@ -333,7 +333,13 @@ impl Registry {
             | R::TlsAccept { stream, .. }
             | R::TlsPeer { stream, .. }
             | R::TlsProtocol { stream, .. }
-            | R::TlsClose { stream, .. } => on(self, &mut keys, *stream, X),
+            | R::TlsClose { stream, .. }
+            | R::NetSplit { stream, .. } => on(self, &mut keys, *stream, X),
+            // The halves of one stream are its one host resource in two directions.
+            R::NetJoin { read, write, .. } => {
+                on(self, &mut keys, *read, X);
+                on(self, &mut keys, *write, X);
+            }
             R::UdpSend { socket, .. } | R::UdpRecv { socket, .. } => {
                 on(self, &mut keys, *socket, X)
             }

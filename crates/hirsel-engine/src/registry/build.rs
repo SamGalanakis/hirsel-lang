@@ -407,6 +407,8 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     // noalloc close finalizer.
     for (name, capability) in [
         ("Stream", "Net"),
+        ("ReadHalf", "Net"),
+        ("WriteHalf", "Net"),
         ("Listener", "Net"),
         ("UdpSocket", "Net"),
         ("Child", "Proc"),
@@ -674,6 +676,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
     publish(
         b.signature("$intrinsic.NetReadInto", SignatureKind::Function(f), false),
+        &mut out,
+    );
+    let mut b = Builder::new("k: size").with_declarations(&out);
+    let f = b.function(
+        "n: Net, mut r: ReadHalf of n, mut buffer: Inline[u8, k], capacity: u64",
+        "Result[u64, NetError]",
+        true,
+    );
+    publish(
+        b.signature(
+            "$intrinsic.ReadHalfReadInto",
+            SignatureKind::Function(f),
+            false,
+        ),
         &mut out,
     );
     // The native task runtime's entries (CONC-2), which the compiled bodies of `task.scope`,

@@ -1329,3 +1329,63 @@ fn unix_paths_are_checked_before_grants_and_grants_before_any_effect() {
     assert_eq!(error(c), NetError::NotGranted);
     assert_eq!(calls.get(), 0);
 }
+
+/// The split program: write and half-close through the write half, drop it, then read to
+/// the end through the read half, which still holds the connection open.
+fn split_exchange(io: &mut impl Adapter, port: u16) -> Vec<Vec<u8>> {
+    let n = net(io);
+    let s = handle(io.call(Request::ConnectAddr {
+        net: n,
+        addr: loopback(port),
+        timeout: NetTimeout::Nanos(5_000_000_000),
+    }));
+    let Ok(Completion::Halves(Ok((r, w)))) = io.call(Request::NetSplit { net: n, stream: s })
+    else {
+        panic!("split")
+    };
+    assert_eq!(
+        io.call(Request::NetWriteAll {
+            net: n,
+            stream: w,
+            bytes: b"ping".to_vec(),
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    assert_eq!(
+        io.call(Request::Shutdown {
+            net: n,
+            stream: w,
+            how: ShutdownHow::Write,
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    assert_eq!(
+        io.call(Request::Close { handle: w }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    let chunks = read_to_end(io, n, r, 4);
+    assert_eq!(
+        io.call(Request::Close { handle: r }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    chunks
+}
+
+#[test]
+fn split_halves_share_one_host_connection_and_replay_without_sockets() {
+    let (port, server) = serve(b"pong and more");
+    let rules = BTreeSet::from([rule("127.0.0.1", port, NetOperation::Connect)]);
+    let mut io = real(rules.clone());
+    let chunks = split_exchange(&mut io, port);
+    assert_eq!(server.join().unwrap(), b"ping");
+    assert_eq!(chunks.concat(), b"pong and more");
+    let tape = io.tape().to_vec();
+    let text = render_tape(&tape).unwrap();
+    assert!(
+        text.contains("net_split ") && text.contains("-> halves ok "),
+        "{text}"
+    );
+    let mut sim = replay(&rules, parse_tape(&text).unwrap());
+    assert_eq!(split_exchange(&mut sim, port), chunks);
+    sim.finish().unwrap();
+}

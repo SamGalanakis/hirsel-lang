@@ -557,14 +557,24 @@ impl Adapter for RealIo {
             })?;
             return Err(AdapterError::Blocked);
         }
+        let network =
+            crate::net::is_net_request(&request) || matches!(request, Request::Close { .. });
+        let scripted = self.state.scripted(&request);
         if !parks {
-            return self.perform(request);
+            let result = self.perform(request);
+            if network && let Some((readiness, _)) = &self.cooperative {
+                readiness.progressed();
+            }
+            return result;
         }
         let retry = request.clone();
         match self.perform(request) {
             Err(AdapterError::Blocked) => {
                 let (readiness, log) = self.cooperative.as_mut().unwrap();
                 let token = log.current();
+                if scripted {
+                    readiness.scripted();
+                }
                 let committed = !readiness.cancellable(token);
                 // Re-issued while its task stays parked (a held request a journal barrier
                 // released first registers its interest here): Readiness reports it from now.
@@ -582,7 +592,12 @@ impl Adapter for RealIo {
                 })?;
                 Err(AdapterError::Blocked)
             }
-            result => result,
+            result => {
+                if network && let Some((readiness, _)) = &self.cooperative {
+                    readiness.progressed();
+                }
+                result
+            }
         }
     }
     fn enter(&mut self, token: u64) {

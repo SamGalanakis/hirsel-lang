@@ -41,6 +41,7 @@ $intrinsic.OrderCompare_u16	51d3fb060836cf8bc209d0d10e26d8bb28aedf6203fde59e87b7
 $intrinsic.OrderCompare_u32	c39f88fce4261cb814174ced83a3baceececca69314c9cf2938c70e3abd01b6a	0:b:n;1:b:n->n
 $intrinsic.OrderCompare_u64	0d0655f86ec2848c23dfa23844efba47799b40065e7a2b658cc388727ee187b9	0:b:n;1:b:n->n
 $intrinsic.OrderCompare_u8	ed8d73aea9b267429f8e791130cad1ee8da6f36863613043fff3bcedfc82cb64	0:b:n;1:b:n->n
+$intrinsic.ReadHalfReadInto	72914ae3df16365216e28dd162b3ee420837e804fdd08beaac67563a14ce706c	0:b:n;1:m:n;2:m:n;3:b:n->n
 $intrinsic.ScalarPositions_next	65842fd3b1ee1e90075f09a060800870db16dd8515fca3dd4fb41e09389f284f	0:m:[0]->[0]
 $intrinsic.ScalarPositions_open	f54e0735899ca3e2482c0e4a2834499607092bae02bc4ebf769938557c9abeb7	0:b:n->n
 $intrinsic.SetElements_next	113e6c1ed4d1b17ca0002aba3d4c68af1b71a58f519c050591b6b681d220da86	0:m:[0]->[0]
@@ -191,6 +192,7 @@ net.accept	f33c62d2a03a53659f9e5d51ed9f291dea73389ed7d693451c6173f7431e3206	0:b:
 net.close	a01237859e72aead849b318691a4a501c961fa675cb107b37746ef6c2d27a6be	0:b:n;1:t:n->n
 net.connect	ad857f741a8dafd699c4fb0aedf057e19337c5ae86deb5bd920d9e038d2549c8	0:b:n;1:b:n;2:b:n;3:b:n->n
 net.connect_addr	e387c85a46c07ee2de072af5c0e75f4f959132987f91cbe8b66499578c892dec	0:b:n;1:b:n;2:b:n->n
+net.join	c040e0ba1bec041215bbfb9666d4b3162abe78e890cb33c831eda9433681ea21	0:b:n;1:t:n;2:t:n->n
 net.listen	3e1474d0fbdabd17e768893bff886641c45499b01cd6d7fdf8c75bf7aca5d350	0:b:n;1:b:n->n
 net.local_addr	cde606c24253a455f4ddce3e2f6be9849255dd4b5b6f658159aaf0335b56e28c	0:b:n;1:b:n->n
 net.narrow	33274a3b8d9c521297186e24c8ef19b4fc42c778d9452d24333947e6008fb38b	0:b:n;1:b:n->n
@@ -201,6 +203,7 @@ net.resolve	05deb13c499ebf38a2b98d67ef65ed2fc9429ea3ef4e2dbdb7c96d8f235d0359	0:b
 net.set_read_timeout	0f3ebb6f7b809cdcf6d4f8104a436b2a5b7524727950c66e09f0188a15ff2fec	0:b:n;1:m:n;2:b:n->n
 net.set_write_timeout	77fdc1f850b07a17923c92d4288a2c479dd103ac4f1b9fac034853e00bf5d4b5	0:b:n;1:m:n;2:b:n->n
 net.shutdown	c8ec4c842fa1181fb1c89006c0916fe12e52ce8718d5f63dc71e7577a1d9962a	0:b:n;1:m:n;2:b:n->n
+net.split	86a419a9ee55e4bdabd61db3279c78efdebbaa62a0e9e399ef9c8b0aa019712c	0:b:n;1:t:n->n
 net.udp_bind	61bd3026e1daa61c60c7dd451da46a032efb4c14478f7460f6c437709b155fc5	0:b:n;1:b:n->n
 net.unix_connect	18e94df20b5a8b475589da45830fdba61f2b9f02fa5d3061fcd22e4a66b8c445	0:b:n;1:b:n->n
 net.unix_listen	0072ac7670ce9fad1f32d1a3bcffacf2689eea9145353a7e704174c47e8b17a6	0:b:n;1:b:n->n
@@ -216,6 +219,10 @@ proc.spawn	1bea81994f093d84751ea9b3f132072f9715add588f3f1c4584662d5f3bb1059	0:b:
 proc.spawn_pipeline	75ec8fb42bbbc2a99577d8d05a8bdce117e66e5d63c23ccd08c540a317a55324	0:b:n;1:b:n;2:b:n->n
 proc.wait_group	69a4eb373c7f8f16ed632b04d2d5dbe54c86df465c47fdba7bf259fd32fda4ae	0:b:n;1:t:n;2:b:n->n
 random.bytes	58c0fc48fb715c271cf268493d94692fea4f35b0684cd28556475806ae8d928a	0:b:n;1:b:n->n
+read_half.close	3823c6d19571b039eac6321e9756546cd21ebe93016f12332d94ba18079435b4	0:b:n;1:t:n->n
+read_half.read	d07e20de45d2a8351e654d6a6da2802de0b7124f783f82c5bffc15e27b8ba349	0:b:n;1:m:n;2:m:n;3:b:n->n
+read_half.read_into	577a6b8fd5ed77a218bbe291dc5d771392ba2aafd79ff8ef522aa2b034f133e9	0:b:n;1:m:n;2:m:n->n
+read_half.set_timeout	c5971552286b6ded4fa3edb079e479a73f42885cf4ce4d46faa08a5cb1964fcf	0:b:n;1:m:n;2:b:n->n
 region.with	74b21977146dbce44364a550b6224786e1823aaa31287b6598c51a12e28653ff	0:m:[0];1:b:a->[1]
 runner.call	2bd3313b331a6271222af5031e296256b559a58a20e1f24c55cca609e9ca1082	0:b:n;1:b:n;2:b:[0]->[1,2]
 runner.compute	4936a259254decc416ae72238e51dd5c88bf6d20ca30da3e8ad7dd5cc14c0fbf	0:b:n;1:b:n;2:b:[0]->[1,2]
@@ -293,3 +300,8 @@ udp.close	df61c53c74fd54f235d2f39a3c1b30f9985ffad8416503d67fd49a1471c5e618	0:b:n
 udp.recv_from	52c62f3d04853a136bca745bd4b4f2ba664643708c9958b5509b6e7488f52eda	0:b:n;1:m:n;2:m:n;3:b:n->n
 udp.send_to	7ed37a82c1df88320e66ddad5735156f5b00474878846d58d175df7fd9c297d0	0:b:n;1:m:n;2:b:n;3:b:n->n
 watcher.next	0ca4347672b50582ebbb710d5e46910e0ac6c1e9cd4b12845ab145ff0ee6d07f	0:b:n;1:m:n->n
+write_half.close	16a1c1f097cc73f280dc04696d73ed70f449f8fd72615c913587928ea743d64b	0:b:n;1:t:n->n
+write_half.set_timeout	c6bd3b09ed491c3bfb1f8033c93295f7f9fa2564dceb14c4acd62320351fcd88	0:b:n;1:m:n;2:b:n->n
+write_half.shutdown	36f84dafd8e333ddd0695ccd63167f7f33532b9ab1bc0868fa894acf37d224ea	0:b:n;1:m:n->n
+write_half.write	de809cc93fa3994a1e494f3a01d4624ebc10ccea69ea1db9af2941a0315946cb	0:b:n;1:m:n;2:b:n->n
+write_half.write_all	8e4dda20d2d802a8ad56651ac534eb64a8d7403daf3aaaddf6b9a795aaa0da12	0:b:n;1:m:n;2:b:n->n
