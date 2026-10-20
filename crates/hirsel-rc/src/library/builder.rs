@@ -293,7 +293,9 @@ impl<'c, 'a> Body<'c, 'a> {
             implementation_revision: super::revision(&cx.path),
             instance: key,
             target: table.target,
-            layouts: table.digest(),
+            // Sealed with the finished table's digest once import adds no layout
+            // (`lower_discharging`); digesting the growing table here was discarded work.
+            layouts: hirsel_syntax::ContentHash::default(),
             abi: cx.abi,
         });
         unit.tables.task_domains = 1;

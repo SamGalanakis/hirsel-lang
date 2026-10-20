@@ -149,7 +149,9 @@ impl Importer<'_, '_> {
             implementation_revision: revision,
             instance: view.key.digest(),
             target: table.target,
-            layouts: table.digest(),
+            // Sealed with the finished table's digest once import adds no layout
+            // (`lower_discharging`); digesting the growing table here was discarded work.
+            layouts: hirsel_syntax::ContentHash::default(),
             abi: self.instances.abis[self.id.index()],
         });
         let out = std::mem::take(&mut self.out);
