@@ -32,32 +32,12 @@ pub use hirsel_lir::emission::KIND_BUG;
 /// The rules a program can fail with, in order: a rule's runtime code is its
 /// index here plus one, so zero never names a rule.
 pub fn failure_rules(program: &ReadyProgram) -> Vec<String> {
-    let mut rules: BTreeSet<&str> = program
-        .units
+    let rules: BTreeSet<&str> = program
+        .summaries
         .iter()
-        .flat_map(|u| u.unit().tables.failures.iter())
-        .filter_map(|f| f.rule.as_deref())
+        .flat_map(|s| s.glue.failure_rules.iter())
+        .map(String::as_str)
         .collect();
-    for unit in &program.units {
-        for call in &unit.unit().tables.calls {
-            if let hirsel_lir::ir::Callee::Operation(op) = call.callee {
-                let id = &unit.unit().tables.operations[op.index()];
-                if let Some(rule) = program.manifest.row(id).and_then(|r| r.failure.as_ref()) {
-                    rules.insert(&rule.0);
-                }
-            }
-        }
-    }
-    // A bounded arena's exhaustion (MEM-6) starts at any arena construction or copy; only
-    // `arena.bounded`'s recovery opens one.
-    if program.units.iter().any(|u| {
-        u.unit()
-            .terminators
-            .iter()
-            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
-    }) {
-        rules.insert(hirsel_lir::emission::BOUNDED_RULE);
-    }
     rules.into_iter().map(str::to_string).collect()
 }
 
@@ -77,20 +57,16 @@ pub fn emit_glue(
         ..NativeError::new(StageName::Emission, message)
     };
     let mut glue = UnitGlue::default();
-    for unit in &program.units {
-        let unit = unit.unit();
-        let needs = UnitGlue::of(unit, &program.table, &program.keys, &program.manifest)
-            .map_err(|e| failed(Some(unit.header.definition.clone()), e))?;
-        glue.extend(&needs);
+    for summary in &program.summaries {
+        glue.extend(&summary.glue);
     }
     let failures = failure_codes(program);
     let mut callbacks = Vec::with_capacity(glue.callbacks.len());
     for (definition, instance) in &glue.callbacks {
         let unit = program
-            .units
+            .summaries
             .iter()
-            .map(|u| &u.unit().header)
-            .find(|h| h.definition == *definition && instance.is_none_or(|i| h.instance == i))
+            .find(|s| s.definition == *definition && instance.is_none_or(|i| s.instance == i))
             .ok_or_else(|| {
                 failed(
                     Some(definition.clone()),
@@ -251,20 +227,30 @@ pub(crate) fn emit_registered(
 /// Hirsel ABI of its declaration, so an export with another shape would be
 /// called with the wrong arguments.
 pub fn check_runtime_calls(program: &ReadyProgram) -> Result<(), NativeError> {
+    for unit in &program.units {
+        check_unit_runtime_calls(unit.unit(), &program.table, &program.manifest)?;
+    }
+    Ok(())
+}
+
+/// `check_runtime_calls` for one unit.
+pub(crate) fn check_unit_runtime_calls(
+    unit: &hirsel_lir::ir::LirUnit<hirsel_lir::stage::Ready>,
+    table: &hirsel_lir::layout_types::LayoutTable,
+    manifest: &hirsel_core_contract::Manifest,
+) -> Result<(), NativeError> {
     use hirsel_core_contract::{Disposition, Engine};
     use hirsel_lir::abi_types::PhysicalType;
     use hirsel_lir::ir::Callee;
     use hirsel_lir::layout_types::SizeSpec;
     use hirsel_rt_operations::{HIRSEL_ABI_EXPORTS, Physical};
-    for unit in &program.units {
-        let unit = unit.unit();
+    {
         for site in &unit.tables.calls {
             let Callee::Operation(op) = site.callee else {
                 continue;
             };
             let id = &unit.tables.operations[op.index()];
-            let Some(Disposition::RuntimePrimitive(template)) = program
-                .manifest
+            let Some(Disposition::RuntimePrimitive(template)) = manifest
                 .row(id)
                 .map(|row| row.dispositions.get(Engine::Native))
             else {
@@ -283,11 +269,11 @@ pub fn check_runtime_calls(program: &ReadyProgram) -> Result<(), NativeError> {
                 .iter()
                 .find(|e| e.symbol == symbol)
                 .ok_or_else(|| mismatch(format!("the runtime exports no `{symbol}`")))?;
-            let abi = &program.table.fn_abis[site.abi.0 as usize];
+            let abi = &table.fn_abis[site.abi.0 as usize];
             let result = abi
                 .result
                 .as_ref()
-                .and_then(|r| program.table.layout(r.layout))
+                .and_then(|r| table.layout(r.layout))
                 .and_then(|l| match l.size {
                     SizeSpec::Fixed(size) => Some((size, l.align)),
                     SizeSpec::Dynamic(_) => None,

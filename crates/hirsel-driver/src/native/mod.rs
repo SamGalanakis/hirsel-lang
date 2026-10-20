@@ -25,6 +25,8 @@ pub use std_surface::StdSurface;
 mod testing;
 mod timeout;
 mod tool;
+mod units;
+pub use units::UnitObjects;
 pub use testing::{bench_path, test_path};
 
 pub use adapt::{input_identity, manifest, program};

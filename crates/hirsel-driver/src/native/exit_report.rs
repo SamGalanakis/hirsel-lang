@@ -67,12 +67,11 @@ pub(crate) fn derive(
     let scope = Scope::root(&input.types);
     let instance = program.functions[entry];
     let unit = program
-        .units
+        .summaries
         .iter()
-        .map(|u| u.unit())
-        .find(|u| u.header.definition == *entry && u.header.instance == instance)
+        .find(|s| s.definition == *entry && s.instance == instance)
         .ok_or_else(|| error("no entry unit".into()))?;
-    let result = program.table.fn_abis[unit.header.abi.0 as usize]
+    let result = program.table.fn_abis[unit.abi.0 as usize]
         .result
         .as_ref()
         .ok_or_else(|| error("no entry result".into()))?

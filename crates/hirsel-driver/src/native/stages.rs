@@ -37,6 +37,9 @@ pub struct Options {
     pub flat_walk: bool,
     /// PS-13 checks accepted evidence licenses removing (`--proofs`).
     pub discharge: Discharge,
+    /// Emit each unit's object during the build through an object store
+    /// (`super::units`), instead of leaving every Ready unit to the link.
+    pub objects: Option<super::units::UnitObjects>,
 }
 
 impl Options {
@@ -50,6 +53,7 @@ impl Options {
             reuse: true,
             flat_walk: true,
             discharge: Discharge::default(),
+            objects: None,
         }
     }
 }
@@ -115,7 +119,7 @@ impl NativeError {
             message: message.into(),
         }
     }
-    fn of(stage: StageName, definition: &DefPath, message: impl Into<String>) -> Self {
+    pub(crate) fn of(stage: StageName, definition: &DefPath, message: impl Into<String>) -> Self {
         Self {
             definition: Some(definition.clone()),
             ..Self::new(stage, message)
@@ -150,7 +154,14 @@ pub struct ReadyProgram {
     /// the glue symbols units import.
     pub keys: hirsel_lir::LayoutKeys,
     pub manifest: Manifest,
+    /// Every Ready unit; empty when the build emitted its units itself
+    /// (`Options::objects`), whose objects are `unit_objects`.
     pub units: Vec<ValidatedUnit<Ready>>,
+    /// What program assembly reads from each unit (`hirsel_lir::fragment`), in unit order.
+    pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
+    /// The units' objects when the build emitted them, with the backend and optimization
+    /// level they were emitted for.
+    pub unit_objects: Option<UnitObjectArtifacts>,
     /// Callable-target specializations and their known bodies, available in
     /// each calling partition without changing their source failure anchors.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
@@ -183,16 +194,23 @@ pub struct ReadyProgram {
     pub(crate) failure_table: Option<super::observe::FailureTable>,
 }
 
+/// The objects a build emitted for its units (`Options::objects`).
+#[derive(Clone, Debug)]
+pub struct UnitObjectArtifacts {
+    pub backend: super::Backend,
+    pub opt: hirsel_lir::emission::OptLevel,
+    /// The objects record debug intervals.
+    pub debug: bool,
+    pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
+    /// How many of them the object store held.
+    pub hits: usize,
+}
+
 impl ReadyProgram {
     /// Whether the program builds tracked arena blocks (MEM-6): it opens a bounded arena,
     /// which only `arena.bounded`'s recovery does.
     pub fn tracking(&self) -> bool {
-        self.units.iter().any(|u| {
-            u.unit()
-                .terminators
-                .iter()
-                .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
-        })
+        self.summaries.iter().any(|s| s.recovers)
     }
 
     /// The semantic program revision a run of `entry` binds to.
@@ -249,14 +267,14 @@ impl ReadyProgram {
 }
 
 /// Run `work` as `phase`.
-fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
+pub(crate) fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
     let _timing = timings::phase(phase);
     work()
 }
 
 /// A unit sealed at its stage by lir's non-generic per-stage validator, or
 /// every violation it reported.
-fn seal<S: Stage>(
+pub(crate) fn seal<S: Stage>(
     stage: StageName,
     validate: impl FnOnce() -> Result<ValidatedUnit<S>, Box<Rejected<S>>>,
 ) -> Result<ValidatedUnit<S>, NativeError> {
@@ -343,6 +361,7 @@ pub fn build_program(
         hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
+    let value_units = std::mem::take(&mut lowered.units);
     let table = &lowered.table;
     let operations = program.operation_registry();
     drop(import);
@@ -354,9 +373,23 @@ pub fn build_program(
         manifest: &manifest,
     };
     let instances = &lowered.instances;
-    let statics = lowered.statics;
+    let statics = std::mem::take(&mut lowered.statics);
+    if let Some(objects) = &options.objects {
+        return build_units(
+            program,
+            &manifest,
+            options,
+            objects,
+            &operations,
+            &lowered,
+            value_units,
+            statics,
+            discharged,
+        )
+        .map(|built| built.finish(program, manifest, operations, options, lowered));
+    }
     let mut rc = Vec::with_capacity(lowered.units.len());
-    for (index, unit) in lowered.units.into_iter().enumerate() {
+    for (index, unit) in value_units.into_iter().enumerate() {
         let id = lowered.unit_origins[index];
         let definition = unit.header.definition.clone();
         let fail = |stage, message: String| NativeError::of(stage, &definition, message);
@@ -381,7 +414,8 @@ pub fn build_program(
         }
         rc.push(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw());
     }
-    let finalizers = timed(Phase::Rc, || Finalizers::new(instances, &rc));
+    // Cleanup reads only the plan's finalizer facts: no unit waits for another's RC output.
+    let finalizers = Finalizers::planned(instances, table);
     let mut units = Vec::with_capacity(rc.len());
     for unit in rc {
         let definition = unit.header.definition.clone();
@@ -412,6 +446,14 @@ pub fn build_program(
         .iter()
         .flat_map(|unit| callbacks(unit.unit()))
         .collect();
+    let keys = hirsel_lir::LayoutKeys::new(&lowered.table);
+    let summaries = units
+        .iter()
+        .map(|u| {
+            hirsel_lir::fragment::UnitSummary::of(u.unit(), &lowered.table, &keys, &manifest)
+                .map_err(|e| NativeError::of(StageName::Emission, &u.unit().header.definition, e))
+        })
+        .collect::<Result<_, _>>()?;
     Ok(ReadyProgram {
         callbacks,
         operations,
@@ -433,10 +475,12 @@ pub fn build_program(
             .map(|(layout, f)| (*layout, f.instance))
             .collect(),
         functions,
-        keys: hirsel_lir::LayoutKeys::new(&lowered.table),
+        keys,
         table: lowered.table,
         manifest,
         units,
+        summaries,
+        unit_objects: None,
         inline_instances: lowered.inline_instances,
         statics,
         discharged,
@@ -446,6 +490,171 @@ pub fn build_program(
         fuel: false,
         failure_table: None,
     })
+}
+
+/// A program whose units the per-unit pipeline lowered or loaded (`Options::objects`),
+/// before it owns the lowering's tables.
+struct BuiltUnits {
+    summaries: Vec<hirsel_lir::fragment::UnitSummary>,
+    objects: UnitObjectArtifacts,
+    keys: hirsel_lir::LayoutKeys,
+    callbacks: BTreeSet<DefPath>,
+    statics: Vec<hirsel_lir::statics::StaticData>,
+    discharged: Discharge,
+}
+
+/// The per-unit pipeline (`super::units`) over a lowered program's Value units.
+#[allow(clippy::too_many_arguments)]
+fn build_units(
+    program: &Program,
+    manifest: &Manifest,
+    options: &Options,
+    objects: &super::units::UnitObjects,
+    operations: &hirsel_layout::operation::OperationRegistry,
+    lowered: &hirsel_rc::import::Lowered,
+    units: Vec<LirUnit<hirsel_lir::stage::Value>>,
+    statics: Vec<hirsel_lir::statics::StaticData>,
+    discharged: Discharge,
+) -> Result<BuiltUnits, NativeError> {
+    let table = &lowered.table;
+    let keys = hirsel_lir::LayoutKeys::new(table);
+    let finalizers = Finalizers::planned(&lowered.instances, table);
+    let callbacks: BTreeSet<DefPath> = units.iter().flat_map(callbacks).collect();
+    let tracking = units.iter().any(|u| {
+        u.terminators
+            .iter()
+            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
+    });
+    let empty = BTreeSet::new();
+    let emit = hirsel_lir::emission::EmitInputs {
+        input: &program.input,
+        target: &options.target,
+        layouts: table,
+        keys: &keys,
+        manifest,
+        statics: &statics,
+        inline_instances: &lowered.inline_instances,
+        available_externally: &empty,
+        callbacks: !callbacks.is_empty(),
+        tracking,
+        opt: objects.opt,
+        measurement: false,
+        fuel: objects.fuel,
+    };
+    let headers: Vec<(DefPath, ContentHash)> = units
+        .iter()
+        .map(|u| (u.header.definition.clone(), u.header.instance))
+        .collect();
+    let lowered_units = super::units::lower(
+        &super::units::Program {
+            options,
+            objects,
+            table,
+            keys: &keys,
+            operations,
+            discharge: Some(&lowered.native_discharge),
+            emit: &emit,
+            instances: &lowered.instances,
+            finalizers: &finalizers,
+            origins: &lowered.unit_origins,
+        },
+        units,
+    )?;
+    // A template's summary is in the fragment of every unit that copies it.
+    let mut templates = BTreeMap::new();
+    for unit in &lowered_units {
+        if let Some(fragment) = &unit.fragment {
+            for template in &fragment.templates {
+                templates
+                    .entry((template.definition.clone(), template.instance))
+                    .or_insert_with(|| template.clone());
+            }
+        }
+    }
+    let mut summaries = Vec::with_capacity(lowered_units.len());
+    let mut artifacts = Vec::new();
+    let mut hits = 0;
+    for (unit, header) in lowered_units.into_iter().zip(headers) {
+        match unit.fragment {
+            Some(fragment) => {
+                hits += usize::from(unit.hit);
+                summaries.push(fragment.summary);
+                artifacts.push(fragment.object);
+            }
+            // A template no object copies is not in the program's code.
+            None => summaries.extend(templates.remove(&header)),
+        }
+    }
+    Ok(BuiltUnits {
+        summaries,
+        objects: UnitObjectArtifacts {
+            backend: objects.backend,
+            opt: objects.opt,
+            debug: objects.debug,
+            objects: artifacts,
+            hits,
+        },
+        keys,
+        callbacks,
+        statics,
+        discharged,
+    })
+}
+
+impl BuiltUnits {
+    fn finish(
+        self,
+        program: &Program,
+        manifest: Manifest,
+        operations: hirsel_layout::operation::OperationRegistry,
+        options: &Options,
+        lowered: hirsel_rc::import::Lowered,
+    ) -> ReadyProgram {
+        let instances = &lowered.instances;
+        let finalizers = Finalizers::planned(instances, &lowered.table);
+        let functions = instances
+            .ids()
+            .filter(|id| instances.roles[id.index()] == InstanceRole::Function)
+            .map(|id| {
+                let view = instances.view(id);
+                (view.key.definition().clone(), view.key.digest())
+            })
+            .collect();
+        ReadyProgram {
+            callbacks: self.callbacks,
+            operations,
+            launch: options.launch.clone(),
+            revisions: BTreeMap::new(),
+            exit_reports: BTreeMap::new(),
+            launches: program
+                .signatures
+                .iter()
+                .filter_map(|(p, s)| super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k)))
+                .collect(),
+            input: program.input.clone(),
+            target: options.target.clone(),
+            finalizers: finalizers
+                .0
+                .iter()
+                .map(|(layout, f)| (*layout, f.instance))
+                .collect(),
+            functions,
+            keys: self.keys,
+            table: lowered.table,
+            manifest,
+            units: Vec::new(),
+            summaries: self.summaries,
+            unit_objects: Some(self.objects),
+            inline_instances: lowered.inline_instances,
+            statics: self.statics,
+            discharged: self.discharged,
+            foreign_links: Vec::new(),
+            foreign_unreplayable: false,
+            escaping: BTreeSet::new(),
+            fuel: options.objects.as_ref().is_some_and(|o| o.fuel),
+            failure_table: None,
+        }
+    }
 }
 
 /// PS-13: every discharged unit removed exactly its planned sites, and every
@@ -489,7 +698,7 @@ fn discharged(
 }
 
 /// The definitions `unit` names as C callbacks: `FunctionRef`s at a pointer scalar (PROG-4).
-fn callbacks(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = DefPath> + '_ {
+fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPath> + '_ {
     use hirsel_lir::ir::{Inst, ValueRepr};
     unit.instructions.iter().filter_map(|inst| match *inst {
         Inst::FunctionRef { result, symbol }

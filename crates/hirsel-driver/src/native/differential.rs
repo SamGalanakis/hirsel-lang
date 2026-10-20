@@ -142,6 +142,7 @@ fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Opti
         reuse,
         flat_walk: true,
         discharge: Default::default(),
+        objects: None,
     }
 }
 

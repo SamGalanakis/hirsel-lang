@@ -168,7 +168,8 @@ The following interval and phase names remain documented for attribution:
 | `ready` | Ready lowering |
 | `lir validate` | the LIR checker C |
 | `codegen` | LLVM or Cranelift code generation |
-| `store lookup` | code-store lookups |
+| `store lookup` | code-store and native object-store lookups |
+| `debug object` | the link's DWARF line tables (debug builds) |
 
 The instruction threshold exceeds the audit's 0.024% within-session range for
 `hirsel check todo-api`. Shared-host wall time can drift by 140% between

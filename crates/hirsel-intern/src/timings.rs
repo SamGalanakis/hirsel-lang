@@ -77,11 +77,13 @@ pub enum Phase {
     LirValidate,
     Codegen,
     StoreLookup,
+    /// The link's debug object (line tables from the objects' debug intervals).
+    DebugObject,
 }
 
 impl Phase {
     /// Every phase, in declaration order.
-    pub const ALL: [Phase; 17] = [
+    pub const ALL: [Phase; 18] = [
         Phase::Parse,
         Phase::Resolve,
         Phase::Signatures,
@@ -99,6 +101,7 @@ impl Phase {
         Phase::LirValidate,
         Phase::Codegen,
         Phase::StoreLookup,
+        Phase::DebugObject,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -120,6 +123,7 @@ impl Phase {
             Phase::LirValidate => "lir validate",
             Phase::Codegen => "codegen",
             Phase::StoreLookup => "store lookup",
+            Phase::DebugObject => "debug object",
         }
     }
 }

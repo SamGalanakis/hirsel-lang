@@ -232,23 +232,15 @@ impl<'a> Sites<'a> {
 /// back to its definition and byte range.
 pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)> {
     let mut codes = BTreeMap::new();
-    for unit in &program.units {
-        let unit = unit.unit();
-        let header = &unit.header;
-        let sites = unit
-            .tables
-            .source_anchors
-            .iter()
-            .map(|a| a.site)
-            .chain(unit.tables.cleanup_anchors.iter().map(|a| a.site));
-        for site in sites {
+    for summary in &program.summaries {
+        for &site in &summary.sites {
             codes.insert(
                 hirsel_lir::emission::site_code(
-                    &header.definition,
-                    &header.implementation_revision,
+                    &summary.definition,
+                    &summary.implementation_revision,
                     site,
                 ),
-                (header.definition.clone(), site),
+                (summary.definition.clone(), site),
             );
         }
     }
@@ -257,12 +249,7 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
 
 /// Whether the program catches failures (`task.isolate`'s `Isolate` terminator).
 pub fn isolates(program: &ReadyProgram) -> bool {
-    program.units.iter().any(|u| {
-        u.unit()
-            .terminators
-            .iter()
-            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Isolate { .. }))
-    })
+    program.summaries.iter().any(|s| s.isolates)
 }
 
 /// The program's failure table (`hirsel_rt::isolate`): each site code's definition path and

@@ -43,7 +43,7 @@ const INTERVALS: [&str; 9] = [
     "units",
     "link",
 ];
-const PHASES: [&str; 17] = [
+const PHASES: [&str; 18] = [
     "parse",
     "resolve",
     "signatures",
@@ -61,6 +61,7 @@ const PHASES: [&str; 17] = [
     "lir validate",
     "codegen",
     "store lookup",
+    "debug object",
 ];
 const COUNTS: [&str; 22] = [
     "definitions",

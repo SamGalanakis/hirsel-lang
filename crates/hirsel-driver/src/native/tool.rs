@@ -198,9 +198,15 @@ fn run(
     if let Some(proofs) = proofs {
         options.discharge = proofs.discharge.clone();
     }
-    let mut program = build(validated, &options)?;
     // A fuel budget needs fuel checks; without one the executable pays nothing.
-    program.fuel = run.budgets().is_some_and(|b| b.fuel.is_some());
+    let fuel = run.budgets().is_some_and(|b| b.fuel.is_some());
+    let opt = match backend {
+        super::Backend::Llvm => OptLevel::Speed,
+        super::Backend::Cranelift => OptLevel::None,
+    };
+    options.objects = super::units::selected(&target, backend, opt, false, fuel)?;
+    let mut program = build(validated, &options)?;
+    program.fuel = fuel;
     for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {
         writeln!(stderr, "hirsel: {line}")
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
@@ -213,10 +219,6 @@ fn run(
     std::fs::create_dir_all(&scratch).map_err(io)?;
     let result = (|| {
         let toolchain = Toolchain::in_tree(&cache, &[&target])?;
-        let opt = match backend {
-            super::Backend::Llvm => OptLevel::Speed,
-            super::Backend::Cranelift => OptLevel::None,
-        };
         let objects = super::link::emit_backend_objects(
             &program,
             backend,

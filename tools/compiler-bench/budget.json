@@ -25,7 +25,8 @@
       "ready",
       "lir validate",
       "codegen",
-      "store lookup"
+      "store lookup",
+      "debug object"
     ]
   },
   "intervals": {

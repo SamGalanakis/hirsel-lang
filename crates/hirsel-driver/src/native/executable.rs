@@ -118,6 +118,8 @@ pub fn build_path_native_backend(
         if let Some(proofs) = &proofs {
             options.discharge = proofs.discharge.clone();
         }
+        options.objects =
+            super::units::selected(&target, backend, profile.opt(), sources.is_some(), fuel)?;
         let mut program = super::build(&validated, &options)?;
         // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
         program.fuel = fuel;
