@@ -3062,6 +3062,7 @@ conformance/MODE/MODE-2-generic-callable-unique-bad.hir
 conformance/MODE/MODE-2-generic-callable-unique-ok.hir
 conformance/MODE/MODE-2-generic-result-declared-modes-bad.hir
 conformance/MODE/MODE-2-generic-result-preserves-unique-run.hir
+conformance/MODE/MODE-2-global-result-borrowed-share-run.hir
 conformance/MODE/MODE-2-inferred-box-block-ok.hir
 conformance/MODE/MODE-2-inferred-box-branch-ok.hir
 conformance/MODE/MODE-2-inferred-box-call-part-ok.hir

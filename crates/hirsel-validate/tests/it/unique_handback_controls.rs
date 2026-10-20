@@ -556,6 +556,13 @@ fn viewed_then_needed(share: Share) -> Fixture {
         f.body().blocks.push(block(vec![], ret(0, exit)));
     }
     owner_sig(&mut f, &[PassingMode::Mut, PassingMode::Take]);
+    view_and_need(&mut f);
+    f
+}
+
+/// `view(s: String) -> String in s` and `need(mut s: unique String)`.
+fn view_and_need(f: &mut Fixture) {
+    let string = TypeKind::Primitive(Primitive::String);
     let mut callee = function_signature(
         "view",
         vec![(PassingMode::Borrow, string.clone())],
@@ -580,7 +587,6 @@ fn viewed_then_needed(share: Share) -> Fixture {
     row.modes.uniqueness = Uniqueness::Unique;
     fun.parameters[0].ty = need.types.push(row);
     f.signatures.insert(path("need"), need);
-    f
 }
 
 #[test]
@@ -596,6 +602,151 @@ fn a_dead_related_share_leaves_its_storage_unique_mid_body() {
 fn a_returned_value_keeps_only_the_shares_it_derives_from() {
     // The returned `y` is counted but unrelated to `x`'s dead share.
     viewed_then_needed(Share::Returned).valid();
+}
+
+/// `fn main(mut x: unique String)` passing the related share `view(x)` by
+/// borrow to `digest(s: String) -> String`, keeping the digest in a local
+/// and dropping the share, then calling `need(mut x)`. With `related`, the
+/// digest is `in s` and so may still hold the share.
+fn digested_then_needed(related: bool) -> Fixture {
+    let (mut f, x) = handback(true);
+    let string = TypeKind::Primitive(Primitive::String);
+    f.emit(InstructionKind::BeginLoan {
+        id: LoanId(0),
+        place: PlaceId(x),
+        mutable: false,
+        if_inactive: false,
+    });
+    let via = f.through_loan(x, 0);
+    let shared = f.slot(string.clone(), Storage::Temporary);
+    let lent = f.cleanup(vec![CleanupAction::EndLoan {
+        loan: LoanId(0),
+        if_active: false,
+    }]);
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: path("view"),
+            arguments: vec![],
+        },
+        arguments: vec![CallArgument {
+            parameter: ParamId(0),
+            value: operand(via, UseKind::Borrow),
+        }],
+        returns: Some(CallReturn {
+            destination: PlaceId(shared),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(lent),
+    };
+    let holding = f.cleanup(vec![drop(shared)]);
+    let through = f.through_loan(shared, 1);
+    let digest = f.slot(string.clone(), Storage::Local);
+    let reading = f.cleanup(vec![
+        CleanupAction::EndLoan {
+            loan: LoanId(1),
+            if_active: false,
+        },
+        drop(shared),
+    ]);
+    f.body().blocks.push(block(
+        vec![
+            inst(
+                InstructionKind::EndLoan {
+                    loan: LoanId(0),
+                    if_active: false,
+                },
+                holding,
+            ),
+            inst(
+                InstructionKind::BeginLoan {
+                    id: LoanId(1),
+                    place: PlaceId(shared),
+                    mutable: false,
+                    if_inactive: false,
+                },
+                reading,
+            ),
+        ],
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("digest"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: operand(through, UseKind::Borrow),
+            }],
+            returns: Some(CallReturn {
+                destination: PlaceId(digest),
+                next: BlockId(2),
+            }),
+            on_failure: CleanupId(reading),
+        },
+    ));
+    let both = f.cleanup(vec![drop(digest), drop(shared)]);
+    let kept = f.cleanup(vec![drop(digest)]);
+    let unit = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+    f.body().blocks.push(block(
+        vec![
+            inst(
+                InstructionKind::EndLoan {
+                    loan: LoanId(1),
+                    if_active: false,
+                },
+                both,
+            ),
+            inst(
+                InstructionKind::Drop {
+                    place: PlaceId(shared),
+                    if_live: false,
+                },
+                kept,
+            ),
+        ],
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("need"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: operand(x, UseKind::Mut),
+            }],
+            returns: Some(CallReturn {
+                destination: PlaceId(unit),
+                next: BlockId(3),
+            }),
+            on_failure: CleanupId(kept),
+        },
+    ));
+    let exit = f.cleanup(vec![drop(unit), drop(digest)]);
+    f.body().blocks.push(block(vec![], ret(0, exit)));
+    owner_sig(&mut f, &[PassingMode::Mut]);
+    view_and_need(&mut f);
+    let mut digest = function_signature(
+        "digest",
+        vec![(PassingMode::Borrow, string.clone())],
+        string,
+    );
+    if related {
+        let SignatureKind::Function(fun) = &mut digest.kind else {
+            panic!()
+        };
+        let mut result = digest.types.get(fun.result).unwrap().clone();
+        result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
+        fun.result = digest.types.push(result);
+    }
+    f.signatures.insert(path("digest"), digest);
+    f
+}
+
+#[test]
+fn a_global_result_holds_no_share_of_a_borrowed_argument() {
+    // MODE-1: `digest`'s global result cannot reach its borrowed argument,
+    // so `x` is unique again once the share itself is dropped.
+    digested_then_needed(false).valid();
+    // A result related to the argument may still hold the share.
+    assert!(!digested_then_needed(true).kinds().is_empty());
 }
 
 /// Hand-built IR has no source annotation: the receiver's association alone

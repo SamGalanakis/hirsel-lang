@@ -5632,12 +5632,27 @@ impl Checker<'_> {
                     }
                 }
                 // MODE-2: the result and each `mut` argument may receive the
-                // borrow-only shares of every argument.
+                // borrow-only shares of every argument. A global result of a
+                // named function holds nothing a borrowed or `mut` argument
+                // reaches, which stays the caller's (MODE-1): only taken and
+                // copied arguments can pass it a share.
                 let argument_shares: BTreeSet<usize> = arguments
                     .iter()
                     .flat_map(|a| self.operand_shares(state, &a.value))
                     .collect();
-                let mut borrowed = argument_shares.clone();
+                let global_result = matches!(callee, Callee::Definition { .. })
+                    && self
+                        .result_relation(callee)
+                        .is_some_and(|relation| relation.is_global());
+                let mut borrowed: BTreeSet<usize> = if global_result {
+                    arguments
+                        .iter()
+                        .filter(|a| matches!(a.value.usage, UseKind::Take | UseKind::Copy))
+                        .flat_map(|a| self.operand_shares(state, &a.value))
+                        .collect()
+                } else {
+                    argument_shares.clone()
+                };
                 let result = if let Some(destination) = destination {
                     let (result_arguments, result_environment) =
                         self.result_arguments(callee, arguments);

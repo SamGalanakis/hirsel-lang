@@ -1,0 +1,49 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// `string.as_bytes(canonical)` shares `canonical` only while its view lives.
+// `hash` returns a global String, which cannot hold anything its borrowed
+// argument reaches (MODE-1), so once the statement's temporaries end,
+// `canonical` is unique again and moves into the record.
+type Signed {
+  canonical: String,
+  output: String,
+}
+
+fn hash(data: Bytes) -> String uses {} {
+  "hash"
+}
+
+fn join(parts: List[String], separator: String) -> unique String uses {} {
+  unique parts[0]
+}
+
+fn sign(timestamp: String) -> Signed uses {} {
+  let canonical = "canonical"
+  let output = join(
+    ["prefix", unique timestamp, hash(string.as_bytes(canonical))],
+    "\n"
+  )
+  Signed(canonical: canonical, output: output)
+}
+
+fn digest(timestamp: String) -> Signed uses {} {
+  let canonical = "canonical"
+  let output = hash(string.as_bytes(canonical))
+  Signed(canonical: canonical, output: output)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let signed = sign("stamp")
+  let digested = digest("stamp")
+  let ok = signed.canonical == "canonical" && signed.output == "prefix" && digested.output == "hash"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
