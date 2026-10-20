@@ -1,0 +1,58 @@
+// rule: CONC-2
+// expect: run
+// stdout: handled
+// stdout: handled
+// stdout: actor ok
+pub type Message = Add(u64) | Get(actor.Reply[u64])
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let value = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let counter = actor.spawn(
+        s,
+        tasks,
+        take 0u64,
+        fn(mut n: unique u64, take message: Message) {
+          match take message {
+            Add(k) => {
+              n += k
+              let _ = out.print(stdout, "handled\n")
+            },
+            Get(reply) => {
+              let _ = actor.reply(tasks, take reply, n)
+            },
+          }
+        }
+      )
+      let mut original = take counter
+      let other = actor.dup(tasks, original)
+      let _ = actor.cast(tasks, mut original, Add(5))
+      let producer = task.async(
+        s,
+        fn() {
+          let mut duplicate = take other
+          let _ = actor.cast(tasks, mut duplicate, Add(7))
+        }
+      )
+      task.await(s, take producer)
+      match actor.call(
+        tasks,
+        mut original,
+        fn(take r: actor.Reply[u64]) -> Message {
+          Get(take r)
+        }
+      ) {
+        Ok(n) => n,
+        Error(_) => 0,
+      }
+    }
+  )
+  failure.check(value == 12, Arithmetic())
+  out.print(stdout, "actor ok\n") ? Output
+  Ok(())
+}

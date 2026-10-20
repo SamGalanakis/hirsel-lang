@@ -515,6 +515,11 @@ conformance/CONC/CONC-2-nested-sender-capture-ok.hir
 conformance/CONC/CONC-2-option-result-joins-run.hir
 conformance/CONC/CONC-2-scope-owned-capture.hir
 conformance/CONC/CONC-2-sizes-example.hir
+conformance/CONC/CONC-2-std-actor-closed-run.hir
+conformance/CONC/CONC-2-std-actor-drain-run.hir
+conformance/CONC/CONC-2-std-actor-roundtrip-run.hir
+conformance/CONC/CONC-2-std-task-map-all-run.hir
+conformance/CONC/CONC-2-std-task-map-all-zero-fail.hir
 conformance/CONC/CONC-2-taken-block-sender-capture-run.hir
 conformance/CONC/CONC-2-taken-direct-sender-capture-run.hir
 conformance/CONC/CONC-2-task-all-failing-child-run.hir

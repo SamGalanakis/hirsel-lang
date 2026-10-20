@@ -4,6 +4,8 @@ Browse the [full signature index](api.md) for every public core and std declarat
 
 New to the language? Start with the [runnable language tour](tour.md), then
 try the [runnable tools](../examples/README.md).
+The [concurrent agent guide](concurrent-agents.md) covers compute fan-out,
+actors, shared state and scheduling tests.
 
 Hirsel is a systems-level, general-purpose language whose primary user is a
 coding agent. Its fixed goals:

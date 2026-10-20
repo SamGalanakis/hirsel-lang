@@ -1,0 +1,65 @@
+// rule: CONC-2
+// expect: run
+// stdout: closed ok
+pub type Message = Get(actor.Reply[u64]) | Put(u64)
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  // A handler can abandon a request: consuming its message closes the reply.
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let endpoint = actor.spawn(
+        s,
+        tasks,
+        take 0u64,
+        fn(mut n: unique u64, take message: Message) {}
+      )
+      let mut target = take endpoint
+      let outcome = actor.call(
+        tasks,
+        mut target,
+        fn(take r: actor.Reply[u64]) -> Message {
+          Get(take r)
+        }
+      )
+      failure.check(outcome == Error(Closed()), Arithmetic())
+    }
+  )
+  // Mailbox handles may outlive their actor's scope; sends preserve the value.
+  let stopped = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), actor.Actor[Message]] {
+      Error(
+        actor.spawn(
+          s,
+          tasks,
+          take 0u64,
+          fn(mut n: unique u64, take message: Message) {}
+        )
+      )
+    }
+  )
+  let endpoint = match take stopped {
+    Error(handle) => take handle,
+    Ok(_) => return Ok(()),
+  }
+  let mut target = take endpoint
+  match actor.cast(tasks, mut target, Put(42)) {
+    Error((Put(n), Closed())) => failure.check(n == 42, Arithmetic()),
+    _ => failure.check(false, Arithmetic()),
+  }
+  let outcome = actor.call(
+    tasks,
+    mut target,
+    fn(take r: actor.Reply[u64]) -> Message {
+      Get(take r)
+    }
+  )
+  failure.check(outcome == Error(Closed()), Arithmetic())
+  out.print(stdout, "closed ok\n") ? Output
+  Ok(())
+}

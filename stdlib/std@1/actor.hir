@@ -1,0 +1,76 @@
+/// A mailbox handle. Duplicate it with `actor.dup`; the actor owns its state
+/// and processes messages in FIFO order on one task.
+pub opaque resource type Actor[M]: sendable uses {Tasks, M} {
+  sender: Sender[M],
+}
+drop(self) {}
+
+/// The sending half of a one-request reply channel.
+pub type Reply[R] = Sender[R]
+
+/// Start an actor in `s`. Closing every handle drains the mailbox and ends
+/// the task. Handlers may use capabilities, including I/O.
+pub fn spawn[S: sendable, M: sendable](
+  s: Scope,
+  tasks: Tasks,
+  take initial: unique S,
+  take handle: sendable fn(mut unique S, take M) -> ()
+) -> Actor[M] {
+  let (tx, rx): (Sender[M], Receiver[M]) = core@1/channel.open(tasks)
+  let child = core@1/task.async(
+    s,
+    fn() {
+      let mut state = take initial
+      let handler = take handle
+      let mut inbox = take rx
+      while true {
+        match core@1/channel.receive(tasks, mut inbox) {
+          Ok(message) => handler(mut state, take message),
+          Error(_) => break,
+        }
+      }
+    }
+  )
+  core@1/task.detach(s, take child)
+  Actor(sender: take tx)
+}
+
+/// Acquire another mailbox handle; ordinary copies are forbidden.
+pub fn dup[M: sendable](tasks: Tasks, target: Actor[M]) -> Actor[M] {
+  Actor(sender: core@1/sender.dup(tasks, target.sender))
+}
+
+/// Send without checking cancellation. A closed mailbox returns the message.
+pub fn cast[M: sendable](tasks: Tasks, mut target: Actor[M], take message: M) -> Result[
+  (),
+  (M, ChannelError)
+] {
+  core@1/channel.send(tasks, mut target.sender, take message)
+}
+
+/// Send a request and wait for its reply. Waiting may observe cancellation;
+/// a closed mailbox or an abandoned reply returns `Closed`.
+pub fn call[M: sendable, R: sendable](
+  tasks: Tasks,
+  mut target: Actor[M],
+  take make: once fn(take Reply[R]) -> M
+) -> Result[R, ChannelError] {
+  let (tx, rx): (Sender[R], Receiver[R]) = core@1/channel.open(tasks)
+  let message = make(take tx)
+  match cast(tasks, mut target, take message) {
+    Ok(_) => {
+      let mut inbox = take rx
+      core@1/channel.receive(tasks, mut inbox)
+    },
+    Error((_, error)) => Error(error),
+  }
+}
+
+/// Reply once, consuming the sending endpoint. A closed caller gets its value back.
+pub fn reply[R: sendable](tasks: Tasks, take response: Reply[R], take value: R) -> Result[
+  (),
+  (R, ChannelError)
+] {
+  let mut endpoint = take response
+  core@1/channel.send(tasks, mut endpoint, take value)
+}

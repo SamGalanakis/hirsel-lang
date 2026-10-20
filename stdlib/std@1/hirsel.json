@@ -736,6 +736,12 @@
       ]
     },
     {
+      "path": "actor.hir",
+      "module": [
+        "actor"
+      ]
+    },
+    {
       "path": "unicode_compatibility_tables.hir",
       "module": [
         "unicode"

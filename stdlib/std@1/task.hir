@@ -40,3 +40,76 @@ pub fn select[R](s: Scope, take set: TaskSet[R] of s) -> (u64, R) {
   core@1/task.cancel_all(s, take members)
   (index, value)
 }
+
+/// Map in a nested scope, one child per `grain` items, and return input order.
+/// `f` holds no authority. The first completed error cancels and joins the
+/// remaining children through `task.all`. Zero grain fails SEM-1.
+pub fn map_all[T: copyable + inert, U: copyable + inert, E: sendable](
+  tasks: Tasks,
+  take items: List[T],
+  grain: u64,
+  take f: fn(T) -> Result[U, E] uses {}
+) -> Result[List[U], E] {
+  core@1/failure.check(grain > 0, Arithmetic())
+  let count = core@1/list.len(items)
+  let input = core@1/shared.freeze(unique items)
+  let mapper = core@1/shared.freeze(unique f)
+  core@1/task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[U], E] {
+      let mut set: TaskSet[Result[Shared[List[U]], E]] of s = core@1/task.set(s)
+      let mut start: u64 = 0
+      while start < count {
+        let first = start
+        let width = if grain < count - start {
+          grain
+        } else {
+          count - start
+        }
+        let end = start + width
+        core@1/task.add(
+          s,
+          mut set,
+          core@1/task.async(
+            s,
+            fn() -> Result[Shared[List[U]], E] {
+              core@1/shared.with(
+                input,
+                fn(xs: List[T]) -> Result[Shared[List[U]], E] {
+                  let mut out: List[U] = []
+                  let mut i = first
+                  while i < end {
+                    let value = core@1/shared.with(
+                      mapper,
+                      fn(g: fn(T) -> Result[U, E] uses {}) -> Result[U, E] {
+                        g(xs[i])
+                      }
+                    )
+                    core@1/list.push(mut out, value?)
+                    i += 1
+                  }
+                  Ok(core@1/shared.freeze(unique out))
+                }
+              )
+            }
+          )
+        )
+        start = end
+      }
+      let batches = all(s, take set)?
+      let mut out: List[U] = []
+      for batch in take batches {
+        let values = core@1/shared.with(
+          batch,
+          fn(xs: List[U]) -> List[U] {
+            unique xs
+          }
+        )
+        for item in take values {
+          core@1/list.push(mut out, take item)
+        }
+      }
+      Ok(take out)
+    }
+  )
+}

@@ -1,0 +1,61 @@
+// rule: CONC-2
+// expect: run
+// stdout: map ok
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn twice(n: u64) -> Result[u64, u64] uses {} {
+  Ok(n * 2)
+}
+
+fn reject(n: u64) -> Result[u64, u64] uses {} {
+  if n == 3 {
+    Error(30)
+  } else {
+    Ok(n)
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let empty: List[u64] = []
+  failure.check(task.map_all(tasks, take empty, 1, twice) == Ok([]), Arithmetic())
+  let grains: List[u64] = [1, 2, 3, 5, 99]
+  for grain in grains {
+    let numbers: List[u64] = [1, 2, 3, 4, 5]
+    failure.check(
+      task.map_all(tasks, take numbers, grain, twice) == Ok(
+        [2u64, 4u64, 6u64, 8u64, 10u64]
+      ),
+      Arithmetic()
+    )
+    let rejected: List[u64] = [1, 2, 3, 4]
+    failure.check(
+      task.map_all(tasks, take rejected, grain, reject) == Error(30),
+      Arithmetic()
+    )
+  }
+  let offset = 7u64
+  let numbers: List[u64] = [1, 2]
+  let mapped = task.map_all(
+    tasks,
+    take numbers,
+    1,
+    fn(n: u64) -> Result[u64, ()] uses {} {
+      Ok(n + offset)
+    }
+  )
+  failure.check(mapped == Ok([8u64, 9u64]), Arithmetic())
+  let words: List[String] = ["one", "two", "three"]
+  let owned = task.map_all(
+    tasks,
+    take words,
+    2,
+    fn(text: String) -> Result[String, ()] uses {} {
+      Ok(unique text)
+    }
+  )
+  failure.check(owned == Ok(["one", "two", "three"]), Arithmetic())
+  out.print(stdout, "map ok\n") ? Output
+  Ok(())
+}

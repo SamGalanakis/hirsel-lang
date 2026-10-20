@@ -1,0 +1,34 @@
+// rule: CONC-2
+// expect: run
+// stdout: total 12
+pub type AppError = Grant(GrantError)
+
+resource type State {
+  total: u64,
+  stdout: Stdout,
+}
+drop(state) {
+  let _ = out.print(state.stdout, f"total {state.total}\n")
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let endpoint = actor.spawn(
+        s,
+        tasks,
+        take State(total: 0, stdout: stdout),
+        fn(mut state: unique State, take amount: u64) {
+          state.total += amount
+        }
+      )
+      let mut target = take endpoint
+      let _ = actor.cast(tasks, mut target, 5u64)
+      let _ = actor.cast(tasks, mut target, 7u64)
+    }
+  )
+  Ok(())
+}

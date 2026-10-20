@@ -204,6 +204,33 @@ operations ([CONC-2](concurrency.md#conc-2-tasks)), which define their behaviour
 the set, wait in completion order and cancel and join every member they leave before
 returning, so no member outlives the call.
 
+`task.map_all(tasks, take items, grain, take f)` opens a nested scope and maps
+each consecutive group of at most `grain` items on one child. `f` is an inert owned
+callable with `uses {}` and returns `Result[U, E]`. Inputs and results are
+copyable and inert, and errors are sendable. Results are flattened
+in input order through `task.all`; the first completed error cancels and joins
+the remaining children. Empty input returns `Ok([])`. Grain must be positive
+(zero fails SEM-1). Grain is a program choice, independent of execution width.
+
+## Actors
+
+`actor.Actor[M]` is an opaque resource wrapping a `Sender[M]`.
+`actor.spawn(s, tasks, take initial, take handle)` starts one task in `s`,
+owning `unique S` and a mailbox receiver. The sendable handler takes a message
+and borrows the state by `mut unique S`; it may use I/O. `actor.dup` acquires
+another sender. Releasing every handle drains the mailbox and ends the task;
+an error or failure exit cancels and joins it. A normal scope exit waits
+for the actor, so its mailbox handles must be released first.
+
+`actor.cast` sends a message and returns `Result[(), (M, ChannelError)]`.
+Like `channel.send`, it never checks cancellation. `actor.call` sends a
+request constructed by a taken once callback receiving a taken `actor.Reply[R]`,
+then waits for one reply. It returns `Result[R, ChannelError]`; an abandoned
+reply or closed actor returns `Closed`, and waiting may return `Canceled`.
+`Reply[R]` is a sender alias. `actor.reply` consumes it, returning the value
+on a failed send. These are ordinary source wrappers over channels, with no
+runtime actor operations. See the [agent guide](../concurrent-agents.md).
+
 ## Paths
 
 `path.PathError = Invalid(u64)` reports a byte offset. Components are separated by

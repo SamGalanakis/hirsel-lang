@@ -84,6 +84,8 @@ Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 | [The proof seam](proof-seam.md): obligation ids, content hashes, the TIR export | PS-1 to PS-16 |
 
 For complete runnable examples, start with the [language tour](../tour.md).
+For task fan-out, actors, mutexes and scheduling tests, see the
+[concurrent agent guide](../concurrent-agents.md).
 
 ## Reading this specification
 
