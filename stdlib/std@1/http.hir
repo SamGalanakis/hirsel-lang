@@ -434,7 +434,7 @@ pub fn request(
 ) -> Result[Request, HttpError] {
   http_validate_headers(headers)?
   http_validate_headers([Header(name: "user-agent", value: config.user_agent)])?
-  let parsed_uri = uri.parse(url) ? Url
+  let parsed_uri = uri.parse(url) ?
   let target = uri.component_encoded(parsed_uri.path, Path())
   http_validate_target(target)?
   if let Some(q) = parsed_uri.query {
@@ -1299,7 +1299,7 @@ fn http_client_request(
   headers: List[Header]
 ) -> Result[Request, HttpError] {
   http_validate_headers(headers)?
-  let parsed = uri.parse(url) ? Url
+  let parsed = uri.parse(url) ?
   if !http_same(parsed.scheme, "http") && !http_same(parsed.scheme, "https") {
     return Error(UnsupportedScheme())
   }

@@ -160,7 +160,7 @@ fn want[S, E](
         Error(Data(error)) => return Error(Data(error)),
       }
     } else if bufio.buffered(r) > 0 {
-      bufio.read(mut r, mut source, refill, mut t.buffer, CHUNK) ? Input
+      bufio.read(mut r, mut source, refill, mut t.buffer, CHUNK) ?
     } else {
       // Once `r` is drained, the source fills the buffer directly.
       let previous = core@1/list.len(t.buffer)
@@ -820,7 +820,7 @@ pub fn next[S, E](
       return Error(Archive(Header(at)))
     }
     let mut bad: u64 = 0
-    let mut h = parse_header(t.buffer, o, sum, at, mut bad) ? Archive
+    let mut h = parse_header(t.buffer, o, sum, at, mut bad) ?
     let flag = t.buffer[o + 156]
     let data_size = if header_only(h.kind) {
       0u64
@@ -841,7 +841,7 @@ pub fn next[S, E](
         i = rest
       }
       if flag == 103 {
-        merge_pax(mut h, take parsed, at) ? Archive
+        merge_pax(mut h, take parsed, at) ?
         h.kind = Global()
         h.size = 0
         return Ok(Some(take h))
@@ -875,7 +875,7 @@ pub fn next[S, E](
       if bad & 1 != 0 && !named || bad & 2 != 0 && !linked {
         return Error(Archive(Encoding(at)))
       }
-      merge_pax(mut h, take records, at) ? Archive
+      merge_pax(mut h, take records, at) ?
       if let Some(name) = long_name {
         h.name = name
       }

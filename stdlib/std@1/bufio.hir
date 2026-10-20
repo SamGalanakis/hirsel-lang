@@ -68,7 +68,7 @@ pub fn read_more[S, E](
   } else {
     r.capacity
   }
-  let n = refill(mut source, mut r.input, limit) ? Source
+  let n = refill(mut source, mut r.input, limit) ?
   let current_len = core@1/list.len(r.input)
   if current_len < previous_len || current_len - previous_len != n || n > limit {
     return Error(InvalidRead())

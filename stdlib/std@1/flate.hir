@@ -905,7 +905,7 @@ pub fn read[S, E](
     }
     match status {
       Hungry() => {
-        if bufio.read_more(mut r, mut source, refill, 65536) ? Input == 0 {
+        if bufio.read_more(mut r, mut source, refill, 65536) ? == 0 {
           last_input = true
         }
       },

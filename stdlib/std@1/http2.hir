@@ -991,7 +991,7 @@ pub fn flush(mut c: Connection) -> Result[(), Error] {
     core@1/net.write_all(n, mut c.stream, prefix) ? net_error
   }
   for frame in frames {
-    let data = http2_wire.encode(frame, 16777215) ? Wire
+    let data = http2_wire.encode(frame, 16777215) ?
     core@1/net.write_all(n, mut c.stream, data) ? net_error
   }
   c.closed = false
