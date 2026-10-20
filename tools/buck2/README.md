@@ -779,7 +779,7 @@ in a fresh process within its action, releasing compiler and interpreter
 state before that worker takes another case. The existing memory cap and
 1800-second action timeout still apply.
 
-Workers print `native case<TAB>program<TAB>seconds<TAB>peak_RSS_KiB`.
+Workers print `native case program seconds peak_RSS_KiB`.
 Import a gate log with `python3 tools/buck2/test_costs.py <log>`, or refresh
 from gate history with `--from-history <history> --binary gate-native-changed`
 (and `gate-native-cranelift-changed`). Partial selections retain timings for

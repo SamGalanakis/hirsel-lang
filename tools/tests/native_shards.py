@@ -75,7 +75,7 @@ class NativeShards(unittest.TestCase):
     def test_native_worker_measurements_are_accepted_by_the_cost_importer(self):
         walls, rows = test_costs.parse([
             '✓ Pass: root//:gate-native-changed-shard-1 (12.0s)',
-            'native case\tconformance/SEM/a.hir\t11.850\t750000',
+            'native case conformance/SEM/a.hir 11.850 750000',
             '✓ Pass: root//:gate-native-cranelift-changed-shard-1 (9.0s)',
             'native case\tconformance/SEM/a.hir\t8.800\t600000'])
         self.assertEqual(rows, {'gate-native-changed': {'conformance/SEM/a.hir': 11.85},

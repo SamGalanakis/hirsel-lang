@@ -24,7 +24,7 @@ def case_costs(details):
     rows = {}
     for line in details.splitlines():
         match = CASE_COST.match(line) or re.fullmatch(
-            r'native case\t([^\t]+)\t([0-9.]+)\t(?:[0-9]+|unknown)', line)
+            r'native case\s+(\S+)\s+([0-9.]+)\s+(?:[0-9]+|unknown)', line)
         if match:
             rows[match[1]] = float(match[2])
     return rows

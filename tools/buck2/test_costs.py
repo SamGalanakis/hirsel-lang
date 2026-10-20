@@ -66,7 +66,7 @@ def parse(lines):
             walls[target] = (status, seconds(wall))
             binary = re.sub(r'-shard-\d+$', '', target)
             binary = binary if binary in SHARDED or binary in NATIVE_STAGES else None
-        elif binary in NATIVE_STAGES and (match := re.fullmatch(r'native case\t([^\t]+)\t([0-9.]+)\t(?:[0-9]+|unknown)', line)):
+        elif binary in NATIVE_STAGES and (match := re.fullmatch(r'native case\s+(\S+)\s+([0-9.]+)\s+(?:[0-9]+|unknown)', line)):
             costs.setdefault(binary, {})[match[1]] = float(match[2])
         elif binary and (match := CASE.match(line)):
             costs.setdefault(binary, {})[match.group(1)] = float(match.group(2))

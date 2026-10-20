@@ -88,7 +88,7 @@ pub(super) fn report(wall: Duration, passed: bool) {
         } else {
             "native failed case"
         };
-        eprintln!("{kind}\t{id}\t{:.3}\t{peak}", wall.as_secs_f64());
+        eprintln!("{kind} {id} {:.3} {peak}", wall.as_secs_f64());
     }
 }
 
