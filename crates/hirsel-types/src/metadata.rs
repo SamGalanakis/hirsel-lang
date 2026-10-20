@@ -102,7 +102,7 @@ pub enum SchemaConstraint {
     NoallocDrop(TypeParameterRef),
 }
 /// Registry-selected identities; same-spelled user declarations do not satisfy these roles.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct NominalRoles {
     pub unsafe_capability: Option<ast::DefPath>,
     pub result_type: Option<ast::DefPath>,
@@ -112,7 +112,7 @@ pub struct NominalRoles {
 }
 
 /// Canonical Arena identity and the compiler-only operation producing the ambient heap.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct HeapRole {
     pub arena: ast::DefPath,
     pub operation: ast::DefPath,
@@ -121,14 +121,14 @@ impl Type {
     pub fn is_heap_target(&self, roles: &NominalRoles) -> bool {
         self.allocation_target == Some(AllocationTarget::Heap)
             && matches!(&self.kind, TypeKind::Named {definition, arguments}
-                if arguments.is_empty() && roles.heap.as_ref().is_some_and(|h| &h.arena == definition))
+                if arguments.is_empty() && roles.heap.as_ref().is_some_and(|h| &h.arena == definition.path()))
     }
 }
 
 /// Replay a declaration's intrinsic constraints against instantiated arguments.
 /// Diagnostic identity comes from the declaration, never a library path lookup.
 pub fn schema_failure(
-    store: &TypeStore,
+    store: &TypeInterner,
     arguments: &[GenericArgument],
     constraints: &[SchemaConstraint],
     mut satisfies: impl FnMut(TypeId, Bound) -> bool,

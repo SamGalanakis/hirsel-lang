@@ -31,11 +31,11 @@ impl Signature {
 /// Missing declarations and malformed graphs prove nothing. Lookup errors remain
 /// caller-owned, so providers retain their dependency and diagnostic policies.
 pub fn structural_property(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     property: StructuralProperty,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     let summary = prove(
         source,
@@ -59,10 +59,10 @@ pub fn structural_property(
 /// The Flat bound is distinct from compatibility of fields stored in a flat
 /// declaration: String/Bytes are compatible fields, but ordinary values own blocks.
 pub fn structural_flat(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     Ok(prove(
         source,
@@ -83,10 +83,10 @@ pub fn structural_flat(
 /// is plain bits, so the copy is global wherever its source was read. Handle
 /// contents are never traversed. Plain values qualify.
 pub fn copy_detaches(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     Ok(prove(
         source,
@@ -104,10 +104,10 @@ pub fn copy_detaches(
 /// Symbolic sendability is a conjunction of generic obligations. A concrete
 /// Sendable bound succeeds only for Sendable, never merely DependsOn.
 pub fn structural_sendability(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
     // A dependent relation remains a promise until its source is instantiated.
     // Callable/Iter sendability describes captures, apart from the root view.
@@ -139,10 +139,10 @@ pub fn structural_sendability(
 /// Crossing evidence for the current referent. Its root access lifetime is
 /// checked separately; retained part and placement bounds remain obligations.
 pub fn content_sendability(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
     prove(
         source,
@@ -161,10 +161,10 @@ pub fn content_sendability(
 /// Written deep uniqueness and prior occurrence proof cannot survive that share.
 /// Flat/Plain copies and immutable Shared boundaries retain their normal rules.
 pub fn sendability_after_sharing(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
     prove(
         source,
@@ -209,8 +209,8 @@ fn implies(bounds: &[Bound], bound: Bound) -> bool {
                 .any(|b| matches!(b, Bound::Data | Bound::Key | Bound::Flat)))
         || (bound == Bound::Sendable && bounds.contains(&Bound::Flat))
 }
-fn prove(
-    source: &TypeStore,
+pub(crate) fn prove(
+    source: &TypeInterner,
     root: TypeId,
     bound: Bound,
     generics: &GenericDeclarations,
@@ -218,11 +218,11 @@ fn prove(
     use_evidence: bool,
     shared_storage: bool,
     handles: bool,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
-    let mut store = crate::graph::RootedScratch::new(source);
+    let store = source;
     let mut pending = vec![(root, false, false, false)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut nominal_roots = NominalExpansions::default();
     let mut dependencies = BTreeSet::new();
     while let Some((id, inherited_unique, mut plain_known, exit)) = pending.pop() {
@@ -261,7 +261,7 @@ fn prove(
             )
         {
             if prove(
-                store.store(id),
+                store,
                 id,
                 Bound::Plain,
                 generics,
@@ -336,7 +336,7 @@ fn prove(
                 definition,
                 arguments,
             } => {
-                let Some(signature) = lookup(definition)? else {
+                let Some(signature) = lookup(*definition)? else {
                     return Ok(Sendability::NotSendable);
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -357,7 +357,7 @@ fn prove(
                     // of their actual representation below.
                     if !signature.metadata.alias && !plain_known {
                         if prove(
-                            store.store(id),
+                            store,
                             id,
                             Bound::Plain,
                             generics,
@@ -396,15 +396,15 @@ fn prove(
                 if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
                     return Ok(Sendability::NotSendable);
                 }
-                if !nominal_roots.enter(id, usize::from(unique), |id| store.store(id))? {
+                if !nominal_roots.enter(id, usize::from(unique), store)? {
                     continue;
                 }
                 pending.push((id, unique, plain_known, true));
                 let Some(representation) = declaration.representation else {
                     return Ok(Sendability::NotSendable);
                 };
-                let representation = store.expand(
-                    &signature.types,
+                let representation = crate::graph::expand(
+                    store,
                     representation,
                     arguments,
                     &signature.metadata.roles,
@@ -555,10 +555,10 @@ impl Type {
 /// A nested generic function owns its generic bounds. Function and Iter capture
 /// summaries remain producer facts; nominal/aggregate facts come from declarations.
 pub fn normalize_type_properties(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     normalize_graph(
         store,
@@ -572,9 +572,9 @@ pub fn normalize_type_properties(
 /// Canonical inert qualifiers, for a graph whose derived summaries are
 /// already final or whose generic scope the caller cannot name.
 pub fn canonical_plain_type(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     normalize_graph(store, root, None, Normalization::Plain, lookup)
 }
@@ -583,10 +583,10 @@ pub fn canonical_plain_type(
 /// Imported callable fields may substitute a nominal Plain actual or a
 /// parameter whose Plain proof belongs to an enclosing lexical binder.
 pub fn canonical_plain_type_in(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     normalize_graph(store, root, Some(generics), Normalization::Plain, lookup)
 }
@@ -594,10 +594,10 @@ pub fn canonical_plain_type_in(
 /// Canonicalize flow-checked current rows without replacing their evidence
 /// with a structural summary. Generic Plain assumptions still canonicalize.
 pub fn canonical_current_type(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     normalize_graph(store, root, Some(generics), Normalization::Current, lookup)
 }
@@ -605,7 +605,7 @@ pub fn canonical_current_type(
 /// Resolve cleanup conjunctions from the bounds of each exact declaring binder.
 /// Traverses nested callable contracts without changing any other evidence.
 pub fn instantiate_cleanup_bounds(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
 ) -> Result<TypeId, QueryError> {
@@ -628,25 +628,25 @@ enum Normalization {
 
 /// `summaries` carries the generic scope when derived summaries are rebuilt.
 fn normalize_graph(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     summaries: Option<&GenericDeclarations>,
     mode: Normalization,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     let unscoped = GenericDeclarations::default();
     let generics = summaries.unwrap_or(&unscoped);
     fn visit(
-        store: &mut TypeStore,
+        store: &TypeInterner,
         id: TypeId,
         generics: &GenericDeclarations,
         mode: Normalization,
         root: TypeId,
         contract: bool,
         binders: &[TypeId],
-        memo: &mut std::collections::BTreeMap<(TypeId, Vec<TypeId>), TypeId>,
-        active: &mut std::collections::BTreeSet<TypeId>,
-        lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+        memo: &mut std::collections::HashMap<(TypeId, Vec<TypeId>), TypeId>,
+        active: &mut std::collections::HashSet<TypeId>,
+        lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     ) -> Result<TypeId, QueryError> {
         if let Some(id) = memo.get(&(id, binders.to_vec())) {
             return Ok(*id);
@@ -722,7 +722,7 @@ fn normalize_graph(
         let mut current = if store.get(id) == Some(&row) {
             id
         } else {
-            store.push(row.clone())
+            store.intern(row.clone())
         };
         if matches!(mode, Normalization::Cleanup) {
             if matches!(&row.drop_allocation, DropAllocation::DependsOn(parameters)
@@ -731,7 +731,7 @@ fn normalize_graph(
                         if bounds.iter().any(|bound| matches!(bound, Bound::NoallocDrop | Bound::Plain)))))
             {
                 row.drop_allocation = DropAllocation::NoAlloc;
-                current = store.push(row);
+                current = store.intern(row);
             }
             active.remove(&id);
             memo.insert((id, binders.to_vec()), current);
@@ -746,10 +746,10 @@ fn normalize_graph(
             && structural_property(store, current, StructuralProperty::Plain, generics, lookup)?
         {
             row.canonicalize_plain();
-            current = store.push(row.clone());
+            current = store.intern(row.clone());
         }
         if row.canonicalize_shared_uniqueness() {
-            current = store.push(row.clone());
+            current = store.intern(row.clone());
         }
         if matches!(mode, Normalization::Properties | Normalization::Current) {
             let structural = structural_sendability(store, current, generics, lookup)?;
@@ -769,7 +769,7 @@ fn normalize_graph(
                 };
             if row.modes.sendability != sendability {
                 row.modes.sendability = sendability;
-                current = store.push(row);
+                current = store.intern(row);
             }
         }
         active.remove(&id);
@@ -863,13 +863,13 @@ fn cleanup_promises(expected: &Type, actual: &mut Type) -> bool {
 /// The promises a value's row makes where `expected` stands: its callable
 /// promise, its erased state's captures and its cleanup summary. Each may be
 /// stronger than the place requires.
-fn value_promises(expected: &Type, actual: &mut Type) -> bool {
+pub(crate) fn value_promises(expected: &Type, actual: &mut Type) -> bool {
     function_value_promises(expected, actual)
         && erased_state_promises(expected, actual)
         && cleanup_promises(expected, actual)
 }
 
-fn receives_crossing(expected: &Sendability, actual: &Sendability) -> bool {
+pub(crate) fn receives_crossing(expected: &Sendability, actual: &Sendability) -> bool {
     match (expected, actual) {
         (Sendability::NotSendable, _) | (_, Sendability::Sendable) => true,
         (Sendability::DependsOn(expected), Sendability::DependsOn(actual)) => {
@@ -897,224 +897,11 @@ pub(crate) fn nested_promise(expected: &Type, actual: &mut Type) -> bool {
 }
 
 /// Root value weakening is distinct from exact nested type identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TypeRelation {
     Exact,
     Value,
     Parameter,
-}
-
-pub fn compatible_type(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    relation: TypeRelation,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    compatible(
-        source, expected, actual, relation, false, None, true, generics, lookup,
-    )
-}
-
-/// The relation for a `mut` argument. The callee writes the caller's storage
-/// back through its parameter, so a callable, an erased state or a cleanup
-/// summary can promise neither more nor less than the parameter declares, at
-/// the root or below it: every nested contract is exact.
-pub fn compatible_handback_type(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    compatible(
-        source,
-        expected,
-        actual,
-        TypeRelation::Parameter,
-        false,
-        None,
-        false,
-        generics,
-        lookup,
-    )
-}
-
-/// The parameter relation for an argument the callee cannot write back: a
-/// borrow or a take. Brands are identity evidence, so a data value may be
-/// handed to a parameter that names none of them at any depth; the callee
-/// simply does not know the brand. A parameter that declares a brand still
-/// requires it. Only Data can forget nested brands. MODE-2 also permits nested
-/// uniqueness weakening along owned payload edges; callable headers, phantom
-/// arguments and interior-mutable contracts remain invariant.
-pub fn compatible_view_type(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    compatible_view_type_in(
-        source,
-        expected,
-        actual,
-        TypeRelation::Parameter,
-        generics,
-        lookup,
-    )
-}
-
-/// The same non-writing view relation with an explicit root reception policy.
-/// Owned receivers use Value so an arena relation cannot disappear into storage;
-/// readonly arguments use Parameter. Mut hand-back keeps compatible_type.
-pub fn compatible_view_type_in(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    relation: TypeRelation,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    if relation == TypeRelation::Exact {
-        return compatible_type(source, expected, actual, relation, generics, lookup);
-    }
-    let data = structural_equality(source, actual, Bound::Data, generics, lookup)?;
-    // Only owned payload edges are covariant. A callable's header, phantom
-    // argument or interior-mutable cell remains the same contract even when
-    // the containing value is taken. Nominal Data excludes hidden callbacks.
-    let mut payloads = std::collections::BTreeSet::new();
-    let mut pending = vec![actual];
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some(id) = pending.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        let Some(row) = source.get(id) else { continue };
-        let owned = match &row.kind {
-            TypeKind::Tuple(_) | TypeKind::Box(_) | TypeKind::Record(_) | TypeKind::Variant(_) => {
-                true
-            }
-            TypeKind::Builtin { kind, .. } => matches!(
-                kind,
-                BuiltinType::Array
-                    | BuiltinType::List
-                    | BuiltinType::Map
-                    | BuiltinType::Set
-                    | BuiltinType::Inline
-                    | BuiltinType::Simd
-                    | BuiltinType::Packed
-                    | BuiltinType::Shared
-                    | BuiltinType::Slots
-            ),
-            TypeKind::Named { .. } => {
-                structural_equality(source, id, Bound::Data, generics, lookup)?
-            }
-            _ => false,
-        };
-        if owned {
-            payloads.insert(id);
-            pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
-        }
-    }
-    compatible(
-        source,
-        expected,
-        actual,
-        relation,
-        data,
-        Some(&payloads),
-        true,
-        generics,
-        lookup,
-    )
-}
-
-fn compatible(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    relation: TypeRelation,
-    forget_brands: bool,
-    payloads: Option<&std::collections::BTreeSet<TypeId>>,
-    // Nested rows may promise more in reading positions; false for hand-back.
-    received: bool,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    let store = source;
-    if relation == TypeRelation::Exact {
-        return Ok(semantic_equal(&store, expected, &store, actual).unwrap_or(false));
-    }
-    let Some(expected_row) = store.get(expected).cloned() else {
-        return Ok(false);
-    };
-    let Some(mut actual_row) = store.get(actual).cloned() else {
-        return Ok(false);
-    };
-    if expected_row.allocation_target.is_some()
-        && expected_row.allocation_target != actual_row.allocation_target
-    {
-        return Ok(false);
-    }
-    actual_row.allocation_target = expected_row.allocation_target;
-    let plain = structural_property(&store, actual, StructuralProperty::Plain, generics, lookup)?;
-    // A `mut` hand-back is written back through the parameter, so storage
-    // that promised less than the parameter admits would return holding it:
-    // the callable promise, the erased state's captures and the cleanup
-    // summary are exact at the root as they are below it. A core operation
-    // that only advances an erased state declares its parameter at the
-    // argument's own captures, so it meets this rule by construction.
-    let handed_back = received
-        || (value_promises(&actual_row, &mut expected_row.clone())
-            && actual_row.modes.multiplicity == expected_row.modes.multiplicity
-            && (plain || crossing_requirement(&actual_row) == crossing_requirement(&expected_row)));
-    let accepts = handed_back
-        && value_promises(&expected_row, &mut actual_row)
-        && receives_relation(
-            &expected_row.modes.relation,
-            &actual_row.modes.relation,
-            relation,
-        )
-        && (expected_row.modes.uniqueness == Uniqueness::Aliased
-            || actual_row.modes.uniqueness == Uniqueness::Unique
-            || plain)
-        && (expected_row.modes.multiplicity == Multiplicity::Once
-            || actual_row.modes.multiplicity == Multiplicity::Many)
-        && receives_crossing(
-            &crossing_requirement(&expected_row),
-            &actual_row.modes.sendability,
-        );
-    if !accepts {
-        return Ok(false);
-    }
-    // Root brands may forget identity or join known alternatives. Empty actual
-    // evidence cannot manufacture a branded origin; nested brands stay invariant.
-    if !expected_row.brand.alternatives.is_empty()
-        && (actual_row.brand.alternatives.is_empty()
-            || !actual_row
-                .brand
-                .alternatives
-                .iter()
-                .all(|o| expected_row.brand.alternatives.contains(o)))
-    {
-        return Ok(false);
-    }
-    actual_row.brand = expected_row.brand.clone();
-    actual_row.sendability_requirement = expected_row.sendability_requirement;
-    actual_row.modes = expected_row.modes;
-    Ok(crate::graph::semantic_equal_adjusted(
-        store,
-        expected,
-        None,
-        store,
-        actual,
-        Some(&actual_row),
-        forget_brands,
-        payloads,
-        received,
-    )
-    .unwrap_or(false))
 }
 
 /// MODE-1: where `expected` is a written or declared relation, the actual's
@@ -1143,39 +930,13 @@ pub(crate) fn receives_relation(
         || (relation == TypeRelation::Parameter && expected.is_global())
 }
 
-/// Replacement of caller-owned storage must supply a global value. The Local
-/// row of a mut parameter or its projected part describes read access (OWN-8),
-/// not permission to retain a view after the call (MODE-1, OWN-3).
-pub fn compatible_storage_type(
-    source: &TypeStore,
-    expected: TypeId,
-    actual: TypeId,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<bool, QueryError> {
-    if !source
-        .get(actual)
-        .is_some_and(|row| row.modes.relation.is_global())
-    {
-        return Ok(false);
-    }
-    compatible_type(
-        source,
-        expected,
-        actual,
-        TypeRelation::Value,
-        generics,
-        lookup,
-    )
-}
-
 /// Derive owned storage content from its declared access type (OWN-3/OWN-8).
 /// The borrowed root locality does not describe the displaced value's lifetime.
 pub fn storage_content_type(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     let Some(mut row) = store.get(root).cloned() else {
         return Ok(root);
@@ -1184,50 +945,16 @@ pub fn storage_content_type(
         return Ok(root);
     }
     row.modes.relation = row.modes.relation.retain(|r| *r != Reach::Environment);
-    let root = store.push(row);
+    let root = store.intern(row);
     normalize_type_properties(store, root, generics, lookup)
 }
 
-/// OWN-8: nonplain parts are bounded by their owner's relation. Recompute only the
-/// derived root summary; declaration-owned nested contracts remain invariant.
-pub fn projected_type(
-    store: &mut TypeStore,
-    owner: TypeId,
-    part: TypeId,
-    generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-) -> Result<TypeId, QueryError> {
-    let Some(mut row) = store.get(part).cloned() else {
-        return Ok(part);
-    };
-    // A part read through its owner is bounded by both relations.
-    let Some(relation) = store
-        .get(owner)
-        .map(|owner| row.modes.relation.union(&owner.modes.relation))
-    else {
-        return Ok(part);
-    };
-    if relation != row.modes.relation
-        && !structural_property(store, part, StructuralProperty::Plain, generics, lookup)?
-    {
-        row.modes.relation = relation;
-        // Projection introduces an access lifetime, not a counted share.
-        // The operand's use and ownership flow decide any later invalidation.
-        return Ok(store.push(row));
-    }
-    Ok(part)
-}
-
-/// PROV-4: unrelated block fields inherit their aggregate's relation, so fresh
-/// blocks go where the aggregate's go. Plain bits have no blocks.
-/// This helper supplies the construction contract; read localization remains
-/// the separate OWN-8 operation in projected_type.
 pub fn placed_part_type(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     owner: TypeId,
     part: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     let Some(mut row) = store.get(part).cloned() else {
         return Ok(part);
@@ -1240,9 +967,9 @@ pub fn placed_part_type(
         && !structural_property(store, part, StructuralProperty::Plain, generics, lookup)?
     {
         row.modes.relation = relation;
-        let related = store.push(row.clone());
+        let related = store.intern(row.clone());
         row.modes.sendability = structural_sendability(store, related, generics, lookup)?;
-        return Ok(store.push(row));
+        return Ok(store.intern(row));
     }
     Ok(part)
 }
@@ -1257,7 +984,7 @@ mod flat_tests {
     #[test]
     fn shared_handle_canonicalization_preserves_other_contracts() {
         let mut store = TypeStore::default();
-        let payload = store.push(row(TypeKind::Primitive(Primitive::Bytes)));
+        let payload = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
         let mut shared = row(TypeKind::Builtin {
             kind: BuiltinType::Shared,
             arguments: vec![GenericArgument::Type(payload)].into(),
@@ -1316,17 +1043,17 @@ mod flat_tests {
             }),
         });
         let mut store = TypeStore::default();
-        let flat = store.push(row(TypeKind::Named {
+        let flat = store.intern(row(TypeKind::Named {
             definition: path,
             arguments: vec![].into(),
         }));
-        let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let bytes = store.push(row(TypeKind::Primitive(Primitive::Bytes)));
-        let text = store.push(row(TypeKind::Primitive(Primitive::String)));
-        let parameter = store.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let bytes = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
+        let text = store.intern(row(TypeKind::Primitive(Primitive::String)));
+        let parameter = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let tuple = store.push(row(TypeKind::Tuple(vec![flat].into())));
+        let tuple = store.intern(row(TypeKind::Tuple(vec![flat].into())));
         let generics = [GenericParameter::Type {
             name: "T".into(),
             bounds: vec![Bound::Flat].into(),
@@ -1376,11 +1103,11 @@ mod flat_tests {
             )
             .unwrap()
         );
-        let pointer = store.push(row(TypeKind::Builtin {
+        let pointer = store.intern(row(TypeKind::Builtin {
             kind: BuiltinType::Ptr,
             arguments: vec![GenericArgument::Type(scalar)].into(),
         }));
-        let pointer_record = store.push(row(TypeKind::Record(
+        let pointer_record = store.intern(row(TypeKind::Record(
             vec![Field {
                 name: "p".into(),
                 ty: pointer,
@@ -1448,7 +1175,7 @@ mod flat_tests {
 
     /// A callable returning a callable; the inner one's sendability and uses
     /// are the nested promises under test.
-    fn producer(store: &mut TypeStore, sendability: Sendability, uses: Uses) -> TypeId {
+    fn producer(store: &TypeInterner, sendability: Sendability, uses: Uses) -> TypeId {
         let function = |result, uses: Uses| FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
@@ -1465,11 +1192,11 @@ mod flat_tests {
             incomplete: false,
             foreign: None,
         };
-        let unit = store.push(row(TypeKind::Tuple(vec![].into())));
+        let unit = store.intern(row(TypeKind::Tuple(vec![].into())));
         let mut inner = row(TypeKind::Function(function(unit, uses)));
         inner.modes.sendability = sendability;
-        let inner = store.push(inner);
-        store.push(row(TypeKind::Function(function(inner, Uses::Unrestricted))))
+        let inner = store.intern(inner);
+        store.intern(row(TypeKind::Function(function(inner, Uses::Unrestricted))))
     }
     #[test]
     fn a_nested_result_promises_more_only_where_the_value_is_not_handed_back() {
@@ -1538,7 +1265,7 @@ mod flat_tests {
         let mut store = TypeStore::default();
         let mut item = row(TypeKind::Primitive(Primitive::U64));
         item.drop_allocation = DropAllocation::NoAlloc;
-        let item = store.push(item);
+        let item = store.intern(item);
         let mut iterator = |captures: Option<ErasedCaptures>, cleanup: DropAllocation| {
             let mut part = row(TypeKind::Builtin {
                 kind: BuiltinType::Iter,
@@ -1546,9 +1273,9 @@ mod flat_tests {
             });
             part.erased_captures = captures;
             part.drop_allocation = cleanup;
-            let part = store.push(part);
-            let holder = store.push(row(TypeKind::Tuple(vec![part].into())));
-            store.push(row(TypeKind::Builtin {
+            let part = store.intern(part);
+            let holder = store.intern(row(TypeKind::Tuple(vec![part].into())));
+            store.intern(row(TypeKind::Builtin {
                 kind: BuiltinType::List,
                 arguments: vec![GenericArgument::Type(holder)].into(),
             }))

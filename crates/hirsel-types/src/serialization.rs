@@ -1,6 +1,6 @@
 //! SER-1 data schemas, deliberately independent of native storage and modes.
 use crate::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 pub const SERIALIZABLE_SCHEMA_VERSION: u32 = 1;
@@ -62,32 +62,32 @@ impl SerializableSchema {
 /// Local data views may be encoded while valid; modes do not promise reconstructed
 /// ownership. Nonregular expansion exhaustion remains an operational QueryError.
 pub fn serializable_schema(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<SerializableSchema>, QueryError> {
     schema_inner(source, root, declarations, lookup).map(|schema| schema.and_then(canonical))
 }
 
 fn schema_inner(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<SerializableSchema>, QueryError> {
-    let mut store = crate::graph::RootedScratch::new(source);
+    let store = source;
     let mut schema = SerializableSchema {
         version: SERIALIZABLE_SCHEMA_VERSION,
         root: SchemaId(0),
         nodes: vec![],
     };
-    let mut memo = BTreeMap::new();
+    let mut memo = std::collections::HashMap::new();
     let mut pending = vec![];
     fn child(
         id: TypeId,
         schema: &mut SerializableSchema,
-        memo: &mut BTreeMap<TypeId, SchemaId>,
+        memo: &mut std::collections::HashMap<TypeId, SchemaId>,
         pending: &mut Vec<(TypeId, bool)>,
     ) -> SchemaId {
         *memo.entry(id).or_insert_with(|| {
@@ -127,17 +127,19 @@ fn schema_inner(
                 SchemaNode::Parameter(p)
             }
             TypeKind::Tuple(ts) => SchemaNode::Tuple(ts.iter().map(|t| part(*t)).collect()),
-            TypeKind::Record(fs) => {
-                SchemaNode::Record(fs.iter().map(|f| (f.name.clone(), part(f.ty))).collect())
-            }
+            TypeKind::Record(fs) => SchemaNode::Record(
+                fs.iter()
+                    .map(|f| (f.name.as_str().to_owned(), part(f.ty)))
+                    .collect(),
+            ),
             TypeKind::Variant(vs) => SchemaNode::Variant(
                 vs.iter()
                     .map(|v| {
                         (
-                            v.name.clone(),
+                            v.name.as_str().to_owned(),
                             v.fields
                                 .iter()
-                                .map(|(name, t)| (name.clone(), part(*t)))
+                                .map(|(name, t)| (name.map(|n| n.as_str().to_owned()), part(*t)))
                                 .collect(),
                         )
                     })
@@ -177,7 +179,7 @@ fn schema_inner(
                 definition,
                 arguments,
             } => {
-                let Some(signature) = lookup(&definition)? else {
+                let Some(signature) = lookup(definition)? else {
                     return Ok(None);
                 };
                 let SignatureKind::Type(d) = &signature.kind else {
@@ -192,7 +194,7 @@ fn schema_inner(
                     let text = SchemaId(schema.nodes.len() as u32);
                     schema.nodes.push(SchemaNode::Scalar(Primitive::String));
                     schema.nodes[memo[&id].0 as usize] = SchemaNode::Nominal {
-                        definition,
+                        definition: definition.path().clone(),
                         representation: text,
                         check: None,
                     };
@@ -237,20 +239,17 @@ fn schema_inner(
                 if let Some(previous) = entered
                     .iter()
                     .copied()
-                    .find(|previous| store.equal(*previous, id))
+                    .find(|previous| store.semantic_eq(*previous, id))
                 {
                     SchemaNode::Reference(memo[&previous])
                 } else {
-                    let fresh = expansions.enter(id, 0, |id| store.store(id))?;
+                    let fresh = expansions.enter(id, 0, store)?;
                     debug_assert!(fresh, "an entered nominal is referenced above");
                     entered.push(id);
                     pending.push((id, true));
-                    let Ok(root) = store.expand(
-                        &signature.types,
-                        root,
-                        &arguments,
-                        &signature.metadata.roles,
-                    ) else {
+                    let Ok(root) =
+                        crate::graph::expand(store, root, &arguments, &signature.metadata.roles)
+                    else {
                         return Ok(None);
                     };
                     let root = child(root, &mut schema, &mut memo, &mut pending);
@@ -258,7 +257,7 @@ fn schema_inner(
                         SchemaNode::Reference(root)
                     } else {
                         SchemaNode::Nominal {
-                            definition,
+                            definition: definition.path().clone(),
                             representation: root,
                             check,
                         }
@@ -272,10 +271,10 @@ fn schema_inner(
 }
 
 pub fn structural_serializable(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     schema_inner(source, root, declarations, lookup).map(|schema| schema.is_some())
 }
@@ -457,7 +456,7 @@ mod tests {
     }
     fn nominal(kind: TypeKind) -> Signature {
         let mut types = TypeStore::default();
-        let root = types.push(row(kind));
+        let root = types.intern(row(kind));
         Signature {
             definition: path("Row"),
             metadata: SignatureMetadata::default(),
@@ -485,7 +484,7 @@ mod tests {
         }
     }
     fn schema(
-        store: &TypeStore,
+        store: &TypeInterner,
         root: TypeId,
         declaration: Option<Signature>,
     ) -> Option<SerializableSchema> {

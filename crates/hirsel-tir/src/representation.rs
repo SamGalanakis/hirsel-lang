@@ -1,7 +1,7 @@
 //! Owner-produced private representations: native layout inputs, never public
 //! signature facts. Only the defining owner's query produces one.
 use hirsel_syntax::{ContentHash, DefPath};
-use hirsel_types::{GenericParameter, Layout, TypeId, TypeStore};
+use hirsel_types::{GenericParameter, Layout, TypeId};
 
 use crate::BodyId;
 
@@ -10,7 +10,6 @@ pub struct RepresentationRecord {
     pub definition: DefPath,
     pub representation_revision: ContentHash,
     pub generics: Vec<GenericParameter>,
-    pub types: TypeStore,
     pub private_shape: TypeId,
     pub layout_promises: Layout,
     /// The public resource flag: a resource may have no drop body, so the

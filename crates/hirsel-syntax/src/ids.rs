@@ -147,3 +147,16 @@ impl std::fmt::Debug for DefId {
 
 #[cfg(test)]
 mod tests;
+
+/// Persisted as its DefPath; never as a session id.
+impl serde::Serialize for DefId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(self.path(), s)
+    }
+}
+impl<'de> serde::Deserialize<'de> for DefId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let path: DefPath = serde::Deserialize::deserialize(d)?;
+        Ok(DefId::intern(&path))
+    }
+}

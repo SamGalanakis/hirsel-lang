@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// result, error, authority and uses rows are inside. Shared DAG edges at different
 /// depths are distinct visits. Inserted references are never visited again.
 pub fn map_parameter_references(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     mut map: impl FnMut(ParameterRef, u32) -> Result<ParameterRef, GraphError>,
 ) -> Result<TypeId, GraphError> {
@@ -84,7 +84,7 @@ pub fn map_parameter_references(
 /// Rewrite generic binder identities throughout all type/size leaves and summaries.
 /// The callback receives the number of callable binders crossed from the root.
 pub fn map_generic_binders(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     mut map: impl FnMut(GenericBinder, u32) -> Result<GenericBinder, GraphError>,
 ) -> Result<TypeId, GraphError> {
@@ -159,7 +159,7 @@ pub fn map_generic_binders(
 
 /// Move a type beneath additional callable binders without capturing free names.
 pub fn shift_type_binders(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     amount: u32,
 ) -> Result<TypeId, GraphError> {
@@ -186,10 +186,7 @@ pub fn shift_type_binders(
 /// Install entry/result evidence from a declared receiving contract. Use only
 /// at body entry or after validating all flows into that contract; substitution
 /// and ordinary normalization must never call this on an incoming actual.
-pub fn declared_receipt_evidence(
-    store: &mut TypeStore,
-    root: TypeId,
-) -> Result<TypeId, GraphError> {
+pub fn declared_receipt_evidence(store: &TypeInterner, root: TypeId) -> Result<TypeId, GraphError> {
     rewrite_parameter_graph(store, root, |_, row, _| {
         if row.sendability_requirement == SendabilityRequirement::Sendable {
             row.modes.sendability = Sendability::Sendable;
@@ -199,10 +196,7 @@ pub fn declared_receipt_evidence(
 }
 
 /// Comparisons observe contents without receiving their crossing contracts.
-pub fn erase_comparison_crossing(
-    store: &mut TypeStore,
-    root: TypeId,
-) -> Result<TypeId, GraphError> {
+pub fn erase_comparison_crossing(store: &TypeInterner, root: TypeId) -> Result<TypeId, GraphError> {
     rewrite_parameter_graph(store, root, |_, row, _| {
         row.sendability_requirement = SendabilityRequirement::None;
         row.modes.sendability = Sendability::NotSendable;
@@ -211,17 +205,17 @@ pub fn erase_comparison_crossing(
 }
 
 fn rewrite_parameter_graph(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     mut map: impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
 ) -> Result<TypeId, GraphError> {
     fn walk(
-        store: &mut TypeStore,
+        store: &TypeInterner,
         id: TypeId,
         depth: u32,
         map: &mut impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
-        memo: &mut BTreeMap<(TypeId, u32), TypeId>,
-        active: &mut BTreeSet<TypeId>,
+        memo: &mut std::collections::HashMap<(TypeId, u32), TypeId>,
+        active: &mut std::collections::HashSet<TypeId>,
     ) -> Result<TypeId, GraphError> {
         if let Some(id) = memo.get(&(id, depth)) {
             return Ok(*id);
@@ -271,7 +265,7 @@ fn rewrite_parameter_graph(
             _ => (),
         }
         active.remove(&id);
-        let out = if t == original { id } else { store.push(t) };
+        let out = if t == original { id } else { store.intern(t) };
         memo.insert((id, depth), out);
         Ok(out)
     }
@@ -280,15 +274,15 @@ fn rewrite_parameter_graph(
         root,
         0,
         &mut map,
-        &mut BTreeMap::new(),
-        &mut BTreeSet::new(),
+        &mut std::collections::HashMap::new(),
+        &mut std::collections::HashSet::new(),
     )
 }
 
 /// Interpret free signature references in a checked body's lexical scope chain,
 /// nearest scope first. A nested callable's own bound references stay bound.
 pub fn bind_parameter_scopes(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     scopes: &[SiteRef],
 ) -> Result<TypeId, GraphError> {
@@ -336,7 +330,7 @@ fn free_parameter(p: ParameterRef, nested: u32) -> Option<ParameterRef> {
 /// references in nested callables. Actual lifetime comes from the selected
 /// operand, never from whether its identity happens to be a local name.
 pub fn instantiate_parameter_origins(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, OriginArgument>,
 ) -> Result<TypeId, GraphError> {
@@ -349,7 +343,7 @@ pub fn instantiate_parameter_origins(
 /// what its sources reach, arenas included. The caller must retain loans on
 /// every declared source, independently of this substitution.
 pub fn instantiate_parameter_sources(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, OriginArgument>,
     actuals: &BTreeMap<ParameterRef, TypeId>,
@@ -407,7 +401,7 @@ pub fn instantiate_relation(
 }
 
 fn instantiate_source_arguments(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, OriginArgument>,
     sources: bool,
@@ -457,7 +451,7 @@ fn instantiate_source_arguments(
 /// Identity-only refinement for an inferred type occurrence. Locality must not
 /// change merely because a previously free identity becomes concrete.
 fn instantiate_origin_identities(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, Origin>,
 ) -> Result<TypeId, GraphError> {
@@ -486,15 +480,15 @@ fn instantiate_origin_identities(
 /// and nested binders remain intact; later occurrences must satisfy the same
 /// contract. Unknown erased types are never strengthened from another argument.
 pub fn refine_inferred_value_contract(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     actual: TypeId,
 ) -> Result<TypeId, GraphError> {
     let mut pending = vec![(root, actual, 0)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut origins = BTreeMap::new();
-    let mut captures = BTreeMap::new();
-    let mut weakened = BTreeSet::new();
+    let mut captures = std::collections::HashMap::new();
+    let mut weakened = std::collections::HashSet::new();
     while let Some((old, new, depth)) = pending.pop() {
         if !seen.insert((old, new, depth)) {
             continue;
@@ -564,7 +558,7 @@ pub fn refine_inferred_value_contract(
 /// Instantiate the held/allowed authority in callback types from the actual
 /// arguments of the surrounding call. Inner callable parameters remain bound.
 pub fn instantiate_parameter_authorities(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, AuthoritySummary>,
 ) -> Result<TypeId, GraphError> {
@@ -612,7 +606,7 @@ pub fn instantiate_parameter_authorities(
 /// Publish a checked callable using its own lexical binder while retaining
 /// concrete references to captured outer scopes. `root` is the callable value.
 pub fn abstract_parameter_scope(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     scope: SiteRef,
 ) -> Result<TypeId, GraphError> {
@@ -639,7 +633,7 @@ pub fn abstract_parameter_scope(
 /// selection belongs to the declared callable, never to its claimed result type.
 /// Inner callable binders and unresolved captured outer references stay intact.
 pub fn instantiate_parameter_captures(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<RelationPlace, CaptureProperties>,
 ) -> Result<TypeId, GraphError> {
@@ -697,7 +691,7 @@ pub fn instantiate_parameter_captures(
 /// parameters retain their binder; field projections of an Arena token do not
 /// denote the same allocator.
 pub fn instantiate_allocation_targets(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, AllocationTarget>,
 ) -> Result<TypeId, GraphError> {
@@ -724,7 +718,7 @@ pub fn instantiate_allocation_targets(
 /// Rebuild origin-bearing edges with lexical binder depth. The callback must
 /// preserve inner bound parameters; graph shape, modes and authority are untouched.
 pub fn map_type_origins(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     map: impl FnMut(&Origin, u32) -> Result<Origin, GraphError>,
 ) -> Result<TypeId, GraphError> {
@@ -733,7 +727,7 @@ pub fn map_type_origins(
 
 /// Map only the brand origins of a type graph, leaving relation places.
 pub fn map_brand_origins(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     map: impl FnMut(&Origin, u32) -> Result<Origin, GraphError>,
 ) -> Result<TypeId, GraphError> {
@@ -742,7 +736,7 @@ pub fn map_brand_origins(
 
 /// Remove every brand of a type graph, nested rows included, leaving relation
 /// places, modes and shape.
-pub fn erase_brands(store: &mut TypeStore, root: TypeId) -> Result<TypeId, GraphError> {
+pub fn erase_brands(store: &TypeInterner, root: TypeId) -> Result<TypeId, GraphError> {
     rewrite_parameter_graph(store, root, |_, row, _| {
         row.brand = Brand::default();
         Ok(())
@@ -751,7 +745,7 @@ pub fn erase_brands(store: &mut TypeStore, root: TypeId) -> Result<TypeId, Graph
 
 /// Remove every `unique` qualifier of a type graph, nested rows included,
 /// leaving brands, relations and shape (MODE-2).
-pub fn erase_uniqueness(store: &mut TypeStore, root: TypeId) -> Result<TypeId, GraphError> {
+pub fn erase_uniqueness(store: &TypeInterner, root: TypeId) -> Result<TypeId, GraphError> {
     rewrite_parameter_graph(store, root, |_, row, _| {
         row.modes.uniqueness = Uniqueness::Aliased;
         Ok(())
@@ -760,7 +754,7 @@ pub fn erase_uniqueness(store: &mut TypeStore, root: TypeId) -> Result<TypeId, G
 
 /// Map only the relation places of a type graph, leaving brand origins.
 pub fn map_relation_places(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     map: impl FnMut(&Origin, u32) -> Result<Origin, GraphError>,
 ) -> Result<TypeId, GraphError> {
@@ -768,7 +762,7 @@ pub fn map_relation_places(
 }
 
 fn map_origins(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     brands: bool,
     relations: bool,
@@ -807,7 +801,7 @@ fn map_origins(
 /// An absent field stays unresolved; it is never silently erased into an
 /// unbranded value or an inferred allocation destination.
 pub fn instantiate_sibling_origins(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     fields: &BTreeMap<FieldId, Origin>,
 ) -> Result<TypeId, GraphError> {

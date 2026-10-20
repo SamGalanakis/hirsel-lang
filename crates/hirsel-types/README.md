@@ -4,16 +4,28 @@ Own semantic types, complete signatures, checked decisions and shared query data
 Allowed dependencies: syntax, intern, span, diag, codec; no implementation crates.
 Wire tests use run-config's shared `hex` formatter as a dev dependency.
 
-- `TypeStore` owns immutable rows. TypeIds have ephemeral provenance, checked by
-  `get` (debug assertion, None in release for a foreign row). Clone shares immutable
-  existing rows with constant-time access; append detaches shared storage; independently appended rows have distinct IDs. Use
-  `push`, `id`, `iter`, `len`, `is_empty`; `from_graph` constructs forward edges
-  without mutable published rows. Provenance never enters fingerprints or IDs on
-  disk: an encoded TypeId (`encode_types`) carries its index and an alias class
-  numbered within the encoding session, and decoding (`decode_types`) gives each
-  class fresh provenance. An old ID must not be paired with a rebuilt graph. The shared
-  `hirsel_intern::work` registry counts copied rows for deterministic scaling
-  assertions.
+- `TypeInterner` is the session's one canonical, concurrent type interner
+  (design §1a). Every phase and thread interns into it exactly and losslessly
+  (`intern`), so one row has one `TypeId` and promotion cannot fork identity.
+  `TypeId(u32)` has no provenance and no order; ids never reach output.
+  Rows live in address-stable chunks over an optional immutable `TypeBase`
+  (the std image), indexed by 64 hash shards. `intern_graph` admits rows
+  naming each other before they exist (hand-built and invalid cyclic graphs).
+  Per-id memos: `validate`/`valid` (missing rows, recovery rows, cycles),
+  `sem` (callable parameter names erased, erased captures sorted, Known(Unknown)
+  as None), `strip_modes` and `shape`. `semantic_eq` is `valid` and equal `sem`.
+- `TypeMemo` (structural, session-wide, one each for I and V) memoizes
+  `substitute` by root, binder, arguments, authorities and roles; `instantiate`
+  by the view's exact `ViewDigest` and actuals; `project` by (owner, part,
+  plain). `ContextMemo` (one per query, bound to its `GenericDeclarations` and
+  signature lookup) memoizes `prove`, `plain` and the directional `compatible`
+  relation, and replays each entry's lookups on a hit.
+- Persisted forms use canonical per-definition tables (`closure`,
+  `encode_table`, `decode_table`): first-encounter order from the roots, never
+  interner numbering. `TypeId` serializes only inside `with_table_encoding`/
+  `with_table_decoding`, as a table position.
+- `GeneratedActualKey` is main's CT-5 key, the CT-3 closed spelling of each
+  actual, interned once and memoized per TypeId.
 - `Signature` is self-contained. Fixed header defaults never come from bodies
   (LANG-6). `SignatureMetadata` carries visibility, transparent-alias status,
   the `unsafe ffi` package fact, a safe wrapper's trusted kind and model, and nominal

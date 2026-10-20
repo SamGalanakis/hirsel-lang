@@ -20,7 +20,7 @@ pub fn combine_crossing_evidence(left: Sendability, right: Sendability) -> Senda
 /// that state's crossing contract on every invocation. The current initial
 /// state's ownership is insufficient. These links come solely from headers.
 pub fn mutable_capture_states(
-    types: &TypeStore,
+    types: &TypeInterner,
     function: &FunctionType,
 ) -> Vec<(usize, usize, usize)> {
     let Some(ErasedCaptures::FromArguments(retained)) =
@@ -78,11 +78,11 @@ pub fn mutable_capture_states(
 /// Evidence supplied by a callback's fixed mutable parameter contract, rather
 /// than by a particular value it happened to receive when constructed.
 pub fn mutable_capture_state_sendability(
-    source: &TypeStore,
+    source: &TypeInterner,
     callback: TypeId,
     slot: usize,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
     let TypeKind::Function(header) = &source.get(callback).unwrap().kind else {
         return Ok(Sendability::NotSendable);
@@ -103,7 +103,7 @@ pub fn mutable_capture_state_sendability(
 /// Copying permission is per declared binder. The selected result read is
 /// included here without installing it for ordinary operations in the body.
 pub fn sharing_type_parameters(
-    types: &TypeStore,
+    types: &TypeInterner,
     function: &FunctionType,
 ) -> BTreeSet<TypeParamId> {
     local_result_generics(types, function).iter().enumerate().filter_map(|(ordinal, parameter)| {
@@ -113,10 +113,10 @@ pub fn sharing_type_parameters(
 }
 
 fn redundant(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     let row = store.get(root).unwrap();
     if structural_property(store, root, StructuralProperty::Plain, declarations, lookup)? {
@@ -149,14 +149,14 @@ fn redundant(
 /// headers and Shared contents do not belong to that payload. Visible nominal
 /// representations are checked; opaque arguments are conservative obligations.
 pub fn has_owned_crossing_requirement(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
-    let mut store = source.clone();
+    let store = source;
     let mut pending = vec![(root, false, false)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut nominals = NominalExpansions::default();
     while let Some((id, inherited_unique, exit)) = pending.pop() {
         if exit {
@@ -172,7 +172,7 @@ pub fn has_owned_crossing_requirement(
         let unique = inherited_unique || row.modes.uniqueness == Uniqueness::Unique;
         let proof_root = if inherited_unique {
             row.modes.uniqueness = Uniqueness::Unique;
-            store.push(row.clone())
+            store.intern(row.clone())
         } else {
             id
         };
@@ -197,11 +197,11 @@ pub fn has_owned_crossing_requirement(
                 definition,
                 arguments,
             } => {
-                if !nominals.enter(id, 0, |_| &store)? {
+                if !nominals.enter(id, 0, store)? {
                     continue;
                 }
                 pending.push((id, unique, true));
-                let Some(signature) = lookup(&definition)? else {
+                let Some(signature) = lookup(definition)? else {
                     return Ok(true);
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -210,16 +210,11 @@ pub fn has_owned_crossing_requirement(
                 if let Some(representation) = declaration.representation.filter(|_| {
                     signature.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
                 }) {
-                    let root = substitute_type(
-                        &signature.types,
+                    let root = crate::graph::expand(
+                        store,
                         representation,
-                        &mut store,
-                        Substitution {
-                            binder: Some(GenericBinder::Bound(0)),
-                            roles: &signature.metadata.roles,
-                            arguments: &arguments,
-                            authorities: &vec![AuthoritySummary::Unknown; arguments.len()],
-                        },
+                        &arguments,
+                        &signature.metadata.roles,
                     )
                     .map_err(|error| {
                         QueryError::Operational(OperationalFailure {
@@ -248,17 +243,17 @@ pub fn has_owned_crossing_requirement(
 /// nominal/builtin parts and invocation headers remain exact. Callers check
 /// the entire resulting receipt and admissibility independently.
 pub fn forget_read_crossing_requirements(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
     fn visit(
-        store: &mut TypeStore,
+        store: &TypeInterner,
         id: TypeId,
         declarations: &GenericDeclarations,
-        active: &mut BTreeSet<TypeId>,
-        lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+        active: &mut std::collections::HashSet<TypeId>,
+        lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     ) -> Result<TypeId, QueryError> {
         if !active.insert(id) {
             return Ok(id);
@@ -311,9 +306,15 @@ pub fn forget_read_crossing_requirements(
             _ => (),
         }
         active.remove(&id);
-        Ok(store.push(row))
+        Ok(store.intern(row))
     }
-    visit(store, root, declarations, &mut BTreeSet::new(), lookup)
+    visit(
+        store,
+        root,
+        declarations,
+        &mut std::collections::HashSet::new(),
+        lookup,
+    )
 }
 
 /// Physical owned-part paths; this is a traversal result, never a new type form.
@@ -327,14 +328,14 @@ pub enum OwnedTypePart {
 /// Qualified owned receipts and whether their checked content proof survives
 /// ordinary sharing independently. Header and Shared boundaries remain opaque.
 pub fn owned_crossing_receipts(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Vec<(Vec<OwnedTypePart>, bool)>, QueryError> {
     // Expansions go to scratch: pushing to a clone of a shared body store
     // would copy every row of the body once per call.
-    let mut store = crate::graph::RootedScratch::new(source);
+    let store = source;
     let mut pending = vec![(root, Vec::new(), false)];
     let mut nominals = NominalExpansions::default();
     let mut receipts = Vec::new();
@@ -347,7 +348,7 @@ pub fn owned_crossing_receipts(
             continue;
         };
         if row.sendability_requirement == SendabilityRequirement::Sendable {
-            let independent = sendability_after_sharing(store.store(id), id, declarations, lookup)?
+            let independent = sendability_after_sharing(store, id, declarations, lookup)?
                 == Sendability::Sendable;
             receipts.push((path.clone(), independent));
         }
@@ -396,11 +397,11 @@ pub fn owned_crossing_receipts(
                 definition,
                 arguments,
             } => {
-                if !nominals.enter(id, 0, |id| store.store(id))? {
+                if !nominals.enter(id, 0, store)? {
                     continue;
                 }
                 pending.push((id, path.clone(), true));
-                let Some(signature) = lookup(&definition)? else {
+                let Some(signature) = lookup(definition)? else {
                     continue;
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -409,19 +410,18 @@ pub fn owned_crossing_receipts(
                 if let Some(representation) = declaration.representation.filter(|_| {
                     signature.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
                 }) {
-                    let expanded = store
-                        .expand(
-                            &signature.types,
-                            representation,
-                            &arguments,
-                            &signature.metadata.roles,
-                        )
-                        .map_err(|error| {
-                            QueryError::Operational(OperationalFailure {
-                                operation: "owned crossing receipts".into(),
-                                message: format!("{error:?}"),
-                            })
-                        })?;
+                    let expanded = crate::graph::expand(
+                        store,
+                        representation,
+                        &arguments,
+                        &signature.metadata.roles,
+                    )
+                    .map_err(|error| {
+                        QueryError::Operational(OperationalFailure {
+                            operation: "owned crossing receipts".into(),
+                            message: format!("{error:?}"),
+                        })
+                    })?;
                     pending.push((expanded, path, false));
                 }
             }
@@ -452,35 +452,11 @@ pub fn owned_crossing_receipts(
 }
 
 /// Receiving view for independently checking Sendable bounds on every owned
-/// occurrence. The overlay is a requirement in scratch storage, never evidence
-/// installed on the actual or an exported signature.
+/// occurrence. The overlay is a requirement row, never evidence installed on
+/// the actual or an exported signature.
 pub fn generic_crossing_parameter(
-    source: &TypeStore,
-    function: &FunctionType,
-    parameter: usize,
-    target: &mut TypeStore,
-    arguments: &[GenericArgument],
-    roles: &NominalRoles,
-) -> Result<Option<TypeId>, GraphError> {
-    let Some(formal) = function.parameters.get(parameter) else {
-        return Ok(None);
-    };
-    let checked = sendable_arguments(function, target, arguments)?;
-    substitute_type(
-        source,
-        formal.ty,
-        target,
-        crossing_substitution(roles, arguments, &checked, &authorities(arguments)),
-    )
-    .map(Some)
-}
-
-/// `generic_crossing_parameter` over one store holding the function type's
-/// rows and the arguments: the receiving view's rows are appended to `store`,
-/// so a caller discards them with `TypeStore::truncate_to` instead of copying
-/// the store for each call.
-pub fn generic_crossing_parameter_in_place(
-    store: &mut TypeStore,
+    t: &TypeInterner,
+    m: &TypeMemo,
     function: &FunctionType,
     parameter: usize,
     arguments: &[GenericArgument],
@@ -489,11 +465,12 @@ pub fn generic_crossing_parameter_in_place(
     let Some(formal) = function.parameters.get(parameter) else {
         return Ok(None);
     };
-    let checked = sendable_arguments(function, store, arguments)?;
-    substitute_type_in_place(
-        store,
+    let checked = sendable_arguments(function, t, arguments)?;
+    substitute(
+        t,
+        m,
         formal.ty,
-        crossing_substitution(roles, arguments, &checked, &authorities(arguments)),
+        &crossing_substitution(roles, arguments, &checked, &authorities(arguments)),
     )
     .map(Some)
 }
@@ -501,7 +478,7 @@ pub fn generic_crossing_parameter_in_place(
 /// The arguments, each one bound by Sendable replaced by a row requiring it.
 fn sendable_arguments(
     function: &FunctionType,
-    target: &mut TypeStore,
+    target: &TypeInterner,
     arguments: &[GenericArgument],
 ) -> Result<Vec<GenericArgument>, GraphError> {
     let mut checked = arguments.to_vec();
@@ -514,7 +491,7 @@ fn sendable_arguments(
                     .ok_or(GraphError::MissingType(*actual))?
                     .clone();
                 row.sendability_requirement = SendabilityRequirement::Sendable;
-                *actual = target.push(row);
+                *actual = target.intern(row);
             }
         }
     }
@@ -549,7 +526,7 @@ mod tests {
         row.kind = TypeKind::Primitive(Primitive::Bytes);
         row.sendability_requirement = SendabilityRequirement::Sendable;
         row.modes.sendability = Sendability::Sendable;
-        let bytes = store.push(row.clone());
+        let bytes = store.intern(row.clone());
         let declarations = GenericDeclarations::default();
         let mut lookup = |_: &hirsel_syntax::DefPath| Ok(None);
         assert!(has_owned_crossing_requirement(&store, bytes, &declarations, &mut lookup).unwrap());
@@ -557,10 +534,10 @@ mod tests {
             kind: BuiltinType::List,
             arguments: vec![GenericArgument::Type(bytes)].into(),
         };
-        let list = store.push(row.clone());
+        let list = store.intern(row.clone());
         assert!(has_owned_crossing_requirement(&store, list, &declarations, &mut lookup).unwrap());
         row.modes.uniqueness = Uniqueness::Unique;
-        let unique_list = store.push(row.clone());
+        let unique_list = store.intern(row.clone());
         assert!(
             !has_owned_crossing_requirement(&store, unique_list, &declarations, &mut lookup)
                 .unwrap()
@@ -571,7 +548,7 @@ mod tests {
             kind: BuiltinType::Shared,
             arguments: vec![GenericArgument::Type(bytes)].into(),
         };
-        let shared = store.push(row);
+        let shared = store.intern(row);
         assert!(
             !has_owned_crossing_requirement(&store, shared, &declarations, &mut lookup).unwrap()
         );
@@ -582,7 +559,7 @@ mod tests {
         let mut row = Type::unit();
         row.kind = TypeKind::Primitive(Primitive::Bytes);
         row.sendability_requirement = SendabilityRequirement::Sendable;
-        let bytes = store.push(row.clone());
+        let bytes = store.intern(row.clone());
         let declarations = GenericDeclarations::default();
         let mut lookup = |_: &hirsel_syntax::DefPath| Ok(None);
         for (kind, forgets) in [(BuiltinType::List, true), (BuiltinType::Map, false)] {
@@ -591,7 +568,7 @@ mod tests {
                 arguments: vec![GenericArgument::Type(bytes)].into(),
             };
             row.sendability_requirement = SendabilityRequirement::None;
-            let before = store.push(row.clone());
+            let before = store.intern(row.clone());
             let after =
                 forget_read_crossing_requirements(&mut store, before, &declarations, &mut lookup)
                     .unwrap();

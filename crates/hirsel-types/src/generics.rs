@@ -227,12 +227,12 @@ impl GenericOrdinal for SizeParamId {
 /// Check every generic reference in a reachable type graph and its summaries.
 /// Entering a callable always introduces a binder, including nongeneric ones.
 pub fn generic_references_valid(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
 ) -> bool {
     let mut pending = vec![(root, declarations.clone(), false)];
-    let mut active = std::collections::BTreeSet::new();
+    let mut active = std::collections::HashSet::new();
     let mut seen = Vec::new();
     while let Some((id, declarations, leaving)) = pending.pop() {
         if leaving {

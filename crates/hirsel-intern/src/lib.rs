@@ -101,6 +101,19 @@ impl PartialOrd for Symbol {
     }
 }
 
+/// Persisted as its spelling; never as a session id.
+impl serde::Serialize for Symbol {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+impl<'de> serde::Deserialize<'de> for Symbol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+        Ok(Symbol::intern(&text))
+    }
+}
+
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Symbol").field(&self.as_str()).finish()

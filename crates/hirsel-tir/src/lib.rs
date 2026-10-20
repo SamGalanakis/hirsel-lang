@@ -5,9 +5,12 @@ hirsel_guard::install!();
 
 use hirsel_diag::RuleId;
 use hirsel_span::Span;
+use hirsel_syntax::DefId;
 use hirsel_syntax::{BinaryOp, ContentHash, DefPath, UnaryOp};
 use hirsel_types::QueryError;
-use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
+use hirsel_types::{
+    Destination, GeneratedActualKey, GenericArgument, TypeId, TypeInterner, UseKind,
+};
 
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
 /// v3 adds diverging calls; v4 retains named-entry caller attribution;
@@ -520,9 +523,11 @@ pub struct Definition {
     /// Ordinary closures and their contracts remain separate invocation boundaries.
     pub caller_bodies: Vec<BodyId>,
     pub protocol_associations: Vec<ProtocolAssociationReceipt>,
-    /// The sole published type graph for all entry, closure and contract bodies.
-    pub types: TypeStore,
-    pub path: DefPath,
+    /// The canonical closure of every type its entry, closure and contract
+    /// bodies reach, in first-encounter order (`hirsel_types::closure`): what
+    /// V checks and the definition's persisted type table.
+    pub types: std::sync::Arc<[TypeId]>,
+    pub path: DefId,
     pub signature_hash: ContentHash,
     pub bodies: Vec<Body>,
     pub entry: BodyId,
@@ -552,8 +557,8 @@ mod tests {
     use hirsel_types::{Type, TypeKind};
     #[test]
     fn hand_built_unit_body_has_explicit_return_and_cleanup() {
-        let mut types = TypeStore::default();
-        let unit = types.push(Type {
+        let types = TypeInterner::new(None);
+        let unit = types.intern(Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
             ..Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
@@ -615,10 +620,9 @@ mod tests {
 /// Cheap immutable lowered definition snapshot.
 pub type DefinitionRef = std::sync::Arc<Definition>;
 
-/// Evaluated data and its producer-owned type graph. No evaluator is linked here.
+/// Evaluated data; its TypeIds are rows of the session interner. No evaluator is linked here.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Materialized {
-    pub types: TypeStore,
     pub root: ValueNode,
 }
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -644,43 +648,37 @@ pub type MaterializedRef = std::sync::Arc<Materialized>;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct InstanceBodies {
     /// Every generic generated declaration of the program, selected or not.
-    pub declarations: std::collections::BTreeSet<DefPath>,
-    /// Selected instances by declaration and `InstanceBodies::key`.
-    pub instances:
-        std::collections::BTreeMap<DefPath, std::collections::BTreeMap<Vec<String>, InstanceBody>>,
+    pub declarations: std::collections::BTreeSet<DefId>,
+    /// Selected instances by declaration and their actuals' CT-5 key.
+    #[serde(with = "sorted_instances")]
+    pub instances: std::collections::BTreeMap<
+        DefId,
+        std::collections::HashMap<GeneratedActualKey, InstanceBody>,
+    >,
 }
-/// One selected instance: its closed arguments, rows of `types`, and the
-/// monomorphic definition that is the declaration's body at them.
+/// One selected instance: its closed lossless actuals (the first selected in
+/// key order represents the key) and the monomorphic definition that is the
+/// declaration's body at them.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct InstanceBody {
-    pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
-    pub definition: DefPath,
+    pub definition: DefId,
 }
 impl InstanceBodies {
-    /// The canonical spelling of each closed argument (CT-3), sizes in decimal;
-    /// None when an argument still names a parameter.
-    pub fn key(types: &TypeStore, arguments: &[GenericArgument]) -> Option<Vec<String>> {
-        arguments
-            .iter()
-            .map(|argument| match argument {
-                GenericArgument::Type(ty) => (!hirsel_types::mentions_parameter(types, *ty))
-                    .then(|| hirsel_types::CanonicalSpelling::closed(types, *ty)),
-                GenericArgument::Size(hirsel_types::Size::Constant(n)) => Some(n.to_string()),
-                GenericArgument::Size(_) => None,
-            })
-            .collect()
+    /// The CT-5 key of closed `arguments`; None when one still names a parameter.
+    pub fn key(types: &TypeInterner, arguments: &[GenericArgument]) -> Option<GeneratedActualKey> {
+        hirsel_types::generated_actual_key(types, arguments)
     }
     /// The definition that runs a call of `path` at closed `arguments`: None
     /// when `path` is not a generic generated declaration, and an error when
     /// it is but that instance was never selected.
     pub fn resolve(
         &self,
-        path: &DefPath,
-        types: &TypeStore,
+        path: DefId,
+        types: &TypeInterner,
         arguments: &[GenericArgument],
-    ) -> Result<Option<&DefPath>, QueryError> {
-        if !self.declarations.contains(path) {
+    ) -> Result<Option<DefId>, QueryError> {
+        if !self.declarations.contains(&path) {
             return Ok(None);
         }
         let unselected = || {
@@ -691,10 +689,31 @@ impl InstanceBodies {
         };
         let key = Self::key(types, arguments).ok_or_else(unselected)?;
         self.instances
-            .get(path)
+            .get(&path)
             .and_then(|instances| instances.get(&key))
-            .map(|instance| Some(&instance.definition))
+            .map(|instance| Some(instance.definition))
             .ok_or_else(unselected)
+    }
+}
+/// Instances persist in key order, never hash order.
+mod sorted_instances {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+    type Instances = BTreeMap<DefId, HashMap<GeneratedActualKey, InstanceBody>>;
+    pub fn serialize<S: serde::Serializer>(map: &Instances, s: S) -> Result<S::Ok, S::Error> {
+        let sorted: BTreeMap<&DefId, BTreeMap<&GeneratedActualKey, &InstanceBody>> = map
+            .iter()
+            .map(|(d, instances)| (d, instances.iter().collect()))
+            .collect();
+        serde::Serialize::serialize(&sorted, s)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Instances, D::Error> {
+        let sorted: BTreeMap<DefId, BTreeMap<GeneratedActualKey, InstanceBody>> =
+            serde::Deserialize::deserialize(d)?;
+        Ok(sorted
+            .into_iter()
+            .map(|(d, instances)| (d, instances.into_iter().collect()))
+            .collect())
     }
 }
 /// Execution requests other definitions lazily, permitting any topology (PROG-5).
@@ -721,10 +740,9 @@ pub trait TirProvider {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &TypeStore,
         arguments: &[GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        let _ = (path, types, arguments);
+        let _ = (path, arguments);
         Ok(None)
     }
 }

@@ -7,7 +7,7 @@
 //! Joins are unions at every depth of a value.
 use crate::{
     FieldId, GenericArgument, Origin, OriginRoot, ParameterRef, RegionId, Sendability, SharedSlice,
-    Type, TypeId, TypeKind, TypeStore, Uniqueness,
+    Type, TypeId, TypeInterner, TypeKind, Uniqueness,
 };
 
 /// One place that bounds a value (MODE-1). Field paths are meaningful (#77).
@@ -204,16 +204,16 @@ impl FromIterator<Reach> for Relation {
 }
 
 /// Whether `ty` is the registry's Arena (PROV-4); `arena` is its DefPath.
-pub fn is_arena_type(store: &TypeStore, ty: TypeId, arena: &hirsel_syntax::DefPath) -> bool {
+pub fn is_arena_type(store: &TypeInterner, ty: TypeId, arena: &hirsel_syntax::DefPath) -> bool {
     store.get(ty).is_some_and(
-        |t| matches!(&t.kind, TypeKind::Named { definition, .. } if definition == arena),
+        |t| matches!(&t.kind, TypeKind::Named { definition, .. } if definition.path() == arena),
     )
 }
 
 /// Whether `origin` is a whole Arena parameter of `function`, written as a
 /// bound reference `depth` callable binders out from the function's own.
 pub fn arena_parameter(
-    store: &TypeStore,
+    store: &TypeInterner,
     function: &crate::FunctionType,
     origin: &Origin,
     depth: u32,
@@ -288,7 +288,7 @@ impl Destination {
 /// its argument; a nominal type's declared fields are not inspected.
 /// `arena` says which places name arenas: placement is not a lifetime bound.
 pub fn structurally_global(
-    store: &TypeStore,
+    store: &TypeInterner,
     ty: TypeId,
     arena: &impl Fn(&Origin) -> bool,
 ) -> bool {
@@ -312,7 +312,7 @@ pub fn structurally_global(
 /// contains the value's (a join's union of placements, PROV-4) holds it too. It
 /// takes the value's relation and any stronger uniqueness and sendability, so
 /// the remaining structure compares exactly.
-pub fn adopt_local(store: &mut TypeStore, holder: TypeId, value: TypeId) -> TypeId {
+pub fn adopt_local(store: &TypeInterner, holder: TypeId, value: TypeId) -> TypeId {
     let (Some(h), Some(v)) = (store.get(holder), store.get(value)) else {
         return holder;
     };
@@ -371,7 +371,7 @@ pub fn adopt_local(store: &mut TypeStore, holder: TypeId, value: TypeId) -> Type
             _ => (),
         }
     }
-    if changed { store.push(h) } else { holder }
+    if changed { store.intern(h) } else { holder }
 }
 
 impl crate::Modes {
@@ -469,15 +469,15 @@ mod tests {
             },
             ..Type::with_kind(kind)
         };
-        let pair = |store: &mut TypeStore, part: Relation| {
-            let part = store.push(row(TypeKind::Primitive(Primitive::String), part));
-            let tag = store.push(row(TypeKind::Primitive(Primitive::U8), Relation::global()));
-            store.push(row(
+        let pair = |store: &TypeInterner, part: Relation| {
+            let part = store.intern(row(TypeKind::Primitive(Primitive::String), part));
+            let tag = store.intern(row(TypeKind::Primitive(Primitive::U8), Relation::global()));
+            store.intern(row(
                 TypeKind::Tuple(vec![part, tag].into()),
                 Relation::global(),
             ))
         };
-        let part = |store: &TypeStore, t: TypeId| match &store.get(t).unwrap().kind {
+        let part = |store: &TypeInterner, t: TypeId| match &store.get(t).unwrap().kind {
             TypeKind::Tuple(ts) => store.get(ts[0]).unwrap().modes.relation.clone(),
             _ => unreachable!(),
         };

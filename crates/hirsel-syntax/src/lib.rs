@@ -294,7 +294,7 @@ pub struct Path {
     pub segments: Vec<Symbol>,
 }
 /// Parameter passing mode; copy/unique are expressions, not parameter conventions (OWN-1/2/3).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum PassingMode {
     Borrow,
     Take,
@@ -839,7 +839,7 @@ pub struct Attribute {
     pub origin: Origin,
 }
 /// Contract kind; before() snapshots are expressions (FACT-1).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ContractKind {
     Requires,
     Ensures,

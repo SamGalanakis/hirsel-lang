@@ -3,15 +3,21 @@
 use crate::*;
 use hirsel_syntax::PassingMode;
 
-/// A type store under construction. Every returned id belongs to `store`.
-#[derive(Default)]
+/// Rows under construction, in their own session interner `store`.
 pub struct Types {
-    pub store: TypeStore,
+    pub store: std::sync::Arc<TypeInterner>,
+}
+impl Default for Types {
+    fn default() -> Self {
+        Self {
+            store: TypeInterner::new(None),
+        }
+    }
 }
 
 impl Types {
     pub fn add_with(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
-        self.store.push(Type {
+        self.store.intern(Type {
             modes,
             ..Type::with_kind(kind)
         })
@@ -32,7 +38,7 @@ impl Types {
                 .enumerate()
                 .map(|(i, &ty)| Field {
                     growable: false,
-                    name: format!("f{i}"),
+                    name: hirsel_intern::Symbol::intern(&format!("f{i}")),
                     ty,
                 })
                 .collect(),
@@ -46,7 +52,7 @@ impl Types {
                 .enumerate()
                 .map(|(i, &ty)| Field {
                     growable: i == last,
-                    name: format!("f{i}"),
+                    name: hirsel_intern::Symbol::intern(&format!("f{i}")),
                     ty,
                 })
                 .collect(),
@@ -58,7 +64,7 @@ impl Types {
                 .iter()
                 .enumerate()
                 .map(|(i, fields)| Variant {
-                    name: format!("V{i}"),
+                    name: hirsel_intern::Symbol::intern(&format!("V{i}")),
                     fields: fields.iter().map(|&t| (None, t)).collect(),
                 })
                 .collect(),
@@ -66,7 +72,7 @@ impl Types {
     }
     pub fn named(&mut self, definition: &DefPath, arguments: Vec<GenericArgument>) -> TypeId {
         self.add(TypeKind::Named {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             arguments: arguments.into(),
         })
     }

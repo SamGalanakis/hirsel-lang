@@ -703,6 +703,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-guard",
  "proptest",
+ "serde",
 ]
 
 [[package]]
