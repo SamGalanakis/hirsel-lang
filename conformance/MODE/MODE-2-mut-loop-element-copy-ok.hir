@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: accept
+// The twin of MODE-2-mut-loop-element-copy-bad: a deep copy of the element owns its
+// own storage and shares no part of the list, so the list stays unique.
+pub fn main() -> Result[(), ()] {
+  let mut names: unique List[String] = ["a", "b"]
+  let mut text = ""
+  for name in mut names {
+    text = unique name
+  }
+  let kept: unique List[String] = take names
+  Ok(())
+}

@@ -56,7 +56,10 @@ the element, and the diagnostic names the loop as the cause. A write followed by
 `break` or `return` does not, since the loop never reads the source again.
 Its element is a place of the source (`element_view`): a copy of it shares a part of
 the source and ends the source's uniqueness (MODE-2), as a copy of `xs[i]` does, while
-a borrow of it keeps the source unique.
+a borrow of it keeps the source unique. A mutable loop's element (`ElementPlace`)
+names its source binding the same way: copying it, or storing an unsendable value
+into it, shares a part of that binding and of every enclosing loop's owner
+(`for x in mut xs { for y in mut x { .. } }`).
 A block whose value projects a counted part of a binding the block declares
 (`{ let v = ..; v[0] }`) only borrows that part, and nothing moves a part out,
 so a consumer that borrows the block's value would read storage the block has

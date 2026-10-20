@@ -1,0 +1,71 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// A mutable loop binds element places (SEM-4), so reading a counted part of an
+// element (here the scrutinee of `if let`) shares a part of the list, and of
+// each enclosing loop's list, for the rest of its scope. The list stays an
+// ordinary aliased value that can be stored into a field.
+type Ty = Scalar(String) | MessageRef(u64)
+
+type F {
+  boxed: bool,
+  ty: Ty,
+}
+
+type Msg {
+  fields: List[F],
+}
+
+type Model {
+  messages: List[Msg],
+}
+
+fn build(mut model: Model, resolved: List[List[F]]) -> () uses {} {
+  let mut i: u64 = 0
+  while i < list.len(resolved) {
+    let mut fields = unique resolved[i]
+    for f in mut fields {
+      if let MessageRef(j) = f.ty {
+        f.boxed = j == i
+      }
+    }
+    model.messages[i].fields = take fields
+    i += 1
+  }
+}
+
+fn nested(xs: List[List[String]]) -> u64 uses {} {
+  let mut rows = unique xs
+  let mut n: u64 = 0
+  for row in mut rows {
+    for cell in mut row {
+      let c = cell
+      n += string.byte_len(c)
+    }
+  }
+  let kept = take rows
+  n + list.len(kept)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let resolved: List[List[F]] = [
+    [F(boxed: false, ty: MessageRef(0)), F(boxed: false, ty: Scalar("x"))],
+    [F(boxed: false, ty: MessageRef(0))]
+  ]
+  let mut model = Model(messages: [Msg(fields: []), Msg(fields: [])])
+  build(mut model, resolved)
+  let first = model.messages[0].fields
+  let second = model.messages[1].fields
+  let ok = first[0].boxed && !first[1].boxed && !second[0].boxed && nested(
+    [["ab", "c"], ["d"]]
+  ) == 6
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

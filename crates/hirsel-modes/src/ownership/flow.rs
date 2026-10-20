@@ -226,13 +226,22 @@ struct CrossingBorrow {
     source: Vec<Projection>,
 }
 
+/// A mutable loop's element is a place of its source (SEM-4): copying it, or
+/// storing an unsendable value into it, shares a part of the binding that
+/// owns the source (MODE-2). A temporary's part has no owning binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ElementPlace {
+    owner: Option<usize>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Value {
     /// Actual creation inputs; None is an unproved producer, never an empty environment.
     envelope: Option<BTreeSet<usize>>,
     modes: Modes,
     usage: UseKind,
-    element_place: bool,
+    /// A mutable collection loop's element place (SEM-4).
+    element_place: Option<ElementPlace>,
     /// A borrowed collection loop's element place (SEM-4): copying it shares
     /// a part of its owner, which ends the owner's uniqueness (MODE-2).
     element_view: bool,
@@ -274,7 +283,7 @@ impl Value {
             envelope: None,
             modes,
             usage: UseKind::Borrow,
-            element_place: false,
+            element_place: None,
             element_view: false,
             loans: LoanSet::default(),
             content: Content::default(),
@@ -369,6 +378,13 @@ impl Value {
     }
     fn aliased(&self) -> Option<usize> {
         self.alias().map(|(binding, _)| binding)
+    }
+    /// The binding a loop element place is a part of (SEM-4).
+    fn element_owner(&self) -> Option<usize> {
+        match self.element_place {
+            Some(place) => place.owner,
+            None => self.element_view.then(|| self.aliased()).flatten(),
+        }
     }
     fn set_alias(&mut self, alias: Option<(usize, Site)>) {
         self.loans.retain(|loan| loan.kind != Kind::Identity);
@@ -685,7 +701,7 @@ impl Value {
             (Some((a, x)), Some((b, y))) if a == b => Some((a, x.min(y))),
             (mine, theirs) => mine.or(theirs),
         });
-        self.element_place |= other.element_place;
+        self.element_place = self.element_place.or(other.element_place);
         self.element_view |= other.element_view;
         self.invalid |= other.invalid;
         self.deep_copy |= other.deep_copy;
@@ -787,6 +803,24 @@ impl Slot {
     }
 }
 impl State {
+    /// MODE-2: a share of a loop element's part ends the uniqueness and
+    /// sendability of the binding owning it, and of each enclosing loop's
+    /// owner in turn (`for x in mut xs { for y in mut x { .. } }`).
+    fn share_element_owners(&mut self, owner: Option<usize>, site: Option<ExprId>) {
+        let mut next = owner;
+        while let Some(owner) = next {
+            let value = &mut self.slots[owner].value;
+            value.share();
+            if site.is_some() {
+                value.uniqueness_site = site;
+            }
+            value.modes.sendability = Sendability::NotSendable;
+            value
+                .crossing_parts
+                .set(&[Projection::Elements], Sendability::NotSendable);
+            next = value.element_owner().filter(|o| *o != owner);
+        }
+    }
     fn join(&mut self, other: &Self, slots: &mut SlotJoins) -> bool {
         let old = self.clone();
         // Repeated ordered subtree pairs keep the exact existing slot result.
@@ -4036,9 +4070,7 @@ impl Checker<'_> {
                     && slot.value.content.summary().is_empty();
                 let mut value = slot.value.clone();
                 value.project_content(&place.projections);
-                let element_owner = (value.element_place || value.element_view)
-                    .then(|| value.aliased())
-                    .flatten();
+                let element_owner = value.element_owner().filter(|o| *o != place.binding);
                 let environment = self
                     .ty(*expression)
                     .and_then(|t| self.body.types.get(t))
@@ -4136,7 +4168,7 @@ impl Checker<'_> {
                         if !property.plain
                             && (value.aliased().is_some()
                                 || !place.projections.is_empty()
-                                || value.element_place) =>
+                                || value.element_place.is_some()) =>
                     {
                         if property.copyable {
                             UseKind::Copy
@@ -4144,7 +4176,7 @@ impl Checker<'_> {
                             UseKind::Take
                         }
                     }
-                    Context::Own if value.element_place && !property.plain => {
+                    Context::Own if value.element_place.is_some() && !property.plain => {
                         if property.copyable {
                             UseKind::Copy
                         } else {
@@ -4162,7 +4194,7 @@ impl Checker<'_> {
                         if !property.plain
                             && value.aliased().is_none()
                             && place.projections.is_empty()
-                            && !value.element_place
+                            && value.element_place.is_none()
                             && value.modes.uniqueness == Uniqueness::Unique =>
                     {
                         UseKind::Take
@@ -4246,7 +4278,7 @@ impl Checker<'_> {
                             },
                         );
                         value.invalid = true;
-                    } else if !place.projections.is_empty() || value.element_place {
+                    } else if !place.projections.is_empty() || value.element_place.is_some() {
                         self.report(
                             const { RuleId::of("OWN-8") },
                             operation_site,
@@ -4352,13 +4384,13 @@ impl Checker<'_> {
                 if *context == Context::Copy
                     || usage == UseKind::Copy
                         && (matches!(context, Context::Store | Context::ResultShare)
-                            || value.element_place)
+                            || value.element_place.is_some())
                 {
                     value.set_alias(None);
                 }
                 if usage == UseKind::Copy {
                     value.acquire_copy();
-                    value.element_place = false;
+                    value.element_place = None;
                     value.element_view = false;
                 }
                 if usage == UseKind::Copy && property.shared {
@@ -4393,16 +4425,8 @@ impl Checker<'_> {
                                 });
                     value.share();
                     if !copied_independently {
-                        if let Some(owner) = element_owner.filter(|owner| *owner != place.binding) {
-                            state.slots[owner].value.share();
-                            // The copied element is what ends the owner's uniqueness.
-                            state.slots[owner].value.uniqueness_site = Some(*expression);
-                            state.slots[owner].value.modes.sendability = Sendability::NotSendable;
-                            state.slots[owner]
-                                .value
-                                .crossing_parts
-                                .set(&[Projection::Elements], Sendability::NotSendable);
-                        }
+                        // The copied element is what ends its owners' uniqueness.
+                        state.share_element_owners(element_owner, Some(*expression));
                         state.slots[place.binding].value.modes.sendability =
                             Sendability::NotSendable;
                         state.slots[place.binding]
@@ -4453,7 +4477,7 @@ impl Checker<'_> {
                     if (value.modes.uniqueness != Uniqueness::Unique
                         || value.aliased().is_some()
                         || !place.projections.is_empty()
-                        || value.element_place)
+                        || value.element_place.is_some())
                         && !property.plain
                     {
                         if !property.copyable {
@@ -5035,6 +5059,16 @@ impl Checker<'_> {
                         }
                     )
                 });
+                // A mutable loop's element place is a part of its source binding.
+                let mut_source = iteration.filter(|_| iteration_mut).and_then(|e| {
+                    match self.tree.expressions[e.0 as usize].kind {
+                        ExprKind::Unary {
+                            op: UnaryOp::Mut,
+                            value,
+                        } => place(self.body, value, self.source_rows).map(|p| p.binding),
+                        _ => None,
+                    }
+                });
                 let iterator = iteration.is_some()
                     && self.ty(source).is_some_and(|ty| {
                         matches!(
@@ -5244,7 +5278,8 @@ impl Checker<'_> {
                         .find(|p| p.pattern == pattern)
                         .map(|p| p.usage);
                     part.element_place =
-                        iteration_mut && !iterator && checked_use == Some(UseKind::Mut);
+                        (iteration_mut && !iterator && checked_use == Some(UseKind::Mut))
+                            .then_some(ElementPlace { owner: mut_source });
                     if iteration.is_some()
                         && !iterator
                         && !plain
@@ -5761,20 +5796,13 @@ impl Checker<'_> {
                 }
                 if place.projections.is_empty() {
                     let mut value = value;
-                    if expected.element_place {
-                        value.element_place = true;
+                    if let Some(element) = expected.element_place {
+                        value.element_place = Some(element);
                         if value.modes.sendability != Sendability::Sendable {
-                            if let Some(owner) =
-                                expected.aliased().filter(|owner| *owner != place.binding)
-                            {
-                                state.slots[owner].value.share();
-                                state.slots[owner].value.modes.sendability =
-                                    Sendability::NotSendable;
-                                state.slots[owner]
-                                    .value
-                                    .crossing_parts
-                                    .set(&[Projection::Elements], Sendability::NotSendable);
-                            }
+                            state.share_element_owners(
+                                element.owner.filter(|owner| *owner != place.binding),
+                                None,
+                            );
                         }
                     }
                     // A Local binding's declared receiving lifetime remains
@@ -6671,19 +6699,8 @@ impl Checker<'_> {
                         .is_some_and(|p| !p.plain && !p.flat && !p.shared)
                 {
                     for root in self.value(state, *callee).captures().collect::<Vec<_>>() {
-                        let element = &state.slots[root].value;
-                        if let Some(owner) = (element.element_place || element.element_view)
-                            .then(|| element.aliased())
-                            .flatten()
-                            .filter(|owner| *owner != root)
-                        {
-                            state.slots[owner].value.share();
-                            state.slots[owner].value.modes.sendability = Sendability::NotSendable;
-                            state.slots[owner]
-                                .value
-                                .crossing_parts
-                                .set(&[Projection::Elements], Sendability::NotSendable);
-                        }
+                        let owner = state.slots[root].value.element_owner();
+                        state.share_element_owners(owner.filter(|owner| *owner != root), None);
                         state.slots[root].value.share();
                         if !self.properties[self.body.bindings[root].ty.index()].sendable_aliased {
                             state.slots[root].value.modes.sendability = Sendability::NotSendable;
