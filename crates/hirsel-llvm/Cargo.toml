@@ -15,6 +15,7 @@ object = { version = "=0.40.0", default-features = false, features = ["elf", "re
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["strict-versioning", "force-dynamic"] }
 
 [dev-dependencies]
+hirsel-cranelift = { path = "../hirsel-cranelift" }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-lir = { path = "../hirsel-lir", features = ["testing"] }

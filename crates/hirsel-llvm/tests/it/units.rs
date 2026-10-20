@@ -1,6 +1,7 @@
 //! Unit objects are relocatable (design §1e): a unit emitted in two programs that number
-//! its layouts differently has one `ready_digest` and the same object bytes, because every
-//! number the program assigns lives in the program's glue object (`hirsel_lir::glue`).
+//! its layouts differently has one `ready_digest` and the same object bytes in both
+//! backends, because every number the program assigns lives in the program's glue object
+//! (`hirsel_lir::glue`).
 
 use crate::support;
 
@@ -31,6 +32,21 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
         fuel: false,
     }
 }
+
+/// Both backends' `emit_object_profile`, by name.
+type Emit = fn(
+    &[&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>],
+    &EmitInputs<'_>,
+    hirsel_lir::debug::Profile<'_>,
+) -> Result<hirsel_lir::stage::ObjectArtifact, String>;
+const BACKENDS: [(&str, Emit); 2] = [
+    ("llvm", |u, i, p| {
+        hirsel_llvm::emit_object_profile(u, i, p).map_err(|e| e.to_string())
+    }),
+    ("cranelift", |u, i, p| {
+        hirsel_cranelift::emit_object_profile(u, i, p).map_err(|e| e.to_string())
+    }),
+];
 
 /// Every fixture program, by name, for `target`.
 fn programs(target: &TargetSpec) -> Vec<(&'static str, Program)> {
@@ -70,15 +86,14 @@ fn a_unit_has_one_digest_and_one_object_across_programs_that_number_its_layouts_
                     let kc = ready_digest(&elsewhere, &ib, "llvm", false, &[]).unwrap();
                     assert_eq!(ka, kc, "{name} {unit}: the digest of another input");
                     assert!(keys.insert(ka), "{name} {unit}: two units share a digest");
-                    let oa = emit_object(&[ua], &ia).unwrap();
-                    let ob = emit_object(&[ub], &ib).unwrap();
-                    assert!(
-                        oa.bytes == ob.bytes,
-                        "{name} {unit} {opt:?} on {}: the objects differ",
-                        target.triple
-                    );
-                    assert_eq!(oa.imports, ob.imports, "{name} {unit}");
-                    assert_eq!(oa.exports, ob.exports, "{name} {unit}");
+                    for (backend, emit) in BACKENDS {
+                        let oa = emit(&[ua], &ia, Default::default()).unwrap();
+                        let ob = emit(&[ub], &ib, Default::default()).unwrap();
+                        let what = format!("{backend} {name} {unit} {opt:?} on {}", target.triple);
+                        assert!(oa.bytes == ob.bytes, "{what}: the objects differ");
+                        assert_eq!(oa.imports, ob.imports, "{what}");
+                        assert_eq!(oa.exports, ob.exports, "{what}");
+                    }
                 }
             }
         }
@@ -92,7 +107,6 @@ fn a_unit_has_one_digest_and_one_object_across_programs_that_number_its_layouts_
 #[test]
 fn debug_intervals_leave_units_without_dwarf_and_bind_no_program() {
     use hirsel_lir::debug::Profile;
-    use hirsel_llvm::emit_object_profile;
     let input = input();
     let profile = Profile {
         debug: true,
@@ -102,50 +116,54 @@ fn debug_intervals_leave_units_without_dwarf_and_bind_no_program() {
         let plain = programs(&target);
         let shifted = with_decoys(|| programs(&target));
         for ((name, a), (_, b)) in plain.iter().zip(&shifted) {
-            for opt in [OptLevel::None, OptLevel::Speed] {
-                let mut mapped = false;
-                for (ua, ub) in a.units.iter().zip(&b.units) {
-                    let unit = &ua.unit().header.definition;
-                    let (ia, ib) = (inputs(a, &input, opt), inputs(b, &input, opt));
-                    let oa = emit_object_profile(&[ua], &ia, profile).unwrap();
-                    let ob = emit_object_profile(&[ub], &ib, profile).unwrap();
-                    let what = format!("{name} {unit} {opt:?} on {}", target.triple);
-                    assert!(oa.bytes == ob.bytes, "{what}: the objects differ");
-                    assert_eq!(oa.debug, ob.debug, "{what}: the intervals differ");
-                    let sections = section_names(&oa.bytes);
-                    assert!(
-                        sections.iter().all(|s| !s.starts_with(".debug")),
-                        "{what}: {sections:?}"
-                    );
-                    let symbol =
-                        hirsel_lir::emission::symbol_name(unit, Some(&ua.unit().header.instance));
-                    // An optimized library unit no call in its object keeps is gone.
-                    if !defined_symbols(&oa.bytes)
-                        .iter()
-                        .any(|s| s.starts_with(&symbol))
-                    {
-                        assert_ne!(opt, OptLevel::None, "{what}: no code");
-                        continue;
+            for (backend, emit) in BACKENDS {
+                for opt in [OptLevel::None, OptLevel::Speed] {
+                    let mut mapped = false;
+                    for (ua, ub) in a.units.iter().zip(&b.units) {
+                        let unit = &ua.unit().header.definition;
+                        let (ia, ib) = (inputs(a, &input, opt), inputs(b, &input, opt));
+                        let oa = emit(&[ua], &ia, profile).unwrap();
+                        let ob = emit(&[ub], &ib, profile).unwrap();
+                        let what = format!("{backend} {name} {unit} {opt:?} on {}", target.triple);
+                        assert!(oa.bytes == ob.bytes, "{what}: the objects differ");
+                        assert_eq!(oa.debug, ob.debug, "{what}: the intervals differ");
+                        let sections = section_names(&oa.bytes);
+                        assert!(
+                            sections.iter().all(|s| !s.starts_with(".debug")),
+                            "{what}: {sections:?}"
+                        );
+                        let symbol = hirsel_lir::emission::symbol_name(
+                            unit,
+                            Some(&ua.unit().header.instance),
+                        );
+                        // An optimized library unit no call in its object keeps is gone.
+                        if !defined_symbols(&oa.bytes)
+                            .iter()
+                            .any(|s| s.starts_with(&symbol))
+                        {
+                            assert_ne!(opt, OptLevel::None, "{what}: no code");
+                            continue;
+                        }
+                        // A library unit's intervals are its body's or its root adapter's.
+                        let function = oa
+                            .debug
+                            .iter()
+                            .find(|f| f.items.first() == Some(unit))
+                            .unwrap_or_else(|| panic!("{what}: no intervals"));
+                        assert!(function.symbol.starts_with(&symbol), "{what}");
+                        assert!(function.well_formed(), "{what}: {function:?}");
+                        // Optimization may merge a small function's locations into none.
+                        mapped |= !function.ranges.is_empty();
+                        assert!(
+                            opt != OptLevel::None || !function.ranges.is_empty(),
+                            "{what}: no mapped code"
+                        );
+                        // Without intervals, the backend records none.
+                        let plain = emit(&[ua], &ia, Profile::default()).unwrap();
+                        assert!(plain.debug.is_empty(), "{what}");
                     }
-                    // A library unit's intervals are its body's or its root adapter's.
-                    let function = oa
-                        .debug
-                        .iter()
-                        .find(|f| f.items.first() == Some(unit))
-                        .unwrap_or_else(|| panic!("{what}: no intervals"));
-                    assert!(function.symbol.starts_with(&symbol), "{what}");
-                    assert!(function.well_formed(), "{what}: {function:?}");
-                    // Optimization may merge a small function's locations into none.
-                    mapped |= !function.ranges.is_empty();
-                    assert!(
-                        opt != OptLevel::None || !function.ranges.is_empty(),
-                        "{what}: no mapped code"
-                    );
-                    // Without intervals, the object is the one emit_object makes.
-                    let plain = emit_object(&[ua], &ia).unwrap();
-                    assert!(plain.debug.is_empty(), "{what}");
+                    assert!(mapped, "{backend} {name} {opt:?}: no unit has mapped code");
                 }
-                assert!(mapped, "{name} {opt:?}: no unit has mapped code");
             }
         }
     }

@@ -783,6 +783,7 @@ version = "0.1.0"
 dependencies = [
  "gimli",
  "hirsel-core-contract",
+ "hirsel-cranelift",
  "hirsel-graph",
  "hirsel-guard",
  "hirsel-heapcheck",
