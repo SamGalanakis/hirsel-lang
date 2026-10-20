@@ -1080,3 +1080,78 @@ snapshot_enum!(ValueKind {
     FunctionReference(path),
     Construct { constructor, fields }
 } in Cx);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_types::{GenericArgument, Primitive, TypeKind, Variant};
+
+    /// A type table's text for a recursive group, a named instance and
+    /// repeated roots, after a round trip through a second interner.
+    fn tables() -> String {
+        let locator: Locator = Rc::new(|_: Span| -> Location { unreachable!("no spans") });
+        let t = TypeInterner::new(None);
+        let u64 = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let list = t.intern_graph(2, |ids| {
+            let field = |name: &str, ty| (Some(hirsel_intern::Symbol::intern(name)), ty);
+            vec![
+                Type::with_kind(TypeKind::Variant(
+                    vec![
+                        Variant {
+                            name: hirsel_intern::Symbol::intern("Nil"),
+                            fields: vec![].into(),
+                        },
+                        Variant {
+                            name: hirsel_intern::Symbol::intern("Cons"),
+                            fields: vec![field("head", u64), field("tail", ids[1])].into(),
+                        },
+                    ]
+                    .into(),
+                )),
+                Type::with_kind(TypeKind::Box(ids[0])),
+            ]
+        })[0];
+        let named = t.intern(Type::with_kind(TypeKind::Named {
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("Option")),
+            arguments: vec![GenericArgument::Type(list)].into(),
+        }));
+        let boolean = t.intern(Type::boolean());
+        let tuple = t.intern(Type::with_kind(TypeKind::Tuple(
+            vec![named, boolean, u64].into(),
+        )));
+        let roots = [tuple, list, u64, named, tuple];
+        let write = |cx: Cx, roots: &[TypeId]| {
+            let mut w = Writer::with_context(cx);
+            tabled(&mut w, |w| {
+                w.uint(roots.len() as u128);
+                for root in roots {
+                    root.write(w);
+                }
+            });
+            w.finish().0
+        };
+        let text = write(Cx::new(locator.clone(), t), &roots);
+        let other = TypeInterner::new(None);
+        let mut r = Reader::with_context(&text, Cx::new(locator.clone(), other.clone()));
+        read_table(&mut r).unwrap();
+        let count = u32::read(&mut r).unwrap();
+        let read: Vec<TypeId> = (0..count).map(|_| TypeId::read(&mut r).unwrap()).collect();
+        r.finish().unwrap();
+        assert_eq!(read[0], read[4], "a repeated root reads as one id");
+        assert_eq!(write(Cx::new(locator, other), &read), text);
+        text
+    }
+
+    #[test]
+    fn type_tables_do_not_depend_on_id_assignment() {
+        let Some(runs) = hirsel_intern::under_salts(
+            "wire::tests::type_tables_do_not_depend_on_id_assignment",
+            &[1, 2, 0x5eed],
+            tables,
+        ) else {
+            return;
+        };
+        assert!(runs.iter().all(|run| *run == runs[0]), "{runs:#?}");
+        assert_eq!(runs[0], tables(), "salted runs agree with the unsalted one");
+    }
+}

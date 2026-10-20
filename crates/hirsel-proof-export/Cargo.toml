@@ -19,3 +19,4 @@ serde_json = "1"
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
+hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
