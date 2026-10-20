@@ -890,21 +890,11 @@ fn specialize_sizes(
     Ok(())
 }
 
-fn source_site(syntax: &hirsel_syntax::ItemSyntax, site: NameSite) -> Span {
-    let tree = &syntax.tree;
-    match site {
-        NameSite::Item => syntax.item.origin.span,
-        NameSite::Statement(id) => tree.statements[id.0 as usize].origin.span,
-        NameSite::Expression(id) => tree.expressions[id.0 as usize].origin.span,
-        NameSite::Pattern(id) => tree.patterns[id.0 as usize].origin.span,
-        NameSite::Type(id) => tree.types[id.0 as usize].origin.span,
-    }
-}
-
 impl QueryEngine {
     /// Select staged constants from checked call actuals, after signatures and
-    /// GEN-5. Local generic frames retain their enclosing lexical size bindings.
-    /// Calls inside comptime are selected by execution, preserving dead branches.
+    /// GEN-5, reading each body's definition summary. Local generic frames
+    /// retain their enclosing lexical size bindings. Calls inside comptime are
+    /// selected by execution, preserving dead branches.
     pub(crate) fn prepare_staged_instances(&mut self) -> Result<(), QueryError> {
         use std::collections::{BTreeMap, BTreeSet, VecDeque};
         if self.staged_constants.is_empty() {
@@ -922,7 +912,7 @@ impl QueryEngine {
                     path.clone(),
                     scope,
                     BTreeMap::<SizeParameterRef, u64>::new(),
-                    source_site(&body.value.syntax, scope),
+                    crate::summary::source_site(&body.value.syntax, scope),
                 ));
             }
         }
@@ -935,69 +925,61 @@ impl QueryEngine {
                 return Err(operational("compile-time instance expansion limit"));
             }
             let analyzed = self.mode_query(&path)?;
-            let typed = &analyzed.value.typed;
             self.register_staged(&analyzed.value)?;
-            let tree = &typed.syntax.tree;
-            let syntax = &*typed.syntax;
-            let checked = &typed.checked;
-            let frames: BTreeSet<_> = typed
-                .plans
-                .functions
-                .iter()
-                .map(|frame| frame.owner)
-                .chain([NameSite::Item])
-                .collect();
-            let contains =
-                |outer: Span, inner: Span| outer.start <= inner.start && outer.end >= inner.end;
-            let frame_at = |at: Span, exclude: Option<NameSite>| {
+            let (summary, _) = crate::summary::summarize(self.types(), &analyzed.value.typed);
+            let frames = &summary.frames;
+            let frame_of = |site: NameSite| {
                 frames
                     .iter()
-                    .copied()
-                    .filter(|frame| {
-                        Some(*frame) != exclude && contains(source_site(syntax, *frame), at)
-                    })
-                    .min_by_key(|frame| {
-                        let span = source_site(syntax, *frame);
-                        span.end - span.start
-                    })
+                    .position(|frame| frame.site == site)
+                    .map(|i| i as u32)
             };
-            let staged_regions: Vec<_> = checked
-                .expressions
+            // The function frame a frame belongs to, and whether a comptime
+            // region encloses it.
+            let function = |mut frame: u32| {
+                while frames[frame as usize].kind == FrameKind::ComptimeRegion {
+                    frame = frames[frame as usize].parent.expect("region parent");
+                }
+                frame
+            };
+            let staged = |mut frame: u32| loop {
+                if frames[frame as usize].kind == FrameKind::ComptimeRegion {
+                    return true;
+                }
+                match frames[frame as usize].parent {
+                    Some(parent) => frame = parent,
+                    None => return false,
+                }
+            };
+            let Some(current) = frame_of(scope) else {
+                continue;
+            };
+            let mut nested: Vec<NameSite> = frames
                 .iter()
-                .filter(|row| {
-                    matches!(
-                        tree.expressions[row.expression.0 as usize].kind,
-                        ExprKind::Comptime(_)
-                    )
+                .enumerate()
+                .filter(|(i, frame)| {
+                    let i = *i as u32;
+                    frame.kind != FrameKind::ComptimeRegion
+                        && i != current
+                        && frame.parent.map(function) == Some(current)
+                        && !staged(i)
+                        && !frame.generic
                 })
-                .map(|row| source_site(syntax, NameSite::Expression(row.expression)))
+                .map(|(_, frame)| frame.site)
                 .collect();
-            let staged_at = |at| staged_regions.iter().any(|region| contains(*region, at));
-            for frame in &frames {
-                if *frame == scope {
-                    continue;
-                }
-                let at = source_site(syntax, *frame);
-                if frame_at(at, Some(*frame)) == Some(scope)
-                    && !staged_at(at)
-                    && !checked
-                        .resolution
-                        .generics
-                        .iter()
-                        .any(|generic| generic.owner == *frame)
-                {
-                    pending.push_back((path.clone(), *frame, bindings.clone(), site));
-                }
+            nested.sort();
+            for frame in nested {
+                pending.push_back((path.clone(), frame, bindings.clone(), site));
             }
             let constants: Vec<_> = self
                 .staged_constants
                 .iter()
                 .filter(|(_, constant)| {
                     constant.owner == path
-                        && frame_at(
-                            source_site(syntax, NameSite::Expression(constant.expression)),
-                            None,
-                        ) == Some(scope)
+                        && frame_of(NameSite::Expression(constant.expression))
+                            .and_then(|region| frames[region as usize].parent)
+                            .map(function)
+                            == Some(current)
                 })
                 .map(|(path, constant)| (path.clone(), constant.inputs.clone()))
                 .collect();
@@ -1019,33 +1001,17 @@ impl QueryEngine {
                     return Err(error);
                 }
             }
-            let mut calls: Vec<_> = checked
-                .instantiations
-                .iter()
-                .map(|call| {
-                    (
-                        call.expression,
-                        hirsel_types::CallTarget::Definition(call.callee.clone()),
-                        call.arguments.clone(),
-                    )
-                })
-                .collect();
-            calls.extend(checked.calls.iter().map(|call| {
-                (
-                    call.expression,
-                    call.target.clone(),
-                    call.generic_arguments.clone(),
-                )
-            }));
-            for (expression, target, arguments) in calls {
-                let at = source_site(syntax, NameSite::Expression(expression));
-                if frame_at(at, None) != Some(scope) || staged_at(at) {
+            for call in summary.calls.iter() {
+                if function(call.owning_frame) != current
+                    || call.class == CallClass::ComptimeExecuted
+                {
                     continue;
                 }
                 // The binder's owner: the callee's item, or this body's for
                 // a local function.
-                let (callee, owner, binder, mut actuals) = match target {
-                    hirsel_types::CallTarget::Definition(callee) => {
+                let (callee, binder, mut actuals) = match call.target_frame {
+                    None => {
+                        let callee = call.callee.path().clone();
                         if self.definition_items(&callee).is_err() {
                             continue;
                         }
@@ -1059,50 +1025,12 @@ impl QueryEngine {
                         {
                             continue;
                         }
-                        let body = self.mode_query(&callee)?;
-                        (
-                            callee,
-                            body.value.typed.syntax.owner(),
-                            NameSite::Item,
-                            BTreeMap::new(),
-                        )
+                        self.mode_query(&callee)?;
+                        (callee, NameSite::Item, BTreeMap::new())
                     }
-                    hirsel_types::CallTarget::Value(value) => {
-                        let local = checked
-                            .resolution
-                            .expressions
-                            .iter()
-                            .find_map(|(id, name)| {
-                                if *id == value {
-                                    if let ResolvedName::Local(id) = name {
-                                        Some(*id)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            });
-                        let binder = local
-                            .and_then(|local| {
-                                checked
-                                    .resolution
-                                    .local_functions
-                                    .iter()
-                                    .find(|(_, id)| *id == local)
-                                    .map(|(statement, _)| NameSite::Statement(*statement))
-                            })
-                            .or_else(|| {
-                                frames
-                                    .contains(&NameSite::Expression(value))
-                                    .then_some(NameSite::Expression(value))
-                            });
-                        let Some(binder) = binder else { continue };
-                        (path.clone(), syntax.owner(), binder, bindings.clone())
-                    }
-                    _ => continue,
+                    Some(_) => (path.clone(), call.binder.site, bindings.clone()),
                 };
-                for (ordinal, argument) in arguments.iter().enumerate() {
+                for (ordinal, argument) in call.arguments.iter().enumerate() {
                     if let GenericArgument::Size(size) = argument {
                         let value = match size {
                             Size::Constant(n) => Some(*n),
@@ -1111,14 +1039,14 @@ impl QueryEngine {
                         .ok_or_else(|| operational("selected call has an unbound size"))?;
                         actuals.insert(
                             SizeParameterRef::body(
-                                owner.site(binder),
+                                call.binder,
                                 hirsel_types::SizeParamId(ordinal as u32),
                             ),
                             value,
                         );
                     }
                 }
-                pending.push_back((callee, binder, actuals, at));
+                pending.push_back((callee, binder, actuals, call.site));
             }
         }
         Ok(())

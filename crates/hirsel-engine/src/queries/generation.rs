@@ -1008,32 +1008,16 @@ impl QueryEngine {
                 continue;
             }
             let analyzed = self.mode_query(&path)?;
-            let checked = &analyzed.value.typed.checked;
-            let tree = &analyzed.value.typed.syntax.tree;
-            let calls: Vec<_> = checked
+            let (summary, _) = crate::summary::summarize(self.types(), &analyzed.value.typed);
+            let types = analyzed.value.typed.checked.types.clone();
+            // Calls that name a definition: written ones, then planned instances.
+            let calls: Vec<_> = summary
                 .calls
                 .iter()
-                .filter_map(|call| match &call.target {
-                    hirsel_types::CallTarget::Definition(callee) => Some((
-                        call.expression,
-                        callee.clone(),
-                        call.generic_arguments.clone(),
-                    )),
-                    _ => None,
-                })
-                .chain(
-                    checked
-                        .instantiations
-                        .iter()
-                        .map(|i| (i.expression, i.callee.clone(), i.arguments.clone())),
-                )
+                .filter(|call| call.target_frame.is_none())
+                .map(|call| (call.callee.path().clone(), call.binder, call.arguments.clone(), call.site))
                 .collect();
-            let types = checked.types.clone();
-            let sites: Vec<_> = calls
-                .iter()
-                .map(|(expression, _, _)| tree.expressions[expression.0 as usize].origin.span)
-                .collect();
-            for ((_, callee, arguments), site) in calls.into_iter().zip(sites) {
+            for (callee, binder, arguments, site) in calls {
                 if !self.items.contains_key(&callee) {
                     continue;
                 }
@@ -1055,13 +1039,7 @@ impl QueryEngine {
                 } else if actuals.arguments.is_empty() {
                     pending.push((callee, BTreeMap::new()));
                 } else if closed {
-                    let binder = self
-                        .mode_query(&callee)?
-                        .value
-                        .typed
-                        .syntax
-                        .owner()
-                        .site(hirsel_types::NameSite::Item);
+                    self.mode_query(&callee)?;
                     pending.push((callee, BTreeMap::from([(binder, actuals)])));
                 }
             }

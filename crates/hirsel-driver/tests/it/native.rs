@@ -577,22 +577,34 @@ fn third[V: copyable](x:V) { first(x) }
         let output = check_progress(&mut engine, file, &default_context()).unwrap();
         assert_eq!(output.diagnostics[0].rule.as_str(), "GEN-5");
         let growing = engine.gen5_source_graph().unwrap();
-        for (graph, sites) in [(finite, 0), (growing, 1)] {
-            let expected = graph.growing_sites();
-            assert_eq!(expected.len(), sites);
-            let mut owners: Vec<&DefPath> = graph.edges.iter().map(|e| &e.owner).collect();
-            owners.sort();
-            owners.dedup();
-            for configuration in topology_matrix(20) {
-                let Engine::Native { partition, .. } = configuration.engine else {
-                    unreachable!()
-                };
-                let objects = partition.assign(owners.len());
-                let mut edges = graph.edges.clone();
-                edges.sort_by_key(|e| objects[owners.binary_search(&&e.owner).unwrap()]);
-                let reordered = InstanceGraph { edges };
-                assert_eq!(reordered.growing_sites(), expected, "{}", partition.name());
-            }
+        let expected = finite.growing_sites();
+        assert!(expected.is_empty());
+        let mut owners: Vec<&DefPath> = finite.edges.iter().map(|e| &e.owner).collect();
+        owners.sort();
+        owners.dedup();
+        for configuration in topology_matrix(20) {
+            let Engine::Native { partition, .. } = configuration.engine else {
+                unreachable!()
+            };
+            let objects = partition.assign(owners.len());
+            let mut edges = finite.edges.clone();
+            edges.sort_by_key(|e| objects[owners.binary_search(&&e.owner).unwrap()]);
+            let reordered = InstanceGraph { edges };
+            assert_eq!(reordered.growing_sites(), expected, "{}", partition.name());
+        }
+        let expected = growing.growing_sites();
+        assert_eq!(expected.len(), 1);
+        let mut owners: Vec<_> = growing.edges.iter().map(|e| e.0.0).collect();
+        owners.sort();
+        owners.dedup();
+        for configuration in topology_matrix(20) {
+            let Engine::Native { partition, .. } = configuration.engine else {
+                unreachable!()
+            };
+            let objects = partition.assign(owners.len());
+            let mut edges = growing.edges.to_vec();
+            edges.sort_by_key(|e| objects[owners.binary_search(&e.0.0).unwrap()]);
+            assert_eq!(hirsel_engine::growing_sites(&edges), expected, "{}", partition.name());
         }
     });
 }

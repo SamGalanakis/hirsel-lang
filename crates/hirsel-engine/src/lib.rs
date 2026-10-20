@@ -25,7 +25,12 @@ pub use memo::{Durability, ReadKey, Reads, ReadsBuilder, Revision};
 mod generic_graph;
 mod layered;
 pub use diagnostics::*;
-pub use generic_graph::{GenericParameterRef, InstanceEdge, InstanceGraph, InstanceKind};
+pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
+mod summary;
+pub use summary::{
+    CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge, ParameterGrowth,
+    SummaryCall, growing_sites, summarize,
+};
 pub use layered::Layered;
 mod semantic;
 pub use semantic::*;

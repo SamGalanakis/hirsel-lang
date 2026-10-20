@@ -79,6 +79,7 @@ mod signature_input;
 mod source_profile;
 #[path = "../support/source_std.rs"]
 mod source_std;
+mod summary;
 mod tail_calls;
 mod tls_audit;
 mod value_transport;

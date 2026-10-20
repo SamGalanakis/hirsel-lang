@@ -5,29 +5,24 @@
 //! that cycle. Size parameters are nodes too: a bare size argument is stable,
 //! and one nested in a type argument grows that type.
 //!
-//! The source verdict reads each definition's checked instantiations (written
-//! and planned calls, closure bodies included). The native graph adds what the
-//! selected TIR instantiates without a written call: finalizers and nominal
-//! representations reached from dropped values, closure environments and
-//! generic arguments, and the nominals of materialized values. Whether those
-//! implicit instances belong to the source rule is spec #87; until it rules,
-//! only native import rejects their growth.
+//! The source verdict reads each definition's growth edges, summarized from
+//! its checked written and planned calls (closure bodies included). The
+//! native graph adds what the selected TIR instantiates without a written
+//! call: finalizers and nominal representations reached from dropped values,
+//! closure environments and generic arguments, and the nominals of
+//! materialized values. Whether those implicit instances belong to the source
+//! rule is spec #87; until it rules, only native import rejects their growth.
+use crate::summary::parameters;
 use crate::*;
 use hirsel_span::Span;
-use hirsel_syntax::ExprId;
+use hirsel_syntax::{DefId, ExprId};
 use hirsel_tir::{Callee, CleanupAction, InstructionKind, Materialized, Rvalue, Terminator};
 use hirsel_types::{
-    BinderRef, GenericArgument, NameSite, SiteRef, Size, SizeParamId, SizeParameterRef, TypeId,
+    GenericArgument, NameSite, SiteRef, SizeParamId, SizeParameterRef, TypeId,
     TypeKind, TypeParamId, TypeParameterRef, TypeStore, UseKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A generic parameter named by its declaring binder (contract rev 3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum GenericParameterRef {
-    Type(TypeParameterRef),
-    Size(SizeParameterRef),
-}
 /// Why an owner's instance requires the callee's instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum InstanceKind {
@@ -126,29 +121,16 @@ impl InstanceGraph {
             .edges
             .iter()
             .flat_map(InstanceEdge::parameter_edges)
+            .map(|edge| {
+                (
+                    (DefId::intern(&edge.from.0), edge.from.1),
+                    (DefId::intern(&edge.to.0), edge.to.1),
+                    edge.grows,
+                    edge.site,
+                )
+            })
             .collect();
-        let mut graph: BTreeMap<&Node, Vec<&Node>> = BTreeMap::new();
-        for edge in &edges {
-            graph.entry(&edge.from).or_default().push(&edge.to);
-        }
-        let mut sites = BTreeMap::new();
-        for edge in edges.iter().filter(|edge| edge.grows) {
-            let mut todo = vec![&edge.to];
-            let mut seen = BTreeSet::new();
-            while let Some(node) = todo.pop() {
-                if *node == edge.from {
-                    sites.insert(
-                        (edge.site.anchor, edge.site.start, edge.site.end),
-                        edge.site,
-                    );
-                    break;
-                }
-                if seen.insert(node) {
-                    todo.extend(graph.get(node).into_iter().flatten());
-                }
-            }
-        }
-        sites.into_values().collect()
+        crate::summary::growing_sites(&edges)
     }
     /// Same edges in the same order.
     pub fn same(&self, other: &Self) -> bool {
@@ -405,42 +387,18 @@ fn type_arguments(arguments: &[GenericArgument]) -> impl Iterator<Item = TypeId>
 }
 
 impl QueryEngine {
-    /// The source GEN-5 graph: each definition's checked instantiations, owned by
-    /// its checked store. Program definitions only; library operations have no
-    /// generic body to expand.
-    pub fn gen5_source_graph(&mut self) -> Result<InstanceGraph, QueryError> {
-        let bodies = self.instantiation_bodies()?;
-        let binders: BTreeMap<_, _> = bodies
-            .iter()
-            .map(|(path, typed)| {
-                (
-                    path.clone(),
-                    typed.value.syntax.owner().site(NameSite::Item),
-                )
-            })
+    /// The source GEN-5 graph: every program definition's growth edges, from
+    /// its definition summary. Library operations have no generic body to
+    /// expand, and an edge into a definition without a summary is a dead end.
+    pub fn gen5_source_graph(&mut self) -> Result<ParameterGrowth, QueryError> {
+        let edges: Vec<_> = self
+            .definition_summaries()?
+            .into_iter()
+            .flat_map(|(_, growth)| growth.edges.into_vec())
             .collect();
-        let mut graph = InstanceGraph::default();
-        for (caller, typed) in &bodies {
-            let (file, checked) = (&typed.value.syntax, &typed.value.checked);
-            for call in &checked.instantiations {
-                let Some(binder) = binders.get(&call.callee) else {
-                    continue;
-                };
-                graph.edges.push(InstanceEdge {
-                    owner: caller.clone(),
-                    owner_binder: None,
-                    site: file.tree.expressions[call.expression.0 as usize]
-                        .origin
-                        .span,
-                    kind: InstanceKind::Call,
-                    callee: call.callee.clone(),
-                    binder: *binder,
-                    types: checked.types.clone(),
-                    arguments: call.arguments.clone(),
-                });
-            }
-        }
-        Ok(graph)
+        Ok(ParameterGrowth {
+            edges: edges.into(),
+        })
     }
 }
 
@@ -512,80 +470,4 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
         });
     }
     result
-}
-
-/// Owner parameters inside one argument, each with whether it is nested
-/// (strict growth). A callable type introduces a binder, so `Bound` references
-/// name the owner only at the owner's own depth.
-fn parameters(
-    types: &TypeStore,
-    argument: &GenericArgument,
-    owner_binder: Option<SiteRef>,
-) -> Vec<(GenericParameterRef, bool)> {
-    let mut result = BTreeSet::new();
-    let size = |size: &Size, depth: u32, nested: bool, result: &mut BTreeSet<_>| {
-        if let Size::Parameter(parameter) = size
-            && let Some(parameter) = owned(*parameter, depth, owner_binder)
-        {
-            result.insert((GenericParameterRef::Size(parameter), nested));
-        }
-    };
-    let root = match argument {
-        GenericArgument::Type(ty) => *ty,
-        GenericArgument::Size(s) => {
-            size(s, 0, false, &mut result);
-            return result.into_iter().collect();
-        }
-    };
-    let mut todo = vec![(root, false, 0)];
-    let mut seen = BTreeSet::new();
-    while let Some((ty, nested, depth)) = todo.pop() {
-        if !seen.insert((ty, nested, depth)) {
-            continue;
-        }
-        match &types.get(ty).expect("instance argument type").kind {
-            TypeKind::Parameter(parameter) => {
-                if let Some(parameter) = owned(*parameter, depth, owner_binder) {
-                    result.insert((GenericParameterRef::Type(parameter), nested));
-                }
-            }
-            TypeKind::Tuple(ts) => todo.extend(ts.iter().map(|t| (*t, true, depth))),
-            TypeKind::Record(fs) => todo.extend(fs.iter().map(|f| (f.ty, true, depth))),
-            TypeKind::Variant(vs) => todo.extend(
-                vs.iter()
-                    .flat_map(|v| v.fields.iter().map(move |(_, t)| (*t, true, depth))),
-            ),
-            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for argument in arguments.iter() {
-                    match argument {
-                        GenericArgument::Type(t) => todo.push((*t, true, depth)),
-                        GenericArgument::Size(s) => size(s, depth, true, &mut result),
-                    }
-                }
-            }
-            TypeKind::Box(t) => todo.push((*t, true, depth)),
-            TypeKind::Function(f) => {
-                todo.extend(f.parameters.iter().map(|p| (p.ty, true, depth + 1)));
-                todo.push((f.result, true, depth + 1));
-            }
-            _ => (),
-        }
-    }
-    result.into_iter().collect()
-}
-/// The owner's view of a reference: its own body binders, or its signature
-/// binder at the owner's depth when the store is signature-owned.
-fn owned<P: Copy>(
-    reference: BinderRef<P>,
-    depth: u32,
-    owner_binder: Option<SiteRef>,
-) -> Option<BinderRef<P>> {
-    match reference {
-        BinderRef::Body { .. } => Some(reference),
-        BinderRef::Bound {
-            depth: bound,
-            parameter,
-        } if bound == depth => owner_binder.map(|scope| BinderRef::Body { scope, parameter }),
-        BinderRef::Bound { .. } => None,
-    }
 }
