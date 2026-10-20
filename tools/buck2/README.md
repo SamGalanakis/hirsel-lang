@@ -620,7 +620,8 @@ the largest freshly measured native sibling, explicitly recorded as a fallback.
 Other binaries without a row retain the 1 CPU / 2 GiB conservative default.
 
 The process data/address-space guard (HIRSEL_MEMORY_LIMIT) normally uses
-that kill line. guard-stops.json records allocation limits including unused
+that kill line, with a 1 GiB guard floor retained independently of PSS.
+guard-stops.json records allocation limits including unused
 thread stacks, which can far exceed resident PSS. Those now raise only the
 guard limit (TEST_GUARD_LIMITS), independently from the reservation. Completed
 memory-kill retries are sized from measured peaks, without preserving the
@@ -696,7 +697,10 @@ The compile generator joins exported Buck2 commands to dispatches by action
 digest and start time, then to worker CPU and scheduler PSS measurements by
 operation. Only uniquely joined successful executions inside the explicit
 measurement window count. Both first-party and third-party compiles get
-per-target dev/release requests. Missing or ambiguous matches stay visible.
+per-target dev/release requests. A profile with no fresh executions inherits
+the measured sibling profile's memory before using the generic default;
+its CPU request remains one until measured in that profile. Missing or
+ambiguous matches stay visible.
 Decode retained event logs with event_logs.commands and copy existing worker
 logs and scheduler traces; do not launch a workspace build to collect data.
 Run action_sizes_from_log.py with --commands, --pss, --usage, --since and

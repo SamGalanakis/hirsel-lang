@@ -24,7 +24,7 @@ at most two. One CPU may burst to two; short parallel bursts do not establish a
 need for a multi-CPU reservation. No full-run exemption: shard the work instead.
 
 Memory: reserve the largest enforced PSS peak times 1.2, rounded to 64 MiB,
-with a 128 MiB floor. Guard-stop floors still protect virtual-memory limits;
+with a 128 MiB floor. Separate guard limits still protect virtual-memory allocation;
 the pool's kill threshold (twice the reservation) is not a sizing discount.
 Unobserved binaries retain their previous evidence rather than being guessed.
 """
@@ -72,6 +72,7 @@ def runs(paths, since=0, until=float("inf")):
     """Finished pool test runs by binary, and each run's binary by operation."""
     found = defaultdict(list)
     operations = {}
+    seen = set()
     for path in paths:
         with Path(path).open() as source:
             for line in source:
@@ -88,6 +89,10 @@ def runs(paths, since=0, until=float("inf")):
                 operations[row.get("op")] = name
                 if row.get("event") == "start" or not row.get("wall_ms", "-").isdigit():
                     continue
+                key = (row.get("op"), int(fields[0]), row["wall_ms"])
+                if key in seen:
+                    continue
+                seen.add(key)
                 found[name].append(dict(
                     end=int(fields[0]),
                     wall=int(row["wall_ms"]) / 1000,
@@ -147,7 +152,7 @@ def stopped_row(floors, cpu):
 
 
 def escalation_floors(paths, operations):
-    """Scheduler memory kills, including the actual reservation of their retries."""
+    """Unresolved memory kills retain a floor; completed retries use actual PSS."""
     attempts = defaultdict(list)
     for path in paths:
         with Path(path).open() as source:

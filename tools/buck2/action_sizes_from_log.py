@@ -24,12 +24,6 @@ import json
 import math
 from pathlib import Path
 
-import event_logs
-
-ROOT = Path(__file__).resolve().parents[2]
-BUCK2 = ROOT / '.buck2/bin/buck2'
-
-
 def usage(paths):
     records = {}
     for path in paths:
@@ -84,7 +78,7 @@ def peak(row):
 
 # A one-CPU request may burst to two CPUs.
 SHARE_CORES = 1.6
-MAX_CPUS = 4
+MAX_CPUS = 2
 
 # The compiles that ask for the pool's fast workers (`cpu_class=fast`): the
 # serial chain of an edit.
@@ -130,15 +124,15 @@ CPU_CLASSES = {
 CALIBRATED_CPUS = {"dev": {}, "release": {}}
 
 
-def cpu_request(p95_cores):
-    if p95_cores <= SHARE_CORES:
+def cpu_request(mean_cores):
+    if mean_cores <= SHARE_CORES:
         return 1
     return 2
 
 
-def compile_cpus(profile, target, p95_cores):
+def compile_cpus(profile, target, mean_cores):
     calibrated = CALIBRATED_CPUS[profile].get(target)
-    return calibrated["cpu_count"] if calibrated else cpu_request(p95_cores)
+    return calibrated["cpu_count"] if calibrated else cpu_request(mean_cores)
 
 
 def sizes(matched):
@@ -158,7 +152,8 @@ def sizes(matched):
         peaks = [peak(row) for _, row in samples]
         p95 = percentile(cores, .95) if len(cores) >= 20 else max(cores)
         p99 = percentile(peaks, .99) if len(peaks) >= 20 else max(peaks)
-        mean = sum(int(r['cpu_usec']) / 1e6 for _, r in samples) / sum(int(r['wall_ms']) / 1000 for _, r in samples)
+        wall = sum(int(r['wall_ms']) / 1000 for _, r in samples)
+        mean = sum(int(r['cpu_usec']) / 1e6 for _, r in samples) / wall if wall >= 1 else 1.0
         cpus = compile_cpus(profile, target, mean)
         need = max(int(row.get('pss_peak_bytes', peak(row))) for _, row in samples) * 1.2
         memory_kb = max(131072, math.ceil(need / (64 * 1024**2)) * 64 * 1024)
@@ -213,14 +208,13 @@ def measured_commands(commands, traces, records, since, until):
 
 
 def special_requests(traces, paths, since, until):
-    identities, peaks = {}, {}
+    identities = {}
     for path in traces:
         with path.open() as source:
             for line in source:
                 e = json.loads(line)
                 if e.get('event') == 'usage' and since <= e.get('end_s', 0) < until and e.get('sampled') and e.get('outcome') == 'COMPLETED' and 'repo:hirsel-lang|' in e.get('identity', ''):
                     identities[e['operation']] = e
-                    peaks[e['operation']] = e.get('peak_memory_kb', 0)
     groups = defaultdict(list)
     seen = set()
     for path in paths:

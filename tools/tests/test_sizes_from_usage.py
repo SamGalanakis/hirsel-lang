@@ -115,6 +115,18 @@ class NativeSizes(unittest.TestCase):
         parallel = [dict(cpu=3.5, wall=1, requested_cpu=4, requested_kb=524288, end=1)]
         self.assertEqual(sizes.size('gate-agree-full', parallel, [100000], [])['cpu_count'], 2)
 
+    def test_memory_uses_samples_at_the_new_cpu_count_when_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / 'trace.jsonl'
+            trace.write_text('\n'.join(json.dumps(e) for e in [
+                dict(event='usage', operation='one', sampled=True, effective_cpu=1, peak_memory_kb=100000),
+                dict(event='usage', operation='four', sampled=True, effective_cpu=4, peak_memory_kb=1000000),
+            ]))
+            operations = {'one': 'binary', 'four': 'binary'}
+            self.assertEqual(sizes.pss_peaks([trace], operations, {'binary': 1})['binary'], [100000])
+            # With no matching CPU evidence, keep the largest available peak.
+            self.assertEqual(sizes.pss_peaks([trace], {'four': 'binary'}, {'binary': 1})['binary'], [1000000])
+
     def test_an_unfinished_memory_kill_keeps_a_safe_floor(self):
         with tempfile.TemporaryDirectory() as directory:
             trace = Path(directory) / 'trace.jsonl'

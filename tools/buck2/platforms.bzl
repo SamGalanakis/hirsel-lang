@@ -64,7 +64,7 @@ def test_request(binary):
 def test_memory_limit(binary, memory_kb):
     # The data/address-space guard includes unused thread stacks; it is not
     # the process group's enforced PSS, which alone sets the reservation.
-    return max(2 * memory_kb, TEST_GUARD_LIMITS.get(binary, 0))
+    return max(1048576, 2 * memory_kb, TEST_GUARD_LIMITS.get(binary, 0))
 
 def test_executor(cpu, memory_kb, cpu_class):
     """A pool test run's executor: Buck2 runs a test with its own executor, not its platform's."""
@@ -113,7 +113,11 @@ def pool_budget_name(cpu, memory_kb, cpu_class = ""):
 
 def compile_request(profile, name):
     """A compile's `[cpu, memory_kb, cpu_class]` in `profile` (dev or release)."""
-    cpu, memory_kb = COMPILE_REQUESTS[profile].get(name, DEFAULT_REQUEST)
+    # If this profile has not run recently, use the other profile's measured
+    # memory rather than dropping a known large crate to the generic floor.
+    # CPU parallelism must be established in this profile; a fallback gets one.
+    other = "release" if profile == "dev" else "dev"
+    cpu, memory_kb = COMPILE_REQUESTS[profile].get(name, [1, COMPILE_REQUESTS[other].get(name, DEFAULT_REQUEST)[1]])
     cpu_class = COMPILE_CLASSES[profile].get(name, "")
     if PROBE_CPUS and cpu_class:
         cpu, memory_kb = PROBE_CPUS, max(memory_kb, PROBE_MEMORY_KB)

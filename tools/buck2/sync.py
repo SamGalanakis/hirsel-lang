@@ -223,6 +223,7 @@ def seeded(source_dir: pathlib.Path, crate_root: pathlib.Path) -> bool:
 # 173-188 s per shard on the pool, and in six shards at most 86 s. The gate
 # keeps every test target near two minutes.
 SHARDED = [
+    "hirsel-cli-test-cli",
     "hirsel-driver-test-it",
     "hirsel-driver-test-it-stdlib",
     "hirsel-pipeline-tests-test-front",
@@ -979,6 +980,13 @@ def execution_sizes() -> str:
         for target, cpu_class in CPU_CLASSES[profile].items():
             cpu, memory = requests[profile].get(target, [1, 262144])
             budgets.add((cpu, memory, cpu_class))
+    # A profile with no fresh execution inherits the measured sibling's
+    # request in platforms.bzl. Register its CPU class combination too.
+    for profile in ("dev", "release"):
+        other = "release" if profile == "dev" else "dev"
+        for target in requests[other].keys() - requests[profile].keys():
+            memory = requests[other][target][1]
+            budgets.add((1, memory, CPU_CLASSES[profile].get(target, "")))
     return (HEADER + "# Requests derived from action-sizes.json; evidence and sizing policy in README.md.\n"
             + "POOL_BUDGETS = " + starlark([list(b) for b in sorted(budgets)]) + "\n\n"
             + "SPECIAL_REQUESTS = " + starlark({name: [r["cpu_count"], r["memory_kb"], "fast" if name == "precheck" else ""] for name, r in special.items()}) + "\n\n"

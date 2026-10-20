@@ -117,7 +117,7 @@ def stages(stage, tier):
 
     def query(expression):
         return subprocess.run([*buck2, 'uquery', *config, expression], cwd=TREE, capture_output=True,
-                              text=True).stdout.split()
+                              text=True, check=True).stdout.split()
     tests = query('(kind("_rust_test", //...) + attrfilter(labels, doctest, //...)) - attrfilter(labels, gate, //...)')
     libtests = query('kind("_rust_test", //...) - attrfilter(labels, gate, //...)')
 
