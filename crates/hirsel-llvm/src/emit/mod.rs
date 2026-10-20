@@ -18,8 +18,8 @@ use hirsel_lir::abi_types::{
 };
 use hirsel_lir::emission::{
     EmitInputs, IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, Manifested, OptLevel, PrefixWord,
-    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, check_receipt, descriptor_name,
-    function_thunk_name, register_result, scalar_shape, site_code, slice_storage, symbol_name,
+    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, descriptor_name, function_thunk_name,
+    register_result, scalar_shape, site_code, slice_storage, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -294,10 +294,13 @@ fn lower<T>(
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested), CodegenError> {
     check_loaded()?;
+    let digests = hirsel_lir::emission::InputDigests::of(inputs);
     for unit in units {
-        check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
-            definition: unit.unit().header.definition.clone(),
-            problem,
+        hirsel_lir::emission::check_receipt_against(unit, inputs, &digests).map_err(|problem| {
+            CodegenError::Receipt {
+                definition: unit.unit().header.definition.clone(),
+                problem,
+            }
         })?;
     }
     if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {

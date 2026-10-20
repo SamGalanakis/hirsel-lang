@@ -13,8 +13,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use hirsel_lir::abi::abi_digest;
 use hirsel_lir::abi_types::{CallableShape, FnAbi, PhysicalType, ScalarExtension};
 use hirsel_lir::emission::{
-    EmitInputs, Manifested, OptLevel, artifact, check_receipt, function_thunk_name,
-    register_result, symbol_name,
+    EmitInputs, Manifested, OptLevel, artifact, function_thunk_name, register_result, symbol_name,
 };
 use hirsel_lir::ir::UnitOrigin;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, ScalarKind, TargetSpec};
@@ -246,10 +245,13 @@ pub(crate) fn emit(
     clif: bool,
     sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
+    let digests = hirsel_lir::emission::InputDigests::of(inputs);
     for unit in units {
-        check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
-            definition: unit.unit().header.definition.clone(),
-            problem,
+        hirsel_lir::emission::check_receipt_against(unit, inputs, &digests).map_err(|problem| {
+            CodegenError::Receipt {
+                definition: unit.unit().header.definition.clone(),
+                problem,
+            }
         })?;
     }
     if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {

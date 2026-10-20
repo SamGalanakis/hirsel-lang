@@ -302,6 +302,33 @@ pub fn register_result(layouts: &LayoutTable, abi: &FnAbi) -> Option<ScalarKind>
 /// other value means the unit was validated against something else. The error is the
 /// problem, for the unit's definition.
 pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Result<(), String> {
+    check_receipt_against(unit, inputs, &InputDigests::of(inputs))
+}
+
+/// The digests of an emission's inputs that every unit's receipt must name: computed
+/// once per emission rather than once per unit.
+pub struct InputDigests {
+    target: ContentHash,
+    layouts: ContentHash,
+    manifest: ContentHash,
+}
+
+impl InputDigests {
+    pub fn of(inputs: &EmitInputs<'_>) -> Self {
+        Self {
+            target: inputs.target.digest(),
+            layouts: inputs.layouts.digest(),
+            manifest: crate::snapshot::digest("manifest", inputs.manifest),
+        }
+    }
+}
+
+/// `check_receipt` given `InputDigests::of(inputs)`.
+pub fn check_receipt_against(
+    unit: &ValidatedUnit<Ready>,
+    inputs: &EmitInputs<'_>,
+    digests: &InputDigests,
+) -> Result<(), String> {
     let raw = unit.receipt().raw();
     let header = &unit.unit().header;
     let reject = |problem: &str| Err(problem.to_owned());
@@ -317,15 +344,15 @@ pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Re
     if raw.validator_version != crate::VALIDATOR_VERSION {
         return reject("the receipt is from another validator version");
     }
-    let target = inputs.target.digest();
+    let target = digests.target;
     if raw.target != target || header.target != target || inputs.layouts.target != target {
         return reject("the receipt names another target");
     }
-    let layouts = inputs.layouts.digest();
+    let layouts = digests.layouts;
     if raw.layouts != layouts || header.layouts != layouts {
         return reject("the receipt names another layout table");
     }
-    if raw.manifest != crate::snapshot::digest("manifest", inputs.manifest) {
+    if raw.manifest != digests.manifest {
         return reject("the receipt names another operation manifest");
     }
     if raw.input != *inputs.input || header.input != *inputs.input {
