@@ -1,0 +1,205 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649, src/log/slog/json_handler_test.go:111-141, TestAppendJSONValue (15 rows).
+pub fn main() -> Result[(), GrantError] uses {} {
+  // control string
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Text("hello\r\n\t\u{7}"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"hello\\r\\n\\t\\u0007\"}\n",
+    TextInvariant()
+  )
+  // quotes
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Text("\"[{escape}]\""))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"\\\"[{escape}]\\\"\"}\n",
+    TextInvariant()
+  )
+  // HTML
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Text("<escapeHTML&>"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"<escapeHTML&>\"}\n",
+    TextInvariant()
+  )
+  // Unicode and incomplete encoding
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Text(
+              std@1/utf8.decode_lossy(
+                b"\xce\xb8\xe2\x80\xa8\xe2\x80\xa9\xef\xbf\xbf\xf6"
+              )
+            )
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"θ\\u2028\\u2029￿�\"}\n",
+    TextInvariant()
+  )
+  // numeric string
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Text("-123"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"-123\"}\n",
+    TextInvariant()
+  )
+  // int64
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Int(-9200123456789123456i64))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":-9200123456789123456}\n",
+    TextInvariant()
+  )
+  // uint64
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Uint(9200123456789123456u64))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":9200123456789123456}\n",
+    TextInvariant()
+  )
+  // float fixed
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Float(-12.75))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":-12.75}\n",
+    TextInvariant()
+  )
+  // float exponent
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Float(1.23e-9))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":1.23e-9}\n",
+    TextInvariant()
+  )
+  // bool
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Bool(false))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":false}\n",
+    TextInvariant()
+  )
+  // duration
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Duration(time.Duration(nanoseconds: 60000000000))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":60000000000}\n",
+    TextInvariant()
+  )
+  // time
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Timestamp(time.Timestamp(unix_nanoseconds: 946782245000000000))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"2000-01-02T03:04:05Z\"}\n",
+    TextInvariant()
+  )
+  // jsonMarshaler
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Json(Array([Text("xyz")])))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":[\"xyz\"]}\n",
+    TextInvariant()
+  )
+  // jsonMarshalerError: marshaler takes precedence
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Json(Array([Text("pqr")])))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":[\"pqr\"]}\n",
+    TextInvariant()
+  )
+  // level
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Severity(Warn()))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"WARN\"}\n",
+    TextInvariant()
+  )
+  Ok(())
+}

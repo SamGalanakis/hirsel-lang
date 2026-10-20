@@ -465,8 +465,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             let expected = if fault {
                 b"".as_slice()
             } else {
-                b"{\"level\":\"info\",\"message\":\"a\\n\\\"b\",\"fields\":[],\"timestamp\":null}\n"
-                    .as_slice()
+                b"{\"level\":\"INFO\",\"msg\":\"a\\n\\\"b\"}\n".as_slice()
             };
             assert_eq!(state.stderr, expected);
         }

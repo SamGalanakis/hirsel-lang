@@ -5073,6 +5073,10 @@ conformance/SEM/SEM-3-json-roundtrip-run.hir
 conformance/SEM/SEM-3-json-slice-run.hir
 conformance/SEM/SEM-3-json-writer-error-run.hir
 conformance/SEM/SEM-3-log-run.hir
+conformance/SEM/SEM-3-log-slog-cases-run.hir
+conformance/SEM/SEM-3-log-slog-edges-run.hir
+conformance/SEM/SEM-3-log-slog-special-run.hir
+conformance/SEM/SEM-3-log-slog-values-run.hir
 conformance/SEM/SEM-3-markdown-api-run.hir
 conformance/SEM/SEM-3-markdown-commonmark-atx-headings-1-malformed-run.hir
 conformance/SEM/SEM-3-markdown-commonmark-atx-headings-1-run.hir

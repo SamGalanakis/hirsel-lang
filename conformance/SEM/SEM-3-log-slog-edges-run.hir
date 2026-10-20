@@ -1,0 +1,127 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649, additional boundary and failure checks for the port.
+pub fn main() -> Result[(), GrantError] uses {} {
+  // Unix epoch is present
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [],
+        timestamp: Some(time.Timestamp(unix_nanoseconds: 0))
+      )
+    ) == "{\"time\":\"1970-01-01T00:00:00Z\",\"level\":\"INFO\",\"msg\":\"m\"}\n",
+    TextInvariant()
+  )
+  // RFC3339 year range
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [],
+        timestamp: Some(time.Timestamp(unix_nanoseconds: 253402300800000000000i128))
+      )
+    ) == "{\"time\":\"!ERROR:time.Time year outside of range [0,9999]\",\"level\":\"INFO\",\"msg\":\"m\"}\n",
+    TextInvariant()
+  )
+  // empty named value stays
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(name: "", value: Text("")),
+          std@1/log.Field(name: "nil", value: Null())
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"\":\"\",\"nil\":null}\n",
+    TextInvariant()
+  )
+  // key and message escaping
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "\u{2028}\u{2029}",
+        fields: [std@1/log.Field(name: "\"\n", value: Text("\u{8}\u{c}"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"\\u2028\\u2029\",\"\\\"\\n\":\"\\u0008\\u000c\"}\n",
+    TextInvariant()
+  )
+  // duplicate reserved keys
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(name: "msg", value: Text("one")),
+          std@1/log.Field(name: "msg", value: Text("two"))
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"msg\":\"one\",\"msg\":\"two\"}\n",
+    TextInvariant()
+  )
+  // positive float exponent
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Float(1e21))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":1e+21}\n",
+    TextInvariant()
+  )
+  // negative zero
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Float(core@1/f64.from_bits(9223372036854775808u64))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":-0}\n",
+    TextInvariant()
+  )
+  // invalid JSON number
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Json(Number("oops")))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"!ERROR:json: invalid number\"}\n",
+    TextInvariant()
+  )
+  // nested JSON uses separator escaping
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(name: "v", value: Json(Array([Text("<\u{2028}\u{2029}>&")])))
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":[\"<\\u2028\\u2029>&\"]}\n",
+    TextInvariant()
+  )
+  Ok(())
+}

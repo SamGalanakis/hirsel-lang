@@ -91,7 +91,7 @@ pub fn note(
   }
   let mut entry_fields: List[log.Field] = []
   for (name, value) in fields {
-    list.push(mut entry_fields, log.Field(name: unique name, value: unique value))
+    list.push(mut entry_fields, log.Field(name: unique name, value: Text(unique value)))
   }
   let timestamp: Option[time.Timestamp] = match wall {
     Some(clock) => match clock.wall(clock) {

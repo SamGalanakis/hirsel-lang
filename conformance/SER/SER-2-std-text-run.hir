@@ -67,7 +67,7 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
     log.Entry(
       level: level,
       message: "disk low",
-      fields: [log.Field(name: "free", value: "5%")],
+      fields: [log.Field(name: "free", value: Text("5%"))],
       timestamp: Some(time.Timestamp(unix_nanoseconds: 1700000000000000000))
     )
   )?

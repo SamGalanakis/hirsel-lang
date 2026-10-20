@@ -1,11 +1,21 @@
-// Go log/slog JSON records/levels, using Hirsel's existing JSON escaping.
+// Adapted from Go log/slog at ebe2feefc400f813aefdc8a036e66d2619da6649:
+// src/log/slog/handler.go:272-325,478-493 (built-ins, ordered attrs, one write),
+// src/log/slog/json_handler.go:94-140,185-262 (values and JSON string escaping).
+// Copyright 2022 The Go Authors; BSD-3-Clause (third-party/NOTICES.md).
 @serializable
 pub type Level = Debug | Info | Warn | Error
+
+// Explicit kinds replace Go's reflection and json.Marshaler dispatch. Json
+// carries an application's already marshaled value; Failure carries error text.
+@serializable
+pub type Value = Null | Text(String) | Int(i64) | Uint(u64) | Float(f64) | Bool(bool) | Duration(
+  time.Duration
+) | Timestamp(time.Timestamp) | Json(json.Value) | Failure(String) | Severity(Level)
 
 @serializable
 pub type Field {
   name: String,
-  value: String,
+  value: Value,
 }
 
 @serializable
@@ -26,46 +36,158 @@ fn rank(level: Level) -> u8 uses {} {
   }
 }
 
-pub fn to_string(entry: Entry) -> String uses {} {
-  let level = match entry.level {
-    Debug() => "debug",
-    Info() => "info",
-    Warn() => "warn",
-    Error() => "error",
+fn level_text(level: Level) -> String uses {} {
+  match level {
+    Debug() => "DEBUG",
+    Info() => "INFO",
+    Warn() => "WARN",
+    Error() => "ERROR",
   }
-  let mut fields: List[json.Value] = []
+}
+
+// appendEscapedJSONString, without Go's invalid-UTF-8 branch: String is UTF-8.
+@preserves_unique(out)
+fn append_string(mut out: List[u8], value: String) -> () uses {} {
+  core@1/list.push(mut out, b'"')
+  let bytes = core@1/string.as_bytes(value)
+  let hex = b"0123456789abcdef"
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    let c = bytes[i]
+    if c == b'"' || c == b'\\' {
+      core@1/list.push(mut out, b'\\')
+      core@1/list.push(mut out, c)
+    } else if c == b'\n' {
+      text.append(mut out, "\\n")
+    } else if c == b'\r' {
+      text.append(mut out, "\\r")
+    } else if c == b'\t' {
+      text.append(mut out, "\\t")
+    } else if c < 32 {
+      text.append(mut out, "\\u00")
+      core@1/list.push(mut out, hex[core@1/int.widen(c >> 4)])
+      core@1/list.push(mut out, hex[core@1/int.widen(c & 15)])
+    } else if c == 226 && core@1/bytes.len(bytes) - i >= 3 && bytes[i + 1] == 128 && (bytes[i + 2] == 168 || bytes[i + 2] == 169) {
+      text.append(mut out, "\\u202")
+      core@1/list.push(
+        mut out,
+        if bytes[i + 2] == 168 {
+          b'8'
+        } else {
+          b'9'
+        }
+      )
+      i += 2
+    } else {
+      core@1/list.push(mut out, c)
+    }
+    i += 1
+  }
+  core@1/list.push(mut out, b'"')
+}
+
+@preserves_unique(out)
+fn append_time(mut out: List[u8], value: time.Timestamp) -> () uses {} {
+  match time.to_string(value) {
+    Ok(encoded) => append_string(mut out, encoded),
+    Error(_) => append_string(
+      mut out,
+      "!ERROR:time.Time year outside of range [0,9999]"
+    ),
+  }
+}
+
+@preserves_unique(out)
+fn append_float(mut out: List[u8], value: f64) -> () uses {} {
+  let encoded = f64.to_string(value)
+  if encoded == "NaN" {
+    append_string(mut out, "!ERROR:json: unsupported value: NaN")
+  } else if encoded == "inf" {
+    append_string(mut out, "!ERROR:json: unsupported value: +Inf")
+  } else if encoded == "-inf" {
+    append_string(mut out, "!ERROR:json: unsupported value: -Inf")
+  } else {
+    // Both printers use shortest round-trip digits and the [-6,21) fixed
+    // range; Go encoding/json additionally spells a positive exponent e+N.
+    let bytes = core@1/string.as_bytes(encoded)
+    let mut i: u64 = 0
+    while i < core@1/bytes.len(bytes) {
+      core@1/list.push(mut out, bytes[i])
+      if bytes[i] == b'e' && bytes[i + 1] != b'-' {
+        core@1/list.push(mut out, b'+')
+      }
+      i += 1
+    }
+  }
+}
+
+@preserves_unique(out)
+fn append_value(mut out: List[u8], value: Value) -> () uses {} {
+  match value {
+    Null() => text.append(mut out, "null"),
+    Text(s) => append_string(mut out, s),
+    Int(n) => text.append(mut out, i64.to_string(n)),
+    Uint(n) => text.append(mut out, u64.to_string(n)),
+    Float(n) => append_float(mut out, n),
+    Bool(b) => text.append(
+      mut out,
+      if b {
+        "true"
+      } else {
+        "false"
+      }
+    ),
+    Duration(d) => text.append(mut out, i128.to_string(d.nanoseconds)),
+    Timestamp(t) => append_time(mut out, t),
+    Failure(s) => append_string(mut out, s),
+    Severity(level) => append_string(mut out, level_text(level)),
+    Json(v) => {
+      // Serialize separately so an error cannot leave a partial value in the
+      // record. SetEscapeHTML(false), with Go's JSONP separator escaping.
+      match json.stringify(v) {
+        Ok(encoded) => {
+          let line = string.replace(encoded, "\u{2028}", "\\u2028")
+          text.append(mut out, string.replace(line, "\u{2029}", "\\u2029"))
+        },
+        Error(InvalidNumber()) => append_string(mut out, "!ERROR:json: invalid number"),
+        Error(_) => append_string(mut out, "!ERROR:json: nesting too deep"),
+      }
+    },
+  }
+}
+
+// time (when present), level, msg, then each attribute, preserving duplicates.
+// None represents Go's zero Record.Time; Unix epoch zero is a real timestamp.
+pub fn to_string(entry: Entry) -> String uses {} {
+  let mut out: List[u8] = []
+  text.append(mut out, "{")
+  if let Some(timestamp) = entry.timestamp {
+    text.append(mut out, "\"time\":")
+    append_time(mut out, timestamp)
+    text.append(mut out, ",")
+  }
+  text.append(mut out, "\"level\":")
+  append_string(mut out, level_text(entry.level))
+  text.append(mut out, ",\"msg\":")
+  append_string(mut out, entry.message)
   let mut i: u64 = 0
   while i < core@1/list.len(entry.fields) {
     let field = entry.fields[i]
-    let mut object: Map[String, json.Value] = core@1/map.empty()
-    core@1/map.insert(mut object, "name", Text(unique field.name))
-    core@1/map.insert(mut object, "value", Text(unique field.value))
-    core@1/list.push(mut fields, Object(take object))
+    // Only the completely empty Attr is omitted; empty names with a value stay.
+    let empty = match field.value {
+      Null() => field.name == "",
+      _ => false,
+    }
+    if !empty {
+      text.append(mut out, ",")
+      append_string(mut out, field.name)
+      text.append(mut out, ":")
+      append_value(mut out, field.value)
+    }
     i += 1
   }
-  let mut object: Map[String, json.Value] = core@1/map.empty()
-  core@1/map.insert(mut object, "level", Text(level))
-  core@1/map.insert(mut object, "message", Text(unique entry.message))
-  core@1/map.insert(mut object, "fields", Array(take fields))
-  let timestamp: json.Value = match entry.timestamp {
-    Some(timestamp) => Number(i128.to_string(timestamp.unix_nanoseconds)),
-    None() => Null(),
-  }
-  core@1/map.insert(mut object, "timestamp", take timestamp)
-  let value: json.Value = Object(take object)
-  let mut out: List[u8] = []
-  match json.stringify(value) {
-    Ok(encoded) => text.append(mut out, encoded),
-    Error(_) => core@1/failure.check(false, TextInvariant()),
-  }
-  text.append(mut out, "\n")
-  match text.finish(take out) {
-    Ok(s) => take s,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
+  text.append(mut out, "}\n")
+  text.finish_valid(take out)
 }
 
 pub fn write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError] {

@@ -1,0 +1,69 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649, src/log/slog/json_handler_test.go:154-170, TestJSONAppendAttrValueSpecial (4 rows).
+pub fn main() -> Result[(), GrantError] uses {} {
+  // NaN
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Float(core@1/f64.from_bits(9221120237041090560u64))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"!ERROR:json: unsupported value: NaN\"}\n",
+    TextInvariant()
+  )
+  // +Inf
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Float(core@1/f64.from_bits(9218868437227405312u64))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"!ERROR:json: unsupported value: +Inf\"}\n",
+    TextInvariant()
+  )
+  // -Inf
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [
+          std@1/log.Field(
+            name: "v",
+            value: Float(core@1/f64.from_bits(18442240474082181120u64))
+          )
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"!ERROR:json: unsupported value: -Inf\"}\n",
+    TextInvariant()
+  )
+  // io.EOF
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "m",
+        fields: [std@1/log.Field(name: "v", value: Failure("EOF"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"m\",\"v\":\"EOF\"}\n",
+    TextInvariant()
+  )
+  Ok(())
+}

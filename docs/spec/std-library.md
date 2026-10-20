@@ -1975,7 +1975,7 @@ to print help or errors. There is no registration, ambient Args access or exit.
 ## Explicit-sink structured logging
 
 `std@1/log` defines `Level = Debug | Info | Warn | Error`, ordered in that
-severity order, `Field { name: String, value: String }`, and
+severity order, `Field { name: String, value: Value }`, and
 `Entry { level: Level, message: String, fields: List[Field], timestamp:
 Option[time.Timestamp] }`.
 
@@ -1984,22 +1984,34 @@ fn log.to_string(entry: Entry) -> String uses {}
 fn log.write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError]
 ```
 
-`to_string` is pure source and emits one compact JSON object followed by exactly one
-LF, with keys in this order: level (lowercase name), message, fields (ordered
-objects with name/value strings), timestamp (integer Unix nanoseconds or null).
-The field list preserves duplicates and reserved names without shadowing core
-keys. Existing JSON escaping handles all strings, including embedded newlines.
+`Value` is `Null | Text(String) | Int(i64) | Uint(u64) | Float(f64) | Bool(bool) |
+Duration(time.Duration) | Timestamp(time.Timestamp) | Json(json.Value) |
+Failure(String) | Severity(Level)`. Applications pass structured JSON explicitly
+with `Json` and error text with `Failure`; there is no reflection or callback.
+
+`to_string` emits Go slog JSONHandler's compact JSON object plus one LF: `time`
+(RFC 3339 in UTC, when supplied), `level` (DEBUG/INFO/WARN/ERROR), `msg`, then
+flat field key/value attributes in list order. Duplicate keys, including built-in
+names, are preserved. Only a field with an empty name and `Null()` is omitted.
+`None()` omits time; Unix epoch zero remains a real timestamp. Strings use slog's
+escaping (including U+2028/U+2029) without HTML escaping. Numbers and booleans
+remain JSON scalars, durations are integer nanoseconds, timestamps use RFC 3339,
+and failures and severities are strings. Nonfinite floats and encoding failures
+become `!ERROR:` strings, leaving the rest of the record intact. Invalid JSON
+numbers and nesting use Hirsel's codec error descriptions.
+
 Timestamp is caller-supplied; no wall clock is read. Write filters below minimum
-before formatting, then calls err.print once with the complete record and
-propagates its error. There is no global logger, implicit sink, hidden clock or
-ambient level. Ordering/atomicity across tasks is not promised; callers needing
-ordering serialize through their explicit task/channel facilities.
+before formatting, calls err.print once with the complete record, and propagates
+its error. There is no global logger, implicit sink, hidden clock or ambient
+level. Ordering/atomicity across tasks is not promised; callers needing ordering
+serialize through their explicit task/channel facilities. The port and vector
+mapping are recorded in [the slog port notes](../../reports/log-slog-port.md).
 
 Recorded structured observations can be exported separately with
 `python3 tools/obs_export.py`; see [Separate OTLP export](determinism.md#separate-otlp-export).
 It preserves explicit trace IDs and units and maps Debug/Info/Warn/Error to OTLP
-5/9/13/17. Legacy `log.Entry` rendering and stderr errors keep their existing
-contract. Export is host tooling with its own endpoint and storage grants, not a
+5/9/13/17. `log.Entry` uses the slog JSON schema described above; stderr errors
+propagate. Export is host tooling with its own endpoint and storage grants, not a
 new library effect: neither `log.write` nor source replay contacts a collector.
 Untimed records remain logs without a source timestamp; spans/histograms require
 original timing evidence and an explicit original Unix/monotonic correlation.

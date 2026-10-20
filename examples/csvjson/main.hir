@@ -214,7 +214,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), Error] {
       let entry = std@1/log.Entry(
         level: Error(),
         message: "csvjson failed",
-        fields: [std@1/log.Field(name: "reason", value: describe(error))],
+        fields: [std@1/log.Field(name: "reason", value: Text(describe(error)))],
         timestamp: None()
       )
       if let Ok(sink) = io.stderr(rt) {

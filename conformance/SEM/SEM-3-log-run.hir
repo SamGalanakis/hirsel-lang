@@ -1,19 +1,19 @@
 // rule: SEM-3
 // expect: run
-// slog JSON escaping/record ideas: duplicate fields stay ordered and never shadow keys.
+// slog JSONHandler: duplicate attributes follow built-ins, in input order.
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let entry = std@1/log.Entry(
     level: Warn(),
     message: "a\n\"b\\c\t",
     fields: [
-      std@1/log.Field(name: "level", value: "é"),
-      std@1/log.Field(name: "level", value: "two")
+      std@1/log.Field(name: "level", value: Text("é")),
+      std@1/log.Field(name: "level", value: Text("two"))
     ],
     timestamp: None()
   )
   let encoded = std@1/log.to_string(entry)
   failure.check(
-    encoded == "{\"level\":\"warn\",\"message\":\"a\\n\\\"b\\\\c\\t\",\"fields\":[{\"name\":\"level\",\"value\":\"é\"},{\"name\":\"level\",\"value\":\"two\"}],\"timestamp\":null}\n",
+    encoded == "{\"level\":\"WARN\",\"msg\":\"a\\n\\\"b\\\\c\\t\",\"level\":\"é\",\"level\":\"two\"}\n",
     TextInvariant()
   )
   let timestamped = std@1/log.Entry(
@@ -23,7 +23,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     timestamp: Some(time.Timestamp(unix_nanoseconds: -1))
   )
   failure.check(
-    std@1/log.to_string(timestamped) == "{\"level\":\"info\",\"message\":\"ok\",\"fields\":[],\"timestamp\":-1}\n",
+    std@1/log.to_string(timestamped) == "{\"time\":\"1969-12-31T23:59:59.999999999Z\",\"level\":\"INFO\",\"msg\":\"ok\"}\n",
     TextInvariant()
   )
   let empty = std@1/log.Entry(
@@ -33,7 +33,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     timestamp: None()
   )
   failure.check(
-    std@1/log.to_string(empty) == "{\"level\":\"debug\",\"message\":\"\",\"fields\":[],\"timestamp\":null}\n",
+    std@1/log.to_string(empty) == "{\"level\":\"DEBUG\",\"msg\":\"\"}\n",
     TextInvariant()
   )
   let sink = io.stderr(rt)?

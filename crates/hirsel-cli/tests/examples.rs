@@ -1615,12 +1615,9 @@ fn csvjson_errors_are_one_escaped_structured_record() {
         .unwrap();
     assert_eq!(&output.stderr[split + 1..], b"error: Invalid\n");
     let record: serde_json::Value = serde_json::from_slice(&output.stderr[..split]).unwrap();
-    assert_eq!(record["level"], "error");
-    assert_eq!(record["message"], "csvjson failed");
-    assert_eq!(
-        record["fields"][0]["value"],
-        "invalid base64 field: bad\"\nx"
-    );
+    assert_eq!(record["level"], "ERROR");
+    assert_eq!(record["msg"], "csvjson failed");
+    assert_eq!(record["reason"], "invalid base64 field: bad\"\nx");
 }
 
 #[test]

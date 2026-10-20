@@ -1,0 +1,58 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649, src/testing/slogtest/slogtest.go:36-81 (4 cases).
+pub fn main() -> Result[(), GrantError] uses {} {
+  // built-ins
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "message",
+        fields: [],
+        timestamp: Some(time.Timestamp(unix_nanoseconds: 946782245000000000))
+      )
+    ) == "{\"time\":\"2000-01-02T03:04:05Z\",\"level\":\"INFO\",\"msg\":\"message\"}\n",
+    TextInvariant()
+  )
+  // attrs
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "message",
+        fields: [std@1/log.Field(name: "k", value: Text("v"))],
+        timestamp: Some(time.Timestamp(unix_nanoseconds: 946782245000000000))
+      )
+    ) == "{\"time\":\"2000-01-02T03:04:05Z\",\"level\":\"INFO\",\"msg\":\"message\",\"k\":\"v\"}\n",
+    TextInvariant()
+  )
+  // empty-attr
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "msg",
+        fields: [
+          std@1/log.Field(name: "a", value: Text("b")),
+          std@1/log.Field(name: "", value: Null()),
+          std@1/log.Field(name: "c", value: Text("d"))
+        ],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"msg\",\"a\":\"b\",\"c\":\"d\"}\n",
+    TextInvariant()
+  )
+  // zero-time
+  failure.check(
+    std@1/log.to_string(
+      std@1/log.Entry(
+        level: Info(),
+        message: "msg",
+        fields: [std@1/log.Field(name: "k", value: Text("v"))],
+        timestamp: None()
+      )
+    ) == "{\"level\":\"INFO\",\"msg\":\"msg\",\"k\":\"v\"}\n",
+    TextInvariant()
+  )
+  Ok(())
+}
