@@ -6,6 +6,7 @@ mod calls;
 mod comptime;
 mod contracts;
 mod formats;
+mod inject;
 mod intrinsics;
 mod iteration;
 mod literals;

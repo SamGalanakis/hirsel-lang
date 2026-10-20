@@ -1,0 +1,13 @@
+// rule: LANG-8
+// expect: accept
+// The site names the arm that carries the String.
+type CliError = Usage(String) | Code(u64)
+
+fn flag(text: String) -> Result[u64, String] {
+  Error(unique text)
+}
+
+fn run(text: String) -> Result[u64, CliError] {
+  let n = flag(text) ? Usage
+  Ok(n)
+}

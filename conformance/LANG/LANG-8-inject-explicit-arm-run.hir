@@ -1,0 +1,26 @@
+// rule: LANG-8
+// expect: run
+// `? Arm` naming the arm plain ? would select stays legal and means the same.
+type ParseError = Empty()
+
+type AppError = Input(ParseError) | Limit(u64)
+
+fn parse() -> Result[u64, ParseError] {
+  Error(Empty())
+}
+
+fn named() -> Result[u64, AppError] {
+  let n = parse() ? Input
+  Ok(n)
+}
+
+fn plain() -> Result[u64, AppError] {
+  let n = parse()?
+  Ok(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, named() == plain())
+  test.check(t, plain() == Error(Input(Empty())))
+  Ok(())
+}

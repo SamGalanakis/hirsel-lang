@@ -1,0 +1,17 @@
+// rule: LANG-8
+// expect: accept
+// The two-field arm is built by hand.
+type RowError = Bad()
+
+type ImportError = Row(u64, RowError)
+
+fn row() -> Result[u64, RowError] {
+  Error(Bad())
+}
+
+fn import() -> Result[u64, ImportError] {
+  match row() {
+    Ok(n) => Ok(n),
+    Error(e) => Error(Row(0, e)),
+  }
+}

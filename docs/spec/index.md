@@ -155,7 +155,7 @@ function bodies are [CT-5](compile-time.md#ct-5-generation), and conditional let
   labels, qualified variant names, overloading including per-variant overload sets, and a
   test sublanguage.
 - Pipe operators, methods as chaining, an implicit `it`, and `using`-style field import.
-- Textual macro expansion, type classes, implicit conversions, exceptions, universal
+- Textual macro expansion, type classes, implicit conversions (beyond LANG-8's `?` arm injection), exceptions, universal
   equality and literal defaulting; compile-time reflection on function bodies or source
   text. No part of a signature is inferred from an implementation body.
 - Local recursion, polymorphic recursion, closure-owned mutable state, capture of

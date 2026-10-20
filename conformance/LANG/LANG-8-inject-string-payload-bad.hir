@@ -1,0 +1,14 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 12
+// twin: LANG-8-inject-string-payload-ok.hir
+// String names no error domain, so plain ? never injects it, even into the one String arm.
+type CliError = Usage(String) | Code(u64)
+
+fn flag(text: String) -> Result[u64, String] {
+  Error(unique text)
+}
+
+fn run(text: String) -> Result[u64, CliError] {
+  let n = flag(text)?
+  Ok(n)
+}

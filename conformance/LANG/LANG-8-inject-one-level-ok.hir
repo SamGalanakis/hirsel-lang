@@ -1,0 +1,22 @@
+// rule: LANG-8
+// expect: accept
+// Each level is a written step.
+type FileProblem = NotFound()
+
+type StoreError = Files(FileProblem)
+
+type StartError = Store(StoreError)
+
+fn missing() -> Result[u64, FileProblem] {
+  Error(NotFound())
+}
+
+fn store() -> Result[u64, StoreError] {
+  let n = missing()?
+  Ok(n)
+}
+
+fn start() -> Result[u64, StartError] {
+  let n = store()?
+  Ok(n)
+}

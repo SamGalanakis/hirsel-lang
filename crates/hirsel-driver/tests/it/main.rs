@@ -28,6 +28,7 @@ mod dependency_card;
 mod depth;
 mod dictionaries;
 mod erased_release_ir;
+mod error_injection;
 mod float_bits_ir;
 mod foreign;
 mod formatting;

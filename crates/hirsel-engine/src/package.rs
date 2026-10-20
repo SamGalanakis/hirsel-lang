@@ -253,6 +253,25 @@ impl LoadedProgram {
             // Publication needs each file's verdict, not its copy of the sources.
             outputs.insert(*file, (output.completion, output.diagnostics));
         }
+        // The root package's dead error arms (LANG-8) are warnings of the
+        // files declaring them, so a reused package keeps them with its verdict.
+        if !self.packages.iter().any(|p| p.reused && p.package == root)
+            && !crate::queries::has_errors(&diagnostics)
+            && completion == CheckCompletion::Complete
+        {
+            let files: Vec<_> = self
+                .files
+                .iter()
+                .filter(|(_, c)| c.package == root)
+                .map(|(file, _)| *file)
+                .collect();
+            for warning in self.engine.dead_arm_warnings(&files) {
+                if let Some((_, file_diagnostics)) = outputs.get_mut(&warning.primary.file) {
+                    file_diagnostics.push(warning.clone());
+                }
+                diagnostics.push(warning);
+            }
+        }
         // GEN-5 crosses package boundaries. Its program verdict is always
         // selected for this program, including when every dependency body is
         // already checked. Unchanged file checks share that program verdict.

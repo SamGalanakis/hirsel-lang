@@ -107,6 +107,23 @@ pub struct Plans {
     pub shapes: Vec<(ast::ExprId, ast::TypeExprId, TypeId)>,
     pub contracts: Vec<ContractPlan>,
     pub facts: Vec<FactPlan>,
+    /// Plain `?` sites with no arm for their error (LANG-8), each with the
+    /// arm its diagnostic proposes adding to the enclosing error's declaration.
+    pub arm_fixes: Vec<ArmFix>,
+}
+/// The "no arm" repair of a plain `?` (LANG-8): append `arm` to the variant
+/// declaration of `owner`. The checker sees no declaration source, so the
+/// engine places the edit and attaches it to the diagnostic at `site`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArmFix {
+    pub site: hirsel_span::Span,
+    pub owner: ast::DefPath,
+    /// The arm text, such as `File(FileError)`.
+    pub arm: String,
+    /// The owner as the diagnostic spells it.
+    pub target: String,
+    /// The owner is `@serializable`, so the arm changes its schema (SER-2, STORE-7).
+    pub serializable: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FactPlan {

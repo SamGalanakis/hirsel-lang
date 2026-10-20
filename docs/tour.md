@@ -284,8 +284,10 @@ Expected:
 ## Errors and variant mappers
 
 Expected failures are ordinary `Result[T, E]` values. `parse(text) ? Input`
-wraps its `ParseError` in `AppError.Input`, then propagates. Plain `?` performs
-no implicit conversion. A mapper may also be a named one-argument borrowed or
+wraps its `ParseError` in `AppError.Input`, then propagates. Plain `?` injects
+an error the same way when exactly one arm of the enclosing error type carries
+it, so `parse(text)?` selects `Input` too; with no such arm, or two, it is an
+error. A mapper may also be a named one-argument borrowed or
 taken function; it cannot require `mut`. Every early exit still cleans up owned
 resources. An entry returning `Error` exits 1 and prints nothing implicitly.
 

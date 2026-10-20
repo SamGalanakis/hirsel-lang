@@ -1,0 +1,37 @@
+// rule: LANG-8
+// expect: run
+// A closure literal is its own frame: its ? injects into the closure's error type,
+// and the outer ? injects that into the function's.
+type Inner = Missing()
+
+type Step = Read(Inner)
+
+type Outer = Stepped(Step)
+
+fn read(present: bool) -> Result[u64, Inner] {
+  if present {
+    Ok(5)
+  } else {
+    Error(Missing())
+  }
+}
+
+fn apply(f: fn() -> Result[u64, Step]) -> Result[u64, Step] uses {f} {
+  f()
+}
+
+fn run(present: bool) -> Result[u64, Outer] {
+  let n = apply(
+    fn() -> Result[u64, Step] uses {} {
+      let v = read(present)?
+      Ok(v + 1)
+    }
+  )?
+  Ok(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, run(true) == Ok(6))
+  test.check(t, run(false) == Error(Stepped(Read(Missing()))))
+  Ok(())
+}

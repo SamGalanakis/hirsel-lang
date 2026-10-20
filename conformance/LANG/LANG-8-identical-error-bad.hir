@@ -1,9 +1,9 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 15
-// Shows "plain e? requires identical error types."
+// Shows "plain e? propagates an identical error unchanged; otherwise it injects through an arm."
 type Inner = Missing()
 
-type Outer = Wrapped(Inner)
+type Outer = Wrapped(u32)
 
 @noalloc
 fn read(r: Result[u32, Inner]) -> Result[u32, Inner] {

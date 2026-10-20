@@ -1,0 +1,18 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 16
+// twin: LANG-8-inject-one-level-ok.hir
+// Injection is one level deep: StartError carries StoreError, which carries FileProblem.
+type FileProblem = NotFound()
+
+type StoreError = Files(FileProblem)
+
+type StartError = Store(StoreError)
+
+fn missing() -> Result[u64, FileProblem] {
+  Error(NotFound())
+}
+
+fn start() -> Result[u64, StartError] {
+  let n = missing()?
+  Ok(n)
+}

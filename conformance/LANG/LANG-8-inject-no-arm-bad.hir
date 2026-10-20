@@ -1,0 +1,22 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 20
+// twin: LANG-8-inject-no-arm-ok.hir
+// No arm of AppError carries ConfigError, so plain ? cannot inject it.
+type ParseError = Empty()
+
+type ConfigError = Missing()
+
+type AppError = Input(ParseError)
+
+fn config(present: bool) -> Result[u64, ConfigError] {
+  if present {
+    Ok(1)
+  } else {
+    Error(Missing())
+  }
+}
+
+fn run(present: bool) -> Result[u64, AppError] {
+  let n = config(present)?
+  Ok(n)
+}

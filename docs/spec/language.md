@@ -255,7 +255,7 @@ Types are algebraic data types with exhaustive `match`, generics with structural
 and explicit dictionaries ([generics](generics.md)), size parameters `[n: size]` (equality
 only), and `distinct` types, which inherit their base's bounds, are built as `Percent(v)`
 and read back with `let Percent(v) = p`. There is no overloading, no type class, no
-implicit conversion (including between error types), no textual macro expansion, no
+implicit conversion (between error types only [LANG-8](#lang-8-errors)'s `?` arm injection), no textual macro expansion, no
 exception, no `any` and no cast. Function bodies can be generated at compile time for headers written in source
 ([CT-5](compile-time.md#ct-5-generation)).
 
@@ -336,10 +336,24 @@ fn repeated_values() {
 ### LANG-8: Errors
 
 Expected failures use `Result` and `?`. `e ? C` maps the error through `C`, a path naming
-a one-argument variant or function, before propagating; a plain `e?` requires identical
-error types. A type is never a mapper: when a bare `C` also names a type, such as core's
-`Net`, `C` is the enclosing error type's variant ([LANG-4](#lang-4-names)). An error mapper may borrow or take its owned error; a mapper that requires
-`mut` access is LANG-8.
+a one-argument variant or function, before propagating. A type is never a mapper: when a
+bare `C` also names a type, such as core's `Net`, `C` is the enclosing error type's variant
+([LANG-4](#lang-4-names)). An error mapper may borrow or take its owned error; a mapper that
+requires `mut` access is LANG-8.
+
+A plain `e?` propagates an error identical to the enclosing function's or closure literal's
+error type unchanged. Otherwise it injects the error through an arm of the enclosing error
+type: the one arm of its variant with exactly one field whose type is identical to the
+error. Only a nominal error is injected: a named type, generic applications included, or a
+type parameter. A primitive (including `String`, `Bytes` and `Never`), tuple, function or
+builtin error is not, and needs `? C`. It is LANG-8 when no arm carries the error, when two
+or more do, or when the enclosing error type is not a variant visible here (a type
+parameter, or an opaque type of another package). Injection is one level deep: an arm
+whose payload could itself carry the error does not. The arm is selected once, when the
+definition is checked against its declared types; instantiating a generic definition never
+re-selects it, so in `Mixed[E] = Source(E) | Files(FileError)` a generic body injects an `E`
+through `Source` even where `E` is later `FileError`. A plain `?` and `? Arm` naming the arm
+it selects mean the same thing and produce the same definition hash.
 
 When `e?` has expected type `T` in a Result-returning function, `e` is checked with
 expected type `Result[T, F]` for a fresh `F`, then the existing error rules apply.
@@ -354,8 +368,22 @@ fn parse(text: String) -> Result[u64, ParseError] {
 }
 
 fn run(text: String) -> Result[u64, AppError] {
-  let n = parse(text) ? Input      // maps ParseError into AppError
+  let n = parse(text)?             // injects ParseError through Input
   Ok(n + 1)
+}
+```
+
+Two arms carrying one type are two roles, so plain `?` names neither:
+
+```hirsel
+type DbError = Open(store.StoreError) | Commit(store.StoreError)
+
+fn save(dir: Dir, take data: Bytes) -> Result[(), DbError] {
+  let mut s = store.open(dir, store.default_config()) ? Open   // plain ? is LANG-8 here
+  let mut t = store.begin(mut s)
+  txn.put(mut t, b"blob", take data)
+  store.commit(mut s, take t) ? Commit
+  Ok(())
 }
 ```
 

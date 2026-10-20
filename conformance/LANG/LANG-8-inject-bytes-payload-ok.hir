@@ -1,0 +1,9 @@
+// rule: LANG-8
+// expect: accept
+// The Bytes error goes through its named arm.
+type ConfigError = Utf8(Bytes) | Empty
+
+fn text(take data: Bytes) -> Result[String, ConfigError] {
+  let s = string.from_bytes(take data) ? Utf8
+  Ok(s)
+}

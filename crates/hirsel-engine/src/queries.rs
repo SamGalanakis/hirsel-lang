@@ -1,5 +1,7 @@
 use crate::layered::Layered;
 use crate::*;
+mod arm_fixes;
+mod dead_arms;
 mod definition_hash;
 pub use definition_hash::DefinitionHashes;
 mod dependencies;
@@ -1198,8 +1200,12 @@ impl QueryEngine {
             ),
             None => recorder.engine.missing(QueryKind::Check),
         };
-        let representations = recorder.representations;
+        let mut representations = recorder.representations;
         let reads = recorder.reads;
+        let mut result = result;
+        if let Ok(output) = &mut result {
+            self.place_arm_fixes(output, &mut representations);
+        }
         let cached = self.finish(key, reads, result, representations);
         if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
             self.checked.insert(definition.clone(), cached.clone());

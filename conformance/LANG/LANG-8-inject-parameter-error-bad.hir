@@ -1,0 +1,14 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 12
+// twin: LANG-8-inject-generic-run.hir
+// An enclosing error that is a bare type parameter has no arms: only identity applies.
+type FileProblem = NotFound()
+
+fn missing() -> Result[u64, FileProblem] {
+  Error(NotFound())
+}
+
+fn generic[E](read: bool) -> Result[u64, E] {
+  let n = missing()?
+  Ok(n)
+}

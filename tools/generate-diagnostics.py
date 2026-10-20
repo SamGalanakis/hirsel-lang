@@ -39,6 +39,47 @@ RELATED = {
             'borrows and Receiver parts from the payload.',
         ),
     ],
+    "LANG-8": [
+        (
+            'LANG-8',
+            'Plain ? with no arm',
+            'No arm of the enclosing error type has exactly one field whose type is the propagated '
+            'nominal error. The diagnostic offers three repairs; only the first is a mechanical '
+            'edit, and its JSON `fix` appends the arm to a declaration in the same file. When the '
+            'error type is serializable, a note says that the arm changes its stored and wire '
+            'schema (STORE-7, SER-2).',
+            '(a) Add the arm the fix proposes, such as `File(FileError)`; this changes the error '
+            'contract of every function returning the type, so prefer it only when callers should '
+            'see that failure. (b) Handle the error at the site with `match` or `let Ok(..) = .. '
+            'else { .. }`. (c) Map it explicitly with `? C`, a function from the propagated error '
+            'or an arm whose payload it is.',
+        ),
+        (
+            'LANG-8',
+            'Ambiguous plain ?',
+            'Two or more arms of the enclosing error type carry the propagated error. Each is a '
+            'different role, such as `Storage(StoreError)` and `Unknown(StoreError)`, so plain `?` '
+            'chooses none and there is no automatic fix.',
+            'Name the arm whose role fits this site: `? Storage` or `? Unknown`.',
+        ),
+        (
+            'LANG-8',
+            'Primitive errors',
+            'Plain `?` injects only nominal errors: a named type or a type parameter. A `String`, '
+            '`Bytes` or other primitive, tuple, function or builtin error names no error domain.',
+            'Name the arm that carries it, such as `? Utf8` for a `Bytes` error, or map it with a '
+            'function.',
+        ),
+        (
+            'LANG-8',
+            'Unconstructed error arms (warning)',
+            'No body of the package constructs this arm of one of its package-private error '
+            'types, so callers match a failure that never happens. `pub` types are not linted, '
+            'since other packages can construct their arms.',
+            'Remove the arm if nothing fails that way any more, updating the matches that name '
+            'it, or construct it where that failure occurs.',
+        ),
+    ],
     "MODE-2": [
         (
             'MEM-11',

@@ -1,0 +1,15 @@
+// rule: LANG-8
+// expect: accept
+// The site names the role: `? Open`.
+type StoreError = Corrupt()
+
+type DbError = Open(StoreError) | Commit(StoreError)
+
+fn open() -> Result[u64, StoreError] {
+  Error(Corrupt())
+}
+
+fn save() -> Result[u64, DbError] {
+  let handle = open() ? Open
+  Ok(handle)
+}

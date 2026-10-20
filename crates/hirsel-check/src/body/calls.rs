@@ -1448,18 +1448,15 @@ impl Checker<'_, '_> {
                     return Ok(self.error());
                 }
             }
-        } else {
-            if !self.compatible(error, expected) {
-                self.type_mismatch(
-                    const { RuleId::of("LANG-8") },
-                    self.span(id),
-                    "plain ? requires identical error types",
-                    error,
-                    expected,
-                );
-                return Ok(self.error());
-            }
+        } else if self.compatible(error, expected) {
+            // Identity comes first, so `type E = Wrap(E) | Leaf` propagates `E`.
             None
+        } else {
+            // The selected arm is exactly the constructor `? Arm` names.
+            match self.inject(id, value, error, expected)? {
+                Some(target) => Some(target),
+                None => return Ok(self.error()),
+            }
         };
         let (success_variant, error_variant) = self.result_tags(ty)?;
         let (_, propagated_error_variant) = self.result_tags(self.frames[frame].result.unwrap())?;

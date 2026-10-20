@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "opaque_error",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "owner.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": []
+}

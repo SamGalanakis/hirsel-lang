@@ -14,6 +14,7 @@ fn hex_digits_never_start_a_float_suffix() {
 mod contracts;
 mod cursors;
 mod hand;
+mod inject;
 mod properties;
 mod support;
 

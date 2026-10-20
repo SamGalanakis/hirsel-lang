@@ -1,0 +1,16 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 14
+// twin: LANG-8-inject-multi-field-ok.hir
+// An arm with two fields is never injectable.
+type RowError = Bad()
+
+type ImportError = Row(u64, RowError)
+
+fn row() -> Result[u64, RowError] {
+  Error(Bad())
+}
+
+fn import() -> Result[u64, ImportError] {
+  let n = row()?
+  Ok(n)
+}

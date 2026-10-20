@@ -1,0 +1,7 @@
+// rule: LANG-8
+// expect: accept
+// The owner injects into its own opaque error; the client propagates it unchanged.
+fn run() -> Result[u64, vendor.Failure] {
+  let n = vendor.fail()?
+  Ok(n)
+}

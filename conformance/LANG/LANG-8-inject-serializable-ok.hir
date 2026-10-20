@@ -1,0 +1,17 @@
+// rule: LANG-8
+// expect: accept
+// The arm the fix proposes, appended last so existing ordinals keep their meaning.
+@serializable
+type RateError = Unknown()
+
+@serializable
+type PriceError = UnknownSku(String) | Rate(RateError)
+
+fn lookup() -> Result[u64, RateError] {
+  Error(Unknown())
+}
+
+fn price() -> Result[u64, PriceError] {
+  let rate = lookup()?
+  Ok(rate)
+}

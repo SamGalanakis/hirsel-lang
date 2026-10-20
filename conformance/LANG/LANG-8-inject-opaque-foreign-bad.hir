@@ -1,0 +1,8 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 6
+// twin: LANG-8-inject-opaque-foreign-ok.hir
+// Another package's opaque error exposes no arms, so only identity applies.
+fn run() -> Result[u64, vendor.Failure] {
+  let n = vendor.cause()?
+  Ok(n)
+}

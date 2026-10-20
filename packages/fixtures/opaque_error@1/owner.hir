@@ -1,0 +1,13 @@
+pub type Cause = Broken()
+
+pub opaque type Failure: data uses {} = Wrapped(Cause)
+
+pub fn cause() -> Result[u64, Cause] {
+  Error(Broken())
+}
+
+// The owner sees Failure's arms, so plain ? injects through Wrapped.
+pub fn fail() -> Result[u64, Failure] {
+  let n = cause()?
+  Ok(n)
+}
