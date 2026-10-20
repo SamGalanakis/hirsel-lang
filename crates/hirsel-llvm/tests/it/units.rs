@@ -244,3 +244,35 @@ fn a_fragment_binds_into_a_program_that_numbers_its_layouts_apart() {
         }
     }
 }
+
+/// A resource drop body can be reached only by a descriptor in the separately
+/// emitted glue object. Its template must survive even with no call in this object.
+#[test]
+fn an_optimized_library_finalizer_remains_defined_for_separate_glue() {
+    use hirsel_lir::emission::symbol_name;
+    use hirsel_lir::ir::UnitOrigin;
+    let input = input();
+    for target in TargetSpec::executed() {
+        let program = support::ready::ready_program(&target);
+        let mut raw = program
+            .units
+            .iter()
+            .find(|u| u.unit().header.definition.0.name == "Res_drop")
+            .unwrap()
+            .unit()
+            .clone();
+        raw.header.origin = UnitOrigin::Library;
+        let name = symbol_name(&raw.header.definition, Some(&raw.header.instance));
+        let unit = support::seal(&program.table, &program.manifest, raw);
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            let object = emit_object(&[&unit], &inputs(&program, &input, opt)).unwrap();
+            let symbols =
+                hirsel_lir::object::ObjectFile::read(&target, object.bytes.clone()).unwrap();
+            assert!(
+                symbols.exports.contains(&name),
+                "{} {opt:?}: missing {name}",
+                target.triple
+            );
+        }
+    }
+}

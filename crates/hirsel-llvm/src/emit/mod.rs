@@ -423,6 +423,22 @@ fn lower<T>(
                     module.add_attribute(function, AttributeSlot::Function, Attribute::Cold);
                     module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
                 }
+                // A finalizer's entry is also called through a descriptor in
+                // the separate glue object. Retain it even if every local call
+                // inlines away. Its own receiver layout proves this dependency,
+                // so retention reads no unrelated program layouts or numbering.
+                if abi.parameters.first().is_some_and(|parameter| {
+                    inputs
+                        .layouts
+                        .layout(parameter.layout)
+                        .is_some_and(|layout| {
+                            layout.finalizer.as_ref().is_some_and(|finalizer| {
+                                finalizer.definition == unit.header.definition
+                            })
+                        })
+                }) {
+                    manifested.kept.insert(name.clone());
+                }
                 manifested.library.insert(name);
                 if abi.shape == CallableShape::Definition {
                     // A library operation can be a FunctionRef (integer Order
@@ -493,7 +509,7 @@ fn lower<T>(
             }
             emitter.emit()?;
         }
-        // A library copy a C callback names is kept for glue's thunk to call.
+        // A library finalizer or C callback entry is kept for glue to call.
         let kept: Vec<_> = manifested
             .kept
             .iter()
