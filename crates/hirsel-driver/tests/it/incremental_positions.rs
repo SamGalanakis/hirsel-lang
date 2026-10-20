@@ -446,7 +446,7 @@ fn inserting_an_item_above_keeps_the_other_items_syntax_ids_and_memos() {
 }
 
 #[test]
-fn a_cross_file_move_keeps_ids_and_memos_and_changes_only_the_anchor() {
+fn a_cross_file_move_keeps_ids_and_syntax_and_recomputes_only_the_moved_definition() {
     with_compiler_stack(|| {
         let a = "fn a() -> u8 { 1u8 }\n";
         let b = "fn b() -> u8 { let x = a()\n x }\n";
@@ -459,6 +459,7 @@ fn a_cross_file_move_keeps_ids_and_memos_and_changes_only_the_anchor() {
         let old = engine.parse_definition(&path("b")).unwrap().value;
         let (old_file, _) = engine.sources.anchor(old.anchor).unwrap();
         let counts = recomputes(&engine, "b");
+        let a_counts = recomputes(&engine, "a");
         let second = format!("fn c() {{}}\n{b}");
         let moved = [("one.hir", a), ("two.hir", second.as_str())];
         let warm = observe_files(&mut engine, &moved);
@@ -471,7 +472,10 @@ fn a_cross_file_move_keeps_ids_and_memos_and_changes_only_the_anchor() {
             Some("two.hir")
         );
         assert_eq!(base as usize, "fn c() {}\n".len());
-        assert_eq!(recomputes(&engine, "b"), counts);
+        // Its declaration candidates name their files (design §1b), so each
+        // of b's own queries recomputes once; a, which b reads, does not.
+        assert_eq!(recomputes(&engine, "b"), counts.map(|c| c + 1));
+        assert_eq!(recomputes(&engine, "a"), a_counts);
         let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
         assert_eq!(warm, observe_files(&mut fresh, &moved));
     });

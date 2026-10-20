@@ -72,7 +72,7 @@ HIRSEL_CACHE = 'none retained: fresh process, std precheck read, query cache pro
 RUST_COLD = 'cold: dependencies built, package artifacts and incremental state removed'
 RUST_WARM = 'warm: incremental cache of the unedited program retained'
 # Environment that would change what a run reads or caches.
-UNSET = ('HIRSEL_PRECHECK', 'HIRSEL_PACKAGE_CACHE', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL')
+UNSET = ('HIRSEL_PRECHECK', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL')
 
 
 def say(text):

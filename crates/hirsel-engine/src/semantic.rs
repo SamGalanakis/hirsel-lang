@@ -21,16 +21,14 @@ impl std::ops::Deref for ResolverSnapshot {
 pub struct CompilerState {
     pub materialization_environment: Option<QueryEnvironment>,
     pub(crate) materialization_limits: Option<hirsel_interp::Limits>,
-    pub(crate) constant_values:
-        crate::layered::Layered<DefPath, crate::comptime::EvaluatedConstant>,
-    pub(crate) representations:
-        crate::layered::Layered<DefPath, crate::representation::OwnerRecord>,
+    pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
+    pub(crate) representations: BTreeMap<DefPath, crate::representation::OwnerRecord>,
     pub mode_diagnostics: Vec<(Diagnostic, String)>,
     /// The frozen declaration index the engine publishes before resolution
     /// and signature normalization read it.
     pub(crate) declarations: Option<Arc<crate::snapshot::Declarations>>,
-    pub resolver_outputs: crate::layered::Layered<DefPath, ResolverSnapshot>,
-    pub signature_resolutions: crate::layered::Layered<DefPath, ResolverSnapshot>,
+    pub resolver_outputs: BTreeMap<DefPath, ResolverSnapshot>,
+    pub signature_resolutions: BTreeMap<DefPath, ResolverSnapshot>,
 }
 impl CompilerState {
     fn declarations(&self) -> Arc<crate::snapshot::Declarations> {

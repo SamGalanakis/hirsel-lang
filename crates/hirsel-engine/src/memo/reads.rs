@@ -43,6 +43,14 @@ impl PackageKey {
             package.name, package.version
         )))
     }
+    pub fn id(self) -> PackageId {
+        let spelling = self.0.as_str();
+        let (name, version) = spelling.rsplit_once('@').unwrap_or((spelling, ""));
+        PackageId {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
 }
 /// A module inside a package, by its dot-joined spelling (empty for the root).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -52,10 +60,20 @@ impl ModuleKey {
         Self(Symbol::intern(&modules.join(".")))
     }
 }
+/// Which lookup a read observed: the signature provider's, the resolver's
+/// manifest index, or whether a module head is exposed.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum LookupSource {
+    Provider,
+    Manifest,
+    Head,
+}
+
 /// One name lookup: the file context it ran in and the path it spelled.
 /// Negative lookups are reads too.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LookupKey {
+    pub source: LookupSource,
     pub package: PackageKey,
     pub module: ModuleKey,
     /// The package a path names explicitly, if any.
@@ -64,13 +82,39 @@ pub struct LookupKey {
     pub path: Symbol,
 }
 impl LookupKey {
-    pub fn of(context: &FileContext, qualifier: Option<&PackageId>, segments: &[String]) -> Self {
+    pub fn of(
+        source: LookupSource,
+        context: &FileContext,
+        qualifier: Option<&PackageId>,
+        segments: &[String],
+    ) -> Self {
         Self {
+            source,
             package: PackageKey::of(&context.package),
             module: ModuleKey::of(&context.modules),
             qualifier: qualifier.map(PackageKey::of),
             path: Symbol::intern(&segments.join(".")),
         }
+    }
+    /// The context the lookup ran in.
+    pub fn context(&self) -> FileContext {
+        FileContext {
+            package: self.package.id(),
+            modules: split(self.module.0.as_str()),
+        }
+    }
+    pub fn qualifier(&self) -> Option<PackageId> {
+        self.qualifier.map(PackageKey::id)
+    }
+    pub fn segments(&self) -> Vec<String> {
+        split(self.path.as_str())
+    }
+}
+fn split(dotted: &str) -> Vec<String> {
+    if dotted.is_empty() {
+        vec![]
+    } else {
+        dotted.split('.').map(str::to_owned).collect()
     }
 }
 
@@ -222,6 +266,7 @@ impl ReadKey {
             | ReadKey::DeclarationCandidates(d)
             | ReadKey::ValidationView(d) => path(out, d),
             ReadKey::Lookup(l) => {
+                out.push(l.source as u8);
                 text(out, l.package.0.as_str());
                 text(out, l.module.0.as_str());
                 match l.qualifier {
@@ -361,11 +406,32 @@ impl ReadsBuilder {
     pub fn merge(&mut self, reads: &Reads) {
         self.0.extend(reads.iter().copied());
     }
+    /// Merges another evaluation's recorded reads.
+    pub fn extend(&mut self, other: ReadsBuilder) {
+        self.0.extend(other.0);
+    }
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     pub fn finish(self) -> Result<Reads, Inconsistent> {
         Reads::from_vec(self.0)
+    }
+}
+
+impl serde::Serialize for Reads {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut bytes = vec![];
+        self.encode(&mut bytes);
+        s.serialize_bytes(&bytes)
+    }
+}
+impl<'de> serde::Deserialize<'de> for Reads {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let bytes: Vec<u8> = serde::Deserialize::deserialize(d)?;
+        let mut input = bytes.as_slice();
+        Reads::decode(&mut input)
+            .filter(|_| input.is_empty())
+            .ok_or_else(|| serde::de::Error::custom("invalid reads"))
     }
 }
 
@@ -429,6 +495,12 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
         ReadKind::DeclarationCandidates => ReadKey::DeclarationCandidates(take_def(input)?),
         ReadKind::ValidationView => ReadKey::ValidationView(take_def(input)?),
         ReadKind::Lookup => {
+            let source = match *take(input, 1)?.first()? {
+                0 => LookupSource::Provider,
+                1 => LookupSource::Manifest,
+                2 => LookupSource::Head,
+                _ => return None,
+            };
             let package = PackageKey(Symbol::intern(take_text(input)?));
             let module = ModuleKey(Symbol::intern(take_text(input)?));
             let qualifier = match *take(input, 1)?.first()? {
@@ -438,6 +510,7 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
             };
             let path = Symbol::intern(take_text(input)?);
             ReadKey::Lookup(LookupKey {
+                source,
                 package,
                 module,
                 qualifier,
@@ -514,7 +587,12 @@ mod tests {
             (ReadKey::Signature(def("a")), h("1")),
             (ReadKey::DeclarationCandidates(def("a")), h("2")),
             (
-                ReadKey::Lookup(LookupKey::of(&context, None, &["x".into(), "y".into()])),
+                ReadKey::Lookup(LookupKey::of(
+                    LookupSource::Manifest,
+                    &context,
+                    None,
+                    &["x".into(), "y".into()],
+                )),
                 h("3"),
             ),
             (
@@ -530,6 +608,17 @@ mod tests {
         let mut input = bytes.as_slice();
         assert_eq!(Reads::decode(&mut input), Some(reads.clone()));
         assert!(input.is_empty());
+        let ReadKey::Lookup(lookup) = reads
+            .iter()
+            .find(|(k, _)| k.kind() == ReadKind::Lookup)
+            .unwrap()
+            .0
+        else {
+            unreachable!()
+        };
+        assert_eq!(lookup.context(), context);
+        assert_eq!(lookup.segments(), vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(lookup.qualifier(), None);
     }
 
     #[test]

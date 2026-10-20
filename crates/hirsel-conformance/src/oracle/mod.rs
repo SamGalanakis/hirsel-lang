@@ -12,7 +12,7 @@ pub mod o5;
 pub mod switches;
 
 use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};
-use hirsel_engine::{CheckCompletion, PackageCache, Precheck, ToolError};
+use hirsel_engine::{CheckCompletion, Precheck, Prechecks, ToolError};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -145,10 +145,9 @@ impl std::str::FromStr for Limits {
     }
 }
 
-/// A cold run's storage: a fresh cache that reads only the toolchain's std
-/// precheck (the future std image) and holds nothing checked yet. Today's
-/// stand-in for `none@1`; sharing one across runs is today's `mem@1`.
-pub fn fresh_cache() -> PackageCache {
+/// A cold run's prechecks: only the toolchain's std precheck (the future std
+/// image); nothing else checked is shared between runs.
+pub fn fresh_prechecks() -> Prechecks {
     static PRECHECKS: std::sync::OnceLock<Vec<Arc<Precheck>>> = std::sync::OnceLock::new();
     let prechecks = PRECHECKS.get_or_init(|| {
         let path = std::env::var_os("HIRSEL_PRECHECK")
@@ -163,13 +162,13 @@ pub fn fresh_cache() -> PackageCache {
             .into_iter()
             .collect()
     });
-    PackageCache::prechecked(prechecks.clone())
+    Prechecks::of(prechecks.clone())
 }
 
 /// Compile `program` under `config` with `cache`, as `hirsel check --json`
 /// renders it, then export the entry's TIR and, with `native`, its Ready
 /// receipts and objects. Refuses before compiling when a switch is missing.
-pub fn produce(program: &Path, config: &Config, cache: &PackageCache) -> Result<Artifacts, Switch> {
+pub fn produce(program: &Path, config: &Config, cache: &Prechecks) -> Result<Artifacts, Switch> {
     switches::missing(config.switches())?;
     // Each missing switch's use site: the lane that lands it applies it here.
     Ok(hirsel_engine::with_compiler_stack(|| {
@@ -177,9 +176,9 @@ pub fn produce(program: &Path, config: &Config, cache: &PackageCache) -> Result<
     }))
 }
 
-fn artifacts(path: &Path, config: &Config, cache: &PackageCache) -> Artifacts {
+fn artifacts(path: &Path, config: &Config, cache: &Prechecks) -> Artifacts {
     let mut out = Artifacts::new();
-    let mut program = match hirsel_driver::load_program_source_with_cache(path, None, cache) {
+    let mut program = match hirsel_driver::load_program_source_with_prechecks(path, None, cache) {
         Ok(program) => program,
         Err(error) => {
             out.insert("diagnostics".into(), tool_error(&error).into_bytes());

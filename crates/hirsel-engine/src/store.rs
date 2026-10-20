@@ -176,11 +176,9 @@ impl MemStore {
             .map(|v| v.len() + std::mem::size_of::<EntryKey>())
             .sum()
     }
-    pub fn clear(&self) {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+    /// Empties the store, returning what it held.
+    pub fn take(&self) -> HashMap<EntryKey, Arc<[u8]>> {
+        std::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 impl ResultStore for MemStore {

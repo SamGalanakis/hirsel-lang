@@ -181,18 +181,16 @@ impl QueryEngine {
                     }
                 }
             }
-            // A generated body (CT-5) depends on what its generator executed.
-            if let Some(cache) = self.checked.get(path) {
-                dependencies.extend(cache.executed.bodies.keys().cloned());
-                dependencies.extend(cache.executed.signatures.keys().cloned());
-            }
-            if let Some(cache) = self.modes.get(path) {
-                dependencies.extend(cache.representations.keys().cloned());
-            }
-            if let Some(cache) = self.lowered.get(path) {
-                dependencies.extend(cache.representations.keys().cloned());
-                dependencies.extend(cache.executed.bodies.keys().cloned());
-                dependencies.extend(cache.executed.signatures.keys().cloned());
+            // A generated body (CT-5) depends on what its generator executed,
+            // and every body on the private representations it read.
+            let id = hirsel_syntax::DefId::intern(path);
+            let reads = [
+                self.checked.get(&id).map(|e| e.memo.reads.clone()),
+                self.modes.get(&id).map(|e| e.memo.reads.clone()),
+                self.lowered.get(&id).map(|e| e.memo.reads.clone()),
+            ];
+            for reads in reads.into_iter().flatten() {
+                dependencies.extend(executed_definitions(&reads));
             }
         }
         for ((constant, _), value) in &self.staged_values {
@@ -201,8 +199,7 @@ impl QueryEngine {
                 .get(constant)
                 .is_some_and(|c| c.owner == *path)
             {
-                dependencies.extend(value.executed.bodies.keys().cloned());
-                dependencies.extend(value.executed.signatures.keys().cloned());
+                dependencies.extend(executed_definitions(&value.executed));
             }
         }
         if let SignatureKind::Type(declaration) = &signature.value.kind {
@@ -301,4 +298,20 @@ impl QueryEngine {
         }
         Ok(content)
     }
+}
+
+/// The definitions a memo executed or whose private representation it read.
+fn executed_definitions(reads: &crate::memo::Reads) -> Vec<DefPath> {
+    reads
+        .iter()
+        .filter(|(read, _)| {
+            matches!(
+                read,
+                ReadKey::ExecutedBody(_)
+                    | ReadKey::ExecutedSignature(_)
+                    | ReadKey::Representation(_)
+            )
+        })
+        .map(|(read, _)| read.definition().unwrap().path().clone())
+        .collect()
 }

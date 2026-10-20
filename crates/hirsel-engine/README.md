@@ -14,12 +14,9 @@ only its owner's sites. Explicit build-input changes still require a new manifes
 revision. `work::read(Counter::ModuleDeclarationRows)` counts source fact composition for scaling
 tests. The core registry shares its immutable signature map across adapters.
 
-Query caches retain shared immutable nodes and outputs. A rooted signature query
-or cache-validity walk visits each retained dependency node once, replaying its
-lookup results, execution reads and signature fingerprints. Visitation ends with
-the query and supplies no validity evidence across edits. Provider reads share
-the output; public query calls return owned output snapshots. `work::read(Counter::CacheValidationRows)`
-counts actual node inspections for the shared-dependency regression.
+Query results are memos with typed reads (see "Memos and invalidation"). Provider
+reads share the output; public query calls return owned output snapshots.
+`work::read(Counter::CacheValidationRows)` counts deep verifications of marked memos.
 
 Syntax and positions are item-local (design rule 6). `parse_file` retains each
 item's `Arc<ItemSyntax>` when its DefPath, text hash and occurrence match an
@@ -438,10 +435,10 @@ substitutions and evaluated constant with its execution reads, decoded on first
 use. Native export reads these audit products instead of repeating H and modes;
 constant queries retain their original execution dependencies. Lowering replays
 the execution reads it adds to enclosing frames. Its key is the compiler
-identity, the package's checked-input revision and the compile-time limits. Only `PackageCache::shared`
-(the toolchain's `$HIRSEL_PRECHECK` or `hirsel-std.precheck` beside the
-executable) and `PackageCache::prechecked` caches adopt prechecks; disabled and
-other explicit caches check fresh. With a precheck adopted, `check` skips the
+identity, the package's checked-input revision and the compile-time limits. Loading
+adopts `Prechecks::toolchain()` (the toolchain's `$HIRSEL_PRECHECK` or
+`hirsel-std.precheck` beside the executable) by default, `Prechecks::of` an
+explicit set, and `Prechecks::none()` checks every package from source. With a precheck adopted, `check` skips the
 package's files, GEN-5's program graph covers only the other bodies (a
 prechecked package reaches nothing outside its closure, so it closes no cycle
 through them), `lower_to_tir`, `semantic_program`, source audits and constant
@@ -649,117 +646,45 @@ promises. Core Unicode views use their nominal declarations rather than collecti
 selector labels. Implementations requiring preservation or creation-envelope proofs
 currently reject explicitly as not yet provable.
 
-Checked dependency packages are immutable process-local artifacts shared across
-compiler threads. Their length-framed content key includes the exact selected
-package manifests, every source in the dependency closure, compiler/interface,
-spec and core revisions, and compile-time limits. Loading reads those inputs
-again; paths never establish validity. Engines reach artifacts only through
-shared package images (below): an image adopts an artifact once per placement,
-rebasing changed FileIds and diagnostic obligations with copy-on-write in a
-private transport engine, leaving the artifact unchanged. Mutable adapters and
-execution state stay engine-local. No cross-process encoding is implied.
-CT-5 syntax also retains its generated token sources and generation sites.
-Transport places those sources relative to the current manifest source, rebases
-their spans independently of the written header's FileId, and keeps the text
-in the package image for later engines.
+## Memos and invalidation
 
-An image validates every adopted receipt once, including negative lookups. An
-engine installs a package proof for a proven package at check time, and walks
-the receipts itself only for an open package. The proof holds only for the
-unchanged indexed source, environment, manifest and limit snapshot; any edit
-ends it. GEN-5 remains a program
-check; its verdict is retained only for unchanged indexed sources, environment,
-manifest and limits, so checking another file does not rebuild the same graph.
-Deterministic package rejections retain exact source diagnostics;
-operational failures and incomplete checks never publish artifacts. A versioned
-read of a selected package outside the declared closure uses ordinary checking.
-The default cache retains at most 32 revisions; `PackageCache` supplies explicit
-session storage and a disabled fresh-check oracle through
-`load_program_source_with_cache`.
-`HIRSEL_PACKAGE_CACHE=off` disables the default cache for tool reproductions and
-same-corpus performance comparisons.
+Every per-definition query result (signature, resolution, check, modes,
+lowering) is a memo (`queries/memos.rs`, `memo/`): its value, the adapter's
+reported detail, and typed `Reads`, a sorted set of `(ReadKey, observed value)`
+over signatures, failed signatures, lookups (provider, manifest index and
+module heads, negative ones included), private representations, executed
+bodies and signatures, cited text, the definition's own declaration candidates
+and the environment (design §1b). A memo's own content is its text: the item's
+text hash (headers' hashes for a signature) with its package's closure
+manifest.
 
-Clean dependency checks also publish when a client rejection withholds lowering.
-Such artifacts retain checked bodies and modes but still follow ordinary file
-checks until every body its role lowers at check time (all bodies for the program
-package, compile-time evaluating bodies for a dependency) has lowered without local
-errors. Reachable dependency bodies travel with the artifact their first client publishes. Cached
-rejections follow ordinary phase order so a client's prerequisite failure can
-still withhold a dependency's lowering diagnostic. A later accepted client
-performs the missing lowering and independent TIR validation before the cache
-can skip that dependency's file checks.
+The `MemoGraph` keeps each memo's record and the reverse index `ReadKey →
+subscribers`. Indexing a file diffs each affected definition's inputs (body,
+headers, candidates, anchors, name kind and visibility) and marks exactly the
+subscribers of every read that can have changed, plus the memos keyed on a
+definition whose text or anchors changed; a name appearing, disappearing or
+changing kind marks every lookup. Nothing else is touched. A memo with no mark
+is valid as it stands and stamped when read; a memo marked by a read is
+deep-verified by observing each read again, and recomputed only if one differs;
+a memo whose own text changed is recomputed. Counters record each mark by read
+kind (`--timings`, `invalidated by <read>`), and `memo_stats` the memos touched.
 
-`tests/it/package_cache.rs` proves cross-thread reuse with zero phase recomputations,
-byte-identical human/JSON diagnostics after FileId changes, relocation, immutable
-retained output, source/dependency/manifest edits, missing-source retry and budget
-invalidation. Its ignored measurements compare the whole corpus cold and warm
-and report fresh/reused empty-main timings with std@1.
-The std-check profile records phase costs, representative
-cold/warm timings, cache boundaries and the reproducible profiling example.
-The shared source-test fixture checks its `LoadedProgram` before returning an
-engine, allowing its callers in driver, RC and runtime tests to reuse std.
-Each selected dependency also gives its engine a publication handle for validated
-lowerings. A later `lower_to_tir` publishes that definition under the same closure
-and receipt checks, even after the `LoadedProgram` is discarded. The bounded cache
-accumulates immutable per-definition snapshots from concurrent engines; an image
-adopts new ones incrementally. Indexed source, environment, manifest or limit edits end
-the engine's publication authority. Compilation and snapshot transport never hold
-the shared publication lock.
-`tests/it/source_std_cache.rs` retains the full-gate real-std recomputation control.
+Executing or materializing anything merges its complete reads into every open
+evaluation frame, on hits too: a lowered body's memo reads, a constant's or
+staged value's execution reads, a generator's check. A constant whose recorded
+execution closure still observes the same values is reused.
 
-## Shared package images
+Compile-time dependency depth is logical height (`memo/depth.rs`): each
+constant, staged value and generator result keeps `DepthEvidence`, its height
+and the overflow table `first[m]`, composed from its requests in request order.
+A request at stack length n fails at its own site when n ≥ L =
+`min(call_depth, 32)`, else at `first[n + 1]` if any, whether the result was
+computed or reused, so the verdict and site equal a cache-free serial
+evaluation. Limit failures are operational and never cached.
 
-A program's dependency packages (std and any other selected package) are read,
-parsed, adopted and validated once per process into an immutable
-`PackageImage`; every fresh engine starts from it instead of re-parsing,
-deep-cloning and rebasing them.
-
-- **Package-scoped keys.** A dependency definition's query key (and its file's
-  parse entry) carries the manifest hash of that package's own dependency
-  closure, not the whole graph's. std's keys are therefore the same in every
-  program that selects the same std, and no environment rewrite happens on
-  adoption. The program package keys on the whole-graph environment as before.
-- **Image identity.** Compiler, interface, spec, core and limit inputs; each
-  dependency file's placement (FileId, path, context) and content digest; and,
-  per dependency package, its checked artifact's generation and the published
-  lowerings adopted. Program text never enters. Loading still reads and hashes
-  every file, so an edited std file selects a different image; paths never
-  establish validity.
-- **Build, once per identity.** A builder engine parses the dependency files
-  (from a parse-only image when one exists for the same placement and
-  contents), adopts the artifact and lowerings (rebasing FileIds once, for this
-  placement), validates each package once and freezes every cache map into
-  `Arc`'d maps. A package is *proven* when validation passed and its reads are
-  closed: no lookup, signature, execution or representation read leaves its
-  dependency closure except into core. A proven package installs its proof at
-  check time without a walk; an open package is still revalidated per engine.
-  New lowerings extend an image incrementally.
-- **Install and isolation.** Engine caches are `Layered` maps: a local overlay
-  over the image's immutable `Arc` base. Installing is O(1) per map, and only program-package files
-  are lexed and parsed. All engine writes, including retiring a dependency entry
-  after an in-engine edit, go to its overlay (tombstones), so no engine
-  observes another's mutations and an image never changes. Dropping an engine
-  releases only its overlay.
-- **Incremental indexing.** Indexing a file retires and rehashes only the
-  definitions it owned or now owns, so adding the program's files over an image
-  costs O(program), not O(program × dependency definitions).
-- **Keys.** With shared bases, dependency entries and their `DefPath` keys are
-  no longer cloned per engine; the remaining clones are proportional to the
-  program package, so no `DefPath` interner is introduced. Cache hits on
-  resolution, checking and modes share their outputs instead of copying them.
-- **TIR validation results.** Each distinct signature input is created (and
-  its signatures checked) once per process, by exact signature-map equality,
-  and records the lowered definitions V passed against it. A definition equal
-  to a passed one (`Arc::ptr_eq` or full `Definition` equality; no digest, since
-  `TypeId`'s Debug omits provenance) is not validated again at lowering or
-  native-input import. Any other input runs V in full. The validator is fixed
-  within a process, so its version needs no key.
-- **Measured** (agree shard 2/96, one thread, this host): a package-program
-  classification costs 51.6 ms on average against 39.0 ms standalone (before:
-  182.7 against 103.4 ms); shard 1/96 gives 57.5 against 44.2 (before: 170.4
-  against 108.3). The residual is the program's own checking, lowering and V,
-  GEN-5 over the dependency bodies the program selects, and execution of the
-  dependency code it calls.
+Dependency packages are checked in each engine unless a precheck covers them;
+cross-program reuse of checked results goes through the result store
+(`store.rs`: `none@1`, `mem@1`, `dir@1`, `sim@1`).
 
 Runtime archives have independent `RuntimeBuild` choices: `system_allocator`,
 `measurement` and `diagnostic`. `Toolchain::in_tree` selects the production

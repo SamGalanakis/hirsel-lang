@@ -188,7 +188,7 @@ impl Recorder<'_> {
         };
         for member in &group.members {
             if let Some(text) = self.engine.implementation_hash(member) {
-                self.representations.insert(member.clone(), text);
+                self.observed.representations.insert(member.clone(), text);
             }
         }
         let adapter = self

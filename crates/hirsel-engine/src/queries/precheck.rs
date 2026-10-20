@@ -40,7 +40,7 @@ pub(crate) struct PrecheckedNode {
 struct PrecheckedLowering {
     definition: Definition,
     dependencies: Vec<SignatureDependency>,
-    execution: ExecutionReads,
+    execution: crate::memo::Reads,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,9 +233,6 @@ impl QueryEngine {
         let value = self
             .prechecked_definition(path)?
             .and_then(|record| record.constant.clone());
-        if let Some(value) = &value {
-            self.inherit_execution(&value.executed);
-        }
         Ok(value)
     }
     /// The prechecked lowering of `path`, with the execution reads computing it
@@ -250,7 +247,7 @@ impl QueryEngine {
         let Some(lowering) = &record.lowering else {
             return Ok(None);
         };
-        self.inherit_execution(&lowering.execution);
+        self.merge_execution(&lowering.execution);
         let adopted = self.prechecks.get_mut(&path.0.package).unwrap();
         let value = match adopted.lowered.get(path) {
             Some(definition) => definition.clone(),
@@ -294,12 +291,14 @@ impl QueryEngine {
             None
         };
         let lowering = if executable {
-            self.execution_stack.push(ExecutionReads::default());
+            self.execution_stack.push(ReadsBuilder::new());
             let lowered = self.lower_to_tir(path);
             let execution = self
                 .execution_stack
                 .pop()
-                .expect("precheck execution frame");
+                .expect("precheck execution frame")
+                .finish()
+                .map_err(|_| QueryError::NotImplemented)?;
             let Ok(lowered) = lowered else {
                 return Ok(None);
             };
@@ -527,5 +526,74 @@ impl std::ops::Deref for PrecheckedNodeRef {
     type Target = PrecheckedNode;
     fn deref(&self) -> &PrecheckedNode {
         &self.0.node
+    }
+}
+
+/// Membership in a package's closure, where core is always inside.
+fn inside(closure: &BTreeSet<PackageId>) -> impl Fn(&PackageId) -> bool {
+    let core = hirsel_syntax::DefPath::core("Result").0.package;
+    move |p: &PackageId| closure.contains(p) || *p == core
+}
+
+/// Every read names only packages `inside` accepts.
+fn reads_closed(reads: &crate::memo::Reads, inside: &impl Fn(&PackageId) -> bool) -> bool {
+    reads.iter().all(|(read, _)| match read {
+        ReadKey::Lookup(l) => {
+            inside(&l.package.id()) && l.qualifier.is_none_or(|q| inside(&q.id()))
+        }
+        read => read.package().is_none_or(|p| inside(&p.id())),
+    })
+}
+
+impl QueryEngine {
+    /// No retained query of `package` reads outside its closure (or core).
+    fn package_closed(&self, package: &PackageId, closure: &BTreeSet<PackageId>) -> bool {
+        let inside = inside(closure);
+        macro_rules! closed {
+            ($field:ident) => {
+                self.$field
+                    .values()
+                    .filter(|e| &e.memo.key.def.path().0.package == package)
+                    .all(|e| reads_closed(e.reads(), &inside))
+            };
+        }
+        let state = self.adapters.compiler_state.as_ref().unwrap().borrow();
+        closed!(signatures)
+            && closed!(resolutions)
+            && closed!(checked)
+            && closed!(modes)
+            && closed!(lowered)
+            && state
+                .constant_values
+                .iter()
+                .filter(|(p, _)| &p.0.package == package)
+                .all(|(_, value)| reads_closed(&value.executed, &inside))
+    }
+    /// Release the checked, mode and lowered bodies of `paths` and the TIR V
+    /// remembers passing for them; a later read computes them again. Whether
+    /// each released query read only inside `closure` (or core).
+    fn release_bodies(&mut self, paths: &[DefPath], closure: &BTreeSet<PackageId>) -> bool {
+        let inside = inside(closure);
+        let mut closed = true;
+        for path in paths {
+            let id = DefId::intern(path);
+            closed &= self
+                .checked
+                .get(&id)
+                .is_none_or(|e| reads_closed(e.reads(), &inside))
+                && self
+                    .modes
+                    .get(&id)
+                    .is_none_or(|e| reads_closed(e.reads(), &inside))
+                && self
+                    .lowered
+                    .get(&id)
+                    .is_none_or(|e| reads_closed(e.reads(), &inside));
+            for kind in [QueryKind::Check, QueryKind::Modes, QueryKind::Lower] {
+                self.forget(&MemoKey::new(kind, id));
+            }
+        }
+        self.forget_passed(paths);
+        closed
     }
 }

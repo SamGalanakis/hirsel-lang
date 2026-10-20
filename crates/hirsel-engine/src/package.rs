@@ -117,10 +117,16 @@ pub struct LoadedProgram {
     /// Why a dependency package is checked from source rather than prechecked,
     /// for `--verbose`; a precheck changes only how long checking takes.
     pub precheck_notes: Vec<String>,
-    packages: Vec<crate::package_cache::PackageRevision>,
-    cache: PackageCache,
+    packages: Vec<DependencyPackage>,
     identity: ContentHash,
-    indexed_revision: u64,
+}
+/// A selected dependency package: its checked-input revision (the precheck
+/// key's input), its closure and its files.
+struct DependencyPackage {
+    package: PackageId,
+    key: ContentHash,
+    closure: BTreeSet<PackageId>,
+    files: Vec<(FileId, FileContext)>,
 }
 impl LoadedProgram {
     /// Check every package of the program, lowering what `lowering` selects:
@@ -142,47 +148,13 @@ impl LoadedProgram {
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
         let mut diagnostics = Vec::new();
         let mut completion = CheckCompletion::Complete;
-        let unchanged = self.indexed_revision == self.engine.package_cache_revision();
-        // Closure identity covers content; ordinary query receipts additionally
-        // revalidate selected definitions and negative lookups outside that closure.
-        for package in &mut self.packages {
-            package.reused = unchanged
-                && package.artifact.as_ref().is_some_and(|a| {
-                    a.environment.interface_version == self.engine.environment.interface_version
-                        && a.environment.compiler_version
-                            == self.engine.environment.compiler_version
-                        && a.environment.spec_hash == self.engine.environment.spec_hash
-                        && a.environment.builtin_signatures_hash
-                            == self.engine.environment.builtin_signatures_hash
-                        && a.limits == self.engine.comptime_limits
-                })
-                && if package.proven {
-                    self.engine.prove_package(&package.package);
-                    true
-                } else {
-                    self.engine.package_snapshot_valid(&package.package)
-                };
-        }
-        let mut preflight = BTreeMap::new();
         for (file, context) in &self.files {
             // A prechecked package checked complete and clean (`Precheck`).
             if self.engine.prechecked(&context.package) {
                 continue;
             }
-            if let Some(package) = self
-                .packages
-                .iter()
-                .find(|p| p.reused && p.package == context.package)
-            {
-                let index = package.files.iter().position(|(f, _)| f == file).unwrap();
-                let errors = package.diagnostics.as_ref().unwrap().preflight[index].clone();
-                preflight.insert(*file, errors.clone());
-                diagnostics.extend(errors);
-                continue;
-            }
             match crate::tools::association_diagnostics(&mut self.engine, *file, context) {
                 Ok(errors) | Err(QueryError::Diagnostics(errors)) => {
-                    preflight.insert(*file, errors.clone());
                     diagnostics.extend(errors);
                 }
                 Err(error) => return Err(error),
@@ -196,7 +168,6 @@ impl LoadedProgram {
                 unsafe_ffi: self.unsafe_ffi.clone(),
             });
         }
-        let mut outputs = BTreeMap::new();
         let root = self.entry.0.package.clone();
         let policy = |package: &PackageId| {
             if *package == root {
@@ -207,20 +178,6 @@ impl LoadedProgram {
         };
         for (file, context) in &self.files {
             if self.engine.prechecked(&context.package) {
-                continue;
-            }
-            if let Some(package) = self.packages.iter().find(|p| {
-                p.reused
-                    && p.package == context.package
-                    && p.artifact
-                        .as_ref()
-                        .unwrap()
-                        .check_complete(policy(&p.package))
-            }) {
-                let index = package.files.iter().position(|(f, _)| f == file).unwrap();
-                let artifact = package.artifact.as_ref().unwrap();
-                diagnostics.extend(package.diagnostics.as_ref().unwrap().files[index].clone());
-                self.engine.last_phase = artifact.last_phase;
                 continue;
             }
             let parallel =
@@ -237,39 +194,18 @@ impl LoadedProgram {
             } else if output.diagnostics.is_empty() {
                 checked(&mut self.engine, *file)?;
             }
-            diagnostics.extend(output.diagnostics.iter().cloned());
-            // Publication needs each file's verdict, not its copy of the sources.
-            outputs.insert(*file, (output.completion, output.diagnostics));
+            diagnostics.extend(output.diagnostics);
         }
         // The root package's dead error arms (LANG-8) are warnings of the
-        // files declaring them, so a reused package keeps them with its verdict.
-        if !self.packages.iter().any(|p| p.reused && p.package == root)
-            && !crate::queries::has_errors(&diagnostics)
-            && completion == CheckCompletion::Complete
-        {
+        // files declaring them.
+        if !crate::queries::has_errors(&diagnostics) && completion == CheckCompletion::Complete {
             let files: Vec<_> = self
                 .files
                 .iter()
                 .filter(|(_, c)| c.package == root)
                 .map(|(file, _)| *file)
                 .collect();
-            for warning in self.engine.dead_arm_warnings(&files) {
-                if let Some((_, file_diagnostics)) =
-                    outputs.get_mut(&self.engine.sources.resolve(warning.primary).file)
-                {
-                    file_diagnostics.push(warning.clone());
-                }
-                diagnostics.push(warning);
-            }
-        }
-        // GEN-5 crosses package boundaries. Its program verdict is always
-        // selected for this program, including when every dependency body is
-        // already checked. Unchanged file checks share that program verdict.
-        if self.packages.iter().any(|p| p.reused) {
-            match crate::generic_graph::check(&mut self.engine) {
-                Ok(errors) | Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
-                Err(error) => return Err(error),
-            }
+            diagnostics.extend(self.engine.dead_arm_warnings(&files));
         }
         // Dependencies lower only what the program's own package reaches.
         if lowering == LoweringPolicy::Reachable
@@ -297,85 +233,7 @@ impl LoadedProgram {
                 Err(error) => return Err(error),
             }
         }
-        let _publication =
-            hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Merge);
-        for package in self.packages.iter().filter(|p| {
-            unchanged
-                && self.cache.enabled()
-                && (!p.reused
-                    || !p
-                        .artifact
-                        .as_ref()
-                        .unwrap()
-                        .check_complete(policy(&p.package)))
-        }) {
-            let Some(file_outputs) = package
-                .files
-                .iter()
-                .map(|(f, _)| outputs.get(f))
-                .collect::<Option<Vec<_>>>()
-            else {
-                continue;
-            };
-            if file_outputs
-                .iter()
-                .any(|(completion, _)| *completion != CheckCompletion::Complete)
-            {
-                continue;
-            }
-            let local: Vec<Vec<_>> = file_outputs
-                .iter()
-                .zip(&package.files)
-                .map(|((_, diagnostics), (f, _))| {
-                    diagnostics
-                        .iter()
-                        .filter(|d| {
-                            self.engine.sources.resolve(d.primary).file == *f
-                                && d.rule.as_str() != "GEN-5"
-                        })
-                        .cloned()
-                        .collect()
-                })
-                .collect();
-            let lowered = [LoweringPolicy::Reachable, LoweringPolicy::Comptime]
-                .into_iter()
-                .find(|&p| self.engine.package_lowered(&package.files, p));
-            let Some(snapshot) = self
-                .engine
-                .package_snapshot(&package.package, &package.closure)
-            else {
-                continue;
-            };
-            let mut ordinals = BTreeMap::<_, usize>::new();
-            let files: Vec<_> = self
-                .files
-                .iter()
-                .filter(|(_, c)| package.closure.contains(&c.package))
-                .map(|(file, c)| {
-                    let index = ordinals.entry(c.package.clone()).or_default();
-                    *index += 1;
-                    (*file, c.package.clone(), *index - 1)
-                })
-                .collect();
-            let sites = self.engine.anchor_sites(&files);
-            self.cache.insert(
-                package.key,
-                crate::package_cache::Artifact {
-                    snapshot,
-                    sites,
-                    preflight: package
-                        .files
-                        .iter()
-                        .map(|(f, _)| preflight.get(f).cloned().unwrap_or_default())
-                        .collect(),
-                    files: local,
-                    lowered,
-                    last_phase: self.engine.last_phase,
-                    environment: self.engine.environment.clone(),
-                    limits: self.engine.comptime_limits,
-                },
-            );
-        }
+        let _merge = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Merge);
         Ok(CheckOutput {
             diagnostics: select_diagnostics(diagnostics, Some(&self.engine.sources)),
             completion,
@@ -572,12 +430,12 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
     }
     Ok(true)
 }
-/// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
-pub(crate) fn load_program_source_with_cache(
+/// Load, adopting the matching `prechecks`.
+pub(crate) fn load_program_source_with_prechecks(
     compiler: &Compiler,
     path: &Path,
     replacement: Option<&str>,
-    cache: &PackageCache,
+    prechecks: &Prechecks,
     package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
@@ -609,9 +467,7 @@ pub(crate) fn load_program_source_with_cache(
                 unsafe_ffi: vec![],
                 precheck_notes: vec![],
                 packages: vec![],
-                cache: cache.clone(),
                 identity: compiler.identity(),
-                indexed_revision: 0,
             });
         }
         return Ok(LoadedProgram {
@@ -622,9 +478,7 @@ pub(crate) fn load_program_source_with_cache(
             unsafe_ffi: vec![],
             precheck_notes: vec![],
             packages: vec![],
-            cache: cache.clone(),
             identity: compiler.identity(),
-            indexed_revision: 0,
         });
     };
     let mut graph = Graph::default();
@@ -704,22 +558,15 @@ pub(crate) fn load_program_source_with_cache(
         })
         .collect();
     let limits = hirsel_interp::Limits::default();
-    let mut revisions = vec![];
-    for id in &dependencies {
-        let key = graph.revision(id, &environment, &files, &texts);
-        let cached = cache.select(key, limits);
-        revisions.push(crate::package_cache::PackageRevision {
+    let mut revisions: Vec<DependencyPackage> = dependencies
+        .iter()
+        .map(|id| DependencyPackage {
             package: (*id).clone(),
-            key,
+            key: graph.revision(id, &environment, &files, &texts),
             closure: graph.closure(id),
             files: vec![],
-            artifact: cached.as_ref().and_then(|p| p.artifact.clone()),
-            lowerings: cached.map(|p| p.lowerings),
-            reused: false,
-            proven: false,
-            diagnostics: None,
-        });
-    }
+        })
+        .collect();
     let unsafe_ffi: Vec<UnsafeFfiPackage> = graph
         .packages
         .iter()
@@ -744,41 +591,6 @@ pub(crate) fn load_program_source_with_cache(
             )
         })
         .collect();
-    let input = crate::queries::ImageInput {
-        unsafe_ffi: unsafe_ffi_metadata.clone(),
-        environment: QueryEnvironment {
-            package_manifest_hash: ContentHash::of_bytes(b"hirsel.package-image.v1"),
-            ..environment.clone()
-        },
-        limits,
-        manifests: manifests.clone(),
-        exposures: dependencies
-            .iter()
-            .map(|id| ((*id).clone(), graph.packages[*id].exposures.clone()))
-            .collect(),
-        files: files
-            .iter()
-            .zip(&texts)
-            .map(|((path, context), text)| {
-                let dependency = context.package != package;
-                (
-                    path.clone(),
-                    context.clone(),
-                    dependency.then(|| text.clone()),
-                )
-            })
-            .collect(),
-        packages: revisions
-            .iter()
-            .map(|r| crate::queries::ImagePackage {
-                package: r.package.clone(),
-                closure: r.closure.clone(),
-                artifact: r.artifact.clone(),
-                lowerings: r.lowerings.clone(),
-            })
-            .collect(),
-    };
-    let image = crate::queries::PackageImage::obtain(cache, &input, || compiler.adapters());
     let mut engine = compiler.engine(environment);
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
@@ -811,7 +623,6 @@ pub(crate) fn load_program_source_with_cache(
         .iter()
         .flat_map(|p| p.link.iter().cloned())
         .collect();
-    engine.install_image(&image);
     let mut program = LoadedProgram {
         engine,
         files: ids,
@@ -820,20 +631,12 @@ pub(crate) fn load_program_source_with_cache(
         unsafe_ffi,
         precheck_notes: vec![],
         packages: vec![],
-        cache: cache.clone(),
         identity: compiler.identity(),
-        indexed_revision: 0,
     };
-    // Dependency files come parsed from the image. One that failed there is
-    // parsed again here, so its failure stops loading in file order with the
-    // same engine state as any other parse failure.
     for (file, context) in &program.files {
-        if context.package != package && program.engine.parsed_in_image(*file) {
-            continue;
-        }
         program
             .engine
-            .reparse_file(*file, context)
+            .parse_file(*file, context)
             .map_err(|e| program.error(e))?;
     }
     // A declared wrapper names an ordinary function of its own package.
@@ -853,17 +656,16 @@ pub(crate) fn load_program_source_with_cache(
             }
         }
     }
-    for mut revision in revisions {
-        revision.proven = image.proven(&revision.package);
+    for revision in &mut revisions {
         revision.files = program
             .files
             .iter()
             .filter(|(_, c)| c.package == revision.package)
             .cloned()
             .collect();
-        program.packages.push(revision);
     }
-    if let Some(toolchain) = cache.prechecks() {
+    program.packages = revisions;
+    if let Some(toolchain) = prechecks.get() {
         for revision in &program.packages {
             let key = crate::Precheck::key(program.identity, revision.key, limits);
             let candidates: Vec<_> = toolchain
@@ -888,61 +690,9 @@ pub(crate) fn load_program_source_with_cache(
             }
         }
     }
-    if crate::package_cache::reporting_prechecks() {
+    if crate::prechecks::reporting_prechecks() {
         for note in &program.precheck_notes {
             eprintln!("hirsel: {note}");
-        }
-    }
-    let sites: BTreeMap<_, _> = graph
-        .packages
-        .iter()
-        .flat_map(|(id, p)| {
-            p.sources
-                .iter()
-                .enumerate()
-                .map(|(index, (source, _))| {
-                    let file = program
-                        .files
-                        .iter()
-                        .find(|(f, _)| &program.engine.sources.file(*f).unwrap().path == source)
-                        .unwrap()
-                        .0;
-                    ((id.clone(), index), file)
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    program.indexed_revision = program.engine.package_cache_revision();
-    // An artifact's diagnostics name its publisher's anchors: placing them in
-    // this program's SourceMap locates them; stored artifacts stay immutable.
-    for p in &mut program.packages {
-        if let Some(artifact) = &p.artifact {
-            program.engine.place_anchors(&artifact.sites, &sites);
-            p.diagnostics = Some(crate::package_cache::PackageDiagnostics {
-                preflight: artifact.preflight.clone(),
-                files: artifact.files.clone(),
-            });
-        }
-        if let Some(lowerings) = &p.lowerings {
-            let source_sites = graph
-                .packages
-                .iter()
-                .filter(|(id, _)| p.closure.contains(*id))
-                .flat_map(|(id, package)| {
-                    package
-                        .sources
-                        .iter()
-                        .enumerate()
-                        .map(|(index, _)| (sites[&(id.clone(), index)], id.clone(), index))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            program.engine.register_package_publication(
-                p.package.clone(),
-                p.closure.clone(),
-                source_sites,
-                lowerings.clone(),
-            );
         }
     }
     Ok(program)

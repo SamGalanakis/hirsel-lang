@@ -228,22 +228,20 @@ impl QueryEngine {
         let mut private = vec![];
         let mut complete = true;
         let paths: Vec<_> = self.items.keys().cloned().collect();
-        self.with_validation_walk(|engine| {
-            for path in paths {
-                let d = DefId::intern(&path);
-                let signature = engine.signature(d);
-                if let Ok(public) = &signature {
-                    match engine.body_signature(&path.0.package, public.clone()) {
-                        Ok((view, _)) if !Arc::ptr_eq(&view, public) => private.push(view),
-                        Ok(_) => {}
-                        Err(_) => complete = false,
-                    }
-                } else {
-                    complete = false;
+        for path in paths {
+            let d = DefId::intern(&path);
+            let signature = self.signature(d);
+            if let Ok(public) = &signature {
+                match self.body_signature(&path.0.package, public.clone()) {
+                    Ok((view, _)) if !Arc::ptr_eq(&view, public) => private.push(view),
+                    Ok(_) => {}
+                    Err(_) => complete = false,
                 }
-                signatures.push((d, signature));
+            } else {
+                complete = false;
             }
-        });
+            signatures.push((d, signature));
+        }
         for (path, constant) in &self.staged_constants {
             signatures.push((DefId::intern(path), Ok(constant.signature.clone())));
         }
@@ -282,7 +280,7 @@ impl QueryEngine {
     /// The inputs a snapshot built now would be built from.
     pub(crate) fn snapshot_stamp(&self) -> SnapshotStamp {
         SnapshotStamp {
-            revision: self.source_revision,
+            revision: self.graph.revision().get(),
             environment: self.environment.clone(),
             manifest: Some(self.declarations.inputs().manifest_revision),
             unavailable: self.unavailable,

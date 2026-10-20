@@ -49,8 +49,8 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 ## Compiler prechecks
 
 Buck2 test targets that run std programs get `HIRSEL_PRECHECK` from
-`//:hirsel-std-precheck`, which rebuilds whenever std or the compiler changes;
-`HIRSEL_PACKAGE_CACHE=off` checks everything fresh. The precheck compiler and
+`//:hirsel-std-precheck`, which rebuilds whenever std or the compiler changes.
+The precheck compiler and
 Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
 debug assertions and integer overflow checks enabled.
 

@@ -413,7 +413,7 @@ struct VerdictInputs {
 impl VerdictInputs {
     fn read(engine: &QueryEngine) -> Self {
         Self {
-            revision: engine.package_cache_revision(),
+            revision: engine.graph.revision().get(),
             environment: engine.environment.clone(),
             limits: engine.comptime_limits,
             manifest: Some(engine.declarations.inputs().manifest_revision),

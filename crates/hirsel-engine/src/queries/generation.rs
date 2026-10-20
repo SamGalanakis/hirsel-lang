@@ -92,9 +92,9 @@ fn label(mut error: QueryError, sources: &SourceMap, generated: FileId, site: Sp
 }
 
 /// The phase reads of one generated check, accumulated across its steps.
-struct Reads {
+struct Recording {
     reads: DependencyReads,
-    representations: BTreeMap<DefPath, ContentHash>,
+    observed: Observed,
 }
 
 impl QueryEngine {
@@ -112,19 +112,19 @@ impl QueryEngine {
     fn recorded<T>(
         &mut self,
         owner: &DefPath,
-        reads: &mut Reads,
+        reads: &mut Recording,
         step: impl FnOnce(&mut Recorder<'_>) -> Result<T, QueryError>,
     ) -> Result<T, QueryError> {
         let mut recorder = Recorder {
             owner: owner.clone(),
             private_shapes: true,
-            representations: std::mem::take(&mut reads.representations),
+            observed: std::mem::take(&mut reads.observed),
             engine: self,
             reads: std::mem::take(&mut reads.reads),
             groups: BTreeMap::new(),
         };
         let result = step(&mut recorder);
-        reads.representations = recorder.representations;
+        reads.observed = recorder.observed;
         reads.reads = recorder.reads;
         result
     }
@@ -155,17 +155,22 @@ impl QueryEngine {
         }
         let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Check);
-        let key = self.key(definition, QueryKind::Check)?;
-        if let Some(cached) = self.checked.get(definition).cloned()
-            && self.valid(&cached, &key)
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Check)?;
+        if let Some(entry) = self.checked.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
         {
-            self.inherit_execution(&cached.executed);
-            return cached.result.clone();
+            if let Some(depth) = &entry.depth {
+                self.depth_admit_nested(depth)?;
+                self.depth_requested(depth, site);
+            }
+            self.merge_execution(entry.reads());
+            return entry.result();
         }
         timings::count(Count::Definitions);
-        let mut reads = Reads {
+        let mut reads = Recording {
             reads: DependencyReads::default(),
-            representations: BTreeMap::new(),
+            observed: Observed::default(),
         };
         reads
             .reads
@@ -177,21 +182,27 @@ impl QueryEngine {
         });
         self.start(definition, QueryKind::Check)?;
         self.comptime_stack.push((definition.clone(), site));
-        self.execution_stack.push(ExecutionReads::default());
+        self.execution_stack.push(ReadsBuilder::new());
+        self.depth_frames.push(vec![]);
         let timing = timings::phase(Phase::Comptime);
         let result = self.generate(definition, &snapshot, body, &signature.value, &mut reads);
         drop(timing);
+        let depth = self.depth_composed();
         let executed = self
             .execution_stack
             .pop()
             .expect("generation execution frame");
+        self.depth_frames.pop();
         self.comptime_stack.pop();
-        let mut cached = self.finish(key, reads.reads, result, reads.representations);
-        Arc::make_mut(&mut cached).executed = executed;
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.checked.insert(definition.clone(), cached.clone());
-        }
-        cached.result.clone()
+        reads.observed.merged.extend(executed);
+        let key = MemoKey::new(QueryKind::Check, id);
+        let mut entry = self.finish(key, text, reads.reads, result, reads.observed);
+        entry.depth = Some(depth.clone());
+        let entry = Arc::new(entry);
+        keep(&mut self.checked, &mut self.graph, entry.clone());
+        self.merge_execution(entry.reads());
+        self.depth_requested(&depth, site);
+        entry.result()
     }
 
     fn generate(
@@ -200,7 +211,7 @@ impl QueryEngine {
         snapshot: &Arc<ItemSyntax>,
         body: ExprId,
         signature: &Signature,
-        reads: &mut Reads,
+        reads: &mut Recording,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         let site = snapshot.tree.expressions[body.0 as usize].origin.span;
         let SignatureKind::Function(_) = &signature.kind else {
@@ -267,7 +278,7 @@ impl QueryEngine {
         definition: &DefPath,
         snapshot: &Arc<ItemSyntax>,
         body: ExprId,
-        reads: &mut Reads,
+        reads: &mut Recording,
     ) -> Result<String, QueryError> {
         let source = &snapshot.item;
         let ItemKind::Function { signature, .. } = &source.kind else {
@@ -431,7 +442,7 @@ impl QueryEngine {
         body: ExprId,
         signature: &Signature,
         generated: FileId,
-        reads: &mut Reads,
+        reads: &mut Recording,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         let source = &snapshot.item;
         let ItemKind::Function {
@@ -702,11 +713,12 @@ impl QueryEngine {
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
         let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Check);
-        let key = self.key(definition, QueryKind::Check)?;
-        if let Some(cached) = self.checked.get(definition).cloned()
-            && self.valid(&cached, &key)
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Check)?;
+        if let Some(entry) = self.checked.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
         {
-            return cached.result.clone();
+            return entry.result();
         }
         timings::count(Count::Definitions);
         let (Some(resolver), Some(checker)) = (
@@ -720,9 +732,9 @@ impl QueryEngine {
             *body = None;
         }
         let file = Arc::new(file);
-        let mut reads = Reads {
+        let mut reads = Recording {
             reads: DependencyReads::default(),
-            representations: BTreeMap::new(),
+            observed: Observed::default(),
         };
         reads
             .reads
@@ -745,11 +757,10 @@ impl QueryEngine {
                     checker.check(file.clone(), resolution.value, &signature.value, r)
                 })
             });
-        let cached = self.finish(key, reads.reads, result, reads.representations);
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.checked.insert(definition.clone(), cached.clone());
-        }
-        cached.result.clone()
+        let key = MemoKey::new(QueryKind::Check, id);
+        let entry = Arc::new(self.finish(key, text, reads.reads, result, reads.observed));
+        keep(&mut self.checked, &mut self.graph, entry.clone());
+        entry.result()
     }
 
     /// The monomorphic definition of `declaration` at closed `arguments`,
@@ -918,9 +929,12 @@ impl QueryEngine {
         syntax.item.definition = instance.clone();
         syntax.item.visibility = Visibility::Private;
         self.items
-            .entry_or_default(instance.clone())
+            .entry(instance.clone())
+            .or_default()
             .push(Arc::new(syntax));
-        // The signature snapshot now includes the instance.
+        // The instance is a new definition: index its inputs and mark
+        // readers; the signature snapshot now includes it.
+        self.note_inputs([instance.clone()]);
         self.retire_snapshot();
         self.instance_bodies
             .declarations

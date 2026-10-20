@@ -17,7 +17,8 @@ impl QueryEngine {
         if policy == LoweringPolicy::Reachable {
             return true;
         }
-        let Some(Ok(analyzed)) = self.modes.get(definition).map(|c| c.result.as_ref()) else {
+        let id = hirsel_syntax::DefId::intern(definition);
+        let Some(Ok(analyzed)) = self.modes.get(&id).map(|e| e.memo.value.as_ref()) else {
             return true;
         };
         let typed = &analyzed.value.typed;
@@ -58,7 +59,9 @@ impl QueryEngine {
             parsed.value.items.iter().all(|syntax| {
                 let item = &syntax.item;
                 !generation::executable(syntax)
-                    || self.lowered.contains_key(&item.definition)
+                    || self
+                        .lowered
+                        .contains_key(&hirsel_syntax::DefId::intern(&item.definition))
                     || !self.lowers_at_check(&item.definition, policy)
             })
         })

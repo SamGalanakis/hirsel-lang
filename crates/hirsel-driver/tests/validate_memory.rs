@@ -66,7 +66,7 @@ fn largest_std_bodies_validate_within_a_fixed_heap_budget() {
         "std",
     );
     with_compiler_stack(|| {
-        let mut p = load(&program, &PackageCache::prechecked(vec![precheck]));
+        let mut p = load(&program, &Prechecks::of(vec![precheck]));
         assert!(
             p.engine.prechecked(&package("std")),
             "{:?}",

@@ -23,7 +23,6 @@ pub mod memo;
 pub mod store;
 pub use memo::{Durability, ReadKey, Reads, ReadsBuilder, Revision};
 mod generic_graph;
-mod layered;
 pub use diagnostics::*;
 pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
 mod summary;
@@ -31,7 +30,6 @@ pub use summary::{
     CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge, ParameterGrowth,
     SummaryCall, growing_sites, summarize,
 };
-pub use layered::Layered;
 mod semantic;
 mod snapshot;
 pub use semantic::*;
@@ -43,8 +41,8 @@ mod adapters;
 mod facts;
 pub use adapters::*;
 mod package;
-mod package_cache;
-pub use package_cache::{PackageCache, release_shared_caches, report_prechecks};
+mod prechecks;
+pub use prechecks::{Prechecks, release_shared_caches, report_prechecks};
 mod policy;
 pub use policy::{LoweringPolicy, Verify, free_sessions};
 mod admission;

@@ -23,7 +23,7 @@ fn definition_hashes_are_the_same_with_and_without_the_std_precheck() {
         .expect("set HIRSEL_PRECHECK to the toolchain's std precheck");
     let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
     let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-    let hashes = |cache: PackageCache, prechecked: bool| {
+    let hashes = |cache: Prechecks, prechecked: bool| {
         with_compiler_stack(|| {
             let mut p = load(&client, &cache);
             assert_eq!(
@@ -40,8 +40,8 @@ fn definition_hashes_are_the_same_with_and_without_the_std_precheck() {
         })
     };
     let (actual, expected) = std::thread::scope(|scope| {
-        let actual = scope.spawn(|| hashes(PackageCache::prechecked(vec![precheck]), true));
-        let expected = hashes(PackageCache::disabled(), false);
+        let actual = scope.spawn(|| hashes(Prechecks::of(vec![precheck]), true));
+        let expected = hashes(Prechecks::none(), false);
         (actual.join().unwrap(), expected)
     });
     assert!(expected.len() > 1000, "{}", expected.len());

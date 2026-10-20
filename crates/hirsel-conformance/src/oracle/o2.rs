@@ -1,13 +1,13 @@
 //! O2, warm equals cold: after each scripted edit, every warm run's artifacts
 //! equal a cold run of the edited tree.
 //!
-//! - `cold`: a fresh run of the edited tree (`none@1`; today a fresh cache).
-//! - `mem`: one process-shared store across the edit (`mem@1`; today a
-//!   shared `PackageCache`).
+//! - `cold`: a fresh run of the edited tree (`none@1`).
+//! - `mem`: one process-shared store across the edit (`mem@1` once loading
+//!   consults the result store).
 //! - `resident`: one `Session` across the edit (TODO until it exists).
 //! - `disk`: two processes sharing a `dir@1` store (TODO until it exists).
 use super::{
-    Artifacts, Config, Report, Switch, Verdict, difference, edits::Scenario, fresh_cache,
+    Artifacts, Config, Report, Switch, Verdict, difference, edits::Scenario, fresh_prechecks,
     o1::produce_in_child, produce, switches,
 };
 use std::path::Path;
@@ -35,7 +35,7 @@ fn one(
     let (before, after) = (&scenario.config_before, &scenario.config_after);
     scenario.write(&tree, root, false)?;
     let entry = scenario.entry(&tree);
-    let mem = fresh_cache();
+    let mem = fresh_prechecks();
     let warmed = produce(&entry, before, &mem);
     let disk = base.join("store");
     let disk_before = Config {
@@ -49,7 +49,7 @@ fn one(
                 .map_err(Verdict::Fail)
         });
     scenario.write(&tree, root, true)?;
-    let cold = match produce(&entry, after, &fresh_cache()) {
+    let cold = match produce(&entry, after, &fresh_prechecks()) {
         Ok(cold) => cold,
         Err(switch) => {
             for mode in ["mem", "resident", "disk"] {

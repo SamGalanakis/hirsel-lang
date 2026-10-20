@@ -2,7 +2,7 @@
 //! give a cold run's artifacts, with every hit recomputed and compared.
 //!
 //! - `mem hit`: the same program twice over one shared store; the second run
-//!   equals a cold run (today's `PackageCache`, which `mem@1` replaces).
+//!   equals a cold run (`mem@1` once loading consults the result store).
 //! - `dir recompute`: a populating and a hitting process over one `dir@1`
 //!   store under `VerifyStore::Recompute`, where a mismatching hit is a tool
 //!   error (TODO until the store exists).
@@ -12,7 +12,7 @@
 //! `VerifyStore::Recompute` once it exists; `tools/buck2/sync.py` then passes
 //! the switch to their targets.
 use super::{
-    Config, Report, Switch, Verdict, difference, fresh_cache, o1::produce_in_child, produce,
+    Config, Report, Switch, Verdict, difference, fresh_prechecks, o1::produce_in_child, produce,
     switches,
 };
 use std::path::{Path, PathBuf};
@@ -26,14 +26,14 @@ pub fn run(exe: &Path, root: &Path, programs: &[PathBuf], work: &Path) -> Report
             .display()
             .to_string();
         let config = Config::default();
-        let cold = match produce(program, &config, &fresh_cache()) {
+        let cold = match produce(program, &config, &fresh_prechecks()) {
             Ok(cold) => cold,
             Err(switch) => {
                 report.add(format!("{name} [cold]"), Verdict::Todo(switch));
                 continue;
             }
         };
-        let shared = fresh_cache();
+        let shared = fresh_prechecks();
         let hit =
             produce(program, &config, &shared).and_then(|_| produce(program, &config, &shared));
         report.add(

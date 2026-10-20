@@ -171,6 +171,17 @@ impl MemoGraph {
     pub fn memos_of(&self, def: DefId) -> impl Iterator<Item = &MemoKey> {
         self.by_def.get(&def).into_iter().flatten()
     }
+    /// Every read some memo subscribes to, in unspecified order.
+    pub fn read_keys(&self) -> Vec<ReadKey> {
+        self.subscribers.keys().copied().collect()
+    }
+    /// The definitions with a dirty memo, sorted by DefPath.
+    pub fn dirty_definitions(&self) -> Vec<DefId> {
+        let mut defs: Vec<DefId> = self.dirty.keys().map(|k| k.def).collect();
+        defs.sort();
+        defs.dedup();
+        defs
+    }
     pub fn is_dirty(&self, key: &MemoKey) -> bool {
         self.dirty.contains_key(key)
     }

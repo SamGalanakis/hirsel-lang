@@ -141,7 +141,7 @@ impl DeclarationIndex {
         &mut self,
         file: FileId,
         affected: &std::collections::BTreeSet<DefPath>,
-        items: &crate::layered::Layered<DefPath, Vec<Arc<ItemSyntax>>>,
+        items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
         sources: &SourceMap,
     ) {
         // The files whose item lists can change: this one, and each file a
@@ -197,7 +197,7 @@ impl DeclarationIndex {
     /// Index every item afresh, except generated instances.
     pub(crate) fn rebuild(
         &mut self,
-        items: &crate::layered::Layered<DefPath, Vec<Arc<ItemSyntax>>>,
+        items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
         sources: &SourceMap,
     ) {
         let inputs = std::mem::take(&mut self.inputs);

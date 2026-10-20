@@ -71,17 +71,23 @@ impl Compiler {
         path: &Path,
         replacement: Option<&str>,
     ) -> Result<LoadedProgram, ToolError> {
-        self.load_program_source_with_cache(path, replacement, &PackageCache::shared(self.verify))
+        self.load_program_source_with_prechecks(path, replacement, &Prechecks::toolchain())
     }
-    /// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
-    /// Sessions with and without V never share `cache`.
-    pub fn load_program_source_with_cache(
+    /// Load adopting exactly `prechecks` (`Prechecks::none()` checks every
+    /// package from source).
+    pub fn load_program_source_with_prechecks(
         &self,
         path: &Path,
         replacement: Option<&str>,
-        cache: &PackageCache,
+        prechecks: &Prechecks,
     ) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_cache(self, path, replacement, cache, false)
+        crate::package::load_program_source_with_prechecks(
+            self,
+            path,
+            replacement,
+            prechecks,
+            false,
+        )
     }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
@@ -91,11 +97,11 @@ impl Compiler {
                 "test requires a package manifest JSON path".into(),
             ));
         }
-        crate::package::load_program_source_with_cache(
+        crate::package::load_program_source_with_prechecks(
             self,
             manifest,
             None,
-            &PackageCache::shared(self.verify),
+            &Prechecks::toolchain(),
             true,
         )
     }
@@ -154,10 +160,10 @@ impl Compiler {
             let written = (|| -> Result<(), ToolError> {
                 let mut out = std::io::BufWriter::new(std::fs::File::create(&partial)?);
                 with_compiler_stack(|| {
-                    let mut loaded = self.load_program_source_with_cache(
+                    let mut loaded = self.load_program_source_with_prechecks(
                         &program,
                         None,
-                        &PackageCache::disabled(),
+                        &Prechecks::none(),
                     )?;
                     loaded.precheck(&package, &mut out, &mut spill)
                 })?;

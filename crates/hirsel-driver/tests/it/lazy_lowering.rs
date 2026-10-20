@@ -39,12 +39,9 @@ impl Fixture {
         self.0.join("lib.json")
     }
     fn check(&self) -> LoadedProgram {
-        let mut program = load_program_source_with_cache(
-            &self.0.join("app.json"),
-            None,
-            &PackageCache::disabled(),
-        )
-        .unwrap();
+        let mut program =
+            load_program_source_with_prechecks(&self.0.join("app.json"), None, &Prechecks::none())
+                .unwrap();
         let output = program
             .check(hirsel_engine::LoweringPolicy::Reachable)
             .unwrap();
@@ -318,7 +315,7 @@ fn library_diagnostics(f: &Fixture, files: &[(&str, &str)], as_dependency: bool)
         "lib.json"
     };
     let mut program =
-        load_program_source_with_cache(&f.0.join(root), None, &PackageCache::disabled()).unwrap();
+        load_program_source_with_prechecks(&f.0.join(root), None, &Prechecks::none()).unwrap();
     let output = program
         .check(hirsel_engine::LoweringPolicy::Reachable)
         .unwrap();

@@ -60,8 +60,8 @@ pub fn std_manifest() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-pub fn load(path: &Path, cache: &PackageCache) -> LoadedProgram {
-    load_program_source_with_cache(path, None, cache).unwrap()
+pub fn load(path: &Path, cache: &Prechecks) -> LoadedProgram {
+    load_program_source_with_prechecks(path, None, cache).unwrap()
 }
 
 pub const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)

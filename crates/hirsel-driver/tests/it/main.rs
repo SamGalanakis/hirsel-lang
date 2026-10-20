@@ -51,7 +51,6 @@ mod native_input;
 mod native_source_cleanup;
 mod operation_inventory;
 mod origins;
-mod package_cache;
 mod packages;
 mod packed_walk;
 mod pipeline;

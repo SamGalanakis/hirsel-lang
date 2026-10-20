@@ -7,8 +7,8 @@
 hirsel_guard::install!();
 
 use hirsel_engine::{
-    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PackageCache,
-    PhaseAdapters, RunOutcome, SimulationConfig, ToolError,
+    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PhaseAdapters,
+    Prechecks, RunOutcome, SimulationConfig, ToolError,
 };
 pub mod api_index;
 pub mod dependency_card;
@@ -39,13 +39,13 @@ pub fn load_program_source(
 ) -> Result<LoadedProgram, ToolError> {
     COMPILER.load_program_source(path, replacement)
 }
-/// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
-pub fn load_program_source_with_cache(
+/// Load adopting exactly `prechecks` (`Prechecks::none()` checks every package from source).
+pub fn load_program_source_with_prechecks(
     path: &Path,
     replacement: Option<&str>,
-    cache: &PackageCache,
+    prechecks: &Prechecks,
 ) -> Result<LoadedProgram, ToolError> {
-    COMPILER.load_program_source_with_cache(path, replacement, cache)
+    COMPILER.load_program_source_with_prechecks(path, replacement, prechecks)
 }
 /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {

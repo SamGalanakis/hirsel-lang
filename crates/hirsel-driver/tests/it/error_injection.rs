@@ -24,7 +24,7 @@ fn file(source: &str) -> PathBuf {
 fn check(path: &Path) -> CheckOutput {
     with_compiler_stack(|| {
         let mut program =
-            load_program_source_with_cache(path, None, &PackageCache::disabled()).unwrap();
+            load_program_source_with_prechecks(path, None, &Prechecks::none()).unwrap();
         let output = program.check(LoweringPolicy::Comptime).unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         output

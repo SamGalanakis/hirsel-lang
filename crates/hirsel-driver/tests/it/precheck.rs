@@ -55,13 +55,13 @@ fn prechecked_std_products_equal_fresh_ones() {
         let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut prechecked = load(&client, &PackageCache::prechecked(vec![precheck.clone()]));
+        let mut prechecked = load(&client, &Prechecks::of(vec![precheck.clone()]));
         assert!(
             prechecked.engine.prechecked(&package("std")),
             "{:?}",
             prechecked.precheck_notes
         );
-        let mut reference = load(&client, &PackageCache::disabled());
+        let mut reference = load(&client, &Prechecks::none());
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -141,7 +141,7 @@ const CLIENT: &str = "pub fn main() -> Result[(), ()] {
 fn library_precheck(f: &Fixture, source: &str) -> Result<Arc<Precheck>, ToolError> {
     let manifest = f.library(source);
     let program = f.program("prechecker", CLIENT, &manifest, "lib");
-    let bytes = precheck(&mut load(&program, &PackageCache::disabled()), "lib")?;
+    let bytes = precheck(&mut load(&program, &Prechecks::none()), "lib")?;
     Ok(Arc::new(Precheck::decode(bytes).unwrap()))
 }
 
@@ -162,7 +162,7 @@ fn a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under() {
         let f = Fixture::new();
         let precheck = library_precheck(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let cache = PackageCache::prechecked(vec![precheck.clone()]);
+        let cache = Prechecks::of(vec![precheck.clone()]);
         let mut program = load(&client, &cache);
         assert!(program.engine.prechecked(&package("lib")));
         assert!(program.precheck_notes.is_empty());
@@ -171,7 +171,7 @@ fn a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under() {
         // Another compiler identity.
         let other = Compiler::new(FrontPhases::shared, [7; 32]);
         let program = other
-            .load_program_source_with_cache(&client, None, &cache)
+            .load_program_source_with_prechecks(&client, None, &cache)
             .unwrap();
         assert!(!program.engine.prechecked(&package("lib")));
         assert_eq!(
@@ -201,7 +201,7 @@ fn editing_a_prechecked_source_in_a_session_ends_its_precheck() {
         let f = Fixture::new();
         let precheck = library_precheck(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut program = load(&client, &PackageCache::prechecked(vec![precheck]));
+        let mut program = load(&client, &Prechecks::of(vec![precheck]));
         assert!(program.engine.prechecked(&package("lib")));
         let (file, context) = program
             .files
@@ -228,8 +228,8 @@ fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
         let source = "const BASE: u64 = comptime 1\n@noalloc\npub fn value(x: u64) -> u64 {\n  x + comptime BASE\n}\n";
         let precheck = library_precheck(&f, source).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut cached = load(&client, &PackageCache::prechecked(vec![precheck.clone()]));
-        let mut fresh = load(&client, &PackageCache::disabled());
+        let mut cached = load(&client, &Prechecks::of(vec![precheck.clone()]));
+        let mut fresh = load(&client, &Prechecks::none());
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();
         let actual = cached.engine.export_native_input().unwrap();
@@ -317,11 +317,11 @@ fn prechecked_generic_comptime_materializes_selected_client_sizes() {
         let client = "pub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];failure.check(lib.value(a)==4u64,Arithmetic());failure.check(lib.value(b)==9u64,Arithmetic());Ok(())}\n";
         let library = f.library(source);
         let prechecker = f.program("prechecker", client, &library, "lib");
-        let bytes = precheck(&mut load(&prechecker, &PackageCache::disabled()), "lib").unwrap();
+        let bytes = precheck(&mut load(&prechecker, &Prechecks::none()), "lib").unwrap();
         let precheck = Arc::new(Precheck::decode(bytes).unwrap());
         let client = f.program("client", client, &library, "lib");
-        let mut cached = load(&client, &PackageCache::prechecked(vec![precheck]));
-        let mut fresh = load(&client, &PackageCache::disabled());
+        let mut cached = load(&client, &Prechecks::of(vec![precheck]));
+        let mut fresh = load(&client, &Prechecks::none());
         assert!(cached.engine.prechecked(&package("lib")));
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();

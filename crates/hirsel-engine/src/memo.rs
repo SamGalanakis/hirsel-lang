@@ -2,8 +2,8 @@
 //! (design §1b).
 mod reads;
 pub use reads::{
-    Durability, Inconsistent, LookupKey, ModuleKey, PackageKey, ReadKey, ReadKind, Reads,
-    ReadsBuilder, Revision, decode_def_path, encode_def_path,
+    Durability, Inconsistent, LookupKey, LookupSource, ModuleKey, PackageKey, ReadKey, ReadKind,
+    Reads, ReadsBuilder, Revision, decode_def_path, encode_def_path,
 };
 mod graph;
 pub use graph::{
