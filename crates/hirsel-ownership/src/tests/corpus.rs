@@ -587,3 +587,23 @@ fn read(bytes: Bytes, mut s: Request) -> () { s.input = copy bytes }
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn constant_table_elements_are_not_carried_through_every_flow_state() {
+    // Each element of a table literal is live until the literal consumes it,
+    // so states and live sets that carried them grew quadratically in its length.
+    let rows = |count: usize| {
+        let elements: Vec<_> = (0..count).map(|i| format!("{}u64", i * 7 % 1000)).collect();
+        let source = format!(
+            "const TABLE: Inline[u64, {count}] = [{}]\nfn first() -> u64 {{ TABLE[0] }}\n",
+            elements.join(", ")
+        );
+        let before = work::read(Counter::OwnershipStateRows);
+        let diagnostics = source_diagnostics(&source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        work::read(Counter::OwnershipStateRows) - before
+    };
+    let small = rows(1024);
+    let large = rows(4096);
+    assert!(large <= 8 * small + 1024, "small {small}, large {large}");
+}

@@ -453,7 +453,7 @@ impl Checker<'_> {
         Some(effect)
     }
 
-    pub(super) fn install_creation_effect(&self, effect: Option<Effect>, state: &mut State) {
+    pub(super) fn install_creation_effect(&mut self, effect: Option<Effect>, state: &mut State) {
         let Some(effect) = effect else { return };
         for (binding, envelope) in effect.writes {
             if envelope.is_none() {
@@ -463,7 +463,10 @@ impl Checker<'_> {
             }
         }
         if let Some((expression, envelope)) = effect.value
-            && let Some(value) = state.values.get_mut(&expression)
+            && let Some(value) = state
+                .values
+                .get_mut(&expression)
+                .or(self.constants.get_mut(&expression).and_then(Option::as_mut))
         {
             value.envelope = envelope;
         }

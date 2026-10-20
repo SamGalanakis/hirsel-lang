@@ -53,6 +53,8 @@ pub enum Counter {
     OwnershipValueJoins,
     /// I's backward temporary-demand node transfers.
     OwnershipLivenessSteps,
+    /// Evaluated temporaries carried by I's transferred states and live sets.
+    OwnershipStateRows,
     /// I's binding rows inspected for ownership frame inputs.
     OwnershipInitializedRows,
     /// J's source-row and closure-table lookups.

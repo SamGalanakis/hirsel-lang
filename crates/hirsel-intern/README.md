@@ -37,7 +37,8 @@ starts, and the earliest-started panicking task's payload is resumed on the call
 work measurements instead of per-crate thread-local counters.
 
 `OwnershipFlowSteps` and `OwnershipValueJoins` measure ownership solver transfers
-and value joins for machine-independent scaling gates.
+and value joins, and `OwnershipStateRows` the temporaries each transfer carries,
+for machine-independent scaling gates.
 They are instrumentation only; counter ordinals are not semantic encodings.
 
 `RcCleanupVersionRows` counts instruction and terminator rows transferred while

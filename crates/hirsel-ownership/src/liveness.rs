@@ -26,6 +26,8 @@ pub(super) struct Liveness<'a> {
     pub rows: &'a SourceRows,
     pub properties: &'a [Properties],
     pub graph: &'a Graph,
+    /// Temporaries that hold nothing and are never released (`constant_temporaries`).
+    pub constants: &'a BTreeSet<ExprId>,
 }
 impl Liveness<'_> {
     /// The holders live after each node: some path from there reaches a use.
@@ -62,6 +64,7 @@ impl Liveness<'_> {
             for next in &graph.nodes[id].next {
                 live.extend(&before[*next]);
             }
+            work::count_by(Counter::OwnershipStateRows, live.len() as u64);
             after[id] = live.clone();
             let (uses, writes) = &effects[id];
             for write in writes {
@@ -217,6 +220,10 @@ impl Liveness<'_> {
             }
             Op::Nop | Op::ReturnUnit | Op::IdentityReady(_) | Op::StatementEnd(_) => {}
         }
+        let held =
+            |holder: &Holder| !matches!(holder, Holder::Temporary(e) if self.constants.contains(e));
+        uses.retain(held);
+        writes.retain(held);
         (uses, writes)
     }
 }

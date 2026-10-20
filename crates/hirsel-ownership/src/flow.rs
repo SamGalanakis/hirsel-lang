@@ -1274,6 +1274,10 @@ struct Checker<'a> {
     arenas: crate::arenas::Arenas,
     /// The holders live after each graph node (LANG-3).
     live: &'a [BTreeSet<Holder>],
+    /// Each constant temporary and, once evaluated, its value. A plain fresh
+    /// leaf's value depends on its expression alone, so it is held here once
+    /// instead of in every state its temporary is live in.
+    constants: BTreeMap<ExprId, Option<Value>>,
     /// The callable type this graph implements, once computed.
     callable: std::cell::OnceCell<Option<(FunctionType, bool)>>,
 }
@@ -1587,12 +1591,15 @@ pub(super) fn check(
     proof: Option<ParamId>,
 ) -> Result<FlowOutput, QueryError> {
     let tree = &syntax.tree;
+    let constants =
+        constant_temporaries(&graph, body, source_rows, properties, projection_lifetimes);
     let live = super::liveness::Liveness {
         tree,
         body,
         rows: source_rows,
         properties,
         graph: &graph,
+        constants: &constants,
     }
     .after();
     let parameters = initial_storage
@@ -1685,6 +1692,7 @@ pub(super) fn check(
         destroying: BTreeSet::new(),
         unique_proof: proof,
         live: &live,
+        constants: constants.into_iter().map(|e| (e, None)).collect(),
     };
     checker.destroying = graph
         .statements
@@ -1883,6 +1891,38 @@ pub(super) fn check(
         return_sendability: checker.return_sendability,
     })
 }
+/// The temporaries of fresh leaves with a plain type: a literal or a nullary
+/// constructor. Their value is the same on every path and in every state, and
+/// they hold no loan, so neither the states nor the live sets carry them; a
+/// table literal's elements would otherwise make both quadratic in its length.
+fn constant_temporaries(
+    graph: &Graph,
+    body: &CheckedBody,
+    rows: &super::source_rows::SourceRows,
+    properties: &[Properties],
+    projection_lifetimes: &BTreeMap<ExprId, super::properties::ProjectionLifetime>,
+) -> BTreeSet<ExprId> {
+    graph
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.op {
+            Op::Finish {
+                expression,
+                children,
+                fresh: true,
+                ..
+            } if children.is_empty() && !projection_lifetimes.contains_key(expression) => {
+                Some(*expression)
+            }
+            _ => None,
+        })
+        .filter(|expression| {
+            expression_type(body, *expression, rows)
+                .and_then(|ty| properties.get(ty.index()))
+                .is_some_and(|p| p.valid && p.plain)
+        })
+        .collect()
+}
 /// The converged input of every node.
 fn solve(
     checker: &mut Checker<'_>,
@@ -1914,6 +1954,7 @@ fn solve(
     while let Some((_, id)) = pending.pop_first() {
         work::count(Counter::OwnershipFlowSteps);
         let mut output = inputs[id].clone().unwrap();
+        work::count_by(Counter::OwnershipStateRows, output.values.len() as u64);
         checker.node = id;
         checker.transfer(&graph.nodes[id].op, &mut output);
         checker.release_temporaries(&mut output, &live[id]);
@@ -2292,13 +2333,18 @@ impl Checker<'_> {
         })
     }
     fn value(&self, state: &State, expression: ExprId) -> Value {
-        state.values.get(&expression).cloned().unwrap_or_else(|| {
-            Value::new(
-                self.ty(expression)
-                    .and_then(|id| self.body.types.get(id))
-                    .map_or_else(Modes::global, |t| t.modes.clone()),
-            )
-        })
+        state
+            .values
+            .get(&expression)
+            .or_else(|| self.constants.get(&expression)?.as_ref())
+            .cloned()
+            .unwrap_or_else(|| {
+                Value::new(
+                    self.ty(expression)
+                        .and_then(|id| self.body.types.get(id))
+                        .map_or_else(Modes::global, |t| t.modes.clone()),
+                )
+            })
     }
     /// An argument's value as the callee receives it. A borrowed or `mut`
     /// place is passed as itself, and the later arguments may still read and
@@ -5013,7 +5059,11 @@ impl Checker<'_> {
                     None,
                 );
                 self.record(*expression, &mut value);
-                state.values.insert(*expression, value);
+                if let Some(constant) = self.constants.get_mut(expression) {
+                    *constant = Some(value);
+                } else {
+                    state.values.insert(*expression, value);
+                }
             }
             Op::ArgumentLoan { argument, call } => {
                 let mut source = *argument;
