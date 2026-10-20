@@ -33,6 +33,24 @@ pub fn run(
     batch_size: usize,
     preamble: &str,
 ) {
+    run_selected(suite, cases, shard, shards, batch_size, preamble, false);
+}
+
+/// Real KDF work factors are too expensive to interpret. Compile the same
+/// assertions and source kernels to a linked native executable for each batch.
+pub fn run_native(suite: &str, cases: &[Case], batch_size: usize) {
+    run_selected(suite, cases, 0, 1, batch_size, "", true);
+}
+
+fn run_selected(
+    suite: &str,
+    cases: &[Case],
+    shard: usize,
+    shards: usize,
+    batch_size: usize,
+    preamble: &str,
+    native: bool,
+) {
     assert!(shards > 0 && shard < shards && batch_size > 0);
     let selected: Vec<_> = cases.iter().skip(shard).step_by(shards).collect();
     assert!(!selected.is_empty(), "{suite}: empty shard {shard}");
@@ -60,6 +78,37 @@ pub fn run(
             loaded
                 .check_for_execution()
                 .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}\n{source}"));
+            if native {
+                use hirsel_driver::native::{OptLevel, Options, Partition, TargetSpec, Toolchain};
+                let dir = std::env::temp_dir()
+                    .join(format!("hirsel-vectors-{suite}-{}", std::process::id()));
+                std::fs::create_dir_all(&dir).unwrap();
+                let input = loaded.engine.export_native_input().unwrap();
+                let validated = loaded.engine.import_native_input(input).unwrap();
+                let target = TargetSpec::x86_64_unknown_linux_gnu();
+                let ready = native::build(&validated, &Options::new(target.clone()))
+                    .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}"));
+                let tools = Toolchain::in_tree(&dir.join("runtime"), &[&target]).unwrap();
+                let exe = native::link(
+                    &ready,
+                    &loaded.entry,
+                    OptLevel::Speed,
+                    Partition::Whole,
+                    &tools,
+                    &dir,
+                )
+                .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}"));
+                let output = std::process::Command::new(exe)
+                    .env_clear()
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{suite} {ids:?}: {output:?}\n{source}"
+                );
+                std::fs::remove_dir_all(dir).unwrap();
+                continue;
+            }
             loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
                 limits: hirsel_interp::Limits {
                     steps: None,

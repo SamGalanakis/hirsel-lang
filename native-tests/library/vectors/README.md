@@ -7,6 +7,10 @@ steps are unlimited (`Limits { steps: None }`); call depth remains bounded at 25
 Each case has its own function and upstream identifier. A failure prints the suite,
 batch IDs and generated source, including the failing assertion's source location.
 
+Hash, MAC and KDF suites: see [HASHES.md](HASHES.md) for counts, exact sources
+and every adaptation. `run_native` links the same assertions for expensive
+PBKDF2 work factors and long Adler-32 inputs.
+
 ## AEAD suites
 
 `stdlib_aead_vectors.rs` registers 26 Rust tests: eight shards for each Wycheproof

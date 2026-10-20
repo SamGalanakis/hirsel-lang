@@ -60,6 +60,7 @@ the license named in its row; the license texts follow once each.
 | Rust standard library | `library/core/src/str/mod.rs`, `library/alloc/src/str.rs`, `library/alloctests/tests/str.rs` contains, lines and replace algorithms/contracts and multilingual/line-ending vectors | `stdlib/std@1/string.hir`, common string conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Zig standard library | `lib/std/crypto/sha2.zig` portable SHA-256 state, rounds, update/final and empty/abc/long/streaming/aligned vectors | `stdlib/std@1/sha256.hir`, SHA-256 conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Zig standard library | `lib/std/hash/fnv.zig` FNV-1a 64 offset basis, prime, byte update and empty/"a"/"foobar" vectors | `stdlib/std@1/fnv.hir`, FNV conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| Go / Go supplementary crypto / RFC 2202, 4231, 6070 | Full hash golden tables, 256-row BLAKE2 keyed KATs, MAC and KDF tables; exact file:line sources and adaptations in `native-tests/library/vectors/HASHES.md` | `native-tests/library/vectors/go-*.json`, `rfc-hmac.json`, `stdlib_hash_vectors.rs` | same Go/crypto revisions below; RFC 2202 (1997), 4231 (2005), 6070 (2011) | BSD-3-Clause (Go); RFC reproduction terms below |
 | Go standard library | `src/crypto/sha1/{sha1.go,sha1block.go}` and `src/crypto/md5/{md5.go,md5block.go}` generic blocks, constants and padding; `sha1_test.go`/`md5_test.go` golden vectors | `stdlib/std@1/{sha1,md5}.hir`, SHA-1 and MD5 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/crypto/internal/fips140/sha256/sha256.go` SHA-224 initial words and `src/crypto/internal/fips140/sha512/{sha512.go,sha512block.go}` constants, generic block, 128-bit length padding and SHA-384/512-256 initial words; `src/crypto/sha256/sha256_test.go` golden224 and `src/crypto/sha512/sha512_test.go` golden384/512/256 vectors | `stdlib/std@1/{sha224,sha384,sha512,sha512_256}.hir`, SHA-2 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go supplementary crypto | `blake2b/{blake2b.go,blake2b_generic.go}` and `blake2s/{blake2s.go,blake2s_generic.go}` parameter block, keyed first block, held-back final block and G/round schedule; `blake2b_test.go`/`blake2s_test.go` keyed known-answer vectors | `stdlib/std@1/{blake2b,blake2s}.hir`, BLAKE2 conformance | golang/crypto `0ae6809b7559060fe62abe65e26bd18b1fcaf6b7` | BSD-3-Clause (Go) |
@@ -68,7 +69,7 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/crypto/chacha20.zig` ChaCha20 and HChaCha20 rounds, the ChaCha20-Poly1305 and XChaCha20-Poly1305 constructions and their seal/open vectors; `poly1305.zig` final reduction | `stdlib/std@1/{chacha_poly,chacha20poly1305,xchacha20poly1305,aead}.hir`, ChaCha20-Poly1305 conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | poly1305-donna | `poly1305-donna-64.h` 44-bit limb multiplication and carry chain | `stdlib/std@1/chacha_poly.hir` Poly1305 | floodyberry/poly1305-donna (2016) | Public domain (MIT where unavailable) |
 | Zig standard library | `lib/std/crypto/aes/bitsliced.zig` S-box Boolean circuit; `ghash_polyval.zig` clmulSoft128 carry-less product and reduce; `aes_gcm.zig` AES-256-GCM vectors | `stdlib/std@1/aes_gcm.hir`, AES-GCM conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
-| Wycheproof | `testvectors_v1/{chacha20_poly1305,xchacha20_poly1305,aes_gcm}_test.json` cases | AEAD Wycheproof conformance and complete applicable JSON suites in `native-tests/library/vectors/` | C2SP/wycheproof `7a325932231bd7a724c791c8b0d65ea4d6d2f435` | Apache-2.0 |
+| Wycheproof | `testvectors_v1/{chacha20_poly1305,xchacha20_poly1305,aes_gcm,hmac_*,pbkdf2_hmac*}_test.json` cases | AEAD, HMAC and PBKDF2 reference suites and complete upstream JSON files in `native-tests/library/vectors/` | C2SP/wycheproof `7a325932231bd7a724c791c8b0d65ea4d6d2f435` | Apache-2.0 |
 | RFC 8439 | ChaCha20-Poly1305 (2.8.2) and primitive A.1–A.3 test vectors | ChaCha20-Poly1305 conformance and `native-tests/library/vectors/rfc8439.json` | RFC 8439 (June 2018) | Simplified BSD (IETF Trust) |
 | Go standard library | `src/crypto/internal/fips140/{hmac/hmac.go,hkdf/hkdf.go,pbkdf2/pbkdf2.go}` key padding, keyed-state reuse, HKDF extract/expand and PBKDF2 block loop; `src/crypto/subtle/constant_time.go` ConstantTimeCompare and its test vectors; `src/crypto/hmac/hmac_test.go` FIPS 198 sample; RFC 2202, 4231, 5869, 6070 and 7914 vectors | `stdlib/std@1/{digest,hmac,hkdf,pbkdf2,constant_time}.hir`, HMAC/HKDF/PBKDF2/constant-time conformance and the constant-time trace test | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/hash/crc32/{crc32.go,crc32_generic.go}` IEEE and Castagnoli simple tables and update, `src/hash/adler32/adler32.go` nmax-batched sums; `crc32_test.go` and `adler32_test.go` golden vectors | `stdlib/std@1/{crc32,crc32c,adler32}.hir`, checksum conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
@@ -1383,3 +1384,29 @@ of the input file used when generating it.  This code is not
 standalone and requires a support library to be linked with it.  This
 support library is itself covered by the above license.
 ```
+
+## RFC vector reproduction
+
+RFC 2202: Copyright (C) The Internet Society (1997). All Rights Reserved.
+
+These documents and translations of them may be copied and furnished to others,
+and derivative works that comment on or otherwise explain them or assist in
+their implementation may be prepared, copied, published and distributed, in
+whole or in part, without restriction of any kind, provided that the above
+copyright notice and this paragraph are included on all such copies and
+derivative works.
+
+RFC 4231: Copyright (C) The Internet Society (2005).
+
+This document is subject to the rights, licenses and restrictions contained in
+BCP 78, and except as set forth therein, the authors retain all their rights.
+
+This document and the information contained herein are provided on an "AS IS"
+basis and THE CONTRIBUTOR, THE ORGANIZATION HE/SHE REPRESENTS OR IS SPONSORED BY
+(IF ANY), THE INTERNET SOCIETY AND THE INTERNET ENGINEERING TASK FORCE DISCLAIM
+ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTY
+THAT THE USE OF THE INFORMATION HEREIN WILL NOT INFRINGE ANY RIGHTS OR ANY
+IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+
+The RFC 6070 code components use the Simplified BSD terms reproduced above.
+Copyright (c) 2011 IETF Trust and the persons identified as the document authors.
