@@ -1,0 +1,27 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// ReadInto only writes the delivered prefix, including when LLVM can discard an
+// unobserved initializer. Observed suffixes and an EOF read keep their old bytes.
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [Open([Send(b"ab")])]
+      )
+    ],
+    []
+  )
+  let mut s = net.connect(n, "example.com", 80u16, Unbounded())?
+  let mut buffer: Inline[u8, 4] = [165u8; 4]
+  test.check(t, net.read_into(n, mut s, mut buffer)? == 2u64)
+  test.check(t, buffer == [97u8, 98u8, 165u8, 165u8])
+  test.check(t, net.read_into(n, mut s, mut buffer)? == 0u64)
+  test.check(t, buffer == [97u8, 98u8, 165u8, 165u8])
+  Ok(())
+}

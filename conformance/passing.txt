@@ -89,6 +89,7 @@ conformance/CAP/CAP-1-process-ungranted-run.hir
 conformance/CAP/CAP-1-random-draws-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
+conformance/CAP/CAP-1-read-into-keeps-unwritten-suffix-run.hir
 conformance/CAP/CAP-1-signals-before-projection-run.hir
 conformance/CAP/CAP-1-signals-double-interrupt-run.hir
 conformance/CAP/CAP-1-signals-graceful-shutdown-run.hir

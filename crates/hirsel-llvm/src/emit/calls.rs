@@ -376,6 +376,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             )?),
             None => None,
         };
+        if name.as_deref() == Some("hirsel_rt_v2_net_read_into")
+            && let Some(function) = function
+        {
+            // recv/copy initializes a prefix without reading the old buffer. The
+            // borrowed address can be parked transiently, but never outlives this
+            // call. This lets LLVM discard initializers whose suffix is unused;
+            // callers that observe the suffix keep the stores they need.
+            for attribute in [Attribute::WriteOnly, Attribute::CapturesNone] {
+                self.module
+                    .add_attribute(function, AttributeSlot::Parameter(5), attribute);
+            }
+        }
         let mut args = Vec::new();
         let mut result_place = None;
         let codes = self.caller_sites(self.anchor_code(site.anchor)?, site.forward_caller);

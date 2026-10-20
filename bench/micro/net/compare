@@ -46,10 +46,12 @@ def checked_sample(*args, **kwargs):
     return result
 runner.sample = checked_sample
 with timing_lock(31), (args.output / 'client.log').open('w') as log:
+    stop = args.output / 'stop-client'
+    stop.unlink(missing_ok=True)
     runner.timing_lock = lambda cpu: contextlib.nullcontext()
     client = subprocess.Popen([str(ROOT / 'tools/capped'), '--timeout', '900', 'taskset', '-c', '7',
         'python3', str(ROOT / 'bench/micro/http/load.py'), '--sessions', str(10 * len(participants)),
-        '--output', str(args.output / 'latencies.json')], env=env, stdout=log, stderr=log)
+        '--output', str(args.output / 'latencies.json'), '--stop-file', str(stop)], env=env, stdout=log, stderr=log)
     try:
         sys.argv = [str(ROOT / 'bench/micro/run'), str(manifest), '--rounds', '10', '--seed', '20261020',
                     '--output', str(args.output / 'counts.json')]
@@ -60,6 +62,6 @@ with timing_lock(31), (args.output / 'client.log').open('w') as log:
         if client.returncode:
             raise RuntimeError('client failed: ' + (args.output / 'client.log').read_text())
     finally:
+        stop.touch()
         if client.poll() is None:
-            client.terminate()
             client.wait(30)
