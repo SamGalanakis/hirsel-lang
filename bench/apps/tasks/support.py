@@ -41,12 +41,14 @@ def grants(directory, port):
 
 
 class Server:
-    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None, heap=None):
+    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None, heap=None, extra_env=None):
         environment = dict(os.environ, TASKS_DATA=str(directory),
                            TASKS_STATIC=str(ROOT / 'examples/tasks/static'),
                            TASKS_WALL_CLOCK='off', TASKS_LOG_LEVEL='error',
                            TASKS_RUNTIME='multi_thread' if kind == 'rust-one-worker' else 'current_thread',
+                           TASKS_STORE='files', TASKS_DURABILITY='volatile', TASKS_HOST='127.0.0.1',
                            HIRSEL_JOBS='1')
+        environment.update(extra_env or {})
         if kind == 'hirsel':
             command = [str(hirsel_binary), '--hirsel-grants', json.dumps(grants(directory, port)), '--port', str(port), '--log-level', 'error']
         else:

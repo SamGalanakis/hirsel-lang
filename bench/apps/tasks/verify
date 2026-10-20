@@ -61,4 +61,14 @@ with tempfile.TemporaryDirectory(prefix='tasks-verify-') as scratch:
     os.kill(pid, signal.SIGTERM)
     assert server.process.wait(10) == 0, 'SIGTERM must exit while stdin stays open'
     server.stop()
-    print('ok: 11 differential HTTP/HTML checks, 4 corrupt/save-failure checks, 1 SIGTERM check')
+    for mode, extra in [('memory', {'TASKS_STORE': 'memory'}), ('durable', {'TASKS_DURABILITY': 'durable'})]:
+        data = root / mode
+        data.mkdir()
+        server = Server('rust', data, free_port(), APP / 'build/tasks-hirsel', root / f'{mode}.log', extra_env=extra)
+        try:
+            assert exchange(server.port, 'POST', '/tasks', draft('Provider check'))[0] == 200
+            assert b'Provider check' in exchange(server.port, 'GET', '/')[1]
+        finally:
+            server.stop()
+        assert bool(list(data.glob('board-*.json'))) == (mode == 'durable')
+    print('ok: 11 differential HTTP/HTML checks, 4 corrupt/save-failure checks, 1 SIGTERM check, 6 storage-provider checks')

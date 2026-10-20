@@ -9,7 +9,8 @@ No system packages or load tools are installed. The load generator is the
 
 Defaults: ten rounds, three-second open-loop cells at 1, 4, 16, 64, 256 and 1024 requests/s,
 10,000 persisted tasks, three participants (Hirsel, Rust current_thread, Rust
-multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Each participant’s sweep stops at its first capacity knee. Rates can be
+multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Each
+participant’s sweep stops at its first capacity knee. Rates can be
 selected with `--rates 1,4,16,64`; cells that cannot keep up retain their corrected
 latency and completion rate. The knee is the first rate whose achieved rate is
 below 90% of offered rate. If no knee is reached the report says so; extend the
@@ -19,7 +20,8 @@ sweep before drawing a capacity conclusion. `--rounds` cannot be below ten.
 labelled partial in its generated report. All raw results are saved before
 rendering `RESULTS.md`. Never compare wall times from separate invocations.
 
-The server is a fresh capped process for every sample. Cold-start cells use an
+The server is a fresh capped process for every sample. A native pre-exec marker
+excludes perf startup from first-response latency. Cold-start cells use an
 empty board; restart and operation cells start with the same 10k snapshot.
 Open-loop latency includes queueing from the scheduled arrival (no coordinated
 omission). Each response body is fully consumed, keeping HTTP connections alive.
@@ -49,3 +51,15 @@ corrupt-snapshot recovery, save failure and SIGTERM with stdin open.
 `./bench/apps/tasks/bench --report-only` regenerates the Markdown from raw samples.
 `--heap-only` appends heap evidence to an earlier session without new timings.
 CPU and heap profiles are separate diagnostic runs, not comparison samples.
+
+The saved session reports a 4 GiB cap failure while Hirsel opens 1000 SSE clients.
+It does not retry that cell or increase the cap; the row stays unavailable and the
+other cells continue. The exact memory-limit evidence is retained in the report.
+Allocation profiles require the already installed `heaptrack` tools; no package
+installation is attempted. `/proc` resident mapping snapshots accompany them.
+
+Measurement builds use the repository's pinned Rust 1.99.0 and LLVM 21.1.8.
+The initial seed is written directly as the common on-disk snapshot, rather than
+spending measurement time creating 10,000 tasks through HTTP. A create cell grows
+that board; an update cell repeatedly edits task 1, and every successful edit
+bumps the revision and saves even when the submitted fields match their old values.
