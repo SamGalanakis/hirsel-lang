@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1573 exported definitions; 579 variants.
+1590 exported definitions; 587 variants.
 
 ## Types and roots
 
@@ -8597,6 +8597,165 @@ Variant of scalar.ParseError.
 - `OutOfRange -> scalar.ParseError`
 
 Variant of scalar.ParseError.
+
+
+## schedule
+
+<a id="def-std_401_2fschedule_2fFailure"></a>
+
+- `pub type schedule.Failure[E] = GiveUp(E, u64) | Interrupted(Option[E], u64, ScheduleError)`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/ScheduleError`](#def-std_401_2fschedule_2fScheduleError)
+
+<a id="def-std_401_2fschedule_2fFailure_23GiveUp"></a>
+
+- `GiveUp(E, u64) -> schedule.Failure[E]`
+
+Variant of schedule.Failure.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschedule_2fFailure_23Interrupted"></a>
+
+- `Interrupted(Option[E], u64, ScheduleError) -> schedule.Failure[E]`
+
+Variant of schedule.Failure.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/ScheduleError`](#def-std_401_2fschedule_2fScheduleError)
+
+<a id="def-std_401_2fschedule_2fJitter"></a>
+
+- `pub type schedule.Jitter = Full | Equal | Decorrelated`
+
+<a id="def-std_401_2fschedule_2fJitter_23Decorrelated"></a>
+
+- `Decorrelated -> schedule.Jitter`
+
+Variant of schedule.Jitter.
+
+<a id="def-std_401_2fschedule_2fJitter_23Equal"></a>
+
+- `Equal -> schedule.Jitter`
+
+Variant of schedule.Jitter.
+
+<a id="def-std_401_2fschedule_2fJitter_23Full"></a>
+
+- `Full -> schedule.Jitter`
+
+Variant of schedule.Jitter.
+
+<a id="def-std_401_2fschedule_2fSchedule"></a>
+
+- `pub opaque type schedule.Schedule: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fschedule_2fScheduleError"></a>
+
+- `pub type schedule.ScheduleError = Clock(ClockError) | Random(random.SampleError) | Sleep( time.SleepError )`
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError), [`std@1/random/SampleError`](#def-std_401_2frandom_2fSampleError), [`std@1/time/SleepError`](#def-std_401_2ftime_2fSleepError)
+
+<a id="def-std_401_2fschedule_2fScheduleError_23Clock"></a>
+
+- `Clock(ClockError) -> schedule.ScheduleError`
+
+Variant of schedule.ScheduleError.
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError)
+
+<a id="def-std_401_2fschedule_2fScheduleError_23Random"></a>
+
+- `Random(random.SampleError) -> schedule.ScheduleError`
+
+Variant of schedule.ScheduleError.
+
+References: [`std@1/random/SampleError`](#def-std_401_2frandom_2fSampleError)
+
+<a id="def-std_401_2fschedule_2fScheduleError_23Sleep"></a>
+
+- `Sleep( time.SleepError ) -> schedule.ScheduleError`
+
+Variant of schedule.ScheduleError.
+
+References: [`std@1/time/SleepError`](#def-std_401_2ftime_2fSleepError)
+
+<a id="def-std_401_2fschedule_2fcapped"></a>
+
+- `pub fn schedule.capped(s: Schedule, max_delay: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fexponential"></a>
+
+- `pub fn schedule.exponential(base: u64, factor: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2ffibonacci"></a>
+
+- `pub fn schedule.fibonacci(base: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2ffixed"></a>
+
+- `pub fn schedule.fixed(interval: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fintersect"></a>
+
+- `pub fn schedule.intersect(a: Schedule, b: Schedule) -> Schedule uses {}`
+
+References: [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fjittered"></a>
+
+- `pub fn schedule.jittered(s: Schedule, kind: Jitter) -> Schedule uses {}`
+
+References: [`std@1/schedule/Jitter`](#def-std_401_2fschedule_2fJitter), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fmax_5fattempts"></a>
+
+- `pub fn schedule.max_attempts(s: Schedule, n: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fmax_5felapsed"></a>
+
+- `pub fn schedule.max_elapsed(s: Schedule, nanoseconds: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fnext"></a>
+
+- `pub fn schedule.next(clock: MonotonicClock, r: Random, mut s: Schedule, start: Instant of clock) -> Result[ Option[time.Duration], ScheduleError ]`
+
+References: [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-core_401_2fResult), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule), [`std@1/schedule/ScheduleError`](#def-std_401_2fschedule_2fScheduleError), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
+
+<a id="def-std_401_2fschedule_2frepeat"></a>
+
+- `pub fn schedule.repeat[T, E]( clock: MonotonicClock, r: Random, schedule: Schedule, op: fn() -> Result[T, E] ) -> Result[(T, u64), Failure[E]]`
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Failure`](#def-std_401_2fschedule_2fFailure), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fretry"></a>
+
+- `pub fn schedule.retry[T, E]( clock: MonotonicClock, r: Random, schedule: Schedule, op: fn() -> Result[T, E], should_retry: fn(E) -> bool ) -> Result[(T, u64), Failure[E]]`
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Failure`](#def-std_401_2fschedule_2fFailure), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2fspaced"></a>
+
+- `pub fn schedule.spaced(interval: u64) -> Schedule uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
+
+<a id="def-std_401_2fschedule_2funion"></a>
+
+- `pub fn schedule.union(a: Schedule, b: Schedule) -> Schedule uses {}`
+
+References: [`std@1/schedule/Schedule`](#def-std_401_2fschedule_2fSchedule)
 
 
 ## schema

@@ -2410,6 +2410,45 @@ fn tasks_end_to_end_llvm() {
     tasks_end_to_end(true);
 }
 
+/// examples/tasks/e2e uses std's HTTP client throughout, and its `first_run` holds
+/// two open streams across about a hundred checks. Each check's early releases once
+/// repeated the streams' finalization in its own failure cleanup, and the LLVM build
+/// took five minutes and 2.35 GB (`rc_scaling`'s
+/// `early_releases_share_the_cleanup_of_live_resources` gates that cause). It now
+/// peaks near 1 GB; the bound is the compiler's own peak RSS.
+#[test]
+fn tasks_e2e_client_builds_with_llvm_in_bounded_memory() {
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-example-{}-{}-tasks-e2e-build",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args([
+            "build",
+            "--timings=json",
+            "--mem-usage",
+            "--backend",
+            "llvm",
+        ])
+        .arg(repository_manifest("examples/tasks/e2e/hirsel.json"))
+        .arg("-o")
+        .arg(dir.join("client"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "build the e2e client: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+    let peak = report["memory"]["peak_rss_bytes"].as_u64().unwrap();
+    assert!(
+        peak < 1536 << 20,
+        "the LLVM build of the e2e client peaked at {} MiB",
+        peak >> 20
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The gRPC greeter calls its own Greeter service over a real TCP connection in the
 /// interpreter and natively: a unary call, a server-streaming call and a refused call
 /// whose status reaches the client. Its packages resolve from the repository.

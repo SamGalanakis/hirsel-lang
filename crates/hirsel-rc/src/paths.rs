@@ -50,7 +50,7 @@ impl Paths {
 }
 
 /// A `Tri` per interned path, `No` where unset.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub(crate) struct Tris {
     /// Paths 0 to 63.
     yes: u64,

@@ -4,7 +4,9 @@
 //! from import to Ready, and C after each, on a function of two shapes and
 //! on one eight times its size (20 and 160 straight-line statements).
 //! `failure_cleanups_grow_linearly_with_live_counted_values` gates the size
-//! of shared failure cleanups and the time they cost.
+//! of shared failure cleanups and the time they cost, and
+//! `early_releases_share_the_cleanup_of_live_resources` the size of the
+//! cleanups early releases synthesize.
 use crate::rc_support as support;
 
 use hirsel_lir::ir::LirUnit;
@@ -141,8 +143,10 @@ fn checked<S: Stage>(units: &[LirUnit<S>], inputs: &Inputs<'_>) -> Duration {
 
 /// The time of each stage of `STAGES` over every unit of a checked program, the
 /// last being everything after the front end; the front end's entry stays
-/// zero. Also the number of blocks of the Ready units.
-fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize) {
+/// zero. Also the Ready units.
+fn middle_end(
+    program: &hirsel_rc::instance::Program,
+) -> ([Duration; 14], Vec<LirUnit<hirsel_lir::stage::Ready>>) {
     let mut out = [Duration::ZERO; 14];
     let t = Clock::now();
     let lowered = hirsel_rc::import::lower(program, &target()).unwrap();
@@ -206,7 +210,11 @@ fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize)
     out[11] = t.elapsed();
     out[12] = checked(&ready, &inputs);
     out[13] = out[1..13].iter().sum();
-    (out, ready.iter().map(|u| u.blocks.len()).sum())
+    (out, ready)
+}
+
+fn blocks(units: &[LirUnit<hirsel_lir::stage::Ready>]) -> usize {
+    units.iter().map(|u| u.blocks.len()).sum()
 }
 
 /// Eight times the statements may take at most 32 times as long. Linear is 8
@@ -250,7 +258,7 @@ fn pipeline_time_is_near_linear_in_function_size() {
 #[test]
 fn failure_cleanups_grow_linearly_with_live_counted_values() {
     let [small, middle, large] = [10, 20, 40].map(|n| compile(&deep(n)));
-    let blocks = [&small, &middle, &large].map(|p| middle_end(p).1);
+    let blocks = [&small, &middle, &large].map(|p| blocks(&middle_end(p).1));
     let (first, second) = (blocks[1] - blocks[0], blocks[2] - blocks[1]);
     assert!(
         2 * second <= 5 * first,
@@ -269,5 +277,57 @@ fn failure_cleanups_grow_linearly_with_live_counted_values() {
     assert!(
         least < 10.0,
         "40 live lists took {least:.1} times as long as 10"
+    );
+}
+
+/// Two resources with drop bodies live across `n` counted lists a call
+/// returns, each read once and so released at its last use.
+fn released(n: usize) -> String {
+    let mut s = String::from(
+        "type P { a: u64 }
+resource type T {
+  n: u64,
+  xs: box P,
+  ys: box P,
+}
+drop(x) {
+  ()
+}
+fn pair(i: u64, k: u64) -> List[u64] {
+  [i, k]
+}
+fn value(k: u64) -> u64 {
+  let t = T(n: 1, xs: box P(a: 1), ys: box P(a: 2))
+  let u = T(n: 2, xs: box P(a: 3), ys: box P(a: 4))
+  let mut total: u64 = 0
+",
+    );
+    for i in 0..n {
+        s += &format!("  let x{i} = pair({i}, k)\n  total = total + x{i}[1] + t.n\n");
+    }
+    s + "  total + u.n\n}\npub fn main() -> Result[(), u64] {\n  Error(value(3))\n}\n"
+}
+
+/// An early release cannot fail (its content has no user-visible
+/// destruction), but it still needs a failure cleanup of everything live
+/// after it, and those cleanups share their tails. Each used to be its own
+/// chain, so every release repeated the finalization of every live resource:
+/// at 10, 20 and 40 lists the Ready units held 24, 44 and 84
+/// `FinalizeBegin`s, and now 6 at each. A function with many checks between
+/// two open HTTP requests (examples/tasks/e2e's `first_run`) grew to 2.7
+/// million lines of LLVM IR and a five-minute LLVM build that way.
+#[test]
+fn early_releases_share_the_cleanup_of_live_resources() {
+    let finalizations = [10, 20, 40].map(|n| {
+        let (_, ready) = middle_end(&compile(&released(n)));
+        ready
+            .iter()
+            .flat_map(|u| &u.instructions)
+            .filter(|i| matches!(i, hirsel_lir::ir::Inst::FinalizeBegin { .. }))
+            .count()
+    });
+    assert_eq!(
+        finalizations[0], finalizations[2],
+        "FinalizeBegin in the Ready units at 10, 20 and 40 released lists: {finalizations:?}"
     );
 }

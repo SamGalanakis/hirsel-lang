@@ -196,7 +196,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             tracking: self.tracking(),
         };
         let i8_ty = self.module.int_type(8);
-        let status = self.prologue.alloca(i8_ty, 1);
+        let status = match self.drop_status {
+            Some(status) => status,
+            None => {
+                let status = self.prologue.alloca(i8_ty, 1);
+                self.drop_status = Some(status);
+                status
+            }
+        };
         self.builder
             .store(self.module.const_int(i8_ty, 0), status, 1);
         let mut pending = Vec::new();

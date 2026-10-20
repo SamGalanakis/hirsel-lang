@@ -959,7 +959,7 @@ fn exit_everywhere(
             continue;
         };
         let at = ed.unit.blocks[b.index()].anchor;
-        let failure = synthesize_failure(ed, lay, facts, &post, at).ok_or_else(|| {
+        let failure = synthesize_failure(ed, lay, facts, &post, at, None).ok_or_else(|| {
             PlaceError::Unsupported("a region exit whose failure cannot be cleaned".into())
         })?;
         if let Inst::RegionExit { failure: f, .. } = &mut ed.code[b.index()][i] {

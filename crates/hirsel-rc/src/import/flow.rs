@@ -21,6 +21,7 @@ impl Importer<'_, '_> {
         self.versioned.clear();
         self.constant_version = PVec::default();
         self.chain_memo.clear();
+        self.scratch.clear();
         self.outer_scope = false;
         self.unreachable = None;
         self.propagate = None;

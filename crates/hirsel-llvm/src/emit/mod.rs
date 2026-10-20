@@ -832,6 +832,10 @@ struct FnEmitter<'m, 'a> {
     regions: Vec<Value<'m>>,
     /// A register-result entry's one return block and its status and word phis.
     register_return: Option<(BasicBlock<'m>, Value<'m>, Value<'m>)>,
+    /// The `i8` every inline drop accumulates its status into: one per function,
+    /// zeroed as each drop starts, so promoting it is one pass over the function
+    /// rather than one per drop.
+    drop_status: Option<Value<'m>>,
     /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
     fuel_points: Vec<bool>,
 }

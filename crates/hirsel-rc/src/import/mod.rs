@@ -1036,6 +1036,7 @@ fn import_mapped(
             pending: Vec::new(),
         },
         chain_memo: HashMap::new(),
+        scratch: HashMap::new(),
         incoming: Vec::new(),
         entry_versions: Vec::new(),
         facts: Vec::new(),
@@ -1149,6 +1150,12 @@ struct Importer<'a, 'o> {
     failure: FailureContext,
     /// Failure-cleanup blocks by what they run and where they continue.
     chain_memo: HashMap<(Link, Option<BlockId>), BlockId>,
+    /// The outer scope's disposal scratch slots by the types disposed. Only a
+    /// failure-cleanup block makes them live, and no failure there disposes
+    /// again, so every exit's disposal of the same shape shares its slots,
+    /// and with them the links of the chains that release them. A shape's
+    /// slots are made together, so they release in their nested order.
+    scratch: HashMap<Vec<LirTypeId>, Vec<SlotId>>,
     /// Per TIR block, the join of states reaching it in this pass.
     incoming: Vec<Option<State>>,
     /// Per single-predecessor TIR block, the versions its edge carries.

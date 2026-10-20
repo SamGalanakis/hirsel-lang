@@ -53,6 +53,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             environment,
             regions: Vec::new(),
             register_return: None,
+            drop_status: None,
             fuel_points: if inputs.fuel {
                 hirsel_lir::fuel::fuel_points(unit)
             } else {

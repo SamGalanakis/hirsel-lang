@@ -39,7 +39,7 @@ use hirsel_lir::layout_types::{
 use hirsel_lir::persistent::{Element, PVec};
 use hirsel_lir::stage::{Placed, Rc, Stage};
 use std::cell::{Ref, RefCell};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 /// Lower a Placed unit to Rc: release every non-destructible slot content at
 /// its last use. The result still has to pass the Rc validator.
@@ -1167,7 +1167,7 @@ pub(crate) fn terminator_edges<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -
 // ---------------------------------------------------------------------------
 // Forward state: initialization, loans, regions and credits
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum Tri {
     No,
     Yes,
@@ -2484,6 +2484,7 @@ pub(crate) fn synthesize_failure<S: Stage>(
     facts: &mut Facts,
     state: &State,
     at: SourceAnchorId,
+    mut shared: Option<&mut SharedChains>,
 ) -> Option<FailureId> {
     let unit = &ed.unit;
     let mut pending = Vec::new();
@@ -2564,8 +2565,17 @@ pub(crate) fn synthesize_failure<S: Stage>(
     let (body, site) = anchor_site(unit, at);
     // Build the chain back to front: each link's failure continues with the
     // rest of the chain, as a cleanup operation finishes before failing.
-    let tail = ed.block(BlockKind::FailureCleanup, &[], at);
-    ed.unit.terminators[tail.index()] = Terminator::Propagate;
+    let tail = match shared.as_deref().and_then(|s| s.tail) {
+        Some(tail) => tail,
+        None => {
+            let tail = ed.block(BlockKind::FailureCleanup, &[], at);
+            ed.unit.terminators[tail.index()] = Terminator::Propagate;
+            if let Some(s) = shared.as_deref_mut() {
+                s.tail = Some(tail);
+            }
+            tail
+        }
+    };
     let mut next = tail;
     let link = |ed: &mut Editor<S>, inst: Inst, next: BlockId| -> BlockId {
         let b = ed.block(BlockKind::FailureCleanup, &[], at);
@@ -2580,71 +2590,155 @@ pub(crate) fn synthesize_failure<S: Stage>(
         ed.code[b.index()].push(inst);
         b
     };
+    // A link already built for the same step from the same state continues
+    // at the same block; otherwise `make` builds it. Its anchor is made only
+    // with the block, so every anchor stays discharged.
+    let mut step = |ed: &mut Editor<S>,
+                    key: SharedLink,
+                    next: BlockId,
+                    make: &mut dyn FnMut(&mut Editor<S>, BlockId) -> BlockId|
+     -> BlockId {
+        let Some(s) = shared.as_deref_mut() else {
+            return make(ed, next);
+        };
+        if let Some(&b) = s.links.get(&(key.clone(), next)) {
+            return b;
+        }
+        let b = make(ed, next);
+        s.links.insert((key, next), b);
+        b
+    };
     for &(region, mark) in regions.iter().rev() {
-        next = link(
+        next = step(
             ed,
-            Inst::RegionExit {
-                mark,
-                region,
-                failure: PENDING_FAILURE,
-            },
+            SharedLink::Region(region, mark),
             next,
+            &mut |ed, next| {
+                link(
+                    ed,
+                    Inst::RegionExit {
+                        mark,
+                        region,
+                        failure: PENDING_FAILURE,
+                    },
+                    next,
+                )
+            },
         );
     }
     for &(slot, init) in drops.iter().rev() {
-        let anchor = ed.cleanup_anchor(CleanupAnchor {
-            body,
-            cleanup: STATE_RELEASE,
-            action: slot.0,
-            site,
-        });
         let address = ed.whole(facts, slot);
-        next = link(
-            ed,
-            Inst::Drop {
-                address,
-                if_live: init != Tri::Yes,
-                anchor,
-                failure: PENDING_FAILURE,
-            },
-            next,
-        );
+        let key = SharedLink::Drop(address, SharedState::of(&state.slots[slot.index()]));
+        next = step(ed, key, next, &mut |ed, next| {
+            let anchor = ed.cleanup_anchor(CleanupAnchor {
+                body,
+                cleanup: STATE_RELEASE,
+                action: slot.0,
+                site,
+            });
+            link(
+                ed,
+                Inst::Drop {
+                    address,
+                    if_live: init != Tri::Yes,
+                    anchor,
+                    failure: PENDING_FAILURE,
+                },
+                next,
+            )
+        });
     }
     for &v in pending.iter().rev() {
-        let anchor = ed.cleanup_anchor(CleanupAnchor {
-            body,
-            cleanup: STATE_RELEASE,
-            action: u32::MAX - v.0,
-            site,
+        next = step(ed, SharedLink::Release(v), next, &mut |ed, next| {
+            let anchor = ed.cleanup_anchor(CleanupAnchor {
+                body,
+                cleanup: STATE_RELEASE,
+                action: u32::MAX - v.0,
+                site,
+            });
+            link(
+                ed,
+                Inst::Release {
+                    value: v,
+                    layout: lay
+                        .payload(value_layout(&ed.unit, v))
+                        .unwrap_or_else(|| value_layout(&ed.unit, v)),
+                    live: MaskRef::All,
+                    anchor,
+                    failure: PENDING_FAILURE,
+                },
+                next,
+            )
         });
-        next = link(
-            ed,
-            Inst::Release {
-                value: v,
-                layout: lay
-                    .payload(value_layout(&ed.unit, v))
-                    .unwrap_or_else(|| value_layout(&ed.unit, v)),
-                live: MaskRef::All,
-                anchor,
-                failure: PENDING_FAILURE,
-            },
-            next,
-        );
     }
     if !loans.is_empty() {
-        let b = ed.block(BlockKind::FailureCleanup, &[], at);
-        for &(loan, t) in &loans {
-            ed.code[b.index()].push(Inst::EndLoan {
-                loan,
-                if_active: t != Tri::Yes,
-            });
-        }
-        let e = ed.edge(next, &[]);
-        ed.unit.terminators[b.index()] = Terminator::Jump(e);
-        next = b;
+        next = step(
+            ed,
+            SharedLink::Ends(loans.clone()),
+            next,
+            &mut |ed, next| {
+                let b = ed.block(BlockKind::FailureCleanup, &[], at);
+                for &(loan, t) in &loans {
+                    ed.code[b.index()].push(Inst::EndLoan {
+                        loan,
+                        if_active: t != Tri::Yes,
+                    });
+                }
+                let e = ed.edge(next, &[]);
+                ed.unit.terminators[b.index()] = Terminator::Jump(e);
+                b
+            },
+        );
     }
     let head = ed.edge(next, &[]);
     Some(ed.failure(head, at))
+}
+
+/// Synthesized failure-cleanup blocks shared between failure edges that can
+/// never be taken: those of early releases, whose content has no
+/// user-visible destruction and so cannot fail to release. Their chains,
+/// built per release, would otherwise each repeat a drop of everything still
+/// live, the frame's long-lived resources included. A link is keyed by what
+/// it runs, the state of the slot it drops and the block it continues at, so
+/// chains meet at their common tail as the import's do; a shared link keeps
+/// the anchor site of the release that first needed it.
+#[derive(Default)]
+pub(crate) struct SharedChains {
+    tail: Option<BlockId>,
+    links: HashMap<(SharedLink, BlockId), BlockId>,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash)]
+enum SharedLink {
+    Region(RegionInstanceId, ValueId),
+    Drop(AddressId, SharedState),
+    Release(ValueId),
+    Ends(Vec<(LoanId, Tri)>),
+}
+
+/// The part of a dropped slot's state its drop depends on; versions are
+/// joined where links meet, as at the import's shared links.
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct SharedState {
+    live: Tri,
+    init: Tri,
+    moved: Tris,
+    taken: Tris,
+    fields_pending: Tris,
+    owned_empty: bool,
+}
+
+impl SharedState {
+    fn of(s: &SlotState) -> Self {
+        Self {
+            live: s.live,
+            init: s.init,
+            moved: s.moved.clone(),
+            taken: s.taken.clone(),
+            fields_pending: s.fields_pending.clone(),
+            owned_empty: s.owned_empty,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3203,12 +3297,13 @@ fn release_pass(
         }
     }
     let mut lost = BTreeSet::new();
+    let mut shared = SharedChains::default();
     for (b, i) in releases {
         let Some(state) = after_states.get(&(b, i)) else {
             continue;
         };
         let at = ed.unit.blocks[b.index()].anchor;
-        match synthesize_failure(&mut ed, lay, &mut facts, state, at) {
+        match synthesize_failure(&mut ed, lay, &mut facts, state, at, Some(&mut shared)) {
             Some(f) => {
                 if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {
                     *slot = f;
@@ -4885,7 +4980,7 @@ pub(crate) fn fill_pending(
     }
     for ((b, i), state) in wanted {
         let at = ed.unit.blocks[b.index()].anchor;
-        let f = synthesize_failure(ed, lay, facts, &state, at).ok_or_else(|| {
+        let f = synthesize_failure(ed, lay, facts, &state, at, None).ok_or_else(|| {
             PassError::Malformed("a failure whose cleanup cannot be synthesized".into())
         })?;
         if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {

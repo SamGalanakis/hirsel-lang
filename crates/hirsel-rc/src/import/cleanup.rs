@@ -354,12 +354,26 @@ impl Importer<'_, '_> {
         } else {
             innermost
         };
+        let types: Vec<LirTypeId> = pending.iter().map(|&v| self.value_type(v)).collect();
+        // An inner scope's later temporaries release before its earlier
+        // ones, so only the outer scope, which holds nothing else, shares.
+        let slots = match self.scratch.get(&types).filter(|_| outer) {
+            Some(slots) => slots.clone(),
+            None => {
+                let slots: Vec<SlotId> = types
+                    .iter()
+                    .map(|&ty| self.new_slot(ty, SlotKind::Temporary, scope))
+                    .collect();
+                if outer {
+                    self.scratch.insert(types.clone(), slots.clone());
+                }
+                slots
+            }
+        };
         let mut releases = Vec::new();
-        for &v in pending {
-            let ty = self.value_type(v);
+        for (&ty, slot) in types.iter().zip(slots) {
             let param = self.value(ty, Holding::Owned);
             self.out.blocks[block.index()].params.push(param);
-            let slot = self.new_slot(ty, SlotKind::Temporary, scope);
             self.push(Inst::StorageLive { slot });
             self.state.live(slot);
             let p = self.whole(slot);
@@ -382,7 +396,21 @@ impl Importer<'_, '_> {
         if outer {
             let mut all = actions.to_vec();
             all.extend(releases);
-            self.run_failure(&all)
+            // A result no finalizer can observe is released at one site for
+            // every exit, so the chains of all exits meet at their common
+            // tail; one with user-visible destruction keeps its exit's site.
+            let table = self.layouts.table();
+            let silent = pending.iter().all(|&v| {
+                let layout = self.out.types[self.value_type(v).index()].layout;
+                !crate::insert::Lay(table).destructible(layout)
+            });
+            let span = self.span;
+            if silent {
+                self.span = self.body.blocks[self.body.entry.0 as usize].span;
+            }
+            let ran = self.run_failure(&all);
+            self.span = span;
+            ran
         } else {
             releases.extend(actions.iter().cloned());
             self.run_failure(&releases)
