@@ -6,11 +6,12 @@
 //! independent of how many operations are parked, and with no runnable task
 //! [`Readiness::wait`] sleeps in one `epoll_wait` until a descriptor is ready or the earliest
 //! deadline passes. A timer wait is a deadline with no descriptor interest.
+use crate::id_map::{IdMap, IdSet};
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
@@ -23,24 +24,24 @@ pub struct Readiness(Rc<RefCell<ReadyState>>);
 struct ReadyState {
     current: u64,
     virtual_time: Option<u64>,
-    pending: BTreeMap<u64, Pending>,
+    pending: IdMap<Pending>,
     /// Tokens whose Pending a provider borrowed since the last scheduling point: their
     /// interest and deadline are registered before the next readiness question.
-    touched: BTreeSet<u64>,
+    touched: IdSet,
     /// The epoll set, created at the first descriptor interest.
     epoll: Option<OwnedFd>,
     /// Each registered descriptor's tokens and the events each waits for; the descriptor's
     /// registration is the union.
-    fds: HashMap<libc::c_int, Vec<(u64, libc::c_short)>>,
+    fds: IdMap<Vec<(u64, libc::c_short)>>,
     /// Deadlines by time, then token; an entry whose token no longer has that deadline is
     /// stale and skipped.
     timers: BinaryHeap<Reverse<(Instant, u64)>>,
     virtual_timers: BinaryHeap<Reverse<(u64, u64)>>,
     /// Parked tokens with neither interest nor deadline, or whose descriptor epoll cannot
     /// watch (a regular file): ready at every scheduling point, as a poll(2) of them is.
-    always: BTreeSet<u64>,
+    always: IdSet,
     /// Tokens the idle wait found ready, for the next scheduling point.
-    woken: BTreeSet<u64>,
+    woken: IdSet,
 }
 /// One parked operation's interest plus the progress a retried network
 /// operation keeps across readiness waits (CooperativeNet).
@@ -131,13 +132,15 @@ impl Readiness {
         let mut state = self.0.borrow_mut();
         state.sync()?;
         let mut ready = std::mem::take(&mut state.woken);
-        ready.extend(state.always.iter().copied());
+        for token in state.always.members_unordered().collect::<Vec<_>>() {
+            ready.insert(token);
+        }
         if !state.fds.is_empty() {
             state.epoll_events(0, &mut ready)?;
         }
         state.due(&mut ready);
-        let (parked, waiting): (Vec<u64>, Vec<u64>) = ready
-            .into_iter()
+        let (mut parked, waiting): (Vec<u64>, Vec<u64>) = ready
+            .drain_unordered()
             .filter(|token| state.pending.contains_key(token))
             .partition(|token| state.pending[token].parked);
         // The idle wait's findings for a request whose task has not parked yet stay.
@@ -145,7 +148,10 @@ impl Readiness {
             .into_iter()
             .filter(|t| !state.always.contains(t))
             .collect();
-        state.woken.extend(waiting);
+        for token in waiting {
+            state.woken.insert(token);
+        }
+        parked.sort_unstable();
         Ok(parked)
     }
     /// A timer wait for CLOCK_MONOTONIC `deadline` nanoseconds under the entered token:
@@ -227,7 +233,8 @@ impl Readiness {
 impl ReadyState {
     /// Register the interest and deadline of every token a provider touched.
     fn sync(&mut self) -> Result<(), AdapterError> {
-        for token in std::mem::take(&mut self.touched) {
+        let mut touched = std::mem::take(&mut self.touched);
+        for token in touched.drain_unordered() {
             let Some(pending) = self.pending.get_mut(&token) else {
                 continue;
             };
@@ -263,7 +270,7 @@ impl ReadyState {
             if let Some((fd, events)) = interest {
                 // Re-registered on every park, even unchanged: a descriptor closed and
                 // reopened under the same number left the epoll set when it closed.
-                let entry = self.fds.entry(fd).or_default();
+                let entry = self.fds.entry(fd as u64).or_default();
                 match entry.iter_mut().find(|(t, _)| *t == token) {
                     Some(row) => row.1 = events,
                     None => entry.push((token, events)),
@@ -291,12 +298,12 @@ impl ReadyState {
         if let Some(pending) = self.pending.get_mut(&token) {
             pending.registered = None;
         }
-        let Some(rows) = self.fds.get_mut(&fd) else {
+        let Some(rows) = self.fds.get_mut(&(fd as u64)) else {
             return;
         };
         rows.retain(|(t, _)| *t != token);
         if rows.is_empty() {
-            self.fds.remove(&fd);
+            self.fds.remove(&(fd as u64));
             if let Some(epoll) = &self.epoll {
                 // A descriptor already closed left the set by itself (ENOENT or EBADF).
                 // SAFETY: plain epoll control call on our own set.
@@ -317,10 +324,10 @@ impl ReadyState {
         }
     }
     fn forget(&mut self, token: u64, fd: libc::c_int) {
-        if let Some(rows) = self.fds.get_mut(&fd) {
+        if let Some(rows) = self.fds.get_mut(&(fd as u64)) {
             rows.retain(|(t, _)| *t != token);
             if rows.is_empty() {
-                self.fds.remove(&fd);
+                self.fds.remove(&(fd as u64));
             }
         }
     }
@@ -361,7 +368,7 @@ impl ReadyState {
     fn epoll_events(
         &mut self,
         timeout: libc::c_int,
-        ready: &mut BTreeSet<u64>,
+        ready: &mut IdSet,
     ) -> Result<(), AdapterError> {
         const BATCH: usize = 256;
         let epoll = self.epoll.as_ref().unwrap().as_raw_fd();
@@ -379,7 +386,7 @@ impl ReadyState {
             for event in &events[..n as usize] {
                 let fd = event.u64 as libc::c_int;
                 let revents = event.events;
-                for (token, wanted) in self.fds.get(&fd).into_iter().flatten() {
+                for (token, wanted) in self.fds.get(&(fd as u64)).into_iter().flatten() {
                     let wanted =
                         (*wanted as u16 as u32) | libc::EPOLLERR as u32 | libc::EPOLLHUP as u32;
                     if revents & wanted != 0 {
@@ -395,7 +402,7 @@ impl ReadyState {
         }
     }
     /// Add the tokens whose deadline has passed.
-    fn due(&mut self, ready: &mut BTreeSet<u64>) {
+    fn due(&mut self, ready: &mut IdSet) {
         if let Some(now) = self.virtual_time {
             while let Some(&Reverse((deadline, token))) = self.virtual_timers.peek() {
                 if deadline > now {
@@ -472,9 +479,9 @@ pub(crate) struct WaitLog {
     next: u64,
     /// Scheduling points with a parked wait so far.
     point: u64,
-    rows: BTreeMap<u64, WaitRow>,
+    rows: IdMap<WaitRow>,
     /// Each row's token by its ordinal.
-    ordinals: BTreeMap<u64, u64>,
+    ordinals: IdMap<u64>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct WaitRow {

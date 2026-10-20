@@ -14,10 +14,10 @@
 //! (`sockaddr_un`, `bind`, `connect`; f6c1107f). A listener removes the socket file it bound
 //! when it closes, as Go's `net.UnixListener` does (`unixsock_posix.go`, ebe2feef), but only
 //! while the path still names that socket's device and inode.
+use crate::id_map::IdMap;
 use crate::net::{
     NetError, NetProvider, NetTimeout, Provided, RootsDigest, ShutdownHow, SocketAddr, TimeoutKind,
 };
-use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
@@ -29,11 +29,11 @@ const BACKLOG: libc::c_int = 128;
 /// Open sockets keyed by their tape-local handle.
 #[derive(Debug, Default)]
 pub struct HostNet {
-    sockets: BTreeMap<u64, OwnedFd>,
-    tls: BTreeMap<u64, rustls::Connection>,
+    sockets: IdMap<OwnedFd>,
+    tls: IdMap<rustls::Connection>,
     pem: Option<Vec<u8>>,
     /// Each Unix listener's socket path and the identity of the file it bound.
-    unix_files: BTreeMap<u64, (std::ffi::CString, libc::dev_t, libc::ino_t)>,
+    unix_files: IdMap<(std::ffi::CString, libc::dev_t, libc::ino_t)>,
 }
 impl HostNet {
     pub fn new() -> Self {

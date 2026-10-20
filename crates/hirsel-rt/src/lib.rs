@@ -25,6 +25,7 @@ pub mod host_paths;
 mod host_stages;
 pub mod host_stdin;
 mod host_waits;
+mod id_map;
 pub mod io;
 pub mod io_checks;
 pub mod io_net_script;

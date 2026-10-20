@@ -19,9 +19,8 @@
 //! completion waits here for the task to resume. With no runnable task the scheduler sleeps
 //! in [`wait`] on every interest and the earliest deadline. Without cooperative admission a
 //! host request blocks the thread, as it always did.
-use std::collections::BTreeMap;
-
 use crate::RunCtx;
+use crate::id_map::IdMap;
 use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
 
@@ -29,9 +28,9 @@ use crate::stop::{Stop, Stopped};
 #[derive(Default)]
 pub(crate) struct Waits {
     next: u64,
-    parked: BTreeMap<u64, Parked>,
+    parked: IdMap<Parked>,
     /// Armed scope deadlines (CONC-3) by token: the scope and its timer request.
-    armed: BTreeMap<u64, (u32, Request)>,
+    armed: IdMap<(u32, Request)>,
 }
 struct Parked {
     request: Request,
@@ -217,13 +216,14 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx, ready: &Ready) -> Stopped<Vec<u32
     let mut armed: Vec<(u64, u64)> = binding
         .waits
         .armed
-        .iter()
-        .filter(|(token, _)| ready.contains(**token))
+        .iter_unordered()
+        .filter(|(token, _)| ready.contains(*token))
         .map(|(token, (_, request))| match request {
-            Request::SleepUntil { deadline, .. } => (*deadline, *token),
+            Request::SleepUntil { deadline, .. } => (*deadline, token),
             _ => crate::fault("an armed deadline that is not a timer"),
         })
         .collect();
+    // By deadline, ties in arming (token) order.
     armed.sort_unstable();
     let mut due = Vec::new();
     for (_, token) in armed {
@@ -294,7 +294,8 @@ pub(crate) unsafe fn ready(ctx: *mut RunCtx) -> Stopped<Ready> {
     binding.adapter.ready().map_err(Stop::refusal)
 }
 
-/// The parked tasks whose request `ready` names, in token order.
+/// The parked tasks whose request `ready` names. Their order is immaterial: the scheduler
+/// polls the woken tasks by deadline, then park order.
 ///
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is parked.
@@ -305,7 +306,11 @@ pub(crate) unsafe fn woken(ctx: *mut RunCtx, ready: &Ready) -> Vec<u32> {
     }
     let waits = &unsafe { Binding::get(ctx) }.waits;
     match ready {
-        Ready::Every => waits.parked.values().filter_map(|p| p.task).collect(),
+        Ready::Every => waits
+            .parked
+            .values_unordered()
+            .filter_map(|p| p.task)
+            .collect(),
         Ready::Tokens(tokens) => tokens
             .iter()
             .filter_map(|token| waits.parked.get(token)?.task)

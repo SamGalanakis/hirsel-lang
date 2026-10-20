@@ -70,7 +70,7 @@ fn replay(real: &RealIo, initial: Tree, mounts: &BTreeMap<String, Access>, final
         &tape,
         &initial,
         final_tree,
-        real.handles().observed(),
+        &real.handles().observed(),
         real.stdout(),
         mounts,
     );

@@ -138,7 +138,7 @@ fn loopback_recording_replays_without_sockets() {
         &tape,
         &initial,
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         b"",
     );
     let mut altered = tape.clone();
@@ -161,7 +161,7 @@ fn loopback_recording_replays_without_sockets() {
                 },
                 &initial,
                 sim.tree(),
-                sim.handles().observed(),
+                &sim.handles().observed(),
                 b"",
                 &std::collections::BTreeMap::from([(
                     String::new(),

@@ -224,7 +224,7 @@ fn replay(tape: &[Event], fixture: &RealIo) {
         },
         &tree,
         &tree,
-        fixture.handles().observed(),
+        &fixture.handles().observed(),
         b"",
         &Default::default(),
     );

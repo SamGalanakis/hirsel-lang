@@ -1598,12 +1598,13 @@ impl State {
                 let stale: Vec<u64> = self
                     .handles
                     .rows
-                    .iter()
+                    .sorted()
+                    .into_iter()
                     .filter_map(|(id, grant)| match grant {
                         Grant::File { directory, .. } | Grant::AtomicFile { directory, .. }
                             if self.fake_directories.get(directory) == Some(&tree) =>
                         {
-                            Some(*id)
+                            Some(id)
                         }
                         _ => None,
                     })

@@ -18,7 +18,7 @@ const UNIX_CONNECT_RETRY: Duration = Duration::from_millis(5);
 pub struct CooperativeNet {
     host: HostNet,
     readiness: Readiness,
-    timeouts: BTreeMap<u64, (NetTimeout, NetTimeout)>,
+    timeouts: IdMap<(NetTimeout, NetTimeout)>,
 }
 impl CooperativeNet {
     /// Blocked operations record their interest in the scheduler's shared readiness.
@@ -26,7 +26,7 @@ impl CooperativeNet {
         Self {
             host: HostNet::new(),
             readiness,
-            timeouts: BTreeMap::new(),
+            timeouts: IdMap::default(),
         }
     }
     fn interest(
@@ -202,7 +202,7 @@ impl CooperativeNet {
             Ok(fd) => fd,
             Err(e) => return Ok(Err(e)),
         };
-        if let std::collections::btree_map::Entry::Vacant(entry) = self.host.tls.entry(stream) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.host.tls.entry(stream) {
             match start() {
                 Ok(conn) => entry.insert(conn),
                 Err(e) => return Ok(Err(e)),

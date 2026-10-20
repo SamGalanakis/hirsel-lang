@@ -89,7 +89,7 @@ fn scripted_tls_success_close_name_mismatch_and_handshake_failure_replay_indepen
         PeerTls::Certificate(vec!["other.example".into()]),
     ] {
         let io = tls_record(tls);
-        replay_interpreter(io.tape(), &tree, &tree, io.handles().observed(), b"");
+        replay_interpreter(io.tape(), &tree, &tree, &io.handles().observed(), b"");
     }
 }
 pub const FAILURES: [TlsFailure; 11] = [
@@ -123,7 +123,7 @@ fn every_failing_peer_handshake_records_its_failure_and_replays_independently() 
             handshake(&io),
             Completion::NetUnit(Err(NetError::Tls(failure)))
         );
-        replay_interpreter(io.tape(), &tree, &tree, io.handles().observed(), b"");
+        replay_interpreter(io.tape(), &tree, &tree, &io.handles().observed(), b"");
         // The interpreter reproduces the fixture's failure, not the comparison tape's.
         let mut altered = io.tape().to_vec();
         altered
@@ -142,7 +142,7 @@ fn every_failing_peer_handshake_records_its_failure_and_replays_independently() 
                     },
                     &tree,
                     &tree,
-                    io.handles().observed(),
+                    &io.handles().observed(),
                     b"",
                     &BTreeMap::new(),
                 )
@@ -232,7 +232,7 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
             .unwrap(),
             Completion::Count(Ok(5))
         );
-        replay_interpreter(io.tape(), &tree, &tree, io.handles().observed(), b"");
+        replay_interpreter(io.tape(), &tree, &tree, &io.handles().observed(), b"");
     }
 }
 
@@ -259,7 +259,7 @@ fn pem_roots_require_the_original_bundle_matching_the_recorded_digest() {
             },
             &tree,
             &tree,
-            io.handles().observed(),
+            &io.handles().observed(),
             b"",
             &BTreeMap::new(),
         )
@@ -333,7 +333,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
                 );
             }
         }
-        replay_interpreter(io.tape(), &tree, &tree, io.handles().observed(), b"");
+        replay_interpreter(io.tape(), &tree, &tree, &io.handles().observed(), b"");
         // A fixed peer certificate cannot both accept and reject one name.
         let mut conflicting = io.tape().to_vec();
         for event in &mut conflicting {
@@ -347,7 +347,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
         }
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                replay_interpreter(&conflicting, &tree, &tree, io.handles().observed(), b"");
+                replay_interpreter(&conflicting, &tree, &tree, &io.handles().observed(), b"");
             }))
             .is_err()
         );
@@ -402,7 +402,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
             },
             &tree,
             native.tree(),
-            native.handles().observed(),
+            &native.handles().observed(),
             b"",
             &BTreeMap::new(),
         )

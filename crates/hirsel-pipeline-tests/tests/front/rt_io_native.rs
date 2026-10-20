@@ -186,7 +186,7 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                         &recording.events,
                         &recording.tree,
                         sim.tree(),
-                        sim.handles().observed(),
+                        &sim.handles().observed(),
                         sim.stdout(),
                     );
                 }
@@ -416,7 +416,7 @@ fn partial_write_replay(
                 &events,
                 &tree,
                 sim.tree(),
-                sim.handles().observed(),
+                &sim.handles().observed(),
                 sim.stdout(),
             );
             if name == "file-write-partial" {

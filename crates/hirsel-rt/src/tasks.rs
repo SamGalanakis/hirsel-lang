@@ -43,7 +43,7 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 
 use hirsel_kernels::schedule::{Algorithm, Schedule};
@@ -223,8 +223,7 @@ pub(crate) struct Scheduler {
     generation: u32,
     current: u32,
     runnable: VecDeque<u32>,
-    /// Parked tasks by their place in park order.
-    parked: BTreeMap<u64, u32>,
+    /// Park places handed out so far; a parked task holds its place in `Task::parked_at`.
     parks: u64,
     /// Parked tasks to poll at the next scheduling point.
     woken: Vec<u32>,
@@ -398,7 +397,6 @@ impl Scheduler {
         row.wait = Some(wait);
         row.parked_at = at;
         row.woken = true;
-        self.parked.insert(at, current);
         self.woken.push(current);
         match wait {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
@@ -407,12 +405,29 @@ impl Scheduler {
             Wait::Exit { .. } | Wait::Host { .. } => {}
         }
     }
+    /// The parked tasks (exactly those with a wait) and their waits, in park order. Only
+    /// quiescence and test reporting walk them, so no index is kept.
+    fn parked(&self) -> Vec<(u32, Wait)> {
+        let mut parked: Vec<_> = self
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let row = row.as_ref()?;
+                Some((row.parked_at, index as u32, row.wait?))
+            })
+            .collect();
+        parked.sort_unstable_by_key(|&(at, _, _)| at);
+        parked
+            .into_iter()
+            .map(|(_, task, wait)| (task, wait))
+            .collect()
+    }
     /// A poll ended parked `task`'s wait: it leaves every registration and joins the queue.
     fn unpark(&mut self, task: u32) {
         let row = self.task(task);
         let (at, wait) = (row.parked_at, row.wait.take());
         row.state = State::Ready;
-        self.parked.remove(&at);
         match wait {
             Some(Wait::Join { child, .. }) => {
                 if let Some(Some(child)) = self.tasks.get_mut(child as usize) {
@@ -598,18 +613,17 @@ pub(crate) fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
 pub(crate) fn test_waits(ctx: *mut RunCtx) -> String {
     let s = scheduler(ctx);
     let mut waits: Vec<_> = s
-        .parked
-        .values()
-        .map(|&task| {
+        .parked()
+        .into_iter()
+        .map(|(task, wait)| {
             let row = s.tasks[task as usize].as_ref().unwrap();
-            let kind = match row.wait {
-                Some(Wait::Join { .. }) => "task.await",
-                Some(Wait::Exit { .. }) => "task.scope",
-                Some(Wait::Receive { .. }) => "channel.receive",
-                Some(Wait::Host { token }) => unsafe { crate::host_waits::kind(ctx, token) },
-                Some(Wait::Any { .. }) => "task.await_any",
-                Some(Wait::Drain { .. }) => "task.cancel_all",
-                None => "task completion",
+            let kind = match wait {
+                Wait::Join { .. } => "task.await",
+                Wait::Exit { .. } => "task.scope",
+                Wait::Receive { .. } => "channel.receive",
+                Wait::Host { token } => unsafe { crate::host_waits::kind(ctx, token) },
+                Wait::Any { .. } => "task.await_any",
+                Wait::Drain { .. } => "task.cancel_all",
             };
             (row.path.clone(), kind)
         })
@@ -848,9 +862,8 @@ unsafe fn blocked_waits(ctx: *mut RunCtx) -> Vec<hirsel_run_config::Wait> {
     let table = unsafe { (*ctx).failure_table.as_deref() };
     let s = scheduler(ctx);
     let mut waits = Vec::new();
-    for index in s.parked.clone().into_values() {
+    for (index, wait) in s.parked() {
         let row = s.task(index);
-        let Some(wait) = row.wait else { continue };
         let spawn_path = row.path.clone();
         let site = table
             .filter(|_| row.wait_site != 0)

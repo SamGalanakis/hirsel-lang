@@ -311,7 +311,7 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                     &recording.events,
                     &recording.tree,
                     sim.tree(),
-                    sim.handles().observed(),
+                    &sim.handles().observed(),
                     &observed.output,
                 );
                 let mut altered = recording.events.clone();
@@ -335,7 +335,7 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                         },
                         &recording.tree,
                         sim.tree(),
-                        sim.handles().observed(),
+                        &sim.handles().observed(),
                         &observed.output,
                         &std::collections::BTreeMap::from([(
                             String::new(),

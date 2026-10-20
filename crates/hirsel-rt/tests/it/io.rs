@@ -129,7 +129,7 @@ fn disposable_filesystem_tape_replays_exact_outputs_partial_writes_tree_and_hand
         &tape,
         &initial(),
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -249,7 +249,7 @@ fn real_output_failure_records_and_replays_the_actual_committed_prefix() {
         real.0.tape(),
         &Tree::new(BTreeMap::new()).unwrap(),
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -526,7 +526,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
         &tape,
         &initial(),
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -727,7 +727,7 @@ fn walk_follows_relative_links_component_by_component_and_replays_their_paths() 
         real.0.tape(),
         &tree,
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -844,7 +844,7 @@ fn write_through_directory_alias_then_read_target_replays_the_same_bytes() {
         real.0.tape(),
         &tree,
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -897,7 +897,7 @@ fn exclusive_temporaries_skip_poisoned_links_and_commit_the_prepared_regular_ino
             real.0.tape(),
             &initial,
             sim.tree(),
-            sim.handles().observed(),
+            &sim.handles().observed(),
             sim.stdout(),
         );
     }
@@ -958,7 +958,7 @@ fn snapshots_preserve_links_and_invalid_names_without_refusing_admission() {
         real.0.tape(),
         &tree,
         sim.tree(),
-        sim.handles().observed(),
+        &sim.handles().observed(),
         sim.stdout(),
     );
 }
@@ -1048,7 +1048,13 @@ fn opened_identity_matches_disk_and_replays_live_unlink_identical_replacement_an
         sim.finish().unwrap();
         assert_eq!(sim.handles(), real.0.handles());
         assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
-        replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
+        replay_interpreter(
+            &tape,
+            &initial(),
+            sim.tree(),
+            &sim.handles().observed(),
+            &[],
+        );
     }
 }
 
@@ -1147,7 +1153,13 @@ fn atomic_append_preserves_opened_identity_until_publication_and_replays_the_tra
     sim.finish().unwrap();
     assert_eq!(sim.tree(), &initial());
     assert_eq!(sim.handles(), real.0.handles());
-    replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
+    replay_interpreter(
+        &tape,
+        &initial(),
+        sim.tree(),
+        &sim.handles().observed(),
+        &[],
+    );
 }
 
 #[test]
@@ -1206,7 +1218,7 @@ fn opened_aliases_compare_resolved_identity_after_identical_target_and_leaf_repl
     sim.finish().unwrap();
     assert_eq!(sim.handles(), real.0.handles());
     assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
-    replay_interpreter(&tape, &initial, sim.tree(), sim.handles().observed(), &[]);
+    replay_interpreter(&tape, &initial, sim.tree(), &sim.handles().observed(), &[]);
 }
 
 #[test]
@@ -1271,7 +1283,13 @@ fn atomic_commit_rejects_identical_replacement_of_its_prepared_temporary_in_each
         assert_eq!(sim.handles(), real.0.handles());
         assert_eq!(sim.fake_trees(), real.0.fake_trees());
         if !fake {
-            replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
+            replay_interpreter(
+                &tape,
+                &initial(),
+                sim.tree(),
+                &sim.handles().observed(),
+                &[],
+            );
         }
     }
 }
@@ -1636,7 +1654,7 @@ fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_hos
         &tape,
         &initial,
         &tree,
-        real.handles().observed(),
+        &real.handles().observed(),
         real.stdout(),
     );
     let mut forged = tape.clone();
@@ -1784,7 +1802,7 @@ fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
         &tape,
         &initial(),
         &final_tree,
-        real.handles().observed(),
+        &real.handles().observed(),
         real.stdout(),
     );
 }
@@ -2415,7 +2433,7 @@ fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
         b"outside"
     );
     let final_tree = host.snapshot().unwrap();
-    let handles = host.handles().observed().clone();
+    let handles = host.handles().observed();
     let tape = host.tape().to_vec();
     let text = hirsel_rt::launch::render_tape(&tape).unwrap();
     assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
@@ -2489,7 +2507,13 @@ fn put_new_and_sync_on_a_host_tree_record_round_trip_as_text_and_replay() {
     }
     sim.finish().unwrap();
     assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
-    replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
+    replay_interpreter(
+        &tape,
+        &initial(),
+        sim.tree(),
+        &sim.handles().observed(),
+        &[],
+    );
 }
 
 #[test]

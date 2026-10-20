@@ -1,4 +1,9 @@
 //! Logical capability identities, scoped to one adapter. No host address is a handle.
+//!
+//! Handle numbers are allocated in increasing order, never reused, and recorded on tapes, so
+//! both engines see the same numbers; the rows live in an [`IdMap`], so a lookup costs the
+//! same however many handles are open.
+use crate::id_map::IdMap;
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Grant {
@@ -72,13 +77,13 @@ pub enum Grant {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Handles {
-    pub(crate) rows: BTreeMap<u64, Grant>,
+    pub(crate) rows: IdMap<Grant>,
     next: u64,
 }
 impl Default for Handles {
     fn default() -> Self {
         Self {
-            rows: BTreeMap::from([(1, Grant::Io)]),
+            rows: IdMap::from_iter([(1, Grant::Io)]),
             next: 2,
         }
     }
@@ -86,12 +91,13 @@ impl Default for Handles {
 impl Handles {
     pub(crate) fn test(seed: u64) -> Self {
         Self {
-            rows: BTreeMap::from([(1, Grant::Test { seed })]),
+            rows: IdMap::from_iter([(1, Grant::Test { seed })]),
             next: 2,
         }
     }
-    pub fn observed(&self) -> &BTreeMap<u64, Grant> {
-        &self.rows
+    /// The open handles in number order.
+    pub fn observed(&self) -> BTreeMap<u64, Grant> {
+        self.rows.to_btree()
     }
     pub(crate) fn insert(&mut self, grant: Grant) -> u64 {
         let id = self.next;
