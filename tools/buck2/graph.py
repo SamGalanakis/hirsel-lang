@@ -4,9 +4,9 @@ tools/buck2/defs.bzl macro whose targets this module expands the same way.
 tools/gate --suggest and the floor's selection query it instead of starting a
 Buck2 daemon, so a suggestion never waits behind the worktree's daemon.
 
-Only the per-push graph is modelled: `full` stages and script tests exist only
-under `-c hirsel.full=true`, and third-party targets are build-wide inputs
-(impact.BUILD_WIDE) that select everything anyway. Against `buck2 uquery` on
+Only the per-push graph is modelled: `full` stages (including full-only script
+tests) exist only under `-c hirsel.full=true`, and third-party targets are
+build-wide inputs (impact.BUILD_WIDE) that select everything anyway. Against `buck2 uquery` on
 the repository's BUCK it gave the same tests for every crate, for all tests,
 and for the owners' reverse dependencies of 330 sampled files; a new macro
 must be taught here (an unknown one is refused).
@@ -164,7 +164,11 @@ def targets(text: str) -> dict[str, Target]:
             add(Target(name, deps=labels(a['hirsel'], a['precheck'])))
         elif macro == 'hirsel_native_selection':
             add(Target(name, inputs=sources(a.get('data', [])), deps=labels(a['collector'])))
-        elif macro in ('hirsel_script_test', 'hirsel_link_hosts_test'):
+        elif macro == 'hirsel_script_test':
+            if not a.get('full', True):
+                add(Target(name, test=True, inputs=sources(a['script'], a.get('data', [])),
+                           deps=labels(a.get('bin_exes', {}), a.get('runtime_archives'), a.get('precheck'))))
+        elif macro == 'hirsel_link_hosts_test':
             continue  # A full-gate stage.
         else:
             raise ValueError(f'BUCK: unknown macro {macro} (teach tools/buck2/graph.py its targets)')

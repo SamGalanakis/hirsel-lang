@@ -257,7 +257,9 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
 
 def _rust_test_impl(ctx):
     llvm = ctx.attrs.llvm[DefaultInfo].default_outputs[0]
-    exes = {bin: dep[DefaultInfo].default_outputs[0] for bin, dep in ctx.attrs.bin_exes.items()}
+    binaries = dict(ctx.attrs.bin_exes)
+    binaries.update(ctx.attrs.release_bin_exes)
+    exes = {bin: dep[DefaultInfo].default_outputs[0] for bin, dep in binaries.items()}
     inputs = ctx.attrs.data + [exe for _, exe in sorted(exes.items())] + [llvm]
     inputs += ctx.attrs._llvm_libraries[DefaultInfo].default_outputs
     tools = {name: dep[DefaultInfo].default_outputs[0] for name, dep in ctx.attrs.native_tools.items()}
@@ -341,6 +343,7 @@ _rust_test = rule(
         "args": attrs.list(attrs.string(), default = []),
         "bin_exe_dir": attrs.string(default = ""),
         "bin_exes": attrs.dict(attrs.string(), attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition"), default = {}),
+        "release_bin_exes": attrs.dict(attrs.string(), attrs.transition_dep(cfg = "root//tools/buck2:release_tool_transition"), default = {}),
         "costs": attrs.option(attrs.source(), default = None),
         "cwd": attrs.string(),
         # Environment variables naming input files.
@@ -436,14 +439,16 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None):
-    """A full-gate shell harness with the same hermetic inputs as native Rust tests."""
-    if not FULL_GATE:
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, bin_exes = {}, precheck = None, production = False):
+    """A script harness with the same hermetic inputs as native Rust tests."""
+    if full and not FULL_GATE:
         return
     binary = name + "-script"
     _script_binary(name = binary, script = script)
     _rust_test(
         name = name, harness = ":" + binary, args = [], data = data, cwd = ".",
+        bin_exes = {} if production else bin_exes, release_bin_exes = bin_exes if production else {},
+        bin_exe_dir = BIN_EXE_DIR + "/" + name, precheck = precheck,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],

@@ -382,7 +382,7 @@ class Graph(unittest.TestCase):
         tests = found.all_tests()
         self.assertIn('hirsel-driver-test-it-shard-1', tests)
         self.assertNotIn('hirsel-driver-test-it', tests)
-        self.assertFalse(any(name.startswith('gate-') for name in tests))
+        self.assertEqual({name for name in tests if name.startswith('gate-')}, {'gate-perf-counts'})
         self.assertTrue(found.owners(['crates/hirsel-lexer/src/lib.rs']) >= {'hirsel-lexer'})
 
     def test_globs_follow_buck2(self):
@@ -808,8 +808,9 @@ hirsel_test(
         selection.graph = graph.Graph(buck, self.root)
         expected = {'root//:vendor-tests', 'root//:hirsel-cli-test-examples-shard-1',
                     'root//:hirsel-cli-test-examples-shard-2'}
-        for plan in [selection.floor(), selection.suggest()]:
-            self.assertEqual(plan.tests, expected)
+        for plan, wanted in [(selection.floor(), expected),
+                             (selection.suggest(), expected | {impact.PERF_COUNTS})]:
+            self.assertEqual(plan.tests, wanted)
             self.assertIn(case, plan.conformance)
         self.assertIn(case, selection.suggest().agreement)
         self.assertTrue(any(case in why for _, why in selection.suggest().reasons))

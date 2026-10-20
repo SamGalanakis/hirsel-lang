@@ -137,6 +137,43 @@ Target names follow Cargo's targets, all in the root package:
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 | a historical native replay shard (`HISTORY_SHARDS`; `tools/native-plants.py --history-only` runs them) | `//:gate-native-history-shard-<i>` |
 
+## Instruction budgets
+
+`tools/gate --tests gate-perf-counts --why "instruction budgets"` checks the
+17 small native benchmarks and all eight `bench/micro/programs/*.hir` at
+N=1000 (one epoch) on the pool. The complete 25-case measurement, including
+builds and annotation, reserved 125.37 seconds on one pool CPU (2.09
+pool-minutes) and used 119.46 CPU-seconds. `impact.py` suggests it for changes
+to LLVM, RC, LIR, the runtime,
+stdlib and benchmark programs. Valgrind, its loader/libc, LLVM and the runtime
+archives are pinned inputs. Native builds use LLVM O3, one epoch of each
+small input read through an explicit `fixtures` directory grant, and must
+print the committed checksum. Runtime input prevents compile-time folding of
+the workload. Native counts cover fixture loading, the original workload,
+checksum, complete teardown and stdout. Both builds and diagnostic compiler
+checks use the production release compiler and the pinned std precheck,
+with one compiler worker. Cache simulation is disabled: only `Ir` is counted,
+so host cache geometry and wall time cannot change the verdict.
+
+`tools/gate --bless-perf-counts` measures on the pool and regenerates
+[`tools/perf-counts.tsv`](../perf-counts.tsv) on the host. Review and commit
+that diff. Both increases and decreases beyond 1% fail; exactly 1% passes.
+The table retains the top 50 `cg_annotate` function counts per case, without
+worker source paths. Failures print the largest 20 function deltas against
+those saved counts. Missing and removed cases fail too. Blessing does not
+create a green gate receipt.
+
+The two compiler cases remain explicitly open in the runner and table:
+`check/hello-web` took 113 seconds with the checked compiler, and
+`check/todo-api` exceeded the unchanged 240-second process limit with checked
+code and took 232.56 seconds (27,528,240,687 instructions) in release. The owner
+approved landing the 25 native/micro cells within five reserved pool-minutes
+while compiler performance is addressed. A diagnostic case remains runnable:
+
+```sh
+.buck2/bin/buck2 test -c hirsel.tests=focus //:gate-perf-counts -- --test-arg=--record --test-arg=--filter --test-arg=check/todo-api
+```
+
 ## Blessing expectations
 
 `tools/bless.sh <what>...` rewrites checked-in expectations from the code that

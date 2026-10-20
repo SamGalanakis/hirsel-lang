@@ -116,6 +116,17 @@ SOURCE_CAMPAIGNS = {
     'crates/hirsel-conformance/src/bin/native.rs': frozenset({NATIVE_SMOKE}),
 }
 
+# Count budgets apply to generated code and compiler checks.
+PERF_COUNTS = 'root//:gate-perf-counts'
+PERF_PATHS = ('crates/hirsel-llvm/**', 'crates/hirsel-rt/**', 'crates/hirsel-rc/**',
+              'crates/hirsel-lir/**', 'stdlib/**', 'bench/native/programs/**', 'bench/micro/**',
+              'tools/perf-counts', 'tools/perf-counts.tsv')
+
+
+def perf_counts(paths):
+    return any(matches(path, PERF_PATHS) for path in paths)
+
+
 # These producers must exercise both native backends with one program selection.
 NATIVE_PARITY_CRATES = frozenset({
     'hirsel-llvm', 'hirsel-cranelift', 'hirsel-lir', 'hirsel-rc', 'hirsel-rt',

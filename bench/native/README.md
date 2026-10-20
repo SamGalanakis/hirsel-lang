@@ -3,8 +3,9 @@
 This suite measures actual native Hirsel source against the frozen phase-1
 C and safe Rust references. Local x86-64 reports are informational: missing
 configurations, counters, workloads and native AArch64 timings are reported as
-incomplete. Benchmarks are not wired into either repository gate or a scheduled
-workflow; the harness's own tests (`bench/native/tests`) run in `tools/gate`
+incomplete. Deterministic instruction budgets for the 17 small Hirsel workloads
+run on the pool as `//:gate-perf-counts`; timing reports remain informational.
+The harness's own tests (`bench/native/tests`) run in `tools/gate`
 whenever a file here outside `programs/` changes. Reports are written to the gitignored `bench/native/out/` by default.
 
 The nested Rust project has its own `[workspace]` and lockfile; the parent

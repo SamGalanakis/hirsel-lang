@@ -48,6 +48,17 @@ host_transition(
     visibility = ["PUBLIC"],
 )
 
+# Performance budgets measure the production compiler, without test assertions.
+host_transition(
+    name = "release_tool_transition",
+    configuration_name = "root//tools/buck2:release",
+    budget = ":budget",
+    panic = ":panic",
+    profile = ":profile_release",
+    cpu = "prelude//cpu/constraints:x86_64",
+    visibility = ["PUBLIC"],
+)
+
 # The default target platform: Cargo's dev profile.
 platform(
     name = "dev",

@@ -968,6 +968,9 @@ class Selection:
             plan.reasons.append((f'{ALL} conformance agreement native-smoke',
                                  'a build-wide input, an unknown crate or the BUCK header changed'))
             return plan
+        if impact.perf_counts(self.paths):
+            plan.tests.add(impact.PERF_COUNTS)
+            plan.reasons.append(('gate-perf-counts', 'deterministic native, micro and compiler instruction budgets'))
         scope = set()
         data = [p for p in c.owned if not p.startswith('crates/')]
         if c.owned:

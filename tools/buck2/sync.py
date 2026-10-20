@@ -794,6 +794,10 @@ def first_party(meta: dict) -> str:
                             precheck=PRECHECK, visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
                             data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
+    out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",
+                            full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
+                            precheck=PRECHECK, runtime_archives=RUNTIME_ARCHIVES,
+                            data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),

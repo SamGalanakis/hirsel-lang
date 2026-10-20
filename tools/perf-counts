@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Deterministic Cachegrind instruction budgets (run by //:gate-perf-counts)."""
+import argparse
+import difflib
+import json
+import os
+from pathlib import Path
+import re
+import resource
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+BASELINE = ROOT / 'tools/perf-counts.tsv'
+MARKER = 'PERF_COUNTS_RECORD '
+COLUMNS = 'case\tIr\tfunction'
+TOTAL = '<total>'
+
+# Open compiler cases remain runnable with --record --filter check/<example>.
+# The owner deferred their enforcement until all cases fit five pool-minutes.
+COMPILER_CASES = {
+    'check/hello-web': ('examples/hello-web/main.hir',
+                      'open: checked compiler took 113s; compiler counts exceed the pool budget'),
+    'check/todo-api': ('examples/todo-api/hirsel.json',
+                     'open: release compiler took 232.56s / 27,528,240,687 Ir; checked exceeded 240s'),
+}
+
+# N=1000, one epoch, verified against the independent Rust micro pairs.
+MICRO_OUTPUTS = {
+    'strbuild': b'12335375983234794207\n',
+    'sha': b'10690083119644975683\n',
+    'sort': b'7836095613479867608\n',
+    'map_u64': b'500500\n',
+    'map_str': b'2028785\n',
+    'map_remove': b'499500\n',
+    'channel': b'500500\n',
+    'print': ''.join(f'line {i}\n' for i in range(1000)).encode(),
+}
+
+
+def table(rows):
+    lines = ['# Cachegrind Ir; LLVM release programs, one small-input epoch; tolerance +/-1%.']
+    lines.extend(f'# {name}: {reason}' for name, (_, reason) in COMPILER_CASES.items() if name not in rows)
+    lines.append(COLUMNS)
+    for name, row in sorted(rows.items()):
+        lines.append(f'{name}\t{row["Ir"]}\t{TOTAL}')
+        lines.extend(f'{name}\t{count}\t{function}' for function, count in sorted(row['functions'].items(),
+                     key=lambda item: (-item[1], item[0])))
+    return '\n'.join(lines) + '\n'
+
+
+def read_table(path):
+    rows = {}
+    for line in path.read_text().splitlines():
+        if not line or line.startswith('#') or line == COLUMNS:
+            continue
+        name, count, function = line.split('\t', 2)
+        row = rows.setdefault(name, {'functions': {}})
+        if int(count) <= 0 or (function == TOTAL and 'Ir' in row) or function in row['functions']:
+            raise ValueError(f'invalid or duplicate budget: {name}/{function}')
+        if function == TOTAL:
+            row['Ir'] = int(count)
+        else:
+            row['functions'][function] = int(count)
+    if any('Ir' not in row for row in rows.values()):
+        raise ValueError('function budgets require a case total')
+    return rows
+
+
+def annotate(text):
+    """cg_annotate --show=Ir --show-percs=no --threshold=0 function totals."""
+    functions = {}
+    # Pinned cg_annotate 3.22 prints both File:function and Function:file
+    # summaries. Only the latter's outer rows ("> ") are function totals;
+    # summing their file breakdowns again would double-count instructions.
+    for line in text.splitlines():
+        match = re.fullmatch(r'\s*>\s*([\d,]+)\s+(.+):[^:]*', line)
+        if match:
+            functions[match[2]] = int(match[1].replace(',', ''))
+    if not functions:
+        raise ValueError('cg_annotate returned no function instruction counts')
+    return functions
+
+
+def instruction_count(text):
+    events = re.search(r'^events: (.+)$', text, re.M)
+    summary = re.search(r'^summary: (.+)$', text, re.M)
+    if not events or not summary:
+        raise ValueError('incomplete Cachegrind output')
+    count = int(summary[1].split()[events[1].split().index('Ir')])
+    if count <= 0:
+        raise ValueError('Cachegrind counted no instructions')
+    return count
+
+
+def compare(expected, actual):
+    errors = []
+    for name in sorted(expected.keys() | actual.keys()):
+        if name not in expected or name not in actual:
+            errors.append(f'{name}: {"missing budget; bless explicitly" if name in actual else "budget case did not run"}')
+            continue
+        before, after = expected[name], actual[name]
+        delta = after['Ir'] - before['Ir']
+        if abs(delta) * 100 <= before['Ir']:
+            continue
+        errors.append(f'{name}: {before["Ir"]:,} -> {after["Ir"]:,} Ir ({100 * delta / before["Ir"]:+.2f}%; tolerance +/-1%)')
+        names = sorted(before['functions'].keys() | after['functions'].keys(),
+                       key=lambda fn: (-abs(after['functions'].get(fn, 0) - before['functions'].get(fn, 0)), fn))[:20]
+        def lines(row):
+            return [f'{row["Ir"]:15,d} PROGRAM TOTALS\n'] + [
+                f'{row["functions"].get(fn, 0):15,d} {fn}\n' for fn in names]
+        errors.extend(line.rstrip() for line in difflib.unified_diff(lines(before), lines(after),
+                      fromfile='baseline cg_annotate top functions', tofile='current cg_annotate top functions', n=20))
+    return errors
+
+
+def run(command, env, **kwargs):
+    result = subprocess.run([str(x) for x in command], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=240, **kwargs)
+    if result.returncode:
+        raise RuntimeError(f'{command[0]} exited {result.returncode}:\n{result.stderr.decode(errors="replace")}')
+    return result.stdout
+
+
+def measure(name, command, scratch, env, expected=None):
+    started = time.monotonic()
+    output = scratch / 'cachegrind.out'
+    valgrind = Path(env['HIRSEL_VALGRIND'])
+    runtime = Path(env['HIRSEL_VALGRIND_RUNTIME'])
+    # Pin the loader/libc as well as Valgrind, including compiler-check startup.
+    launch = [runtime / 'ld-linux-x86-64.so.2', '--library-path',
+              str(runtime) + ':' + str(Path(env['LLVM_SYS_211_PREFIX']) / 'lib'), *command]
+    stdout = run([valgrind, '--tool=cachegrind', '--cache-sim=no', '--branch-sim=no',
+                  '--cachegrind-out-file=' + str(output), *launch], env)
+    if expected is not None and stdout != expected:
+        raise ValueError(f'{name}: wrong benchmark checksum: {stdout!r}, expected {expected!r}')
+    functions = annotate(run([valgrind.parent / 'cg_annotate', '--show=Ir', '--show-percs=no',
+                              '--auto=no', '--threshold=0', output], env).decode())
+    count = instruction_count(output.read_text())
+    print(f'{name}: {count:,} Ir ({time.monotonic() - started:.2f} s)', flush=True)
+    return {'Ir': count, 'functions': dict(sorted(functions.items(), key=lambda item: (-item[1], item[0]))[:50])}
+
+
+def build_program(hirsel, text, name, scratch, env):
+    source = scratch / (name + '.hir')
+    source.write_text(text)
+    source.with_suffix('.hir.json').write_text(json.dumps({
+        'schema': 1, 'package': {'name': 'benchmark', 'version': '1'},
+        'entry': {'module': [], 'name': 'main'}, 'sources': [{'path': source.name, 'module': []}],
+        'dependencies': [{'manifest': str(ROOT / 'stdlib/std@1/hirsel.json'),
+                          'package': {'name': 'std', 'version': '1'}, 'expose': []}]}))
+    binary = scratch / name
+    run([hirsel, 'build', '--release', source, '-o', binary], env)
+    return binary
+
+
+def micro_cases(hirsel, scratch, env, selected=None):
+    micro = ROOT / 'bench/micro'
+    for source in sorted((micro / 'programs').glob('*.hir')):
+        name = 'micro/' + source.stem
+        if selected and selected not in name:
+            continue
+        binary = build_program(hirsel, source.read_text(), 'micro-' + source.stem, scratch, env)
+        arguments = ['1000'] + ([] if source.stem in ('print', 'channel') else ['1'])
+        command = [binary, '--hirsel-grants', micro / 'grants.json', *arguments]
+        if source.stem not in MICRO_OUTPUTS:
+            raise ValueError(f'{name}: add an independent small-input output oracle')
+        yield name, command, MICRO_OUTPUTS[source.stem]
+
+
+def native_cases(hirsel, scratch, env, selected=None):
+    bench = ROOT / 'bench/native'
+    common = (bench / 'programs/common.hir').read_text().split('pub fn main(', 1)[0]
+    cases = [case for case in json.loads((bench / 'manifest.json').read_text())['cases'] if case['size'] == 'small']
+    if len(cases) != 17:
+        raise ValueError(f'expected 17 native small cases, found {len(cases)}')
+    grants = json.dumps({'io': {'stdout': 'stdout.bytes@1', 'dirs': [
+        {'path': 'fixtures', 'host': str(bench / 'inputs'), 'access': 'read'}]}})
+    for case in cases:
+        if selected and selected not in 'native/' + case['id']:
+            continue
+        name = case['case'].replace('/', '-')
+        text = (bench / 'programs' / (name + '.hir')).read_text() + '\n' + common
+        text += f'''
+pub fn main(rt: Io) -> Result[(), ()] {{
+  let directory = io.dir(rt, path.of("fixtures")) ? error
+  let input = file.read_bytes(directory, path.of("{Path(case['input']).name}")) ? error
+  let output = workload(input)
+  out.print(io.stdout(rt) ? error, hex(checksum(output))) ? error
+  Ok(())
+}}
+'''
+        binary = build_program(hirsel, text, name, scratch, env)
+        yield 'native/' + case['id'], [binary, '--hirsel-grants', grants], case['checksum'].encode() + b'\n'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--record', action='store_true', help='emit measurements for tools/gate --bless-perf-counts; writes no inputs')
+    parser.add_argument('--filter', help='one case substring, for diagnosis (never a passing gate)')
+    args = parser.parse_args()
+    env = {key: value for key, value in os.environ.items() if key in (
+        'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_PRECHECK', 'HIRSEL_MEMORY_LIMIT',
+        'HIRSEL_VALGRIND', 'VALGRIND_LIB', 'HIRSEL_VALGRIND_RUNTIME', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR', 'LD_LIBRARY_PATH')}
+    env.update(LC_ALL='C', HIRSEL_JOBS='1', RUST_TEST_THREADS='1')
+    hirsel = ROOT / 'buck-out/tmp/cargo-bin-exe/gate-perf-counts/hirsel'
+    hirsel = hirsel.resolve()
+    started = time.monotonic()
+    rows = {}
+    with tempfile.TemporaryDirectory(prefix='hirsel-perf-counts-') as directory:
+        scratch = Path(directory)
+        for name, (source, reason) in COMPILER_CASES.items():
+            if not args.filter:
+                print(f'perf-counts: {name}: {reason}', flush=True)
+            elif args.filter in name:
+                rows[name] = measure(name, [hirsel, 'check', ROOT / source], scratch, env)
+        if not args.filter or 'micro/' in args.filter:
+            for name, command, expected in micro_cases(hirsel, scratch, env, args.filter):
+                rows[name] = measure(name, command, scratch, env, expected)
+        if not args.filter or 'native/' in args.filter:
+            for name, command, expected in native_cases(hirsel, scratch, env, args.filter):
+                if not args.filter or args.filter in name:
+                    rows[name] = measure(name, command, scratch, env, expected)
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    print(f'perf-counts: {len(rows)} cases; {time.monotonic() - started:.2f} seconds; '
+          f'{usage.ru_utime + usage.ru_stime:.2f} CPU seconds; 1 pool CPU', flush=True)
+    if not rows:
+        raise ValueError('no performance cases ran')
+    if args.record:
+        print(MARKER + json.dumps(rows, sort_keys=True, separators=(',', ':')))
+        return 0
+    if args.filter:
+        raise ValueError('--filter is diagnostic only; use --record')
+    errors = compare(read_table(BASELINE), rows)
+    if errors:
+        print('\n'.join(errors))
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        raise SystemExit(f'perf-counts: {error}')

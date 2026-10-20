@@ -9583,6 +9583,29 @@ hirsel_link_hosts_test(
 )
 
 hirsel_script_test(
+    name = "gate-perf-counts",
+    script = "tools/perf-counts",
+    full = False,
+    production = True,
+    bin_exes = {
+        "hirsel": "//:hirsel-cli-bin-hirsel",
+    },
+    precheck = "//:hirsel-std-precheck",
+    runtime_archives = "//:hirsel-rt-archives",
+    data = glob([
+        "bench/native/programs/**",
+        "bench/native/inputs/**",
+        "bench/native/manifest.json",
+        "bench/micro/**",
+        "examples/hello-web/**",
+        "examples/todo-api/**",
+        "examples/common.hir",
+        "stdlib/**",
+        "tools/perf-counts.tsv",
+    ]),
+)
+
+hirsel_script_test(
     name = "gate-native-runtime-c",
     script = "crates/hirsel-rt/harness/run.sh",
     data = glob([

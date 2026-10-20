@@ -7,6 +7,7 @@
     tools/gate --extend [--tests ...] --why ...   # after an edit to a passed change
     tools/gate --base <commit> ...                # the change from <commit> (for example a replay)
     tools/gate --full                             # every stage, on demand at milestone cuts
+    tools/gate --bless-perf-counts                 # regenerate the reviewed instruction budgets
     tools/gate --status                           # the slot queues: holders, their age, your position
     tools/gate --set-slots N                      # change the normal pool's cap
     tools/gate --set-express-slots N              # change the express pool's cap
@@ -694,6 +695,7 @@ def full_gate():
     stages.run('conformance validation and ratchet', [PY, 'tools/buck2/conformance.py'])
     # The whole seed-1 catalogue in shards, each under its own timeout (AGREE_FULL_TIMEOUT).
     stages.run('source and IR checker agreement (unrestricted)', [PY, 'tools/buck2/agree.py', '--full'])
+    stages.run('instruction count budgets', [*buck2, 'test', *config, '//:gate-perf-counts', '--', *timeout])
     stages.run('native smoke: heap, x86-64 and real Io replay', [*buck2, 'test', *config, '//:gate-native-smoke', '--', *timeout])
     stages.run('release tests', [*buck2, 'test', *config, *release, *tests, '--', *timeout])
     stages.run('full gate crate tests in release', full_crate_tests(*release, *libtests))
@@ -714,6 +716,7 @@ def full_gate():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--bless-perf-counts', action='store_true', help='measure instruction budgets on the pool and rewrite tools/perf-counts.tsv')
     parser.add_argument('--full', action='store_true', help='every stage, on demand at milestone cuts')
     parser.add_argument('--base', default='origin/main', help='check the change from this commit\'s merge base')
     parser.add_argument('--suggest', action='store_true', help='print the floor and what the change can affect; run nothing')
@@ -725,6 +728,12 @@ def main():
     counts.add_argument('--set-slots', type=int, metavar='N', help='set the normal pool count; run no checks')
     counts.add_argument('--set-express-slots', type=int, metavar='N', help='set the express pool count; run no checks')
     args = parser.parse_args()
+    if args.bless_perf_counts:
+        if (args.full or args.suggest or args.tests or args.extend or args.why or args.status
+                or args.base != 'origin/main' or args.set_slots is not None or args.set_express_slots is not None):
+            parser.error('--bless-perf-counts takes no other option')
+        with gating.daemon_lifetime():
+            return bless_perf_counts()
     if args.status:
         if (args.full or args.suggest or args.tests or args.extend or args.why or args.base != 'origin/main'
                 or args.set_slots is not None or args.set_express_slots is not None):
@@ -753,6 +762,36 @@ def main():
     # the slot counts must never stop the daemon of a gate running in this worktree.
     with gating.daemon_lifetime():
         return checks(args, parser)
+
+
+def bless_perf_counts():
+    """Measure on the pool; only this host writes the reviewed baseline diff."""
+    import runpy
+    counts = runpy.run_path(str(ROOT / 'tools/perf-counts'))
+    os.chdir(ROOT)
+    result = gating.run([PY, str(ROOT / 'tools/buck2/prepare.py')], cwd=ROOT)
+    if result.returncode:
+        return result.returncode
+    with tempfile.TemporaryDirectory(prefix='hirsel-perf-bless-') as directory:
+        event_log = Path(directory) / 'events.pb.zst'
+        result = gating.buck2('test', '--event-log', str(event_log), '//:gate-perf-counts',
+                              '--', '--test-arg=--record')
+        if result.returncode:
+            return result.returncode
+        measured = gating.test_results(event_log).get('gate-perf-counts')
+        if not measured or measured['status'] != gating.PASS:
+            say('perf-counts: no passing pool result; baseline unchanged')
+            return 1
+        records = [line.removeprefix(counts['MARKER']) for line in measured['details'].splitlines()
+                   if line.startswith(counts['MARKER'])]
+        if len(records) != 1:
+            say('perf-counts: no unique measurement record; baseline unchanged')
+            return 1
+        baseline = ROOT / 'tools/perf-counts.tsv'
+        baseline.write_text(counts['table'](json.loads(records[0])))
+        subprocess.run(['git', 'diff', '--stat', '--', str(baseline)], cwd=ROOT, check=True)
+        say('perf-counts: regenerated tools/perf-counts.tsv; review its diff before committing')
+    return 0
 
 
 def status():
