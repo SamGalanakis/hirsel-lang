@@ -1,0 +1,12 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:793-802, URI percent encoding (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/uri.percent_encode(
+      string.as_bytes("\\ö/ äöß ~~.adas-https://canvas:123/#ads&&sad")
+    ) == "%5C%C3%B6%2F%20%C3%A4%C3%B6%C3%9F%20~~.adas-https%3A%2F%2Fcanvas%3A123%2F%23ads%26%26sad",
+    TextInvariant()
+  )
+  Ok(())
+}

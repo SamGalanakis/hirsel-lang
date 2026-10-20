@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:862-866, URI malformed input; invalid UTF-8 is refused before URI parsing.
+pub fn main() -> Result[(), ()] {
+  match std@1/uri.parse("http://][") {
+    Error(InvalidFormat()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://]@[") {
+    Error(InvalidFormat()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://lo]s\u{85}hc@[/8\u{0010}?0Q") {
+    Error(InvalidFormat()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match string.from_bytes(b"http://lo]s\x85hc@[/8\x10?0Q") {
+    Error(_) => (),
+    Ok(_) => {
+      return Error(())
+    },
+  }
+  Ok(())
+}

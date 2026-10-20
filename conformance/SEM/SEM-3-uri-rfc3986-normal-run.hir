@@ -1,0 +1,354 @@
+// rule: SEM-3
+// expect: run
+// RFC 3986 §5.4, rfc3986.txt:1967-1991; 23 normal reference/target pairs.
+pub fn main() -> Result[(), ()] {
+  let Ok(base) = std@1/uri.parse("http://a/b/c/d;p?q") else {
+    return Error(())
+  }
+  failure.check(
+    std@1/uri.resolve(base, "g:h") == Ok(
+      std@1/uri.Uri(
+        scheme: "g",
+        user: None(),
+        password: None(),
+        host: None(),
+        port: None(),
+        path: Encoded("h"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "./g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g/") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "/g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/g"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "//g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("g")),
+        port: None(),
+        path: Encoded(""),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "?y") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/d;p"),
+        query: Some(Encoded("y")),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g?y") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g"),
+        query: Some(Encoded("y")),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "#s") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/d;p"),
+        query: Some(Encoded("q")),
+        fragment: Some(Encoded("s"))
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g#s") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g"),
+        query: None(),
+        fragment: Some(Encoded("s"))
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g?y#s") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g"),
+        query: Some(Encoded("y")),
+        fragment: Some(Encoded("s"))
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, ";x") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/;x"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g;x") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g;x"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "g;x?y#s") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/g;x"),
+        query: Some(Encoded("y")),
+        fragment: Some(Encoded("s"))
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/d;p"),
+        query: Some(Encoded("q")),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, ".") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "./") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/c/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "..") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "../") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "../g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/b/g"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "../..") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "../../") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.resolve(base, "../../g") == Ok(
+      std@1/uri.Uri(
+        scheme: "http",
+        user: None(),
+        password: None(),
+        host: Some(Encoded("a")),
+        port: None(),
+        path: Encoded("/g"),
+        query: None(),
+        fragment: None()
+      )
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

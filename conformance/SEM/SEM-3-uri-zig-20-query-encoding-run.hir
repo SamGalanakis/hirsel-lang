@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:836-844, URI query encoding; component formatting replaces flag selection.
+pub fn main() -> Result[(), ()] {
+  let Ok(parsed_uri) = std@1/uri.parse(
+    "https://objects.githubusercontent.com/?response-content-type=application%2Foctet-stream"
+  ) else {
+    return Error(())
+  }
+  let Some(query) = parsed_uri.query else {
+    return Error(())
+  }
+  failure.check(
+    string.concat(
+      std@1/uri.component_encoded(parsed_uri.path, Path()),
+      string.concat("?", std@1/uri.component_encoded(query, Query()))
+    ) == "/?response-content-type=application%2Foctet-stream",
+    TextInvariant()
+  )
+  Ok(())
+}

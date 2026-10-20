@@ -1,0 +1,138 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:758-786, Examples from RFC3986 (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  match std@1/uri.parse("http://a/b/c/g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/d;p?y") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g?y") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/d;p?q#s") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g#s") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g?y#s") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/;x") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g;x") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/g;x?y#s") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/d;p?q") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/c/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/b/g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("http://a/g") {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  Ok(())
+}

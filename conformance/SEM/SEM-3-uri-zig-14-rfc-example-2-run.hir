@@ -1,0 +1,22 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:724-736, RFC example 2 (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("urn:example:animal:ferret:nose") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "urn", TextInvariant())
+    failure.check(parsed_uri.user == None(), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.host == None(), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+    failure.check(
+      parsed_uri.path == Encoded("example:animal:ferret:nose"),
+      TextInvariant()
+    )
+    failure.check(parsed_uri.query == None(), TextInvariant())
+    failure.check(parsed_uri.fragment == None(), TextInvariant())
+  }
+  Ok(())
+}

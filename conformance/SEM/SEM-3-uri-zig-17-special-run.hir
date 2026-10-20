@@ -1,0 +1,14 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:788-791, Special test (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  match std@1/uri.parse(
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=youtu.be&t=0"
+  ) {
+    Ok(_) => (),
+    Error(_) => {
+      return Error(())
+    },
+  }
+  Ok(())
+}

@@ -1,0 +1,15 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:549-555, with port (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("http://example:1337/") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "http", TextInvariant())
+    failure.check(parsed_uri.host == Some(Encoded("example")), TextInvariant())
+    failure.check(parsed_uri.path == Encoded("/"), TextInvariant())
+    failure.check(parsed_uri.port == Some(1337), TextInvariant())
+  }
+  Ok(())
+}

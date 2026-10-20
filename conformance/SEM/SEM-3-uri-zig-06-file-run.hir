@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:566-586, file (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("file:///") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "file", TextInvariant())
+    failure.check(parsed_uri.host == None(), TextInvariant())
+    failure.check(parsed_uri.path == Encoded("/"), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("file:///an/absolute/path/to/something") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "file", TextInvariant())
+    failure.check(parsed_uri.host == None(), TextInvariant())
+    failure.check(
+      parsed_uri.path == Encoded("/an/absolute/path/to/something"),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse(
+      "file://localhost/an/absolute/path/to/another/thing/"
+    ) else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "file", TextInvariant())
+    failure.check(parsed_uri.host == Some(Encoded("localhost")), TextInvariant())
+    failure.check(
+      parsed_uri.path == Encoded("/an/absolute/path/to/another/thing/"),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("file:/an/absolute/path") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "file", TextInvariant())
+    failure.check(parsed_uri.host == None(), TextInvariant())
+    failure.check(parsed_uri.path == Encoded("/an/absolute/path"), TextInvariant())
+  }
+  Ok(())
+}

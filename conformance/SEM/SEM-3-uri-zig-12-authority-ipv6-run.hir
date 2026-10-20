@@ -1,0 +1,116 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:692-708, authority.IPv6 (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[2001:db8:0:0:0:0:2:1]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[2001:db8:0:0:0:0:2:1]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[2001:db8::2:1]") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("[2001:db8::2:1]")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[2001:db8:0000:1:1:1:1:1]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[2001:db8:0000:1:1:1:1:1]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[2001:db8:0:1:1:1:1:1]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[2001:db8:0:1:1:1:1:1]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[0:0:0:0:0:0:0:0]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[0:0:0:0:0:0:0:0]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[0:0:0:0:0:0:0:1]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[0:0:0:0:0:0:0:1]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[::1]") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("[::1]")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[::]") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("[::]")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse(
+      "scheme://[2001:db8:85a3:8d3:1319:8a2e:370:7348]"
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[2001:db8:85a3:8d3:1319:8a2e:370:7348]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[fe80::1ff:fe23:4567:890a%25eth2]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[fe80::1ff:fe23:4567:890a%25eth2]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[fe80::1ff:fe23:4567:890a]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[fe80::1ff:fe23:4567:890a]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[fe80::1ff:fe23:4567:890a%253]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[fe80::1ff:fe23:4567:890a%253]")),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://[fe80:3::1ff:fe23:4567:890a]") else {
+      return Error(())
+    }
+    failure.check(
+      parsed_uri.host == Some(Encoded("[fe80:3::1ff:fe23:4567:890a]")),
+      TextInvariant()
+    )
+  }
+  Ok(())
+}

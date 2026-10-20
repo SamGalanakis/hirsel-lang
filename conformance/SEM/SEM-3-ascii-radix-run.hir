@@ -54,7 +54,7 @@ pub fn main() -> Result[(), ()] {
     Ok(Text(value)) => failure.check(value == "¯", TextInvariant()),
     _ => failure.check(false, TextInvariant()),
   }
-  failure.check(std@1/uri.percent_decode("%+f%-0%2F") == b"\x0f\x00/", TextInvariant())
+  failure.check(std@1/uri.percent_decode("%+f%-0%2F") == b"%+f%-0/", TextInvariant())
   failure.check(std@1/net.ends_in_number("0xFf"), TextInvariant())
   failure.check(!std@1/net.ends_in_number("0xg"), TextInvariant())
   failure.check(std@1/net.validate_host("A-b.Example.") == Ok(()), TextInvariant())
@@ -63,8 +63,8 @@ pub fn main() -> Result[(), ()] {
     Error(_) => failure.check(false, TextInvariant()),
   }
   match std@1/uri.parse("https://example.test:+080/path") {
-    Ok(_) => (),
-    Error(_) => failure.check(false, TextInvariant()),
+    Error(InvalidPort()) => (),
+    _ => failure.check(false, TextInvariant()),
   }
   failure.check(std@1/u8.parse_radix("ff", 16) == Ok(255u8), TextInvariant())
   failure.check(std@1/u8.parse_radix("100", 16) == Error(OutOfRange), TextInvariant())

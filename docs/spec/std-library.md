@@ -1280,7 +1280,12 @@ kept as `Raw(String) | Encoded(String)` and `UriError = UnexpectedCharacter |
 InvalidFormat | InvalidPort | InvalidHostName`. A reference with a syntactically valid scheme
 keeps its absolute-parse error; only scheme-less references are parsed as relative, so
 `resolve(base, "http://127.1")` is `InvalidHostName`. Hosts apply the numeric-host rule after
-percent decoding.
+percent decoding. Ports contain only ASCII decimal digits and must fit `u16`; empty,
+signed and underscored ports are `InvalidPort`. `percent_decode` decodes only `%`
+followed by two ASCII hex digits (case-insensitive); malformed or incomplete escapes
+stay literal, and plus stays plus. For example `%+f%-0%2F` becomes `%+f%-0/`.
+The [prior-art inventory](../uri-prior-art.md) maps the Zig tests and all 42 RFC
+3986 §5.4 resolution examples to corpus fixtures and records adaptations.
 
 ## Buffered reads
 

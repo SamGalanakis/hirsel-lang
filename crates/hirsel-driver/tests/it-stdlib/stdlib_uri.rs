@@ -401,14 +401,8 @@ fn absolute_reference_numeric_refusals_do_not_fall_back_to_paths() {
 }
 
 #[test]
-fn zig_uri_decimal_ports_and_signed_hex_pairs_follow_fmt_parse_int() {
-    for (text, port) in [
-        ("+10", 10),
-        ("-0", 0),
-        ("1__0", 10),
-        ("00080", 80),
-        ("65535", 65535),
-    ] {
+fn uri_ports_and_hex_pairs_follow_rfc3986() {
+    for (text, port) in [("00080", 80), ("65535", 65535)] {
         execute(&parsed(
             &format!("http://example.com:{text}/"),
             &format!("core@1/test.check(t, parsed_uri.port == Some({port}))"),
@@ -416,6 +410,9 @@ fn zig_uri_decimal_ports_and_signed_hex_pairs_follow_fmt_parse_int() {
     }
     bad(
         &[
+            "http://example.com:+10/",
+            "http://example.com:-0/",
+            "http://example.com:1__0/",
             "http://example.com:_10/",
             "http://example.com:10_/",
             "http://example.com:-1/",
@@ -424,7 +421,5 @@ fn zig_uri_decimal_ports_and_signed_hex_pairs_follow_fmt_parse_int() {
         ],
         "InvalidPort",
     );
-    execute(
-        "core@1/test.check(t, std@1/uri.percent_decode(\"%+A%-0%+f\") == b\"\\x0a\\x00\\x0f\")",
-    );
+    execute("core@1/test.check(t, std@1/uri.percent_decode(\"%+A%-0%+f\") == b\"%+A%-0%+f\")");
 }

@@ -1,0 +1,78 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:588-602, scheme (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("http:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "http", TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme-mee:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "scheme-mee", TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("a.b.c:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "a.b.c", TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("ab+:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "ab+", TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("X+++:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "X+++", TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("Y+-.:_") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "Y+-.", TextInvariant())
+  }
+  match std@1/uri.parse("") {
+    Error(InvalidFormat()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse(":") {
+    Error(UnexpectedCharacter()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("-:") {
+    Error(UnexpectedCharacter()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("+hTTp:") {
+    Error(UnexpectedCharacter()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("$:") {
+    Error(UnexpectedCharacter()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  match std@1/uri.parse("h$:") {
+    Error(UnexpectedCharacter()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  Ok(())
+}

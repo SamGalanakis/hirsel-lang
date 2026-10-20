@@ -1,0 +1,15 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:541-547, basic (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("https://ziglang.org/download") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.scheme == "https", TextInvariant())
+    failure.check(parsed_uri.host == Some(Encoded("ziglang.org")), TextInvariant())
+    failure.check(parsed_uri.path == Encoded("/download"), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  Ok(())
+}

@@ -1,0 +1,114 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:604-645, authority (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://hostname") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == None(), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://userinfo@hostname") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("userinfo")), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://userinfo@") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == None(), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("userinfo")), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user:password@hostname") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user")), TextInvariant())
+    failure.check(parsed_uri.password == Some(Encoded("password")), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://hostname:0") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == None(), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == Some(0), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == None(), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://userinfo@hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("userinfo")), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user:password@hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user")), TextInvariant())
+    failure.check(parsed_uri.password == Some(Encoded("password")), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user:p@ssword@hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user")), TextInvariant())
+    failure.check(parsed_uri.password == Some(Encoded("p@ssword")), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user:p@@@word@hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user")), TextInvariant())
+    failure.check(parsed_uri.password == Some(Encoded("p@@@word")), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user@name@hostname") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user@name")), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == None(), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://user@name@hostname:1234") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("hostname")), TextInvariant())
+    failure.check(parsed_uri.user == Some(Encoded("user@name")), TextInvariant())
+    failure.check(parsed_uri.password == None(), TextInvariant())
+    failure.check(parsed_uri.port == Some(1234), TextInvariant())
+  }
+  Ok(())
+}

@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:846-860, format (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  let value = std@1/uri.Uri(
+    scheme: "file",
+    user: None(),
+    password: None(),
+    host: None(),
+    port: None(),
+    path: Raw("/foo/bar/baz"),
+    query: None(),
+    fragment: None()
+  )
+  failure.check(std@1/uri.to_string(value) == "file:/foo/bar/baz", TextInvariant())
+  Ok(())
+}

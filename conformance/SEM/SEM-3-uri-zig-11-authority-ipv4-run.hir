@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:680-690, authority.IPv4 (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://127.0.0.1") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("127.0.0.1")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://255.255.255.255") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("255.255.255.255")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://0.0.0.0") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("0.0.0.0")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://8.8.8.8") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("8.8.8.8")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://1.2.3.4") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("1.2.3.4")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://192.168.0.1") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("192.168.0.1")), TextInvariant())
+  }
+  {
+    let Ok(parsed_uri) = std@1/uri.parse("scheme://10.42.0.0") else {
+      return Error(())
+    }
+    failure.check(parsed_uri.host == Some(Encoded("10.42.0.0")), TextInvariant())
+  }
+  Ok(())
+}

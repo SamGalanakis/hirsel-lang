@@ -1,0 +1,10 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:466-471, test remove_dot_segments (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/uri.remove_dot_segments("/a/b/c/./../../g") == "/a/g",
+    TextInvariant()
+  )
+  Ok(())
+}

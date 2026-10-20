@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:804-834, URI percent decoding; owned APIs replace in-place/backwards buffers.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/uri.percent_decode(
+      "%5C%C3%B6%2F%20%C3%A4%C3%B6%C3%9F%20~~.adas-https%3A%2F%2Fcanvas%3A123%2F%23ads%26%26sad"
+    ) == string.as_bytes("\\ö/ äöß ~~.adas-https://canvas:123/#ads&&sad"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.component_raw(
+      Encoded(
+        "%5C%C3%B6%2F%20%C3%A4%C3%B6%C3%9F%20~~.adas-https%3A%2F%2Fcanvas%3A123%2F%23ads%26%26sad"
+      )
+    ) == string.as_bytes("\\ö/ äöß ~~.adas-https://canvas:123/#ads&&sad"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.percent_decode("/abc%") == string.as_bytes("/abc%"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/uri.component_raw(Encoded("/abc%")) == string.as_bytes("/abc%"),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,12 @@
+// rule: SEM-3
+// expect: run
+// Zig Uri.zig:557-559, should fail gracefully (bff490a2, MIT).
+pub fn main() -> Result[(), ()] {
+  match std@1/uri.parse("foobar://") {
+    Error(InvalidFormat()) => (),
+    _ => {
+      return Error(())
+    },
+  }
+  Ok(())
+}
