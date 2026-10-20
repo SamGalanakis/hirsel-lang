@@ -35,7 +35,7 @@ pub struct RealIo {
     /// (`Adapter::process`); without it a host process call is a tool refusal.
     children: Option<Box<dyn crate::process::ProcessHost>>,
     /// Runner call outcomes delivered and not yet taken, by wait token (RUN-11).
-    delivered: BTreeMap<u64, hirsel_run_config::RunnerCompletion>,
+    delivered: BTreeMap<u64, hirsel_run_schema::RunnerCompletion>,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -66,13 +66,13 @@ impl RealIo {
     /// supplied separately by set_net_rules; peer data never widens them.
     pub fn set_net_script(
         &mut self,
-        peers: Vec<hirsel_run_config::NetPeer>,
-        listeners: Vec<hirsel_run_config::NetListener>,
+        peers: Vec<hirsel_run_schema::NetPeer>,
+        listeners: Vec<hirsel_run_schema::NetListener>,
     ) -> Result<(), AdapterError> {
         self.state.set_net_script(peers, listeners)
     }
     /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
-    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.state.set_process_grant(grant);
     }
     /// The admitted RunConfig rule set of the root Net (`io.net.rules`). Absent, the
@@ -122,7 +122,7 @@ impl RealIo {
         output: impl Write + 'static,
     ) -> Self {
         Self::from_pinned_mounts(
-            [(String::new(), hirsel_run_config::Access::ReadWrite, root)],
+            [(String::new(), hirsel_run_schema::Access::ReadWrite, root)],
             output,
         )
         .expect("one explicit root mount")
@@ -132,12 +132,12 @@ impl RealIo {
         mounts: impl IntoIterator<
             Item = (
                 String,
-                hirsel_run_config::Access,
+                hirsel_run_schema::Access,
                 crate::host_paths::PinnedDirectory,
             ),
         >,
         output: impl Write + 'static,
-    ) -> Result<Self, hirsel_run_config::RunRefusal> {
+    ) -> Result<Self, hirsel_run_schema::RunRefusal> {
         let mounts: Vec<_> = mounts.into_iter().collect();
         let access = mount_access(
             mounts
@@ -193,7 +193,7 @@ impl RealIo {
         &self,
         path: &Path,
         files: &[(&str, &File)],
-    ) -> Result<File, hirsel_run_config::RunRefusal> {
+    ) -> Result<File, hirsel_run_schema::RunRefusal> {
         crate::host_paths::RecorderDestination::pin(path)?
             .open_with_files(&self.mount_pins(), files)
     }
@@ -203,9 +203,9 @@ impl RealIo {
         self.state.wall_granted = wall;
     }
     /// The admitted Random provider and the run's Random seed (used only by splitmix64).
-    pub fn set_random(&mut self, provider: hirsel_run_config::ProviderContract, seed: u64) {
+    pub fn set_random(&mut self, provider: hirsel_run_schema::ProviderContract, seed: u64) {
         self.state.random = match provider {
-            hirsel_run_config::ProviderContract::RandomSystem => RandomSource::System,
+            hirsel_run_schema::ProviderContract::RandomSystem => RandomSource::System,
             _ => RandomSource::SplitMix64(seed),
         };
     }
@@ -235,7 +235,7 @@ impl RealIo {
     }
     /// The outcome of the runner call parked under `token`: re-issuing the call completes
     /// it, and the wait is ready at the next scheduling point.
-    pub fn deliver(&mut self, token: u64, completion: hirsel_run_config::RunnerCompletion) {
+    pub fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
         self.delivered.insert(token, completion);
         if let Some((readiness, _)) = &self.cooperative {
             readiness.deliver(token);
@@ -248,7 +248,7 @@ impl RealIo {
     /// The run ended with `outcome`: the recording's trailer.
     pub fn finish_recording(
         &mut self,
-        outcome: &hirsel_run_config::RunOutcome,
+        outcome: &hirsel_run_schema::RunOutcome,
     ) -> std::io::Result<()> {
         self.journal.end(outcome)
     }
@@ -354,7 +354,7 @@ impl RealIo {
                         tree.directories.insert(path.clone());
                         work.push((pin, path, ancestry));
                     } else if meta.is_file() {
-                        let logical = hirsel_run_config::confined_relative(&selector, &path)
+                        let logical = hirsel_run_schema::confined_relative(&selector, &path)
                             .expect("snapshot entry");
                         // Invalid entries remain operation faults, rather than admission errors.
                         file_identities.insert(logical.clone(), (meta.dev(), meta.ino()));
@@ -402,23 +402,23 @@ impl RealIo {
             let (_, _, snapshot) = &snapshots[selector];
             tree.directories
                 .extend(snapshot.directories.iter().map(|p| {
-                    hirsel_run_config::confined_relative(selector, p).expect("snapshot directory")
+                    hirsel_run_schema::confined_relative(selector, p).expect("snapshot directory")
                 }));
             tree.files.extend(snapshot.files.iter().map(|(p, b)| {
                 (
-                    hirsel_run_config::confined_relative(selector, p).expect("snapshot file"),
+                    hirsel_run_schema::confined_relative(selector, p).expect("snapshot file"),
                     b.clone(),
                 )
             }));
             tree.metadata.extend(snapshot.metadata.iter().map(|(p, m)| {
                 (
-                    hirsel_run_config::confined_relative(selector, p).expect("snapshot metadata"),
+                    hirsel_run_schema::confined_relative(selector, p).expect("snapshot metadata"),
                     m.clone(),
                 )
             }));
             tree.links.extend(snapshot.links.iter().map(|(p, target)| {
                 (
-                    hirsel_run_config::confined_relative(selector, p).expect("snapshot link"),
+                    hirsel_run_schema::confined_relative(selector, p).expect("snapshot link"),
                     target.clone(),
                 )
             }));
@@ -436,7 +436,7 @@ impl RealIo {
                 .iter()
                 .find_map(|top| snapshots[top].1.get(identity).map(|suffix| (top, suffix)))
                 .ok_or(IoError::Fault(1))?;
-            let target = hirsel_run_config::confined_relative(canonical, suffix)
+            let target = hirsel_run_schema::confined_relative(canonical, suffix)
                 .expect("snapshot mount alias");
             let parent = selector.rsplit_once('/').map_or("", |(p, _)| p);
             let prefix = "../".repeat(parent.split('/').filter(|p| !p.is_empty()).count());

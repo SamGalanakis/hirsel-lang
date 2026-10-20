@@ -1,19 +1,9 @@
 # hirsel-run-config
 
-Closed tooling data for PROG-3/6 and DET-1.
-`confined_relative` is the shared portable lexical path normalization: parent
-components cannot cross a pinned root; physical symlink traversal follows it. Allowed dependencies: std, serde,
-serde_json, sha2, pinned pure rustls-pki-types/webpki parsers, and rustls (ring) only to load
-server identity keys and verify client certificates. No compiler or execution implementation dependency.
-`tls` parses verification names, PEM trust anchors and PEM server identities (certificate
-chain plus a private key matching the leaf) without time, signing or Io, loads a
-`TlsServer` (identities plus the rustls client verifier of its trust set), answers whether
-an identity's leaf certificate names a server name and which identity an SNI selects, and
-decides a scripted client's server handshake (`scripted_accept`, verifying a presented chain
-at its latest notBefore) and a scripted peer's client handshake (`scripted_connect`: a
-`Serves` peer's SNI-selected identity, name-checked, then its client policy applied to a
-`tls.connect_as` identity at that identity's latest notBefore, refused with the alert a
-rustls server sends); all engines use these argument checks before cancellation.
+Record parsing, normalization, validation and admission for PROG-3/6 and DET-1.
+Shared grants, calls, outcomes, script data, semantic program revisions, hashing
+and TLS argument checks live in `hirsel-run-schema`; consumers import it directly.
+No compiler or execution implementation dependency.
 
 Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
 

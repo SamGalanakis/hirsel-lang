@@ -55,7 +55,7 @@ impl ValidatedNativeInput {
     pub fn semantic_program_revision(
         &self,
         entry: &DefPath,
-    ) -> Result<hirsel_run_config::ProgramRevision, QueryError> {
+    ) -> Result<hirsel_run_schema::ProgramRevision, QueryError> {
         self.semantic_program.revision(entry)
     }
     /// The escape from capability checking `entry` reaches, if any (CAP-6).

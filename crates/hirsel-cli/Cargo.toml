@@ -17,7 +17,7 @@ hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }
 hirsel-intern = { path = "../hirsel-intern" }
-hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }
 
 mimalloc = { version = "=0.1.52", default-features = false }
 serde_json = "1"

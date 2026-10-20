@@ -13,7 +13,7 @@
 //! Process-fatal by design: a broken invariant ([`crate::fault`]), host exhaustion
 //! ([`crate::environmental`]), a PROG-4 violation, a stack overflow, and a stop raised inside a
 //! foreign call, whose C frames cannot be abandoned.
-use hirsel_run_config::{BudgetKind, Environmental};
+use hirsel_run_schema::{BudgetKind, Environmental};
 
 use crate::TaskCtx;
 use crate::fiber;
@@ -23,7 +23,7 @@ use crate::io::AdapterError;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Stop {
     /// Every task waits on another and nothing outside the run can wake one (CONC-8).
-    Blocked(Vec<hirsel_run_config::Wait>),
+    Blocked(Vec<hirsel_run_schema::Wait>),
     BudgetExceeded(BudgetKind),
     /// The adapter refused a request.
     Refused(String),
@@ -50,8 +50,8 @@ impl Stop {
         }
     }
     /// The ending a host reports for this stop.
-    pub fn outcome(self) -> hirsel_run_config::RunOutcome {
-        use hirsel_run_config::RunOutcome;
+    pub fn outcome(self) -> hirsel_run_schema::RunOutcome {
+        use hirsel_run_schema::RunOutcome;
         match self {
             Stop::Blocked(waits) => RunOutcome::Blocked(waits),
             Stop::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),

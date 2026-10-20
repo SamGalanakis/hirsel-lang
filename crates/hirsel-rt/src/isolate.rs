@@ -105,9 +105,9 @@ impl FailureTable {
         rule.unwrap_or_else(|| fault("a failure rule the program's table does not list"))
     }
 
-    pub(crate) fn located(&self, code: u64) -> hirsel_run_config::Site {
+    pub(crate) fn located(&self, code: u64) -> hirsel_run_schema::Site {
         let site = self.site(code);
-        hirsel_run_config::Site {
+        hirsel_run_schema::Site {
             definition: site.definition.into(),
             file: site.file.into(),
             line: site.line,
@@ -119,8 +119,8 @@ impl FailureTable {
     pub(crate) fn failure(
         &self,
         record: &crate::failure::FailureRecord,
-    ) -> hirsel_run_config::Failure {
-        hirsel_run_config::Failure {
+    ) -> hirsel_run_schema::Failure {
+        hirsel_run_schema::Failure {
             rule: self.rule(record.rule).into(),
             site: self.located(record.site),
             operation: (record.operation_site != 0 && record.operation_site != record.site)
@@ -145,7 +145,7 @@ fn rule(ctx: *mut TaskCtx, code: u32) -> &'static str {
 }
 
 /// Human failure text for a standalone launch, outside program Io and replay tapes.
-pub fn report(failure: &hirsel_run_config::Failure) -> String {
+pub fn report(failure: &hirsel_run_schema::Failure) -> String {
     format!(
         "{}\n",
         failure

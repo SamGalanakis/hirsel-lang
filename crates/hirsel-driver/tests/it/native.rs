@@ -1076,7 +1076,7 @@ fn root_free_native_entry_ignores_ambient_directory_and_argument_inputs() {
 #[test]
 fn agreement_rejects_exit_codes_that_disagree_with_the_run_outcome() {
     use hirsel_driver::native::{Launched, Options, Sites, build, observe};
-    use hirsel_run_config::{BudgetKind, Returned, RunOutcome, Site, Wait};
+    use hirsel_run_schema::{BudgetKind, Returned, RunOutcome, Site, Wait};
     with_compiler_stack(|| {
         let input = checked("pub fn main() -> Result[(), ()] { Ok(()) }");
         let program = build(

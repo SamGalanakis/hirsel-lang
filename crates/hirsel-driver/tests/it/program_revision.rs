@@ -1,6 +1,7 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_run_config::{LaunchKind, ProgramRevision, RunConfig};
+use hirsel_run_config::RunConfig;
+use hirsel_run_schema::{LaunchKind, ProgramRevision};
 use hirsel_syntax::ContentHash;
 
 const PROGRAM: &str =

@@ -157,7 +157,7 @@ impl NetProvider for Counting {
         s: u64,
         name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> Provided<()> {
         self.tick();
         self.inner.tls_connect(tls, s, name, roots, identity)
@@ -166,7 +166,7 @@ impl NetProvider for Counting {
         &mut self,
         tls: &dyn hirsel_rt::net_tls::TlsEngine,
         s: u64,
-        server: &hirsel_run_config::tls::Server,
+        server: &hirsel_run_schema::tls::Server,
     ) -> Provided<()> {
         self.tick();
         self.inner.tls_accept(tls, s, server)
@@ -644,16 +644,16 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
         Request::TestNet {
             test: 1,
             peers: vec![],
-            listeners: vec![hirsel_run_config::NetListener {
+            listeners: vec![hirsel_run_schema::NetListener {
                 address: "::1".into(),
                 port: 8080,
-                clients: vec![hirsel_run_config::NetClient {
+                clients: vec![hirsel_run_schema::NetClient {
                     address: "192.0.2.1".into(),
                     port: 40001,
-                    tls: hirsel_run_config::PeerTls::Plain,
+                    tls: hirsel_run_schema::PeerTls::Plain,
                     steps: vec![
-                        hirsel_run_config::NetStep::Send(b"GET".to_vec()),
-                        hirsel_run_config::NetStep::Expect(vec![0, 0xff]),
+                        hirsel_run_schema::NetStep::Send(b"GET".to_vec()),
+                        hirsel_run_schema::NetStep::Expect(vec![0, 0xff]),
                     ],
                 }],
             }],
@@ -1015,7 +1015,7 @@ fn udp_host_datagrams_discard_outside_senders_and_replay_without_sockets() {
         3
     );
     let text = render_tape(&tape).unwrap();
-    assert!(!text.contains(&hirsel_run_config::hex(b"discard me")));
+    assert!(!text.contains(&hirsel_run_schema::hex(b"discard me")));
     assert_eq!(parse_tape(&text).unwrap(), tape);
     drop(io);
     drop(peer);

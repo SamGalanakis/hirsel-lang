@@ -29,8 +29,8 @@ impl SimIo {
     /// supplied separately by set_net_rules; peer data never widens them.
     pub fn set_net_script(
         &mut self,
-        peers: Vec<hirsel_run_config::NetPeer>,
-        listeners: Vec<hirsel_run_config::NetListener>,
+        peers: Vec<hirsel_run_schema::NetPeer>,
+        listeners: Vec<hirsel_run_schema::NetListener>,
     ) -> Result<(), AdapterError> {
         self.state.set_net_script(peers, listeners)
     }
@@ -62,15 +62,15 @@ impl SimIo {
     /// Configure only the virtual selectors and rights; replay acquires no host authority.
     pub fn set_mounts(
         &mut self,
-        mounts: impl IntoIterator<Item = (String, hirsel_run_config::Access)>,
-    ) -> Result<(), hirsel_run_config::RunRefusal> {
+        mounts: impl IntoIterator<Item = (String, hirsel_run_schema::Access)>,
+    ) -> Result<(), hirsel_run_schema::RunRefusal> {
         let mounts = mount_access(mounts)?;
         let mut directories = self.tree.directories.clone();
         for selector in mounts.keys() {
             let mut path = selector.as_str();
             loop {
                 if self.tree.files.contains_key(path) {
-                    return Err(hirsel_run_config::RunRefusal::Invalid {
+                    return Err(hirsel_run_schema::RunRefusal::Invalid {
                         field: "io.dirs".into(),
                         detail: "mount directory collides with a snapshot file".into(),
                     });
@@ -101,7 +101,7 @@ impl SimIo {
         Ok(())
     }
     /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
-    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.state.set_process_grant(grant);
     }
     /// The bound RunConfig rule set; replay re-derives every grant decision from it.
@@ -1040,7 +1040,7 @@ impl<'a> LinkedTree<'a> {
                 .ok_or(IoError::Fault(1))?
         };
         if self.detached() {
-            return if hirsel_run_config::confined_relative("", local).as_deref() == Some("") {
+            return if hirsel_run_schema::confined_relative("", local).as_deref() == Some("") {
                 Ok(self.active.1.clone())
             } else {
                 Err(IoError::NotFound)
@@ -1454,7 +1454,7 @@ impl NetProvider for Recorded<'_> {
         _: u64,
         _: &str,
         _: &RootsDigest,
-        _: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        _: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> crate::net::Provided<()> {
         self.unit()
     }
@@ -1462,7 +1462,7 @@ impl NetProvider for Recorded<'_> {
         &mut self,
         _: &dyn crate::net_tls::TlsEngine,
         _: u64,
-        _: &hirsel_run_config::tls::Server,
+        _: &hirsel_run_schema::tls::Server,
     ) -> crate::net::Provided<()> {
         self.unit()
     }

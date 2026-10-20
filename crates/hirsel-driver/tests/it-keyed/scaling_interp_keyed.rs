@@ -42,7 +42,7 @@ fn keyed_work(kind: &str, count: u64) -> u64 {
     .unwrap();
     assert_eq!(
         outcome,
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     std::fs::remove_dir_all(&dir).unwrap();
     hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows) - before

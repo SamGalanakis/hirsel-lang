@@ -50,7 +50,7 @@ fn ordinary_source_time_operations_execute_with_extreme_ticks_and_replay() {
         let execution = run_observed_snapshot(&mut engine, &run, config.clone()).unwrap();
         assert!(matches!(
             execution.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
         ));
         let events: Vec<_> = execution
             .observation

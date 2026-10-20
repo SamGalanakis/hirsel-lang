@@ -8,7 +8,7 @@ use hirsel_rt::{
     io_real::RealIo,
     io_sim::SimIo,
 };
-use hirsel_run_config::{Access, RunRefusal};
+use hirsel_run_schema::{Access, RunRefusal};
 use std::fs;
 
 #[test]

@@ -1,6 +1,7 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_run_config::{LaunchKind, RunConfig, RunRefusal};
+use hirsel_run_config::RunConfig;
+use hirsel_run_schema::{LaunchKind, RunRefusal};
 
 fn engine(text: &str) -> QueryEngine {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());

@@ -1,7 +1,7 @@
 //! Explicit deterministic capability implementations; no host I/O or entropy.
 use crate::{Error, OperationContext, TraceEvent, Value, invalid};
-use hirsel_run_config::Access;
-use hirsel_run_config::confined_relative;
+use hirsel_run_schema::Access;
+use hirsel_run_schema::confined_relative;
 use hirsel_syntax::DefPath;
 use hirsel_tir::{CapabilityEvent, RunConfiguration};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -88,13 +88,13 @@ impl SimulationDebug {
 pub struct SimulationConfig {
     pub debug: SimulationDebug,
     /// Explicit script provider and exact rules; peer data never widens authority.
-    pub net: Option<hirsel_run_config::NetGrant>,
+    pub net: Option<hirsel_run_schema::NetGrant>,
     /// Exact process rules; scripted runs never widen them.
-    pub process: Option<hirsel_run_config::ProcessGrant>,
+    pub process: Option<hirsel_run_schema::ProcessGrant>,
     pub random_seed: u64,
     pub test_seed: u64,
     /// The run's scheduler policy (`inputs.scheduler`); `None` is `fifo@1`.
-    pub scheduler: Option<hirsel_run_config::Scheduler>,
+    pub scheduler: Option<hirsel_run_schema::Scheduler>,
     pub grants: BTreeSet<String>,
     /// Configured Io projections, independent of the root Io grant.
     pub projections: BTreeSet<String>,
@@ -115,13 +115,13 @@ pub struct SimulationConfig {
     /// Fault queues are consumed by operation name, in order, never host errno.
     pub faults: BTreeMap<String, VecDeque<Fault>>,
     /// The runners the run's Io projects (RUN-1), sorted by name.
-    pub runners: Vec<hirsel_run_config::RunnerEntry>,
+    pub runners: Vec<hirsel_run_schema::RunnerEntry>,
     /// The seed `sim@1` runners draw their faults from (`inputs.fault_seed`).
     pub fault_seed: u64,
     /// This run's instance (RUN-11): call keys and callee seeds derive from it.
     pub instance: [u8; 16],
     /// The callee entries the program names, by full versioned path (RUN-8, RUN-11).
-    pub callees: std::sync::Arc<BTreeMap<String, hirsel_run_config::CalleeFacts>>,
+    pub callees: std::sync::Arc<BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
     /// Record every live `Shared` root's count at every scheduling point
     /// (`--trace-roots`, S-14) into `ObservedSimulation::root_trace`.
     pub trace_roots: bool,
@@ -170,14 +170,14 @@ impl Default for SimulationConfig {
 pub(crate) enum Grant {
     Net {
         world: u64,
-        rules: Vec<hirsel_run_config::NetRule>,
+        rules: Vec<hirsel_run_schema::NetRule>,
     },
     Stream {
         net: u64,
     },
     Proc {
         world: u64,
-        rules: Vec<hirsel_run_config::ProcessRule>,
+        rules: Vec<hirsel_run_schema::ProcessRule>,
     },
     /// A streaming child of Proc `process`, or with `group` a spawned pipeline (a
     /// ChildGroup); scripted ones are in `script_children` and `script_groups`.
@@ -243,9 +243,9 @@ pub struct Simulation {
     pub(super) process_worlds: BTreeMap<u64, super::process::World>,
     pub(super) process_children: BTreeMap<u64, super::process::Children>,
     /// Spawned scripted children, by Child handle.
-    pub(super) script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
+    pub(super) script_children: BTreeMap<u64, hirsel_run_schema::ScriptChild>,
     /// Spawned scripted pipelines, by ChildGroup handle.
-    pub(super) script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
+    pub(super) script_groups: BTreeMap<u64, hirsel_run_schema::ScriptGroup>,
     pub(super) udp_sockets: BTreeMap<u64, super::net::ScriptUdp>,
     pub(super) net_listeners: BTreeMap<u64, super::net::ScriptListener>,
     pub config: SimulationConfig,
@@ -293,14 +293,14 @@ pub enum ObservedGrant {
     },
     Net {
         world: u64,
-        rules: Vec<hirsel_run_config::NetRule>,
+        rules: Vec<hirsel_run_schema::NetRule>,
     },
     Stream {
         net: u64,
     },
     Proc {
         world: u64,
-        rules: Vec<hirsel_run_config::ProcessRule>,
+        rules: Vec<hirsel_run_schema::ProcessRule>,
     },
     Child {
         process: u64,
@@ -452,7 +452,7 @@ impl Simulation {
         }
     }
     pub fn new(run: &RunConfiguration, mut config: SimulationConfig) -> Result<Self, Error> {
-        config.env = hirsel_run_config::snapshot_env(
+        config.env = hirsel_run_schema::snapshot_env(
             std::mem::take(&mut config.env)
                 .into_iter()
                 .map(|(key, value)| (key.into(), value.map(Into::into))),

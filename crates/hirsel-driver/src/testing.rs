@@ -2,7 +2,7 @@
 //! Substring/OR filters adapt Rust libtest filter_tests (third-party/NOTICES.md).
 use hirsel_engine::{DefinitionQueries, LoadedProgram, RunOutcome, SimulationConfig, ToolError};
 pub use hirsel_interp::library::simulation::SimulationDebug;
-pub use hirsel_run_config::Scheduler;
+pub use hirsel_run_schema::Scheduler;
 use hirsel_syntax::{DefPath, FileContext};
 use hirsel_types::{SignatureKind, TypeKind};
 use sha2::{Digest, Sha256};
@@ -550,8 +550,8 @@ pub fn execute(
 
 pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
     match outcome {
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok) => None,
-        RunOutcome::Returned(hirsel_run_config::Returned::Error) => Some("returned Error".into()),
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok) => None,
+        RunOutcome::Returned(hirsel_run_schema::Returned::Error) => Some("returned Error".into()),
         RunOutcome::Blocked(waits) => {
             let mut report = String::from("runtime failure: blocked");
             for wait in waits {
@@ -561,7 +561,7 @@ pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
         }
         RunOutcome::Failed {
             primary:
-                hirsel_run_config::Failure {
+                hirsel_run_schema::Failure {
                     rule,
                     site,
                     operation,

@@ -296,7 +296,7 @@ The compiler's native entry wrapper registers the returned Error and its immutab
 
 `process.rs` holds the Process capability (docs/spec/core-library.md#processes).
 `State::execute_process` checks every `proc.run` and every stage of a `proc.pipeline`
-(an empty one is InvalidInput) before any effect: the Proc and Dir handles, then `hirsel_run_config::Command::check`: a canonical absolute program,
+(an empty one is InvalidInput) before any effect: the Proc and Dir handles, then `hirsel_run_schema::Command::check`: a canonical absolute program,
 NUL-free arguments and a well-formed exact environment (InvalidInput), then the exact
 rule and its environment names (NotGranted); a scripted world (`process.script@1`,
 `test.process`) is served from its entries, and only a checked host run reaches the
@@ -330,7 +330,7 @@ re-derived checks. A launch without a run record reads the root Proc's `io.proce
 grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. `proc.narrow`
 (`ProcessNarrow`, tape `process_narrow`: a rule count, then each program and its counted
 names) mints a Proc of the merged requested rules in its parent's world when
-`hirsel_run_config::process_rule_within` covers each. Tape forms are `process`, `test_process` (runs and
+`hirsel_run_schema::process_rule_within` covers each. Tape forms are `process`, `test_process` (runs and
 children), `process_run` (with its deadline as `clock:ticks` or `none`, then its
 command: program, directory, counted arguments, and `inherit` or counted variables) and
 `process_pipeline` (a stage count, then each stage's command, which ends with the word
@@ -341,7 +341,7 @@ world times out only a deadline that reading already reached.
 
 `proc.spawn` makes the same checks and mints a `Grant::Child` of its Proc, which every
 child request names (CAP-2); the policy tracks whether its input is open. A scripted
-world plays the entry with `hirsel_run_config::ScriptChild`: a read at an `Expect` is
+world plays the entry with `hirsel_run_schema::ScriptChild`: a read at an `Expect` is
 `AdapterError::Blocked`, and a contradicted or unmet `Expect` writes its Test report and
 completes `Checked(false)` (LANG-9). A host child goes through `HostCall` to
 the `process::ProcessHost` provider, `host_child::HostChildren`, three nonblocking pipes per child: a write or read that would
@@ -364,7 +364,7 @@ holds its stage count and `max_stderr`; `group.write`, `group.close_stdin`,
 its handle, a standard-error read of a group is refused, and `proc.wait_group` is
 `Request::GroupWait`, whose completion must hold one status and one at-most-`max_stderr`
 standard error per stage. A scripted world plays the entries with
-`hirsel_run_config::ScriptGroup`, its stages connected. A host group (`host_child.rs`) is a
+`hirsel_run_schema::ScriptGroup`, its stages connected. A host group (`host_child.rs`) is a
 `HostChild` of several stages: the program holds the first stage's input and the last
 stage's output, and a `Capture` thread drains every stage's standard error into its own
 buffer from the spawn, SIGKILLing every stage (a copy of the `Stages` targets) once one
@@ -501,7 +501,7 @@ section in the archive and `--gc-sections`, an executable whose program calls no
 links none of rustls, ring, webpki's verifiers or the root set
 (`link_kit::an_executable_links_each_host_provider_only_when_its_program_reaches_it`).
 Admission only checks that a scripted `Serves` peer's server is well formed
-(`hirsel_run_config::tls::well_formed`); the scripted handshake loads it through the
+(`hirsel_run_schema::tls::well_formed`); the scripted handshake loads it through the
 engine (`TlsEngine::scripted_connect`), and an unloadable one fails that handshake. `tls.close` sends close_notify before closing on every outcome; implicit
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
@@ -510,7 +510,7 @@ server handshake (`TlsEngine::accept`: ALPN `http/1.1` only, no session cache or
 the identity `tls::select` picks for the client's SNI, and the rustls client verifier of
 a `Request` or `Require` trust set; the host holds either side as a
 `TlsSession`). Its `TlsServer` passes through `Adapter::tls_server`; every world
-loads it into State with the engine (the shared `hirsel_run_config::tls::server`), the tape request
+loads it into State with the engine (the shared `hirsel_run_schema::tls::server`), the tape request
 records only the chain and trust-set PEM SHA-256s, and the provider receives the loaded
 server (`tests/it/tls_server.rs`). `tls.connect_as` passes its client identity through
 `Adapter::tls_identity` the same way and the tape names its chain digest. `tls.peer` is a
@@ -737,7 +737,7 @@ the linked program's immutable descriptor registry and runs one compiled
 `fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
 granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and
 returns the exit status of the run's outcome
-(`hirsel_run_config::RunOutcome::exit_code`), using the
+(`hirsel_run_schema::RunOutcome::exit_code`), using the
 [PROG-3 policy](../../docs/spec/programs.md#prog-3-entry) shared with interpreted
 launches. Blocked reports retain parked tasks' spawn paths, source sites, wait
 kinds and target ordinals, before abandoning their contexts. Observation version
@@ -1026,7 +1026,7 @@ Unbounded unanswered connects and stalled reads produce a distinct Blocked signa
 A `Fails(f)` peer fails every handshake with `Tls(f)` (State closes the taken stream as
 for any handshake failure), and a `Truncate()` step reads as `Tls(Truncated())` on a
 secured stream and as end of stream otherwise. A scripted client's `tls` answers
-`tls.accept` through the shared `hirsel_run_config::tls::scripted_accept`: a
+`tls.accept` through the shared `hirsel_run_schema::tls::scripted_accept`: a
 `Certificate(names)` or `Presents(names, chain)` client sends its first DNS name as SNI,
 accepts the selected identity when its leaf names one of `names` and otherwise sends
 bad_certificate; a `Presents` chain is verified against a `Request` or `Require` trust set
@@ -1238,7 +1238,7 @@ anchored failures remain intact while later field failures retain their own pair
 TaskSpawn alone takes the hidden pair among runtime primitives; a child starts
 its callable with the actual spawn invocation as both codes.
 
-TLS argument validation uses `hirsel-run-config::tls` in every world. Adapters bind
+TLS argument validation uses `hirsel-run-schema::tls` in every world. Adapters bind
 PEM validity and its digest to the stream until its handshake completes or closes;
 replay rederives it and keeps the existing tape identity. The host constructs its trust store with the same parser.
 

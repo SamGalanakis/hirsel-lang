@@ -1,9 +1,9 @@
 //! Production entry selection and admission, before any evaluator starts.
 use crate::DefinitionQueries;
 use hirsel_run_config::{
-    AdmittedRun, BoundRun, CalleeFacts, CodeReach, HostAuthority, LaunchKind, ProgramFacts,
-    ProgramRevision, Root, RunConfig, RunRefusal, ValidatedRun,
+    AdmittedRun, BoundRun, HostAuthority, ProgramFacts, Root, RunConfig, ValidatedRun,
 };
+use hirsel_run_schema::{CalleeFacts, CodeReach, LaunchKind, ProgramRevision, RunRefusal};
 use hirsel_syntax::Visibility;
 use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
 use std::collections::BTreeMap;

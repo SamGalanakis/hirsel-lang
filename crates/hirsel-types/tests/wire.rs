@@ -1,6 +1,6 @@
 hirsel_guard::install!();
 
-use hirsel_run_config::hex;
+use hirsel_run_schema::hex;
 use hirsel_syntax::{DefPath, ItemPath, PackageId};
 use hirsel_types::serialization::{
     SchemaArgument as A, SchemaId as S, SchemaNode as N, SerializableSchema,

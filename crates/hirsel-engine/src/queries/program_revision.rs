@@ -1,6 +1,6 @@
 //! Rooted semantic dependencies, independent of native artifacts and instances.
 use super::*;
-use hirsel_run_config::{ProgramNode, ProgramRevision};
+use hirsel_run_schema::{ProgramNode, ProgramRevision};
 use hirsel_syntax::TokenKind;
 use hirsel_types::{DependencyRead, SignatureKind};
 

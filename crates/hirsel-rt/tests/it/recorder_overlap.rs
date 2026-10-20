@@ -2,7 +2,8 @@
 //! and entry; the same grants with isolated recorder storage enter successfully.
 use hirsel_rt::host_paths::{PinnedDirectory, RecorderDestination, RecorderDirectory};
 use hirsel_rt::io_real::RealIo;
-use hirsel_run_config::{HostAuthority, RevocationEvidence, RunConfig, RunRefusal};
+use hirsel_run_config::{HostAuthority, RevocationEvidence, RunConfig};
+use hirsel_run_schema::RunRefusal;
 use std::fs::{self, File};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -265,7 +266,7 @@ fn validated_host_admission_reports_recorder_overlap_before_entry_for_read_only_
             entry: run.record().entry.clone(),
             launch: run.record().launch,
             roots: vec![],
-            code: hirsel_run_config::CodeReach::Safe,
+            code: hirsel_run_schema::CodeReach::Safe,
             fueled: true,
         };
         let result = run

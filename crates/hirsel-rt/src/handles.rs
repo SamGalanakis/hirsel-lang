@@ -43,7 +43,7 @@ pub enum Grant {
     },
     /// Exact program rules and the world that serves them.
     Process {
-        rules: Vec<hirsel_run_config::ProcessRule>,
+        rules: Vec<hirsel_run_schema::ProcessRule>,
         world: crate::process::ProcessWorld,
     },
     /// A streaming child of Proc `process`, served by that Proc's world; with `group` a
@@ -61,7 +61,7 @@ pub enum Grant {
     },
     Directory {
         root: String,
-        access: hirsel_run_config::Access,
+        access: hirsel_run_schema::Access,
     },
     File {
         path: String,

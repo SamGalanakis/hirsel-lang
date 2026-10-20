@@ -97,7 +97,7 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
             let (outcome, stdout) = run("completes", COMPLETES);
             assert_eq!(
                 outcome.unwrap(),
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok),
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok),
                 "{label}"
             );
             assert_eq!(stdout, "completes ok\n", "{label}");
@@ -111,7 +111,7 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
             matches!(
                 outcome,
                 Ok(RunOutcome::Environmental(
-                    hirsel_run_config::Environmental::CodecLimit
+                    hirsel_run_schema::Environmental::CodecLimit
                 ))
             ),
             "{outcome:?}"
@@ -121,7 +121,7 @@ fn interpreted_runs_that_block_stop_or_fail_end_alone_in_one_process() {
         for (name, source, line) in [("fails", FAILS, 4), ("fails-later", FAILS_LATER, 5)] {
             let (outcome, stdout) = run(name, source);
             let Ok(RunOutcome::Failed {
-                primary: hirsel_run_config::Failure { rule, site, .. },
+                primary: hirsel_run_schema::Failure { rule, site, .. },
                 ..
             }) = outcome
             else {
@@ -186,9 +186,9 @@ fn native_runs_that_block_stop_or_fail_end_alone_in_one_host_process_on_both_bac
                 .unwrap();
                 let mut record = hirsel_run_config::RunConfig::for_program(
                     ready.revision(&entry).unwrap(),
-                    hirsel_run_config::LaunchKind::Main,
+                    hirsel_run_schema::LaunchKind::Main,
                 );
-                record.io = Some(hirsel_run_config::IoGrants {
+                record.io = Some(hirsel_run_schema::IoGrants {
                     stdout: Some("stdout.bytes@1".into()),
                     tasks: Some("tasks.cooperative@1".into()),
                     ..Default::default()

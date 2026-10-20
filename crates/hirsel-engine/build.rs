@@ -1,6 +1,6 @@
 //! Freeze the conservative shared execution dependency bundle at compiler build
 //! time. Launch never reads source files or host paths to identify its program.
-use hirsel_run_config::{ProgramNode, ProgramRevision};
+use hirsel_run_schema::{ProgramNode, ProgramRevision};
 use std::{
     env, fs,
     path::{Path, PathBuf},

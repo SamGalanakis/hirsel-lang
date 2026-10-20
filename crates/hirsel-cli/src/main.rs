@@ -797,9 +797,9 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                         );
                     }
                     RunOutcome::Returned(if failed == 0 {
-                        hirsel_run_config::Returned::Ok
+                        hirsel_run_schema::Returned::Ok
                     } else {
-                        hirsel_run_config::Returned::Error
+                        hirsel_run_schema::Returned::Error
                     })
                     .exit_code() as u8
                 }
@@ -938,9 +938,9 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                         );
                     }
                     RunOutcome::Returned(if failed == 0 {
-                        hirsel_run_config::Returned::Ok
+                        hirsel_run_schema::Returned::Ok
                     } else {
-                        hirsel_run_config::Returned::Error
+                        hirsel_run_schema::Returned::Error
                     })
                     .exit_code() as u8
                 }
@@ -1376,7 +1376,7 @@ fn tool_error(error: ToolError, json: bool) -> u8 {
     }
     eprintln!("hirsel: {error}");
     // A run without a record grants nothing (determinism.md); say how to grant the root.
-    if let ToolError::Launch(hirsel_run_config::RunRefusal::NotGranted { root }) = &error
+    if let ToolError::Launch(hirsel_run_schema::RunRefusal::NotGranted { root }) = &error
         && !json
     {
         eprintln!(

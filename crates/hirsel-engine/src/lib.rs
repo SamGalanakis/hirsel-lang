@@ -65,7 +65,7 @@ impl fmt::Display for NotImplemented {
     }
 }
 impl std::error::Error for NotImplemented {}
-pub use hirsel_run_config::RunOutcome;
+pub use hirsel_run_schema::RunOutcome;
 /// Rich execution export. Execution API errors retain output beside their cause.
 #[derive(Debug)]
 pub struct ObservedExecution {

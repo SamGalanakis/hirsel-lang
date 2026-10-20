@@ -9,7 +9,7 @@ use hirsel_lir::ir::SiteRange;
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_rt::io::UnitResult;
 use hirsel_rt::launch::{ARGS_HANDLE, IO_HANDLE};
-use hirsel_run_config::Access;
+use hirsel_run_schema::Access;
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1902,9 +1902,9 @@ pub struct HeapWorld {
     /// deterministic simulation's does.
     pub monotonic: Option<u64>,
     /// A Main launch's `io.process` grant; only a scripted one (process.script@1) runs.
-    pub process: Option<hirsel_run_config::ProcessGrant>,
+    pub process: Option<hirsel_run_schema::ProcessGrant>,
     /// A Main launch's `io.net` grant; only a scripted one (net.script@2, with peers) runs.
-    pub net: Option<hirsel_run_config::NetGrant>,
+    pub net: Option<hirsel_run_schema::NetGrant>,
     /// A Main launch's Env snapshot; absent, the root Env grants no name.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// A raised interpreter step budget; H's instruction limit scales with it.

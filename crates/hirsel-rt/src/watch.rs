@@ -383,13 +383,13 @@ mod tests {
         assert_eq!(relative_to("d", Created("d/a".into())), Created("a".into()));
         assert_eq!(
             map_paths(&Created("a".into()), |p| {
-                hirsel_run_config::confined_relative("d", p)
+                hirsel_run_schema::confined_relative("d", p)
             }),
             Some(Created("d/a".into()))
         );
         assert_eq!(
             map_paths(&Created("../a".into()), |p| {
-                hirsel_run_config::confined_relative("d", p)
+                hirsel_run_schema::confined_relative("d", p)
             }),
             None
         );

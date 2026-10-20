@@ -15,7 +15,7 @@
 use super::*;
 use hirsel_interp::library::runners::{RunnerSend, callee_outcome};
 use hirsel_interp::{CallSchemas, CalleeEnd, CalleeStart};
-use hirsel_run_config::{CallForm, CalleeFacts, RunnerCompletion, RunnerRequest};
+use hirsel_run_schema::{CallForm, CalleeFacts, RunnerCompletion, RunnerRequest};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -263,20 +263,20 @@ impl HostLibrary {
         self.callee_return(end, cx)?;
         let outcome = match end {
             CalleeEnd::Returned(Value::Variant { variant: 0, .. }) => {
-                hirsel_run_config::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                hirsel_run_schema::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             }
             CalleeEnd::Returned(_) => {
-                hirsel_run_config::RunOutcome::Returned(hirsel_run_config::Returned::Error)
+                hirsel_run_schema::RunOutcome::Returned(hirsel_run_schema::Returned::Error)
             }
             CalleeEnd::Failed(chain) => hirsel_engine::project_failures(chain, cx.sources)
                 .unwrap_or_else(|error| {
-                    hirsel_run_config::RunOutcome::Tooling(format!("{error:?}"))
+                    hirsel_run_schema::RunOutcome::Tooling(format!("{error:?}"))
                 }),
-            CalleeEnd::BudgetExceeded(kind) => hirsel_run_config::RunOutcome::BudgetExceeded(*kind),
-            CalleeEnd::Canceled => hirsel_run_config::RunOutcome::Tooling(
+            CalleeEnd::BudgetExceeded(kind) => hirsel_run_schema::RunOutcome::BudgetExceeded(*kind),
+            CalleeEnd::Canceled => hirsel_run_schema::RunOutcome::Tooling(
                 "the call was cancelled before its callee started".into(),
             ),
-            CalleeEnd::Abandoned => hirsel_run_config::RunOutcome::Tooling(
+            CalleeEnd::Abandoned => hirsel_run_schema::RunOutcome::Tooling(
                 "the place stopped the callee without an outcome".into(),
             ),
         };
@@ -299,14 +299,14 @@ impl HostLibrary {
             .get(&path)
             .cloned()
             .ok_or_else(|| format!("no checked facts for the callee {path}"))?;
-        let key = hirsel_run_config::call_key(&call.cause.instance, call.cause.ordinal);
-        let seed = |name: &str| hirsel_run_config::callee_seed(&key, name);
+        let key = hirsel_run_schema::call_key(&call.cause.instance, call.cause.ordinal);
+        let seed = |name: &str| hirsel_run_schema::callee_seed(&key, name);
         let mut record = hirsel_run_config::RunConfig::empty(
             facts.program,
             path.clone(),
-            hirsel_run_config::LaunchKind::Call,
+            hirsel_run_schema::LaunchKind::Call,
         );
-        record.call = Some(hirsel_run_config::CallRecord::new(
+        record.call = Some(hirsel_run_schema::CallRecord::new(
             call.form,
             &call.cause,
             &call.argument,
@@ -319,20 +319,20 @@ impl HostLibrary {
             call.runner
                 .admission
                 .as_ref()
-                .map(|place| hirsel_run_config::Admission {
+                .map(|place| hirsel_run_schema::Admission {
                     not_before: None,
                     expires: None,
                     revocation: None,
                     code: place.code.clone(),
                 });
-        let refused = |e: hirsel_run_config::RunRefusal| format!("callee admission: {e}");
+        let refused = |e: hirsel_run_schema::RunRefusal| format!("callee admission: {e}");
         let bound = record
             .validated()
             .map_err(refused)?
             .bind(&hirsel_run_config::ProgramFacts {
                 program: facts.program,
                 entry: path,
-                launch: hirsel_run_config::LaunchKind::Call,
+                launch: hirsel_run_schema::LaunchKind::Call,
                 roots: match call.form {
                     CallForm::Call => vec![hirsel_run_config::Root::Io],
                     CallForm::Compute => vec![],

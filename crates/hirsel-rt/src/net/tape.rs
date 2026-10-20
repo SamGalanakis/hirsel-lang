@@ -2,7 +2,7 @@
 //! file events, with hex strings and bytes, canonical socket addresses and named errors.
 use super::*;
 use crate::io::{Completion, Request};
-use hirsel_run_config::hex;
+use hirsel_run_schema::hex;
 
 fn unhex(word: &str) -> Result<Vec<u8>, String> {
     if !word.is_ascii() || word.len() % 2 != 0 {
@@ -227,8 +227,8 @@ pub(crate) fn render_request(request: &Request) -> String {
             listeners,
         } => format!(
             "test_net {test} {} {}",
-            hex(&hirsel_run_config::encode_net_peers(peers)),
-            hex(&hirsel_run_config::encode_net_listeners(listeners))
+            hex(&hirsel_run_schema::encode_net_peers(peers)),
+            hex(&hirsel_run_schema::encode_net_listeners(listeners))
         ),
         R::UdpBind { net, addr } => format!("udp_bind {net} {}", address(addr)),
         R::UdpSend {
@@ -362,9 +362,9 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
     Ok(Some(match words {
         ["test_net", test, peers, listeners] => R::TestNet {
             test: number(test)?,
-            peers: hirsel_run_config::decode_net_peers(&unhex(peers)?)
+            peers: hirsel_run_schema::decode_net_peers(&unhex(peers)?)
                 .map_err(|e| e.to_string())?,
-            listeners: hirsel_run_config::decode_net_listeners(&unhex(listeners)?)
+            listeners: hirsel_run_schema::decode_net_listeners(&unhex(listeners)?)
                 .map_err(|e| e.to_string())?,
         },
         ["udp_bind", n, a] => R::UdpBind {

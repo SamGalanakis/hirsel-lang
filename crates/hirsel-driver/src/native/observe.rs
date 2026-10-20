@@ -33,7 +33,7 @@ pub struct Observation {
     /// The run is Blocked (CONC-8, schema 2): it neither returned nor failed.
     pub blocked: bool,
     /// The run spent this budget (`budgets.limits@1`) and stopped as a Blocked run does.
-    pub budget: Option<hirsel_run_config::BudgetKind>,
+    pub budget: Option<hirsel_run_schema::BudgetKind>,
     pub output: Vec<u8>,
     /// The primary failure, then cleanup failures in order.
     pub failures: Vec<Failure>,
@@ -73,9 +73,9 @@ impl Observation {
     pub fn outcome(
         &self,
         sites: &Sites<'_>,
-        waits: Vec<hirsel_run_config::Wait>,
-    ) -> Result<hirsel_run_config::RunOutcome, NativeError> {
-        use hirsel_run_config::{Returned, RunOutcome};
+        waits: Vec<hirsel_run_schema::Wait>,
+    ) -> Result<hirsel_run_schema::RunOutcome, NativeError> {
+        use hirsel_run_schema::{Returned, RunOutcome};
         if let Some(kind) = self.budget {
             return Ok(RunOutcome::BudgetExceeded(kind));
         }
@@ -91,7 +91,7 @@ impl Observation {
         }
         let mut failures = self.failures.iter().map(|failure| {
             let missing = || NativeError::new(StageName::Launch, "failure has no source site");
-            Ok(hirsel_run_config::Failure {
+            Ok(hirsel_run_schema::Failure {
                 rule: failure.rule.clone(),
                 site: sites.failure_site(failure).ok_or_else(missing)?,
                 operation: failure
@@ -184,12 +184,12 @@ impl<'a> Sites<'a> {
         })
     }
 
-    pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_config::Site> {
+    pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
         let file = self
             .input
             .sources
             .file(*self.files.get(&failure.definition)?)?;
-        Some(hirsel_run_config::Site {
+        Some(hirsel_run_schema::Site {
             definition: failure.definition.to_string(),
             file: file.path.to_string_lossy().into_owned(),
             line: failure.line.into(),
@@ -211,12 +211,12 @@ impl<'a> Sites<'a> {
     pub fn operation_site(
         &self,
         source: &hirsel_interp::observation::SourceSite,
-    ) -> Option<hirsel_run_config::Site> {
+    ) -> Option<hirsel_run_schema::Site> {
         let file = self
             .input
             .sources
             .file(*self.files.get(&source.definition)?)?;
-        Some(hirsel_run_config::Site {
+        Some(hirsel_run_schema::Site {
             definition: source.definition.to_string(),
             file: file.path.to_string_lossy().into_owned(),
             line: source.line.into(),

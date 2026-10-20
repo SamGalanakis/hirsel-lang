@@ -7,7 +7,7 @@ use hirsel_rt::{
     io_real::RealIo,
     io_sim::SimIo,
 };
-use hirsel_run_config::Access;
+use hirsel_run_schema::Access;
 use std::{collections::BTreeMap, fs};
 fn replay(real: &RealIo, initial: Tree, mounts: &BTreeMap<String, Access>, final_tree: &Tree) {
     let mut tape = real.tape().to_vec();

@@ -864,7 +864,7 @@ impl HostLibrary {
                     let [program, env] = fields(rule)?[..] else {
                         return Err(invalid());
                     };
-                    Ok(hirsel_run_config::ProcessRule {
+                    Ok(hirsel_run_schema::ProcessRule {
                         program: text(program)?,
                         env: fields(env)?
                             .into_iter()
@@ -2311,7 +2311,7 @@ mod tests {
         let admitted = hirsel_run_config::RunConfig::empty(
             [0; 32],
             "core@1/main".into(),
-            hirsel_run_config::LaunchKind::Main,
+            hirsel_run_schema::LaunchKind::Main,
         )
         .validated()
         .unwrap();

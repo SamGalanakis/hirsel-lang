@@ -14,7 +14,8 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use hirsel_run_config::{AdmittedRun, BoundRun, RunOutcome, RunRefusal};
+use hirsel_run_config::{AdmittedRun, BoundRun};
+use hirsel_run_schema::{RunOutcome, RunRefusal};
 
 use crate::io_real::RealIo;
 use crate::io_sim::SimIo;

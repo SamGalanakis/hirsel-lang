@@ -28,7 +28,7 @@ fn ticks(io: &mut impl Adapter, clock: u64) -> u64 {
 #[test]
 fn splitmix_draws_are_the_seeded_words_and_replay_with_their_tape_forms() {
     let mut real = granted();
-    real.set_random(hirsel_run_config::ProviderContract::RandomSplitMix64, 42);
+    real.set_random(hirsel_run_schema::ProviderContract::RandomSplitMix64, 42);
     assert_eq!(
         real.call(Request::Random { io: 1 }).unwrap(),
         Completion::Handle(Ok(2))
@@ -57,7 +57,7 @@ fn splitmix_draws_are_the_seeded_words_and_replay_with_their_tape_forms() {
 #[test]
 fn system_draws_fill_the_count_from_the_host_and_replay_only_the_recorded_bytes() {
     let mut real = granted();
-    real.set_random(hirsel_run_config::ProviderContract::RandomSystem, 0);
+    real.set_random(hirsel_run_schema::ProviderContract::RandomSystem, 0);
     real.call(Request::Random { io: 1 }).unwrap();
     let a = draw(&mut real, 2, 64).unwrap();
     let b = draw(&mut real, 2, 64).unwrap();
@@ -204,7 +204,7 @@ fn a_cooperative_wait_parks_on_a_readiness_timer_until_due() {
 #[test]
 fn a_draw_or_wait_on_a_foreign_handle_is_refused_before_any_provider_effect() {
     let mut real = granted();
-    real.set_random(hirsel_run_config::ProviderContract::RandomSplitMix64, 1);
+    real.set_random(hirsel_run_schema::ProviderContract::RandomSplitMix64, 1);
     real.call(Request::MonotonicClock { io: 1 }).unwrap();
     assert_eq!(
         real.call(Request::RandomBytes {
@@ -224,7 +224,7 @@ fn a_draw_or_wait_on_a_foreign_handle_is_refused_before_any_provider_effect() {
     // The refused draw did not advance the seeded state.
     let fresh = {
         let mut other = granted();
-        other.set_random(hirsel_run_config::ProviderContract::RandomSplitMix64, 1);
+        other.set_random(hirsel_run_schema::ProviderContract::RandomSplitMix64, 1);
         other.call(Request::Random { io: 1 }).unwrap();
         draw(&mut other, 2, 8).unwrap()
     };

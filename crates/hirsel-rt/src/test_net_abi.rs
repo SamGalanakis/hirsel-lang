@@ -9,7 +9,7 @@ use crate::{
     Header, TaskCtx,
     io::{Completion, Request},
 };
-use hirsel_run_config::{
+use hirsel_run_schema::{
     NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls, TlsFailure, TlsIdentity,
     TlsServer,
 };

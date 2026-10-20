@@ -726,7 +726,7 @@ impl NetProvider for HostNet {
         stream: u64,
         name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> Provided<()> {
         let pem = self.pem.take();
         Ok(self.handshake(stream, || tls.connect(name, roots, pem, identity)))
@@ -735,7 +735,7 @@ impl NetProvider for HostNet {
         &mut self,
         tls: &dyn crate::net_tls::TlsEngine,
         stream: u64,
-        server: &hirsel_run_config::tls::Server,
+        server: &hirsel_run_schema::tls::Server,
     ) -> Provided<()> {
         Ok(self.handshake(stream, || tls.accept(server)))
     }

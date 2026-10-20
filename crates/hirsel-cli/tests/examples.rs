@@ -343,7 +343,7 @@ fn httpget() {
     .unwrap();
     assert_eq!(
         result,
-        hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        hirsel_engine::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     assert_eq!(output, b"sheep\n");
     let executable = fixture.native_executable();

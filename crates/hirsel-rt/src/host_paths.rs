@@ -2,7 +2,7 @@
 //! These pins do not authorize providers or access rights. An adapter retains each
 //! granted pin, checks every recorder against all of them, and uses the same
 //! descriptors for execution. Tool destinations are outside semantic RunConfig.
-use hirsel_run_config::RunRefusal;
+use hirsel_run_schema::RunRefusal;
 use std::collections::BTreeSet;
 use std::ffi::{CString, OsStr};
 use std::fs::File;

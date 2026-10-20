@@ -35,6 +35,7 @@ hirsel-rc = { path = "../hirsel-rc" }
 hirsel-rt = { path = "../hirsel-rt", features = ["diagnostic"] }
 hirsel-rt-operations = { path = "../hirsel-rt-operations" }
 hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-tir = { path = "../hirsel-tir" }

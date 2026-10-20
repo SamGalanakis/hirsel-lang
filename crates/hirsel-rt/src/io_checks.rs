@@ -5,7 +5,7 @@ use crate::io::{
 };
 use crate::net::NetError;
 use crate::process::{ProcessFailure, ProcessOutcome};
-use hirsel_run_config::Access;
+use hirsel_run_schema::Access;
 
 pub(crate) fn net_completion(request: &R, error: NetError) -> C {
     match request {
@@ -168,10 +168,10 @@ impl State {
             R::SetPermissions {
                 path, permissions, ..
             } => {
-                *permissions > 0o777 || hirsel_run_config::confined_relative(&root, path).is_none()
+                *permissions > 0o777 || hirsel_run_schema::confined_relative(&root, path).is_none()
             }
             R::RemoveAll { path, .. } => {
-                hirsel_run_config::confined_relative(&root, path).is_none_or(|p| p == root)
+                hirsel_run_schema::confined_relative(&root, path).is_none_or(|p| p == root)
             }
             R::Open { path, .. }
             | R::Create { path, .. }
@@ -186,10 +186,10 @@ impl State {
             | R::CreateAtomic { path, .. }
             | R::PutNew { path, .. }
             | R::Map { path, .. }
-            | R::Watch { path, .. } => hirsel_run_config::confined_relative(&root, path).is_none(),
+            | R::Watch { path, .. } => hirsel_run_schema::confined_relative(&root, path).is_none(),
             R::Rename { from, to, .. } => {
-                hirsel_run_config::confined_relative(&root, from).is_none()
-                    || hirsel_run_config::confined_relative(&root, to).is_none()
+                hirsel_run_schema::confined_relative(&root, from).is_none()
+                    || hirsel_run_schema::confined_relative(&root, to).is_none()
             }
             _ => false,
         };
@@ -226,7 +226,7 @@ pub fn cancel(
         R::Print { .. } | R::PrintStderr { .. } => C::Unit(Err(IoError::Canceled(cause))),
         R::SleepUntil { .. } => C::Wait(Err(WaitError::Canceled(cause))),
         R::ProcessRun { .. } => C::Process(ProcessOutcome::Error(ProcessFailure::Canceled(cause))),
-        R::ProcessPipeline { .. } => C::Pipeline(hirsel_run_config::PipelineOutcome::Error(
+        R::ProcessPipeline { .. } => C::Pipeline(hirsel_run_schema::PipelineOutcome::Error(
             ProcessFailure::Canceled(cause),
         )),
         R::ProcessSpawn { .. } | R::ProcessSpawnPipeline { .. } => {

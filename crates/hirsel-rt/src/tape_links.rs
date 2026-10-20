@@ -8,8 +8,9 @@
 //! not given) is reported as unchecked. No program is needed: the tapes alone are compared.
 use crate::io::{Completion, Request};
 use crate::launch::Recording;
-use hirsel_run_config::{
-    CalleeOutcome, RunConfig, RunnerCompletion, RunnerRequest, call_key, callee_instance, hex,
+use hirsel_run_config::RunConfig;
+use hirsel_run_schema::{
+    CalleeOutcome, RunnerCompletion, RunnerRequest, call_key, callee_instance, hex,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -171,6 +172,6 @@ pub fn check(tapes: &[(String, Recording)]) -> Result<Links, Vec<String>> {
 }
 
 fn carries_bytes(completion: &RunnerCompletion) -> bool {
-    use hirsel_run_config::CallOutcome::*;
+    use hirsel_run_schema::CallOutcome::*;
     matches!(completion.outcome, Ok(_) | Failed(_) | Faulted(_))
 }

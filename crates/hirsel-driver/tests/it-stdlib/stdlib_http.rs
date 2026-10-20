@@ -28,7 +28,7 @@ fn execute_source(source: &str) {
             assert!(
                 matches!(
                     result.outcome,
-                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
                 ),
                 "{:?}",
                 result.outcome
@@ -597,7 +597,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
                 assert!(
                     matches!(
                         replay.outcome,
-                        Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                        Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
                     ),
                     "{:?}",
                     replay.outcome
@@ -677,7 +677,7 @@ fn assert_http_script_replay(relative: &str) {
         assert!(
             matches!(
                 recorded.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}",
             recorded.outcome
@@ -714,7 +714,7 @@ fn assert_http_script_replay(relative: &str) {
         assert!(
             matches!(
                 replayed.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}",
             replayed.outcome

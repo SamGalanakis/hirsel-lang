@@ -747,7 +747,7 @@ fn net_id(completion: Completion) -> u64 {
 }
 fn precedence_net_matrix() {
     use hirsel_rt::net::{ClientAuth, NetOperation as O, TlsServerDigest};
-    use hirsel_run_config::{NetClient, NetConnection, NetGrant, NetListener, NetPeer, PeerTls};
+    use hirsel_run_schema::{NetClient, NetConnection, NetGrant, NetListener, NetPeer, PeerTls};
     let address = SocketAddr {
         ip: "127.0.0.1".parse().unwrap(),
         port: 443,
@@ -1028,7 +1028,7 @@ fn record(name: &str, values: Vec<Value>) -> Value {
         fields: values.into_iter().map(Some).collect(),
     }
 }
-fn command_value(command: &hirsel_run_config::Command) -> Value {
+fn command_value(command: &hirsel_run_schema::Command) -> Value {
     record(
         "Command",
         vec![
@@ -1132,7 +1132,7 @@ fn process_arguments(request: &Request) -> (&'static str, Vec<Value>) {
             stream,
             max,
         } => (
-            if *stream == hirsel_run_config::ChildStream::Stdout {
+            if *stream == hirsel_run_schema::ChildStream::Stdout {
                 "child.read_stdout"
             } else {
                 "child.read_stderr"
@@ -1171,13 +1171,13 @@ fn process_arguments(request: &Request) -> (&'static str, Vec<Value>) {
         _ => unreachable!(),
     }
 }
-fn process_completion(request: &Request, error: hirsel_run_config::ProcessFailure) -> Completion {
+fn process_completion(request: &Request, error: hirsel_run_schema::ProcessFailure) -> Completion {
     match request {
         Request::ProcessRun { .. } => {
-            Completion::Process(hirsel_run_config::ProcessOutcome::Error(error))
+            Completion::Process(hirsel_run_schema::ProcessOutcome::Error(error))
         }
         Request::ProcessPipeline { .. } => {
-            Completion::Pipeline(hirsel_run_config::PipelineOutcome::Error(error))
+            Completion::Pipeline(hirsel_run_schema::PipelineOutcome::Error(error))
         }
         Request::ProcessSpawn { .. } | Request::ProcessSpawnPipeline { .. } => {
             Completion::Spawned(Err(error))
@@ -1190,7 +1190,7 @@ fn process_completion(request: &Request, error: hirsel_run_config::ProcessFailur
     }
 }
 fn process_error_value(completion: Completion) -> Value {
-    use hirsel_run_config::{PipelineOutcome, ProcessFailure as F, ProcessOutcome};
+    use hirsel_run_schema::{PipelineOutcome, ProcessFailure as F, ProcessOutcome};
     let error = match completion {
         Completion::Process(ProcessOutcome::Error(e))
         | Completion::Pipeline(PipelineOutcome::Error(e))
@@ -1215,7 +1215,7 @@ fn process_error_value(completion: Completion) -> Value {
     reference::error(value)
 }
 fn precedence_process_matrix() {
-    use hirsel_run_config::{
+    use hirsel_run_schema::{
         ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessGrant, ProcessRule,
     };
     let command = Command {
@@ -1348,7 +1348,7 @@ fn precedence_process_matrix() {
                 5 => Request::ChildRead {
                     process,
                     child,
-                    stream: hirsel_run_config::ChildStream::Stdout,
+                    stream: hirsel_run_schema::ChildStream::Stdout,
                     max: if conditions & 4 != 0 { 0 } else { 1 },
                 },
                 6 => Request::ChildWait {

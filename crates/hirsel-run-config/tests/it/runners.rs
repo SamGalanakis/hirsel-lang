@@ -1,4 +1,6 @@
 use hirsel_run_config::*;
+use hirsel_run_schema::*;
+use hirsel_run_schema::*;
 use serde_json::{Value, json};
 
 fn record(runners: Value) -> Value {

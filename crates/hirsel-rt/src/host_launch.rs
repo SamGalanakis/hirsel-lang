@@ -5,7 +5,8 @@ use crate::{
     host_paths::PinnedDirectory, host_stdin::CooperativeStdin, io_real::RealIo, io_sim::SimIo,
     net::NetRule, readiness::Readiness,
 };
-use hirsel_run_config::{AdmittedRun, HostAuthority, RevocationEvidence, RunRefusal, ValidatedRun};
+use hirsel_run_config::{AdmittedRun, HostAuthority, RevocationEvidence, ValidatedRun};
+use hirsel_run_schema::RunRefusal;
 use std::{fs::File, path::Path};
 
 /// Record an admitted host run at the level its record selects (determinism.md, Recording
@@ -18,7 +19,7 @@ pub fn journal(
     path: Option<&Path>,
     outputs: &[(&str, &File)],
 ) -> Result<(), String> {
-    use hirsel_run_config::RecordingLevel;
+    use hirsel_run_schema::RecordingLevel;
     match (recording_level(admitted.run(), path.is_some())?, path) {
         (RecordingLevel::Record, Some(path)) => record(io, admitted, path, outputs),
         (RecordingLevel::Durable, Some(path)) => durable(io, admitted, path, outputs),
@@ -31,8 +32,8 @@ pub fn journal(
 pub fn recording_level(
     run: &ValidatedRun,
     destination: bool,
-) -> Result<hirsel_run_config::RecordingLevel, String> {
-    use hirsel_run_config::RecordingLevel;
+) -> Result<hirsel_run_schema::RecordingLevel, String> {
+    use hirsel_run_schema::RecordingLevel;
     match (run.record().recording, destination) {
         (None, false) => Ok(RecordingLevel::None),
         (None, true) => Ok(RecordingLevel::Record),

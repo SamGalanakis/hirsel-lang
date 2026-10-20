@@ -139,7 +139,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
             .unwrap();
             assert_eq!(
                 observed.outcome.unwrap(),
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             );
             assert!(observed.observation.unwrap().failures.is_empty());
         }
@@ -192,7 +192,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             if failures == 0 {
                 assert_eq!(
                     outcome,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 )
             } else {
                 assert!(matches!(outcome, RunOutcome::Failed { .. }))
@@ -389,7 +389,7 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         .unwrap();
         assert_eq!(
             observed.outcome.unwrap(),
-            RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
         );
         let observation = observed.observation.unwrap();
         assert!(observation.failures.is_empty());

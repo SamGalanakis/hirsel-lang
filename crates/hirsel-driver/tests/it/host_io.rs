@@ -17,7 +17,7 @@ fn execute(source: &str, simulation: SimulationConfig) -> hirsel_engine::Observe
     assert!(
         matches!(
             result.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
         ),
         "{:?}",
         result.outcome
@@ -47,7 +47,7 @@ fn execute(source: &str, simulation: SimulationConfig) -> hirsel_engine::Observe
     assert!(
         matches!(
             replay.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
         ),
         "{:?}",
         replay.outcome

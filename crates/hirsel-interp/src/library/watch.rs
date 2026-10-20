@@ -193,7 +193,7 @@ impl Library {
         let mut paths = vec![];
         for field in fields {
             let p = path_text(field.as_ref().ok_or_else(|| invalid("dead event path"))?)?;
-            paths.push(hirsel_run_config::confined_relative(&root, p));
+            paths.push(hirsel_run_schema::confined_relative(&root, p));
         }
         if tree != 0
             && let Some(paths) = paths.into_iter().collect::<Option<Vec<_>>>()

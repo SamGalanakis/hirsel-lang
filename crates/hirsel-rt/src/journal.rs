@@ -10,7 +10,7 @@ use crate::io::{Completion, Event, Request};
 use crate::launch::{
     Recording, RecordingWriter, parse_recording, parse_tape, render_recording, render_tape,
 };
-use hirsel_run_config::RunOutcome;
+use hirsel_run_schema::RunOutcome;
 use std::collections::BTreeMap;
 use std::io;
 use std::time::{Duration, Instant};
@@ -328,8 +328,8 @@ fn unhex(word: &str) -> Result<String, String> {
 
 /// The trailer's outcome text: one word for the class, then hex strings and decimal numbers.
 pub fn render_outcome(outcome: &RunOutcome) -> String {
-    use hirsel_run_config::{BudgetKind, Environmental, Returned};
-    fn site(site: &hirsel_run_config::Site) -> String {
+    use hirsel_run_schema::{BudgetKind, Environmental, Returned};
+    fn site(site: &hirsel_run_schema::Site) -> String {
         format!(
             "{} {} {} {}",
             hex(site.definition.as_bytes()),
@@ -338,14 +338,14 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
             site.column
         )
     }
-    fn failure(f: &hirsel_run_config::Failure) -> String {
+    fn failure(f: &hirsel_run_schema::Failure) -> String {
         let operation = f
             .operation
             .as_ref()
             .map_or_else(|| "-".into(), |s| format!("+ {}", site(s)));
         format!("{} {} {operation}", hex(f.rule.as_bytes()), site(&f.site))
     }
-    fn diagnostic(d: &hirsel_run_config::ExecutionDiagnostic) -> String {
+    fn diagnostic(d: &hirsel_run_schema::ExecutionDiagnostic) -> String {
         format!(
             "{} {} {}",
             hex(d.rule.as_bytes()),
@@ -366,7 +366,7 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
         }
         RunOutcome::Blocked(waits) => format!(
             "blocked {}",
-            hex(hirsel_run_config::Wait::encode(waits).as_bytes())
+            hex(hirsel_run_schema::Wait::encode(waits).as_bytes())
         ),
         RunOutcome::BudgetExceeded(BudgetKind::Fuel) => "budget fuel".into(),
         RunOutcome::BudgetExceeded(BudgetKind::Memory) => "budget memory".into(),
@@ -395,7 +395,7 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
 }
 /// Strict inverse of [`render_outcome`].
 pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
-    use hirsel_run_config::{BudgetKind, Environmental, Failure, Returned, Site};
+    use hirsel_run_schema::{BudgetKind, Environmental, Failure, Returned, Site};
     fn site(next: &mut dyn FnMut() -> Result<String, String>) -> Result<Site, String> {
         Ok(Site {
             definition: unhex(&next()?)?,
@@ -441,7 +441,7 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
                 causes: failures,
             }
         }
-        "blocked" => RunOutcome::Blocked(hirsel_run_config::Wait::decode(&unhex(next()?)?)?),
+        "blocked" => RunOutcome::Blocked(hirsel_run_schema::Wait::decode(&unhex(next()?)?)?),
         "budget" => match next()? {
             "fuel" => RunOutcome::BudgetExceeded(BudgetKind::Fuel),
             "memory" => RunOutcome::BudgetExceeded(BudgetKind::Memory),
@@ -464,13 +464,13 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
                 "+" => Some(site(&mut || next().map(str::to_owned))?),
                 _ => return Err("bad journal tooling limit".into()),
             };
-            RunOutcome::ToolingLimit(hirsel_run_config::ToolingLimit { kind, limit, site })
+            RunOutcome::ToolingLimit(hirsel_run_schema::ToolingLimit { kind, limit, site })
         }
         kind @ ("undefined_behavior" | "trapped") => {
             let rule = unhex(next()?)?;
             let site = site(&mut || next().map(str::to_owned))?;
             let message = unhex(next()?)?;
-            let diagnostic = hirsel_run_config::ExecutionDiagnostic {
+            let diagnostic = hirsel_run_schema::ExecutionDiagnostic {
                 rule,
                 site,
                 message,
@@ -990,7 +990,7 @@ impl Journaled {
 mod tests {
     use super::*;
     use crate::io::{IoError, Tree};
-    use hirsel_run_config::{Failure, Returned, Site};
+    use hirsel_run_schema::{Failure, Returned, Site};
     use std::{cell::RefCell, rc::Rc};
 
     fn header() -> Recording {
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn outcomes_round_trip() {
-        use hirsel_run_config::{
+        use hirsel_run_schema::{
             BudgetKind, Environmental, ExecutionDiagnostic, ToolingLimit, Wait,
         };
         let site = Site {

@@ -12,15 +12,15 @@ use hirsel_rt::{
     io::{Completion as C, Event, Request as R},
     net::*,
 };
-use hirsel_run_config::{NetConnection, NetGrant, NetListener, NetPeer, NetStep, PeerTls};
+use hirsel_run_schema::{NetConnection, NetGrant, NetListener, NetPeer, NetStep, PeerTls};
 use hirsel_types::{BuiltinType, Primitive};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn rules(rules: &BTreeSet<NetRule>) -> Vec<hirsel_run_config::NetRule> {
+pub fn rules(rules: &BTreeSet<NetRule>) -> Vec<hirsel_run_schema::NetRule> {
     rules
         .iter()
-        .map(|r| hirsel_run_config::NetRule {
+        .map(|r| hirsel_run_schema::NetRule {
             address: r.address.clone(),
             service: r.port.to_string(),
             operation: r.operation.name().into(),
@@ -305,7 +305,7 @@ fn peer_tls(tls: &PeerTls) -> Value {
             ],
         ),
         PeerTls::Serves(server) => {
-            let identity = |i: &hirsel_run_config::TlsIdentity| {
+            let identity = |i: &hirsel_run_schema::TlsIdentity| {
                 record(
                     "TlsIdentity",
                     vec![Value::Bytes(i.chain.clone()), Value::Bytes(i.key.clone())],

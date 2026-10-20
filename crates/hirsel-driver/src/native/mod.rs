@@ -44,7 +44,7 @@ pub use hirsel_lir::layout_types::TargetSpec;
 pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
 pub use hirsel_llvm::c_call;
 pub use hirsel_proof_export::sidecar::Checker;
-pub use hirsel_run_config::Inputs as LaunchInputs;
+pub use hirsel_run_schema::Inputs as LaunchInputs;
 pub use link::{
     Launched, Library, Observed, Partition, Runnable, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape,
     Toolchain, emit_backend_objects, emit_objects, launch, launch_runnable, launch_with, link,

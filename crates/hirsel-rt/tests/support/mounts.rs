@@ -1,7 +1,7 @@
 //! Scratch host directories of the mount tests and of their interpreter-replay twins in
 //! hirsel-pipeline-tests (`rt_mounts`).
 use hirsel_rt::{host_paths::PinnedDirectory, io_real::RealIo};
-use hirsel_run_config::Access;
+use hirsel_run_schema::Access;
 use std::{fs, path::PathBuf};
 pub struct Scratch(pub PathBuf);
 

@@ -5,8 +5,8 @@ pub use crate::net::{
     NetError, NetOperation, NetProvider, NetRule, NetTimeout, NetWorld, RootsDigest, ShutdownHow,
     SocketAddr, TimeoutKind, TlsFailure,
 };
-use hirsel_run_config::confined_relative;
-use hirsel_run_config::{Access, RunRefusal};
+use hirsel_run_schema::confined_relative;
+use hirsel_run_schema::{Access, RunRefusal};
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) fn mount_access(
     mounts: impl IntoIterator<Item = (String, Access)>,
@@ -138,18 +138,18 @@ pub enum Request {
     },
     TestProcess {
         test: u64,
-        runs: Vec<hirsel_run_config::ProcessRun>,
-        children: Vec<hirsel_run_config::ChildRun>,
+        runs: Vec<hirsel_run_schema::ProcessRun>,
+        children: Vec<hirsel_run_schema::ChildRun>,
     },
     /// `proc.narrow`: a Proc of `rules`, each within a rule of `process`, in its world.
     ProcessNarrow {
         process: u64,
-        rules: Vec<hirsel_run_config::ProcessRule>,
+        rules: Vec<hirsel_run_schema::ProcessRule>,
     },
     /// `proc.run`.
     ProcessRun {
         process: u64,
-        command: hirsel_run_config::Command,
+        command: hirsel_run_schema::Command,
         stdin: Vec<u8>,
         max_output: u64,
         deadline: Option<crate::process::Deadline>,
@@ -157,7 +157,7 @@ pub enum Request {
     /// `proc.pipeline`.
     ProcessPipeline {
         process: u64,
-        stages: Vec<hirsel_run_config::Command>,
+        stages: Vec<hirsel_run_schema::Command>,
         stdin: Vec<u8>,
         max_output: u64,
         deadline: Option<crate::process::Deadline>,
@@ -165,12 +165,12 @@ pub enum Request {
     /// `proc.spawn`.
     ProcessSpawn {
         process: u64,
-        command: hirsel_run_config::Command,
+        command: hirsel_run_schema::Command,
     },
     /// `proc.spawn_pipeline`.
     ProcessSpawnPipeline {
         process: u64,
-        stages: Vec<hirsel_run_config::Command>,
+        stages: Vec<hirsel_run_schema::Command>,
         max_stderr: u64,
     },
     /// The streaming child operations name their Proc, as stream operations name their Net.
@@ -188,7 +188,7 @@ pub enum Request {
     ChildRead {
         process: u64,
         child: u64,
-        stream: hirsel_run_config::ChildStream,
+        stream: hirsel_run_schema::ChildStream,
         max: u64,
     },
     ChildWait {
@@ -199,7 +199,7 @@ pub enum Request {
     ChildKill {
         process: u64,
         child: u64,
-        signal: hirsel_run_config::Signal,
+        signal: hirsel_run_schema::Signal,
     },
     /// `proc.wait_group`.
     GroupWait {
@@ -244,8 +244,8 @@ pub enum Request {
     },
     TestNet {
         test: u64,
-        peers: Vec<hirsel_run_config::NetPeer>,
-        listeners: Vec<hirsel_run_config::NetListener>,
+        peers: Vec<hirsel_run_schema::NetPeer>,
+        listeners: Vec<hirsel_run_schema::NetListener>,
     },
     TestDir {
         test: u64,
@@ -533,7 +533,7 @@ pub enum Request {
     },
     /// A runner call (RUN-11): parked until its callee ends, then completed with its
     /// outcome.
-    RunnerCall(Box<hirsel_run_config::RunnerRequest>),
+    RunnerCall(Box<hirsel_run_schema::RunnerRequest>),
     /// A cancellation forwarded to the call with key `key` (RUN-9), acknowledged with
     /// `Ready`.
     RunnerCancel {
@@ -542,7 +542,7 @@ pub enum Request {
     },
     /// A callee run's own outcome as it ended (RUN-11), acknowledged with `Ready`: replay
     /// checks it, and a joined tape check compares it with its caller's completion.
-    CallReturn(hirsel_run_config::CalleeOutcome),
+    CallReturn(hirsel_run_schema::CalleeOutcome),
     /// A scheduling input of cooperative runs, never a capability request: the parked
     /// request of wait `wait` (creation ordinal) was ready at the scheduling point after the
     /// `points` it waited through since it parked or was last ready, and was re-issued there.
@@ -656,18 +656,18 @@ pub enum Completion {
     Certificates(Result<Option<Vec<u8>>, NetError>),
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
-    Process(hirsel_run_config::ProcessOutcome),
+    Process(hirsel_run_schema::ProcessOutcome),
     /// `proc.pipeline`.
-    Pipeline(hirsel_run_config::PipelineOutcome),
+    Pipeline(hirsel_run_schema::PipelineOutcome),
     /// `proc.spawn` and `proc.spawn_pipeline`: the Child or ChildGroup handle.
-    Spawned(Result<u64, hirsel_run_config::ProcessFailure>),
+    Spawned(Result<u64, hirsel_run_schema::ProcessFailure>),
     /// `child.write`, `child.close_stdin` and `child.kill`.
-    ChildUnit(Result<(), hirsel_run_config::ProcessFailure>),
+    ChildUnit(Result<(), hirsel_run_schema::ProcessFailure>),
     /// A child read: the bytes it delivered, empty at end of stream.
-    ChildBytes(Result<Vec<u8>, hirsel_run_config::ProcessFailure>),
-    ChildExit(Result<hirsel_run_config::ExitStatus, hirsel_run_config::ProcessFailure>),
+    ChildBytes(Result<Vec<u8>, hirsel_run_schema::ProcessFailure>),
+    ChildExit(Result<hirsel_run_schema::ExitStatus, hirsel_run_schema::ProcessFailure>),
     /// `proc.wait_group`.
-    GroupExit(Result<hirsel_run_config::GroupOutput, hirsel_run_config::ProcessFailure>),
+    GroupExit(Result<hirsel_run_schema::GroupOutput, hirsel_run_schema::ProcessFailure>),
     /// The request would block and its task parked; `committed` when it already made part
     /// of its effect, so cancellation no longer completes it.
     Blocked {
@@ -677,7 +677,7 @@ pub enum Completion {
     /// a forwarded cancellation's acknowledgement.
     Ready,
     /// A runner call's outcome.
-    Runner(hirsel_run_config::RunnerCompletion),
+    Runner(hirsel_run_schema::RunnerCompletion),
     /// `mapped.with`'s view.
     View(MapView),
     /// `watcher.next`'s event, its paths relative to the watcher's Dir.
@@ -939,16 +939,16 @@ pub(crate) struct State {
     /// The TLS engine, once a TLS entry handed it over (`Adapter::tls`).
     pub(crate) tls: crate::net_tls::Engine,
     /// The admitted rules of the root Proc and the world serving it.
-    pub process_rules: Vec<hirsel_run_config::ProcessRule>,
+    pub process_rules: Vec<hirsel_run_schema::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
     /// Unused entries of each scripted world, keyed by world.
-    pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ProcessRun>>>,
+    pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_schema::ProcessRun>>>,
     /// Unused streaming-child entries of each scripted world, keyed by world.
-    pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ChildRun>>>,
+    pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_schema::ChildRun>>>,
     /// Spawned scripted children, keyed by Child handle.
-    pub script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
+    pub script_children: BTreeMap<u64, hirsel_run_schema::ScriptChild>,
     /// Spawned scripted pipelines, keyed by ChildGroup handle.
-    pub script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
+    pub script_groups: BTreeMap<u64, hirsel_run_schema::ScriptGroup>,
     /// Whether a host mapping's view copies its bytes, for a tape that keeps them.
     pub(crate) capture_views: bool,
     /// The queue of each test tree's watcher, with its tree; `test.dir_event` fills them.

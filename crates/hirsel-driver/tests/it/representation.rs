@@ -229,7 +229,7 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
                 let mut output = vec![];
                 assert!(matches!(
                     run_path(&path, &mut output).unwrap(),
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 ));
                 assert_eq!(
                     output,

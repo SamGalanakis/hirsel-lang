@@ -7,7 +7,7 @@ use hirsel_rt::{
     io::{Completion as C, Request as R},
     net::*,
 };
-use hirsel_run_config::{NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls};
+use hirsel_run_schema::{NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls};
 
 fn word(v: &OpValue) -> Option<u64> {
     match v {
@@ -98,7 +98,7 @@ fn tls_failure(v: &OpValue) -> Option<TlsFailure> {
     })
 }
 /// A `TlsServer`: its identities' PEM chain and key, and its client policy.
-fn tls_server(v: &OpValue) -> Option<hirsel_run_config::TlsServer> {
+fn tls_server(v: &OpValue) -> Option<hirsel_run_schema::TlsServer> {
     let [identities, clients] = fields(v)? else {
         return None;
     };
@@ -108,7 +108,7 @@ fn tls_server(v: &OpValue) -> Option<hirsel_run_config::TlsServer> {
             let [chain, key] = fields(identity)? else {
                 return None;
             };
-            Some(hirsel_run_config::TlsIdentity {
+            Some(hirsel_run_schema::TlsIdentity {
                 chain: bytes(chain)?,
                 key: bytes(key)?,
             })
@@ -121,7 +121,7 @@ fn tls_server(v: &OpValue) -> Option<hirsel_run_config::TlsServer> {
         2 => ClientAuth::Require(bytes(trust)?),
         _ => return None,
     };
-    Some(hirsel_run_config::TlsServer {
+    Some(hirsel_run_schema::TlsServer {
         identities,
         clients,
     })

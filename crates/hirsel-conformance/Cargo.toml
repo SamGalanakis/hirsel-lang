@@ -9,6 +9,7 @@ default-run = "hirsel-conformance"
 [dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }
 hirsel-cli-args = { path = "../hirsel-cli-args" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }

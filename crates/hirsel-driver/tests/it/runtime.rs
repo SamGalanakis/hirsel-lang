@@ -433,7 +433,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
                 &engine.sources
             )
             .unwrap(),
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     assert_eq!(bytes, b"hello\n");
 }
@@ -487,7 +487,7 @@ fn grant_error(refusal: GrantError) -> () uses {} { () }
     .unwrap();
     assert_eq!(
         result,
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     assert_eq!(stdout, b"sizes ok\ndrop one\ndrop three\n");
 }
@@ -531,7 +531,7 @@ fn grant_error(refusal: GrantError) -> () uses {} { () }
     .unwrap();
     assert_eq!(
         result,
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     assert_eq!(stdout, b"branches ok\n");
 }
@@ -560,7 +560,7 @@ fn ambient_heap_token_executes_without_an_allocation_or_capability_on_compiler_t
     .unwrap();
     assert_eq!(
         result,
-        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
 }
 
@@ -632,7 +632,7 @@ pub fn main(rt:Io) -> Result[(),GrantError] {{
             } else {
                 assert_eq!(
                     result,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 );
             }
             assert_eq!(
@@ -703,7 +703,7 @@ fn strict_and_mixed_replacement_failures_keep_the_new_value_in_named_cleanup_ord
             )
             .unwrap();
             assert!(
-                matches!(result, RunOutcome::Failed { primary: hirsel_run_config::Failure { ref rule, ref site, .. }, .. } if rule.as_str()=="SEM-1" && site.line == expected_line as u64),
+                matches!(result, RunOutcome::Failed { primary: hirsel_run_schema::Failure { ref rule, ref site, .. }, .. } if rule.as_str()=="SEM-1" && site.line == expected_line as u64),
                 "{result:?}"
             );
             assert_eq!(stdout, b"old\nlater\nnew\n");
@@ -753,9 +753,9 @@ fn all_four_projection_controls_propagate_not_granted_without_dummy_capabilities
                 assert_eq!(
                     result,
                     RunOutcome::Returned(if granted {
-                        hirsel_run_config::Returned::Ok
+                        hirsel_run_schema::Returned::Ok
                     } else {
-                        hirsel_run_config::Returned::Error
+                        hirsel_run_schema::Returned::Error
                     }),
                     "{operation}"
                 );

@@ -8,7 +8,7 @@ use hirsel_driver::native::{
     Configuration, MATRIX_VERSION, OBSERVATION_SCHEMA, Observation, Outcome, Toolchain,
     full_matrix, topology_matrix,
 };
-use hirsel_run_config::hex;
+use hirsel_run_schema::hex;
 use std::path::Path;
 
 /// What two engines disagreed about, independent of line shifts: which parts

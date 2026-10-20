@@ -25,7 +25,7 @@ use std::fmt;
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Explicit launch inputs; placement and capability seeds are independent.
-    pub launch: hirsel_run_config::Inputs,
+    pub launch: hirsel_run_schema::Inputs,
     pub target: TargetSpec,
     /// Place compiler-local allocations in internal regions.
     pub regions: bool,
@@ -142,7 +142,7 @@ impl std::error::Error for NativeError {}
 /// this table, target, manifest and input.
 pub struct ReadyProgram {
     pub operations: hirsel_layout::operation::OperationRegistry,
-    pub launch: hirsel_run_config::Inputs,
+    pub launch: hirsel_run_schema::Inputs,
     pub input: InputIdentity,
     pub target: TargetSpec,
     pub table: LayoutTable,
@@ -158,7 +158,7 @@ pub struct ReadyProgram {
     /// Instance digest of each non-generic function, for entry lookup.
     pub functions: BTreeMap<DefPath, ContentHash>,
     pub(crate) launches: BTreeMap<DefPath, super::link::LaunchKind>,
-    pub(crate) revisions: BTreeMap<DefPath, hirsel_run_config::ProgramRevision>,
+    pub(crate) revisions: BTreeMap<DefPath, hirsel_run_schema::ProgramRevision>,
     pub(crate) exit_reports: BTreeMap<DefPath, super::exit_report::Report>,
     /// The static data of every constant a unit reads (CT-2).
     pub statics: Vec<hirsel_lir::statics::StaticData>,
@@ -182,7 +182,7 @@ pub struct ReadyProgram {
 
 impl ReadyProgram {
     /// The semantic program revision a run of `entry` binds to.
-    pub fn revision(&self, entry: &DefPath) -> Option<&hirsel_run_config::ProgramRevision> {
+    pub fn revision(&self, entry: &DefPath) -> Option<&hirsel_run_schema::ProgramRevision> {
         self.revisions.get(entry)
     }
     /// Attach checked semantic code selection, independently of pass options and topology.

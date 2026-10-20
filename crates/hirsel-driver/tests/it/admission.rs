@@ -1,6 +1,8 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_run_config::*;
+use hirsel_run_schema::*;
+use hirsel_run_schema::*;
 
 #[derive(Default)]
 struct Host(usize);

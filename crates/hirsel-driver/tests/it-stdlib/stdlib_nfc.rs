@@ -513,7 +513,7 @@ fn case_insensitive_search_and_equality_match_full_casefold_composition() {
         assert!(
             matches!(
                 run.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}",
             run.outcome

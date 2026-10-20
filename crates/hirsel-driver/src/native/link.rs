@@ -609,7 +609,7 @@ pub(crate) fn root_handle(root: hirsel_run_config::Root) -> u64 {
     ][root_index(root)]
 }
 pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchKind> {
-    use hirsel_run_config::LaunchKind as Kind;
+    use hirsel_run_schema::LaunchKind as Kind;
     if hirsel_engine::entry_launch_kind(signature).ok()? == Kind::Test {
         return Some(LaunchKind::Test);
     }
@@ -1259,16 +1259,16 @@ done:
         )
     })?;
     let launch = if *kind == LaunchKind::Test {
-        hirsel_run_config::LaunchKind::Test
+        hirsel_run_schema::LaunchKind::Test
     } else {
-        hirsel_run_config::LaunchKind::Main
+        hirsel_run_schema::LaunchKind::Main
     };
     let mut record = hirsel_run_config::RunConfig::for_program(revision, launch);
     record.inputs = program.launch.clone();
     // The existing conformance launcher supplies this explicit fixture profile.
     // Standalone admission will consume the record at the C entry boundary.
     if matches!(kind, LaunchKind::Main(_)) && !standalone {
-        use hirsel_run_config::{Access, IoGrants, Mount, ProviderContract};
+        use hirsel_run_schema::{Access, IoGrants, Mount, ProviderContract};
         let root = std::fs::canonicalize(dir)
             .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?
             .join("root");
@@ -1286,7 +1286,7 @@ done:
             ..Default::default()
         });
         record.args = Some(
-            hirsel_run_config::snapshot_args([])
+            hirsel_run_schema::snapshot_args([])
                 .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?,
         );
     }
@@ -2325,11 +2325,11 @@ fn run_live(
 #[derive(Debug)]
 pub enum Observed {
     /// The run returned, failed or was Blocked.
-    Ran(Observation, Vec<hirsel_run_config::Wait>),
+    Ran(Observation, Vec<hirsel_run_schema::Wait>),
     /// The launch was refused before entry: a `RunRefusal`'s JSON, or the launcher's reason.
     Refused(String),
     /// The run stopped: `Refused`, `Diverged` or `Environmental`.
-    Stopped(hirsel_run_config::RunOutcome),
+    Stopped(hirsel_run_schema::RunOutcome),
 }
 
 /// The observation of a run that returned, failed or was Blocked; a refused or stopped run is
@@ -2392,30 +2392,30 @@ pub fn observe_run(
         let rest = |n: usize| words[n..].join(" ");
         match words.as_slice() {
             ["refused", ..] => {
-                if launched.exit != Some(hirsel_run_config::exit::REFUSED) {
+                if launched.exit != Some(hirsel_run_schema::exit::REFUSED) {
                     return Err(bad("a refused launch did not exit as refused".into()));
                 }
                 return Ok(Observed::Refused(rest(1)));
             }
             ["stopped", "refused", ..] => {
-                stopped = Some(hirsel_run_config::RunOutcome::Refused(rest(2)))
+                stopped = Some(hirsel_run_schema::RunOutcome::Refused(rest(2)))
             }
             ["stopped", "diverged", ..] => {
-                stopped = Some(hirsel_run_config::RunOutcome::Diverged(rest(2)))
+                stopped = Some(hirsel_run_schema::RunOutcome::Diverged(rest(2)))
             }
             ["stopped", "environmental", "codec_limit"] => {
-                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
-                    hirsel_run_config::Environmental::CodecLimit,
+                stopped = Some(hirsel_run_schema::RunOutcome::Environmental(
+                    hirsel_run_schema::Environmental::CodecLimit,
                 ))
             }
             ["stopped", "environmental", "recording", ..] => {
-                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
-                    hirsel_run_config::Environmental::Recording(rest(3)),
+                stopped = Some(hirsel_run_schema::RunOutcome::Environmental(
+                    hirsel_run_schema::Environmental::Recording(rest(3)),
                 ))
             }
             ["stopped", "environmental", "output", ..] => {
-                stopped = Some(hirsel_run_config::RunOutcome::Environmental(
-                    hirsel_run_config::Environmental::Output(rest(3)),
+                stopped = Some(hirsel_run_schema::RunOutcome::Environmental(
+                    hirsel_run_schema::Environmental::Output(rest(3)),
                 ))
             }
             ["status", s] => status = s.parse::<u8>().ok(),
@@ -2424,12 +2424,12 @@ pub fn observe_run(
                 if waits.is_some() {
                     return Err(bad("duplicate wait report".into()));
                 }
-                waits = Some(hirsel_run_config::Wait::decode(&rest(1)).map_err(bad)?);
+                waits = Some(hirsel_run_schema::Wait::decode(&rest(1)).map_err(bad)?);
             }
             ["ended"] => ended = true,
             ["budget_exceeded", kind] => {
                 budget = Some(
-                    hirsel_run_config::BudgetKind::parse(kind)
+                    hirsel_run_schema::BudgetKind::parse(kind)
                         .ok_or_else(|| bad(format!("an unknown budget in `{line}`")))?,
                 )
             }
@@ -2561,7 +2561,7 @@ fn verify_exit(
     launched: &Launched,
     sites: &Sites<'_>,
     observation: Observation,
-    waits: Vec<hirsel_run_config::Wait>,
+    waits: Vec<hirsel_run_schema::Wait>,
 ) -> Result<Observed, NativeError> {
     let expected = observation.outcome(sites, waits.clone())?.exit_code();
     if launched.exit != Some(expected) {

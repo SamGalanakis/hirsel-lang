@@ -26,7 +26,7 @@ pub mod value;
 pub use budget::RunBudgets;
 pub use eval::{run, run_with_operations, run_with_runtime};
 use hirsel_diag::RuleId;
-pub use hirsel_run_config::BudgetKind;
+pub use hirsel_run_schema::BudgetKind;
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::DefPath;
 use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
@@ -101,7 +101,7 @@ pub enum Outcome {
     /// Checked execution found the memory model broken; nothing further ran.
     Trapped(checked::Trap),
     /// A host resource stopped the run; nothing further ran (`RunOutcome::Environmental`).
-    Environmental(hirsel_run_config::Environmental),
+    Environmental(hirsel_run_schema::Environmental),
 }
 /// One suspended root-task wait; ordinals identify runtime-owned targets only.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,7 +194,7 @@ pub enum Error {
     Query(QueryError),
     /// A host resource stopped the run (the codec's operational budget, SER-2); the run
     /// entry points turn it into `Outcome::Environmental`.
-    Environmental(hirsel_run_config::Environmental),
+    Environmental(hirsel_run_schema::Environmental),
     /// Checked execution's stop signal. The run entry points turn it into
     /// `Outcome::Trapped`; it never leaves them as an error.
     Trapped(Box<checked::Trap>),
@@ -224,11 +224,11 @@ pub struct CalleeStart {
 /// A sent call as its callee run's record states it (RUN-10).
 pub struct CallStart {
     /// The place: the runner entry the call went through.
-    pub runner: hirsel_run_config::RunnerEntry,
+    pub runner: hirsel_run_schema::RunnerEntry,
     /// The grant set the request selected.
-    pub grants: hirsel_run_config::IoGrants,
-    pub form: hirsel_run_config::CallForm,
-    pub cause: hirsel_run_config::Cause,
+    pub grants: hirsel_run_schema::IoGrants,
+    pub form: hirsel_run_schema::CallForm,
+    pub cause: hirsel_run_schema::Cause,
     pub argument: Vec<u8>,
     pub schemas: CallSchemas,
 }

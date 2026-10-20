@@ -2,7 +2,7 @@
 //! library/std/src/net/tcp/tests.rs::{timeouts,test_timeout_zero_duration,
 //! test_read_with_timeout,shutdown_smoke} (f6c1107f, MIT).
 use hirsel_rt::{io::AdapterError, io_net_script::ScriptNet, net::*};
-use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls};
+use hirsel_run_schema::{NetConnection, NetPeer, NetStep, PeerTls};
 fn peer(connections: Vec<NetConnection>) -> NetPeer {
     NetPeer {
         address: "example.com".into(),
@@ -521,7 +521,7 @@ fn net_script_configured_root_executes_and_replays_with_explicit_policy() {
 fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay() {
     use hirsel_rt::io::{Adapter, Completion as C, Request as R, Tree};
     use hirsel_rt::io_sim::SimIo;
-    use hirsel_run_config::{NetClient, NetListener};
+    use hirsel_run_schema::{NetClient, NetListener};
     let address = |port| SocketAddr {
         ip: std::net::Ipv4Addr::LOCALHOST.into(),
         port,
@@ -538,7 +538,7 @@ fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay(
             clients: vec![NetClient {
                 address: "192.0.2.1".into(),
                 port: 40001,
-                tls: hirsel_run_config::PeerTls::Plain,
+                tls: hirsel_run_schema::PeerTls::Plain,
                 steps: vec![NetStep::Send(b"hi".to_vec())],
             }],
         },

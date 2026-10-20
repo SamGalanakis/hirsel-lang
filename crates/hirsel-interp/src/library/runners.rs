@@ -18,7 +18,7 @@ use crate::{
     BlockedWait, CallSchemas, CallStart, CalleeEnd, CalleeStart, Error, OperationCall,
     OperationContext, OperationResult, Operations, RunBudgets, Value, invalid,
 };
-use hirsel_run_config::{
+use hirsel_run_schema::{
     Access, CallForm, CallOutcome, CalleeOutcome, Cause, CodeReach, IoGrants, Mount, NetRule,
     ProcessRule, RunnerCompletion, RunnerEntry, RunnerRequest,
 };
@@ -114,7 +114,7 @@ fn refused(outcome: Refused) -> RunnerCompletion {
 
 /// The first eight bytes, little-endian, of a domain-separated hash of `parts`.
 fn draw(domain: &str, parts: &[&[u8]]) -> u64 {
-    let hash = hirsel_run_config::hash_parts(domain, parts.iter().copied());
+    let hash = hirsel_run_schema::hash_parts(domain, parts.iter().copied());
     u64::from_le_bytes(hash[..8].try_into().unwrap())
 }
 /// Whether a draw in parts per million falls under `rate`.
@@ -320,12 +320,12 @@ impl Library {
         let ordinal = self.runners.requests;
         self.runners.requests += 1;
         let instance = self.simulation.config.instance;
-        let key = hirsel_run_config::call_key(&instance, ordinal);
+        let key = hirsel_run_schema::call_key(&instance, ordinal);
         let facts = self.simulation.config.callees.get(&path).cloned();
         // 1. The argument encodes within the request budget.
         let bytes = super::codec::encode(&argument_schema, arg(a, 2)?)?;
-        let grants = hirsel_run_config::request_grants(&runner.grants);
-        let definitions = hirsel_run_config::request_definitions(runner.definitions.as_deref());
+        let grants = hirsel_run_schema::request_grants(&runner.grants);
+        let definitions = hirsel_run_schema::request_definitions(runner.definitions.as_deref());
         let (fingerprint, code) = facts
             .as_ref()
             .map_or(([0; 32], [0; 32]), |f| (f.fingerprint, f.code));
@@ -333,7 +333,7 @@ impl Library {
             runner: runner.entry.name.clone(),
             form,
             path: path.clone(),
-            digest: hirsel_run_config::request_digest(
+            digest: hirsel_run_schema::request_digest(
                 form,
                 &path,
                 &fingerprint,
@@ -420,7 +420,7 @@ impl Library {
                         },
                         place: runner.entry.name.clone(),
                         key,
-                        callee: hirsel_run_config::callee_instance(&key),
+                        callee: hirsel_run_schema::callee_instance(&key),
                         lose_reply,
                         forwarded: None,
                         completion: None,
@@ -534,8 +534,8 @@ impl Library {
             ) % 4
         });
         let lose_reply = fire("lose_reply", attempt);
-        let key = hirsel_run_config::call_key(&cause.instance, ordinal);
-        let seed = |name: &str| hirsel_run_config::callee_seed(&key, name);
+        let key = hirsel_run_schema::call_key(&cause.instance, ordinal);
+        let seed = |name: &str| hirsel_run_schema::callee_seed(&key, name);
         let configuration = hirsel_tir::RunConfiguration {
             entry: path.clone(),
             hash_seed: seed("hash"),
@@ -545,7 +545,7 @@ impl Library {
             &runner.grants,
             seed("random"),
             seed("test"),
-            hirsel_run_config::callee_instance(&key),
+            hirsel_run_schema::callee_instance(&key),
             self.simulation.config.fault_seed,
             self.simulation.config.callees.clone(),
         );
@@ -759,7 +759,7 @@ fn callee_world(
     test_seed: u64,
     instance: [u8; 16],
     fault_seed: u64,
-    callees: std::sync::Arc<BTreeMap<String, hirsel_run_config::CalleeFacts>>,
+    callees: std::sync::Arc<BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
 ) -> SimulationConfig {
     let mut world = SimulationConfig {
         random_seed,
@@ -959,7 +959,7 @@ fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> 
         if !rules.iter().all(|rule| {
             net.rules
                 .iter()
-                .any(|wide| hirsel_run_config::net_rule_within(rule, wide))
+                .any(|wide| hirsel_run_schema::net_rule_within(rule, wide))
         }) {
             return Ok(None);
         }
@@ -976,7 +976,7 @@ fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> 
             process
                 .rules
                 .iter()
-                .any(|wide| hirsel_run_config::process_rule_within(rule, wide))
+                .any(|wide| hirsel_run_schema::process_rule_within(rule, wide))
         }) {
             return Ok(None);
         }

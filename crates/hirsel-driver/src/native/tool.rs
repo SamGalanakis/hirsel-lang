@@ -164,7 +164,7 @@ pub fn run_path_native_backend(
         // The executable admitted the run and refused it: the same refusal the interpreter's
         // admission reports.
         Ok(super::link::Observed::Refused(reason)) => {
-            return Err(match hirsel_run_config::RunRefusal::parse(&reason) {
+            return Err(match hirsel_run_schema::RunRefusal::parse(&reason) {
                 Some(refusal) => ToolError::Launch(refusal),
                 None => ToolError::Runtime(format!("launch: {reason}")),
             });

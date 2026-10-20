@@ -2,7 +2,7 @@
 use super::{Io, IoGrant, io_error, io_not_granted, io_ok, io_portable, io_relative};
 use hirsel_heapcheck::{OpOutcome, OpValue, Operations};
 use hirsel_lir::layout_types::ScalarKind;
-use hirsel_run_config::Access;
+use hirsel_run_schema::Access;
 
 fn parent(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)

@@ -30,7 +30,7 @@ pub(super) fn execute_source(source: &str) {
         assert!(
             matches!(
                 run.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}\n{source}",
             run.outcome
@@ -48,7 +48,7 @@ pub(super) fn execute_source(source: &str) {
         assert!(
             matches!(
                 checked.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}\n{source}",
             checked.outcome

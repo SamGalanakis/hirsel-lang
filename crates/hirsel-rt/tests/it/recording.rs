@@ -45,8 +45,8 @@ fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
             .contains("unknown suffix")
     );
     assert!(parse_recording_prefix(&text[..text.len() - 1]).is_err());
-    io.finish_recording(&hirsel_run_config::RunOutcome::Returned(
-        hirsel_run_config::Returned::Ok,
+    io.finish_recording(&hirsel_run_schema::RunOutcome::Returned(
+        hirsel_run_schema::Returned::Ok,
     ))
     .unwrap();
     let text = std::fs::read_to_string(&tape).unwrap();
@@ -306,7 +306,8 @@ fn link_metadata_round_trips_without_flattening_or_admitting_a_collision() {
 #[test]
 fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
     use hirsel_rt::launch::{RecordedRun, render_recording};
-    use hirsel_run_config::{LaunchKind, RunConfig, RunRefusal};
+    use hirsel_run_config::RunConfig;
+    use hirsel_run_schema::{LaunchKind, RunRefusal};
     let mut record = RunConfig::empty([1; 32], "replayed@1/main".into(), LaunchKind::Main);
     record.inputs.random_seed = 3;
     record.args = Some(vec!["a".into()]);

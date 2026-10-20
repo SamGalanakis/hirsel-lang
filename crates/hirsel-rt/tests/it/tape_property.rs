@@ -2,7 +2,7 @@
 use hirsel_rt::io::*;
 use hirsel_rt::launch::{parse_tape, render_tape};
 use hirsel_rt::net::{NetOperation, NetRule, NetTimeout, RootsDigest, ShutdownHow, TimeoutKind};
-use hirsel_run_config::{
+use hirsel_run_schema::{
     CallForm, CallOutcome, CalleeOutcome, ChildStream, Command, ExitStatus, GroupOutput,
     PipelineOutcome, ProcessFailure, ProcessOutcome, ProcessRule, RunnerCompletion, Signal,
 };
@@ -70,7 +70,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
     let runs = if n % 2 == 0 {
         vec![]
     } else {
-        vec![hirsel_run_config::ProcessRun {
+        vec![hirsel_run_schema::ProcessRun {
             program: "/bin/probe".into(),
             args: vec![String::new(), "é\n".into()],
             outcome: ProcessOutcome::Output {
@@ -83,45 +83,45 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
     let children = if n % 2 == 0 {
         vec![]
     } else {
-        vec![hirsel_run_config::ChildRun {
+        vec![hirsel_run_schema::ChildRun {
             program: "/bin/probe".into(),
             args: vec![String::new()],
             steps: vec![
-                hirsel_run_config::ChildStep::Print(bytes.clone()),
-                hirsel_run_config::ChildStep::PrintErr(vec![]),
-                hirsel_run_config::ChildStep::Expect(bytes.clone()),
-                hirsel_run_config::ChildStep::Exit(ExitStatus::Signaled(9)),
+                hirsel_run_schema::ChildStep::Print(bytes.clone()),
+                hirsel_run_schema::ChildStep::PrintErr(vec![]),
+                hirsel_run_schema::ChildStep::Expect(bytes.clone()),
+                hirsel_run_schema::ChildStep::Exit(ExitStatus::Signaled(9)),
             ],
         }]
     };
     let peers = if n % 2 == 0 {
         vec![]
     } else {
-        vec![hirsel_run_config::NetPeer {
+        vec![hirsel_run_schema::NetPeer {
             address: "127.0.0.1".into(),
             port: n as u16,
             resolves_to: vec!["127.0.0.2".into()],
-            tls: hirsel_run_config::PeerTls::Plain,
-            connections: vec![hirsel_run_config::NetConnection::Open(vec![
-                hirsel_run_config::NetStep::Send(bytes.clone()),
-                hirsel_run_config::NetStep::Expect(bytes.clone()),
-                hirsel_run_config::NetStep::Close,
+            tls: hirsel_run_schema::PeerTls::Plain,
+            connections: vec![hirsel_run_schema::NetConnection::Open(vec![
+                hirsel_run_schema::NetStep::Send(bytes.clone()),
+                hirsel_run_schema::NetStep::Expect(bytes.clone()),
+                hirsel_run_schema::NetStep::Close,
             ])],
         }]
     };
     let listeners = if n % 2 == 0 {
         vec![]
     } else {
-        vec![hirsel_run_config::NetListener {
+        vec![hirsel_run_schema::NetListener {
             address: "127.0.0.1".into(),
             port: n as u16,
-            clients: vec![hirsel_run_config::NetClient {
+            clients: vec![hirsel_run_schema::NetClient {
                 address: "127.0.0.2".into(),
                 port: n.wrapping_add(1) as u16,
-                tls: hirsel_run_config::PeerTls::Plain,
+                tls: hirsel_run_schema::PeerTls::Plain,
                 steps: vec![
-                    hirsel_run_config::NetStep::Send(bytes.clone()),
-                    hirsel_run_config::NetStep::Close,
+                    hirsel_run_schema::NetStep::Send(bytes.clone()),
+                    hirsel_run_schema::NetStep::Close,
                 ],
             }],
         }]
@@ -227,7 +227,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         RunnerCancel { key: digest, cause: n as u32 },
         Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) },
         Schedule { count: n.wrapping_add(2), choice: n % 2 };
-        RunnerCall(Box::new(hirsel_run_config::RunnerRequest {
+        RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
             runner: if n == 0 { String::new() } else { format!("{text}#runner") },
             form: if n % 2 == 0 { CallForm::Compute } else { CallForm::Call },
             path: format!("{text}#path"),

@@ -8,7 +8,7 @@
 //! is one test on a cold path. A spent budget stops the run with
 //! `Stop::BudgetExceeded`, as a Blocked run stops (`crate::stop`).
 use crate::TaskCtx;
-use hirsel_run_config::BudgetKind;
+use hirsel_run_schema::BudgetKind;
 use std::cell::Cell;
 
 /// The backing bytes a run holds against its `memory_bytes` budget; zero is no budget.

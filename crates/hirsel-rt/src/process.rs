@@ -12,7 +12,7 @@
 use crate::handles::Grant;
 use crate::host_stages::{Ended, Stages};
 use crate::io::{AdapterError, Completion, Request, State};
-pub use hirsel_run_config::{
+pub use hirsel_run_schema::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
     ProcessFailure, ProcessOutcome, ProcessRule, ProcessRun, ScriptChild, ScriptGroup, ScriptRead,
     Signal, canonical_program,
@@ -163,7 +163,7 @@ impl State {
     }
     /// The admitted `io.process` grant: its rules, and for process.script@1 the root
     /// scripted world. Scripted runs never widen the rules.
-    pub(crate) fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+    pub(crate) fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.process_rules = grant.rules.clone();
         self.process_world = match &grant.runs {
             Some(runs) => {
@@ -232,7 +232,7 @@ impl State {
                     .process_scripts
                     .get_mut(&id)
                     .ok_or(AdapterError::InvalidCompletion)?;
-                hirsel_run_config::script_pipeline(runs, stages, max_output)
+                hirsel_run_schema::script_pipeline(runs, stages, max_output)
             }
             ProcessWorld::Host => {
                 let mut specs = vec![];
@@ -332,7 +332,7 @@ impl State {
                 {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
-                if let Some(failure) = hirsel_run_config::stages_error(stages) {
+                if let Some(failure) = hirsel_run_schema::stages_error(stages) {
                     Some(failure)
                 } else {
                     let mut failure = None;
@@ -421,7 +421,7 @@ impl State {
                 if !rules.iter().all(|r| {
                     parent
                         .iter()
-                        .any(|p| hirsel_run_config::process_rule_within(r, p))
+                        .any(|p| hirsel_run_schema::process_rule_within(r, p))
                 }) {
                     return Ok(Completion::Spawned(Err(ProcessFailure::NotGranted)));
                 }
@@ -438,7 +438,7 @@ impl State {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
                 if runs.iter().any(|run| {
-                    !canonical_program(&run.program) || !hirsel_run_config::scriptable(&run.outcome)
+                    !canonical_program(&run.program) || !hirsel_run_schema::scriptable(&run.outcome)
                 }) || children.iter().any(|c| !canonical_program(&c.program))
                 {
                     return Err(AdapterError::InvalidCompletion);
@@ -564,7 +564,7 @@ impl State {
                             .child_scripts
                             .get_mut(&id)
                             .ok_or(AdapterError::InvalidCompletion)?;
-                        match hirsel_run_config::take_children(children, stages) {
+                        match hirsel_run_schema::take_children(children, stages) {
                             Ok(runs) => {
                                 let (script, report) = ScriptGroup::new(runs, *max_stderr);
                                 if let Some(report) = report {

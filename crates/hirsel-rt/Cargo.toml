@@ -23,6 +23,7 @@ hirsel-free = { path = "../hirsel-free" }
 hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }
 libc = { version = "0.2", default-features = false }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "=1.0.9"

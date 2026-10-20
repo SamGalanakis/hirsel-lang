@@ -15,7 +15,7 @@ pub fn replay_interpreter(
         tree,
         handles,
         stdout,
-        &BTreeMap::from([(String::new(), hirsel_run_config::Access::ReadWrite)]),
+        &BTreeMap::from([(String::new(), hirsel_run_schema::Access::ReadWrite)]),
     );
 }
 pub fn replay_interpreter_with_mounts(
@@ -24,7 +24,7 @@ pub fn replay_interpreter_with_mounts(
     tree: &Tree,
     handles: &BTreeMap<u64, hirsel_rt::handles::Grant>,
     stdout: &[u8],
-    mounts: &BTreeMap<String, hirsel_run_config::Access>,
+    mounts: &BTreeMap<String, hirsel_run_schema::Access>,
 ) {
     replay_interpreter_with_fixture(
         tape,
@@ -60,7 +60,7 @@ pub fn replay_interpreter_with_fixture(
     tree: &Tree,
     handles: &BTreeMap<u64, hirsel_rt::handles::Grant>,
     stdout: &[u8],
-    mounts: &BTreeMap<String, hirsel_run_config::Access>,
+    mounts: &BTreeMap<String, hirsel_run_schema::Access>,
 ) {
     let fixture_tape = fixture.events;
     assert_eq!(tape.len(), fixture_tape.len(), "fixture event count");

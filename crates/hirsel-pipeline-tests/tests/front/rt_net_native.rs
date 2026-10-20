@@ -71,7 +71,7 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
             assert!(
                 matches!(
                     outcome,
-                    hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    hirsel_engine::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 ),
                 "{outcome:?}"
             );
@@ -337,7 +337,7 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                         &observed.output,
                         &std::collections::BTreeMap::from([(
                             String::new(),
-                            hirsel_run_config::Access::ReadWrite,
+                            hirsel_run_schema::Access::ReadWrite,
                         )]),
                     );
                 }));

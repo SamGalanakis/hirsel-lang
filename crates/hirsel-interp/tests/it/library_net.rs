@@ -1,6 +1,6 @@
 //! Boundary tests for frozen scripted-network semantics, independent of source lowering.
 use hirsel_interp::{library::*, *};
-use hirsel_run_config::{
+use hirsel_run_schema::{
     NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
 };
 use hirsel_span::{SourceMap, Span};

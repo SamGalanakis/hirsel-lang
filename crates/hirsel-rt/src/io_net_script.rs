@@ -9,7 +9,7 @@ use super::{
         TimeoutKind, TlsFailure,
     },
 };
-use hirsel_run_config::{NetConnection, NetListener, NetPeer, NetStep, PeerTls};
+use hirsel_run_schema::{NetConnection, NetListener, NetPeer, NetStep, PeerTls};
 use std::{collections::BTreeMap, net::IpAddr};
 
 /// A listen address as scripted listeners name it: an IP literal and port, or a
@@ -76,9 +76,9 @@ impl Connection {
                             index, listener, ..
                         } = &self.remote
                         {
-                            self.mismatch = Some(hirsel_run_config::net_client_mismatch(
+                            self.mismatch = Some(hirsel_run_schema::net_client_mismatch(
                                 *index,
-                                &hirsel_run_config::listener_name(&listener.0, listener.1),
+                                &hirsel_run_schema::listener_name(&listener.0, listener.1),
                                 expected,
                                 wrote,
                             ));
@@ -123,7 +123,7 @@ pub struct ScriptNet {
 }
 impl ScriptNet {
     pub fn new(peers: Vec<NetPeer>, listeners: Vec<NetListener>) -> Result<Self, AdapterError> {
-        hirsel_run_config::check_net_listeners(&listeners).map_err(AdapterError::Unsupported)?;
+        hirsel_run_schema::check_net_listeners(&listeners).map_err(AdapterError::Unsupported)?;
         let mut endpoints = BTreeMap::new();
         for (index, p) in peers.iter().enumerate() {
             if let Some(first) = endpoints.insert((&p.address, p.port), index) {
@@ -131,7 +131,7 @@ impl ScriptNet {
                     "duplicate address/port at entries {first} and {index}"
                 )));
             }
-            if hirsel_run_config::check_peer_address(p).is_err()
+            if hirsel_run_schema::check_peer_address(p).is_err()
                 || p.resolves_to.iter().any(|a| {
                     a.parse::<IpAddr>().is_err()
                         || a.parse::<IpAddr>().is_ok_and(|ip| ip.to_string() != *a)
@@ -175,9 +175,9 @@ impl ScriptNet {
                     NetStep::Expect(b) => Some(b),
                     _ => None,
                 })?;
-            return Some(hirsel_run_config::net_client_unmet(
+            return Some(hirsel_run_schema::net_client_unmet(
                 index,
-                &hirsel_run_config::listener_name(&listener.0, listener.1),
+                &hirsel_run_schema::listener_name(&listener.0, listener.1),
                 expected,
                 &s.written[s.consumed..],
             ));
@@ -188,10 +188,10 @@ impl ScriptNet {
             .iter()
             .position(|l| l.address == *address && l.port == *port)?;
         let client =
-            hirsel_run_config::first_expecting_client(&self.listeners[i], self.next_client[i])?;
-        Some(hirsel_run_config::net_client_unaccepted(
+            hirsel_run_schema::first_expecting_client(&self.listeners[i], self.next_client[i])?;
+        Some(hirsel_run_schema::net_client_unaccepted(
             client,
-            &hirsel_run_config::listener_name(address, *port),
+            &hirsel_run_schema::listener_name(address, *port),
         ))
     }
     /// The Test report of the write that just contradicted a scripted client's Expect.
@@ -446,7 +446,7 @@ impl NetProvider for ScriptNet {
             Remote::Client { from, .. } => return Ok(Ok(from)),
         };
         let peer = &self.peers[peer_index];
-        if hirsel_run_config::canonical_unix_path(&peer.address) {
+        if hirsel_run_schema::canonical_unix_path(&peer.address) {
             return Ok(Ok(SocketAddr::UNNAMED));
         }
         let ip = peer
@@ -468,7 +468,7 @@ impl NetProvider for ScriptNet {
         id: u64,
         server_name: &str,
         _roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> Provided<()> {
         let s = self.connection(id)?;
         // Owner 385145: upgrading an already secured Stream consumes it with
@@ -509,7 +509,7 @@ impl NetProvider for ScriptNet {
         &mut self,
         tls: &dyn crate::net_tls::TlsEngine,
         id: u64,
-        server: &hirsel_run_config::tls::Server,
+        server: &hirsel_run_schema::tls::Server,
     ) -> Provided<()> {
         let s = self.connection(id)?;
         if s.tls {
@@ -676,7 +676,7 @@ impl ScriptIo {
     /// as a host launch configures them.
     pub fn set_net_grant(
         &mut self,
-        grant: &hirsel_run_config::NetGrant,
+        grant: &hirsel_run_schema::NetGrant,
     ) -> Result<(), AdapterError> {
         self.state.net_rules = crate::net::NetRule::from_config(grant);
         match &grant.peers {
@@ -687,7 +687,7 @@ impl ScriptIo {
         }
     }
     /// A Main launch's admitted `io.process` grant; absent, the root Proc runs nothing.
-    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.state.set_process_grant(grant);
     }
     /// A Main launch's Env snapshot; absent, the root Env grants no name.

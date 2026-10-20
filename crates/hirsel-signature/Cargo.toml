@@ -15,4 +15,4 @@ hirsel-diag = { path = "../hirsel-diag" }
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
-hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }

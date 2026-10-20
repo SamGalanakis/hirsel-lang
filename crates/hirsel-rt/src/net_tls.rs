@@ -11,7 +11,7 @@
 //! per section and the link collects unreferenced sections, so a program that calls no TLS
 //! entry links none of rustls, ring, webpki or the root set.
 use crate::net::{NetError, RootsDigest, TlsFailure};
-use hirsel_run_config::tls::{ClientAuth, Identity, Server};
+use hirsel_run_schema::tls::{ClientAuth, Identity, Server};
 use rustls::{
     ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
 };
@@ -43,20 +43,20 @@ pub trait TlsEngine {
     /// A server connection presenting the identity the client's SNI selects.
     fn accept(&self, server: &Server) -> Result<Box<dyn TlsSession>, NetError>;
     /// A scripted client's answer to a server handshake
-    /// (`hirsel_run_config::tls::scripted_accept`).
+    /// (`hirsel_run_schema::tls::scripted_accept`).
     fn scripted_accept(
         &self,
-        client: &hirsel_run_config::PeerTls,
+        client: &hirsel_run_schema::PeerTls,
         server: &Server,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure>;
+    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure>;
     /// A scripted peer's answer to a client handshake, and the chain it presented
-    /// (`hirsel_run_config::tls::scripted_connect`).
+    /// (`hirsel_run_schema::tls::scripted_connect`).
     fn scripted_connect(
         &self,
-        peer: &hirsel_run_config::PeerTls,
+        peer: &hirsel_run_schema::PeerTls,
         server_name: &str,
         identity: Option<&Identity>,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure>;
+    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure>;
 }
 
 /// An adapter's TLS engine, once a TLS entry handed it over. An engine holds no state, so
@@ -124,16 +124,16 @@ pub fn engine() -> &'static dyn TlsEngine {
 struct Rustls;
 impl TlsEngine for Rustls {
     fn valid_name(&self, name: &str) -> bool {
-        hirsel_run_config::tls::server_name(name).is_some()
+        hirsel_run_schema::tls::server_name(name).is_some()
     }
     fn valid_roots(&self, pem: &[u8]) -> bool {
-        hirsel_run_config::tls::pem_roots(pem).is_some()
+        hirsel_run_schema::tls::pem_roots(pem).is_some()
     }
     fn identity(&self, chain: &[u8], key: &[u8]) -> Option<Arc<Identity>> {
-        hirsel_run_config::tls::identity(chain, key).map(Arc::new)
+        hirsel_run_schema::tls::identity(chain, key).map(Arc::new)
     }
     fn server(&self, identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server> {
-        hirsel_run_config::tls::server(identities, clients)
+        hirsel_run_schema::tls::server(identities, clients)
     }
     fn connect(
         &self,
@@ -149,18 +149,18 @@ impl TlsEngine for Rustls {
     }
     fn scripted_accept(
         &self,
-        client: &hirsel_run_config::PeerTls,
+        client: &hirsel_run_schema::PeerTls,
         server: &Server,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure> {
-        hirsel_run_config::tls::scripted_accept(client, server)
+    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure> {
+        hirsel_run_schema::tls::scripted_accept(client, server)
     }
     fn scripted_connect(
         &self,
-        peer: &hirsel_run_config::PeerTls,
+        peer: &hirsel_run_schema::PeerTls,
         server_name: &str,
         identity: Option<&Identity>,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure> {
-        hirsel_run_config::tls::scripted_connect(peer, server_name, identity)
+    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure> {
+        hirsel_run_schema::tls::scripted_connect(peer, server_name, identity)
     }
 }
 
@@ -221,7 +221,7 @@ impl TlsSession for Connection {
     }
     fn peer(&self) -> Option<Vec<u8>> {
         self.peer_certificates()
-            .map(hirsel_run_config::tls::chain_der)
+            .map(hirsel_run_schema::tls::chain_der)
     }
 }
 
@@ -245,7 +245,7 @@ pub const SERVER_ALPN: &[&[u8]] = &[b"http/1.1"];
 struct BySni(Vec<Arc<Identity>>);
 impl rustls::server::ResolvesServerCert for BySni {
     fn resolve(&self, hello: rustls::server::ClientHello<'_>) -> Option<Arc<Identity>> {
-        Some(hirsel_run_config::tls::select(&self.0, hello.server_name()).clone())
+        Some(hirsel_run_schema::tls::select(&self.0, hello.server_name()).clone())
     }
 }
 
@@ -287,12 +287,12 @@ fn client(
                 return Err(NetError::InvalidInput);
             }
             RootCertStore {
-                roots: hirsel_run_config::tls::pem_roots(&pem).ok_or(NetError::InvalidInput)?,
+                roots: hirsel_run_schema::tls::pem_roots(&pem).ok_or(NetError::InvalidInput)?,
             }
         }
         _ => return Err(NetError::InvalidInput),
     };
-    let name = hirsel_run_config::tls::server_name(name).ok_or(NetError::InvalidInput)?;
+    let name = hirsel_run_schema::tls::server_name(name).ok_or(NetError::InvalidInput)?;
     let builder =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -310,7 +310,7 @@ fn client(
 
 /// Condense rustls Error/CertificateError into the runtime's TLS errors.
 pub fn failure(error: &rustls::Error) -> TlsFailure {
-    hirsel_run_config::tls::failure(error).into()
+    hirsel_run_schema::tls::failure(error).into()
 }
 
 fn error(error: io::Error) -> NetError {

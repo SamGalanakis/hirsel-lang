@@ -1,7 +1,7 @@
 //! Independent interpreter replay of native typed network recordings.
 use crate::rt_replay::replay_interpreter;
 use hirsel_rt::{io::*, io_real::RealIo};
-use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls};
+use hirsel_run_schema::{NetConnection, NetPeer, NetStep, PeerTls};
 use std::collections::BTreeMap;
 
 fn tls_record(peer_tls: PeerTls) -> RealIo {

@@ -10,7 +10,7 @@ use super::{
     simulation::{Fault, Grant, Simulation},
 };
 use crate::{Error, Integer, OperationCall, OperationContext, OperationResult, Value, invalid};
-use hirsel_run_config::{
+use hirsel_run_schema::{
     NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
     ProviderContract, TlsFailure, canonical_net_address as canonical_address,
 };
@@ -69,7 +69,7 @@ impl ScriptListener {
         )
     }
     fn name(&self) -> String {
-        hirsel_run_config::listener_name(&self.address.0, self.address.1)
+        hirsel_run_schema::listener_name(&self.address.0, self.address.1)
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -157,7 +157,7 @@ impl ScriptStream {
                         if let Some((client, listener)) = &self.client {
                             let wrote: Vec<u8> =
                                 self.written.iter().take(b.len()).copied().collect();
-                            self.mismatch = Some(hirsel_run_config::net_client_mismatch(
+                            self.mismatch = Some(hirsel_run_schema::net_client_mismatch(
                                 *client, listener, b, &wrote,
                             ));
                         }
@@ -186,7 +186,7 @@ impl ScriptStream {
                 _ => None,
             })?;
         let wrote: Vec<u8> = self.written.iter().copied().collect();
-        Some(hirsel_run_config::net_client_unmet(
+        Some(hirsel_run_schema::net_client_unmet(
             client, &listener, expected, &wrote,
         ))
     }
@@ -414,7 +414,7 @@ fn peer(v: &Value) -> Result<NetPeer, Error> {
         tls,
         connections,
     };
-    hirsel_run_config::check_peer_address(&peer)
+    hirsel_run_schema::check_peer_address(&peer)
         .map_err(|e| invalid(format!("test.net peer: {e}")))?;
     Ok(peer)
 }
@@ -549,8 +549,8 @@ impl Simulation {
             .iter()
             .position(|l| (&l.address, l.port) == (&listener.address.0, listener.address.1))?;
         let client =
-            hirsel_run_config::first_expecting_client(&world.listeners[i], world.accepted[i])?;
-        Some(hirsel_run_config::net_client_unaccepted(
+            hirsel_run_schema::first_expecting_client(&world.listeners[i], world.accepted[i])?;
+        Some(hirsel_run_schema::net_client_unaccepted(
             client,
             &listener.name(),
         ))
@@ -652,13 +652,13 @@ impl Simulation {
                 .map(listener)
                 .collect::<Result<Vec<_>, _>>()?;
             validate_peers(&peers)?;
-            hirsel_run_config::check_net_listeners(&listeners).map_err(invalid)?;
+            hirsel_run_schema::check_net_listeners(&listeners).map_err(invalid)?;
             let rules = peers
                 .iter()
                 .map(|p| NetRule {
                     address: p.address.clone(),
                     service: p.port.to_string(),
-                    operation: if hirsel_run_config::canonical_unix_path(&p.address) {
+                    operation: if hirsel_run_schema::canonical_unix_path(&p.address) {
                         "unix_connect"
                     } else if matches!(p.tls, PeerTls::Plain) {
                         "connect"
@@ -671,7 +671,7 @@ impl Simulation {
                     NetRule {
                         address: l.address.clone(),
                         service: l.port.to_string(),
-                        operation: if hirsel_run_config::canonical_unix_path(&l.address) {
+                        operation: if hirsel_run_schema::canonical_unix_path(&l.address) {
                             "unix_listen"
                         } else {
                             "listen"
@@ -917,7 +917,7 @@ impl Simulation {
                     let rules = rules(arg(a, 1)?)?;
                     if rules.iter().any(|r| {
                         !canonical_address(&r.address)
-                            && !hirsel_run_config::canonical_unix_path(&r.address)
+                            && !hirsel_run_schema::canonical_unix_path(&r.address)
                     }) {
                         Err(NetFault::InvalidInput)
                     } else if !rules.iter().all(|r| {
@@ -996,7 +996,7 @@ impl Simulation {
                 "net.unix_connect" | "net.unix_listen" => {
                     let path = super::dispatch::path_text(arg(a, 1)?)?.to_owned();
                     let listen = name == "net.unix_listen";
-                    if !hirsel_run_config::canonical_unix_path(&path) {
+                    if !hirsel_run_schema::canonical_unix_path(&path) {
                         break 'operation Err(NetFault::InvalidInput);
                     }
                     if !ruleset.iter().any(|r| {
@@ -1197,12 +1197,12 @@ impl Simulation {
                                 let invalid_roots = match variant_fields(arg(a, 3)?)? {
                                     (0, []) => false,
                                     (1, [Some(pem)]) => {
-                                        hirsel_run_config::tls::pem_roots(bytes(pem)?).is_none()
+                                        hirsel_run_schema::tls::pem_roots(bytes(pem)?).is_none()
                                     }
                                     _ => return Err(invalid("TlsRoots representation")),
                                 };
                                 invalid_roots
-                                    || hirsel_run_config::tls::server_name(text(arg(a, 2)?)?)
+                                    || hirsel_run_schema::tls::server_name(text(arg(a, 2)?)?)
                                         .is_none()
                                     || name == "tls.connect_as" && identity(arg(a, 4)?)?.is_none()
                             }
@@ -1340,7 +1340,7 @@ impl Simulation {
                                 // An accepted stream's client runs no TLS server.
                                 Err(NetFault::Tls(TlsFailure::HandshakeFailure))
                             } else {
-                                match hirsel_run_config::tls::scripted_connect(
+                                match hirsel_run_schema::tls::scripted_connect(
                                     &s.peer,
                                     server_name,
                                     identity.as_ref(),
@@ -1371,7 +1371,7 @@ impl Simulation {
                                     NetFault::Blocked
                                 })
                             } else {
-                                match hirsel_run_config::tls::scripted_accept(&s.peer, &server) {
+                                match hirsel_run_schema::tls::scripted_accept(&s.peer, &server) {
                                     Ok(chain) => {
                                         s.tls = true;
                                         s.chain = chain;
@@ -1460,7 +1460,7 @@ impl Simulation {
                                 Value::Unit
                             })
                         }
-                        "net.peer_addr" if hirsel_run_config::canonical_unix_path(&s.host) => {
+                        "net.peer_addr" if hirsel_run_schema::canonical_unix_path(&s.host) => {
                             Ok(addr_value(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0))
                         }
                         "net.peer_addr" => {
@@ -1622,23 +1622,23 @@ impl Simulation {
     }
 }
 /// A `TlsIdentity` record loaded by the shared argument check; `None` when invalid.
-fn identity(v: &Value) -> Result<Option<hirsel_run_config::tls::Identity>, Error> {
+fn identity(v: &Value) -> Result<Option<hirsel_run_schema::tls::Identity>, Error> {
     let f = fields(v, "TlsIdentity", 2)?;
-    Ok(hirsel_run_config::tls::identity(bytes(f[0])?, bytes(f[1])?))
+    Ok(hirsel_run_schema::tls::identity(bytes(f[0])?, bytes(f[1])?))
 }
 /// A `TlsServer` record loaded by the shared argument check; `None` when invalid.
-fn server(v: &Value) -> Result<Option<hirsel_run_config::tls::Server>, Error> {
-    Ok(hirsel_run_config::tls::load(&tls_server(v)?))
+fn server(v: &Value) -> Result<Option<hirsel_run_schema::tls::Server>, Error> {
+    Ok(hirsel_run_schema::tls::load(&tls_server(v)?))
 }
 /// A `TlsServer` record's data: its identities' PEM chain and key, and its client policy.
-fn tls_server(v: &Value) -> Result<hirsel_run_config::TlsServer, Error> {
-    use hirsel_run_config::tls::ClientAuth;
+fn tls_server(v: &Value) -> Result<hirsel_run_schema::TlsServer, Error> {
+    use hirsel_run_schema::tls::ClientAuth;
     let f = fields(v, "TlsServer", 2)?;
     let identities = collection::elements(f[0], BuiltinType::List)?
         .iter()
         .map(|identity| {
             let f = fields(identity, "TlsIdentity", 2)?;
-            Ok(hirsel_run_config::TlsIdentity {
+            Ok(hirsel_run_schema::TlsIdentity {
                 chain: bytes(f[0])?.to_vec(),
                 key: bytes(f[1])?.to_vec(),
             })
@@ -1651,7 +1651,7 @@ fn tls_server(v: &Value) -> Result<hirsel_run_config::TlsServer, Error> {
         (2, [Some(pem)]) => ClientAuth::Require(bytes(pem)?.to_vec()),
         _ => return Err(invalid("TlsClientAuth representation")),
     };
-    Ok(hirsel_run_config::TlsServer {
+    Ok(hirsel_run_schema::TlsServer {
         identities,
         clients,
     })
@@ -1664,7 +1664,7 @@ fn validate_peers(peers: &[NetPeer]) -> Result<(), Error> {
                 "duplicate address/port at entries {first} and {index}"
             )));
         }
-        if hirsel_run_config::check_peer_address(peer).is_err()
+        if hirsel_run_schema::check_peer_address(peer).is_err()
             || peer.resolves_to.iter().any(|a| {
                 a.parse::<IpAddr>().is_err()
                     || a.parse::<IpAddr>().is_ok_and(|ip| ip.to_string() != *a)
@@ -1680,10 +1680,10 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
         if let Some(peers) = &grant.peers {
             validate_peers(peers)?;
         }
-        hirsel_run_config::check_net_listeners(&grant.listeners).map_err(invalid)?;
+        hirsel_run_schema::check_net_listeners(&grant.listeners).map_err(invalid)?;
         if grant.rules.iter().any(|r| {
-            let unix = hirsel_run_config::UNIX_OPERATIONS.contains(&r.operation.as_str());
-            unix && (!hirsel_run_config::canonical_unix_path(&r.address) || r.service != "0")
+            let unix = hirsel_run_schema::UNIX_OPERATIONS.contains(&r.operation.as_str());
+            unix && (!hirsel_run_schema::canonical_unix_path(&r.address) || r.service != "0")
                 || !unix && !canonical_address(&r.address)
                 || r.service.parse::<u16>().is_err()
                 || r.service

@@ -334,8 +334,8 @@ fn same_options(a: &Options, b: &Options) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct Fixture {
     pub monotonic: Option<u64>,
-    pub net: Option<hirsel_run_config::NetGrant>,
-    pub process: Option<hirsel_run_config::ProcessGrant>,
+    pub net: Option<hirsel_run_schema::NetGrant>,
+    pub process: Option<hirsel_run_schema::ProcessGrant>,
     /// The root Env's snapshot: each granted name and its value, null when unset.
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// A corpus program's raised interpreter step budget (`// steps:`); H's
@@ -343,7 +343,7 @@ pub struct Fixture {
     pub steps: Option<u64>,
     /// The run's runners (`// runners:`) and the seed `sim@1` draws faults from
     /// (`// fault_seed:`).
-    pub runners: Vec<hirsel_run_config::RunnerEntry>,
+    pub runners: Vec<hirsel_run_schema::RunnerEntry>,
     pub fault_seed: Option<u64>,
     /// `--trace-roots` (S-14): native launches on the diagnostic archive write every live
     /// `Shared` root's count at every scheduling point into `Observation::roots`, to be
@@ -777,7 +777,7 @@ mod tests {
                 1 => changed.launch.random_seed = 1,
                 2 => changed.launch.test_seed = 1,
                 _ => {
-                    changed.launch.scheduler = Some(hirsel_run_config::Scheduler {
+                    changed.launch.scheduler = Some(hirsel_run_schema::Scheduler {
                         algorithm: "unsupported".into(),
                         version: 1,
                         seed: 1,

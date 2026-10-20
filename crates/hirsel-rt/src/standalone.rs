@@ -1,7 +1,6 @@
 //! Standalone process inputs are explicit: one run record and an optional argv snapshot.
-use hirsel_run_config::{
-    BoundRun, CodeReach, LaunchKind, ProgramFacts, Root, RunConfig, RunRefusal,
-};
+use hirsel_run_config::{BoundRun, ProgramFacts, Root, RunConfig};
+use hirsel_run_schema::{CodeReach, LaunchKind, RunRefusal};
 use std::ffi::OsString;
 
 pub(crate) const ROOT_IO: u8 = 1;
@@ -182,7 +181,7 @@ fn select_run(
             } else {
                 RunConfig::record_template(input)?
             };
-            match hirsel_run_config::snapshot_args(arguments.into_iter().skip(2)) {
+            match hirsel_run_schema::snapshot_args(arguments.into_iter().skip(2)) {
                 Ok(args) => record.args = Some(args),
                 // The selected record's own refusal comes first.
                 Err(refusal) => {
@@ -197,7 +196,7 @@ fn select_run(
         }
         Some(flag) if flag == "--" => {
             let mut record = RunConfig::empty(program, entry.into(), launch);
-            record.args = Some(hirsel_run_config::snapshot_args(
+            record.args = Some(hirsel_run_schema::snapshot_args(
                 arguments.into_iter().skip(1),
             )?);
             record

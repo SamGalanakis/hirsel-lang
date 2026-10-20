@@ -37,7 +37,7 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -101,7 +101,7 @@ fn full_gate_large_hash_native_references_on_both_backends() {
             assert!(
                 matches!(
                     outcome,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 ),
                 "{backend:?}: {outcome:?}"
             );
@@ -138,7 +138,7 @@ fn flate_large_vectors_execute_std_source() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -162,7 +162,7 @@ fn zip_large_vectors_execute_std_source() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -185,7 +185,7 @@ fn full_gate_deflate_matches_zlib_native() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -245,7 +245,7 @@ fn uuid_v7_reads_the_wall_clock() {
             assert!(
                 matches!(
                     outcome,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 ),
                 "{outcome:?}"
             );
@@ -372,7 +372,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             .unwrap();
             assert!(matches!(
                 observed.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ));
             let observation = observed.observation.unwrap();
             let writes = observation.effects.iter().filter(|effect| matches!(&effect.effect, hirsel_interp::observation::Effect::CapabilityConsumed(event) if event.operation == "err.print")).count();
@@ -425,11 +425,11 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
             if passes {
                 assert!(matches!(
                     observed.outcome,
-                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
                 ));
             } else {
                 assert!(
-                    matches!(observed.outcome, Ok(RunOutcome::Failed { primary: hirsel_run_config::Failure { ref rule, .. }, .. }) if rule.as_str() == "LANG-9")
+                    matches!(observed.outcome, Ok(RunOutcome::Failed { primary: hirsel_run_schema::Failure { ref rule, .. }, .. }) if rule.as_str() == "LANG-9")
                 );
             }
             let observation = observed.observation.unwrap();
@@ -481,7 +481,7 @@ fn yaml_large_fixture(fixture: &str) {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -545,7 +545,7 @@ fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -588,7 +588,7 @@ fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
                 assert!(
                     matches!(
                         outcome,
-                        RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                     ),
                     "{fixture} {backend:?}: {outcome:?}"
                 );
@@ -650,7 +650,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             assert!(
                 matches!(
                     observed.outcome,
-                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
                 ),
                 "{:?}",
                 observed.outcome
@@ -682,7 +682,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             assert!(
                 matches!(
                     replay.outcome,
-                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
                 ),
                 "{:?}",
                 replay.outcome
@@ -746,7 +746,7 @@ fn telemetry_native_recording_replays_and_changed_stderr_request_refuses() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -754,7 +754,7 @@ fn telemetry_native_recording_replays_and_changed_stderr_request_refuses() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );

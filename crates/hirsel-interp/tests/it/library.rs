@@ -1312,7 +1312,7 @@ fn argument_snapshot_preserves_empty_unicode_and_option_like_text() {
 #[test]
 fn seeded_scheduler_choices_follow_the_policy_and_its_words() {
     use hirsel_kernels::schedule::Algorithm;
-    use hirsel_run_config::Scheduler;
+    use hirsel_run_schema::Scheduler;
     let h = Harness::new(Default::default());
     let mut library = Library::new(
         &h.run,
@@ -1424,7 +1424,7 @@ fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication()
 
 #[test]
 fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() {
-    use hirsel_run_config::{ExitStatus, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun};
+    use hirsel_run_schema::{ExitStatus, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun};
     let grant = |runs: Vec<ProcessRun>| SimulationConfig {
         process: Some(ProcessGrant {
             provider: "process.script@1".into(),
@@ -1500,7 +1500,7 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
     // the re-derived checks and publishes nothing.
     for forged in [
         process::encode_completion(&ProcessOutcome::Error(
-            hirsel_run_config::ProcessFailure::NotGranted,
+            hirsel_run_schema::ProcessFailure::NotGranted,
         )),
         process::encode_completion(&ProcessOutcome::Output {
             status: ExitStatus::Exited(0),
@@ -1509,10 +1509,10 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
         }),
         // A timeout needs a deadline, and a cancellation an uncancelled scope cannot give.
         process::encode_completion(&ProcessOutcome::Error(
-            hirsel_run_config::ProcessFailure::TimedOut,
+            hirsel_run_schema::ProcessFailure::TimedOut,
         )),
         process::encode_completion(&ProcessOutcome::Error(
-            hirsel_run_config::ProcessFailure::Canceled(0),
+            hirsel_run_schema::ProcessFailure::Canceled(0),
         )),
         vec![2],
     ] {

@@ -33,7 +33,7 @@ fn published_programs_and_outputs_match_the_corpus() {
             template,
             [1; 32],
             "tour@1/main".into(),
-            hirsel_run_config::LaunchKind::Main,
+            hirsel_run_schema::LaunchKind::Main,
         )
         .unwrap();
     }
@@ -138,7 +138,7 @@ fn input_program_uses_supplied_snapshots_and_stream() {
         .unwrap();
         assert_eq!(
             outcome,
-            hirsel_engine::RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            hirsel_engine::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
         );
         assert_eq!(stdout, b"agent\nhello\none\ntwo");
         assert!(stderr.is_empty());

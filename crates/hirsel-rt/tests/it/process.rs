@@ -29,8 +29,8 @@ impl Drop for Disposable {
     }
 }
 
-fn grant(rules: &[(&str, &[&str])]) -> hirsel_run_config::ProcessGrant {
-    hirsel_run_config::ProcessGrant {
+fn grant(rules: &[(&str, &[&str])]) -> hirsel_run_schema::ProcessGrant {
+    hirsel_run_schema::ProcessGrant {
         provider: "process.spawn@1".into(),
         rules: rules
             .iter()

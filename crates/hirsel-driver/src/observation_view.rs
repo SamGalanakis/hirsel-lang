@@ -21,7 +21,7 @@ impl EvidenceId {
         }
         Ok(Self {
             capture: capture.into(),
-            sha256: hirsel_run_config::hex(&Sha256::digest(bytes)),
+            sha256: hirsel_run_schema::hex(&Sha256::digest(bytes)),
         })
     }
     fn value(&self) -> Value {

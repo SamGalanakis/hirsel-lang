@@ -294,9 +294,9 @@ fn locate(
     sources: &hirsel_span::SourceMap,
     definition: &hirsel_syntax::DefPath,
     span: hirsel_span::Span,
-) -> Option<hirsel_run_config::Site> {
+) -> Option<hirsel_run_schema::Site> {
     let location = sources.location(span)?;
-    Some(hirsel_run_config::Site {
+    Some(hirsel_run_schema::Site {
         definition: definition.to_string(),
         file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
         line: location.line.into(),
@@ -311,7 +311,7 @@ pub fn project_failures(
     sources: &hirsel_span::SourceMap,
 ) -> Result<RunOutcome, RuntimeError> {
     let mut failures = failures.iter().map(|failure| {
-        Ok(hirsel_run_config::Failure {
+        Ok(hirsel_run_schema::Failure {
             rule: failure.failure.rule.to_string(),
             site: locate(sources, &failure.anchor.definition, failure.anchor.site)
                 .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
@@ -340,7 +340,7 @@ pub fn project_outcome(
     execution: &hirsel_interp::Execution,
     sources: &hirsel_span::SourceMap,
 ) -> Result<RunOutcome, RuntimeError> {
-    use hirsel_run_config::{ExecutionDiagnostic, Returned, Site, ToolingLimit, Wait};
+    use hirsel_run_schema::{ExecutionDiagnostic, Returned, Site, ToolingLimit, Wait};
     let locate = |definition: &hirsel_syntax::DefPath, span| locate(sources, definition, span);
     Ok(match &execution.outcome {
         hirsel_interp::Outcome::Returned { exit_code, .. } => {

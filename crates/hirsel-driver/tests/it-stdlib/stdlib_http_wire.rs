@@ -41,7 +41,7 @@ fn execute(body: &str) {
     assert!(
         matches!(
             run.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
         ),
         "{:?}",
         run.outcome

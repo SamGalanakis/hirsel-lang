@@ -365,7 +365,7 @@ impl Library {
             }),
             "file.rename" => {
                 let target = path_text(arg(a, 2)?)?;
-                if hirsel_run_config::confined_relative(root, target).as_deref() == Some(root) {
+                if hirsel_run_schema::confined_relative(root, target).as_deref() == Some(root) {
                     Err(FileError::Fault(self.simulation.config.invalid_path_code))
                 } else {
                     self.simulation

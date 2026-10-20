@@ -499,7 +499,7 @@ retires the grant. This model is independent of heap and runtime Io.
 `SimulationConfig.test_seed` supplies Test's property input. Neither reads
 `RunConfiguration.hash_seed`, which affects placement only. All default to zero.
 
-`SimulationConfig.mounts` supplies named virtual selectors with `hirsel_run_config::Access`
+`SimulationConfig.mounts` supplies named virtual selectors with `hirsel_run_schema::Access`
 rights. File snapshots use those virtual names, including root aliases for shared
 physical trees. A missing selector returns FileError::NotGranted independently
 of the Dir projection; narrowing retains access rights and all mutation paths
@@ -615,22 +615,22 @@ language failure (a scripted client's unmet Expect) reports it through
 `library::process` is the reference Process provider. `SimulationConfig.process`
 holds the `io.process` grant; the `process` projection mints the root Proc with its
 rules. `proc.run` returns Canceled in a cancelled scope, then checks its `Command`
-(`hirsel_run_config::Command::check`: a canonical absolute program, NUL-free arguments
+(`hirsel_run_schema::Command::check`: a canonical absolute program, NUL-free arguments
 and a well-formed exact environment, InvalidInput; the exact rule and its environment
 names, NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
 serves the first unused `process.script@1` or `test.process` entry with equal program
 and args (none: NotFound), bounding each stream by `max_output` (OutputLimit).
-`proc.pipeline` checks its stage list (`hirsel_run_config::stages_error`: empty, or
+`proc.pipeline` checks its stage list (`hirsel_run_schema::stages_error`: empty, or
 stages whose `own_group` differ, InvalidInput), then every stage, then takes one entry per
 stage, all or none, with
-`hirsel_run_config::script_pipeline`; `proc.run` is its one-stage case. It never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
+`hirsel_run_schema::script_pipeline`; `proc.run` is its one-stage case. It never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
 Replay takes the recorded completion and re-derives the checks; a contradiction
 refuses. `proc.spawn` makes the same checks and plays the first unused scripted child
-entry with `hirsel_run_config::ScriptChild`, minting a `Child` grant of its Proc. A read
+entry with `hirsel_run_schema::ScriptChild`, minting a `Child` grant of its Proc. A read
 at an `Expect` parks its task as a scripted peer's read does (`waiting_call`), and a
 contradicted or unmet `Expect` (at a write, `close_stdin`, `wait` or the Child's drop)
 fails LANG-9 after its Test report. `proc.spawn_pipeline` plays its stages' entries with
-`hirsel_run_config::ScriptGroup` behind a `ChildGroup` grant, which the `group.*`
+`hirsel_run_schema::ScriptGroup` behind a `ChildGroup` grant, which the `group.*`
 operations and `proc.wait_group` take. Host children, like host runs, go through the
 driver's host library to the runtime.
 
@@ -705,7 +705,7 @@ Blocking Io calls apply CONC-3 program validity and authority checks before canc
 scripted peer transitions, faults and deadline observations follow cancellation.
 
 Directory operations normalize the caller's portable path lexically through
-`hirsel_run_config::confined_relative` before resolving snapshot symlinks.
+`hirsel_run_schema::confined_relative` before resolving snapshot symlinks.
 Physical link targets are still traversed component by component beneath the
 pinned directory.
 

@@ -496,8 +496,8 @@ fn connect_as_presents_the_client_identity_to_a_requiring_server() {
     for identity in [Some((CLIENT, CLIENT_KEY)), None] {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let verifier = hirsel_run_config::tls::client_verifier(
-            hirsel_run_config::tls::pem_roots(CLIENT_CA).unwrap(),
+        let verifier = hirsel_run_schema::tls::client_verifier(
+            hirsel_run_schema::tls::pem_roots(CLIENT_CA).unwrap(),
             true,
         )
         .unwrap();

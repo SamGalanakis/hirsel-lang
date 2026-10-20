@@ -43,7 +43,7 @@ use crate::io_sim::SimIo;
 use crate::net::NetRule;
 use crate::program::{Code, Program, ProgramDescriptor};
 use crate::{ABI_VERSION, Layout, STATUS_FAILURE, STATUS_OK, TaskCtx};
-use hirsel_run_config::{RunOutcome, hex};
+use hirsel_run_schema::{RunOutcome, hex};
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -926,8 +926,8 @@ impl Recording {
     /// consulting a clock, revocation source or host provider.
     pub fn bound_run(
         &self,
-    ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
-        let invalid = |detail: &str| hirsel_run_config::RunRefusal::Invalid {
+    ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_schema::RunRefusal> {
+        let invalid = |detail: &str| hirsel_run_schema::RunRefusal::Invalid {
             field: "recording".into(),
             detail: detail.into(),
         };
@@ -1121,7 +1121,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             ["argument", value] => arguments.push(string(value)?),
             ["directory", value] => {
                 let path = string(value)?;
-                if hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
+                if hirsel_run_schema::confined_relative("", &path).as_ref() != Some(&path)
                     || !directories.insert(path)
                 {
                     return Err("bad recorded directory".into());
@@ -1137,7 +1137,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             ["link", path, target] => {
                 let path = string(path)?;
                 if path.is_empty()
-                    || hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
+                    || hirsel_run_schema::confined_relative("", &path).as_ref() != Some(&path)
                     || links.insert(path, string(target)?).is_some()
                 {
                     return Err("bad recorded link".into());
@@ -1145,7 +1145,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             }
             ["metadata", path, meta] => {
                 let path = string(path)?;
-                if hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
+                if hirsel_run_schema::confined_relative("", &path).as_ref() != Some(&path)
                     || entry_metadata.insert(path, parse_metadata(meta)?).is_some()
                 {
                     return Err("bad recorded metadata".into());
@@ -1412,7 +1412,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_main(
 fn facts(
     program: &Program,
     run: &hirsel_run_config::ValidatedRun,
-) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
+) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_schema::RunRefusal> {
     let (digest, entry) = if program.entry_name.is_empty() {
         (run.program(), run.record().entry.as_str())
     } else {
@@ -1530,7 +1530,7 @@ fn select_bound(
                     revocations: options.revocations,
                 }))
             }
-            _ => Err(hirsel_run_config::RunRefusal::Invalid {
+            _ => Err(hirsel_run_schema::RunRefusal::Invalid {
                 field: "argv".into(),
                 detail: "expected --hirsel-run after launch options".into(),
             }),
@@ -1642,7 +1642,7 @@ pub(crate) unsafe fn execute(
     let scheduler = match &requested {
         Some(run) => run.record().inputs.scheduler.clone(),
         None => match std::env::var("HIRSEL_RT_SCHEDULER") {
-            Ok(text) => match hirsel_run_config::Scheduler::parse(&text) {
+            Ok(text) => match hirsel_run_schema::Scheduler::parse(&text) {
                 Some(scheduler) => Some(scheduler),
                 None => return Err(format!("the scheduler `{text}` is not supported")),
             },
@@ -1770,7 +1770,7 @@ pub(crate) unsafe fn execute(
                     io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
                     // The harness launch draws the reference's seeded simulation.
                     io.set_random(
-                        hirsel_run_config::ProviderContract::RandomSplitMix64,
+                        hirsel_run_schema::ProviderContract::RandomSplitMix64,
                         launch_config.random_seed,
                     );
                     if let Some(grant) = &process {
@@ -2032,10 +2032,10 @@ pub(crate) unsafe fn execute(
                 let _ = write!(record, "{b:02x}");
             }
             record.push('\n');
-            hirsel_run_config::RunOutcome::Returned(if bytes[..4] == [0, 0, 0, 0] {
-                hirsel_run_config::Returned::Ok
+            hirsel_run_schema::RunOutcome::Returned(if bytes[..4] == [0, 0, 0, 0] {
+                hirsel_run_schema::Returned::Ok
             } else {
-                hirsel_run_config::Returned::Error
+                hirsel_run_schema::Returned::Error
             })
         }
         Ok(STATUS_FAILURE) => {
@@ -2069,7 +2069,7 @@ pub(crate) unsafe fn execute(
             });
             let mut failures = records.iter().map(|record| table.failure(record));
             let primary = failures.next().expect("a primary failure");
-            hirsel_run_config::RunOutcome::Failed {
+            hirsel_run_schema::RunOutcome::Failed {
                 primary,
                 causes: failures.collect(),
             }
@@ -2081,8 +2081,8 @@ pub(crate) unsafe fn execute(
     let returned = !ended
         && matches!(
             outcome,
-            hirsel_run_config::RunOutcome::Returned(_)
-                | hirsel_run_config::RunOutcome::Failed { .. }
+            hirsel_run_schema::RunOutcome::Returned(_)
+                | hirsel_run_schema::RunOutcome::Failed { .. }
         );
     if returned {
         let mut audit = Audit {
@@ -2107,7 +2107,7 @@ pub(crate) unsafe fn execute(
         record.push_str("audit unavailable\n");
     } else {
         // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
-        if entry.is_test() && matches!(outcome, hirsel_run_config::RunOutcome::Blocked(_)) {
+        if entry.is_test() && matches!(outcome, hirsel_run_schema::RunOutcome::Blocked(_)) {
             let waits = crate::tasks::test_waits(ctx);
             sinks
                 .report
@@ -2120,11 +2120,11 @@ pub(crate) unsafe fn execute(
             record.push_str("ended\n");
         }
         match &outcome {
-            hirsel_run_config::RunOutcome::Blocked(waits) => {
+            hirsel_run_schema::RunOutcome::Blocked(waits) => {
                 record.push_str("blocked\n");
-                let _ = writeln!(record, "waits {}", hirsel_run_config::Wait::encode(waits));
+                let _ = writeln!(record, "waits {}", hirsel_run_schema::Wait::encode(waits));
             }
-            hirsel_run_config::RunOutcome::BudgetExceeded(kind) => {
+            hirsel_run_schema::RunOutcome::BudgetExceeded(kind) => {
                 let _ = writeln!(record, "budget_exceeded {}", kind.name());
             }
             _ => {}
@@ -2135,14 +2135,14 @@ pub(crate) unsafe fn execute(
     drop(binding);
     // A stopped run's cause, as its observation records it.
     let stopped = match &outcome {
-        hirsel_run_config::RunOutcome::Refused(reason) => Some(format!("refused {reason}")),
-        hirsel_run_config::RunOutcome::Diverged(reason) => Some(format!("diverged {reason}")),
-        hirsel_run_config::RunOutcome::Environmental(cause) => Some(match cause {
-            hirsel_run_config::Environmental::CodecLimit => "environmental codec_limit".into(),
-            hirsel_run_config::Environmental::Recording(reason) => {
+        hirsel_run_schema::RunOutcome::Refused(reason) => Some(format!("refused {reason}")),
+        hirsel_run_schema::RunOutcome::Diverged(reason) => Some(format!("diverged {reason}")),
+        hirsel_run_schema::RunOutcome::Environmental(cause) => Some(match cause {
+            hirsel_run_schema::Environmental::CodecLimit => "environmental codec_limit".into(),
+            hirsel_run_schema::Environmental::Recording(reason) => {
                 format!("environmental recording {reason}")
             }
-            hirsel_run_config::Environmental::Output(reason) => {
+            hirsel_run_schema::Environmental::Output(reason) => {
                 format!("environmental output {reason}")
             }
         }),
@@ -2181,15 +2181,15 @@ pub(crate) unsafe fn execute(
         write_observation(&record)
     };
     match &outcome {
-        hirsel_run_config::RunOutcome::Returned(_)
-        | hirsel_run_config::RunOutcome::BudgetExceeded(_) => finish()?,
-        hirsel_run_config::RunOutcome::Blocked(waits) => {
+        hirsel_run_schema::RunOutcome::Returned(_)
+        | hirsel_run_schema::RunOutcome::BudgetExceeded(_) => finish()?,
+        hirsel_run_schema::RunOutcome::Blocked(waits) => {
             if report_failures {
                 let _ = writeln!(sinks.report.clone(), "Blocked: {waits:?}");
             }
             finish()?;
         }
-        hirsel_run_config::RunOutcome::Failed { primary, causes } => {
+        hirsel_run_schema::RunOutcome::Failed { primary, causes } => {
             if report_failures {
                 for failure in std::iter::once(primary).chain(causes) {
                     let _ = sinks
@@ -2202,10 +2202,10 @@ pub(crate) unsafe fn execute(
         }
         // The recording stopped short of a complete run: no trailer. A launcher that reads
         // the observation reports the stop from it; otherwise the run reports it here.
-        hirsel_run_config::RunOutcome::Refused(reason)
-        | hirsel_run_config::RunOutcome::Diverged(reason)
-        | hirsel_run_config::RunOutcome::Environmental(
-            hirsel_run_config::Environmental::Recording(reason),
+        hirsel_run_schema::RunOutcome::Refused(reason)
+        | hirsel_run_schema::RunOutcome::Diverged(reason)
+        | hirsel_run_schema::RunOutcome::Environmental(
+            hirsel_run_schema::Environmental::Recording(reason),
         ) => {
             stopped_output(sinks, &echo_replay);
             if report_failures {
@@ -2213,7 +2213,7 @@ pub(crate) unsafe fn execute(
             }
             write_observation(&record)?;
         }
-        hirsel_run_config::RunOutcome::Environmental(cause) => {
+        hirsel_run_schema::RunOutcome::Environmental(cause) => {
             stopped_output(sinks, &echo_replay);
             if report_failures {
                 let _ = writeln!(
@@ -2223,10 +2223,10 @@ pub(crate) unsafe fn execute(
             }
             write_observation(&record)?;
         }
-        hirsel_run_config::RunOutcome::Tooling(reason) => return Err(reason.clone()),
-        hirsel_run_config::RunOutcome::ToolingLimit(_)
-        | hirsel_run_config::RunOutcome::UndefinedBehavior(_)
-        | hirsel_run_config::RunOutcome::Trapped(_) => {
+        hirsel_run_schema::RunOutcome::Tooling(reason) => return Err(reason.clone()),
+        hirsel_run_schema::RunOutcome::ToolingLimit(_)
+        | hirsel_run_schema::RunOutcome::UndefinedBehavior(_)
+        | hirsel_run_schema::RunOutcome::Trapped(_) => {
             crate::fault("an interpreter-only outcome in native execution")
         }
     }

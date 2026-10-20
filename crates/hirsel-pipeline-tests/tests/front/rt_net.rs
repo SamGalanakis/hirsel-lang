@@ -46,7 +46,7 @@ fn loopback_recording_replays_without_sockets() {
                 b"",
                 &std::collections::BTreeMap::from([(
                     String::new(),
-                    hirsel_run_config::Access::ReadWrite,
+                    hirsel_run_schema::Access::ReadWrite,
                 )]),
             );
         }))

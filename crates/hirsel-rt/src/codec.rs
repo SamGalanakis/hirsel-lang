@@ -565,7 +565,7 @@ unsafe fn write_text(ctx: *mut TaskCtx, text: &Text, at: *mut u8, bytes: &[u8]) 
 /// The stop past `hirsel_types::wire::Limits::default`'s byte or value budget: the run ends
 /// environmentally, as the interpreter's operational limit ends it.
 fn budget() -> Stop {
-    Stop::Environmental(hirsel_run_config::Environmental::CodecLimit)
+    Stop::Environmental(hirsel_run_schema::Environmental::CodecLimit)
 }
 
 /// Why a payload does not decode: its first `DecodeError`, or the operational budget.

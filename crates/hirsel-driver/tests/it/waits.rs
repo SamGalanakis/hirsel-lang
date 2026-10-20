@@ -17,7 +17,7 @@ fn run(source: &str, config: SimulationConfig) {
     assert!(
         matches!(
             execution.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
         ),
         "{:?}",
         execution.outcome

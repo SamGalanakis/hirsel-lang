@@ -103,7 +103,7 @@ impl Executable {
     fn launch(
         &self,
         index: usize,
-        scheduler: Option<&hirsel_run_config::Scheduler>,
+        scheduler: Option<&hirsel_run_schema::Scheduler>,
     ) -> Result<(Option<String>, Vec<u8>, Duration), NativeError> {
         let sites = super::Sites::new(&self.input);
         let record = self.scratch.0.join("observation");

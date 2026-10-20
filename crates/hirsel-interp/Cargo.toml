@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 sha2 = "0.10"
-hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-run-schema = { path = "../hirsel-run-schema" }
 hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-free = { path = "../hirsel-free" }
 hirsel-span = { path = "../hirsel-span" }

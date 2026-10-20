@@ -59,7 +59,7 @@ pub struct NetRule {
 }
 impl NetRule {
     /// The validated RunConfig rule set (`io.net.rules`), already canonical and unique.
-    pub(crate) fn from_config(grant: &hirsel_run_config::NetGrant) -> BTreeSet<Self> {
+    pub(crate) fn from_config(grant: &hirsel_run_schema::NetGrant) -> BTreeSet<Self> {
         grant
             .rules
             .iter()
@@ -129,9 +129,9 @@ pub enum TlsFailure {
     CertificateRequired,
 }
 /// Scripted `Fails(f)` peers carry the same closed set in RunConfig data.
-impl From<hirsel_run_config::TlsFailure> for TlsFailure {
-    fn from(failure: hirsel_run_config::TlsFailure) -> Self {
-        use hirsel_run_config::TlsFailure as F;
+impl From<hirsel_run_schema::TlsFailure> for TlsFailure {
+    fn from(failure: hirsel_run_schema::TlsFailure) -> Self {
+        use hirsel_run_schema::TlsFailure as F;
         match failure {
             F::UnknownIssuer => Self::UnknownIssuer,
             F::Expired => Self::Expired,
@@ -147,7 +147,7 @@ impl From<hirsel_run_config::TlsFailure> for TlsFailure {
         }
     }
 }
-impl From<TlsFailure> for hirsel_run_config::TlsFailure {
+impl From<TlsFailure> for hirsel_run_schema::TlsFailure {
     fn from(failure: TlsFailure) -> Self {
         use TlsFailure as F;
         match failure {
@@ -203,7 +203,7 @@ pub enum RootsDigest {
 #[derive(Clone)]
 pub struct TlsIdentity {
     pub chain: [u8; 32],
-    pub key: Option<std::sync::Arc<hirsel_run_config::tls::Identity>>,
+    pub key: Option<std::sync::Arc<hirsel_run_schema::tls::Identity>>,
 }
 impl TlsIdentity {
     pub fn load(tls: &dyn TlsEngine, chain: &[u8], key: &[u8]) -> Self {
@@ -229,7 +229,7 @@ impl std::fmt::Debug for TlsIdentity {
     }
 }
 
-pub use hirsel_run_config::tls::ClientAuth;
+pub use hirsel_run_schema::tls::ClientAuth;
 
 /// What a `TlsAccept` request records of its `TlsServer`: the SHA-256 of each identity's
 /// certificate-chain PEM, in order, and of the client trust set's PEM. Keys never appear.
@@ -255,7 +255,7 @@ impl TlsServerDigest {
 #[derive(Clone, Debug)]
 pub struct TlsServer {
     pub digest: TlsServerDigest,
-    pub loaded: Option<hirsel_run_config::tls::Server>,
+    pub loaded: Option<hirsel_run_schema::tls::Server>,
 }
 /// Valid material is determined by its digests, so they and validity are the whole server.
 impl PartialEq for TlsServer {
@@ -316,7 +316,7 @@ pub trait NetProvider {
         stream: u64,
         server_name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> Provided<()>;
     /// A server handshake with a valid server: the identity selected by the client's SNI,
     /// and its client-certificate policy. The policy layer closes the stream after a
@@ -325,7 +325,7 @@ pub trait NetProvider {
         &mut self,
         tls: &dyn TlsEngine,
         stream: u64,
-        server: &hirsel_run_config::tls::Server,
+        server: &hirsel_run_schema::tls::Server,
     ) -> Provided<()>;
     /// The DER chain (leaf first, concatenated) a `tls_accept` stream's client presented and
     /// the handshake verified; `None` for any other stream.
@@ -393,7 +393,7 @@ impl NetProvider for NoNet {
         _: u64,
         _: &str,
         _: &RootsDigest,
-        _: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
+        _: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
     ) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
@@ -401,7 +401,7 @@ impl NetProvider for NoNet {
         &mut self,
         _: &dyn TlsEngine,
         _: u64,
-        _: &hirsel_run_config::tls::Server,
+        _: &hirsel_run_schema::tls::Server,
     ) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
@@ -432,7 +432,7 @@ impl NetProvider for NoNet {
 /// Canonical host name or IP literal: the exact form RunConfig rules use, so a request
 /// names a rule address byte for byte or is `InvalidInput()`.
 pub fn canonical_address(address: &str) -> bool {
-    hirsel_run_config::canonical_net_address(address)
+    hirsel_run_schema::canonical_net_address(address)
 }
 
 /// The canonical literal of an address (Rust `Display`, RFC 5952 for IPv6).
@@ -478,12 +478,12 @@ pub fn permits(
 }
 
 /// `net.narrow` coverage: a rule of the same address and port whose operation is the
-/// requested one or its wider one (`hirsel_run_config::net_operation_within`).
+/// requested one or its wider one (`hirsel_run_schema::net_operation_within`).
 pub fn covers(rules: &BTreeSet<NetRule>, requested: &NetRule) -> bool {
     rules.iter().any(|rule| {
         rule.address == requested.address
             && rule.port == requested.port
-            && hirsel_run_config::net_operation_within(
+            && hirsel_run_schema::net_operation_within(
                 requested.operation.name(),
                 rule.operation.name(),
             )
@@ -568,8 +568,8 @@ impl crate::io::State {
 
     pub(crate) fn set_net_script(
         &mut self,
-        peers: Vec<hirsel_run_config::NetPeer>,
-        listeners: Vec<hirsel_run_config::NetListener>,
+        peers: Vec<hirsel_run_schema::NetPeer>,
+        listeners: Vec<hirsel_run_schema::NetListener>,
     ) -> Result<(), AdapterError> {
         let script = crate::io_net_script::ScriptNet::new(peers, listeners)?;
         self.net_scripts.insert(0, script);
@@ -697,7 +697,7 @@ impl crate::io::State {
                 } else {
                     NetOperation::UnixListen
                 };
-                if !hirsel_run_config::canonical_unix_path(path) {
+                if !hirsel_run_schema::canonical_unix_path(path) {
                     Some(NetError::InvalidInput)
                 } else {
                     permits(&rules, path, 0, Some(operation))
@@ -918,21 +918,21 @@ impl crate::io::State {
                         address: peer.address.clone(),
                         port: peer.port,
                         operation: match &peer.tls {
-                            _ if hirsel_run_config::canonical_unix_path(&peer.address) => {
+                            _ if hirsel_run_schema::canonical_unix_path(&peer.address) => {
                                 NetOperation::UnixConnect
                             }
-                            hirsel_run_config::PeerTls::Plain => NetOperation::Connect,
+                            hirsel_run_schema::PeerTls::Plain => NetOperation::Connect,
                             // A client's Presents never names a checked peer.
-                            hirsel_run_config::PeerTls::Certificate(_)
-                            | hirsel_run_config::PeerTls::Fails(_)
-                            | hirsel_run_config::PeerTls::Presents(..)
-                            | hirsel_run_config::PeerTls::Serves(_) => NetOperation::ConnectTls,
+                            hirsel_run_schema::PeerTls::Certificate(_)
+                            | hirsel_run_schema::PeerTls::Fails(_)
+                            | hirsel_run_schema::PeerTls::Presents(..)
+                            | hirsel_run_schema::PeerTls::Serves(_) => NetOperation::ConnectTls,
                         },
                     })
                     .chain(listeners.iter().map(|listener| NetRule {
                         address: listener.address.clone(),
                         port: listener.port,
-                        operation: if hirsel_run_config::canonical_unix_path(&listener.address) {
+                        operation: if hirsel_run_schema::canonical_unix_path(&listener.address) {
                             NetOperation::UnixListen
                         } else {
                             NetOperation::Listen
@@ -942,7 +942,7 @@ impl crate::io::State {
                         peers
                             .iter()
                             .filter(|p| {
-                                matches!(p.tls, hirsel_run_config::PeerTls::Plain)
+                                matches!(p.tls, hirsel_run_schema::PeerTls::Plain)
                                     && p.address.parse::<std::net::IpAddr>().is_ok()
                             })
                             .map(|p| NetRule {

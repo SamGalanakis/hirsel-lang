@@ -1,4 +1,4 @@
-use hirsel_run_config::{
+use hirsel_run_schema::{
     BudgetKind, Environmental, ExecutionDiagnostic, Failure, Returned, RunOutcome, Site,
     ToolingLimit, Wait,
 };

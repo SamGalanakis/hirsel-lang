@@ -16,7 +16,7 @@ pub enum ToolError {
     SourceTooLarge,
     Runtime(String),
     /// Admission refused the run before entry (PROG-3).
-    Launch(hirsel_run_config::RunRefusal),
+    Launch(hirsel_run_schema::RunRefusal),
     Query {
         error: QueryError,
         phase: Option<QueryKind>,

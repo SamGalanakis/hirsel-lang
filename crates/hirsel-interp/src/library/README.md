@@ -163,7 +163,7 @@ Blocking operations consume cancellation only before effects, and partial write
 faults preserve the accepted prefix. TLS scripts use certificate names without
 crypto; a `Fails(f)` peer fails every handshake with `Tls(f)`, and a `Truncate()`
 step makes reads of a secured stream `Tls(Truncated())`; request events retain the verification name and SHA-256 PEM root digest.
-`tls.accept` loads its `TlsServer` with the shared `hirsel_run_config::tls::server` check
+`tls.accept` loads its `TlsServer` with the shared `hirsel_run_schema::tls::server` check
 and answers from the accepted client's `tls` with `tls::scripted_accept` (SNI selection,
 leaf names, client-chain verification); its request event records each chain's and the
 trust set's SHA-256, never a key. A verified `Presents` chain is what `tls.peer` returns.

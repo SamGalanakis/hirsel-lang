@@ -8,5 +8,3 @@ mod process;
 mod program;
 mod record;
 mod runners;
-
-mod outcome;

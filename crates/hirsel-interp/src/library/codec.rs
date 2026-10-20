@@ -134,7 +134,7 @@ fn check_function(
 
 fn codec_error(error: wire::Error) -> Error {
     if error == wire::Error::Limit {
-        Error::Environmental(hirsel_run_config::Environmental::CodecLimit)
+        Error::Environmental(hirsel_run_schema::Environmental::CodecLimit)
     } else {
         invalid(format!("invalid checked codec value: {error:?}"))
     }

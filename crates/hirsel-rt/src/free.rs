@@ -65,8 +65,8 @@ pub(crate) fn install(ctx: &mut TaskCtx, binding: &[u8]) -> Result<(), String> {
 
 /// End the run: a recording stops with `outcome` and writes its tape and report; a replay
 /// checks and writes its projection.
-pub(crate) fn finish(ctx: &mut TaskCtx, outcome: &hirsel_run_config::RunOutcome) {
-    use hirsel_run_config::RunOutcome as O;
+pub(crate) fn finish(ctx: &mut TaskCtx, outcome: &hirsel_run_schema::RunOutcome) {
+    use hirsel_run_schema::RunOutcome as O;
     let Some(free) = ctx.run().free.take() else {
         return;
     };

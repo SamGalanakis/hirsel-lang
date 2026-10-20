@@ -1,7 +1,7 @@
 //! Additional typed tape forms for host streams, exact environment reads, processes,
 //! random draws and timer waits.
 use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
-use hirsel_run_config::{
+use hirsel_run_schema::{
     ChildStream, ExitStatus, PipelineOutcome, ProcessFailure, ProcessOutcome, Signal, hex,
 };
 
@@ -26,7 +26,7 @@ fn deadline_word(deadline: Option<crate::process::Deadline>) -> String {
 /// `inherit` or the variable count and each name and value, then `own_group` only when it
 /// is set, so a recording made before the field keeps its bytes. Each count leads the
 /// words it counts.
-fn command_words(command: &hirsel_run_config::Command) -> String {
+fn command_words(command: &hirsel_run_schema::Command) -> String {
     let mut text = format!(
         "{} {} {}",
         hex(command.program.as_bytes()),
@@ -103,11 +103,11 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         ),
         Request::RunnerCancel { key, cause } => format!("runner_cancel {} {cause}", hex(key)),
         Request::CallReturn(outcome) => match outcome {
-            hirsel_run_config::CalleeOutcome::Ok(bytes) => format!("call_return ok {}", hex(bytes)),
-            hirsel_run_config::CalleeOutcome::Err(bytes) => {
+            hirsel_run_schema::CalleeOutcome::Ok(bytes) => format!("call_return ok {}", hex(bytes)),
+            hirsel_run_schema::CalleeOutcome::Err(bytes) => {
                 format!("call_return err {}", hex(bytes))
             }
-            hirsel_run_config::CalleeOutcome::Failed(bytes) => {
+            hirsel_run_schema::CalleeOutcome::Failed(bytes) => {
                 format!("call_return failed {}", hex(bytes))
             }
         },
@@ -120,8 +120,8 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             children,
         } => format!(
             "test_process {test} {} {}",
-            hex(&hirsel_run_config::encode_process_runs(runs)),
-            hex(&hirsel_run_config::encode_child_runs(children))
+            hex(&hirsel_run_schema::encode_process_runs(runs)),
+            hex(&hirsel_run_schema::encode_child_runs(children))
         ),
         Request::ProcessRun {
             process,
@@ -236,7 +236,7 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Env(Ok(None)) => "env none".into(),
         Completion::Blocked { committed } => format!("blocked {}", u8::from(*committed)),
         Completion::Runner(completion) => {
-            use hirsel_run_config::CallOutcome::*;
+            use hirsel_run_schema::CallOutcome::*;
             let outcome = match &completion.outcome {
                 Ok(bytes) => format!("ok {}", hex(bytes)),
                 Failed(bytes) => format!("failed {}", hex(bytes)),
@@ -376,7 +376,7 @@ fn parse_deadline(word: &str) -> Result<Option<crate::process::Deadline>, String
 /// One Command from the front of `words`, as [`command_words`] writes it.
 fn parse_command<'a>(
     words: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
-) -> Result<(hirsel_run_config::Command, usize), String> {
+) -> Result<(hirsel_run_schema::Command, usize), String> {
     let mut used = 0;
     let mut next = || {
         used += 1;
@@ -403,7 +403,7 @@ fn parse_command<'a>(
     // A program word is hexadecimal, so it is never `own_group`.
     let own_group = words.next_if_eq(&"own_group").is_some();
     Ok((
-        hirsel_run_config::Command {
+        hirsel_run_schema::Command {
             program,
             args,
             directory,
@@ -416,7 +416,7 @@ fn parse_command<'a>(
 /// A command that used every remaining word.
 fn ended(
     rest: &[&str],
-) -> impl FnOnce((hirsel_run_config::Command, usize)) -> Result<hirsel_run_config::Command, String>
+) -> impl FnOnce((hirsel_run_schema::Command, usize)) -> Result<hirsel_run_schema::Command, String>
 {
     let len = rest.len();
     move |(command, used)| {
@@ -457,7 +457,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                 let env = (0..number::<usize>(next()?)?)
                     .map(|_| text(next()?))
                     .collect::<Result<_, _>>()?;
-                rules.push(hirsel_run_config::ProcessRule { program, env });
+                rules.push(hirsel_run_schema::ProcessRule { program, env });
             }
             if words.next().is_some() {
                 return Err("trailing process tape words".into());
@@ -482,9 +482,9 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             key,
             digest,
             argument,
-        ] => Request::RunnerCall(Box::new(hirsel_run_config::RunnerRequest {
+        ] => Request::RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
             runner: text(runner)?,
-            form: hirsel_run_config::CallForm::parse(form).ok_or("bad runner call form")?,
+            form: hirsel_run_schema::CallForm::parse(form).ok_or("bad runner call form")?,
             path: text(path)?,
             grants: bytes(grants)?,
             definitions: bytes(definitions)?,
@@ -497,9 +497,9 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             cause: number(cause)?,
         },
         ["call_return", kind, value] => Request::CallReturn(match *kind {
-            "ok" => hirsel_run_config::CalleeOutcome::Ok(bytes(value)?),
-            "err" => hirsel_run_config::CalleeOutcome::Err(bytes(value)?),
-            "failed" => hirsel_run_config::CalleeOutcome::Failed(bytes(value)?),
+            "ok" => hirsel_run_schema::CalleeOutcome::Ok(bytes(value)?),
+            "err" => hirsel_run_schema::CalleeOutcome::Err(bytes(value)?),
+            "failed" => hirsel_run_schema::CalleeOutcome::Failed(bytes(value)?),
             _ => return Err("bad call return".into()),
         }),
         ["schedule", count, choice] => Request::Schedule {
@@ -516,9 +516,9 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         },
         ["test_process", test, runs, children] => Request::TestProcess {
             test: number(test)?,
-            runs: hirsel_run_config::decode_process_runs(&bytes(runs)?)
+            runs: hirsel_run_schema::decode_process_runs(&bytes(runs)?)
                 .map_err(|e| e.to_string())?,
-            children: hirsel_run_config::decode_child_runs(&bytes(children)?)
+            children: hirsel_run_schema::decode_child_runs(&bytes(children)?)
                 .map_err(|e| e.to_string())?,
         },
         [
@@ -660,8 +660,8 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["blocked", "1"] => Completion::Blocked { committed: true },
         ["ready"] => Completion::Ready,
         ["runner", kind, value, callee] => {
-            use hirsel_run_config::CallOutcome::*;
-            Completion::Runner(hirsel_run_config::RunnerCompletion {
+            use hirsel_run_schema::CallOutcome::*;
+            Completion::Runner(hirsel_run_schema::RunnerCompletion {
                 outcome: match *kind {
                     "ok" => Ok(bytes(value)?),
                     "failed" => Failed(bytes(value)?),
@@ -746,7 +746,7 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
                 return Err("process tape stage count".into());
             }
             let (statuses, stderr) = rest.split_at(count * 2);
-            Completion::GroupExit(Ok(hirsel_run_config::GroupOutput {
+            Completion::GroupExit(Ok(hirsel_run_schema::GroupOutput {
                 statuses: statuses
                     .chunks(2)
                     .map(|pair| {

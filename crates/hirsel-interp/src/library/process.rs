@@ -8,7 +8,7 @@ use super::{
     simulation::{Grant, Simulation},
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
-use hirsel_run_config::{
+use hirsel_run_schema::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
     ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, ProviderContract,
     ScriptChild, ScriptGroup, ScriptRead, Signal, canonical_program, script_pipeline, scriptable,
@@ -591,7 +591,7 @@ impl Simulation {
                 }
                 let deadline = deadline.map(|(_, ticks)| ticks);
                 // Every stage's checks, in stage order, precede cancellation.
-                let checked = if let Some(failure) = hirsel_run_config::stages_error(&stages) {
+                let checked = if let Some(failure) = hirsel_run_schema::stages_error(&stages) {
                     Err(failure)
                 } else {
                     stages
@@ -827,7 +827,7 @@ impl Simulation {
                     _ => return Err(invalid("max_stderr requires u64")),
                 };
                 // Every stage's checks, in stage order, precede cancellation.
-                let checked = if let Some(failure) = hirsel_run_config::stages_error(&stages) {
+                let checked = if let Some(failure) = hirsel_run_schema::stages_error(&stages) {
                     Err(failure)
                 } else {
                     stages

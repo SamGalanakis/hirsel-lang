@@ -1,6 +1,5 @@
-use hirsel_run_config::{
-    LaunchKind, ProgramNode, ProgramRevision, RevisionError, RunConfig, RunRefusal,
-};
+use hirsel_run_config::RunConfig;
+use hirsel_run_schema::{LaunchKind, ProgramNode, ProgramRevision, RevisionError, RunRefusal};
 
 fn node(name: &str, body: &[u8], dependencies: &[&str]) -> ProgramNode {
     ProgramNode {

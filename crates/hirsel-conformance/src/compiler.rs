@@ -95,7 +95,7 @@ fn evaluate_on_compiler_thread(
                     if !matches!(
                         ordinary.outcome,
                         Ok(hirsel_engine::RunOutcome::Returned(
-                            hirsel_run_config::Returned::Ok
+                            hirsel_run_schema::Returned::Ok
                         ))
                     ) || observation.checked.is_some()
                     {

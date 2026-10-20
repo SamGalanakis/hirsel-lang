@@ -1024,7 +1024,7 @@ fn filesystem_lifecycle_replays_without_host_paths() {
 
 #[test]
 fn filesystem_mutations_deny_read_grants_before_resolving_paths_and_replay_cross_device() {
-    use hirsel_run_config::Access;
+    use hirsel_run_schema::Access;
     let temp = Disposable::new();
     let pin = hirsel_rt::host_paths::PinnedDirectory::open(temp.path()).unwrap();
     let mut host =
@@ -1219,7 +1219,7 @@ fn filesystem_hard_link_rename_keeps_both_names_and_replays_inode_sharing() {
 
 #[test]
 fn filesystem_mount_pins_survive_rename_and_removal_before_directory_projection() {
-    use hirsel_run_config::Access;
+    use hirsel_run_schema::Access;
     let temp = Disposable::new();
     std::fs::create_dir(temp.path().join("sub")).unwrap();
     let pin = |path: &Path| hirsel_rt::host_paths::PinnedDirectory::open(path).unwrap();
@@ -1342,7 +1342,7 @@ fn a_durable_journal_of_a_host_run_recovers_at_every_record_boundary_and_replays
     real.0
         .journal_to(Box::new(DurableJournal::create(file, &header).unwrap()));
     actions(&mut real);
-    let outcome = hirsel_run_config::RunOutcome::Returned(hirsel_run_config::Returned::Ok);
+    let outcome = hirsel_run_schema::RunOutcome::Returned(hirsel_run_schema::Returned::Ok);
     real.0.finish_recording(&outcome).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
