@@ -1273,6 +1273,19 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if ctx.run().tasks.is_none() {
         return Ok(());
     }
+    // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
+    // runnable root without entering the driver. Hirsel additionally preserves
+    // explicit scope deadlines and free-mode phase recording at every point.
+    if ctx.run().free.is_none() {
+        let s = scheduler(ctx);
+        if s.tasks.len() == 1
+            && s.runnable.is_empty()
+            && s.woken.is_empty()
+            && unsafe { crate::host_waits::idle(ctx) }
+        {
+            return Ok(());
+        }
+    }
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) }?;
     let s = scheduler(ctx);

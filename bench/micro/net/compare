@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Compare frozen before/after network loops with the minimal Rust TCP reference."""
 import argparse
+import contextlib
+import importlib.machinery
+import importlib.util
+import sys
 import json
 import os
 from pathlib import Path
@@ -24,13 +28,25 @@ for binary in args.binary:
 manifest = args.output / 'participants.json'
 manifest.write_text(json.dumps(participants, indent=2) + '\n')
 env = dict(os.environ, HIRSEL_JOBS='1')
-with (args.output / 'client.log').open('w') as log:
+# Take the shared server-core lock before starting the finite client's deadline.
+# Reuse the ordinary harness in-process with its inner lock already held.
+sys.path.insert(0, str(ROOT / 'bench/micro'))
+from measure import timing_lock
+loader = importlib.machinery.SourceFileLoader('network_micro_run', str(ROOT / 'bench/micro/run'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+runner = importlib.util.module_from_spec(spec)
+loader.exec_module(runner)
+with timing_lock(31), (args.output / 'client.log').open('w') as log:
+    runner.timing_lock = lambda cpu: contextlib.nullcontext()
     client = subprocess.Popen([str(ROOT / 'tools/capped'), '--timeout', '900', 'taskset', '-c', '7',
         'python3', str(ROOT / 'bench/micro/http/load.py'), '--sessions', str(10 * len(participants)),
         '--output', str(args.output / 'latencies.json')], env=env, stdout=log, stderr=log)
     try:
-        subprocess.run([str(ROOT / 'bench/micro/run'), str(manifest), '--rounds', '10', '--seed', '20261020',
-            '--output', str(args.output / 'counts.json')], env=env, cwd=ROOT, check=True)
+        sys.argv = [str(ROOT / 'bench/micro/run'), str(manifest), '--rounds', '10', '--seed', '20261020',
+                    '--output', str(args.output / 'counts.json')]
+        status = runner.main()
+        if status:
+            raise RuntimeError('measurement failed')
         client.wait(timeout=30)
         if client.returncode:
             raise RuntimeError('client failed: ' + (args.output / 'client.log').read_text())

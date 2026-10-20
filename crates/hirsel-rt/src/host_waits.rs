@@ -415,6 +415,17 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
     binding.adapter.parked(token);
 }
 
+/// Whether a scheduling point can observe an external wait or scope deadline.
+/// # Safety
+/// The context is live; its binding, if any, has exclusive access.
+pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
+    if unsafe { (*ctx).io_data() }.is_null() {
+        return true;
+    }
+    let waits = &unsafe { Binding::get(ctx) }.waits;
+    waits.parked.is_empty() && waits.armed.is_empty()
+}
+
 /// A scheduling point: the parked tokens to re-issue, asked of the adapter once while a host
 /// request is parked or a scope deadline armed.
 ///

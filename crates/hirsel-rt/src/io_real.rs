@@ -529,16 +529,12 @@ impl Adapter for RealIo {
                     provider.write_all(id, bytes).map(Completion::NetUnit)
                 }
             };
-            if let Some((readiness, log)) = &mut self.cooperative {
-                if matches!(result, Err(AdapterError::Blocked)) {
-                    let token = log.current();
-                    if log.rows_of(token).is_some_and(|row| row.parked) {
-                        readiness.parked(token);
-                    }
-                    log.park(!readiness.cancellable(token));
-                } else {
-                    readiness.progressed();
-                }
+            if !matches!(result, Err(AdapterError::Blocked))
+                && let Some((readiness, _)) = &self.cooperative
+            {
+                // The live path needs readiness, never the tape's wait ordinals.
+                // A re-issued borrowed request keeps Pending::parked until finish.
+                readiness.progressed();
             }
             result
         })())
@@ -757,7 +753,12 @@ impl Adapter for RealIo {
                 },
             ));
         };
-        log.point();
+        // With no journal or retained history, no Ready events or wait-ordinal
+        // bookkeeping are constructed. The readiness tokens are sufficient.
+        let recording = self.retain_history || self.journal.records();
+        if recording {
+            log.point();
+        }
         let mut tokens = readiness.ready()?;
         if let Some(clock) = &self.test_clock {
             tokens.extend(clock.ready()?);
@@ -772,6 +773,9 @@ impl Adapter for RealIo {
         } else {
             self.signals_ready(tokens)
         };
+        if !recording {
+            return Ok(Ready::Tokens(tokens));
+        }
         let Some((_, log)) = &mut self.cooperative else {
             unreachable!()
         };
