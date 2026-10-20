@@ -220,13 +220,14 @@ pub fn stream_read_until(
   )
 }
 
-@preserves_captures(s)
-@preserves_captures(r)
+@preserves_captures(s, r)
 pub fn stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[
   u64,
   ReadError[NetError]
 ] {
-  if max == 0 { return Ok(0) }
+  if max == 0 {
+    return Ok(0)
+  }
   let mut unread: List[u8] = []
   let mut i = r.offset
   while i < core@1/list.len(r.input) {
@@ -235,9 +236,13 @@ pub fn stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> 
   }
   r.input = take unread
   r.offset = 0
-  let limit = if max < r.capacity { max } else { r.capacity }
-  let n = core@1/net.read(n, mut s, mut r.input, limit) ? Source
-  Ok(n)
+  let limit = if max < r.capacity {
+    max
+  } else {
+    r.capacity
+  }
+  let count = core@1/net.read(n, mut s, mut r.input, limit) ? Source
+  Ok(count)
 }
 
 @preserves_unique(out)

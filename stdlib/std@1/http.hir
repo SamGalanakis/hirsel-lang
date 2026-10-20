@@ -1070,6 +1070,7 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   Error(Truncated())
 }
 
+@preserves_captures(r)
 fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   // Prefix a synthetic status line to reuse strict batched header parsing.
   let mut collected: List[u8] = []
@@ -1088,7 +1089,7 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
       if end - 17 > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
-      r.response_trailers = copy head.headers
+      r.response_trailers = unique head.headers
       return Ok(())
     }
     let have = core@1/list.len(collected) - 17

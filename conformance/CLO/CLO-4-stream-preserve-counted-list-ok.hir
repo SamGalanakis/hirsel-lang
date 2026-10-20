@@ -1,0 +1,13 @@
+// rule: CLO-4
+// expect: accept
+pub type Event = Data(Bytes) | Idle
+
+resource type Request {
+  input: List[Event],
+}
+drop(s) {}
+
+@preserves_captures(s)
+fn read(mut s: Request, take event: Event) -> () {
+  list.push(mut s.input, unique event)
+}

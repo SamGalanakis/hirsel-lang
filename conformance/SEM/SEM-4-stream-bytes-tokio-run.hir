@@ -1,0 +1,84 @@
+// rule: SEM-4
+// expect: run
+// Port: Tokio ce685ee tokio-util/tests/io_reader_stream.rs:39-67.
+// The reference Reader emits 8000 zero bytes, at most 31 per read, then errors.
+pub type Error = Network(NetError) | Config(stream.StreamConfigError)
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let mut steps: List[NetStep] = []
+  let mut remaining: u64 = 8000
+  while remaining != 0 {
+    let size: u64 = if remaining > 31 {
+      31
+    } else {
+      remaining
+    }
+    let mut data: List[u8] = []
+    let mut i: u64 = 0
+    while i < size {
+      list.push(mut data, 0u8)
+      i += 1
+    }
+    list.push(mut steps, Send(bytes.from_list(take data)))
+    remaining -= size
+  }
+  list.push(mut steps, Reset())
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open(take steps)]
+      )
+    ],
+    []
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? Network
+  let limit = stream.chunk_limit(256) ? Config
+  let mut flow = stream.net_chunks(n, take socket, limit)
+  let mut total: u64 = 0
+  let mut chunks: u64 = 0
+  let mut peak: u64 = 0
+  while true {
+    match stream.next(mut flow) {
+      Some(Ok(data)) => {
+        let size = bytes.len(data)
+        test.check(t, size > 0 && size <= 31)
+        if size > peak {
+          peak = size
+        }
+        let mut i: u64 = 0
+        while i < size {
+          test.check(t, data[i] == 0u8)
+          i += 1
+        }
+        total += size
+        chunks += 1
+      },
+      Some(Error(ConnectionReset())) => break,
+      _ => {
+        test.check(t, false)
+        break
+      },
+    }
+  }
+  test.check(t, total == 8000 && chunks == 259 && peak == 31)
+  test.check(
+    t,
+    match stream.next(mut flow) {
+      None => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut flow) {
+      None => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

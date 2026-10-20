@@ -415,29 +415,17 @@ impl Checker<'_> {
                         let inert_advance = !selection.advance
                             && relation == Meet::Inside
                             && ty.is_some_and(|ty| self.fixed_inert_content(ty))
-                            && self
-                                .ty(*callee)
-                                .and_then(|ty| self.body.types.get(ty))
-                                .is_some_and(|row| match &row.kind {
-                                    TypeKind::Function(f) => f.state_promises.iter().any(|p| {
-                                        p.preserve_unique
-                                            && p.selector.fields.is_empty()
-                                            && p.selector.parameter
-                                                == ParameterRef::bound(ParamId(
-                                                    requirement.parameter as u32,
-                                                ))
-                                    }),
-                                    _ => false,
-                                })
+                            && self.callee_preserves_unique(*callee, requirement.parameter)
                             && arguments.iter().zip(requirements).all(|(arg, req)| {
-                                req.as_ref().is_none_or(|req| {
-                                    req.passing != PassingMode::Take
+                                req.as_ref().is_none_or(|_| {
+                                    arg.value == argument.value
                                         || self.property(arg.value).is_some_and(|p| p.plain)
                                         || {
                                             let value = self.value(state, arg.value);
                                             self.arenas.global(&value.modes.relation)
-                                                && self.captured_sendability(arg.value, &value)
-                                                    == Sendability::Sendable
+                                                && (value.modes.uniqueness == Uniqueness::Unique
+                                                    || self.captured_sendability(arg.value, &value)
+                                                        == Sendability::Sendable)
                                         }
                                 })
                             });

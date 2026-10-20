@@ -791,7 +791,8 @@ fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
         }
       },
       Headers(_, fields, true) => {
-        r.response_trailers = http_h2_headers(fields, r.config.max_headers)?
+        let decoded_trailers = http_h2_headers(fields, r.config.max_headers)?
+        r.response_trailers = unique decoded_trailers
         r.body_end = true
       },
       event => {

@@ -1,5 +1,6 @@
-// Tokio ce685ee ReaderStream: one read per pull, short reads are items,
-// error/EOF fuse. Fresh buffers avoid retaining a larger previous allocation.
+// Tokio ce685ee tokio-util/src/io/reader_stream.rs:91-123: one read per
+// pull, short reads are items, error/EOF fuse. Fresh buffers avoid retaining
+// a larger previous allocation under Hirsel's explicit chunk ceiling.
 pub type StreamConfigError = InvalidChunkLimit()
 
 /// A positive chunk ceiling, at most 65536 bytes. Construction performs no I/O.
@@ -43,7 +44,9 @@ pub fn file_chunks(dir: Dir, take file: File of dir, limit: ChunkLimit) -> Flow[
   from_results(
     core@1/iter.from(
       take FileChunks(dir: dir, file: take file, max: limit.bytes),
-      fn(mut s: FileChunks) -> Option[Result[Bytes, FileError]] { file_chunk(mut s) }
+      fn(mut s: FileChunks) -> Option[Result[Bytes, FileError]] {
+        file_chunk(mut s)
+      }
     )
   )
 }
@@ -77,7 +80,9 @@ pub fn net_chunks(net: Net, take socket: Stream of net, limit: ChunkLimit) -> Fl
   from_results(
     core@1/iter.from(
       take NetChunks(net: net, socket: take socket, max: limit.bytes),
-      fn(mut s: NetChunks) -> Option[Result[Bytes, NetError]] { net_chunk(mut s) }
+      fn(mut s: NetChunks) -> Option[Result[Bytes, NetError]] {
+        net_chunk(mut s)
+      }
     )
   )
 }
@@ -110,7 +115,9 @@ pub fn http_chunks(take request: http.Request, limit: ChunkLimit) -> Flow[
   from_results(
     core@1/iter.from(
       take HttpChunks(request: take request, max: limit.bytes),
-      fn(mut s: HttpChunks) -> Option[Result[Bytes, http.HttpError]] { http_chunk(mut s) }
+      fn(mut s: HttpChunks) -> Option[Result[Bytes, http.HttpError]] {
+        http_chunk(mut s)
+      }
     )
   )
 }
@@ -118,6 +125,8 @@ pub fn http_chunks(take request: http.Request, limit: ChunkLimit) -> Flow[
 /// Source and writer errors remain distinct; invalid progress is never EOF.
 pub type WriteError[E, W] = Source(E) | Write(W) | InvalidWrite
 
+// futures-rs 706e29b futures-util/src/io/write_all.rs:28-44: finish the
+// remaining suffix before advancing; a zero write is an error.
 /// Consume each chunk fully before pulling again. Return the owned destination
 /// only on clean EOF, so callers can explicitly commit/finish it.
 pub fn write_to[S, E, W](
