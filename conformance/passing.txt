@@ -649,6 +649,10 @@ conformance/CONC/CONC-3-schedule-cancel-run.hir
 conformance/CONC/CONC-3-schedule-driver-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
+conformance/CONC/CONC-3-stream-scoped-bounds-run.hir
+conformance/CONC/CONC-3-stream-scoped-cancel-run.hir
+conformance/CONC/CONC-3-stream-scoped-http-run.hir
+conformance/CONC/CONC-3-stream-scoped-precedence-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/CONC/CONC-3-tour-11-deadline-run.hir
 conformance/CONC/CONC-3-udp-canceled-recv-run.hir

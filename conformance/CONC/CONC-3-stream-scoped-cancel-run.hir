@@ -1,0 +1,106 @@
+// rule: CONC-3
+// expect: run
+// stdout: source 16
+// stdout: canceled
+// stdout: source 16
+// stdout: canceled
+// A source with unlimited ready records signals only its first refill. The
+// rejecting loop must reach its own checks before another bounded refill.
+resource type Ready {
+  tasks: Tasks,
+  started: Sender[u8],
+  out: Stdout,
+  bytes: u64,
+  records: bool,
+}
+drop(s) {
+  failure.check(s.bytes <= 16, Bounds())
+  let _ = out.print(s.out, f"source {s.bytes}\n")
+}
+
+fn refill(mut s: Ready, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  if s.bytes == 0 {
+    let _ = channel.send(s.tasks, mut s.started, 1u8)
+  }
+  for i in 0u64..max {
+    list.push(
+      mut out,
+      if !s.records || i % 2 == 0 {
+        b'x'
+      } else {
+        b'\n'
+      }
+    )
+  }
+  s.bytes += max
+  Ok(max)
+}
+
+fn reject(row: List[String]) -> Result[bool, u8] {
+  Ok(false)
+}
+
+fn unreachable_step(take count: u64, take row: List[String]) -> Result[u64, u8] {
+  failure.check(false, Bounds())
+  Ok(count + 1)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let modes: List[bool] = [true, false]
+  for records in modes {
+    task.scope(
+      tasks,
+      fn(parent: Scope) {
+        let (tx, rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+        let child = task.async(
+          parent,
+          fn() -> bool {
+            task.scope(
+              tasks,
+              fn(scope: Scope) -> bool {
+                let source = Ready(
+                  tasks: tasks,
+                  started: take tx,
+                  out: output,
+                  bytes: 0,
+                  records: records
+                )
+                let cfg = csv.StreamConfig(
+                  csv: csv.Config(
+                    delimiter: b',',
+                    fields_per_record: None(),
+                    max_record_bytes: 32
+                  ),
+                  refill_bytes: 16,
+                  max_input_bytes: 1000000,
+                  max_records: 1000000,
+                  max_outputs: 1
+                )
+                match stream.csv_fold_scoped(
+                  scope,
+                  take source,
+                  cfg,
+                  0u64,
+                  refill,
+                  reject,
+                  unreachable_step
+                ) {
+                  Error(Canceled(_)) => true,
+                  _ => false,
+                }
+              }
+            )
+          }
+        )
+        let mut ready = take rx
+        failure.check(channel.receive(tasks, mut ready) == Ok(1u8), Bounds())
+        task.cancel(parent, child)
+        failure.check(task.await(parent, take child), Bounds())
+        let _ = out.print(output, "canceled\n")
+      }
+    )
+  }
+  Ok(())
+}

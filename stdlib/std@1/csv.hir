@@ -84,7 +84,7 @@ fn finish_row(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
 }
 
 // One byte, one transition, at most one completed record. No completed-row queue.
-fn step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses {} {
+fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses {} {
   let at = r.offset
   core@1/failure.check(at < 18446744073709551615u64, TextInvariant())
   r.offset += 1
@@ -156,7 +156,7 @@ pub fn feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[
   let mut rows: List[List[String]] = []
   let mut i: u64 = 0
   while i < len {
-    match step(mut r, chunk[i]) {
+    match csv_step(mut r, chunk[i]) {
       Ok(Some(row)) => core@1/list.push(mut rows, take row),
       Ok(None()) => (),
       Error(error) => {
@@ -228,7 +228,7 @@ pub fn read_record[S, E](
     }
     let byte = r.input[r.cursor]
     r.cursor += 1
-    let outcome = step(mut r, byte)
+    let outcome = csv_step(mut r, byte)
     match take outcome {
       Ok(Some(row)) => return Ok(Some(take row)),
       Ok(None()) => (),
@@ -281,4 +281,112 @@ pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> R
   }
   core@1/list.push(mut out, b'\n')
   Ok(())
+}
+
+/// Limits for an owning scoped fold. Zero raw/input budgets forbid further work;
+/// zero output budget succeeds without pulling. Refill and record sizes are positive.
+pub type StreamConfig {
+  csv: Config,
+  refill_bytes: u64,
+  max_input_bytes: u64,
+  max_records: u64,
+  max_outputs: u64,
+}
+
+pub type DriverError[E] = Source(E) | Callback(E) | Csv(CsvError) | Canceled(
+  CancelCause
+) | Limit | InvalidRead | InvalidConfig
+
+// Reuse the Go-derived step/end transitions above. Like Go Reader.Read
+// (go ebe2fee src/encoding/csv/reader.go:197-205), advance one row only.
+// Tokio ce685ee tokio/src/task/coop/mod.rs:8-31 motivates checking even when
+// every row is ready and rejected. Hirsel uses explicit deterministic checks,
+// rather than Tokio's hidden task budget.
+/// Consume an owned source with bounded parsing and explicit cooperative checks.
+pub fn fold_scoped[S, A, E](
+  scope: Scope,
+  take source: S,
+  config: StreamConfig,
+  take initial: A,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  accept: fn(List[String]) -> Result[bool, E],
+  step: fn(take A, take List[String]) -> Result[A, E]
+) -> Result[A, DriverError[E]] uses {scope, source, initial, refill, accept, step} {
+  // Configuration validation precedes every check and any source/callback work.
+  if config.refill_bytes == 0 || config.refill_bytes > 65536 || config.csv.max_record_bytes == 0 {
+    return Error(InvalidConfig())
+  }
+  let mut r = reader(config.csv) ? Csv
+  let mut input = take source
+  let mut accumulator = take initial
+  let mut remaining = config.max_input_bytes
+  let mut records: u64 = 0
+  let mut outputs: u64 = 0
+  while outputs < config.max_outputs {
+    // Stop at N before any further check, row, or refill. Otherwise cancellation
+    // wins over an exhausted raw/input budget at the next documented boundary.
+    match core@1/task.check_canceled(scope) {
+      Ok(()) => (),
+      Error(Canceled(cause)) => return Error(Canceled(cause)),
+    }
+    if records == config.max_records {
+      return Error(Limit())
+    }
+    let mut row: Option[List[String]] = None()
+    let mut complete = false
+    while !complete {
+      if r.cursor == core@1/list.len(r.input) {
+        // EOF finalized the last unterminated row; no extra refill is needed.
+        if r.ended {
+          return Ok(take accumulator)
+        }
+        match core@1/task.check_canceled(scope) {
+          Ok(()) => (),
+          Error(Canceled(cause)) => return Error(Canceled(cause)),
+        }
+        if remaining == 0 {
+          return Error(Limit())
+        }
+        r.input = []
+        r.cursor = 0
+        let carry = r.config.max_record_bytes - r.record_bytes
+        let mut capacity = config.refill_bytes
+        // The extra byte permits a terminator at exactly the record ceiling.
+        if carry < capacity {
+          capacity = carry + 1
+        }
+        if remaining < capacity {
+          capacity = remaining
+        }
+        let count = refill(mut input, mut r.input, capacity) ? Source
+        if count > capacity || core@1/list.len(r.input) != count {
+          return Error(InvalidRead())
+        }
+        remaining -= count
+        if count == 0 {
+          row = end(mut r) ? Csv
+          complete = true
+        }
+      }
+      if !complete {
+        let byte = r.input[r.cursor]
+        r.cursor += 1
+        row = csv_step(mut r, byte) ? Csv
+        if let Some(_) = row {
+          complete = true
+        }
+      }
+    }
+    match take row {
+      None() => return Ok(take accumulator),
+      Some(value) => {
+        records += 1
+        if accept(value) ? Callback {
+          accumulator = step(take accumulator, take value) ? Callback
+          outputs += 1
+        }
+      },
+    }
+  }
+  Ok(take accumulator)
 }

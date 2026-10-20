@@ -3994,3 +3994,80 @@ record-key declaration is reordered, lookups project back to that layout and
 ranges sort the projected keys in the caller's order. That fallback reads the
 table's rows into an ordinary in-memory ordered map; schemas whose key layout
 already agrees use a bounded index scan.
+
+## Scoped CSV stream consumption
+
+Prior-art mapping and deviations are recorded in
+[the scoped driver port notes](../../reports/stream-scoped-port.md).
+
+`stream.csv_fold_scoped` consumes a source directly, using the incremental CSV
+state machine. It does not construct an escaping cursor or retain a Scope.
+`csv.fold_scoped` is the same operation in the parser namespace.
+
+```text
+csv.StreamConfig {
+  csv: csv.Config, refill_bytes: u64, max_input_bytes: u64,
+  max_records: u64, max_outputs: u64
+}
+csv.DriverError[E] = Source(E) | Callback(E) | Csv(csv.CsvError)
+  | Canceled(CancelCause) | Limit | InvalidRead | InvalidConfig
+fn stream.csv_fold_scoped[S, A, E](scope: Scope, take source: S,
+  config: csv.StreamConfig, take initial: A,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  accept: fn(List[String]) -> Result[bool, E],
+  step: fn(take A, take List[String]) -> Result[A, E])
+  -> Result[A, csv.DriverError[E]] uses {scope, source, initial, refill, accept, step}
+```
+
+Refill bytes must be positive and at most 65536, and the CSV record limit must
+be positive; otherwise InvalidConfig is returned. Delimiter validation returns
+Csv(InvalidDelimiter). These validations precede all checks, pulls and callbacks.
+The input, raw-record and accepted-output budgets may be zero.
+
+The driver owns the source, reader and accumulator for the duration of the
+call. Reaching `max_outputs` succeeds immediately, including zero, without
+another check, row or refill. Otherwise it checks cancellation before **each
+raw-record advance**, even for rejected or already-buffered rows, and before
+each refill. At those boundaries cancellation wins over an exhausted budget.
+The raw-record limit counts accepted and rejected records alike. Reaching that
+limit without reaching the output target returns Limit before another record
+advance, including an advance that might discover EOF. A needed refill with
+no input budget returns Limit **before** invoking the callback; max=0 is never
+passed as an EOF probe. Exact-budget input without observed EOF therefore
+requires either a satisfied output target or more budget for the EOF probe.
+
+Each refill receives an empty list and an allowance no larger than the minimum
+of `refill_bytes`, remaining input bytes, and remaining raw record bytes plus
+one. The extra byte permits a terminator at the record ceiling. It must append
+exactly its returned count, at most that allowance; otherwise InvalidRead.
+Zero means clean EOF and finalizes one unterminated record, if present.
+Source errors, including HTTP truncation or a source's own nested cancellation,
+remain Source(E). Syntax, width, record-size and UTF-8 failures remain Csv.
+Only successful records reach accept; only accepted records reach step.
+Accept and step failures are Callback(E). The first refill/parser/callback
+error returns immediately, with no subsequent cancellation check replacing it.
+This is the fixed precedence even if cancellation became pending inside that
+callback. There is no retry or rollback of effects already performed.
+
+The driver finishes each step before advancing again, so a slow/suspending
+sink supplies sequential backpressure. Pass an owned `http.Request` as S and
+`http.read_body` as the scoped refill for HTTP → CSV → first N → sink; configure
+input and record limits independently. Completion or any error destroys the
+owned source and parser before returning. Incomplete HTTP bodies are dropped
+and aborted, and trailers are discarded; callers needing trailers retain the
+manual body/trailers protocol. Already-read lookahead can include later rows.
+There is no producer task, queue, unbounded row list or implicit decompression.
+
+Between checks parser work consumes at most one bounded refill or one bounded
+raw record (plus CRLF handling). Retention comprises a refill buffer of at most
+`refill_bytes`, the bounded incomplete record's field/row storage, and one
+output row; record metadata/allocator capacity, source internal buffers and the
+accumulator/callback scratch must be counted separately. An arbitrary callback
+can allocate beyond its requested allowance before InvalidRead is detected,
+retain every row in A, or run forever; this API cannot bound or interrupt that
+work. Such callbacks need their own checks and capacity policy. Limits bound
+logical input work and parser retention, not process RSS.
+
+The check sequence and limits are program semantics for record/replay; they
+cannot be changed by an optimizer or provider setting. Children obtain their
+own Scope through a nested `task.scope` using captured global Tasks.

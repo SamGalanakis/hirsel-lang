@@ -1,0 +1,159 @@
+// rule: CONC-3
+// expect: run
+// Cancellation during a callback does not replace its result. Cancellation at
+// the next record boundary wins over an exhausted raw-record/input limit.
+fn signal(tasks: Tasks, tx: Sender[u8]) -> () {
+  let mut notice = sender.dup(tasks, tx)
+  let _ = channel.send(tasks, mut notice, 1u8)
+  let (hold, wait): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  let mut gate = take wait
+  failure.check(
+    match channel.receive(tasks, mut gate) {
+      Error(Canceled(_)) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let _ = hold
+}
+
+fn config() -> csv.StreamConfig {
+  csv.StreamConfig(
+    csv: csv.Config(delimiter: b',', fields_per_record: None(), max_record_bytes: 3),
+    refill_bytes: 2,
+    max_input_bytes: 2,
+    max_records: 1,
+    max_outputs: 1
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  for mode in 0u8..6u8 {
+    task.scope(
+      tasks,
+      fn(parent: Scope) {
+        let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+        let child = task.async(
+          parent,
+          fn() -> bool {
+            let notify = take sender
+            task.scope(
+              tasks,
+              fn(s: Scope) -> bool {
+                let outcome_rows = stream.csv_fold_scoped(
+                  s,
+                  0u8,
+                  config(),
+                  0u64,
+                  fn(mut source: u8, mut out: List[u8], max: u64) -> Result[u64, u8] {
+                    failure.check(max == 2, Bounds())
+                    if mode < 2 {
+                      signal(tasks, notify)
+                      if mode == 0 {
+                        return Error(10)
+                      }
+                      return Ok(2)
+                    }
+                    list.push(mut out, b'x')
+                    list.push(mut out, b'\n')
+                    Ok(2)
+                  },
+                  fn(row: List[String]) -> Result[bool, u8] {
+                    if mode == 2 || mode == 4 {
+                      signal(tasks, notify)
+                      if mode == 2 {
+                        return Error(11)
+                      }
+                      return Ok(false)
+                    }
+                    Ok(true)
+                  },
+                  fn(take count: u64, take row: List[String]) -> Result[u64, u8] {
+                    signal(tasks, notify)
+                    if mode == 3 {
+                      return Error(12)
+                    }
+                    Ok(count + 1)
+                  }
+                )
+                let correct = match mode {
+                  0 => outcome_rows == Error(Source(10u8)),
+                  1 => outcome_rows == Error(InvalidRead()),
+                  2 => outcome_rows == Error(Callback(11u8)),
+                  3 => outcome_rows == Error(Callback(12u8)),
+                  4 => match outcome_rows {
+                    Error(Canceled(_)) => true,
+                    _ => false,
+                  },
+                  _ => outcome_rows == Ok(1u64),
+                }
+                // The scope is already canceled: validation still precedes checks,
+                // zero-output succeeds, but zero input/raw budgets lose to cancellation.
+                let mut invalid = config()
+                invalid.refill_bytes = 0
+                let no_read = fn(mut source: u8, mut out: List[u8], max: u64) -> Result[
+                  u64,
+                  u8
+                ] {
+                  failure.check(false, Bounds())
+                  Error(99)
+                }
+                let accept = fn(row: List[String]) -> Result[bool, u8] {
+                  Ok(true)
+                }
+                let step = fn(take count: u64, take row: List[String]) -> Result[
+                  u64,
+                  u8
+                ] {
+                  Ok(count + 1)
+                }
+                let bad = stream.csv_fold_scoped(
+                  s,
+                  0u8,
+                  invalid,
+                  0u64,
+                  no_read,
+                  accept,
+                  step
+                )
+                let mut zero = config()
+                zero.max_outputs = 0
+                let empty = stream.csv_fold_scoped(
+                  s,
+                  0u8,
+                  zero,
+                  0u64,
+                  no_read,
+                  accept,
+                  step
+                )
+                zero.max_outputs = 1
+                zero.max_records = 0
+                zero.max_input_bytes = 0
+                let canceled = stream.csv_fold_scoped(
+                  s,
+                  0u8,
+                  zero,
+                  0u64,
+                  no_read,
+                  accept,
+                  step
+                )
+                correct && bad == Error(InvalidConfig()) && empty == Ok(0u64) && match canceled {
+                  Error(Canceled(_)) => true,
+                  _ => false,
+                }
+              }
+            )
+          }
+        )
+        let mut ready = take receiver
+        test.check(t, channel.receive(tasks, mut ready) == Ok(1u8))
+        task.cancel(parent, child)
+        test.check(t, task.await(parent, take child))
+      }
+    )
+  }
+  Ok(())
+}

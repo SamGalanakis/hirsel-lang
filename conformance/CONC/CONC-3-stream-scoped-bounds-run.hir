@@ -1,0 +1,222 @@
+// rule: CONC-3
+// expect: run
+// Go ebe2fee src/encoding/csv/reader_test.go:45-86: Simple, CRLF,
+// RFC4180test and NoEOLTest, with every bounded refill size.
+type Input {
+  data: Bytes,
+  offset: u64,
+}
+
+fn refill(mut s: Input, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  failure.check(max > 0, Bounds())
+  let count = if bytes.len(s.data) - s.offset < max {
+    bytes.len(s.data) - s.offset
+  } else {
+    max
+  }
+  for i in 0u64..count {
+    list.push(mut out, s.data[s.offset + i])
+  }
+  s.offset += count
+  Ok(count)
+}
+
+fn accept(row: List[String]) -> Result[bool, u8] {
+  Ok(true)
+}
+
+fn reject(row: List[String]) -> Result[bool, u8] {
+  Ok(false)
+}
+
+fn collect(take rows: List[List[String]], take row: List[String]) -> Result[
+  List[List[String]],
+  u8
+] {
+  let mut outcome_rows = take rows
+  list.push(mut outcome_rows, take row)
+  Ok(take outcome_rows)
+}
+
+fn source_error(mut s: Input, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  Error(7)
+}
+
+fn bad_count(mut s: Input, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  Ok(1)
+}
+
+fn oversize(mut s: Input, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  for _ in 0u64..max + 1 {
+    list.push(mut out, b'x')
+  }
+  Ok(max + 1)
+}
+
+fn accept_error(row: List[String]) -> Result[bool, u8] {
+  Error(8)
+}
+
+fn step_error(take rows: List[List[String]], take row: List[String]) -> Result[
+  List[List[String]],
+  u8
+] {
+  Error(9)
+}
+
+fn empty_rows() -> List[List[String]] {
+  []
+}
+
+fn config(chunk: u64, input: u64, records: u64, outputs: u64) -> csv.StreamConfig {
+  csv.StreamConfig(
+    csv: csv.Config(delimiter: b',', fields_per_record: None(), max_record_bytes: 64),
+    refill_bytes: chunk,
+    max_input_bytes: input,
+    max_records: records,
+    max_outputs: outputs
+  )
+}
+
+fn run(scope: Scope, take data: Bytes, cfg: csv.StreamConfig) -> Result[
+  List[List[String]],
+  csv.DriverError[u8]
+] {
+  stream.csv_fold_scoped(
+    scope,
+    Input(data: take data, offset: 0),
+    cfg,
+    empty_rows(),
+    refill,
+    accept,
+    collect
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      for chunk in 1u64..12u64 {
+        test.check(
+          t,
+          run(s, b"a,b,c\n", config(chunk, 100, 10, 10)) == Ok([["a", "b", "c"]])
+        )
+        test.check(
+          t,
+          run(s, b"a,b\r\nc,d\r\n", config(chunk, 100, 10, 10)) == Ok(
+            [["a", "b"], ["c", "d"]]
+          )
+        )
+        test.check(
+          t,
+          run(s, b"a,b,c", config(chunk, 100, 10, 10)) == Ok([["a", "b", "c"]])
+        )
+        test.check(
+          t,
+          run(
+            s,
+            b"\"a,a\",\"b\"\"bb\",\"\xc3\xa9\n\xc3\xbc\"\n",
+            config(chunk, 100, 10, 10)
+          ) == Ok([["a,a", "b\"bb", "é\nü"]])
+        )
+      }
+      test.check(t, run(s, b"", config(1, 1, 1, 1)) == Ok([]))
+      test.check(t, run(s, b"ignored", config(1, 0, 0, 0)) == Ok([]))
+      test.check(t, run(s, b"a\nb\n", config(1, 2, 1, 1)) == Ok([["a"]]))
+      // No EOF probe at an exhausted budget: max=0 is never a refill.
+      test.check(t, run(s, b"a", config(1, 1, 10, 10)) == Error(Limit()))
+      test.check(t, run(s, b"a\n", config(1, 2, 1, 10)) == Error(Limit()))
+      test.check(t, run(s, b"x", config(1, 0, 10, 10)) == Error(Limit()))
+      test.check(t, run(s, b"x", config(1, 10, 0, 10)) == Error(Limit()))
+      test.check(t, run(s, b"a\"", config(1, 10, 10, 10)) == Error(Csv(Syntax(1))))
+      let mut small = config(100, 100, 10, 10)
+      small.csv.max_record_bytes = 3
+      test.check(t, run(s, b"abc\n", small) == Ok([["abc"]]))
+      test.check(t, run(s, b"abcd", small) == Error(Csv(RecordTooLarge())))
+      let invalid_limits: List[u64] = [0u64, 65537u64]
+      for bad in invalid_limits {
+        test.check(t, run(s, b"", config(bad, 1, 1, 1)) == Error(InvalidConfig()))
+      }
+      small.csv.max_record_bytes = 0
+      test.check(t, run(s, b"", small) == Error(InvalidConfig()))
+      small.csv.delimiter = b'"'
+      small.csv.max_record_bytes = 3
+      test.check(t, run(s, b"", small) == Error(Csv(InvalidDelimiter())))
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"", offset: 0),
+          config(1, 10, 10, 10),
+          empty_rows(),
+          source_error,
+          accept,
+          collect
+        ) == Error(Source(7u8))
+      )
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"", offset: 0),
+          config(1, 10, 10, 10),
+          empty_rows(),
+          bad_count,
+          accept,
+          collect
+        ) == Error(InvalidRead())
+      )
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"", offset: 0),
+          config(1, 10, 10, 10),
+          empty_rows(),
+          oversize,
+          accept,
+          collect
+        ) == Error(InvalidRead())
+      )
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"a\n", offset: 0),
+          config(1, 10, 10, 10),
+          empty_rows(),
+          refill,
+          accept_error,
+          collect
+        ) == Error(Callback(8u8))
+      )
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"a\n", offset: 0),
+          config(1, 10, 10, 10),
+          empty_rows(),
+          refill,
+          accept,
+          step_error
+        ) == Error(Callback(9u8))
+      )
+      test.check(
+        t,
+        stream.csv_fold_scoped(
+          s,
+          Input(data: b"a\nb\n", offset: 0),
+          config(4, 100, 2, 10),
+          empty_rows(),
+          refill,
+          reject,
+          collect
+        ) == Error(Limit())
+      )
+    }
+  )
+  Ok(())
+}

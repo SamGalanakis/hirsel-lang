@@ -1,0 +1,146 @@
+// rule: CONC-3
+// expect: run
+// HTTP -> bounded CSV -> first two accepted records -> suspending sink.
+// The third row is incomplete and stalls; success proves no next-row read.
+resource type Body {
+  request: http.Request,
+  consumed: u64,
+}
+drop(s) {
+  failure.check(s.consumed <= 16, Bounds())
+}
+
+fn refill(mut s: Body, mut out: List[u8], max: u64) -> Result[u64, http.HttpError] {
+  failure.check(max > 0 && max <= 1, Bounds())
+  let count = http.read_body(mut s.request, mut out, max)?
+  s.consumed += count
+  Ok(count)
+}
+
+fn accept(row: List[String]) -> Result[bool, http.HttpError] {
+  Ok(row[0] != "skip")
+}
+
+fn body(n: Net) -> Result[http.Request, http.HttpError] {
+  let mut request = http.request(
+    n,
+    http.default_config(),
+    Get(),
+    "http://example.com",
+    []
+  )?
+  http.send_bodiless(mut request)?
+  let _ = http.receive_head(mut request)?
+  Ok(take request)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let tasks = test.tasks(t)
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nskip\n\"\xc3\xa9\"\r\nlast\n\"unfinished"
+              ),
+              Stall()
+            ]
+          ),
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nx\n"), Close()])
+        ]
+      )
+    ],
+    []
+  )
+  let request = body(n)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let cfg = csv.StreamConfig(
+        csv: csv.Config(
+          delimiter: b',',
+          fields_per_record: Some(1),
+          max_record_bytes: 16
+        ),
+        refill_bytes: 1,
+        max_input_bytes: 16,
+        max_records: 3,
+        max_outputs: 2
+      )
+      let initial: List[List[String]] = []
+      let outcome = stream.csv_fold_scoped(
+        s,
+        Body(request: take request, consumed: 0),
+        cfg,
+        take initial,
+        refill,
+        accept,
+        fn(take rows: List[List[String]], take row: List[String]) -> Result[
+          List[List[String]],
+          http.HttpError
+        ] {
+          // Suspension in the sink completes before the driver reads again.
+          task.scope(
+            tasks,
+            fn(sink: Scope) {
+              let job = task.async(
+                sink,
+                fn() -> () {
+                  ()
+                }
+              )
+              task.await(sink, take job)
+            }
+          )
+          let mut outcome_rows = take rows
+          list.push(mut outcome_rows, take row)
+          Ok(take outcome_rows)
+        }
+      )
+      test.check(t, outcome == Ok([["é"], ["last"]]))
+    }
+  )
+  let truncated = body(n)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let cfg = csv.StreamConfig(
+        csv: csv.Config(
+          delimiter: b',',
+          fields_per_record: None(),
+          max_record_bytes: 16
+        ),
+        refill_bytes: 1,
+        max_input_bytes: 16,
+        max_records: 5,
+        max_outputs: 5
+      )
+      let outcome = stream.csv_fold_scoped(
+        s,
+        Body(request: take truncated, consumed: 0),
+        cfg,
+        0u64,
+        refill,
+        accept,
+        fn(take count: u64, take row: List[String]) -> Result[u64, http.HttpError] {
+          Ok(count + 1)
+        }
+      )
+      test.check(
+        t,
+        match take outcome {
+          Error(Source(Truncated())) => true,
+          _ => false,
+        }
+      )
+    }
+  )
+  Ok(())
+}

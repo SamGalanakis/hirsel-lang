@@ -102,7 +102,11 @@ call waits for the acknowledgement ([RUN-9](runners.md#run-9-cancellation)). A s
 transaction checks no cancellation itself: its caller checks before starting it, and the
 call-stream form returns `Canceled` only from a runner; a body, once started, is not
 cancellable ([STORE-3](storage.md#store-3-transaction-scope)). Pure code is not
-cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature states
+cancellable; `task.check_canceled(s)?` marks long loops. The consuming
+[`stream.csv_fold_scoped`](std-library.md#scoped-csv-stream-consumption) driver places
+checks inside rejecting-record and bounded-refill loops; a check outside an
+unbounded pure filter cannot interrupt its next call. It borrows Scope only
+for the call and owns the source until completion or error. Each operation's signature states
 what it owns on success and on failure; a borrow or `mut` loan lasts until the call
 completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:
 `task.scope_until(tasks, deadline, body)` runs `body` in a fresh scope as `task.scope`

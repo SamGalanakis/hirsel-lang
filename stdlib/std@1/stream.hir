@@ -225,3 +225,17 @@ pub fn take_n[T, E](take input: Flow[T, E], count: u64) -> Flow[T, E] uses {inpu
   let Flow(inner: inner) = take input
   Flow(inner: iter.take_n(take inner, count))
 }
+
+/// Own and consume a CSV source; checks include rejected rows and every refill.
+/// Callbacks are scoped and never stored in the returned value or an iterator.
+pub fn csv_fold_scoped[S, A, E](
+  scope: Scope,
+  take source: S,
+  config: csv.StreamConfig,
+  take initial: A,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  accept: fn(List[String]) -> Result[bool, E],
+  step: fn(take A, take List[String]) -> Result[A, E]
+) -> Result[A, csv.DriverError[E]] uses {scope, source, initial, refill, accept, step} {
+  csv.fold_scoped(scope, take source, config, take initial, refill, accept, step)
+}
