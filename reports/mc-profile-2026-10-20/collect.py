@@ -1,5 +1,5 @@
 """Ten interleaved, seeded profiler-on/off samples; timings are within-trace models."""
-import hashlib, importlib.util, json, os, random, selectors, socket, statistics, subprocess, sys, time
+import hashlib, importlib.util, json, os, random, selectors, shutil, socket, statistics, subprocess, sys, time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 OUT=Path(sys.argv[1]).resolve()
@@ -23,12 +23,12 @@ def command(binary,env,directory):
  return [str(ROOT/'tools/capped'),'--timeout','120','perf','stat','-x,','-e','cycles,instructions','-o',str(directory/'perf.csv'),'--','taskset','-c','31',str(binary)]
 
 def execute(name,enabled,round):
- binary=OUT/name/'program';d=OUT/'samples'/str(round)/f'{name}-{enabled}';d.mkdir(parents=True,exist_ok=True)
+ binary=OUT/('tasks-app' if name.startswith('tasks-app') else name)/'program';d=OUT/'samples'/str(round)/f'{name}-{enabled}';d.mkdir(parents=True,exist_ok=True)
  env=dict(ENV,HIRSEL_RT_MEASUREMENT=str(d/'measurement'))
  if enabled:env['HIRSEL_RT_MC_PROFILE']='1'
  argv=command(binary,env,d)
  before=cpu()
- if name!='tasks-app':
+ if not name.startswith('tasks-app'):
   fixture=OUT/'input-root';fixture.mkdir(exist_ok=True)
   env['HIRSEL_RT_ROOT']=str(fixture)
   env['HIRSEL_RT_TAPE']=str(d/'tape')
@@ -56,7 +56,7 @@ def execute(name,enabled,round):
      if not sel.select(30):raise RuntimeError('server readiness timeout')
      line=server.stdout.readline()
     if b'listening on' not in line:raise RuntimeError(('server readiness',line,(d/'stderr').read_text()))
-    load=subprocess.run([str(ROOT/'tools/capped'),'--timeout','60','taskset','-c','7',sys.executable,str(Path(__file__).with_name('load.py')),str(port)],capture_output=True)
+    load=subprocess.run([str(ROOT/'tools/capped'),'--timeout','60','taskset','-c','7',sys.executable,str(Path(__file__).with_name('load-saturated.py' if name.endswith('-saturated') else 'load.py')),str(port)],capture_output=True)
     (d/'client.stdout').write_bytes(load.stdout);(d/'client.stderr').write_bytes(load.stderr)
     if load.returncode:raise RuntimeError(('client',load.stderr.decode()))
    finally:
@@ -83,14 +83,18 @@ def main():
  rng=random.Random(SEED);samples=[]
  selected=NAMES if len(sys.argv)<3 else sys.argv[2:]
  rounds=10 if os.environ.get('MC_SMOKE') is None else 1
+ session_name='base' if selected==NAMES else 'saturated' if selected==['tasks-app-saturated'] else '-'.join(selected)
  for round in range(rounds):
   jobs=[(n,b) for n in selected for b in (False,True)];rng.shuffle(jobs)
   for name,enabled in jobs:
    item=execute(name,enabled,round);samples.append(item)
    print(round,name,enabled,item.get('model',{}).get('tasks'),flush=True)
-   (OUT/'samples.json').write_text(json.dumps(dict(seed=SEED,samples=samples),indent=2))
+   (OUT/f'session-{session_name}.json').write_text(json.dumps(dict(seed=SEED,samples=samples),indent=2))
+   sessions={p.stem.removeprefix('session-'):json.loads(p.read_text()) for p in sorted(OUT.glob('session-*.json'))}
+   combined=[dict(s,session=label) for label,session in sessions.items() for s in session['samples']]
+   (OUT/'samples.json').write_text(json.dumps(dict(seed=SEED,sessions=list(sessions),samples=combined),indent=2))
   for name in selected:
-   if name=='tasks-app':continue
+   if name.startswith('tasks-app'):continue
    a=OUT/'samples'/str(round)/f'{name}-False';b=OUT/'samples'/str(round)/f'{name}-True'
    assert (a/'stdout').read_bytes()==(b/'stdout').read_bytes()
    assert (a/'tape').read_bytes()==(b/'tape').read_bytes()

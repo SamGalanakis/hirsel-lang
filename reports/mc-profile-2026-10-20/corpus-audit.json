@@ -1,0 +1,542 @@
+[
+  {
+    "program": "conformance/CLO/CLO-1-library-callback-forms.hir",
+    "async_sites": 2,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-child-atomic-capture-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-child-counted-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 12"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-child-mutex-capture-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-child-not-sendable-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 10"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-child-not-sendable-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-counted-child-borrow-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 10"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-counted-child-borrow-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-handle-record-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 33"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-handle-record-capture-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-handle-record-capture-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-inferred-task-result-error.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-local-receiver-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 12"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-receiver-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 10"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-receiver-capture-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-scoped-shared-root-copy.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-spec-shared-readers.hir",
+    "async_sites": 2,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-spec-sizes.hir",
+    "async_sites": 2,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-taken-resource-parameter-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 14"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-taken-resource-parameter-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CLO/CLO-3-taken-resource-parameter-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-1-pure-child.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-await.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-cancel-then-await.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-child-resource-drop-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-detach-joins-before-exit.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-detach.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-error-result-cancels-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-handle-parameter-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CONC-2 at line 4"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-handle-parameter-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-nested-handle-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 15"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-nested-handle-capture-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-nested-sender-capture-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-option-result-joins-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-sizes-example.hir",
+    "async_sites": 2,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-taken-block-sender-capture-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-taken-direct-sender-capture-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-all-failing-child-run.hir",
+    "async_sites": 3,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-all-ok-run.hir",
+    "async_sites": 3,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-select-fast-slow-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-await-twice-fail.hir",
+    "async_sites": 1,
+    "expect": "// expect: fail CONC-2 at line 21"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-detach-all-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-first-completed-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-parameter-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CONC-2 at line 5"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-parameter-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-scope-body-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CONC-2 at line 12"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-scope-body-capture-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-unconsumed-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CONC-2 at line 8"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-set-unconsumed-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-task-take-capture-freeze-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-tour-11-concurrency-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-tour-11-task-all-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-unconsumed-handle-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CONC-2 at line 8"
+  },
+  {
+    "program": "conformance/CONC/CONC-2-unconsumed-handle-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-canceled-pure-child.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-cancellation-shields-drop-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-check-canceled-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-child-local-scope.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-cancel-sleep-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-deadline-nested-child-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-deadline-past-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-deadline-receive-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-sleep-order-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-clock-tied-timers-run.hir",
+    "async_sites": 3,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-process-pipeline-canceled-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-process-run-canceled-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-shielded-drop-send-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-task-capture-after-sleep-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-3-udp-canceled-recv-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-5-owned-payload-mutexes-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-5-unique-payload-part-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-6-receiver-child-capture.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-6-suspended-receiver-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-8-await-channel-cycle-blocked.hir",
+    "async_sites": 1,
+    "expect": "// expect: blocked"
+  },
+  {
+    "program": "conformance/CONC/CONC-8-await-channel-cycle-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/CONC/CONC-8-two-task-channel-blocked.hir",
+    "async_sites": 2,
+    "expect": "// expect: blocked"
+  },
+  {
+    "program": "conformance/CONC/CONC-8-two-task-channel-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-1-track-caller-task-fail.hir",
+    "async_sites": 1,
+    "expect": "// expect: fail SEM-1 at line 14"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-1-track-caller-task-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-2-await-later-reports-first.hir",
+    "async_sites": 2,
+    "expect": "// expect: fail SEM-1 at line 16"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-2-child-propagates.hir",
+    "async_sites": 1,
+    "expect": "// expect: fail SEM-1 at line 13"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-2-first-spawn-failure.hir",
+    "async_sites": 2,
+    "expect": "// expect: fail SEM-1 at line 13"
+  },
+  {
+    "program": "conformance/FAIL/FAIL-2-isolate-failure-fields-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/LANG/LANG-7-callback-passing-inferred-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject LANG-7 at line 7"
+  },
+  {
+    "program": "conformance/LANG/LANG-7-callback-passing-inferred-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/LANG/LANG-9-test-clock.hir",
+    "async_sites": 1,
+    "expect": "// expect: test"
+  },
+  {
+    "program": "conformance/LANG/LANG-9-test-tasks-deadlock.hir",
+    "async_sites": 1,
+    "expect": "// expect: blocked"
+  },
+  {
+    "program": "conformance/LANG/LANG-9-test-tasks-interleaving.hir",
+    "async_sites": 2,
+    "expect": "// expect: test"
+  },
+  {
+    "program": "conformance/LANG/LANG-9-test-tasks-ping-pong.hir",
+    "async_sites": 1,
+    "expect": "// expect: test"
+  },
+  {
+    "program": "conformance/LANG/LANG-9-test-tasks-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/MEM/MEM-11-tour-11-shared-config-run.hir",
+    "async_sites": 3,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/MEM/MEM-11-with-send-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject OWN-1 at line 26"
+  },
+  {
+    "program": "conformance/MEM/MEM-11-with-send-copy-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/MEM/MEM-11-with-send-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/MEM/MEM-11-with-tasks-run.hir",
+    "async_sites": 2,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/MODE/MODE-4-shared-root-child-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/OWN/OWN-1-borrowed-take-capture-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject OWN-1 at line 9"
+  },
+  {
+    "program": "conformance/OWN/OWN-1-borrowed-take-capture-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/OWN/OWN-5-task-sender-free-use-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject OWN-5 at line 14"
+  },
+  {
+    "program": "conformance/OWN/OWN-5-task-sender-free-use-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/OWN/OWN-6-counted-child-borrow-bad.hir",
+    "async_sites": 1,
+    "expect": "// expect: reject CLO-3 at line 10"
+  },
+  {
+    "program": "conformance/OWN/OWN-6-counted-child-borrow-ok.hir",
+    "async_sites": 1,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/OWN/OWN-6-shared-children.hir",
+    "async_sites": 2,
+    "expect": "// expect: accept"
+  },
+  {
+    "program": "conformance/OWN/OWN-6-unique-child-value.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/RUN/RUN-12-callee-progress-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  },
+  {
+    "program": "conformance/RUN/RUN-6-sim-faults-run.hir",
+    "async_sites": 1,
+    "expect": "// expect: run"
+  }
+]

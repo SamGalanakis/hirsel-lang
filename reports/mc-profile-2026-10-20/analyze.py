@@ -38,7 +38,7 @@ for name in sorted({s['program'] for s in samples}):
         assert hashlib.sha256(path.read_bytes()).hexdigest() == sample['trace_sha256']
         logs.append(dict(round=sample['round'], log=path.read_text()))
     (output / f'{name}.json.gz').write_bytes(gzip.compress(json.dumps(logs).encode(), mtime=0))
-report = dict(schema=1, seed=session['seed'], commit_ns=200, programs=programs, samples=samples)
+report = dict(schema=1, seed=session['seed'], sessions=session.get('sessions', []), commit_ns=200, programs=programs, samples=samples)
 (output / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
 print('| Program | N=1 | N=2 | N=4 | N=8 | N=16 |')
 print('|---|---:|---:|---:|---:|---:|')
