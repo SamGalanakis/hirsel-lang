@@ -52,37 +52,5 @@ pub fn main() -> Result[(), ()] {
   check("^bcd'", "abcdef", None())?
   // src/regexp/find_test.go:50
   check("^abcd$", "abcde", None())?
-  // src/regexp/find_test.go:51
-  check("a+", "baaab", Some(regex.Span(start: 1, end: 4)))?
-  // src/regexp/find_test.go:52
-  check("a*", "baaab", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/find_test.go:53
-  check("[a-z]+", "abcd", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:54
-  check("[^a-z]+", "ab1234cd", Some(regex.Span(start: 2, end: 6)))?
-  // src/regexp/find_test.go:55
-  check("[a\\-\\]z]+", "az]-bcz", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:56
-  check("[^\\n]+", "abcd\n", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:57
-  check("[日本語]+", "日本語日本語", Some(regex.Span(start: 0, end: 18)))?
-  // src/regexp/find_test.go:58
-  check("日本語+", "日本語", Some(regex.Span(start: 0, end: 9)))?
-  // src/regexp/find_test.go:59
-  check("日本語+", "日本語語語語", Some(regex.Span(start: 0, end: 18)))?
-  // src/regexp/find_test.go:60
-  check("()", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/find_test.go:61
-  check("(a)", "a", Some(regex.Span(start: 0, end: 1)))?
-  // src/regexp/find_test.go:62
-  check("(.)(.)", "日a", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:63
-  check("(.*)", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/find_test.go:64
-  check("(.*)", "abcd", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:65
-  check("(..)(..)", "abcd", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/find_test.go:66
-  check("(([^xyz]*)(d))", "abcd", Some(regex.Span(start: 0, end: 4)))?
   Ok(())
 }

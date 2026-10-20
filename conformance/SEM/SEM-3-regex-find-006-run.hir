@@ -12,11 +12,11 @@ fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result
 }
 
 pub fn main() -> Result[(), ()] {
-  // src/regexp/find_test.go:126
-  check("\\`", "`", Some(regex.Span(start: 0, end: 1)))?
-  // src/regexp/find_test.go:127
-  check("[\\`]+", "`", Some(regex.Span(start: 0, end: 1)))?
-  // src/regexp/find_test.go:137
-  check(".", "qwertyuiopasdfghjklzxcvbnm1234567890", Some(regex.Span(start: 0, end: 1)))?
+  // src/regexp/find_test.go:124
+  check(
+    "[\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\{\\|\\}\\~]+",
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~",
+    Some(regex.Span(start: 0, end: 31))
+  )?
   Ok(())
 }

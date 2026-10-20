@@ -54,11 +54,5 @@ pub fn main() -> Result[(), ()] {
   invalid("x{1,9876543210}", true)
   // src/regexp/syntax/parse_test.go:498
   invalid("[a-Z]", false)
-  // src/regexp/syntax/parse_test.go:501
-  invalid("a{100000}", true)
-  // src/regexp/syntax/parse_test.go:502
-  invalid("a{100000,}", true)
-  // src/regexp/syntax/parse_test.go:503
-  invalid("((((((((((x{2}){2}){2}){2}){2}){2}){2}){2}){2}){2})", true)
   Ok(())
 }

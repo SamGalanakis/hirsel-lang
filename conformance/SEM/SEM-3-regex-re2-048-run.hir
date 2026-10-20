@@ -12,51 +12,45 @@ fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result
 }
 
 pub fn main() -> Result[(), ()] {
-  // src/regexp/testdata/re2-search.txt:3257
-  check("^abc", "", None())?
-  // src/regexp/testdata/re2-search.txt:3258
-  check("^abc", "aabcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3260
-  check("^(?:^abc)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:3261
-  check("^(?:^abc)$", "aabcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3263
-  check("^(?:^abc)", "", None())?
-  // src/regexp/testdata/re2-search.txt:3264
-  check("^(?:^abc)", "aabcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3266
-  check("(?:^abc)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:3267
-  check("(?:^abc)$", "aabcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3273
-  check("^[ay]*[bx]+c", "", None())?
-  // src/regexp/testdata/re2-search.txt:3274
-  check("^[ay]*[bx]+c", "abcdef", Some(regex.Span(start: 0, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:3276
-  check("^(?:^[ay]*[bx]+c)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:3277
-  check("^(?:^[ay]*[bx]+c)$", "abcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3279
-  check("^(?:^[ay]*[bx]+c)", "", None())?
-  // src/regexp/testdata/re2-search.txt:3280
-  check("^(?:^[ay]*[bx]+c)", "abcdef", Some(regex.Span(start: 0, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:3282
-  check("(?:^[ay]*[bx]+c)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:3283
-  check("(?:^[ay]*[bx]+c)$", "abcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3289
-  check("^[ay]*[bx]+c", "", None())?
-  // src/regexp/testdata/re2-search.txt:3290
-  check("^[ay]*[bx]+c", "aabcdef", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/testdata/re2-search.txt:3292
-  check("^(?:^[ay]*[bx]+c)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:3293
-  check("^(?:^[ay]*[bx]+c)$", "aabcdef", None())?
-  // src/regexp/testdata/re2-search.txt:3295
-  check("^(?:^[ay]*[bx]+c)", "", None())?
-  // src/regexp/testdata/re2-search.txt:3296
-  check("^(?:^[ay]*[bx]+c)", "aabcdef", Some(regex.Span(start: 0, end: 4)))?
-  // src/regexp/testdata/re2-search.txt:3298
-  check("(?:^[ay]*[bx]+c)$", "", None())?
+  // src/regexp/testdata/re2-search.txt:1843
+  check("(?:\\B$)$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1849
+  check("\\B$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1850
+  check("\\B$", "x", None())?
+  // src/regexp/testdata/re2-search.txt:1852
+  check("^(?:\\B$)$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1853
+  check("^(?:\\B$)$", "x", None())?
+  // src/regexp/testdata/re2-search.txt:1855
+  check("^(?:\\B$)", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1856
+  check("^(?:\\B$)", "x", None())?
+  // src/regexp/testdata/re2-search.txt:1858
+  check("(?:\\B$)$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1859
+  check("(?:\\B$)$", "x", None())?
+  // src/regexp/testdata/re2-search.txt:1865
+  check("\\B$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1866
+  check("\\B$", "y x", None())?
+  // src/regexp/testdata/re2-search.txt:1868
+  check("^(?:\\B$)$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1869
+  check("^(?:\\B$)$", "y x", None())?
+  // src/regexp/testdata/re2-search.txt:1871
+  check("^(?:\\B$)", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1872
+  check("^(?:\\B$)", "y x", None())?
+  // src/regexp/testdata/re2-search.txt:1874
+  check("(?:\\B$)$", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:1875
+  check("(?:\\B$)$", "y x", None())?
+  // src/regexp/testdata/re2-search.txt:1881
+  check("\\B.$", "", None())?
+  // src/regexp/testdata/re2-search.txt:1882
+  check("\\B.$", "x", None())?
+  // src/regexp/testdata/re2-search.txt:1884
+  check("^(?:\\B.$)$", "", None())?
   Ok(())
 }

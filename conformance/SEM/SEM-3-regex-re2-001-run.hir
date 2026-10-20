@@ -52,39 +52,5 @@ pub fn main() -> Result[(), ()] {
   check("^(?:a+)$", "", None())?
   // src/regexp/testdata/re2-search.txt:45
   check("^(?:a+)$", "aa", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:47
-  check("^(?:a+)", "", None())?
-  // src/regexp/testdata/re2-search.txt:48
-  check("^(?:a+)", "aa", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:50
-  check("(?:a+)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:51
-  check("(?:a+)$", "aa", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:57
-  check("(a+|b)+", "", None())?
-  // src/regexp/testdata/re2-search.txt:58
-  check("(a+|b)+", "ab", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:60
-  check("^(?:(a+|b)+)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:61
-  check("^(?:(a+|b)+)$", "ab", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:63
-  check("^(?:(a+|b)+)", "", None())?
-  // src/regexp/testdata/re2-search.txt:64
-  check("^(?:(a+|b)+)", "ab", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:66
-  check("(?:(a+|b)+)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:67
-  check("(?:(a+|b)+)$", "ab", Some(regex.Span(start: 0, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:73
-  check("ab|cd", "", None())?
-  // src/regexp/testdata/re2-search.txt:74
-  check("ab|cd", "xabcdx", Some(regex.Span(start: 1, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:76
-  check("^(?:ab|cd)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:77
-  check("^(?:ab|cd)$", "xabcdx", None())?
-  // src/regexp/testdata/re2-search.txt:79
-  check("^(?:ab|cd)", "", None())?
   Ok(())
 }

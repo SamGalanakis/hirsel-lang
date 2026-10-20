@@ -12,11 +12,35 @@ fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result
 }
 
 pub fn main() -> Result[(), ()] {
-  // src/regexp/find_test.go:122
-  check(
-    "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\{\\|\\}\\~",
-    "!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~",
-    Some(regex.Span(start: 0, end: 31))
-  )?
+  // src/regexp/find_test.go:96
+  check("(a){0}", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:99
+  check("(?:(?:^).)", "\n", None())?
+  // src/regexp/find_test.go:100
+  check("\\b", "x", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:101
+  check("\\b", "xx", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:102
+  check("\\b", "x y", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:103
+  check("\\b", "xx yy", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:104
+  check("\\B", "x", None())?
+  // src/regexp/find_test.go:105
+  check("\\B", "xx", Some(regex.Span(start: 1, end: 1)))?
+  // src/regexp/find_test.go:106
+  check("\\B", "x y", None())?
+  // src/regexp/find_test.go:107
+  check("\\B", "xx yy", Some(regex.Span(start: 1, end: 1)))?
+  // src/regexp/find_test.go:108
+  check("(|a)*", "aa", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/find_test.go:109
+  check("0A|0[aA]", "0a", Some(regex.Span(start: 0, end: 2)))?
+  // src/regexp/find_test.go:110
+  check("0[aA]|0A", "0a", Some(regex.Span(start: 0, end: 2)))?
+  // src/regexp/find_test.go:113
+  check("[^\\S\\s]", "abcd", None())?
+  // src/regexp/find_test.go:115
+  check("[^\\D\\d]", "abcd", None())?
   Ok(())
 }

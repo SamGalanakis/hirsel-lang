@@ -1,0 +1,52 @@
+// rule: SEM-3
+// expect: run
+fn span(pattern: String, input: String, start: u64, end: u64) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(
+    regex.find(re, input, 10000) == Ok(Some(regex.Span(start: start, end: end))),
+    TextInvariant()
+  )
+  failure.check(regex.is_match(re, input, 10000) == Ok(true), TextInvariant())
+  Ok(())
+}
+
+fn absent(pattern: String, input: String) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find(re, input, 10000) == Ok(None()), TextInvariant())
+  Ok(())
+}
+
+fn invalid(pattern: String, offset: u64) {
+  failure.check(
+    match regex.compile(pattern, 1000) {
+      Error(Syntax(at)) => at == offset,
+      _ => false,
+    },
+    TextInvariant()
+  )
+}
+
+// Go syntax/parse.go:996-1015,1099-1141,1272-1303 (ebe2feef).
+pub fn main() -> Result[(), ()] {
+  span("a{2", "a{2", 0, 3)?
+  span("{", "{", 0, 1)?
+  span("a{", "a{", 0, 2)?
+  span("a{2,", "a{2,", 0, 4)?
+  span("a{2,x}", "a{2,x}", 0, 6)?
+  span("a{,2}", "a{,2}", 0, 5)?
+  span("a{01}", "a{01}", 0, 5)?
+  span("a{1,02}", "a{1,02}", 0, 7)?
+  span("a*{x}", "aa{x}", 0, 5)?
+  span("a{0,1}", "a", 0, 1)?
+  span("é{2", "é{2", 0, 4)?
+  span("a{18446744073709551616", "a{18446744073709551616", 0, 22)?
+  invalid("{2}", 0)
+  invalid("a*{2}", 2)
+  Ok(())
+}

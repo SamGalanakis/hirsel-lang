@@ -12,47 +12,43 @@ fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result
 }
 
 pub fn main() -> Result[(), ()] {
+  // src/regexp/testdata/re2-search.txt:89
+  check("h.*od?", "", None())?
+  // src/regexp/testdata/re2-search.txt:90
+  check("h.*od?", "hello\ngoodbye\n", Some(regex.Span(start: 0, end: 5)))?
+  // src/regexp/testdata/re2-search.txt:92
+  check("^(?:h.*od?)$", "", None())?
+  // src/regexp/testdata/re2-search.txt:93
+  check("^(?:h.*od?)$", "hello\ngoodbye\n", None())?
+  // src/regexp/testdata/re2-search.txt:95
+  check("^(?:h.*od?)", "", None())?
+  // src/regexp/testdata/re2-search.txt:96
+  check("^(?:h.*od?)", "hello\ngoodbye\n", Some(regex.Span(start: 0, end: 5)))?
+  // src/regexp/testdata/re2-search.txt:98
+  check("(?:h.*od?)$", "", None())?
+  // src/regexp/testdata/re2-search.txt:99
+  check("(?:h.*od?)$", "hello\ngoodbye\n", None())?
+  // src/regexp/testdata/re2-search.txt:105
+  check("h.*o", "", None())?
+  // src/regexp/testdata/re2-search.txt:106
+  check("h.*o", "hello\ngoodbye\n", Some(regex.Span(start: 0, end: 5)))?
+  // src/regexp/testdata/re2-search.txt:108
+  check("^(?:h.*o)$", "", None())?
+  // src/regexp/testdata/re2-search.txt:109
+  check("^(?:h.*o)$", "hello\ngoodbye\n", None())?
+  // src/regexp/testdata/re2-search.txt:111
+  check("^(?:h.*o)", "", None())?
+  // src/regexp/testdata/re2-search.txt:112
+  check("^(?:h.*o)", "hello\ngoodbye\n", Some(regex.Span(start: 0, end: 5)))?
+  // src/regexp/testdata/re2-search.txt:114
+  check("(?:h.*o)$", "", None())?
+  // src/regexp/testdata/re2-search.txt:115
+  check("(?:h.*o)$", "hello\ngoodbye\n", None())?
   // src/regexp/testdata/re2-search.txt:121
   check("h.*o", "", None())?
   // src/regexp/testdata/re2-search.txt:122
   check("h.*o", "goodbye\nhello\n", Some(regex.Span(start: 8, end: 13)))?
   // src/regexp/testdata/re2-search.txt:124
   check("^(?:h.*o)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:125
-  check("^(?:h.*o)$", "goodbye\nhello\n", None())?
-  // src/regexp/testdata/re2-search.txt:127
-  check("^(?:h.*o)", "", None())?
-  // src/regexp/testdata/re2-search.txt:128
-  check("^(?:h.*o)", "goodbye\nhello\n", None())?
-  // src/regexp/testdata/re2-search.txt:130
-  check("(?:h.*o)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:131
-  check("(?:h.*o)$", "goodbye\nhello\n", None())?
-  // src/regexp/testdata/re2-search.txt:137
-  check("h.*o", "", None())?
-  // src/regexp/testdata/re2-search.txt:138
-  check("h.*o", "hello world", Some(regex.Span(start: 0, end: 8)))?
-  // src/regexp/testdata/re2-search.txt:140
-  check("^(?:h.*o)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:141
-  check("^(?:h.*o)$", "hello world", None())?
-  // src/regexp/testdata/re2-search.txt:143
-  check("^(?:h.*o)", "", None())?
-  // src/regexp/testdata/re2-search.txt:144
-  check("^(?:h.*o)", "hello world", Some(regex.Span(start: 0, end: 8)))?
-  // src/regexp/testdata/re2-search.txt:146
-  check("(?:h.*o)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:147
-  check("(?:h.*o)$", "hello world", None())?
-  // src/regexp/testdata/re2-search.txt:153
-  check("h.*o", "", None())?
-  // src/regexp/testdata/re2-search.txt:154
-  check("h.*o", "othello, world", Some(regex.Span(start: 2, end: 11)))?
-  // src/regexp/testdata/re2-search.txt:156
-  check("^(?:h.*o)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:157
-  check("^(?:h.*o)$", "othello, world", None())?
-  // src/regexp/testdata/re2-search.txt:159
-  check("^(?:h.*o)", "", None())?
   Ok(())
 }

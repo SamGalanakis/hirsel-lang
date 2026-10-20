@@ -12,77 +12,45 @@ fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result
 }
 
 pub fn main() -> Result[(), ()] {
-  // src/regexp/testdata/re2-search.txt:218
-  check("a*", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:220
-  check("^(?:a*)$", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:221
-  check("^(?:a*)$", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:223
-  check("^(?:a*)", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:224
-  check("^(?:a*)", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:226
-  check("(?:a*)$", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:227
-  check("(?:a*)$", "", Some(regex.Span(start: 0, end: 0)))?
-  // src/regexp/testdata/re2-search.txt:233
-  check("ab|cd", "", None())?
-  // src/regexp/testdata/re2-search.txt:234
-  check("ab|cd", "xabcdx", Some(regex.Span(start: 1, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:236
-  check("^(?:ab|cd)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:237
-  check("^(?:ab|cd)$", "xabcdx", None())?
-  // src/regexp/testdata/re2-search.txt:239
-  check("^(?:ab|cd)", "", None())?
-  // src/regexp/testdata/re2-search.txt:240
-  check("^(?:ab|cd)", "xabcdx", None())?
-  // src/regexp/testdata/re2-search.txt:242
-  check("(?:ab|cd)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:243
-  check("(?:ab|cd)$", "xabcdx", None())?
-  // src/regexp/testdata/re2-search.txt:249
+  // src/regexp/testdata/re2-search.txt:163
+  check("(?:h.*o)$", "othello, world", None())?
+  // src/regexp/testdata/re2-search.txt:169
+  check("[^\\s\\S]", "", None())?
+  // src/regexp/testdata/re2-search.txt:170
+  check("[^\\s\\S]", "aaaaaaa", None())?
+  // src/regexp/testdata/re2-search.txt:172
+  check("^(?:[^\\s\\S])$", "", None())?
+  // src/regexp/testdata/re2-search.txt:173
+  check("^(?:[^\\s\\S])$", "aaaaaaa", None())?
+  // src/regexp/testdata/re2-search.txt:175
+  check("^(?:[^\\s\\S])", "", None())?
+  // src/regexp/testdata/re2-search.txt:176
+  check("^(?:[^\\s\\S])", "aaaaaaa", None())?
+  // src/regexp/testdata/re2-search.txt:178
+  check("(?:[^\\s\\S])$", "", None())?
+  // src/regexp/testdata/re2-search.txt:179
+  check("(?:[^\\s\\S])$", "aaaaaaa", None())?
+  // src/regexp/testdata/re2-search.txt:185
   check("a", "", None())?
-  // src/regexp/testdata/re2-search.txt:250
-  check("a", "cab", Some(regex.Span(start: 1, end: 2)))?
-  // src/regexp/testdata/re2-search.txt:252
+  // src/regexp/testdata/re2-search.txt:186
+  check("a", "aaaaaaa", Some(regex.Span(start: 0, end: 1)))?
+  // src/regexp/testdata/re2-search.txt:188
   check("^(?:a)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:253
-  check("^(?:a)$", "cab", None())?
-  // src/regexp/testdata/re2-search.txt:255
+  // src/regexp/testdata/re2-search.txt:189
+  check("^(?:a)$", "aaaaaaa", None())?
+  // src/regexp/testdata/re2-search.txt:191
   check("^(?:a)", "", None())?
-  // src/regexp/testdata/re2-search.txt:256
-  check("^(?:a)", "cab", None())?
-  // src/regexp/testdata/re2-search.txt:258
+  // src/regexp/testdata/re2-search.txt:192
+  check("^(?:a)", "aaaaaaa", Some(regex.Span(start: 0, end: 1)))?
+  // src/regexp/testdata/re2-search.txt:194
   check("(?:a)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:259
-  check("(?:a)$", "cab", None())?
-  // src/regexp/testdata/re2-search.txt:265
-  check("a*b", "", None())?
-  // src/regexp/testdata/re2-search.txt:266
-  check("a*b", "cab", Some(regex.Span(start: 1, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:268
-  check("^(?:a*b)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:269
-  check("^(?:a*b)$", "cab", None())?
-  // src/regexp/testdata/re2-search.txt:271
-  check("^(?:a*b)", "", None())?
-  // src/regexp/testdata/re2-search.txt:272
-  check("^(?:a*b)", "cab", None())?
-  // src/regexp/testdata/re2-search.txt:274
-  check("(?:a*b)$", "", None())?
-  // src/regexp/testdata/re2-search.txt:275
-  check("(?:a*b)$", "cab", Some(regex.Span(start: 1, end: 3)))?
-  // src/regexp/testdata/re2-search.txt:281
-  check("((((((((((((((((((((x))))))))))))))))))))", "", None())?
-  // src/regexp/testdata/re2-search.txt:282
-  check(
-    "((((((((((((((((((((x))))))))))))))))))))",
-    "x",
-    Some(regex.Span(start: 0, end: 1))
-  )?
-  // src/regexp/testdata/re2-search.txt:284
-  check("^(?:((((((((((((((((((((x)))))))))))))))))))))$", "", None())?
+  // src/regexp/testdata/re2-search.txt:195
+  check("(?:a)$", "aaaaaaa", Some(regex.Span(start: 6, end: 7)))?
+  // src/regexp/testdata/re2-search.txt:201
+  check("a*", "", Some(regex.Span(start: 0, end: 0)))?
+  // src/regexp/testdata/re2-search.txt:202
+  check("a*", "aaaaaaa", Some(regex.Span(start: 0, end: 7)))?
+  // src/regexp/testdata/re2-search.txt:204
+  check("^(?:a*)$", "", Some(regex.Span(start: 0, end: 0)))?
   Ok(())
 }
