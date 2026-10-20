@@ -280,9 +280,21 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     );
     let mut s = Shape::default();
     let element = s.parameter(0);
-    let entries = s.builtin(BuiltinType::List, &[element]);
-    let index = s.index();
-    let shape = s.record(&[("entries", entries), ("index", index)]);
+    let unit = s.add(TypeKind::Tuple(vec![].into()));
+    let entry = s.add(TypeKind::Named {
+        definition: native_path("MapEntry"),
+        arguments: vec![GenericArgument::Type(element), GenericArgument::Type(unit)].into(),
+    });
+    let entries = s.builtin(BuiltinType::List, &[entry]);
+    let word = s.primitive(Primitive::U64);
+    let index = s.builtin(BuiltinType::List, &[word]);
+    let hashes = s.builtin(BuiltinType::List, &[word]);
+    let shape = s.record(&[
+        ("entries", entries),
+        ("index", index),
+        ("hashes", hashes),
+        ("live", word),
+    ]);
     out.containers.insert(
         Container::Set,
         record(

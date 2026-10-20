@@ -527,7 +527,7 @@ impl Gen<'_, '_> {
             self.payload(l, &entries, payload)?,
             self.payload(r, &entries, payload)?,
         );
-        let (lc, rc) = if owner.0.name == "Map" {
+        let (lc, rc) = if record.fields.len() == 4 {
             let la = self.at(left, record.fields[3].offset);
             let ra = self.at(right, record.fields[3].offset);
             (self.load(types::I64, la), self.load(types::I64, ra))
@@ -575,6 +575,9 @@ impl Gen<'_, '_> {
                 .jump(head, &[next.into(), ln.into(), rn.into()]);
             self.b.switch_to_block(done);
         } else {
+            let tag = self.record(element)?.tag.as_ref().unwrap();
+            let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+            let key_layout = self.record(pair.layout)?.fields[0].layout;
             // SEM-5: selection yields canonical structural order without allocating or
             // mutating either borrowed set.
             let (head, compare, done) = (
@@ -594,7 +597,7 @@ impl Gen<'_, '_> {
             let first = self.b.ins().icmp_imm_s(IntCC::Equal, i, 0);
             let ln = self.sorted_next(element, stride, l, lc, lp, first, depth, None)?;
             let rn = self.sorted_next(element, stride, r, rc, rp, first, depth, None)?;
-            let code = self.child(element, ln, rn, depth)?;
+            let code = self.child(key_layout, ln, rn, depth)?;
             self.decide(code);
             let next = self.b.ins().iadd_imm_s(i, 1);
             self.b
@@ -621,6 +624,22 @@ impl Gen<'_, '_> {
         depth: Value,
         hash: Option<(Value, Value)>,
     ) -> Generated<Value> {
+        let tag = self
+            .record(element)?
+            .tag
+            .clone()
+            .ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition.clone(),
+                what: "set entry tag".into(),
+            })?;
+        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+        let key = self.record(pair.layout)?.fields[0].clone();
+        let key_offset = pair.offset + key.offset;
+        let element = key.layout;
+        let first_entry = self.map_next(&tag, stride, base);
+        let first_key = self.at(first_entry, key_offset);
+        let previous = self.b.ins().select(first, first_key, previous);
+
         let (head, check, done) = (
             self.b.create_block(),
             self.b.create_block(),
@@ -628,18 +647,20 @@ impl Gen<'_, '_> {
         );
         let i = self.b.append_block_param(head, types::I64);
         let best = self.b.append_block_param(head, PTR);
+        let scan = self.b.append_block_param(head, PTR);
         let found = self.b.append_block_param(head, types::I8);
         let zero = self.u64(0);
         let none = self.b.ins().iconst(types::I8, 0);
-        self.b
-            .ins()
-            .jump(head, &[zero.into(), base.into(), none.into()]);
+        self.b.ins().jump(
+            head,
+            &[zero.into(), first_key.into(), base.into(), none.into()],
+        );
         self.b.switch_to_block(head);
         let more = self.b.ins().icmp(IntCC::UnsignedLessThan, i, count);
         self.b.ins().brif(more, check, &[], done, &[]);
         self.b.switch_to_block(check);
-        let offset = self.b.ins().imul_imm_s(i, stride as i64);
-        let candidate = self.b.ins().iadd(base, offset);
+        let entry = self.map_next(&tag, stride, scan);
+        let candidate = self.at(entry, key_offset);
         let equality = self.equality;
         self.equality = false;
         let after = if hash.is_some() {
@@ -674,9 +695,16 @@ impl Gen<'_, '_> {
         let next_best = self.b.ins().select(choose, candidate, best);
         let next_found = self.b.ins().bor(found, eligible);
         let next_i = self.b.ins().iadd_imm_s(i, 1);
-        self.b
-            .ins()
-            .jump(head, &[next_i.into(), next_best.into(), next_found.into()]);
+        let next_scan = self.at(entry, stride);
+        self.b.ins().jump(
+            head,
+            &[
+                next_i.into(),
+                next_best.into(),
+                next_scan.into(),
+                next_found.into(),
+            ],
+        );
         self.b.switch_to_block(done);
         Ok(best)
     }
@@ -1062,7 +1090,7 @@ impl Gen<'_, '_> {
             Err(e) => return self.invalid(format!("{e:?}")),
         };
         let data = self.at(pointer, offset);
-        let count_at = if owner.0.name == "Map" {
+        let count_at = if record.fields.len() == 4 {
             self.at(at, record.fields[3].offset)
         } else {
             data
@@ -1108,8 +1136,11 @@ impl Gen<'_, '_> {
             self.b.switch_to_block(done);
             return Ok(state_phi);
         }
+        let tag = self.record(element)?.tag.as_ref().unwrap();
+        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+        let key_layout = self.record(pair.layout)?.fields[0].layout;
         // Canonical Set order feeds one stream and finalizes only at the root.
-        let callee = self.em.declare_hasher(element)?;
+        let callee = self.em.declare_hasher(key_layout)?;
         let head = self.b.create_block();
         let fold = self.b.create_block();
         let done = self.b.create_block();

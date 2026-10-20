@@ -397,17 +397,12 @@ impl<'m> Generator<'m, '_> {
             self.payload(l, &entries, payload)?,
             self.payload(r, &entries, payload)?,
         );
-        let map = owner.0.name == "Map";
-        let (lc, rc) = if map {
-            (
-                self.builder
-                    .load(word, self.at(left, record.fields[3].offset), 1),
-                self.builder
-                    .load(word, self.at(right, record.fields[3].offset), 1),
-            )
-        } else {
-            (self.builder.load(word, l, 1), self.builder.load(word, r, 1))
-        };
+        let (lc, rc) = (
+            self.builder
+                .load(word, self.at(left, record.fields[3].offset), 1),
+            self.builder
+                .load(word, self.at(right, record.fields[3].offset), 1),
+        );
         let fewer = self.builder.icmp(IntPredicate::Ult, lc, rc);
         let count = self.builder.select(fewer, lc, rc);
         let start = self.element_offset(element)?;
@@ -456,6 +451,9 @@ impl<'m> Generator<'m, '_> {
             self.builder.add_incoming(rp, next_right, from);
             self.builder.position(done);
         } else {
+            let tag = self.record(element)?.tag.as_ref().unwrap();
+            let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+            let key_layout = self.record(pair.layout)?.fields[0].layout;
             // SEM-5, spec #93. Selection yields canonical structural order
             // without allocating or mutating either borrowed set.
             let from = self.builder.current();
@@ -476,7 +474,7 @@ impl<'m> Generator<'m, '_> {
             let first = self.builder.icmp(IntPredicate::Eq, i, self.u64(0));
             let ln = self.sorted_next(element, stride, l, lc, lp, first, depth)?;
             let rn = self.sorted_next(element, stride, r, rc, rp, first, depth)?;
-            let code = self.child(element, ln, rn, depth)?;
+            let code = self.child(key_layout, ln, rn, depth)?;
             self.decide(code);
             let next = self
                 .builder
@@ -504,6 +502,19 @@ impl<'m> Generator<'m, '_> {
         first: Value<'m>,
         depth: Value<'m>,
     ) -> Compared<Value<'m>> {
+        let tag = self
+            .record(element)?
+            .tag
+            .clone()
+            .ok_or_else(|| CompareError::Invalid("set entry tag".into()))?;
+        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+        let key = self.record(pair.layout)?.fields[0].clone();
+        let key_offset = pair.offset + key.offset;
+        let element = key.layout;
+        let first_entry = map_next(&self.builder, self.function, &tag, stride, base);
+        let first_key = self.at(first_entry, key_offset);
+        let previous = self.builder.select(first, first_key, previous);
+
         use crate::context::BinOp;
         let word = self.module.int_type(64);
         let ptr = self.module.ptr_type();
@@ -517,15 +528,17 @@ impl<'m> Generator<'m, '_> {
         let i = self.builder.phi(word);
         self.builder.add_incoming(i, self.u64(0), from);
         let best = self.builder.phi(ptr);
-        self.builder.add_incoming(best, base, from);
+        self.builder.add_incoming(best, first_key, from);
+        let scan = self.builder.phi(ptr);
+        self.builder.add_incoming(scan, base, from);
         let found = self.builder.phi(boolean);
         self.builder
             .add_incoming(found, self.module.const_int(boolean, 0), from);
         let more = self.builder.icmp(IntPredicate::Ult, i, count);
         self.builder.cond_br(more, check, done);
         self.builder.position(check);
-        let offset = self.builder.binary(BinOp::Mul, i, self.u64(stride));
-        let candidate = self.builder.offset(base, offset);
+        let entry = map_next(&self.builder, self.function, &tag, stride, scan);
+        let candidate = self.at(entry, key_offset);
         let equality = self.equality;
         self.equality = false;
         let after = self.child(element, candidate, previous, depth)?;
@@ -548,9 +561,11 @@ impl<'m> Generator<'m, '_> {
         let next_best = self.builder.select(choose, candidate, best);
         let next_found = self.builder.binary(BinOp::Or, found, eligible);
         let next_i = self.builder.binary(BinOp::Add, i, self.u64(1));
+        let next_scan = self.at(entry, stride);
         let from = self.builder.current();
         self.builder.br(loop_);
         self.builder.add_incoming(i, next_i, from);
+        self.builder.add_incoming(scan, next_scan, from);
         self.builder.add_incoming(best, next_best, from);
         self.builder.add_incoming(found, next_found, from);
         self.builder.position(done);
@@ -1172,6 +1187,19 @@ impl<'m> HashGenerator<'m, '_> {
         state: Value<'m>,
         deep: Value<'m>,
     ) -> Compared<Value<'m>> {
+        let tag = self
+            .record(element)?
+            .tag
+            .clone()
+            .ok_or_else(|| CompareError::Invalid("set entry tag".into()))?;
+        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+        let key = self.record(pair.layout)?.fields[0].clone();
+        let key_offset = pair.offset + key.offset;
+        let element = key.layout;
+        let first_entry = map_next(&self.builder, self.function, &tag, stride, base);
+        let first_key = self.at(first_entry, key_offset);
+        let previous = self.builder.select(first, first_key, previous);
+
         use crate::context::BinOp;
         let word = self.module.int_type(64);
         let ptr = self.module.ptr_type();
@@ -1185,15 +1213,17 @@ impl<'m> HashGenerator<'m, '_> {
         let i = self.builder.phi(word);
         self.builder.add_incoming(i, self.u64(0), from);
         let best = self.builder.phi(ptr);
-        self.builder.add_incoming(best, base, from);
+        self.builder.add_incoming(best, first_key, from);
+        let scan = self.builder.phi(ptr);
+        self.builder.add_incoming(scan, base, from);
         let found = self.builder.phi(boolean);
         self.builder
             .add_incoming(found, self.module.const_int(boolean, 0), from);
         let more = self.builder.icmp(IntPredicate::Ult, i, count);
         self.builder.cond_br(more, check, done);
         self.builder.position(check);
-        let offset = self.builder.binary(BinOp::Mul, i, self.u64(stride));
-        let candidate = self.builder.offset(base, offset);
+        let entry = map_next(&self.builder, self.function, &tag, stride, scan);
+        let candidate = self.at(entry, key_offset);
         let comparator = comparator(self.module, self.layouts, element, false)?;
         let context = self.module.parameter(self.function, 4);
         let after = self
@@ -1225,9 +1255,11 @@ impl<'m> HashGenerator<'m, '_> {
         let next_best = self.builder.select(choose, candidate, best);
         let next_found = self.builder.binary(BinOp::Or, found, eligible);
         let next_i = self.builder.binary(BinOp::Add, i, self.u64(1));
+        let next_scan = self.at(entry, stride);
         let from = self.builder.current();
         self.builder.br(loop_);
         self.builder.add_incoming(i, next_i, from);
+        self.builder.add_incoming(scan, next_scan, from);
         self.builder.add_incoming(best, next_best, from);
         self.builder.add_incoming(found, next_found, from);
         self.builder.position(done);
@@ -1282,7 +1314,7 @@ impl<'m> HashGenerator<'m, '_> {
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
         let data = self.at(pointer, offset);
         let word = self.module.int_type(64);
-        let count = if owner.0.name == "Map" {
+        let count = if record.fields.len() == 4 {
             self.builder
                 .load(word, self.at(at, record.fields[3].offset), 1)
         } else {
@@ -1333,6 +1365,9 @@ impl<'m> HashGenerator<'m, '_> {
             self.builder.position(done);
             return Ok(state_phi);
         }
+        let tag = self.record(element)?.tag.as_ref().unwrap();
+        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+        let key_layout = self.record(pair.layout)?.fields[0].layout;
         // Canonical structural order makes a set's stream independent of
         // insertion order, with one finalization for the complete key.
         let from = self.builder.current();
@@ -1354,7 +1389,7 @@ impl<'m> HashGenerator<'m, '_> {
         let entry = self.sorted_next(
             element, stride, first, count, previous, is_first, depth, state_phi, deep,
         )?;
-        let state = self.child(element, entry, state_phi, depth, deep)?;
+        let state = self.child(key_layout, entry, state_phi, depth, deep)?;
         let next = self.builder.binary(BinOp::Add, i, self.u64(1));
         let from = self.builder.current();
         self.builder.br(head);

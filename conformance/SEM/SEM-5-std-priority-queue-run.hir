@@ -13,9 +13,9 @@ fn compare(a: i64, b: i64) -> i32 uses {} {
 }
 
 pub fn main(t: Test) -> Result[(), ()] {
-  let mut h: unique priority_queue.Heap[i64] = priority_queue.empty()
+  let mut h: unique priority_queue.Heap[i64] = priority_queue.empty(compare)
   failure.check(
-    priority_queue.len(h) == 0 && priority_queue.pop(mut h, compare) == None,
+    priority_queue.len(h) == 0 && priority_queue.pop(mut h) == None,
     Bounds()
   )
   let input: Array[i64] = [
@@ -31,7 +31,7 @@ pub fn main(t: Test) -> Result[(), ()] {
     9223372036854775807i64
   ]
   for value in input {
-    priority_queue.push(mut h, value, compare)
+    priority_queue.push(mut h, value)
   }
   failure.check(priority_queue.len(h) == 10, Bounds())
   let expected: Array[i64] = [
@@ -47,17 +47,17 @@ pub fn main(t: Test) -> Result[(), ()] {
     9223372036854775807i64
   ]
   for value in expected {
-    failure.check(priority_queue.pop(mut h, compare) == Some(value), Bounds())
+    failure.check(priority_queue.pop(mut h) == Some(value), Bounds())
   }
   failure.check(
-    priority_queue.len(h) == 0 && priority_queue.pop(mut h, compare) == None,
+    priority_queue.len(h) == 0 && priority_queue.pop(mut h) == None,
     Bounds()
   )
   for i in 0u64..100u64 {
-    priority_queue.push(mut h, int.narrow(100u64 - i), compare)
+    priority_queue.push(mut h, int.narrow(100u64 - i))
   }
   for i in 1i64..101i64 {
-    failure.check(priority_queue.pop(mut h, compare) == Some(i), Bounds())
+    failure.check(priority_queue.pop(mut h) == Some(i), Bounds())
   }
   Ok(())
 }

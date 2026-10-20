@@ -31,12 +31,12 @@ fn compare_pop(a: Item, b: Item) -> i32 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let o = io.stdout(rt)?
-  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty()
-  priority_queue.push(mut h, Item(priority: 1, output: o, label: "one\n"), compare)
-  priority_queue.push(mut h, Item(priority: 2, output: o, label: "two\n"), compare)
-  priority_queue.push(mut h, Item(priority: 3, output: o, label: "three\n"), compare)
+  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty(compare_pop)
+  priority_queue.push(mut h, Item(priority: 1, output: o, label: "one\n"))
+  priority_queue.push(mut h, Item(priority: 2, output: o, label: "two\n"))
+  priority_queue.push(mut h, Item(priority: 3, output: o, label: "three\n"))
   {
-    let item = priority_queue.pop(mut h, compare_pop)
+    let item = priority_queue.pop(mut h)
   }
   Ok(())
 }

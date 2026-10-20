@@ -219,7 +219,7 @@ impl<S: Stage> Machine<'_, S> {
                     let mut ys: Vec<_> = (0..yc)
                         .map(|i| At::Heap(y.at(start + i * stride)))
                         .collect();
-                    if owner.0.name == "Map" {
+                    if matches!(owner.0.name.as_str(), "Map" | "Set") {
                         let tag = self
                             .record(element)?
                             .tag
@@ -248,6 +248,12 @@ impl<S: Stage> Machine<'_, S> {
                         xc = xs.len() as u64;
                         yc = ys.len() as u64;
                         element = pair.layout;
+                        if owner.0.name == "Set" {
+                            let key = &self.record(element)?.fields[0];
+                            xs = xs.into_iter().map(|at| at.at(key.offset)).collect();
+                            ys = ys.into_iter().map(|at| at.at(key.offset)).collect();
+                            element = key.layout;
+                        }
                     }
                     if owner.0.name == "Set" {
                         // SEM-5, #93: structural sorted element order.
@@ -469,7 +475,7 @@ impl<S: Stage> Machine<'_, S> {
                         _ => return fail(V::Malformed, "container sequence"),
                     };
                     let count = self.bits_at(At::Heap(entries), 8)? as u64;
-                    let live = if owner.0.name == "Map" {
+                    let live = if matches!(owner.0.name.as_str(), "Map" | "Set") {
                         self.bits_at(at.at(record.fields[3].offset), 8)? as u64
                     } else {
                         count
@@ -477,11 +483,18 @@ impl<S: Stage> Machine<'_, S> {
                     fold(&live.to_le_bytes());
                     let (start, stride) = self.sequence_shape(element)?;
                     if owner.0.name == "Set" {
+                        let tag = self.record(element)?.tag.as_ref().unwrap();
+                        let pair = &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+                        let key = &self.record(pair.layout)?.fields[0];
                         let mut combined = 0u64;
                         for i in 0..count {
+                            let entry = At::Heap(entries.at(start + i * stride));
+                            if self.tag_at(entry.at(tag.offset), tag.form)? != 1 {
+                                continue;
+                            }
                             let Ok(child) = self.hash_work(vec![(
-                                At::Heap(entries.at(start + i * stride)),
-                                element,
+                                entry.at(pair.offset + key.offset),
+                                key.layout,
                                 depth + 1,
                             )])?
                             else {

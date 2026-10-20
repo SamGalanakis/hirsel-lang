@@ -1,0 +1,30 @@
+// rule: SER-2
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut removed: Set[u64] = set.empty()
+  for i in 0u64..32u64 { set.insert(mut removed, i) }
+  for i in 0u64..16u64 { failure.check(set.remove(mut removed, i), Bounds()) }
+  let mut dense: Set[u64] = set.empty()
+  for i in 16u64..32u64 { set.insert(mut dense, i) }
+  failure.check(removed == dense, Bounds())
+  failure.check(codec.encode(removed) == codec.encode(dense), Bounds())
+  let decoded: Result[Set[u64], DecodeError] = codec.decode(codec.encode(removed))
+  match take decoded {
+    Ok(value) => {
+      let mut value = take value
+      failure.check(value == dense && set.len(value) == 16, Bounds())
+      failure.check(set.remove(mut value, 20), Bounds())
+      set.insert(mut value, 0)
+      failure.check(set.len(value) == 16 && set.contains(value, 0), Bounds())
+    },
+    Error(_) => failure.check(false, Bounds()),
+  }
+  // A Set with holes is also a key: hashing ignores private tags and unit values.
+  let mut m: Map[Set[u64], u64] = map.empty()
+  map.insert(mut m, copy removed, 7)
+  failure.check(map.get(m, dense) == Some(7), Bounds())
+  let snapshot = copy removed
+  set.insert(mut removed, 0)
+  failure.check(set.len(snapshot) == 16 && !set.contains(snapshot, 0), Bounds())
+  Ok(())
+}

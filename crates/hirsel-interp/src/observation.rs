@@ -251,8 +251,10 @@ impl ObservedValue {
                 Value::Variant { variant, fields } => (A::Variant(*variant), fields),
                 Value::Sequence { kind, elements, .. } => (A::Sequence(*kind), &**elements),
             };
+            let keyed = matches!(value, Value::Map { .. } | Value::Set { .. });
             let fields = fields
                 .iter()
+                .filter(|f| !keyed || f.is_some())
                 .map(|f| {
                     f.as_ref().map(|v| {
                         let index = nodes.len() + pending.len() + 1;

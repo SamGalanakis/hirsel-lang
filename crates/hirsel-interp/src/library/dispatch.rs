@@ -2499,7 +2499,9 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 } else {
                     17
                 });
-                fields(&mut out, &mut work, items);
+                out.extend_from_slice(&(items.live_len() as u64).to_le_bytes());
+                out.extend(items.iter().flatten().map(|_| 1u8));
+                work.extend(items.iter().rev().flatten());
             }
             Value::ResourceVariant {
                 sizes,

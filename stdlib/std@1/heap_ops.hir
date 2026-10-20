@@ -1,4 +1,6 @@
-// Shared sift kernels adapted from Rust/Zig heap algorithms.
+// Zig bff490a2 lib/std/priority_queue.zig:59-78,138-156.
+// Shared kernels: sift builds a max heap; sift_up builds a min heap.
+// Direct regression vectors: priority_queue.zig:371-386,654-674.
 @noalloc
 pub fn sift[T](
   mut xs: unique List[T],

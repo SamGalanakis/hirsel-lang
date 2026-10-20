@@ -8,7 +8,7 @@ fn compare(a: String, b: String) -> i32 uses {} {
 
 pub fn demo(take value: String) -> () uses {} {
   let alias = copy value
-  let mut q: unique priority_queue.Heap[String] = priority_queue.empty()
-  priority_queue.push(mut q, take value, compare)
+  let mut q: unique priority_queue.Heap[String] = priority_queue.empty(compare)
+  priority_queue.push(mut q, take value)
   let _ = string.byte_len(alias)
 }

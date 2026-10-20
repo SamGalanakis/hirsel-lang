@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 fn priority_queue_is_an_ordinary_source_native_container() {
     with_compiler_stack(|| {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/SEM/SEM-5-std-priority-queue-run.hir");
+            .join("../../conformance/SEM/SEM-5-std-priority-queue-zig-run.hir");
         let mut loaded = load_program(&path).unwrap();
         loaded
             .check_for_execution()
@@ -30,7 +30,7 @@ fn priority_queue_is_an_ordinary_source_native_container() {
                 }
             }
         }
-        for name in ["empty", "len", "push", "pop"] {
+        for name in ["empty", "len", "push", "pop", "peek", "from_list"] {
             assert!(
                 found.contains(name),
                 "missing source priority_queue.{name}: {found:?}"

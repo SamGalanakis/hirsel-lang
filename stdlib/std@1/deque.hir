@@ -1,61 +1,86 @@
-// Endpoint semantics and owned-item vectors from Rust VecDeque and Zig deque.
+// Zig bff490a2 lib/std/deque.zig:15-29, 68-180, 220-283:
+// a ring with a head and live length; growth moves the two wrapped spans.
+// Option slots represent uninitialized storage without copying owned items.
 pub opaque type Deque[T]: () uses {T} {
-  front: unique List[unique T],
-  back: unique List[unique T],
+  slots: unique List[unique Option[T]],
+  head: u64,
+  count: u64,
 }
 
 pub fn empty[T]() -> unique Deque[T] uses {} {
-  Deque(front: [], back: [])
+  Deque(slots: [], head: 0, count: 0)
 }
 
 @noalloc
 pub fn len[T](q: Deque[T]) -> u64 uses {} {
-  core@1/list.len(q.front) + core@1/list.len(q.back)
+  q.count
+}
+
+fn grow[T](mut q: unique Deque[T]) -> () uses {q} {
+  let capacity = core@1/list.len(q.slots)
+  if q.count < capacity {
+    return
+  }
+  let next = if capacity == 0 { 4u64 } else { capacity * 2 }
+  let mut slots: unique List[unique Option[T]] = []
+  for i in 0u64..next {
+    core@1/list.push(mut slots, None())
+  }
+  for i in 0u64..q.count {
+    let item = replace(mut q.slots[(q.head + i) % capacity], None())
+    slots[i] = take item
+  }
+  q.slots = take slots
+  q.head = 0
 }
 
 pub fn push_front[T](mut q: unique Deque[T], take value: unique T) -> () uses {q, value} {
-  core@1/list.push(mut q.front, take value)
+  grow(mut q)
+  let capacity = core@1/list.len(q.slots)
+  q.head = (q.head + capacity - 1) % capacity
+  q.slots[q.head] = Some(take value)
+  q.count += 1
 }
 
 pub fn push_back[T](mut q: unique Deque[T], take value: unique T) -> () uses {q, value} {
-  core@1/list.push(mut q.back, take value)
-}
-
-// Moving half to the empty side avoids repeatedly reversing the whole queue
-// when callers alternate endpoint removals. Every element remains owned.
-fn balance[T](mut target: unique List[unique T], mut source: unique List[unique T]) -> () uses {target, source} {
-  let count = core@1/list.len(source)
-  let transfer = count - count / 2
-  list.reverse(mut source)
-  let mut moved: u64 = 0
-  while moved < transfer {
-    if let Some(item) = take core@1/list.pop(mut source) {
-      core@1/list.push(mut target, take item)
-    }
-    moved += 1
-  }
-  list.reverse(mut target)
-  list.reverse(mut source)
+  grow(mut q)
+  let tail = (q.head + q.count) % core@1/list.len(q.slots)
+  q.slots[tail] = Some(take value)
+  q.count += 1
 }
 
 pub fn pop_front[T](mut q: unique Deque[T]) -> unique Option[T] uses {q} {
-  if core@1/list.len(q.front) == 0 {
-    balance(mut q.front, mut q.back)
+  if q.count == 0 {
+    return None()
   }
-  let item = core@1/list.pop(mut q.front)
-  match take item {
-    Some(value) => Some(take value),
+  let item = replace(mut q.slots[q.head], None())
+  q.head = (q.head + 1) % core@1/list.len(q.slots)
+  q.count -= 1
+  take item
+}
+
+pub fn pop_back[T](mut q: unique Deque[T]) -> unique Option[T] uses {q} {
+  if q.count == 0 {
+    return None()
+  }
+  q.count -= 1
+  let tail = (q.head + q.count) % core@1/list.len(q.slots)
+  replace(mut q.slots[tail], None())
+}
+
+/// Copies the item at a logical index, without changing either endpoint.
+pub fn get[T: copyable](q: Deque[T], index: u64) -> Option[T] in q uses {} {
+  if index >= q.count { return None() }
+  match q.slots[(q.head + index) % core@1/list.len(q.slots)] {
+    Some(value) => Some(copy value),
     None => None(),
   }
 }
 
-pub fn pop_back[T](mut q: unique Deque[T]) -> unique Option[T] uses {q} {
-  if core@1/list.len(q.back) == 0 {
-    balance(mut q.back, mut q.front)
-  }
-  let item = core@1/list.pop(mut q.back)
-  match take item {
-    Some(value) => Some(take value),
-    None => None(),
-  }
+pub fn front[T: copyable](q: Deque[T]) -> Option[T] in q uses {} {
+  get(q, 0)
+}
+
+pub fn back[T: copyable](q: Deque[T]) -> Option[T] in q uses {} {
+  if q.count == 0 { None() } else { get(q, q.count - 1) }
 }

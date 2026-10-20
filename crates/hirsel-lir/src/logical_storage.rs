@@ -35,7 +35,7 @@ impl MapStorage {
     pub fn new(table: &LayoutTable) -> Self {
         let mut entries = BTreeMap::new();
         for owner in &table.layouts {
-            if !matches!(&owner.kind, LayoutKind::Opaque { owner } if *owner == hirsel_syntax::DefPath::core("Map"))
+            if !matches!(&owner.kind, LayoutKind::Opaque { owner } if [hirsel_syntax::DefPath::core("Map"), hirsel_syntax::DefPath::core("Set")].contains(owner))
             {
                 continue;
             }

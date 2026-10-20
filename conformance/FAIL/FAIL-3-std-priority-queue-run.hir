@@ -25,8 +25,8 @@ fn compare(a: Item, b: Item) -> i32 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let o = io.stdout(rt)?
-  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty()
-  priority_queue.push(mut h, Item(priority: 98, output: o, label: "old\n"), compare)
-  priority_queue.push(mut h, Item(priority: 100, output: o, label: "new\n"), compare)
+  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty(compare)
+  priority_queue.push(mut h, Item(priority: 98, output: o, label: "old\n"))
+  priority_queue.push(mut h, Item(priority: 100, output: o, label: "new\n"))
   Ok(())
 }

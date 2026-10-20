@@ -84,3 +84,61 @@ fn map_upserts_and_value_callbacks_preserve_the_index_without_copying_the_map() 
         }
     });
 }
+
+// Indexmap's entries + index layout (src/inner.rs:21-38) keeps ordinals stable
+// through tombstones, as Map does. A fourfold drain must do linear row work.
+#[test]
+fn map_and_set_drains_inspect_linearly_many_entries() {
+    with_compiler_stack(|| {
+        for kind in ["map", "set"] {
+            for count in [2_000, 8_000] {
+                let dir = std::env::temp_dir().join(format!(
+                    "hirsel-keyed-drain-{kind}-{count}-{}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&dir).unwrap();
+                let path = dir.join("main.hir");
+                let ty = if kind == "map" {
+                    "Map[u64,u64]"
+                } else {
+                    "Set[u64]"
+                };
+                let insert = if kind == "map" {
+                    "map.insert(mut out,i,i)"
+                } else {
+                    "set.insert(mut out,i)"
+                };
+                let remove = if kind == "map" {
+                    "map.remove(mut out,i) == Some(i)"
+                } else {
+                    "set.remove(mut out,i)"
+                };
+                std::fs::write(&path, format!(
+                    "pub fn main() -> Result[(),String] {{\nlet mut out: {ty} = {kind}.empty()\nfor i in 0u64..{count}u64 {{ {insert} }}\nfor i in 0u64..{count}u64 {{ if !({remove}) {{ return Error(\"missing\") }} }}\nif {kind}.len(out) != 0 {{ return Error(\"length\") }}\nOk(())\n}}"
+                )).unwrap();
+                let before =
+                    hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows);
+                let result = run_path_with_step_budget(
+                    &path,
+                    SimulationConfig::default(),
+                    None,
+                    hirsel_engine::Verify::On,
+                    &mut vec![],
+                    &mut vec![],
+                )
+                .unwrap();
+                assert_eq!(
+                    result,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                );
+                let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows)
+                    - before;
+                assert!(
+                    rows <= 6 * count + 1_000,
+                    "{kind} drain of {count} inspected {rows} rows"
+                );
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    });
+}

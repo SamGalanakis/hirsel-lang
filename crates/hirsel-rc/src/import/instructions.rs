@@ -1236,7 +1236,11 @@ impl Importer<'_, '_> {
             .collect();
         let mut values = Vec::new();
         for (field, layout) in shape {
-            if kind == hirsel_types::BuiltinType::Map && field == 3 {
+            if matches!(
+                kind,
+                hirsel_types::BuiltinType::Map | hirsel_types::BuiltinType::Set
+            ) && field == 3
+            {
                 let ty = self.intern(layout);
                 let constant = self.constant(ty, ConstantValue::Integer(0));
                 let value = self.value(ty, Holding::Plain);

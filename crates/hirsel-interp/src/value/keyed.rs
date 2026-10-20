@@ -40,7 +40,10 @@ impl KeyIndex {
         };
         for (ordinal, element) in elements.iter().enumerate() {
             count(Counter::InterpKeyedRows);
-            let key = kind.key(element.as_ref()?).ok()?;
+            let Some(element) = element else {
+                continue;
+            };
+            let key = kind.key(element).ok()?;
             match crate::structural::hash(key, 0) {
                 Ok(hash) => index.buckets.entry(hash).or_default().push(ordinal),
                 Err(_) => index.unhashed.push(ordinal),
@@ -70,9 +73,9 @@ impl Block {
         let Some(index) = index.as_ref().filter(|index| index.kind == kind) else {
             for (ordinal, element) in self.iter().enumerate() {
                 count(Counter::InterpKeyedRows);
-                let element = element
-                    .as_ref()
-                    .ok_or_else(|| invalid("dead collection element"))?;
+                let Some(element) = element.as_ref() else {
+                    continue;
+                };
                 if data_equal(kind.key(element)?, key) {
                     return Ok((Some(ordinal), hash));
                 }
@@ -83,9 +86,9 @@ impl Block {
         let mut found = None;
         for &ordinal in bucket.iter().chain(&index.unhashed) {
             count(Counter::InterpKeyedRows);
-            let element = self[ordinal]
-                .as_ref()
-                .ok_or_else(|| invalid("dead collection element"))?;
+            let Some(element) = self[ordinal].as_ref() else {
+                continue;
+            };
             if data_equal(kind.key(element)?, key) {
                 found = Some(found.map_or(ordinal, |previous: usize| previous.min(ordinal)));
             }
@@ -95,6 +98,12 @@ impl Block {
     /// Append without invalidating a lookup index whose positions stay fixed.
     pub(crate) fn push_keyed(&mut self, entry: Value, hash: u64, kind: KeyKind) {
         let data = self.make_mut();
+        if data.dead >= data.elements.len().saturating_sub(data.dead) && data.elements.len() >= 16 {
+            count_by_rows(data.elements.len());
+            data.elements.retain(Option::is_some);
+            data.dead = 0;
+            data.index.take();
+        }
         if data
             .index
             .get()
@@ -120,5 +129,22 @@ impl Block {
             return Err(invalid("invalid map pair"));
         }
         Ok(&mut pair[1])
+    }
+}
+
+fn count_by_rows(rows: usize) {
+    hirsel_intern::work::count_by(Counter::InterpKeyedRows, rows as u64);
+}
+impl Block {
+    pub(crate) fn live_len(&self) -> usize {
+        self.len() - self.0.dead
+    }
+    /// Leave the physical ordinal stable; other buckets and snapshots survive.
+    pub(crate) fn remove_keyed(&mut self, ordinal: usize) -> Option<Value> {
+        let data = self.make_mut();
+        let value = data.elements.get_mut(ordinal)?.take()?;
+        data.dead += 1;
+        count(Counter::InterpKeyedRows);
+        Some(value)
     }
 }

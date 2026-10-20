@@ -108,10 +108,7 @@ fn compare_at(
                         fields: &[Option<Value>],
                         depth: usize,
                     ) -> Result<Vec<&Value>, StructuralError> {
-                        let mut values: Vec<_> = fields
-                            .iter()
-                            .map(|v| v.as_ref().ok_or(StructuralError::InvalidValue))
-                            .collect::<Result<_, _>>()?;
+                        let mut values: Vec<_> = fields.iter().filter_map(Option::as_ref).collect();
                         let mut failure = None;
                         values.sort_by(|a, b| match compare_at(a, b, depth + 1, false) {
                             Ok(Some(order)) => order,
@@ -151,8 +148,11 @@ fn compare_at(
                     if ord != Ordering::Equal {
                         return Ok(Some(ord));
                     }
+                    let keyed = matches!(a, Value::Map { .. });
+                    let ac: Vec<_> = ac.iter().filter(|v| !keyed || v.is_some()).collect();
+                    let bc: Vec<_> = bc.iter().filter(|v| !keyed || v.is_some()).collect();
                     work.push(Work::Length(ac.len(), bc.len()));
-                    for (a, b) in ac.iter().zip(bc).rev() {
+                    for (a, b) in ac.into_iter().zip(bc).rev() {
                         work.push(Work::Pair(
                             a.as_ref().ok_or(StructuralError::InvalidValue)?,
                             b.as_ref().ok_or(StructuralError::InvalidValue)?,
@@ -271,6 +271,8 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     _ => (),
                 }
                 if let Some(fields) = children(v) {
+                    let keyed = matches!(v, Value::Map { .. } | Value::Set { .. });
+                    let fields: Vec<_> = fields.iter().filter(|v| !keyed || v.is_some()).collect();
                     bytes.extend_from_slice(&(fields.len() as u64).to_le_bytes());
                     work.push(Work::Finish(
                         bytes,

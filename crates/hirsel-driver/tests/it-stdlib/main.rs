@@ -13,6 +13,7 @@ mod source_std_cache;
 mod stdlib_aead_vectors;
 mod stdlib_bigdecimal_dectest;
 mod stdlib_bigint_toom3;
+mod stdlib_collection_vectors;
 mod stdlib_constant_time;
 mod stdlib_crc32;
 mod stdlib_deque;

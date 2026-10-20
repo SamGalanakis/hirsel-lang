@@ -1,10 +1,12 @@
-// Min-heap endpoint semantics from Zig PriorityQueue and Rust BinaryHeap.
+// Zig bff490a2 lib/std/priority_queue.zig:17-82, 138-176.
+// The comparator belongs to the heap, so every operation preserves its order.
 pub opaque type Heap[T]: () uses {T} {
   items: unique List[unique T],
+  by: unique @noalloc fn(T, T) -> i32 uses {},
 }
 
-pub fn empty[T]() -> unique Heap[T] uses {} {
-  Heap(items: [])
+pub fn empty[T](take by: unique @noalloc fn(T, T) -> i32 uses {}) -> unique Heap[T] uses {} {
+  Heap(items: [], by: take by)
 }
 
 @noalloc
@@ -12,42 +14,51 @@ pub fn len[T](h: Heap[T]) -> u64 uses {} {
   core@1/list.len(h.items)
 }
 
-pub fn push[T](
-  mut h: unique Heap[T],
-  take value: unique T,
-  by: @noalloc fn(T, T) -> i32 uses {}
-) -> () uses {h, value} {
+pub fn push[T](mut h: unique Heap[T], take value: unique T) -> () uses {h, value} {
   core@1/list.push(mut h.items, take value)
-  internal.heap_ops.sift_up(
-    mut h.items,
-    core@1/list.len(h.items) - 1,
-    fn(a: unique T, b: unique T) -> i32 uses {} {
-      by(a, b)
-    }
-  )
+  up(mut h.items, h.by)
 }
 
-pub fn pop[T](mut h: unique Heap[T], by: @noalloc fn(T, T) -> i32 uses {}) -> unique Option[
-  T
-] uses {h} {
+fn up[T](mut items: unique List[unique T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  internal.heap_ops.sift_up(mut items, core@1/list.len(items) - 1,
+    fn(a: unique T, b: unique T) -> i32 uses {} { by(a, b) })
+}
+
+fn down[T](mut items: unique List[unique T], begin: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  // The shared kernel selects the larger child. Reverse arguments without
+  // negating a potentially minimum i32 comparator result.
+  internal.heap_ops.sift(mut items, begin, core@1/list.len(items),
+    fn(a: unique T, b: unique T) -> i32 uses {} { by(b, a) })
+}
+
+pub fn pop[T](mut h: unique Heap[T]) -> unique Option[T] uses {h} {
   let count = core@1/list.len(h.items)
-  if count == 0 {
-    return None()
-  }
+  if count == 0 { return None() }
   core@1/list.swap(mut h.items, 0, count - 1)
   let item = core@1/list.pop(mut h.items)
-  // list's shared sift kernel selects the larger child, so reverse `by` to
-  // obtain a min-heap without negating a potentially minimum i32 result.
-  internal.heap_ops.sift(
-    mut h.items,
-    0,
-    count - 1,
-    fn(a: unique T, b: unique T) -> i32 uses {} {
-      by(b, a)
-    }
-  )
+  down(mut h.items, 0, h.by)
   match take item {
     Some(value) => Some(take value),
     None => None(),
   }
+}
+
+// A copied observation is available for copyable elements; owned values
+// remain in the heap until pop transfers them.
+pub fn peek[T: copyable](h: Heap[T]) -> Option[T] in h uses {} {
+  if core@1/list.len(h.items) == 0 { None() } else { Some(copy h.items[0]) }
+}
+
+// Bottom-up heap construction, Zig fromOwnedSlice:161-176, O(n).
+pub fn from_list[T](
+  take by: unique @noalloc fn(T, T) -> i32 uses {},
+  take items: unique List[unique T]
+) -> unique Heap[T] uses {items} {
+  let mut items = take items
+  let mut parent = core@1/list.len(items) / 2
+  while parent > 0 {
+    parent -= 1
+    down(mut items, parent, by)
+  }
+  Heap(items: take items, by: take by)
 }

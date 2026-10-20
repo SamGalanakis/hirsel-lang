@@ -505,7 +505,17 @@ impl<'a> Plan<'a> {
                         if *kind == BuiltinType::Set {
                             CodecNode::Set {
                                 layout,
-                                element: self.node(Self::argument(&arguments, 0)?, element),
+                                element: self.node(Self::argument(&arguments, 0)?, {
+                                    let tag = self.record(element)?.tag.as_ref().unwrap();
+                                    let pair = tag
+                                        .variants
+                                        .iter()
+                                        .find(|v| v.ordinal == 1)
+                                        .unwrap()
+                                        .fields[0]
+                                        .layout;
+                                    self.record(pair)?.fields[0].layout
+                                }),
                             }
                         } else {
                             let live = self

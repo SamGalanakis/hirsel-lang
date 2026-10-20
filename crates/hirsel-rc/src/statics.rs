@@ -395,11 +395,11 @@ impl Encoder<'_, '_> {
                 // Materialization has already applied duplicate/upsert semantics.
                 // The immutable image keeps that order and remains unindexed.
                 let map = owner.0.name == "Map";
-                if record.fields.len() != if map { 4 } else { 2 } {
+                if record.fields.len() != 4 {
                     return unsupported("a keyed container without its private fields");
                 }
                 for field in &record.fields {
-                    if map && field.ordinal == 3 {
+                    if field.ordinal == 3 {
                         self.put(
                             block,
                             offset + field.offset,
@@ -431,7 +431,34 @@ impl Encoder<'_, '_> {
                                     })
                                     .collect()
                             } else {
-                                fields.clone()
+                                fields
+                                    .iter()
+                                    .map(|key| ValueNode {
+                                        ty: key.ty,
+                                        kind: ValueKind::Construct {
+                                            constructor: Constructor::Variant {
+                                                definition: owner.clone(),
+                                                variant: 1,
+                                            },
+                                            fields: vec![ValueNode {
+                                                ty: key.ty,
+                                                kind: ValueKind::Construct {
+                                                    constructor: Constructor::Tuple,
+                                                    fields: vec![
+                                                        key.clone(),
+                                                        ValueNode {
+                                                            ty: key.ty,
+                                                            kind: ValueKind::Construct {
+                                                                constructor: Constructor::Tuple,
+                                                                fields: vec![],
+                                                            },
+                                                        },
+                                                    ],
+                                                },
+                                            }],
+                                        },
+                                    })
+                                    .collect()
                             }
                         } else {
                             Vec::new()

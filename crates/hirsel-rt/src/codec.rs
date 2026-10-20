@@ -363,7 +363,7 @@ impl Program {
                     if (kind == NODE_SET) != value.is_none() {
                         fault("a codec container whose entries disagree with its kind");
                     }
-                    let map = (kind == NODE_MAP).then(|| MapStorage {
+                    let map = Some(MapStorage {
                         hashes_at: w.next(),
                         live_at: w.next(),
                         tag_at: w.next(),
@@ -965,15 +965,19 @@ unsafe fn encode_payload(
                 if !unsafe { container.map.expect("map storage").live(at) } {
                     continue;
                 }
-                let value = container.value.expect("a map entry has a value");
-                work.push(Put::Visit(
-                    value,
-                    at.wrapping_add(container.value_at as usize),
-                ));
+                if let Some(value) = container.value {
+                    work.push(Put::Visit(
+                        value,
+                        at.wrapping_add(container.value_at as usize),
+                    ));
+                }
                 work.push(Put::Visit(
                     container.key,
                     at.wrapping_add(container.key_at as usize),
                 ));
+                if container.set {
+                    work.push(Put::Mark);
+                }
             }
             Put::Visit(node, at) => {
                 values += 1;
@@ -1180,20 +1184,12 @@ unsafe fn encode_node(
                 if container.set {
                     sets.push((out.len(), Vec::new()));
                     work.push(Put::SetEnd);
-                    work.push(Put::Elements {
-                        node: container.key,
-                        at: first.add(container.key_at as usize),
-                        stride: container.entries.stride,
-                        count,
-                        set: true,
-                    });
-                } else {
-                    work.push(Put::Entries {
-                        container: *container,
-                        at: first,
-                        count,
-                    });
                 }
+                work.push(Put::Entries {
+                    container: *container,
+                    at: first,
+                    count,
+                });
             }
         }
     }

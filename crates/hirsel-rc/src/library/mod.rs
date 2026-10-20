@@ -111,6 +111,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &map::MAP_WARM,
     &map::MAP_ADVANCE,
     &map::SET_INDEX,
+    &map::SET_WARM,
+    &map::SET_PREPARE,
     // sorted (lib-sorted): sorted_map keyed access, its cursor, the integer comparators.
     &sorted::INSERT,
     &sorted::GET,
@@ -259,7 +261,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 22;
+pub const REVISION: u32 = 23;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

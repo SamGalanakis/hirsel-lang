@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 fn deque_is_an_ordinary_source_native_container() {
     with_compiler_stack(|| {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/SEM/SEM-5-std-deque-run.hir");
+            .join("../../conformance/SEM/SEM-5-std-deque-oracle-run.hir");
         let mut loaded = load_program(&path).unwrap();
         loaded
             .check_for_execution()
@@ -37,6 +37,9 @@ fn deque_is_an_ordinary_source_native_container() {
             "push_back",
             "pop_front",
             "pop_back",
+            "get",
+            "front",
+            "back",
         ] {
             assert!(
                 found.contains(name),

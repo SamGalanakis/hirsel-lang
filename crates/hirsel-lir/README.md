@@ -715,9 +715,10 @@ still holds but passes nowhere is not the callee's. The native backends'
 second `mut` argument, a borrowed view and a capturing closure, each against
 the same route to another place.
 
-Native Map storage retains optional private entries, tagged u64 buckets, cached
-hashes and a live count. Its LayoutKeys change with library revision 22; no
-TIR/LIR instruction changes. Descriptor version 12 adds a live-count program
+Native Map and Set storage retain optional private entries, tagged u64 buckets, cached
+hashes and a live count. Set uses the same table with unit values. Library
+revision 23 and descriptor version 13 identify the shared representation; no
+TIR/LIR instruction changes. The descriptor carries a live-count program
 for private Map entry Lists, derived once by `logical_storage::MapStorage` from
 the frozen layout table and reused by the descriptor registry and H. Charges
 count live key/value pairs and exclude tags, buckets and hash-cache storage.

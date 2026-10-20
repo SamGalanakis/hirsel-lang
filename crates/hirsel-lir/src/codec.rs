@@ -312,21 +312,17 @@ fn container(
     if !owner.0.package.name_is("core")
         || !owner.0.modules.is_empty()
         || owner.0.name != name
-        || r.fields.len() != if name == "Map" { 4 } else { 2 }
+        || r.fields.len() != 4
     {
         return Err(format!("a container payload that is not core {name}'s"));
     }
     let (entries, element) = sequence(table, field(r, CONTAINER_ENTRIES)?.layout)?;
     let (index, word) = sequence(table, field(r, CONTAINER_INDEX)?.layout)?;
-    let scalar = if name == "Map" {
-        ScalarKind::U64
-    } else {
-        ScalarKind::U32
-    };
+    let scalar = ScalarKind::U64;
     if record(table, word)?.kind != LayoutKind::Scalar(scalar) {
         return Err("a container index with the wrong word layout".into());
     }
-    if name == "Map" {
+    {
         if field(r, 2)?.layout != field(r, CONTAINER_INDEX)?.layout
             || record(table, field(r, 3)?.layout)?.kind != LayoutKind::Scalar(ScalarKind::U64)
         {
@@ -560,7 +556,8 @@ impl CodecPlan {
                 }
                 CodecNode::Set { layout, element } => {
                     let (_, _, e, _) = container(table, *layout, "Set")?;
-                    child(*element, e)?;
+                    let pair = record(table, map_pair(table, e)?.layout)?;
+                    child(*element, field(pair, 0)?.layout)?;
                 }
                 CodecNode::Checked {
                     layout,
@@ -893,42 +890,43 @@ impl CodecPlan {
                         u64::from(record(table, word)?.align),
                         fixed(record(table, word)?)?,
                     ]);
+                    let pair = map_pair(table, element)?;
+                    let p = record(table, pair.layout)?;
                     match node {
-                        CodecNode::Map { key, value, .. } => {
-                            let pair = map_pair(table, element)?;
-                            let p = record(table, pair.layout)?;
-                            body.extend([
-                                u64::from(key.0),
-                                pair.offset + field(p, 0)?.offset,
-                                u64::from(value.0),
-                                pair.offset + field(p, 1)?.offset,
-                            ]);
-                            let tag = record(table, element)?
-                                .tag
-                                .as_ref()
-                                .ok_or("map entry tag")?;
-                            let (form, bit) = match tag.form {
-                                TagForm::Ordinal => (0, 0),
-                                TagForm::LiveBit { bit } => (1, u64::from(bit)),
-                                TagForm::Niche {
-                                    nullary: 0,
-                                    dataful: 1,
-                                } => (2, 0),
-                                _ => return Err("map entry tag ordinals".into()),
-                            };
-                            body.extend([
-                                field(pr, 2)?.offset,
-                                field(pr, 3)?.offset,
-                                tag.offset,
-                                form,
-                                bit,
-                            ]);
-                        }
-                        CodecNode::Set { element, .. } => {
-                            body.extend([u64::from(element.0), 0, NO_NODE, 0])
-                        }
+                        CodecNode::Map { key, value, .. } => body.extend([
+                            u64::from(key.0),
+                            pair.offset + field(p, 0)?.offset,
+                            u64::from(value.0),
+                            pair.offset + field(p, 1)?.offset,
+                        ]),
+                        CodecNode::Set { element, .. } => body.extend([
+                            u64::from(element.0),
+                            pair.offset + field(p, 0)?.offset,
+                            NO_NODE,
+                            0,
+                        ]),
                         _ => unreachable!(),
                     }
+                    let tag = record(table, element)?
+                        .tag
+                        .as_ref()
+                        .ok_or("map entry tag")?;
+                    let (form, bit) = match tag.form {
+                        TagForm::Ordinal => (0, 0),
+                        TagForm::LiveBit { bit } => (1, u64::from(bit)),
+                        TagForm::Niche {
+                            nullary: 0,
+                            dataful: 1,
+                        } => (2, 0),
+                        _ => return Err("map entry tag ordinals".into()),
+                    };
+                    body.extend([
+                        field(pr, 2)?.offset,
+                        field(pr, 3)?.offset,
+                        tag.offset,
+                        form,
+                        bit,
+                    ]);
                 }
             }
             words.extend(body);

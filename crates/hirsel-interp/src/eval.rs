@@ -3360,7 +3360,7 @@ fn keyed_write(
         return Some(arena);
     }
     if storage.shared() {
-        let bytes = storage.element.saturating_mul(entries.len() as u64);
+        let bytes = storage.element.saturating_mul(entries.live_len() as u64);
         if let Err(arena) = budgets.charge(storage.arena, bytes) {
             return Some(arena);
         }

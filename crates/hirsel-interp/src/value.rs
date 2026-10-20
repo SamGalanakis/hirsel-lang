@@ -172,19 +172,29 @@ pub struct Block(std::sync::Arc<BlockData>);
 #[derive(Default)]
 struct BlockData {
     elements: Vec<Option<Value>>,
+    dead: usize,
     index: std::sync::OnceLock<Option<Box<keyed::KeyIndex>>>,
 }
 impl Clone for BlockData {
     fn clone(&self) -> Self {
         Self {
             elements: self.elements.clone(),
+            dead: self.dead,
             index: Default::default(),
         }
     }
 }
 impl PartialEq for Block {
     fn eq(&self, other: &Self) -> bool {
-        self.0.elements == other.0.elements
+        if self.0.dead != 0 || other.0.dead != 0 {
+            self.0
+                .elements
+                .iter()
+                .flatten()
+                .eq(other.0.elements.iter().flatten())
+        } else {
+            self.0.elements == other.0.elements
+        }
     }
 }
 impl Eq for Block {}
@@ -262,6 +272,7 @@ impl From<Vec<Option<Value>>> for Block {
     fn from(elements: Vec<Option<Value>>) -> Self {
         Self(std::sync::Arc::new(BlockData {
             elements,
+            dead: 0,
             index: Default::default(),
         }))
     }

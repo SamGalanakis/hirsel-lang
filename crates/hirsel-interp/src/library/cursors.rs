@@ -34,16 +34,21 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
         let [source, index] = args else {
             return Err(invalid("map advance arguments"));
         };
-        let count = collection::elements(source, BuiltinType::Map)?.len() as u64;
+        let elements = source_elements(source, BuiltinType::Map)?;
+        let count = elements.len() as u64;
         let Value::Integer(index) = index else {
             return Err(invalid("map advance index"));
         };
         if index.kind() != Primitive::U64 {
             return Err(invalid("map advance index width"));
         }
-        return Ok(Some(OperationResult::returned(u64_value(
-            (index.bits() as u64).min(count),
-        ))));
+        return Ok(Some(OperationResult::returned(u64_value({
+            let mut next = (index.bits() as u64).min(count);
+            while next < count && elements[next as usize].is_none() {
+                next += 1;
+            }
+            next
+        }))));
     }
     if let Some(result) = consuming(name, args)? {
         return Ok(Some(result));
@@ -171,9 +176,6 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
     };
     if operation == "len" && matches!(kind, BuiltinType::Map | BuiltinType::SortedMap) {
         let elements = source_elements(argument, kind)?;
-        if elements.iter().any(Option::is_none) {
-            return Err(invalid("dead map entry"));
-        }
         return Ok(Some(OperationResult::returned(u64_value(
             elements.len() as u64
         ))));
@@ -184,7 +186,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
     match operation {
         Step::Open => {
             let elements = source_elements(argument, kind)?;
-            if !elements.iter().all(Option::is_some) || matches!(kind, BuiltinType::Map | BuiltinType::SortedMap) && !elements.iter().all(|e| matches!(e, Some(Value::Tuple(pair)) if pair.len()==2 && pair.iter().all(Option::is_some))) {
+            if kind != BuiltinType::Map && !elements.iter().all(Option::is_some) || matches!(kind, BuiltinType::Map | BuiltinType::SortedMap) && !elements.iter().flatten().all(|e| matches!(e, Value::Tuple(pair) if pair.len()==2 && pair.iter().all(Option::is_some))) {
                 return Err(invalid("owning cursor source"));
             }
             // MEM-6: an arena List is never unique, so consuming it copies each element
@@ -243,6 +245,12 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                     .ok_or_else(|| invalid("dead owning cursor source"))?,
                 kind,
             )?;
+            let mut index = index;
+            if kind == BuiltinType::Map {
+                while index < elements.len() && elements[index].is_none() {
+                    index += 1;
+                }
+            }
             if index > elements.len() {
                 return Err(invalid("owning cursor source state"));
             }

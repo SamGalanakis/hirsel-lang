@@ -17,13 +17,13 @@ fn by(a: Item, b: Item) -> i32 uses {} {
 }
 
 pub fn main(t: Test) -> Result[(), ()] {
-  let mut q: unique std@1/priority_queue.Heap[Item] = std@1/priority_queue.empty()
-  std@1/priority_queue.push(mut q, Item(number: 7), by)
-  match take std@1/priority_queue.pop(mut q, by) {
-    Some(item) => std@1/priority_queue.push(mut q, take item, by),
+  let mut q: unique std@1/priority_queue.Heap[Item] = std@1/priority_queue.empty(by)
+  std@1/priority_queue.push(mut q, Item(number: 7))
+  match take std@1/priority_queue.pop(mut q) {
+    Some(item) => std@1/priority_queue.push(mut q, take item),
     None => failure.check(false, Bounds()),
   }
-  match take std@1/priority_queue.pop(mut q, by) {
+  match take std@1/priority_queue.pop(mut q) {
     Some(item) => failure.check(item.number == 7, Bounds()),
     None => failure.check(false, Bounds()),
   }

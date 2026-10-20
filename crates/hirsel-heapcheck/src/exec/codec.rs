@@ -432,7 +432,7 @@ impl<S: Stage> Machine<'_, S> {
                     let (_, pair, start, stride) = self.codec_sequence(entries.layout)?;
                     let block = self.ptr_at(At::Heap(self.ptr_at(at)?.at(entries.offset)))?;
                     let count = self.bits_at(At::Heap(block), 8)? as u64;
-                    let live = if matches!(node, CodecNode::Map { .. }) {
+                    let live = if matches!(node, CodecNode::Map { .. } | CodecNode::Set { .. }) {
                         let live_field = self.field_at(container, 3)?;
                         let root = self.ptr_at(at)?;
                         self.bits_at(At::Heap(root.at(live_field.offset)), 8)? as u64
@@ -475,10 +475,18 @@ impl<S: Stage> Machine<'_, S> {
                         CodecNode::Set { element, .. } => {
                             sets.push((out.len(), vec![]));
                             work.push(Job::SetEnd);
+                            let tag = self.record(pair)?.tag.as_ref().unwrap();
+                            let data =
+                                &tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0];
+                            let key = self.field_at(data.layout, 0)?;
                             for i in (0..count).rev() {
+                                let entry = block.at(start + i * stride);
+                                if self.tag_at(At::Heap(entry.at(tag.offset)), tag.form)? != 1 {
+                                    continue;
+                                }
                                 work.push(Job::Visit(
                                     *element,
-                                    At::Heap(block.at(start + i * stride)),
+                                    At::Heap(entry.at(data.offset + key.offset)),
                                 ));
                                 work.push(Job::Mark);
                             }
@@ -1213,7 +1221,7 @@ impl<S: Stage> Machine<'_, S> {
                     let (unindexed, _, _) = self.codec_elements(index.layout, 0)?;
                     self.codec_cell(image, Dest::Heap(block.at(entries.offset)), list);
                     self.codec_cell(image, Dest::Heap(block.at(index.offset)), unindexed);
-                    if matches!(node, CodecNode::Map { .. }) {
+                    if matches!(node, CodecNode::Map { .. } | CodecNode::Set { .. }) {
                         let hashes = self.field_at(container, 2)?;
                         let live = self.field_at(container, 3)?;
                         let (cache, _, _) = self.codec_elements(hashes.layout, 0)?;
@@ -1240,7 +1248,13 @@ impl<S: Stage> Machine<'_, S> {
                                 work.push((*key, Dest::Heap(entry.at(offsets[0] + k.offset))));
                             }
                             CodecNode::Set { element, .. } => {
-                                work.push((*element, Dest::Heap(entry)))
+                                let (tag, offsets) = self.arm_fields(pair, 1)?;
+                                self.codec_tag(image, Dest::Heap(entry), &tag, 1);
+                                let data =
+                                    tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0]
+                                        .layout;
+                                let key = self.field_at(data, 0)?;
+                                work.push((*element, Dest::Heap(entry.at(offsets[0] + key.offset))))
                             }
                             _ => unreachable!(),
                         }

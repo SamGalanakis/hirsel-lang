@@ -1,5 +1,9 @@
-//! Native insertion-ordered maps and sets. Maps retain optional entries, a
+//! Native insertion-ordered maps and sets. Both retain optional entries, a
 //! tagged index, cached full hashes and a live count. Keyed reads never mutate.
+//! Indexmap 41a87088 src/inner.rs:21-38 supplies the entries/index split;
+//! CPython 59942e24 Objects/dictobject.c:35-88,2934-2973 supplies
+//! dummy deletion. Set uses unit values, like Rust HashSet. Tombstones preserve insertion order
+//! without shifting the suffix; insertion compacts when dead >= live.
 use super::builder::{Body, Cx, Direct};
 use super::{CallShape, InlineLowering, LibraryBody, Request, native_path};
 use crate::PassError;
@@ -100,7 +104,10 @@ fn length(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> super::R<bool> {
         return Ok(false);
     };
     let value = cx.operand(&argument.value)?;
-    if call.path == &hirsel_syntax::DefPath::core("map.len") {
+    if ["map.len", "set.len"]
+        .iter()
+        .any(|name| call.path == &hirsel_syntax::DefPath::core(name))
+    {
         let result = cx.read_field(value, 3)?;
         cx.consumed(value);
         cx.finish(call, result)?;
@@ -409,11 +416,7 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
         &types,
     );
     let u64_ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
-    let result_ty = if is_map {
-        add_type(&mut b.cx.store, TypeKind::Tuple(vec![u64_ty; 3].into()))
-    } else {
-        u64_ty
-    };
+    let result_ty = add_type(&mut b.cx.store, TypeKind::Tuple(vec![u64_ty; 3].into()));
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
@@ -436,7 +439,7 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
     .unwrap();
     b.end_loan(kl);
     b.end_loan(ml);
-    if is_map {
+    {
         let layout = b.layout_of(index);
         let (slot, tuple) = temporary(b, layout)?;
         b.store(tuple, index)?;
@@ -461,21 +464,12 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
             if_live: false,
         });
         Ok(result)
-    } else {
-        Ok(Probe {
-            ordinal: index,
-            hash: index,
-            bucket: index,
-        })
     }
 }
 fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    if cx.path == native_path("map_probe") {
-        probe_map(cx)
-    } else {
-        probe_set(cx)
-    }
+    probe_map(cx)
 }
+
 /// A lookup also returns the already computed hash and bucket, so insertion,
 /// update and removal never search or hash the key a second time.
 fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
@@ -636,75 +630,6 @@ fn probe_return(b: &mut Body<'_, '_>, ordinal: ValueId, hash: ValueId, bucket: V
     Ok(())
 }
 
-fn probe_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let mut b = Body::new(cx)?;
-    let container = b.parameters[0];
-    let key = b.parameters[1];
-    // Hash even an empty/unindexed collection. The complete key's depth is checked here.
-    let key_hash = hash(&mut b, key.address)?;
-    let entries = field(&mut b, container.address, 0)?;
-    let count = len(&mut b, entries)?;
-    let zero = b.u64(0)?;
-    let one = b.u64(1)?;
-    let u64_layout = b.u64_layout()?;
-    let i = b.fresh(u64_layout);
-    let loop_ = b.block(BlockKind::Body, &[i]);
-    let check = b.block(BlockKind::Body, &[]);
-    let miss = b.block(BlockKind::Body, &[]);
-    let hit = b.block(BlockKind::Body, &[]);
-    let next = b.block(BlockKind::Body, &[]);
-    let index = field(&mut b, container.address, 1)?;
-    let slots = len(&mut b, index)?;
-    let indexed = b.compare(BinaryOp::Ne, slots, zero)?;
-    let indexed_block = b.block(BlockKind::Body, &[]);
-    let linear = b.block(BlockKind::Body, &[]);
-    b.branch(indexed, indexed_block, linear);
-    b.at(indexed_block);
-    let mask = sub(&mut b, slots, one);
-    let start = binary(&mut b, BinaryOp::BitAnd, key_hash, mask);
-    let position = b.fresh(u64_layout);
-    let buckets = b.block(BlockKind::Body, &[position]);
-    let occupied = b.block(BlockKind::Body, &[]);
-    let advance = b.block(BlockKind::Body, &[]);
-    let found = b.block(BlockKind::Body, &[]);
-    b.jump(buckets, &[start]);
-    b.at(buckets);
-    let slot = b.slot_place(index, position)?;
-    let stored = b.read_bits(slot)?;
-    let stored = convert(&mut b, stored, Primitive::U64)?;
-    let empty = b.compare(BinaryOp::Eq, stored, zero)?;
-    b.branch(empty, miss, occupied);
-    b.at(occupied);
-    let ordinal = sub(&mut b, stored, one);
-    let entry = b.slot_place(entries, ordinal)?;
-    let candidate = entry;
-    let equal = eq(&mut b, candidate, key.address)?;
-    b.branch(equal, found, advance);
-    b.at(found);
-    b.ret(Some(ordinal));
-    b.at(advance);
-    let inc = b.add(ArithMode::Wrapping, position, one);
-    let inc = binary(&mut b, BinaryOp::BitAnd, inc, mask);
-    b.jump(buckets, &[inc]);
-    b.at(linear);
-    b.jump(loop_, &[zero]);
-    b.at(loop_);
-    let more = b.compare(BinaryOp::Lt, i, count)?;
-    b.branch(more, check, miss);
-    b.at(check);
-    let entry = b.slot_place(entries, i)?;
-    let candidate = entry;
-    let equal = eq(&mut b, candidate, key.address)?;
-    b.branch(equal, hit, next);
-    b.at(next);
-    let inc = b.add(ArithMode::Wrapping, i, one);
-    b.jump(loop_, &[inc]);
-    b.at(hit);
-    b.ret(Some(i));
-    b.at(miss);
-    b.ret(Some(count));
-    Ok(b.finish())
-}
 fn get(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
     let probe = probe_call(&mut b)?;
@@ -833,21 +758,7 @@ fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
         let value = b.parameters[2].address;
         append_map(&mut b, probe.hash, key, value)?;
     } else {
-        let value = b.take(incoming.address)?;
-        let element_ty = b.cx.type_actual(0)?;
-        let list_ty = builtin(&mut b, BuiltinType::List, &[element_ty]);
-        let unit_ty = add_type(&mut b.cx.store, TypeKind::Tuple(vec![].into()));
-        let push = helper(
-            &mut b,
-            "list.push",
-            &[(PassingMode::Mut, list_ty), (PassingMode::Take, element_ty)],
-            unit_ty,
-            Allocation::MayAllocate,
-            vec![GenericArgument::Type(element_ty)],
-        )?;
-        let list = mut_argument(&mut b, 0, entries)?;
-        call(&mut b, push, &[list, argument(1, Passing::Take, value)])?;
-        index_call(&mut b)?;
+        table::append_set(&mut b, probe.hash, incoming.address)?;
     }
     unit(&mut b);
     Ok(b.finish())
@@ -888,7 +799,7 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let cursor = b.parameters[0];
     let source = field(&mut b, cursor.address, 0)?;
     let position = field(&mut b, cursor.address, 1)?;
-    let i = b.read_bits(position)?;
+    let first = b.read_bits(position)?;
     let (opaque, loan) = b.borrow(source, false)?;
     b.ed.unit.values[opaque.index()].holding = Holding::Borrowed(loan);
     let t = b.cx.type_actual(0)?;
@@ -908,6 +819,7 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         None,
     )?;
     let (entries_view, entries_loan) = b.borrow(entries, false)?;
+    let i = table::advance(&mut b, entries, first)?;
     let count = b.fresh(b.layout_of(i));
     b.push(Inst::SeqLen {
         result: count,
@@ -953,7 +865,9 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // Complete every fallible state write before producing an owned Copy.
     // The source loan covers field 0 and permits the disjoint position write.
     let failure = loan_failure(&mut b, &[loan], None);
-    let value = b.copy(entry, failure)?;
+    let pair = live_pair(&mut b, entry)?;
+    let key = field(&mut b, pair, 0)?;
+    let value = b.copy(key, failure)?;
     b.end_loan(loan);
     let some = option(&mut b, Some(value))?;
     b.ret(Some(some));
@@ -1213,7 +1127,15 @@ body!(
 use table::map_advance;
 pub static SET_INDEX: LibraryBody = LibraryBody {
     path: || native_path("set_index"),
-    build: index_update,
+    build: map_index_update,
+};
+pub static SET_WARM: LibraryBody = LibraryBody {
+    path: || native_path("set_warm"),
+    build: table::map_prepare,
+};
+pub static SET_PREPARE: LibraryBody = LibraryBody {
+    path: || native_path("set_prepare"),
+    build: table::map_prepare,
 };
 
 fn binary(b: &mut Body<'_, '_>, op: BinaryOp, a: ValueId, c: ValueId) -> ValueId {
@@ -1227,21 +1149,6 @@ fn binary(b: &mut Body<'_, '_>, op: BinaryOp, a: ValueId, c: ValueId) -> ValueId
         failure,
     });
     result
-}
-fn convert(b: &mut Body<'_, '_>, value: ValueId, primitive: Primitive) -> R<ValueId> {
-    let layout = b.cx.primitive(primitive)?;
-    let result = b.fresh(layout);
-    b.push(Inst::Convert {
-        result,
-        flag: None,
-        operand: value,
-        mode: if primitive == Primitive::U64 {
-            ConvertMode::Widen
-        } else {
-            ConvertMode::Truncate
-        },
-    });
-    Ok(result)
 }
 fn overwrite(b: &mut Body<'_, '_>, address: AddressId, value: ValueId) -> R<()> {
     let displaced = b.slot(b.layout_of(value), SlotKind::Displaced);
@@ -1268,217 +1175,6 @@ fn overwrite(b: &mut Body<'_, '_>, address: AddressId, value: ValueId) -> R<()> 
     });
     Ok(())
 }
-fn index_call(b: &mut Body<'_, '_>) -> R<()> {
-    let element = b.cx.type_actual(0)?;
-    let entries_type = builtin(b, BuiltinType::List, &[element]);
-    let u32_type = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U32));
-    let index_type = builtin(b, BuiltinType::List, &[u32_type]);
-    let result = b.cx.store.push(Type::unit());
-    let actuals = b.cx.arguments.clone();
-    let direct = helper(
-        b,
-        "set_index",
-        &[
-            (PassingMode::Borrow, entries_type),
-            (PassingMode::Mut, index_type),
-        ],
-        result,
-        Allocation::MayAllocate,
-        actuals,
-    )?;
-    let address = b.parameters[0].address;
-    let entries = field(b, address, 0)?;
-    let index = field(b, address, 1)?;
-    let (entries, loan) = b.borrow(entries, false)?;
-    let index = mut_argument(b, 1, index)?;
-    call(b, direct, &[argument(0, Passing::Borrow, entries), index])?;
-    b.end_loan(loan);
-    Ok(())
-}
-/// Keep the index maintenance and growth off the insertion fast path. Rebuild
-/// only when crossing the small-table threshold or reaching 7/8 occupancy.
-fn index_update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let mut b = Body::new(cx)?;
-    let container = b.parameters[1];
-    let entries = b.parameters[0].address;
-    let index = container.address;
-    let n = len(&mut b, entries)?;
-    let capacity = len(&mut b, index)?;
-    let eight = b.u64(8)?;
-    let one = b.u64(1)?;
-    let zero = b.u64(0)?;
-    let small = b.compare(BinaryOp::Le, n, eight)?;
-    let done = b.block(BlockKind::Body, &[]);
-    let check = b.block(BlockKind::Body, &[]);
-    let small_table = b.block(BlockKind::Body, &[]);
-    b.branch(small, small_table, check);
-    b.at(small_table);
-    // Removal can leave an allocated index behind even below the threshold.
-    // Every later insertion must maintain it while probes still consult it.
-    let unindexed = b.compare(BinaryOp::Eq, capacity, zero)?;
-    b.branch(unindexed, done, check);
-    b.at(done);
-    unit(&mut b);
-    b.at(check);
-    let maximum = b.u64(u64::from(u32::MAX))?;
-    let too_many = b.compare(BinaryOp::Gt, n, maximum)?;
-    let trap = b.block(BlockKind::Body, &[]);
-    let admitted = b.block(BlockKind::Body, &[]);
-    b.branch(too_many, trap, admitted);
-    b.at(trap);
-    b.terminate(Terminator::InvariantFault {
-        reason: "Map/Set entry count exceeds u32::MAX".into(),
-    });
-    b.at(admitted);
-    let seven = b.u64(7)?;
-    let used = binary(&mut b, BinaryOp::Mul, n, eight);
-    let limit = binary(&mut b, BinaryOp::Mul, capacity, seven);
-    let rebuild = b.compare(BinaryOp::Ge, used, limit)?;
-    let rebuild_v = b.version(container.slot);
-    let fast_v = b.version(container.slot);
-    let rebuild_block = b.block(BlockKind::Body, &[rebuild_v]);
-    let fast_block = b.block(BlockKind::Body, &[fast_v]);
-    let before = b.reaching(container.slot)?;
-    let yes = b.edge(rebuild_block, &[before]);
-    let no = b.edge(fast_block, &[before]);
-    b.terminate(Terminator::Branch {
-        condition: rebuild,
-        yes,
-        no,
-    });
-    // An already sized table needs only the newest ordinal.
-    b.at(fast_block);
-    b.set_reaching(container.slot, fast_v);
-    let ordinal = sub(&mut b, n, one);
-    index_put(&mut b, entries, index, ordinal, capacity)?;
-    unit(&mut b);
-    b.at(rebuild_block);
-    b.set_reaching(container.slot, rebuild_v);
-    let twice = b.add(ArithMode::Wrapping, capacity, capacity);
-    let empty = b.compare(BinaryOp::Eq, capacity, zero)?;
-    let word = b.u64_layout()?;
-    let wanted = b.fresh(word);
-    let capacity_join_v = b.version(container.slot);
-    let capacity_join = b.block(BlockKind::Body, &[wanted, capacity_join_v]);
-    let fresh = b.block(BlockKind::Body, &[]);
-    let doubled = b.block(BlockKind::Body, &[]);
-    b.branch(empty, fresh, doubled);
-    b.at(fresh);
-    let sixteen = b.u64(16)?;
-    b.jump(capacity_join, &[sixteen, rebuild_v]);
-    b.at(doubled);
-    b.jump(capacity_join, &[twice, rebuild_v]);
-    b.at(capacity_join);
-    b.set_reaching(container.slot, capacity_join_v);
-    // Drop the plain old slots; building never touches entries.
-    let layout = b.ed.unit.types[b.ed.unit.addresses[index.index()].ty.index()].layout;
-    let displaced = b.slot(layout, SlotKind::Displaced);
-    b.push(Inst::StorageLive { slot: displaced });
-    let old = b.place(AddressBase::Slot(displaced), &[], layout, None)?;
-    let sequence = construct(&mut b, layout, ConstructorKind::Sequence, &[])?;
-    let version = b.version(container.slot);
-    b.set_reaching(container.slot, version);
-    let displaced_version = b.version(displaced);
-    b.set_reaching(displaced, displaced_version);
-    let failure = b.failure(None);
-    b.push(Inst::Replace {
-        address: index,
-        value: sequence,
-        displaced,
-        version,
-        displaced_version,
-        if_live: false,
-        failure,
-    });
-    drop_place(&mut b, old);
-    b.push(Inst::StorageDead {
-        slot: displaced,
-        if_live: false,
-    });
-    b.seq_reserve(index, wanted)?;
-    let initial_v = b.reaching(container.slot)?;
-    let i = b.fresh(word);
-    let loop_v = b.version(container.slot);
-    let zeros = b.block(BlockKind::Body, &[i, loop_v]);
-    let store = b.block(BlockKind::Body, &[]);
-    let filled = b.block(BlockKind::Body, &[]);
-    b.jump(zeros, &[zero, initial_v]);
-    b.at(zeros);
-    b.set_reaching(container.slot, loop_v);
-    let more = b.compare(BinaryOp::Lt, i, wanted)?;
-    b.branch(more, store, filled);
-    b.at(store);
-    let slot = b.slot_place(index, i)?;
-    let u32_layout = b.cx.primitive(Primitive::U32)?;
-    let null = b.constant(u32_layout, ConstantValue::Integer(0));
-    b.store(slot, null)?;
-    let inc = b.add(ArithMode::Wrapping, i, one);
-    let after = b.reaching(container.slot)?;
-    b.jump(zeros, &[inc, after]);
-    b.at(filled);
-    b.set_reaching(container.slot, loop_v);
-    b.seq_set_len(index, wanted)?;
-    let initial_v = b.reaching(container.slot)?;
-    let ordinal = b.fresh(word);
-    let all_v = b.version(container.slot);
-    let all = b.block(BlockKind::Body, &[ordinal, all_v]);
-    let put = b.block(BlockKind::Body, &[]);
-    let complete = b.block(BlockKind::Body, &[]);
-    b.jump(all, &[zero, initial_v]);
-    b.at(all);
-    b.set_reaching(container.slot, all_v);
-    let more = b.compare(BinaryOp::Lt, ordinal, n)?;
-    b.branch(more, put, complete);
-    b.at(put);
-    index_put(&mut b, entries, index, ordinal, wanted)?;
-    let inc = b.add(ArithMode::Wrapping, ordinal, one);
-    let after = b.reaching(container.slot)?;
-    b.jump(all, &[inc, after]);
-    b.at(complete);
-    unit(&mut b);
-    Ok(b.finish())
-}
-/// Linear probing visits at most slots.len() buckets: a table is never full.
-fn index_put(
-    b: &mut Body<'_, '_>,
-    entries: AddressId,
-    index: AddressId,
-    ordinal: ValueId,
-    capacity: ValueId,
-) -> R<()> {
-    let key = b.slot_place(entries, ordinal)?;
-    let hash = hash(b, key)?;
-    let one = b.u64(1)?;
-    let zero = b.u64(0)?;
-    let mask = sub(b, capacity, one);
-    let start = binary(b, BinaryOp::BitAnd, hash, mask);
-    let word = b.u64_layout()?;
-    let position = b.fresh(word);
-    let root = b.root(index).unwrap();
-    let loop_v = b.version(root);
-    let before = b.reaching(root)?;
-    let loop_ = b.block(BlockKind::Body, &[position, loop_v]);
-    let taken = b.block(BlockKind::Body, &[]);
-    let vacant = b.block(BlockKind::Body, &[]);
-    b.jump(loop_, &[start, before]);
-    b.at(loop_);
-    b.set_reaching(root, loop_v);
-    let slot = b.slot_place(index, position)?;
-    let stored = b.read_bits(slot)?;
-    let stored = convert(b, stored, Primitive::U64)?;
-    let empty = b.compare(BinaryOp::Eq, stored, zero)?;
-    b.branch(empty, vacant, taken);
-    b.at(taken);
-    let inc = b.add(ArithMode::Wrapping, position, one);
-    let inc = binary(b, BinaryOp::BitAnd, inc, mask);
-    b.jump(loop_, &[inc, loop_v]);
-    b.at(vacant);
-    let encoded = b.add(ArithMode::Wrapping, ordinal, one);
-    let encoded = convert(b, encoded, Primitive::U32)?;
-    overwrite(b, slot, encoded)?;
-    Ok(())
-}
-
 fn protect(b: &mut Body<'_, '_>, first: usize, loan: LoanId) {
     let end = b.ed.unit.tables.failures.len();
     for i in first..end {
@@ -1499,91 +1195,7 @@ fn temporary(b: &mut Body<'_, '_>, layout: LayoutId) -> R<(SlotId, AddressId)> {
     let address = b.place(AddressBase::Slot(slot), &[], layout, None)?;
     Ok((slot, address))
 }
-fn remove_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let mut b = Body::new(cx)?;
-    let ordinal = probe_call(&mut b)?.ordinal;
-    let container = b.parameters[0];
-    let entries = field(&mut b, container.address, 0)?;
-    let count = len(&mut b, entries)?;
-    let hit = b.compare(BinaryOp::Lt, ordinal, count)?;
-    let found = b.block(BlockKind::Body, &[]);
-    let missing = b.block(BlockKind::Body, &[]);
-    b.branch(hit, found, missing);
-    b.at(missing);
-    b.ret(Some(hit));
-    b.at(found);
-    remove_entry(&mut b, entries, ordinal, false)?;
-    reindex(&mut b)?;
-    b.ret(Some(hit));
-    Ok(b.finish())
-}
-// Ordered removal changes dense ordinals. Rebuild only the private index, in
-// its existing initialized storage; entry/value owners never get copied.
-fn reindex(b: &mut Body<'_, '_>) -> R<()> {
-    let container = b.parameters[0];
-    let entries = field(b, container.address, 0)?;
-    let index = field(b, container.address, 1)?;
-    let capacity = len(b, index)?;
-    let count = len(b, entries)?;
-    let zero = b.u64(0)?;
-    let one = b.u64(1)?;
-    let word = b.u64_layout()?;
-    let nonempty = b.compare(BinaryOp::Ne, capacity, zero)?;
-    let rebuild = b.block(BlockKind::Body, &[]);
-    let done_version = b.version(container.slot);
-    let done = b.block(BlockKind::Body, &[done_version]);
-    let before = b.reaching(container.slot)?;
-    let yes = b.edge(rebuild, &[]);
-    let no = b.edge(done, &[before]);
-    b.terminate(Terminator::Branch {
-        condition: nonempty,
-        yes,
-        no,
-    });
-    b.at(rebuild);
-    let position = b.fresh(word);
-    let zero_version = b.version(container.slot);
-    let zeros = b.block(BlockKind::Body, &[position, zero_version]);
-    let store = b.block(BlockKind::Body, &[]);
-    let filled = b.block(BlockKind::Body, &[]);
-    b.jump(zeros, &[zero, before]);
-    b.at(zeros);
-    b.set_reaching(container.slot, zero_version);
-    let more = b.compare(BinaryOp::Lt, position, capacity)?;
-    b.branch(more, store, filled);
-    b.at(store);
-    let slot = b.slot_place(index, position)?;
-    let u32_layout = b.cx.primitive(Primitive::U32)?;
-    let null = b.constant(u32_layout, ConstantValue::Integer(0));
-    overwrite(b, slot, null)?;
-    let next = b.add(ArithMode::Wrapping, position, one);
-    let after = b.reaching(container.slot)?;
-    b.jump(zeros, &[next, after]);
-    b.at(filled);
-    b.set_reaching(container.slot, zero_version);
-    let ordinal = b.fresh(word);
-    let all_version = b.version(container.slot);
-    let all = b.block(BlockKind::Body, &[ordinal, all_version]);
-    let put = b.block(BlockKind::Body, &[]);
-    let complete = b.block(BlockKind::Body, &[]);
-    b.jump(all, &[zero, zero_version]);
-    b.at(all);
-    b.set_reaching(container.slot, all_version);
-    let more = b.compare(BinaryOp::Lt, ordinal, count)?;
-    b.branch(more, put, complete);
-    b.at(put);
-    index_put(b, entries, index, ordinal, capacity)?;
-    let next = b.add(ArithMode::Wrapping, ordinal, one);
-    let after = b.reaching(container.slot)?;
-    b.jump(all, &[next, after]);
-    b.at(complete);
-    b.set_reaching(container.slot, all_version);
-    b.jump(done, &[all_version]);
-    b.at(done);
-    b.set_reaching(container.slot, done_version);
-    Ok(())
-}
-// Shared dense-entry removal for Set and branded SortedMap. The caller
+// Dense-entry removal for branded SortedMap. The caller
 // keeps the returned value owner live through any private metadata repair.
 pub(super) fn remove_entry(
     b: &mut Body<'_, '_>,
@@ -1654,4 +1266,4 @@ pub(super) fn remove_entry(
 }
 
 mod table;
-use table::{append_map, map_index_update, remove_map};
+use table::{append_map, map_index_update, remove_map, remove_set};

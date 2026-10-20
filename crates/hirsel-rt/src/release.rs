@@ -140,7 +140,7 @@ pub struct Layout {
     /// The MEM-6 charge of a block of this payload layout (version 6; the runtime README's
     /// table), per element with [`LAYOUT_LOGICAL_PER_ELEMENT`].
     pub logical: u64,
-    /// Optional five-word live-entry count program (native descriptor version 12).
+    /// Optional five-word live-entry count program (native descriptor version 13).
     pub logical_count: *const u64,
 }
 

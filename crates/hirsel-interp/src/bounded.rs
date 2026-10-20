@@ -468,7 +468,9 @@ pub(crate) fn copy<'a>(
                         },
                     ) => {
                         let each = size(*element)?;
-                        total = total.saturating_add(each.saturating_mul(elements.len() as u64));
+                        total = total.saturating_add(
+                            each.saturating_mul(elements.iter().flatten().count() as u64),
+                        );
                         for element_value in elements.iter().flatten() {
                             work.push((element_value, *element, scope.clone()));
                         }
@@ -482,7 +484,9 @@ pub(crate) fn copy<'a>(
                         },
                     ) => {
                         let each = size(*key)?.saturating_add(size(*item)?);
-                        total = total.saturating_add(each.saturating_mul(entries.len() as u64));
+                        total = total.saturating_add(
+                            each.saturating_mul(entries.iter().flatten().count() as u64),
+                        );
                         for entry in entries.iter().flatten() {
                             let Value::Tuple(parts) = entry else {
                                 return Err(mismatch());

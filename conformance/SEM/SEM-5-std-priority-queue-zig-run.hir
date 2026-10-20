@@ -1,0 +1,61 @@
+// rule: SEM-5
+// expect: run
+// Zig bff490a2 lib/std/priority_queue.zig:294-483,654-674.
+@noalloc
+fn by(a: i32, b: i32) -> i32 uses {} { if a < b { -1 } else if a > b { 1 } else { 0 } }
+@noalloc
+fn reverse(a: i32, b: i32) -> i32 uses {} { by(b, a) }
+fn check(input: List[i32], expected: List[i32], heapify: bool, descending: bool) -> () {
+  let compare = if descending { reverse } else { by }
+  let mut h: unique priority_queue.Heap[i32] = if heapify {
+    priority_queue.from_list(compare, unique input)
+  } else {
+    let mut out: unique priority_queue.Heap[i32] = priority_queue.empty(compare)
+    for x in input { priority_queue.push(mut out, x) }
+    take out
+  }
+  for x in expected {
+    failure.check(priority_queue.peek(h) == Some(x), Bounds())
+    failure.check(priority_queue.peek(h) == Some(x), Bounds())
+    failure.check(priority_queue.pop(mut h) == Some(x), Bounds())
+  }
+  failure.check(priority_queue.len(h) == 0 && priority_queue.peek(h) == None && priority_queue.pop(mut h) == None, Bounds())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  check([54, 12, 7, 23, 25, 13], [7, 12, 13, 23, 25, 54], false, false)
+  check([54, 12, 7, 23, 25, 13], [54, 25, 23, 13, 12, 7], false, true)
+  check([54, 12, 7, 23, 25, 13], [7, 12, 13, 23, 25, 54], true, false)
+  check([54, 12, 7, 23, 25, 13], [54, 25, 23, 13, 12, 7], true, true)
+  check([1, 1, 2, 2, 1, 1], [1, 1, 1, 1, 2, 2], false, false)
+  check([1, 1, 2, 2, 1, 1], [2, 2, 1, 1, 1, 1], false, true)
+  check([1, 1, 2, 2, 1, 1], [1, 1, 1, 1, 2, 2], true, false)
+  check([1, 1, 2, 2, 1, 1], [2, 2, 1, 1, 1, 1], true, true)
+  check([], [], false, false)
+  check([], [], false, true)
+  check([], [], true, false)
+  check([], [], true, true)
+  check([9, 3, 2], [2, 3, 9], false, false)
+  check([9, 3, 2], [9, 3, 2], false, true)
+  check([9, 3, 2], [2, 3, 9], true, false)
+  check([9, 3, 2], [9, 3, 2], true, true)
+  check([15, 7, 21, 14, 13, 22, 12, 6, 7, 25, 5, 24, 11, 16, 15, 24, 2, 1], [1, 2, 5, 6, 7, 7, 11, 12, 13, 14, 15, 15, 16, 21, 22, 24, 24, 25], false, false)
+  check([15, 7, 21, 14, 13, 22, 12, 6, 7, 25, 5, 24, 11, 16, 15, 24, 2, 1], [25, 24, 24, 22, 21, 16, 15, 15, 14, 13, 12, 11, 7, 7, 6, 5, 2, 1], false, true)
+  check([15, 7, 21, 14, 13, 22, 12, 6, 7, 25, 5, 24, 11, 16, 15, 24, 2, 1], [1, 2, 5, 6, 7, 7, 11, 12, 13, 14, 15, 15, 16, 21, 22, 24, 24, 25], true, false)
+  check([15, 7, 21, 14, 13, 22, 12, 6, 7, 25, 5, 24, 11, 16, 15, 24, 2, 1], [25, 24, 24, 22, 21, 16, 15, 15, 14, 13, 12, 11, 7, 7, 6, 5, 2, 1], true, true)
+  check([1], [1], false, false)
+  check([1], [1], false, true)
+  check([1], [1], true, false)
+  check([1], [1], true, true)
+  check([0, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106, 8], [0, 1, 2, 3, 4, 5, 6, 7, 8, 100, 101, 102, 103, 104, 105, 106], false, false)
+  check([0, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106, 8], [106, 105, 104, 103, 102, 101, 100, 8, 7, 6, 5, 4, 3, 2, 1, 0], false, true)
+  check([0, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106, 8], [0, 1, 2, 3, 4, 5, 6, 7, 8, 100, 101, 102, 103, 104, 105, 106], true, false)
+  check([0, 1, 100, 2, 3, 101, 102, 4, 5, 6, 7, 103, 104, 105, 106, 8], [106, 105, 104, 103, 102, 101, 100, 8, 7, 6, 5, 4, 3, 2, 1, 0], true, true)
+
+  // Zig:676-704 context comparator, with an owned capture instead of void*.
+  let context: List[i32] = [5,3,4,2,2,8,0]
+  let mut h: unique priority_queue.Heap[u64] = priority_queue.empty(unique fn(a:u64,b:u64) -> i32 uses {} { by(context[a],context[b]) })
+  for i in 0u64..7u64 { priority_queue.push(mut h,i) }
+  for i in [6u64,4,3,1,2,0,5] { failure.check(priority_queue.pop(mut h) == Some(i), Bounds()) }
+  Ok(())
+}

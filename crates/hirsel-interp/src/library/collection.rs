@@ -32,21 +32,25 @@ pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
         ) if *k == kind => elements,
         _ => return Err(invalid("wrong collection kind")),
     };
-    elements
-        .iter()
-        .map(|v| v.clone().ok_or_else(|| invalid("dead collection element")))
-        .collect()
+    if matches!(kind, BuiltinType::Map | BuiltinType::Set) {
+        Ok(elements.iter().flatten().cloned().collect())
+    } else {
+        elements
+            .iter()
+            .map(|v| v.clone().ok_or_else(|| invalid("dead collection element")))
+            .collect()
+    }
 }
 
 pub fn len(value: &Value) -> Result<u64, Error> {
     match value {
-        Value::Sequence { elements, .. }
-        | Value::Map {
+        Value::Sequence { elements, .. } => Ok(elements.len() as u64),
+        Value::Map {
             entries: elements, ..
         }
         | Value::Set {
             entries: elements, ..
-        } => Ok(elements.len() as u64),
+        } => Ok(elements.live_len() as u64),
         _ => Err(invalid("expected collection")),
     }
 }
@@ -240,9 +244,15 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
                 fields(x, y)
             }
         }
-        (Value::Map { entries: x, .. }, Value::Map { entries: y, .. }) => fields(x, y),
+        (Value::Map { entries: x, .. }, Value::Map { entries: y, .. }) => {
+            x.live_len() == y.live_len()
+                && x.iter()
+                    .flatten()
+                    .zip(y.iter().flatten())
+                    .all(|(a, b)| data_equal(a, b))
+        }
         (Value::Set { entries: x, .. }, Value::Set { entries: y, .. }) => {
-            x.len() == y.len()
+            x.live_len() == y.live_len()
                 && x.iter()
                     .flatten()
                     .all(|a| y.iter().flatten().any(|b| data_equal(a, b)))
@@ -282,7 +292,7 @@ pub fn map_remove(map: &mut Value, key: &Value) -> Result<OperationResult, Keyed
         return Err(invalid("map.remove requires Map").into());
     };
     let (result, released) = if let Some(index) = elements.find_key(key, KeyKind::Map)?.0 {
-        let Some(Value::Tuple(mut pair)) = elements.remove(index) else {
+        let Some(Value::Tuple(mut pair)) = elements.remove_keyed(index) else {
             return Err(invalid("invalid map entry").into());
         };
         let stored_key = pair[0].take().ok_or_else(|| invalid("dead map key"))?;
@@ -309,7 +319,7 @@ pub fn set_remove(set: &mut Value, key: &Value) -> Result<OperationResult, Keyed
     let released = if let Some(index) = index {
         vec![
             elements
-                .remove(index)
+                .remove_keyed(index)
                 .ok_or_else(|| invalid("dead set element"))?,
         ]
     } else {

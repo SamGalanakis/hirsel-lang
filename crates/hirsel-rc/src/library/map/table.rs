@@ -4,7 +4,11 @@ use super::*;
 
 pub(super) fn entry_type(b: &mut Body<'_, '_>) -> R<TypeId> {
     let k = b.cx.type_actual(0)?;
-    let v = b.cx.type_actual(1)?;
+    let v = if b.cx.arguments.len() == 2 {
+        b.cx.type_actual(1)?
+    } else {
+        b.cx.store.push(Type::unit())
+    };
     Ok(add_type(
         &mut b.cx.store,
         TypeKind::Named {
@@ -16,8 +20,16 @@ pub(super) fn entry_type(b: &mut Body<'_, '_>) -> R<TypeId> {
 
 fn map_type(b: &mut Body<'_, '_>) -> R<TypeId> {
     let k = b.cx.type_actual(0)?;
-    let v = b.cx.type_actual(1)?;
-    Ok(builtin(b, BuiltinType::Map, &[k, v]))
+    let v = if b.cx.arguments.len() == 2 {
+        b.cx.type_actual(1)?
+    } else {
+        b.cx.store.push(Type::unit())
+    };
+    Ok(if b.cx.arguments.len() == 2 {
+        builtin(b, BuiltinType::Map, &[k, v])
+    } else {
+        builtin(b, BuiltinType::Set, &[k])
+    })
 }
 pub(super) fn entry_value(
     b: &mut Body<'_, '_>,
@@ -58,6 +70,15 @@ fn maintenance(b: &mut Body<'_, '_>, name: &str) -> R<()> {
     let map = map_type(b)?;
     let unit = b.cx.store.push(Type::unit());
     let actuals = b.cx.arguments.clone();
+    let name = if b.cx.arguments.len() == 1 {
+        match name {
+            "map_prepare" => "set_prepare",
+            "map_warm" => "set_warm",
+            _ => name,
+        }
+    } else {
+        name
+    };
     let direct = helper(
         b,
         name,
@@ -81,7 +102,11 @@ fn update_index(b: &mut Body<'_, '_>) -> R<()> {
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
-        "map_index",
+        if b.cx.arguments.len() == 2 {
+            "map_index"
+        } else {
+            "set_index"
+        },
         &[
             (PassingMode::Borrow, entries_ty),
             (PassingMode::Borrow, words_ty),
@@ -136,6 +161,20 @@ pub(super) fn append_prepared(
     value: AddressId,
 ) -> R<()> {
     append_map_inner(b, hash, key, value, true)
+}
+pub(super) fn append_set(b: &mut Body<'_, '_>, hash: ValueId, key: AddressId) -> R<()> {
+    let unit_ty = b.cx.store.push(Type::unit());
+    let layout = b.cx.layout(unit_ty)?;
+    let (slot, value) = temporary(b, layout)?;
+    let unit = construct(b, layout, ConstructorKind::Tuple, &[])?;
+    b.store(value, unit)?;
+    b.hold(slot, value);
+    append_map_inner(b, hash, key, value, false)?;
+    b.push(Inst::StorageDead {
+        slot,
+        if_live: false,
+    });
+    Ok(())
 }
 fn append_map_inner(
     b: &mut Body<'_, '_>,
@@ -280,7 +319,13 @@ fn retire(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId) {
     });
 }
 
+pub(super) fn remove_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    remove(cx, false)
+}
 pub(super) fn remove_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    remove(cx, true)
+}
+fn remove(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
     let probe = probe_call(&mut b)?;
     let container = b.parameters[0].address;
@@ -291,7 +336,7 @@ pub(super) fn remove_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let missing = b.block(BlockKind::Body, &[]);
     b.branch(hit, found, missing);
     b.at(missing);
-    let result = option(&mut b, None)?;
+    let result = if is_map { option(&mut b, None)? } else { hit };
     b.ret(Some(result));
     b.at(found);
     let bucket = warm_for_removal(&mut b, &probe, count)?;
@@ -355,7 +400,11 @@ pub(super) fn remove_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot: value_slot,
         if_live: false,
     });
-    let result = option(&mut b, Some(value))?;
+    let result = if is_map {
+        option(&mut b, Some(value))?
+    } else {
+        hit
+    };
     b.ret(Some(result));
     Ok(b.finish())
 }
@@ -416,7 +465,7 @@ pub(super) fn map_prepare(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.jump(scan, &[next, after]);
     b.at(filled);
     b.set_reaching(container.slot, version);
-    if b.cx.path == native_path("map_warm") {
+    if b.cx.path == native_path("map_warm") || b.cx.path == native_path("set_warm") {
         // Only cold immutable/decoded maps enter this body for removal. Build
         // their first index once; retain every physical ordinal.
         update_index(&mut b)?;
