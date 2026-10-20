@@ -162,7 +162,10 @@ def _platforms(ctx):
 
     # The invoking host, for tests that need its tools (qemu, cross compilers,
     # Valgrind). Registered last with its own budget value, so only a target that
-    # names `host` resolves to it.
+    # names `host` resolves to it. Nothing the pool could run belongs here
+    # (toolchain unpacking and crate archives use the default pool platform):
+    # its results never reach the remote cache, whose action cache the pool
+    # serves read-only to clients, so every checkout would redo them.
     host = ctx.attrs.host
     platforms.append(ExecutionPlatformInfo(
         label = host.label.raw_target(),

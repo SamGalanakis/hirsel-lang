@@ -1,4 +1,14 @@
-"""Pinned downloads become relocatable tool directories; only unpacking uses the host."""
+"""Pinned downloads become relocatable tool directories.
+
+Unpacking and the link kit run on the pool like any compile (the default
+platform, platforms.bzl), so the remote action cache shares their outputs
+between checkouts instead of every worktree redoing them on this host. They
+need only the worker image's python3, dpkg-deb and readelf (the kiln root
+filesystem the runtime fingerprint pins) and the pinned LLVM tree. The
+downloads themselves are deferred: with a SHA-256 the daemon fetches an archive
+only when the pool's CAS lacks it, and not at all on an action-cache hit
+(buck2 app/buck2_action_impl/src/actions/impls/download_file.rs `declare_http`,
+app/buck2_execute/src/re/uploader.rs `find_missing`)."""
 load("//tools/buck2:platforms.bzl", "budget_constraint", "test_budget_name", "test_executor", "test_request")
 
 def _unpack(ctx):

@@ -783,10 +783,10 @@ python3 tools/buck2/prepare.py                  # once per checkout
 tools/land                                      # land it on main
 ```
 
-Without further configuration every action runs on this host. Buck2 can
-also use an optional remote-execution pool; its endpoint, credentials and
-platform properties live only in the gitignored `.buckconfig.local`
-(`tools/buck2/README.md`). `-c hirsel.tests=host` explicitly opts into running tests on the invoking
+Buck2 runs on a remote-execution pool whose endpoint, credentials and
+platform properties live only in the gitignored `.buckconfig.local`, written
+by a host hook (`tools/buck2/README.md`); without one `prepare.py` fails, and
+`prepare.py --local` runs every action on this host instead. `-c hirsel.tests=host` explicitly opts into running tests on the invoking
 host; native tools remain pinned inputs in either mode. More target names and the filtered native commands are in
 [tools/buck2/README.md](../tools/buck2/README.md).
 

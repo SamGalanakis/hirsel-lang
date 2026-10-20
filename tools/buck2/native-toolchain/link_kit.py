@@ -89,8 +89,15 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def tool_env(**values):
+    """A pinned environment that keeps the LLVM tree's library path: RUNPATH
+    finds libLLVM, but not its own dependencies (libedit's libbsd), which the
+    tree ships and a pool worker's image does not."""
+    return {"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""), "LC_ALL": "C", **values}
+
+
 def run(command, **kwargs):
-    subprocess.run([str(c) for c in command], check=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "SOURCE_DATE_EPOCH": "0"}, **kwargs)
+    subprocess.run([str(c) for c in command], check=True, env=tool_env(PATH="/usr/bin:/bin", SOURCE_DATE_EPOCH="0"), **kwargs)
 
 
 class Abilists:
@@ -167,7 +174,7 @@ class Abilists:
 def dynamic_symbols(readelf, library):
     """{(name, version): (kind, size, binding, default)} of a library's public
     versioned definitions (GLIBC_PRIVATE and version names excluded)."""
-    printed = subprocess.check_output([str(readelf), "--dyn-syms", "--wide", str(library)], text=True, env={"LC_ALL": "C"})
+    printed = subprocess.check_output([str(readelf), "--dyn-syms", "--wide", str(library)], text=True, env=tool_env())
     found = {}
     for line in printed.splitlines():
         fields = line.split()
@@ -297,13 +304,15 @@ def main():
                     raise SystemExit(f"{triple} {soname}: the stub does not define exactly the release's symbols")
                 record(f"lib/{soname}", source=f"libc6 {target['deb']}: lib/{target['multiarch']}/{soname}, public versions",
                        symbols=len(symbols), checked="abilists at GLIBC_2.28")
-            # LLVM crtbegin/crtend: __dso_handle and the init/fini array hooks.
+            # LLVM crtbegin/crtend: __dso_handle and the init/fini array hooks,
+            # against the floor's headers, never the invoking host's.
+            floor_headers = ["-nostdlibinc", "-isystem", root / "usr/include" / target["multiarch"], "-isystem", root / "usr/include"]
             for name, source in (("crtbeginS.o", "crtbegin.c"), ("crtendS.o", "crtend.c")):
-                command = [clang, f"--target={target['clang']}", *CRT_FLAGS, "-c", builtins / source, "-o", directory / name]
+                command = [clang, f"--target={target['clang']}", *CRT_FLAGS, *floor_headers, "-c", builtins / source, "-o", directory / name]
                 run(command)
                 record(name, source=f"compiler-rt lib/builtins/{source}", flags=CRT_FLAGS)
             # Static LLVM libunwind, compiled against the floor's headers.
-            headers = ["-nostdlibinc", "-isystem", root / "usr/include" / target["multiarch"], "-isystem", root / "usr/include", "-I", unwind / "include", f"-ffile-prefix-map={unwind}=libunwind"]
+            headers = [*floor_headers, "-I", unwind / "include", f"-ffile-prefix-map={unwind}=libunwind"]
             objects = []
             for source in UNWIND_SOURCES:
                 language = UNWIND_CXX_FLAGS if source.endswith(".cpp") else UNWIND_C_FLAGS if source.endswith(".c") else []

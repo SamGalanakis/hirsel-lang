@@ -49,6 +49,7 @@ No lane commits a generated file, so no rebase can conflict on one
 
 ```sh
 python3 tools/buck2/prepare.py        # bootstrap.py, then the remote-execution hook
+python3 tools/buck2/prepare.py --local  # or: no pool, every action on this host
 ```
 
 `bootstrap.py` installs the official Buck2 release pinned in `pins.json` at
@@ -66,9 +67,20 @@ or `~/.config/hirsel/buck2-remote-config`, with the checkout's root. The hook
 writes the gitignored `.buckconfig.local` (only when its content changes):
 the `[buck2_re_client]` endpoint, instance and TLS identity, and
 `hirsel.remote_properties`, the `key=value,...` platform properties the
-pool's workers match. Without a hook an existing `.buckconfig.local` is kept;
-without one `prepare.py` writes `hirsel.execution = local`, which runs every
-action on this host.
+pool's workers match. When the hook is missing or fails, an existing remote
+`.buckconfig.local` is kept; without one `prepare.py` fails and names the
+missing hook. Only `prepare.py --local` writes `hirsel.execution = local`,
+which runs every action on this host, so an unattended `tools/land` or
+`tools/main-runs` never silently redoes the pool's work here.
+
+Toolchain preparation runs on the pool like any compile: the third-party crate
+`http_archive`s, the `native_toolchain_unpack`s and the `link_kit`
+(`native-toolchain/defs.bzl`) resolve to the default pool platform, so every
+checkout after the first takes their outputs from the remote action cache and
+never downloads or unpacks them here. Only targets that name
+`//tools/buck2:host` (tests that run the host's own tools) stay local, uncached:
+the pool's client listener serves the action cache read-only, so a local
+result could not be uploaded (`allow_cache_uploads`) anyway.
 
 ## Stale outputs
 

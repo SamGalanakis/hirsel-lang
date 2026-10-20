@@ -6,9 +6,11 @@ load("@prelude//utils:selects.bzl", "selects")
 load(":profile.bzl", "third_party_profile_flags")
 
 def third_party_http_archive(name, **kwargs):
-    # Unpacking a crate archive is a fraction of a second over a file the
-    # daemon just downloaded; it runs on the invoking host.
-    native.http_archive(name = name, exec_compatible_with = ["root//tools/buck2:host"], **kwargs)
+    # The prelude's http_archive unpacks remotely when the archive has a
+    # SHA-256 (prelude http_archive/http_archive.bzl `prefer_local`): on the
+    # default pool platform, so a second checkout gets an action-cache hit and
+    # never downloads or unpacks the crate on this host.
+    native.http_archive(name = name, **kwargs)
 
 def _compatible(platforms, kwargs):
     compatible = kwargs.pop("target_compatible_with", [])
