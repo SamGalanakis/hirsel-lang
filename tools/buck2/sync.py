@@ -194,14 +194,10 @@ PRECHECK = "//:hirsel-std-precheck"
 PRECHECKED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
 
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
-# discovery, and the drift checks of what only tools/land writes: every run
-# outside the full gate skips them by name, and `-c hirsel.full=true` runs them
-# (tools/buck2/defs.bzl).
+# discovery: every run outside the full gate skips them by name, and
+# `-c hirsel.full=true` runs them (tools/buck2/defs.bzl).
 FULL_GATE_SKIPS = {
-    # docs/api.md is current on main alone: tools/land writes it (generated.py).
-    "hirsel-cli-test-cli": ["full_gate_committed_index_is_what_doc_prints"],
-    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry",
-                              "api_index::full_gate_committed_index_is_the_rendered_page"],
+    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
     "hirsel-conformance-test-it": ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
 }
 

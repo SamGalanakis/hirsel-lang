@@ -3044,25 +3044,6 @@ pub fn main(rt: Io) -> Result[(), LaunchError] {
     }
 }
 
-fn std_signature_page() -> Vec<u8> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("doc")
-        .arg(root.join("stdlib/std@1/hirsel.json"))
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    output.stdout
-}
-
-/// Only tools/land writes docs/api.md, on the tip it pushes: the full gate
-/// checks main's page is what `hirsel doc` prints (FULL_GATE_SKIPS).
-#[test]
-fn full_gate_committed_index_is_what_doc_prints() {
-    assert_eq!(std_signature_page(), include_bytes!("../../../docs/api.md"));
-}
-
 #[test]
 fn runtime_failure_reports_a_complete_site_in_human_and_json() {
     let path = file(

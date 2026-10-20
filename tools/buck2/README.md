@@ -32,10 +32,10 @@ No lane commits a generated file, so no rebase can conflict on one
   so remote execution and its cache, is unchanged.
 - **`docs/api.md` is committed, and only main's hourly run writes it**:
   `tools/main-runs` regenerates the page with the built CLI after each run and
-  pushes a change straight to main. `tools/land` refuses a change that
-  touches it (or force-adds a build input) and print the commands that drop
-  it. Its drift tests run in the
-  full suite (`FULL_GATE_SKIPS` in `sync.py`), on main.
+  pushes a change straight to main, so main's page trails its sources by at
+  most one run and no test compares the two. `tools/land` refuses a change
+  that touches it (or force-adds a build input) and prints the commands that
+  drop it.
 - **Files many lanes add to merge themselves.** `.gitattributes` gives
   `third-party/NOTICES.md`, every `hirsel.json` and the sorted ratchet and
   expectation lists (`SORTED_LISTS` in `merging.py`) the `hirsel` merge
@@ -183,9 +183,9 @@ tools/land                                           # rebase, build, Clippy, fm
 ```
 
 After each run, `tools/main-runs` runs the built `hirsel doc stdlib/std@1/hirsel.json`
-and pushes a changed `docs/api.md` straight to main. Lane runs keep the
-index's export-count test; its drift tests, which compare the committed page,
-run in the full suite.
+and pushes a changed `docs/api.md` straight to main. The index's export-count
+test checks the renderer; nothing compares the committed page, which only
+main-runs writes.
 
 Builds use Buck2's default isolation dir, `v2`: never pass
 `--isolation-dir` (or pass only `--isolation-dir v2`) and leave

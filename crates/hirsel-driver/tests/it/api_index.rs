@@ -108,21 +108,6 @@ fn published_index_matches_every_core_and_std_export() {
     });
 }
 
-/// Only tools/land writes docs/api.md, on the tip it pushes, so main's page is
-/// current and a lane's never is: the full gate checks main's (FULL_GATE_SKIPS).
-#[test]
-fn full_gate_committed_index_is_the_rendered_page() {
-    hirsel_engine::with_compiler_stack(|| {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let entries = api_index::entries(&root.join("stdlib/std@1/hirsel.json")).unwrap();
-        assert_eq!(
-            api_index::render(&entries),
-            include_str!("../../../../docs/api.md"),
-            "docs/api.md is stale on this tree; tools/land regenerates it on the batch it pushes"
-        );
-    });
-}
-
 #[test]
 fn index_retains_source_contracts_comments_and_public_visibility() {
     hirsel_engine::with_compiler_stack(|| {
