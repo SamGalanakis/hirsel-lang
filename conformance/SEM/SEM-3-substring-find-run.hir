@@ -34,6 +34,13 @@ fn slice(s: String, begin: u64, end: u64) -> String in s uses {} {
 }
 
 pub fn main() -> Result[(), ()] {
+  failure.check(string.contains("", ""), TextInvariant())
+  failure.check(string.contains("a", ""), TextInvariant())
+  failure.check(!string.contains("", "a"), TextInvariant())
+  failure.check(string.contains("雪", "雪"), TextInvariant())
+  failure.check(!string.contains("雪", "☃"), TextInvariant())
+  failure.check(!string.contains("short", "long needle"), TextInvariant())
+  failure.check(string.contains("prefix needle suffix", "needle"), TextInvariant())
   failure.check(offset("", "", false) == Some(0u64), TextInvariant())
   failure.check(offset("banana", "apple pie", false) == None(), TextInvariant())
   let ascii = "abcabc"

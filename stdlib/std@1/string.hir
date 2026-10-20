@@ -205,6 +205,15 @@ pub fn join(parts: List[String], separator: String) -> unique String uses {} {
 
 @noalloc
 pub fn contains(s: String, pattern: String) -> bool uses {} {
+  // Rust Pattern for &str::is_contained_in, pattern.rs:989-1017 at
+  // a7c37f9f0ee5e93396106e9de20f4a86b4154e63: resolve empty, equal and
+  // longer needles before constructing a Two-Way searcher.
+  if core@1/string.byte_len(pattern) == 0 {
+    return true
+  }
+  if core@1/string.byte_len(pattern) >= core@1/string.byte_len(s) {
+    return s == pattern
+  }
   match find(s, pattern) {
     Some(_) => true,
     None() => false,
