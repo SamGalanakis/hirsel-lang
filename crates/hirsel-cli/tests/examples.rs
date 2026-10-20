@@ -2479,3 +2479,170 @@ fn grpc_greeter_serves_and_calls_itself_over_tcp() {
         );
     }
 }
+
+/// The peak resident set of a running process, in bytes.
+fn peak_resident(pid: u32) -> u64 {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    let line = status
+        .lines()
+        .find(|l| l.starts_with("VmHWM:"))
+        .expect("VmHWM");
+    line.split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse::<u64>()
+        .unwrap()
+        * 1024
+}
+
+/// Reads one server-sent event (up to its blank line) from `stream`, keeping what
+/// follows in `pending`.
+fn next_event(stream: &mut std::net::TcpStream, pending: &mut Vec<u8>) -> String {
+    use std::io::Read;
+    loop {
+        if let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
+            let event = String::from_utf8(pending[..end].to_vec()).unwrap();
+            pending.drain(..end + 2);
+            return event;
+        }
+        let mut chunk = [0u8; 16384];
+        let n = stream.read(&mut chunk).unwrap();
+        assert!(n > 0, "the event stream closed");
+        pending.extend_from_slice(&chunk[..n]);
+    }
+}
+
+/// examples/tasks with many open event streams over a large board, natively: each
+/// stream renders under the board's lock, which lends the board, so a stream holds no
+/// copy of it while it waits. 200 streams over 2,000 tasks once held a 1 MB board copy
+/// each (about 200 MiB); they must now stay within a few MiB of the server's
+/// readiness, through a change that re-renders every stream.
+#[test]
+fn tasks_event_streams_hold_no_board_llvm() {
+    use std::io::Write;
+    const TASKS: u64 = 2000;
+    const STREAMS: usize = 200;
+    const GROWTH: u64 = 24 << 20;
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-example-{}-{}-tasks-streams",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let tasks: Vec<serde_json::Value> = (1..=TASKS)
+        .map(|n| {
+            serde_json::json!({
+                "id": n, "title": format!("Task {n}"), "description": "Benchmark description",
+                "status": "Todo", "priority": "Medium", "due": null,
+                "tags": ["bench", format!("group-{}", n % 10)],
+            })
+        })
+        .collect();
+    std::fs::write(
+        data.join("board-00000000000000000001.json"),
+        serde_json::json!({"next_id": TASKS + 1, "revision": 1, "tasks": tasks}).to_string(),
+    )
+    .unwrap();
+    let exe = dir.join("tasks");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["build", "--backend", "llvm"])
+        .arg(repository_manifest("examples/tasks/hirsel.json"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "build tasks: {output:?}");
+    let port = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let grants = serde_json::json!({
+        "io": {
+            "stdout": "stdout.bytes@1",
+            "stderr": "stderr.bytes@1",
+            "stdin": "stdin.bytes@1",
+            "tasks": "tasks.cooperative@1",
+            "monotonic_clock": "clock.monotonic.ns@1",
+            "dirs": [
+                {"path": "data", "host": data.canonicalize().unwrap(), "access": "read_write"},
+                {"path": "static", "host": repository_manifest("examples/tasks/static"), "access": "read"},
+            ],
+            "net": {"provider": "net.stream@1", "rules": [{"address": "127.0.0.1", "service": port, "operation": "listen"}]},
+        },
+        "args": [],
+        "env": {"TASKS_HOST": null, "TASKS_PORT": null, "TASKS_DURABILITY": null, "TASKS_LOG_LEVEL": null},
+    });
+    let grants_path = dir.join("grants.json");
+    std::fs::write(&grants_path, grants.to_string()).unwrap();
+    let mut command = Command::new(&exe);
+    command
+        .arg("--hirsel-grants")
+        .arg(&grants_path)
+        .args(["--port", &port]);
+    let server = Running::spawn(command, &dir.join("server.log"));
+    assert_eq!(
+        server.line("server readiness"),
+        format!("listening on http://127.0.0.1:{port}/")
+    );
+    let pid = server.child.id();
+    let ready = peak_resident(pid);
+    // A search that matches one task, as a browser sends its signals.
+    let target = "/updates?datastar=%7B%22filter%22%3A%7B%22status%22%3A%22%22%2C%22tag%22%3A%22%22%2C%22text%22%3A%22Task%201999%22%2C%22sort%22%3A%22manual%22%7D%2C%22selected%22%3A0%7D";
+    let mut streams = Vec::new();
+    for _ in 0..STREAMS {
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap())).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+            .unwrap();
+        write!(
+            stream,
+            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+        )
+        .unwrap();
+        // The response head ends with a blank line too.
+        let mut pending = Vec::new();
+        let head = loop {
+            if let Some(end) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8(pending[..end].to_vec()).unwrap();
+                pending.drain(..end + 4);
+                break head;
+            }
+            let mut chunk = [0u8; 16384];
+            let n = std::io::Read::read(&mut stream, &mut chunk).unwrap();
+            assert!(n > 0, "no response head");
+            pending.extend_from_slice(&chunk[..n]);
+        };
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let event = next_event(&mut stream, &mut pending);
+        assert!(event.contains("Task 1999"), "{event}");
+        streams.push((stream, pending));
+    }
+    let opened = peak_resident(pid);
+    let mut change =
+        std::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap())).unwrap();
+    write!(
+        change,
+        "POST /tasks/1/advance HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    std::io::Read::read_to_string(&mut change, &mut reply).unwrap();
+    assert!(reply.starts_with("HTTP/1.1 204"), "{reply}");
+    for (stream, pending) in &mut streams {
+        let event = next_event(stream, pending);
+        assert!(event.contains("Task 1999"), "{event}");
+    }
+    let changed = peak_resident(pid);
+    assert!(
+        opened - ready < GROWTH && changed - ready < GROWTH,
+        "{STREAMS} streams grew the peak resident set from {ready} to {opened} bytes, \
+         and the change to {changed}"
+    );
+    drop(streams);
+    assert!(server.finish("server").success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

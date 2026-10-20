@@ -730,15 +730,9 @@ impl<'a> Layouts<'a> {
             }
         })
     }
-    /// The layout of the field (of any variant) stored at `offset`.
+    /// The layout of the field (of any variant, at any inline depth) stored at `offset`.
     fn field_at(&self, layout: &LayoutRecord, offset: u64) -> Option<LayoutId> {
-        let variants = layout.tag.iter().flat_map(|t| &t.variants);
-        layout
-            .fields
-            .iter()
-            .chain(variants.flat_map(|v| &v.fields))
-            .find(|f| f.offset == offset)
-            .map(|f| f.layout)
+        self.0.field_at(layout, offset)
     }
 }
 

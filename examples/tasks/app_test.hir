@@ -153,7 +153,14 @@ fn changes_are_saved_before_they_are_published(t: Test) {
       test.check(t, commit(svc, mut to_writer, mut to_hub, Next(1)) == Ok(1))
       // The move changed nothing, so the next wakeup is the advance's revision.
       test.check(t, channel.receive(tasks, mut wakeups) == Ok(2) && on_disk(d, 2))
-      test.check(t, board_snapshot(svc).tasks[0].status == Doing())
+      let status = mutex.with(
+        tasks,
+        svc.state,
+        fn(mut board: unique model.Board) -> model.Status uses {} {
+          board.tasks[0].status
+        }
+      )
+      test.check(t, status == Doing())
       hub.stop(tasks, mut to_hub)
       close_sender(take to_hub)
       close_sender(take to_writer)

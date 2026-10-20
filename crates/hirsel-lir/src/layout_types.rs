@@ -614,6 +614,28 @@ impl LayoutTable {
     pub fn layout(&self, id: LayoutId) -> Option<&LayoutRecord> {
         self.layouts.get(id.0 as usize)
     }
+    /// The layout of the field (of any variant) stored at `offset` in `layout`, at any
+    /// inline depth: an aggregate's drop program lifts the steps of an inline field,
+    /// such as an `Option[String]` inside a record, to offsets in the whole value.
+    pub fn field_at(&self, layout: &LayoutRecord, offset: u64) -> Option<LayoutId> {
+        let variants = layout.tag.iter().flat_map(|t| &t.variants);
+        let fields = layout.fields.iter().chain(variants.flat_map(|v| &v.fields));
+        let mut inside = None;
+        for field in fields {
+            if field.offset == offset {
+                return Some(field.layout);
+            }
+            if field.offset < offset
+                && let Some(child) = self.layout(field.layout)
+                && let SizeSpec::Fixed(size) = child.size
+                && offset - field.offset < size
+            {
+                inside = Some((child, offset - field.offset));
+            }
+        }
+        let (child, within) = inside?;
+        self.field_at(child, within)
+    }
     pub fn digest(&self) -> ContentHash {
         snapshot::digest("layout-table", self)
     }

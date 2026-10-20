@@ -210,16 +210,10 @@ impl<'a> Lay<'a> {
                     .peekable();
                 fields.peek().is_none() || fields.any(|f| self.destructible_in(f.layout, seen))
             }
-            DropStep::Release { offset } => {
-                let variants = layout.tag.iter().flat_map(|t| &t.variants);
-                let child = layout
-                    .fields
-                    .iter()
-                    .chain(variants.flat_map(|v| &v.fields))
-                    .find(|f| f.offset == *offset)
-                    .map(|f| f.layout);
-                child.is_none_or(|c| self.destructible_in(c, seen))
-            }
+            DropStep::Release { offset } => self
+                .0
+                .field_at(layout, *offset)
+                .is_none_or(|c| self.destructible_in(c, seen)),
         })
     }
 }

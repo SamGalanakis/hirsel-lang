@@ -246,6 +246,37 @@ fn a_partial_move_drops_the_rest() {
     );
 }
 
+/// A record whose counted field sits inside an inline field (a nested record, a
+/// variant payload) has no user-visible destruction, so it is released at its last
+/// use like any other: its block is freed before the next one is built. Its drop
+/// program names that field at its offset in the whole record, through the inline
+/// field that holds it.
+#[test]
+fn a_record_with_a_nested_counted_field_released_at_last_use() {
+    for (types, make) in [
+        (
+            "type In { m: u64, b: box P }\ntype R { n: u64, i: In }\n",
+            "R(n: {n}, i: In(m: 0, b: box P(a: {n}, b: 0)))",
+        ),
+        (
+            "type V = One(box P) | Two(box P)\ntype R { n: u64, v: V }\n",
+            "R(n: {n}, v: Two(box P(a: {n}, b: 0)))",
+        ),
+    ] {
+        let first = make.replace("{n}", "1");
+        let second = make.replace("{n}", "2");
+        let source = format!(
+            "{P}{types}fn main() -> u64 {{ let r = {first}; let k = r.n; let s = {second}; k + s.n }}"
+        );
+        let (o, builds) = run_all(&source);
+        assert_eq!(returned_u64(&o), 3);
+        for built in &builds {
+            let peak = execute(built).counters.peak_live_heap;
+            assert!(peak <= 1, "{peak} heap blocks live at once\n{source}");
+        }
+    }
+}
+
 /// A loop-carried holder replaced every iteration: its version joins at the
 /// loop head and the displaced value is released each time.
 #[test]

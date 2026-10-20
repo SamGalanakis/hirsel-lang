@@ -268,16 +268,6 @@ pub fn apply(mut board: unique model.Board, what: Change) -> unique Applied uses
   Applied(found: found, id: id, saved: take saved)
 }
 
-fn board_snapshot(svc: Services) -> model.Board {
-  mutex.with(
-    svc.tasks,
-    svc.state,
-    fn(mut board: unique model.Board) -> unique model.Board uses {} {
-      unique board
-    }
-  )
-}
-
 /// Applies `change`, waits for its snapshot to be saved and publishes the new
 /// revision. Returns whether the task existed and the change was saved.
 pub fn commit(
@@ -478,16 +468,32 @@ fn html_reply(status: u16, take document: String) -> httpd.Reply uses {} {
 }
 
 pub fn page(svc: Services, query: model.Query, selected: u64) -> httpd.Reply {
-  let board = board_snapshot(svc)
-  if selected != 0 && option.is_none(model.find(board, selected)) {
-    return html_reply(404, view.not_found_page())
-  }
   let screen = view.Screen(
     query: unique query,
     selected: selected,
     today: today(svc.wall)
   )
-  html_reply(200, view.page(board, screen))
+  // Rendered under the lock, which lends the board: a read copies nothing.
+  let document = mutex.with(
+    svc.tasks,
+    svc.state,
+    fn(mut board: unique model.Board) -> unique Option[String] uses {} {
+      found_page(board, screen)
+    }
+  )
+  match take document {
+    Some(text) => html_reply(200, take text),
+    None() => html_reply(404, view.not_found_page()),
+  }
+}
+
+// The page, or None when it selects a task the board does not hold.
+fn found_page(board: model.Board, screen: view.Screen) -> unique Option[String] uses {} {
+  if screen.selected != 0 && option.is_none(model.find(board, screen.selected)) {
+    None()
+  } else {
+    Some(view.page(board, screen))
+  }
 }
 
 /// GET /static/<name>, with an ETag so a browser can revalidate cheaply.
@@ -576,6 +582,17 @@ fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique vie
   }
 }
 
+// The live elements and their revision, unless the board is still at `shown`.
+fn changed_live(board: model.Board, screen: view.Screen, first: bool, shown: u64) -> unique Option[
+  (u64, String)
+] uses {} {
+  if first || board.revision > shown {
+    Some((board.revision, view.live(board, screen)))
+  } else {
+    None()
+  }
+}
+
 /// GET /updates: the long-lived stream of one browser. It renders the live elements
 /// now and again after every published revision, until the browser goes or the
 /// server stops.
@@ -597,16 +614,20 @@ pub fn stream_updates(
   let mut shown: u64 = 0
   let mut first = true
   while true {
-    let board = board_snapshot(svc)
-    if first || board.revision > shown {
+    // Rendered under the lock, which lends the board, so a stream copies nothing
+    // and holds nothing while it waits.
+    let patch = mutex.with(
+      svc.tasks,
+      svc.state,
+      fn(mut board: unique model.Board) -> unique Option[(u64, String)] uses {} {
+        changed_live(board, screen, first, shown)
+      }
+    )
+    if let Some((revision, elements)) = take patch {
       first = false
-      shown = board.revision
+      shown = revision
       if results.is_error(
-        datastar.patch_elements(
-          mut sse,
-          view.live(board, screen),
-          datastar.elements_options()
-        )
+        datastar.patch_elements(mut sse, elements, datastar.elements_options())
       ) {
         return ()
       }
