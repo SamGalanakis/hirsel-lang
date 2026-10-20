@@ -604,34 +604,28 @@ bundled`, and delete `prelude_overlay.py`, its pins, its test `tools/tests/prelu
 A pool test binary reserves what it measured using: `test_sizes.bzl`
 (`TEST_REQUESTS`, which `sync.py` derives from the evidence in
 `test-sizes.json`) gives each binary, shared by
-its shards, one CPU while its p95 core use is at most 1.6 (a one-CPU action
-already runs up to the worker's slot share), otherwise two. No gate test asks
-for more: the pool holds its one reservation for a blocked multi-CPU action, so
-three or four CPUs both wait minutes and hold back the actions behind them,
-where two start in seconds. The evidence keeps the parallel fraction and the
-wall time two CPUs take relative to `clamp(ceil(p95), 2, 4)`; at two, every
-gate binary's p95 wall, scaled from its measured runs, stays under a
-quarter of its 1800 s timeout.
-Only the full run's agreement shards, which already reach their timeout at
-four, keep four. The launcher runs as many test threads as the request's whole
-CPUs.
+its shards, one CPU while total CPU seconds / total wall seconds is at most
+1.6, otherwise two. A one-CPU action may burst to two (cpu.max = 2 × request).
+A short CPU burst does not establish sustained parallelism. Four-CPU full-run
+shards no longer have an exemption: agreement uses 384 smaller shards instead
+of 96 long-lived four-CPU reservations. The launcher runs as many test threads
+as the reservation's whole CPUs.
 
-Memory follows the worker's kill rule: it samples an action's process-group
-PSS, shared libraries and mapped binaries included, and kills it past twice its
-`memory_kb`. A binary reserves its largest PSS peak / 2 * 1.2, rounded up to
-256 MiB, at least 512 MiB, and at least 1.75 times the request of any run of it
-killed for memory. The full native stages without measurements inherit the largest measured native
-stage's request, recorded as `fallback_from` in the evidence. Other binaries
-without a row reserve 1 CPU and 2 GiB.
+Memory reserves the largest measured process-group PSS peak times 1.2, rounded
+up to 64 MiB, at least 128 MiB. The worker's twice-reservation kill threshold
+is a safety mechanism, not a discount on the reservation. The 20% margin
+covers PSS sampling jitter and moderate code growth; fine rounding avoids a
+256 MiB rounding penalty on small binaries. Unmeasured native stages inherit
+the largest freshly measured native sibling, explicitly recorded as a fallback.
+Other binaries without a row retain the 1 CPU / 2 GiB conservative default.
 
-Each test run's data is capped at that same kill line (`HIRSEL_MEMORY_LIMIT`, set
-by `defs.bzl`; `crates/hirsel-guard`), so a run past it stops with `hirsel: memory
-limit ... reached` instead of being killed and retried. A stop counts as a memory
-kill: record it in `guard-stops.json` (the binary, the `reserved_kb` it ran under,
-what grew and, when measured, the `needed_kb` data limit it needs), and the
-generator raises that binary to 1.75 times the reservation or half `needed_kb`,
-whichever is larger, giving one with no measured runs yet a row at that floor with the
-stop's `cpu_count` (default 1).
+The process data/address-space guard (HIRSEL_MEMORY_LIMIT) normally uses
+that kill line. guard-stops.json records allocation limits including unused
+thread stacks, which can far exceed resident PSS. Those now raise only the
+guard limit (TEST_GUARD_LIMITS), independently from the reservation. Completed
+memory-kill retries are sized from measured peaks, without preserving the
+scheduler's geometric escalation overshoot forever. Unfinished memory kills
+keep a conservative floor of twice their failed request times 1.2.
 
 The inputs are read-only copies: each worker's `actions.log` and
 `actions.log.1` (`TEST_TARGET` and CPU per test run), the scheduler's usage
@@ -688,7 +682,7 @@ action includes compiling the executable, so its time is not linker-only.
 ## Measured compile requests
 
 `action-sizes.json` keeps dev/release budgets per target, with phase timings,
-CPU seconds and anonymous memory peaks. `sync.py` generates `exec_sizes.bzl`
+CPU seconds and PSS memory peaks. `sync.py` generates `exec_sizes.bzl`
 from it; compile rules select that target's platform. A dev compile splits its
 code into 16 codegen units whatever its reservation, so LLVM spreads them over
 the reserved CPUs, and one reserving more than one CPU runs rustc's front end on
@@ -698,40 +692,33 @@ unmeasured release targets keep Cargo's defaults.
 One target's metadata and codegen share the reservation.
 Cargo profiles and dependency resolution remain in Cargo.toml.
 
-`action_sizes_from_log.py` joins Buck2 events, which identify owners,
-initial requests and timing, to the pool workers' per-action usage logs,
-which supply CPU and anonymous/cgroup memory. It uses only unique successful
-matches, leaves ambiguous/missing usage unmeasured, and records those
-omissions. Copy each worker's usage log to `/tmp/usage-<worker>.log`, then:
+The compile generator joins exported Buck2 commands to dispatches by action
+digest and start time, then to worker CPU and scheduler PSS measurements by
+operation. Only uniquely joined successful executions inside the explicit
+measurement window count. Both first-party and third-party compiles get
+per-target dev/release requests. Missing or ambiguous matches stay visible.
+Decode retained event logs with event_logs.commands and copy existing worker
+logs and scheduler traces; do not launch a workspace build to collect data.
+Run action_sizes_from_log.py with --commands, --pss, --usage, --since and
+--until, writing action-sizes.json, then regenerate with sync.py.
 
-```sh
-.buck2/bin/buck2 build //: --event-log /tmp/build.pb.zst
-python3 tools/buck2/action_sizes_from_log.py --events /tmp/build.pb.zst \
-  --usage /tmp/usage-*.log -o tools/buck2/action-sizes.json
-python3 tools/buck2/sync.py
-```
+CPU follows sustained use across the complete run: one CPU through 1.6 cores,
+otherwise two. Old October 16 calibrations no longer pin four CPUs; a new
+four-CPU request needs fresh evidence that it shortens the critical path.
+Memory is maximum measured PSS times 1.2, rounded to 64 MiB, at least 128 MiB.
+The unmeasured compile default is 256 MiB instead of 1 GiB. There is no fixed
+512 MiB anonymous-memory surcharge. special_requests in the same evidence
+sizes precheck, Clippy and native observation from their own measured peaks.
 
-Final CPU sizing is one CPU while p95 cores is at most 1.6 (a one-CPU action
-runs unthrottled up to the worker's slot share), otherwise
-`clamp(ceil(p95_cores), 2, 4)`; below 20 samples the maximum replaces p95.
-Release codegen units match the request, and one-CPU release targets keep two;
-dev compiles use 16. A probe's old request is evidence, never a reservation floor. Schedulability on the shared pool beats peak
-parallelism: smaller requests can start without a whole eight-CPU slot.
-Memory keeps its measured headroom. The script documents memory headroom and sample
-handling. Requests participate in action keys, so resizing deliberately
-invalidates those actions.
-
-A compile measured under one CPU reads as using one core, so the rule never
-grows it. The critical-path compiles in `CPU_CLASSES` are calibrated instead:
-`-c hirsel.probe_cpus=8` gives each of them eight CPUs (and, in release, codegen
-units) for that invocation, `action_sizes_from_log.py --merge` sizes their rows from that
-evidence, and `CALIBRATED_CPUS` keeps the reservation that measured the least
-wall time including queue on the loaded pool; only such a row may exceed four
-CPUs. A crate split that renames a `CPU_CLASSES` target fails `sync.py` until
-the list names the new targets.
+Priority and lane attribution do not enter the action digest. Dependency
+symlink trees are assembled in the daemon by the pinned prelude overlay,
+without remote compile-sized helper actions. Clippy twins share ordinary
+dependencies. The fast main run builds the same bounded workspace build set
+as land, then builds test harnesses in its test stage; it does not build full
+campaign dependencies through the root wildcard. Its pool priority remains 40.
 
 `clippy.py` builds each target's Clippy twin `<name>-clippy`: the same rule on
-a 1 CPU/512 MiB platform, declared only under `-c hirsel.clippy=true`, so
+its measured single-CPU platform, declared only under `-c hirsel.clippy=true`, so
 Clippy never reserves a compile's request and `buck2 build //:` never
 compiles the twins.
 

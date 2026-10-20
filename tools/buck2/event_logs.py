@@ -198,7 +198,7 @@ def commands(paths):
             target = label['name']
             display = target if label['package'] == 'root//' else label['package'] + ':' + target
             profile = owner.get('configuration', {}).get('full_name', '')
-            profile = 'dev' if ':dev#' in profile or profile.startswith('hirsel-rust-host#') else 'release'
+            profile = 'dev' if any(p in profile for p in (':dev#', ':checked#')) or profile.startswith('hirsel-rust-host#') else 'release'
             for report in reports:
                 details = report.get('details', {})
                 remote = details.get('command_kind', {}).get('command', {}).get('RemoteCommand')

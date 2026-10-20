@@ -152,6 +152,20 @@ class Route(unittest.TestCase):
 
 
 class Tiers(unittest.TestCase):
+    def test_fast_build_excludes_campaigns_and_keeps_priority_40(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        queries, stages = [], {}
+        def query(command, **kwargs):
+            queries.append(command[-1])
+            return subprocess.CompletedProcess(command, 0, '//:workspace-lib\n', '')
+        with patch.dict(os.environ), patch('subprocess.run', side_effect=query):
+            tool['stages'](lambda name, command, **_: stages.update({name: command}), 'fast')
+        command = stages['workspace build']
+        self.assertIn('hirsel.priority=40', command)
+        self.assertIn('//:workspace-lib', command)
+        self.assertNotIn('//:', command)
+        self.assertTrue(any('attrfilter(labels, gate' in q and '_hirsel_precheck' in q for q in queries))
+
     def test_fast_runs_only_the_quick_stages_and_full_runs_them_too(self):
         tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
         named = {}

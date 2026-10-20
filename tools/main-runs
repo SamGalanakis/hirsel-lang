@@ -128,7 +128,10 @@ def stages(stage, tier):
     def test(*targets, after=timeout):
         return [*buck2, 'test', *config, *targets, '--', *after]
     from sync import NATIVE_FULL_SHARDS
-    stage('workspace build', [*buck2, 'build', *config, '//:', '--materializations', 'none'])
+    build_set = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
+                 ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
+                 ' - rdeps(root//:, kind("_hirsel_precheck", root//:))')
+    stage('workspace build', [*buck2, 'build', *config, *query(build_set), '--materializations', 'none'])
     stage('workspace clippy', [PY, 'tools/buck2/clippy.py'])
     stage('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
     stage('workspace tests', test(*tests))

@@ -12,7 +12,7 @@ names the crate from any package directory, locally or on the pool, and so do
 CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
-load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
+load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -274,12 +274,10 @@ def _rust_test_impl(ctx):
         # these Bazel test variables. They are stable per
         # target and shard, as they are part of the action key.
         "TEST_TARGET": str(ctx.label.raw_target()),
-        # The memory the run was granted: the pool reserves `memory_kb` and
-        # kills a run past twice that (README.md, Measured test requests). The
-        # launcher and every hirsel binary's guard (crates/hirsel-guard) cap
-        # the run's data there, so it stops with a named message instead; a
-        # larger cap comes from re-measuring the binary's request.
-        "HIRSEL_MEMORY_LIMIT": "{}K".format(2 * int(ctx.attrs.request[1])),
+        # Resident PSS sets the reservation. The allocation guard can also
+        # include unused thread stacks (TEST_GUARD_LIMITS), without reserving
+        # those virtual bytes on the pool.
+        "HIRSEL_MEMORY_LIMIT": "{}K".format(test_memory_limit(ctx.attrs.test_binary, int(ctx.attrs.request[1]))),
     }
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
     if tools:

@@ -19,31 +19,14 @@ writes `test-sizes.json` (the evidence); sync.py derives the gitignored
 `test_sizes.bzl` (the requests `platforms.bzl` reads) from it. A binary's
 shards are one row: they run the same harness.
 
-CPU: 1 while p95 cores (CPU seconds per wall second, runs of at least 1 s) is
-at most 1.6, otherwise 2. A one-CPU action gets the larger of its request and
-the worker's slot share (1.25-1.67 cores), so a second CPU below that reserves
-a core the run leaves idle. The launcher runs as many test threads as the
-reservation's whole CPUs. With fewer than 20 runs the maximum replaces p95.
-No gate test asks for more than two: the pool holds its one reservation for a
-blocked multi-CPU action, so a three- or four-CPU run both waits minutes and
-holds back the actions behind it, where a two-CPU one starts in seconds. The
-evidence keeps what more would buy: Amdahl's parallel fraction, from each run's
-cores used over the test threads it ran (its request, at most 4), the median
-over runs, and the wall time two CPUs take relative to clamp(ceil(p95), 2, 4).
-Only the full run's agreement shards, which run past their timeout already at
-four, keep that count.
+CPU: one CPU up to 1.6 sustained cores (total CPU / total wall), otherwise
+at most two. One CPU may burst to two; short parallel bursts do not establish a
+need for a multi-CPU reservation. No full-run exemption: shard the work instead.
 
-Memory: the worker samples an action's process-group PSS (shared libraries and
-mapped binaries included) every 250 ms and kills it past twice its memory_kb on
-two samples, then the scheduler requeues it with more. A binary reserves its
-largest PSS peak / 2 * 1.2, rounded up to 256 MiB, at least 512 MiB, and at
-least the escalated reservation of any run of it killed for memory (1.75x
-unless a larger retry reservation was observed). A run the memory guard stopped
-(crates/hirsel-guard caps a test's data at its kill line, so the pool never sees
-it) counts as such a kill: `guard-stops.json` records each stop's binary and
-reservation, or more when the stop records `needed_kb`, the data limit the run was
-measured to need (the limit is twice the request); a binary with stops but no runs
-gets a row at its floor, with the stop's `cpu_count` (default 1).
+Memory: reserve the largest enforced PSS peak times 1.2, rounded to 64 MiB,
+with a 128 MiB floor. Guard-stop floors still protect virtual-memory limits;
+the pool's kill threshold (twice the reservation) is not a sizing discount.
+Unobserved binaries retain their previous evidence rather than being guessed.
 """
 
 import argparse
@@ -62,9 +45,8 @@ MIN_WALL_SECONDS = 1.0
 KILL_FACTOR = 2
 MEMORY_MARGIN = 1.2
 ESCALATION = 1.75
-MEMORY_STEP_KB = 262144
-MIN_MEMORY_KB = 524288
-FULL_RUN_CPUS = {"gate-agree-full"}
+MEMORY_STEP_KB = 65536
+MIN_MEMORY_KB = 131072
 # Conformance shards are single-threaded and ran past their limit on the
 # slower worker class; they keep asking for the fast workers.
 CPU_CLASSES = {
@@ -86,55 +68,63 @@ def binary(target):
     return re.sub(r"-shard-\d+$", "", target)
 
 
-def runs(paths):
+def runs(paths, since=0, until=float("inf")):
     """Finished pool test runs by binary, and each run's binary by operation."""
     found = defaultdict(list)
     operations = {}
     for path in paths:
-        for line in Path(path).read_text().splitlines():
-            fields = line.split("\t")
-            if not fields[0].isdigit():
-                continue
-            row = dict(field.split("=", 1) for field in fields[1:] if "=" in field)
-            test = re.fullmatch(r"run:[^:]*:root//:(.*)", row.get("test", ""))
-            if not test or not test.group(1).startswith(("hirsel-", "gate-")):
-                continue
-            name = binary(test.group(1))
-            operations[row.get("op")] = name
-            if row.get("event") == "start" or not row.get("wall_ms", "-").isdigit():
-                continue
-            found[name].append(dict(
-                end=int(fields[0]),
-                wall=int(row["wall_ms"]) / 1000,
-                cpu=int(row["cpu_usec"]) / 1e6 if row.get("cpu_usec", "-").isdigit() else None,
-                requested_cpu=int(row["requested_cpu"]),
-                requested_kb=int(row["requested_kb"]),
-            ))
+        with Path(path).open() as source:
+            for line in source:
+                fields = line.rstrip("\n").split("\t")
+                if not fields[0].isdigit():
+                    continue
+                if not since <= int(fields[0]) < until:
+                    continue
+                row = dict(field.split("=", 1) for field in fields[1:] if "=" in field)
+                test = re.fullmatch(r"run:[^:]*:root//:(.*)", row.get("test", ""))
+                if not test or not test.group(1).startswith(("hirsel-", "gate-")):
+                    continue
+                name = binary(test.group(1))
+                operations[row.get("op")] = name
+                if row.get("event") == "start" or not row.get("wall_ms", "-").isdigit():
+                    continue
+                found[name].append(dict(
+                    end=int(fields[0]),
+                    wall=int(row["wall_ms"]) / 1000,
+                    cpu=int(row["cpu_usec"]) / 1e6 if row.get("cpu_usec", "-").isdigit() else None,
+                    requested_cpu=int(row["requested_cpu"]),
+                    requested_kb=int(row["requested_kb"]),
+                ))
     return found, operations
 
 
-def pss_peaks(paths, operations):
+def pss_peaks(paths, operations, cpus=None):
     """Each binary's PSS peaks (KiB) from the scheduler's usage events."""
     peaks = defaultdict(list)
+    fallback = defaultdict(list)
     for path in paths:
-        for line in Path(path).read_text().splitlines():
-            event = json.loads(line)
-            name = operations.get(event.get("operation"))
-            if name and event.get("event") == "usage" and event.get("sampled") and event.get("peak_memory_kb"):
-                peaks[name].append(event["peak_memory_kb"])
-    return peaks
+        with Path(path).open() as source:
+            for line in source:
+                event = json.loads(line)
+                name = operations.get(event.get("operation"))
+                if name and event.get("event") == "usage" and event.get("sampled") and event.get("peak_memory_kb"):
+                    fallback[name].append(event["peak_memory_kb"])
+                    if cpus is None or event.get("effective_cpu", 1) <= cpus[name]:
+                        peaks[name].append(event["peak_memory_kb"])
+    return defaultdict(list, {name: peaks[name] or values for name, values in fallback.items()})
 
 
 def kills(path, operations):
     """Each binary's escalated reservations (KiB) after a memory kill."""
     floors = defaultdict(list)
     if path:
-        for line in Path(path).read_text().splitlines():
-            line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-            kill = re.search(r"Uuid\(([0-9a-f-]+)\), reserved_kb: (\d+)", line)
-            name = kill and operations.get(kill.group(1))
-            if name:
-                floors[name].append(math.ceil(int(kill.group(2)) * ESCALATION))
+        with Path(path).open() as source:
+            for line in source:
+                line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                kill = re.search(r"Uuid\(([0-9a-f-]+)\), reserved_kb: (\d+)", line)
+                name = kill and operations.get(kill.group(1))
+                if name:
+                    floors[name].append(math.ceil(int(kill.group(2)) * ESCALATION))
     return floors
 
 
@@ -160,17 +150,21 @@ def escalation_floors(paths, operations):
     """Scheduler memory kills, including the actual reservation of their retries."""
     attempts = defaultdict(list)
     for path in paths:
-        for line in Path(path).read_text().splitlines():
-            event = json.loads(line)
-            if event.get("event") == "usage" and event.get("operation") in operations:
-                attempts[event["operation"]].append(event)
+        with Path(path).open() as source:
+            for line in source:
+                event = json.loads(line)
+                if event.get("event") == "usage" and event.get("operation") in operations:
+                    attempts[event["operation"]].append(event)
     floors = defaultdict(list)
     for operation, events in attempts.items():
-        retried = max(e.get("effective_memory_kb", 0) for e in events)
+        # A completed retry establishes its actual peak. Do not turn a
+        # geometric retry overshoot into a permanent reservation floor.
+        if any(e.get("outcome") == "COMPLETED" for e in events):
+            continue
         for event in events:
             if event.get("outcome") == "KILLED_MEMORY":
-                floors[operations[operation]].append(max(
-                    retried, math.ceil(event["effective_memory_kb"] * ESCALATION)))
+                floors[operations[operation]].append(math.ceil(
+                    event["effective_memory_kb"] * KILL_FACTOR * MEMORY_MARGIN))
     return floors
 
 
@@ -186,7 +180,8 @@ def native_rows(found, peaks, floors):
     for name in sorted(NATIVE_STAGES - measured.keys()):
         measured[name] = {key: measured[largest][key]
                           for key in ("cpu_count", "memory_kb", "cpu_class")}
-        measured[name].update(runs=0, pss_runs=0, memory_kills=0, fallback_from=largest)
+        measured[name].update(runs=0, pss_runs=0, memory_kills=0, fallback_from=largest,
+                              window=measured[largest]["window"])
     return measured
 
 
@@ -222,12 +217,13 @@ def relative_wall(p, cpus):
 def size(name, samples, peaks, floors):
     cores = [s["cpu"] / s["wall"] for s in samples if s["cpu"] is not None and s["wall"] >= MIN_WALL_SECONDS]
     p95 = high(cores, .95) if cores else 0.0
-    wanted = 1 if p95 <= SHARE_CORES else min(MAX_CPUS, max(GATE_CPUS, math.ceil(p95)))
-    cpu = wanted if name in FULL_RUN_CPUS else min(wanted, GATE_CPUS)
+    mean = sum(s["cpu"] for s in samples if s["cpu"] is not None) / sum(s["wall"] for s in samples if s["cpu"] is not None) if cores else 0.0
+    wanted = 1 if mean <= SHARE_CORES else min(MAX_CPUS, max(GATE_CPUS, math.ceil(p95)))
+    cpu = min(wanted, GATE_CPUS)
     p = parallel_fraction(samples)
     slowdown = round(relative_wall(p, GATE_CPUS) / relative_wall(p, wanted), 2) if p is not None and wanted > GATE_CPUS else None
     peak = max(peaks, default=0)
-    memory_kb = max([MIN_MEMORY_KB, step(peak / KILL_FACTOR * MEMORY_MARGIN)] + [step(f) for f in floors])
+    memory_kb = max([MIN_MEMORY_KB, step(peak * MEMORY_MARGIN)] + [step(f) for f in floors])
     return dict(
         cpu_count=cpu,
         memory_kb=memory_kb,
@@ -235,6 +231,7 @@ def size(name, samples, peaks, floors):
         runs=len(samples),
         timed_runs=len(cores),
         p95_cores=round(p95, 2),
+        mean_cores=round(mean, 2),
         parallel_fraction=round(p, 2) if p is not None else None,
         two_cpu_slowdown=slowdown,
         pss_runs=len(peaks),
@@ -262,11 +259,15 @@ def requests_bzl(rows) -> str:
     lines += ['    "{}": [{}, {}, "{}"],'.format(name, r["cpu_count"], r["memory_kb"], r["cpu_class"])
               for name, r in sorted(rows.items())]
     lines.append("}")
+    lines += ["TEST_GUARD_LIMITS = {", *['    "{}": {},'.format(name, r["guard_limit_kb"])
+               for name, r in sorted(rows.items()) if r.get("guard_limit_kb")], "}"]
     return "\n".join(lines) + "\n"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--since", type=float, default=0)
+    parser.add_argument("--until", type=float, default=float("inf"))
     parser.add_argument("--usage", nargs="+", required=True, help="copies of the workers' actions.log")
     parser.add_argument("--pss", nargs="+", required=True, help="copies of the scheduler's usage-event trace files")
     parser.add_argument("--native-stages", action="store_true",
@@ -276,16 +277,15 @@ def main():
     args = parser.parse_args()
     if args.native_stages and args.only:
         parser.error('--only and --native-stages are mutually exclusive')
-    found, operations = runs(args.usage)
-    peaks = pss_peaks(args.pss, operations)
+    found, operations = runs(args.usage, args.since, args.until)
+    cpus = {name: size(name, samples, [], [])["cpu_count"] for name, samples in found.items()}
+    peaks = pss_peaks(args.pss, operations, cpus)
     floors = kills(args.kills, operations)
     # Scheduler events also cover kills whose executor journal has rotated out.
     # Prefer their retry evidence, without counting the same kill twice.
     for name, reservations in escalation_floors(args.pss, operations).items():
         floors[name] = reservations + [f for f in floors[name] if f > max(reservations)]
     stops = guard_stops()
-    for name, (reservations, _) in stops.items():
-        floors[name] += reservations
     if args.native_stages:
         rows = json.loads((HERE / "test-sizes.json").read_text())
         rows.update(native_rows(found, peaks, floors))
@@ -295,11 +295,15 @@ def main():
         rows = json.loads((HERE / "test-sizes.json").read_text())
         rows.update({name: size(name, samples, peaks[name], floors[name])
                      for name, samples in sorted(found.items()) if not args.only or name in args.only})
+    if not args.only:
+        fresh_native = native_rows(found, peaks, floors)
+        for name, row in list(rows.items()):
+            if name not in found and name in fresh_native:
+                rows[name] = fresh_native[name]
     for name, (reservations, cpu) in stops.items():
         if name not in rows:
-            rows[name] = stopped_row(reservations, cpu)
-        else:
-            rows[name]["memory_kb"] = max([rows[name]["memory_kb"]] + [step(f) for f in reservations])
+            rows[name] = stopped_row([], 1)
+        rows[name]["guard_limit_kb"] = 2 * max(step(f) for f in reservations)
     write_rows(rows)
 
 

@@ -343,7 +343,7 @@ AGREE_SLICE_PROGRAMS = 260
 # The unrestricted campaign (tools/main-runs) runs as shards of the whole
 # seed-1 catalogue by stable variant rank, each with its own timeout, so a slow
 # or non-terminating variant fails fast and names its shard.
-AGREE_FULL_SHARDS = 96
+AGREE_FULL_SHARDS = 384
 AGREE_FULL_TIMEOUT = 1800
 # The unrestricted native agreement campaign (tools/main-runs) runs as
 # shards of the same catalogue by stable variant rank. On 2026-10-14 the whole
@@ -962,7 +962,8 @@ def execution_sizes() -> str:
     data = json.loads(READS.text(HERE / "action-sizes.json"))
     profiles = data["profiles"]
     # The native-selection observation request (tools/buck2/native_selection.bzl).
-    budgets = {(1, 1048576, ""), (1, 4194304, "")}
+    special = data.get("special_requests", {})
+    budgets = {(1, 262144, "")} | {(r["cpu_count"], r["memory_kb"], "fast" if name == "precheck" else "") for name, r in special.items()}
     requests = {}
     for profile in ("dev", "release"):
         requests[profile] = {}
@@ -971,15 +972,16 @@ def execution_sizes() -> str:
             ceiling = 8 if target in CALIBRATED_CPUS[profile] else MAX_CPUS
             if type(cpu) is not int or not 1 <= cpu <= ceiling or type(memory) is not int or not 0 < memory <= 8388608:
                 raise ValueError(f"invalid execution request: {profile}/{target}")
-            if cpu != compile_cpus(profile, target, row["p95_cores"]):
+            if cpu != compile_cpus(profile, target, row.get("mean_cores", row["p95_cores"])):
                 raise ValueError(f"stale CPU sizing: {profile}/{target}; regenerate action-sizes.json")
             budgets.add((cpu, memory, CPU_CLASSES[profile].get(target, "")))
             requests[profile][target] = [cpu, memory]
         for target, cpu_class in CPU_CLASSES[profile].items():
-            cpu, memory = requests[profile].get(target, [1, 1048576])
+            cpu, memory = requests[profile].get(target, [1, 262144])
             budgets.add((cpu, memory, cpu_class))
     return (HEADER + "# Requests derived from action-sizes.json; evidence and sizing policy in README.md.\n"
             + "POOL_BUDGETS = " + starlark([list(b) for b in sorted(budgets)]) + "\n\n"
+            + "SPECIAL_REQUESTS = " + starlark({name: [r["cpu_count"], r["memory_kb"], "fast" if name == "precheck" else ""] for name, r in special.items()}) + "\n\n"
             + "COMPILE_REQUESTS = " + starlark(requests) + "\n\n"
             + "# The critical-path compiles that ask for the fast workers (action_sizes_from_log.py).\n"
             + "COMPILE_CLASSES = " + starlark({profile: dict(sorted(CPU_CLASSES[profile].items())) for profile in ("dev", "release")}) + "\n")

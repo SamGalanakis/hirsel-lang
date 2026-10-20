@@ -28,8 +28,8 @@ hundred compiles queued behind the gates' test runs for 85-94% of each build
 merge rule above); the batch's own combinations are new digests.
 """
 
-load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
-load(":test_sizes.bzl", "TEST_REQUESTS")
+load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS", "SPECIAL_REQUESTS")
+load(":test_sizes.bzl", "TEST_REQUESTS", "TEST_GUARD_LIMITS")
 
 PRIORITY = int(read_root_config("hirsel", "priority", "50"))
 if PRIORITY < 0 or PRIORITY > 99:
@@ -61,6 +61,11 @@ def test_request(binary):
     """A test binary's effective pool request `[cpu, memory_kb, cpu_class]`."""
     return _test_request(*TEST_REQUESTS.get(binary, DEFAULT_TEST_REQUEST))[1]
 
+def test_memory_limit(binary, memory_kb):
+    # The data/address-space guard includes unused thread stacks; it is not
+    # the process group's enforced PSS, which alone sets the reservation.
+    return max(2 * memory_kb, TEST_GUARD_LIMITS.get(binary, 0))
+
 def test_executor(cpu, memory_kb, cpu_class):
     """A pool test run's executor: Buck2 runs a test with its own executor, not its platform's."""
     return CommandExecutorConfig(
@@ -84,18 +89,15 @@ def doctest_properties():
     }
 
 # The request of a compile no measurement sized.
-DEFAULT_REQUEST = [1, 1048576]
+DEFAULT_REQUEST = [1, 262144]
 
 # Every Clippy twin's request (defs.bzl): Clippy is a single-threaded front end.
-CLIPPY_REQUEST = [1, 524288, ""]
+CLIPPY_REQUEST = SPECIAL_REQUESTS["clippy"]
 
-# The std precheck's request (defs.bzl): every test and tool run that loads std
-# waits on it, so it is the longest step of an edit's serial chain and runs on
-# the fast workers like that chain's compiles. One CPU: the checker is
-# single-threaded. Its memory is the precheck's own bound (PRECHECK_MEMORY_LIMIT),
-# which it measured 1850-1950 MiB of; the default 1 GiB request put the pool's
-# kill at twice that, at the bound itself.
-PRECHECK_REQUEST = [1, 2097152, "fast"]
+# The single-threaded std precheck is on every std test's serial chain;
+# its peak PSS and 20% headroom come from the same fresh usage evidence as
+# compiles. Keep the fast-worker preference.
+PRECHECK_REQUEST = SPECIAL_REQUESTS["precheck"]
 
 # `-c hirsel.probe_cpus=N` gives every CPU_CLASSES compile N CPUs (and, in
 # release, N codegen units, defs.bzl) for one invocation: the calibration that a compile

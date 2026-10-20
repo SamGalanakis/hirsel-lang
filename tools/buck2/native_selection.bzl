@@ -6,15 +6,17 @@ native-tests/regressions/native-selection.json and `tools/bless.sh
 native-selection` regenerates it (`-c hirsel.native_selection=derive`).
 """
 
+load(":exec_sizes.bzl", "SPECIAL_REQUESTS")
+load(":platforms.bzl", "budget_constraint", "pool_budget_name")
+
 FROZEN = "native-tests/regressions/native-selection.json"
 
 # Each observation now owns a process, releasing compiler state between cases.
-# Keep the existing 256 stripes and 4 GiB request for the cost of each program's
-# 14 native builds; isolation does not bound an individual program's cost.
+# Keep the existing 256 stripes; the request is measured separately from
+# compiler actions using successful observations' enforced PSS peaks.
 OBSERVATION_SHARDS = 256
-OBSERVATION_REQUEST = (1, 4194304)  # sync.py adds it to POOL_BUDGETS
+OBSERVATION_REQUEST = tuple(SPECIAL_REQUESTS["native_observation"][:2])  # sync.py adds it to POOL_BUDGETS
 
-load(":platforms.bzl", "budget_constraint", "pool_budget_name")
 
 def _impl(ctx):
     tree = ctx.actions.copied_dir("corpus", {f.short_path: f for f in ctx.attrs.data})
