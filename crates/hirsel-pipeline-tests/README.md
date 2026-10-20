@@ -32,8 +32,9 @@ Layout:
   `front/check_support.rs`.
 - Shared files of other crates are included by path: the driver's
   `tests/support/source_std.rs`, the runtime's `tests/support/io.rs`
-  (independent replay of runtime completion tapes) and the lowering fixture
-  `crates/hirsel-lower/src/support.rs`.
+  (independent replay of runtime completion tapes), the lowering fixture
+  `crates/hirsel-lower/src/support.rs` and the LLVM emission fixtures
+  `crates/hirsel-llvm/tests/support/mod.rs`.
 - `full_gate_` tests keep their names and `#[ignore = "full gate"]`; the full
   gate runs them with the rest of the workspace.
 

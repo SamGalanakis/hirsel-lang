@@ -829,7 +829,7 @@ fn a_malformed_ledger_is_rejected() {
 // instruction. Every program checks under C, and H and the interpreter agree
 // on it; Rust's own integer conversions and arithmetic are the oracle. The
 // exhaustive edge matrix per instruction (H, interpreter kernels and native
-// code) is `hirsel-llvm/tests/scalar_library.rs`; these programs cover the
+// code) is `tests/front/llvm_scalar_library.rs`; these programs cover the
 // lowering through the real pipeline.
 
 /// `value() -> bool` asserting every term of `terms`, after `helpers`. The

@@ -203,7 +203,7 @@ fn integer_oracle(
         Ok(B::Ge) => boolean(if s { sa >= sb } else { a >= b }),
         Err(UnaryOp::Neg) => fit_signed(sa.checked_neg()),
         Err(UnaryOp::Not | UnaryOp::BitNot) => Some(!a & m),
-        // The named library operations have their own matrix (`tests/it/scalar_library.rs`).
+        // The named library operations have their own matrix (`hirsel-pipeline-tests/tests/front/llvm_scalar_library.rs`).
         Ok(other) => panic!("no operator oracle for {other:?}"),
     }
 }

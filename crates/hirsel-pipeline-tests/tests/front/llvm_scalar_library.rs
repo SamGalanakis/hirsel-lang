@@ -5,11 +5,12 @@
 //! lines; the heap checker is compared in the ordinary gate and native code by
 //! `tools/check-native.sh`.
 
-use crate::support;
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::llvm_support::native::*;
+use crate::llvm_support::programs::*;
+use crate::llvm_support::*;
 use hirsel_heapcheck::{Arg, Config, NoOperations, Observed};
 use hirsel_interp::library::{float, integer};
 use hirsel_interp::{Integer, Value};
@@ -19,9 +20,6 @@ use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
 use hirsel_lir::stage::{Ready, ValidatedUnit};
 use hirsel_llvm::emit_object;
 use hirsel_syntax::PassingMode;
-use support::native::*;
-use support::programs::*;
-use support::*;
 
 const FLOATS: [ScalarKind; 2] = [ScalarKind::F32, ScalarKind::F64];
 

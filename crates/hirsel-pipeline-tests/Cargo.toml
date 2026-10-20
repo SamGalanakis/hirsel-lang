@@ -26,7 +26,8 @@ hirsel-engine = { path = "../hirsel-engine" }
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }
 hirsel-interp = { path = "../hirsel-interp" }
 hirsel-intern = { path = "../hirsel-intern" }
-hirsel-lir = { path = "../hirsel-lir" }
+hirsel-lir = { path = "../hirsel-lir", features = ["testing"] }
+hirsel-llvm = { path = "../hirsel-llvm" }
 hirsel-lower = { path = "../hirsel-lower" }
 hirsel-object-storage = { path = "../hirsel-object-storage" }
 hirsel-proof-export = { path = "../hirsel-proof-export" }
@@ -37,7 +38,7 @@ hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-tir = { path = "../hirsel-tir" }
-hirsel-types = { path = "../hirsel-types" }
+hirsel-types = { path = "../hirsel-types", features = ["testing"] }
 hirsel-validate = { path = "../hirsel-validate" }
 insta = "1"
 proptest = "1"

@@ -59,6 +59,8 @@ run_stage "layout C probes" buck2 test //:hirsel-lir-test-it -- "${timeout[@]}" 
 run_stage "LLVM toolchain pin" buck2 test //:gate-native-toolchain-pin -- "${timeout[@]}"
 # They link AArch64 programs with the cross gcc and run them under qemu-user.
 run_stage "LLVM backend tests" buck2 test //:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)
+run_stage "LLVM scalar library matrix against the interpreter's kernels" \
+  buck2 test //:hirsel-pipeline-tests-test-front-shard-1 -- "${timeout[@]}" $(libtest llvm_scalar_library:: --include-ignored)
 run_stage "Lean RC model audit" proofs/rc/audit.sh
 run_stage "Lean RC model vectors" proofs/rc/check-vectors.sh
 run_stage "TLA+ ordered-mode model" proofs/ordered/check.sh

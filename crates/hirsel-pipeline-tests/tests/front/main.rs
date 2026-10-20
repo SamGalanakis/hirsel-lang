@@ -1,5 +1,5 @@
 //! Pipeline tests of the front phases, runtime and code store (check, modes, lir,
-//! lower, rt, code_store), linked
+//! llvm, lower, rt, code_store), linked
 //! as one binary. A module named `<crate>_<file>` holds what was
 //! `crates/hirsel-<crate>/tests/it/<file>.rs`, and `<crate>_<module>` the
 //! driver- or interpreter-using unit tests of `src/<module>`; hirsel-rc's suites
@@ -18,6 +18,11 @@ mod check_signature_tests;
 mod check_support;
 mod code_store_programs;
 mod lir_schema;
+mod llvm_scalar_library;
+// hirsel-llvm's emission fixtures, shared with its own tests; llvm_scalar_library uses a part.
+#[allow(dead_code)]
+#[path = "../../../hirsel-llvm/tests/support/mod.rs"]
+mod llvm_support;
 mod lower_tests;
 mod modes_authority_corpus;
 mod modes_authority_tests;

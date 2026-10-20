@@ -17,6 +17,5 @@ hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-lir = { path = "../hirsel-lir", features = ["testing"] }
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }
-hirsel-interp = { path = "../hirsel-interp" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types", features = ["testing"] }

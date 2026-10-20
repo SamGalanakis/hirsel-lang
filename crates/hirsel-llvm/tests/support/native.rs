@@ -122,7 +122,7 @@ pub fn link(
         .arg("-include")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/native/fixture.h"
+            "/../hirsel-llvm/tests/native/fixture.h"
         ))
         .arg("-I")
         .arg(dir);
