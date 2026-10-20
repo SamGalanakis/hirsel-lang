@@ -62,7 +62,7 @@ Invariants:
   from `align_up(16, align)`; the word is never above the real slots or below the count,
   and zero-sized elements report `u64::MAX`), constructions and literals write the count as
   the capacity, and a slice over a whole sequence starts at `layout::sequence_slice_start`
-  (slice data stays at `payload + align_up(8, align)`), `SeqReserve` calls `hirsel_rt_v2_seq_grow` by root value (which detaches a block that is not unique at the requested capacity) and writes its returned, unique root into the place,
+  (slice data stays at `payload + align_up(8, align)`), `SeqReserve` calls `hirsel_rt_v2_seq_grow` by root value (which detaches a block that is not unique at the requested capacity) and writes its returned, unique root into the place, except that a block with count one whose capacity word already holds the request (what the runtime returns unchanged) skips the call below the context's dup bound, which diagnostic and measurement runs keep zero,
   `SeqSetLen` stores the count, `SeqAppend` (revision 19) copies its element's active extent
   past the used bytes after `hirsel_rt_v2_block_grow` doubles full storage, `FlatAppend`
   (revision 22) sizes its construction's parts, grows the same way, then writes the content

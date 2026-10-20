@@ -1122,6 +1122,54 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 );
                 let reserve = self.runtime(RuntimeEntry::SeqReserve)?;
                 let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                // A unique block (count one is a heap block: statics and regions never
+                // carry it) whose capacity word already holds the request is what
+                // `hirsel_rt_v2_seq_grow` returns unchanged, so it skips the call.
+                // Capacity is unobservable, so the word need not become exact here.
+                // Like the inline Dup, it runs only below the context's dup bound,
+                // which diagnostic and measurement runs keep zero: they still call.
+                let wanted = self.get(capacity)?;
+                let held = if size == 0 {
+                    self.const_u64(u64::MAX)
+                } else {
+                    let Some(payload) = self.layout_payload(place.layout)? else {
+                        return self.invalid("a reserve of a sequence without payload");
+                    };
+                    let data = self.payload_of(old, payload)?.ptr;
+                    let at = self
+                        .builder
+                        .offset(data, self.const_u64(SEQUENCE_CAPACITY_OFFSET));
+                    self.builder
+                        .load_access(self.module.int_type(64), at, 8, Access::Capacity)
+                };
+                let unique = crate::runtime::is_unique(&self.builder, old);
+                let fits = self.builder.icmp(IntPredicate::Uge, held, wanted);
+                let i32_ty = self.module.int_type(32);
+                let bound = self.builder.load(
+                    i32_ty,
+                    self.builder
+                        .offset(self.context, self.const_u64(CTX_DUP_MAX_OFFSET)),
+                    4,
+                );
+                let inline = self.builder.icmp(
+                    IntPredicate::Ugt,
+                    bound,
+                    self.module.const_int(i32_ty, COUNT_UNIQUE.into()),
+                );
+                let held_already = self.builder.binary(
+                    BinOp::And,
+                    inline,
+                    self.builder.binary(BinOp::And, unique, fits),
+                );
+                let short = self.builder.binary(
+                    BinOp::Xor,
+                    held_already,
+                    self.module.const_int(self.module.int_type(1), 1),
+                );
+                let grow = self.module.append_block(self.function);
+                let done = self.module.append_block(self.function);
+                self.builder.cold_cond_br(short, grow, done);
+                self.builder.position(grow);
                 // Read before the call, which may free `old`.
                 let kept = self
                     .sequence_state_at(place)
@@ -1133,7 +1181,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         old,
                         self.const_u64(size),
                         self.const_u64(align),
-                        self.get(capacity)?,
+                        wanted,
                     ],
                 );
                 self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
@@ -1146,6 +1194,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.store(unique, state.unique, 1);
                     self.builder.store(untracked, state.untracked, 1);
                 }
+                self.builder.br(done);
+                self.builder.position(done);
                 Ok(())
             }
             Inst::SeqAppend { address, value, .. } => {

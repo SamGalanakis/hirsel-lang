@@ -33,8 +33,8 @@ use hirsel_lir::layout_types::{
 use hirsel_lir::object::ObjectFile;
 use hirsel_lir::rt_program::{self, StepKind};
 use hirsel_lir::runtime_abi::{
-    CName, COUNT_IMMORTAL, COUNT_OFFSET, COUNT_UNIQUE, CType, DomainTag, LAYOUT_DESCRIPTOR_VERSION,
-    LAYOUT_MAGIC, RuntimeEntry, small_pool,
+    CName, COUNT_IMMORTAL, COUNT_OFFSET, COUNT_UNIQUE, CTX_DUP_MAX_OFFSET, CType, DomainTag,
+    LAYOUT_DESCRIPTOR_VERSION, LAYOUT_MAGIC, RuntimeEntry, small_pool,
 };
 use hirsel_lir::stage::{
     DebugSource, InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
