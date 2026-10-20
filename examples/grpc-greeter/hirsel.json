@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "grpc_greeter",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "greeter.hir",
+      "module": [
+        "greeter"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/grpc@1/hirsel.json",
+      "package": {
+        "name": "grpc",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../packages/protobuf@1/hirsel.json",
+      "package": {
+        "name": "protobuf",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

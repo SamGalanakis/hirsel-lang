@@ -1,0 +1,26 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [],
+    "net": {
+      "provider": "net.stream@1",
+      "rules": [
+        {
+          "address": "127.0.0.1",
+          "service": "50051",
+          "operation": "connect"
+        },
+        {
+          "address": "127.0.0.1",
+          "service": "50051",
+          "operation": "listen"
+        }
+      ]
+    }
+  },
+  "args": [
+    "demo",
+    "50051"
+  ]
+}

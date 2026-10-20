@@ -1,0 +1,183 @@
+// A gRPC greeter: the service in helloworld.proto, generated into greeter.hir by
+// protoc@1, served and called with packages/grpc@1.
+//
+//   greeter server <port>          serves Greeter on 127.0.0.1:<port>
+//   greeter client <port> <name>   calls SayHello and SayHelloStream
+//   greeter demo <port>            serves one connection and calls it, in one process
+
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Usage(String) | Network(
+  NetError
+) | Rpc(grpc.Status) | Output(OutputError)
+
+fn say_hello(request: greeter.HelloRequest, mut call: grpc.ServerCall) -> Result[
+  greeter.HelloReply,
+  grpc.Status
+] {
+  if string.byte_len(request.name) == 0 {
+    return Error(grpc.status(INVALID_ARGUMENT(), "name is required"))
+  }
+  let mut reply = greeter.default_HelloReply()
+  reply.message = f"Hello, {request.name}!"
+  Ok(take reply)
+}
+
+fn say_hello_stream(request: greeter.HelloRequest, mut call: grpc.ServerCall) -> Result[
+  (),
+  grpc.Status
+] {
+  let mut i: i32 = 1
+  while i <= request.count {
+    let mut reply = greeter.default_HelloReply()
+    reply.message = f"Hello {i} of {request.count}, {request.name}!"
+    greeter.Greeter_SayHelloStream_respond(mut call, reply)?
+    i += 1
+  }
+  Ok(())
+}
+
+// Serves one connection's calls until the client closes it.
+fn serve_connection(n: Net, take stream: Stream of n) -> Result[(), grpc.Status] {
+  grpc.serve(
+    n,
+    take stream,
+    grpc.server_options(),
+    fn(mut call: grpc.ServerCall) -> Result[(), grpc.Status] {
+      greeter.serve_Greeter(mut call, say_hello, say_hello_stream)
+    }
+  )
+}
+
+fn listen(n: Net, port: u16) -> Result[Listener of n, AppError] {
+  Ok(net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network)
+}
+
+fn server(rt: Io, port: u16) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let listener = listen(n, port)?
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(s: Scope) -> Result[(), AppError] {
+      let mut accepting = take listener
+      while true {
+        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let child = task.async(
+          s,
+          fn() -> bool {
+            match serve_connection(n, take stream) {
+              Ok(()) => true,
+              Error(_) => false,
+            }
+          }
+        )
+        task.detach(s, take child)
+      }
+      Ok(())
+    }
+  )
+}
+
+// Calls both methods and prints each greeting.
+fn greet(stdout: Stdout, mut conn: grpc.ClientConn, name: String) -> Result[
+  (),
+  AppError
+] {
+  let mut request = greeter.default_HelloRequest()
+  request.name = unique name
+  request.count = 3
+  let reply = greeter.Greeter_SayHello(mut conn, request, grpc.call_options()) ? Rpc
+  out.print(stdout, f"{reply.message}\n") ? Output
+  let mut call = greeter.Greeter_SayHelloStream_start(
+    mut conn,
+    request,
+    grpc.call_options()
+  ) ? Rpc
+  while true {
+    let Some(next) = greeter.Greeter_SayHelloStream_receive(mut conn, mut call) ? Rpc else {
+      break
+    }
+    out.print(stdout, f"{next.message}\n") ? Output
+  }
+  // An empty name is refused with a status the client sees.
+  match greeter.Greeter_SayHello(
+    mut conn,
+    greeter.default_HelloRequest(),
+    grpc.call_options()
+  ) {
+    Ok(_) => out.print(stdout, "an empty name was accepted\n") ? Output,
+    Error(s) => out.print(stdout, f"{grpc.code_name(s.code)}: {s.message}\n") ? Output,
+  }
+  Ok(())
+}
+
+fn client(rt: Io, port: u16, name: String) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let mut conn = grpc.dial(n, "127.0.0.1", port, None())
+  greet(stdout, mut conn, name)
+}
+
+fn describe(e: AppError) -> unique String uses {} {
+  match e {
+    Rpc(s) => f"{grpc.code_name(s.code)}: {s.message}",
+    Usage(u) => unique u,
+    _ => "I/O failed",
+  }
+}
+
+// Calls the server from a task while serving the task's connection.
+fn demo(rt: Io, port: u16) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let listener = listen(n, port)?
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(s: Scope) -> Result[(), AppError] {
+      let calls = task.async(
+        s,
+        fn() -> bool {
+          let mut conn = grpc.dial(n, "127.0.0.1", port, None())
+          match greet(stdout, mut conn, "Hirsel") {
+            Ok(()) => true,
+            Error(e) => {
+              let _ = out.print(stdout, f"client failed: {describe(e)}\n")
+              false
+            },
+          }
+        }
+      )
+      let mut accepting = take listener
+      let (stream, _) = net.accept(n, mut accepting) ? Network
+      serve_connection(n, take stream) ? Rpc
+      if !task.await(s, take calls) {
+        return Error(Usage("the demo client failed"))
+      }
+      Ok(())
+    }
+  )
+}
+
+fn port_arg(args: Args, index: u64) -> Result[u16, AppError] {
+  let text_value = arg.text(args, index) ? Arguments
+  match u16.parse(text_value) {
+    Ok(p) => Ok(p),
+    Error(_) => Error(Usage(f"not a port: {text_value}")),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let usage = "usage: greeter server <port> | client <port> <name> | demo <port>"
+  if arg.len(args) < 2 {
+    return Error(Usage(usage))
+  }
+  let mode = arg.text(args, 0) ? Arguments
+  let port = port_arg(args, 1)?
+  if mode == "server" {
+    server(rt, port)
+  } else if mode == "client" && arg.len(args) == 3 {
+    client(rt, port, arg.text(args, 2) ? Arguments)
+  } else if mode == "demo" {
+    demo(rt, port)
+  } else {
+    Error(Usage(usage))
+  }
+}

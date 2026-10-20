@@ -2097,6 +2097,95 @@ fn datastar_api_reference_is_current() {
 }
 
 #[test]
+fn protobuf_package_tests() {
+    check_package_tests(
+        "protobuf",
+        &repository_manifest("packages/protobuf@1/hirsel.json"),
+        5,
+    );
+}
+
+#[test]
+fn grpc_package_tests() {
+    check_package_tests(
+        "grpc",
+        &repository_manifest("packages/grpc@1/hirsel.json"),
+        6,
+    );
+}
+
+#[test]
+fn protobuf_and_grpc_api_references_are_current() {
+    for (package, current) in [
+        (
+            "protobuf",
+            include_str!("../../../packages/protobuf@1/api.md"),
+        ),
+        ("grpc", include_str!("../../../packages/grpc@1/api.md")),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("doc")
+            .arg(repository_manifest(&format!(
+                "packages/{package}@1/hirsel.json"
+            )))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            current,
+            "regenerate with `hirsel doc packages/{package}@1/hirsel.json -o packages/{package}@1/api.md`"
+        );
+    }
+}
+
+/// protoc@1 followed by `hirsel fmt` regenerates the checked-in greeter source byte
+/// for byte, service stubs included, from the example's .proto.
+#[test]
+fn protoc_regenerates_the_greeter() {
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-protoc-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("helloworld.proto"),
+        include_str!("../../../examples/grpc-greeter/helloworld.proto"),
+    )
+    .unwrap();
+    let grants = dir.join("grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io": {"dirs": [{"path": "", "host": dir, "access": "read_write"}]}})
+            .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(repository_manifest(
+            "packages/protobuf@1/protoc/hirsel.json",
+        ))
+        .arg("--grants")
+        .arg(&grants)
+        .args(["--", "--grpc", "greeter.hir", "helloworld.proto"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("fmt")
+        .arg(dir.join("greeter.hir"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("greeter.hir")).unwrap(),
+        include_str!("../../../examples/grpc-greeter/greeter.hir"),
+        "regenerate examples/grpc-greeter/greeter.hir with protoc@1 --grpc, then hirsel fmt"
+    );
+}
+
+#[test]
 fn tasks_package_tests() {
     check_package_tests(
         "tasks",
@@ -2322,4 +2411,74 @@ fn tasks_end_to_end_interpreted() {
 #[test]
 fn tasks_end_to_end_llvm() {
     tasks_end_to_end(true);
+}
+
+/// The gRPC greeter calls its own Greeter service over a real TCP connection in the
+/// interpreter and natively: a unary call, a server-streaming call and a refused call
+/// whose status reaches the client. Its packages resolve from the repository.
+#[test]
+fn grpc_greeter_serves_and_calls_itself_over_tcp() {
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-example-{}-{}-grpc-greeter",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("main.hir"),
+        include_str!("../../../examples/grpc-greeter/main.hir"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("greeter.hir"),
+        include_str!("../../../examples/grpc-greeter/greeter.hir"),
+    )
+    .unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../examples/grpc-greeter/hirsel.json")).unwrap();
+    for dependency in manifest["dependencies"].as_array_mut().unwrap() {
+        let relative = dependency["manifest"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("../../");
+        let path = root.join(relative).canonicalize().unwrap();
+        dependency["manifest"] = serde_json::json!(path);
+    }
+    std::fs::write(dir.join("hirsel.json"), manifest.to_string()).unwrap();
+    let expected = "Hello, Hirsel!\nHello 1 of 3, Hirsel!\nHello 2 of 3, Hirsel!\n\
+                    Hello 3 of 3, Hirsel!\nINVALID_ARGUMENT: name is required\n";
+    for args in [vec![], vec!["--native", "--backend", "llvm"]] {
+        // A port free now; the program listens on it and dials it.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let grants = dir.join("grants.json");
+        std::fs::write(
+            &grants,
+            include_str!("../../../examples/grpc-greeter/grants.json")
+                .replace("50051", &port.to_string()),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(&args)
+            .arg(dir.join("hirsel.json"))
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{args:?}"
+        );
+    }
 }
