@@ -230,7 +230,7 @@ impl Checker<'_, '_> {
             parameters.push(ContractParameter::Result);
             types.push(self.frames[frame].result.unwrap());
         }
-        let remap_graph = |store: &mut TypeStore, ty| {
+        let remap_graph = |store: &TypeInterner, ty| {
             map_parameter_references(store, ty, |p, _| match p {
                 ParameterRef::Body {
                     scope: owner,
@@ -251,7 +251,7 @@ impl Checker<'_, '_> {
         };
         let mut formal_types = vec![];
         for ty in types {
-            match remap_graph(&mut self.body.types, ty) {
+            match remap_graph(self.types, ty) {
                 Ok(ty) => formal_types.push(ty),
                 // Authority checking owns illegal taken-parameter brands and
                 // placements. Do not construct an exit frame from that invalid
@@ -260,7 +260,7 @@ impl Checker<'_, '_> {
                 Err(error) => return Err(transport_error(error)),
             }
         }
-        let remap = |store: &mut TypeStore, ty| remap_graph(store, ty).map_err(transport_error);
+        let remap = |store: &TypeInterner, ty| remap_graph(store, ty).map_err(transport_error);
         // Only the executable clause is rebound. Snapshot children are entry
         // expressions in the original frame and are evaluated there exactly once.
         let mut expressions = BTreeSet::new();
@@ -309,22 +309,22 @@ impl Checker<'_, '_> {
         }
         for row in &mut self.body.expressions {
             if expressions.contains(&row.expression) {
-                row.ty = remap(&mut self.body.types, row.ty)?;
+                row.ty = remap(self.types, row.ty)?;
             }
         }
         for row in &mut self.body.calls {
             if !expressions.contains(&row.expression) {
                 continue;
             }
-            row.result = remap(&mut self.body.types, row.result)?;
+            row.result = remap(self.types, row.result)?;
             for argument in &mut row.arguments {
                 if let Some((_, parameter)) = &mut argument.parameter {
-                    parameter.ty = remap(&mut self.body.types, parameter.ty)?;
+                    parameter.ty = remap(self.types, parameter.ty)?;
                 }
             }
             for argument in &mut row.generic_arguments {
                 if let GenericArgument::Type(ty) = argument {
-                    *ty = remap(&mut self.body.types, *ty)?;
+                    *ty = remap(self.types, *ty)?;
                 }
             }
         }
@@ -334,23 +334,23 @@ impl Checker<'_, '_> {
             }
             for argument in &mut row.arguments {
                 if let GenericArgument::Type(ty) = argument {
-                    *ty = remap(&mut self.body.types, *ty)?;
+                    *ty = remap(self.types, *ty)?;
                 }
             }
         }
         for row in &mut self.body.patterns {
             if patterns.contains(&row.pattern) {
-                row.ty = remap(&mut self.body.types, row.ty)?;
+                row.ty = remap(self.types, row.ty)?;
             }
         }
         for info in &mut self.body.closures {
             if expressions.contains(&info.expression) {
-                info.ty = remap(&mut self.body.types, info.ty)?;
+                info.ty = remap(self.types, info.ty)?;
                 if let Some(result) = &mut info.result_evidence {
-                    *result = remap(&mut self.body.types, *result)?;
+                    *result = remap(self.types, *result)?;
                 }
                 for capture in &mut info.captures {
-                    capture.ty = remap(&mut self.body.types, capture.ty)?;
+                    capture.ty = remap(self.types, capture.ty)?;
                 }
             }
         }
@@ -358,13 +358,13 @@ impl Checker<'_, '_> {
             if matches!(row.owner, NameSite::Expression(e) if expressions.contains(&e))
                 || matches!(row.site, NameSite::Pattern(p) if patterns.contains(&p))
             {
-                row.ty = remap(&mut self.body.types, row.ty)?;
+                row.ty = remap(self.types, row.ty)?;
             }
             if row.owner == original
                 && matches!(row.site, NameSite::Pattern(p) if patterns.contains(&p))
             {
                 row.owner = scope;
-                row.ty = remap(&mut self.body.types, row.ty)?;
+                row.ty = remap(self.types, row.ty)?;
             }
         }
         for (expression, name) in &mut self.body.resolution.expressions {
@@ -410,9 +410,9 @@ impl Checker<'_, '_> {
         let mut formal = vec![];
         for (ordinal, mut ty) in formal_types.into_iter().enumerate() {
             if !self.bound(ty, ast::Bound::Plain)? {
-                let mut row = self.body.types.get(ty).unwrap().clone();
+                let mut row = self.types.get(ty).unwrap().clone();
                 row.modes.relation = Relation::environment();
-                ty = self.body.types.push(row);
+                ty = self.types.intern(row);
                 ty = self.normalize_properties(ty);
             }
             let parameter = ParamId(ordinal as u32);
@@ -453,7 +453,7 @@ impl Checker<'_, '_> {
             incomplete: false,
             foreign: None,
         }));
-        let function = abstract_parameter_scope(&mut self.body.types, function, scope_site)
+        let function = abstract_parameter_scope(self.types, function, scope_site)
             .map_err(|e| {
                 QueryError::Operational(OperationalFailure {
                     operation: "contract clause header".into(),
@@ -475,10 +475,10 @@ impl Checker<'_, '_> {
             };
             if in_clause {
                 if let Some(result) = &mut self.frames[child].result {
-                    *result = remap(&mut self.body.types, *result)?;
+                    *result = remap(self.types, *result)?;
                 }
                 for ty in &mut self.frames[child].parameters {
-                    *ty = remap(&mut self.body.types, *ty)?;
+                    *ty = remap(self.types, *ty)?;
                 }
                 if self.frames[child].parent == Some(frame) {
                     self.frames[child].parent = Some(clause_frame);

@@ -9,13 +9,7 @@ impl Audit<'_, '_> {
         let Some(representation) = definition.representation else {
             return Ok(());
         };
-        let root = import_type(&self.input.signature.types, representation, &mut self.types)
-            .map_err(|error| {
-                QueryError::Operational(OperationalFailure {
-                    operation: "inline layout audit".into(),
-                    message: format!("{error:?}"),
-                })
-            })?;
+        let root = representation;
         let annotations: Vec<_> = match (&item.kind, self.types.get(root).unwrap().kind.clone()) {
             (
                 ast::ItemKind::Type {
@@ -99,7 +93,7 @@ impl Audit<'_, '_> {
                 definition,
                 arguments,
             } => {
-                if !active.insert(definition.clone()) {
+                if !active.insert(definition.path().clone()) {
                     return Ok(true);
                 }
                 let mut held = BTreeSet::new();
@@ -107,7 +101,7 @@ impl Audit<'_, '_> {
                     Some(representation) => self.inline_cycle(representation, active, &mut held)?,
                     None => false,
                 };
-                active.remove(&definition);
+                active.remove(definition.path());
                 if cycle {
                     return Ok(true);
                 }
@@ -156,7 +150,7 @@ impl Audit<'_, '_> {
     /// A named type's representation over its own parameters, if it has one.
     fn generic_representation(
         &mut self,
-        definition: &ast::DefPath,
+        definition: &hirsel_syntax::DefId,
     ) -> Result<Option<TypeId>, QueryError> {
         let s = self.snapshot(definition)?;
         let SignatureKind::Type(d) = &s.kind else {
@@ -165,13 +159,6 @@ impl Audit<'_, '_> {
         let Some(representation) = d.representation else {
             return Ok(None);
         };
-        import_type(&s.types, representation, &mut self.types)
-            .map(Some)
-            .map_err(|error| {
-                QueryError::Operational(OperationalFailure {
-                    operation: "inline layout audit".into(),
-                    message: format!("{error:?}"),
-                })
-            })
+        Ok(Some(representation))
     }
 }

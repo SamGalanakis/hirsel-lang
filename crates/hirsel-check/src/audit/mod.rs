@@ -11,6 +11,9 @@ mod layout;
 mod packed;
 
 pub struct Input<'a> {
+    /// The session interner holding every row this audit reads.
+    pub types: &'a TypeInterner,
+    pub memo: &'a TypeMemo,
     pub syntax: &'a ast::ItemSyntax,
     pub signature: &'a Signature,
     pub call_allocations: &'a [(ExprId, Allocation)],
@@ -26,7 +29,7 @@ pub fn check(
 ) -> Result<QueryOutput<()>, QueryError> {
     let mut audit = Audit {
         source_rows: source_rows::SourceRows::new(input.checked, &input.syntax.tree),
-        types: input.checked.types.clone(),
+        types: input.types,
         expression_types: input
             .checked
             .expressions
@@ -99,7 +102,7 @@ pub fn check(
             .snapshots
             .into_values()
             .map(|s| SignatureDependency {
-                definition: s.definition.clone(),
+                definition: s.definition.path().clone(),
                 fingerprint: s.fingerprint,
             })
             .collect(),
@@ -109,7 +112,7 @@ pub fn check(
 struct Audit<'a, 'p> {
     source_rows: source_rows::SourceRows,
     input: Input<'a>,
-    types: TypeStore,
+    types: &'a TypeInterner,
     expression_types: BTreeMap<ExprId, TypeId>,
     call_parameters: BTreeMap<(ExprId, ExprId), (u32, Parameter)>,
     provider: &'p mut dyn SignatureProvider,
@@ -121,14 +124,15 @@ impl Audit<'_, '_> {
         self.diagnostics
             .push(Diagnostic::error(rule, span, message));
     }
-    fn snapshot(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
-        if *path == self.input.signature.definition {
+    fn snapshot(&mut self, definition: &hirsel_syntax::DefId) -> Result<SignatureRef, QueryError> {
+        if *definition == self.input.signature.definition {
             return Ok(std::sync::Arc::new(self.input.signature.clone()));
         }
+        let path = definition.path();
         if let Some(s) = self.snapshots.get(path) {
             return Ok(s.clone());
         }
-        let s = self.provider.signature(path)?;
+        let s = self.provider.signature(*definition)?;
         self.snapshots.insert(path.clone(), s.clone());
         Ok(s)
     }
@@ -151,7 +155,7 @@ impl Audit<'_, '_> {
         let Some(Type {
             kind: TypeKind::Record(semantic),
             ..
-        }) = self.input.signature.types.get(repr)
+        }) = self.types.get(repr)
         else {
             return;
         };
@@ -161,7 +165,7 @@ impl Audit<'_, '_> {
             }
             let list = semantic
                 .get(ordinal)
-                .and_then(|f| self.input.signature.types.get(f.ty))
+                .and_then(|f| self.types.get(f.ty))
                 .is_some_and(|t| {
                     matches!(
                         t.kind,
@@ -215,7 +219,7 @@ impl Audit<'_, '_> {
                     ) => *scope == lexical.site(b.owner) && parameter == p,
                     _ => false,
                 };
-                root && is_arena_type(&self.types, b.ty, &heap.arena)
+                root && is_arena_type(self.types, b.ty, &heap.arena)
             })
     }
     /// Whether a body row's relation places its blocks in an arena or region.
@@ -236,11 +240,11 @@ impl Audit<'_, '_> {
                 && let Some(repr) = d.representation
             {
                 let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
-                let imported = substitute_type(
-                    &s.types,
+                let imported = substitute(
+                    self.types,
+                    self.input.memo,
                     repr,
-                    &mut self.types,
-                    Substitution {
+                    &Substitution {
                         binder: Some(hirsel_types::GenericBinder::Bound(0)),
                         roles: &s.metadata.roles,
                         arguments: &arguments,
@@ -365,7 +369,7 @@ impl Audit<'_, '_> {
                 true
             }
             TypeKind::Named { definition, .. } => {
-                if !active.insert(definition.clone()) {
+                if !active.insert(definition.path().clone()) {
                     return Ok(false);
                 }
                 let s = self.snapshot(&definition)?;
@@ -375,7 +379,7 @@ impl Audit<'_, '_> {
                 } else {
                     self.fixed_size(repr, active)?
                 };
-                active.remove(&definition);
+                active.remove(definition.path());
                 fixed
             }
             TypeKind::Builtin {

@@ -22,8 +22,8 @@ impl Checker<'_, '_> {
         let valid = if let Some(definition) = resource {
             let declaration = self.snapshot(&definition)?;
             matches!(&declaration.kind, SignatureKind::Type(td) if td.resource)
-                && definition.0.package == self.input.signature.definition.0.package
-                && definition.0.modules == self.input.signature.definition.0.modules
+                && definition.path().0.package == self.input.signature.definition.path().0.package
+                && definition.path().0.modules == self.input.signature.definition.path().0.modules
         } else {
             false
         };
@@ -47,7 +47,7 @@ impl Checker<'_, '_> {
         let CallTarget::Definition(path) = target else {
             return Ok(true);
         };
-        let Some(signature) = self.snapshots.get(path) else {
+        let Some(signature) = self.snapshots.get(&DefId::intern(path)) else {
             return Ok(true);
         };
         let schema = signature.metadata.schema.clone();
@@ -59,7 +59,7 @@ impl Checker<'_, '_> {
         schema: &[SchemaConstraint],
         args: &[GenericArgument],
     ) -> Result<bool, QueryError> {
-        let mut proofs = BTreeMap::new();
+        let mut proofs = std::collections::HashMap::new();
         for constraint in schema {
             if let SchemaConstraint::Bound {
                 parameter, bound, ..
@@ -75,7 +75,7 @@ impl Checker<'_, '_> {
             }
         }
         if let Some((rule, message)) =
-            schema_failure(&self.body.types, args, schema, |ty, bound| {
+            schema_failure(self.types, args, schema, |ty, bound| {
                 proofs.get(&(ty, bound)).copied().unwrap_or(false)
             })
         {

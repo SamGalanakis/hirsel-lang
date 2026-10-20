@@ -4,10 +4,10 @@ use super::*;
 impl Checker<'_, '_> {
     pub(super) fn type_spelling(&self, root: TypeId) -> String {
         hirsel_type_analysis::spelling::type_spelling(
-            &self.body.types,
+            self.types,
             root,
             &self.body.resolution.generic_declarations,
-            &self.input.signature.definition.0.package,
+            &self.input.signature.definition.path().0.package,
             false,
         )
     }
@@ -20,10 +20,10 @@ impl Checker<'_, '_> {
         expected: TypeId,
     ) {
         let [expected, actual] = hirsel_type_analysis::spelling::type_spellings_apart(
-            &self.body.types,
+            self.types,
             [expected, actual],
             &self.body.resolution.generic_declarations,
-            &self.input.signature.definition.0.package,
+            &self.input.signature.definition.path().0.package,
             false,
         );
         self.report(

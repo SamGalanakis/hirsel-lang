@@ -86,7 +86,7 @@ impl Checker<'_, '_> {
                         let variant = if let TypeKind::Variant(vs) = self.kind(repr) {
                             vs.iter()
                                 .enumerate()
-                                .find(|(_, v)| v.name == self.name(*name) && v.fields.is_empty())
+                                .find(|(_, v)| v.name == *name && v.fields.is_empty())
                                 .map(|(i, _)| (i, vs.len()))
                         } else {
                             None
@@ -202,7 +202,7 @@ impl Checker<'_, '_> {
                                     false,
                                 )),
                                 TypeKind::Variant(vs) => {
-                                    vs.iter().enumerate().find(|(_, v)| v.name == name).map(
+                                    vs.iter().enumerate().find(|(_, v)| v.name.as_str() == name).map(
                                         |(i, v)| {
                                             (
                                                 ContextualName::Variant {
@@ -229,7 +229,10 @@ impl Checker<'_, '_> {
                                     fs.iter().map(|f| f.label.map(|s| self.name(s))).collect();
                                 let ordinals = self.labels(
                                     &labels,
-                                    &slots.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+                                    &slots
+                                        .iter()
+                                        .map(|(l, _)| l.map(|l| l.as_str().to_owned()))
+                                        .collect::<Vec<_>>(),
                                     *rest,
                                     p.origin.span,
                                 );
@@ -474,13 +477,7 @@ impl Checker<'_, '_> {
                 let same = mutable == expected_mutable
                     && (self.invalid(*ty)
                         || self.invalid(*expected)
-                        || hirsel_types::semantic_equal(
-                            &self.body.types,
-                            *ty,
-                            &self.body.types,
-                            *expected,
-                        )
-                        .unwrap_or(false));
+                        || self.types.semantic_eq(*ty, *expected));
                 if !same {
                     let span = self.input.syntax.tree.patterns[alternative.0 as usize]
                         .origin
