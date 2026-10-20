@@ -2698,8 +2698,11 @@ HT, LF, FF, CR and space (excluding VT, following Go regexp). Uppercase
 Dot excludes LF. Anchors are absolute text boundaries, so `$` does not match
 before a trailing LF. There are no flags, captures, backreferences,
 lookaround, property or POSIX named classes, octal/hex escapes, replacement
-language or native regex hook. An unescaped `{` always begins a repetition;
-malformed repetitions are errors. Literal braces can be escaped.
+language or native regex hook. An unescaped `{` begins a repetition only when
+the complete `{n}`, `{n,}` or `{n,m}` form follows, with no leading zeroes
+except the count `0` itself (Go's rule). Otherwise it is literal: `a{2`,
+`a{,2}` and `a{01}` match their own spelling. Complete repeats with reversed
+bounds remain errors. Literal braces can also be escaped.
 
 `Syntax` reports the unexpected scalar's UTF-8 byte offset, or pattern byte
 length for unexpected EOF. A repeated quantifier reports the second operator;

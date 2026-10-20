@@ -368,6 +368,37 @@ fn decimal(mut cursor: Input) -> Result[u64, CompileError] uses {} {
   Ok(value)
 }
 
+// Go syntax/parse.go:1099-1141,1272-1303 (ebe2feef): first recognize the
+// complete repeat, without converting counts. A malformed form (including
+// leading zeroes) leaves the opening brace literal; a complete oversized
+// count still reaches decimal's checked conversion and the instruction limit.
+fn repeat_form(cursor: Input) -> bool uses {} {
+  let mut look = Input(scalars: cursor.scalars, offsets: [], at: cursor.at)
+  let mut field: u8 = 0
+  while field < 2 {
+    let start = look.at
+    let first = peek_digit(look)
+    while peek_digit(look) != None() {
+      look.at += 1
+    }
+    if first == None() || first == Some(0) && look.at - start > 1 {
+      return false
+    }
+    if peek(look) == Some('}') {
+      return true
+    }
+    if field != 0 || peek(look) != Some(',') {
+      return false
+    }
+    look.at += 1
+    if peek(look) == Some('}') {
+      return true
+    }
+    field += 1
+  }
+  false
+}
+
 fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char) -> Result[
   u64,
   CompileError
@@ -476,7 +507,7 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
           None() => right,
         }
       )
-    } else if c == '*' || c == '+' || c == '?' || c == '{' {
+    } else if c == '*' || c == '+' || c == '?' || c == '{' && repeat_form(cursor) {
       if contexts[depth].repeated {
         return Error(Syntax(at))
       }
