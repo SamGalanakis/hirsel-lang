@@ -1,0 +1,108 @@
+// Adapted from Effect v4 SchemaParser.ts:270,633 (paired traversal) and
+// test/schema/toDifferJsonPatch.test.ts:27,181 (explicit generated round trips),
+// commit 4cddd3c41e71fc4990d37c42b1bcf2ce3780b41d.
+// Hirsel compares explicit canonical DTO projections rather than assuming
+// inverse callbacks or introducing universal equality for inert domains.
+// The original boundary/format cause is retained; a mismatch contains no input.
+pub type CheckedWriteError = Boundary(BoundaryError) | ProjectionMismatch
+
+// Reparse the actual candidate, not its pre-format DOM. Canonical DTO bytes
+// define the caller's equivalence (including HSC1's NaN and set rules).
+pub fn write_checked[D: inert, P: serializable](
+  b: Boundary[D, std@1/json.Value],
+  value: D,
+  projection: fn(D) -> P uses {},
+  o: Options
+) -> Result[String, CheckedWriteError] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Boundary(Schema(take error))),
+  }
+  let candidate = match write_json_with_state(b, value, o, mut check) {
+    Ok(text) => text,
+    Error(error) => return Error(Boundary(take error)),
+  }
+  if core@1/bytes.len(core@1/string.as_bytes(candidate)) > o.limits.max_input_bytes {
+    return Error(Boundary(FormatLimit(InputBytes(o.limits.max_input_bytes))))
+  }
+  let wire = match std@1/json.parse(unique candidate) {
+    Ok(wire) => wire,
+    Error(error) => return Error(Boundary(Json(take error))),
+  }
+  let decoded = match b.decode(wire, mut check) {
+    Ok(decoded) => decoded,
+    Error(error) => return Error(Boundary(Schema(take error))),
+  }
+  if core@1/codec.encode(projection(value)) != core@1/codec.encode(projection(decoded)) {
+    return Error(ProjectionMismatch)
+  }
+  Ok(take candidate)
+}
+
+pub fn write_json_checked[D: inert, P: serializable](
+  b: Boundary[D, std@1/json.Value],
+  value: D,
+  projection: fn(D) -> P uses {},
+  o: Options
+) -> Result[String, CheckedWriteError] uses {} {
+  write_checked(b, value, projection, o)
+}
+
+pub type LawError = Schema(SchemaError) | ProjectionMismatch
+
+// One generated case, after Effect's explicit property round-trip tests.
+// Compose with std@1/test.property_cases; no law is inferred from callback types.
+pub fn check_round_trip[D: inert, W: data + inert, P: serializable](
+  b: Boundary[D, W],
+  value: D,
+  projection: fn(D) -> P uses {},
+  o: Options
+) -> Result[(), LawError] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Schema(take error)),
+  }
+  let wire = match b.encode(value, mut check) {
+    Ok(wire) => wire,
+    Error(error) => return Error(Schema(take error)),
+  }
+  let decoded = match b.decode(wire, mut check) {
+    Ok(decoded) => decoded,
+    Error(error) => return Error(Schema(take error)),
+  }
+  if core@1/codec.encode(projection(value)) != core@1/codec.encode(projection(decoded)) {
+    return Error(ProjectionMismatch)
+  }
+  Ok(())
+}
+
+// Check N(N(w)) == N(w), where N = encode after decode, on one admitted wire.
+pub fn check_normalization[D: inert, W: data + inert, P: serializable](
+  b: Boundary[D, W],
+  wire: W,
+  projection: fn(W) -> P uses {},
+  o: Options
+) -> Result[(), LawError] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Schema(take error)),
+  }
+  let first = match b.decode(wire, mut check) {
+    Ok(value) => match b.encode(value, mut check) {
+      Ok(normalized) => normalized,
+      Error(error) => return Error(Schema(take error)),
+    },
+    Error(error) => return Error(Schema(take error)),
+  }
+  let second = match b.decode(first, mut check) {
+    Ok(value) => match b.encode(value, mut check) {
+      Ok(normalized) => normalized,
+      Error(error) => return Error(Schema(take error)),
+    },
+    Error(error) => return Error(Schema(take error)),
+  }
+  if core@1/codec.encode(projection(first)) != core@1/codec.encode(projection(second)) {
+    return Error(ProjectionMismatch)
+  }
+  Ok(())
+}

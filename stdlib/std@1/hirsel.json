@@ -1137,6 +1137,12 @@
       "module": [
         "jwt"
       ]
+    },
+    {
+      "path": "schema_checked.hir",
+      "module": [
+        "schema"
+      ]
     }
   ],
   "dependencies": []

@@ -44,11 +44,93 @@ owned representations; none introduces a new static domain type.
 Arbitrary paired callbacks provide typed endpoints, normal domain invariants
 and the checks they actually perform. They do not establish inverse,
 preservation or normalization laws. `write_json` formats the declared encoder's
-output. A custom mapping may produce output its decoder rejects. Stronger
-checked writes, explicit projection law helpers and evolution APIs build on
-this seam separately. Existing `derive.from_json`
+output. A custom mapping may produce output its decoder rejects. Checked
+writes and explicit projection law helpers below test stronger properties without inferring inverse laws. Existing `derive.from_json`
 acceptance is unchanged. New structural schema generation must reject unknown
 fields, alias collisions and non-exact variant tags by default.
+
+## Checked writes and law helpers
+
+`write_checked(b, value, projection, options)` (also named
+`write_json_checked`) is the explicit stronger JSON operation. It buffers the
+encoder's **actual formatted text**, parses that candidate with `json.parse`,
+and passes the resulting DOM to the same boundary's decoder. Only then does it
+compare `codec.encode(projection(value))` with
+`codec.encode(projection(decoded))`, returning the original candidate on equal
+canonical HSC1 bytes. `P: serializable` is the projection's DTO type; `D` needs
+only `inert`, so opaque domains can expose an owner-approved projection without
+universal equality or canonical admission of the domain itself.
+
+`CheckedWriteError` is `Boundary(BoundaryError) | ProjectionMismatch`.
+Encoder/preflight/parser/decoder refusal preserves its original typed cause in
+`Boundary`; unequal projection bytes return `ProjectionMismatch`. Neither arm
+retains rejected input or candidate output. Callbacks, projections and ordinary
+FACT checks may fail or diverge under the usual language rules. No candidate is
+published on a returned error. This is a pure buffered operation; a caller may
+publish its successful String through ordinary authorized I/O. It cannot retract
+an already emitted streaming prefix.
+
+One shared CheckState charges encoding, JSON size preflight and decoding.
+Reparsing checks candidate bytes against `max_input_bytes` before copying them;
+preflight checks `max_output_bytes` before allocating candidate text. The JSON
+parser's own work and projections/canonical encodings are outside schema visit
+counts, just as arbitrary callback scratch work is. Invalid Options refuse
+before any callback. There is no new tape event or format encoding.
+
+A successful checked write establishes **only the supplied projection's
+preservation for that value**. A constant projection deliberately ignores all
+domain state. Canonical equivalence includes HSC1's canonical NaN and set
+rules; it is not IEEE equality, lexeme equality or an inverse theorem. A
+non-idempotent encoder can preserve a projection on this write without
+establishing normalization laws for other inputs. Ordinary mappings retain
+typed endpoints, domain invariants and their supplied validation; the
+dictionary adds no independent validator around arbitrary user callbacks.
+
+`check_round_trip(b, value, projection, options)` checks one generated domain
+case: encode, decode and compare canonical projection bytes. It works for any
+wire `W: data + inert`, without formatting it. `check_normalization(b, wire,
+projection, options)` checks one admitted wire case under `N = encode ∘ decode`:
+compute `N(w)` then `N(N(w))` and compare their projected canonical bytes. The
+wire projection states the intended normalization equivalence; use an identity
+DTO projection for exact representation equality. Each helper shares one state
+across its stages and short-circuits on failure. `LawError` is
+`Schema(SchemaError) | ProjectionMismatch`, preserving refusal/limit causes.
+These helpers check examples, not all possible values; a generator must produce
+values in the claimed law's domain. They do not treat refusal as a passing law.
+
+Compose the per-case helper with the existing seeded/shrinking property runner:
+
+```hirsel
+fn project(v: u8) -> u8 uses {} { v }
+fn generate(mut source: test.Source) -> u8 uses {} {
+  int.narrow(test.choice(mut source, 255))
+}
+fn law(v: u8) -> bool uses {} {
+  match schema.check_round_trip(schema.u8_json(), v, project, schema.default_options()) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+}
+// In a Test entry: test.property_cases(t, 100, generate, law, u8.to_string)
+```
+
+Trimming on decode with passthrough encode normalizes whitespace idempotently,
+but a domain round trip preserves only already trimmed strings. A callback
+encoding every u8 as zero has typed valid endpoints: `write_json` succeeds,
+while `write_checked` and `check_round_trip` with the identity projection refuse
+nonzero values. This distinction is intentional.
+
+JSON retains Number lexemes, including integers beyond binary64 precision and
+large exponents; generated numeric leaves instead use their declared scalar's
+parse/range contract. Finite floats use JSON Number and nonfinite floats use
+the existing explicit Text spellings `NaN`, `inf`, `-inf`. Invalid Number
+lexemes refuse in the format writer. A format-valid DOM alone says nothing
+about numeric preservation. HSC1-through-DTO continues to use exact canonical
+descriptors/bytes and explicit reconstruction. No schema adapter for CBOR or
+MessagePack is enabled here: their existing DOM codecs preserve supported
+integers, normalize decimal/exponent spelling through binary64, reject integer
+overflow and reject nonfinite Number lexemes. YAML and TOML have separate value
+domains and are not implicit JSON adapters.
 
 ## Paired structural generation
 
@@ -240,3 +322,15 @@ and its alias vectors; nested list and variant paths adapt
 serde_path_to_error `tests/deserialize.rs:43,119`. Differences are explicit
 shared directional policy, bounded deterministic issue accumulation, entry/key/
 value paths for all maps, and defaults validated through the field boundary.
+
+Law/normalization fixtures adapt Effect v4
+`packages/effect/test/schema/toDifferJsonPatch.test.ts:27,181` (explicit generated
+round trips) and `Schema.test.ts:5184` (trim/passthrough). The trim vector
+`" asdf " → "asdf"` also follows Zod
+`packages/zod/src/v4/classic/tests/codec.test.ts:392` at
+`afdac65e0f80c0ccf9e8909da97c411567908b57`. The library adds explicit canonical
+projection comparison because these references do not prove inverses. Seeded
+inputs/shrinking reuse Hirsel's existing test helpers; formatting reuses its
+existing JSON codec. Cross-engine real-I/O replay follows the existing CLI
+replay fixture, recording natively and removing host data before interpreter
+replay of identical structured issue fields and checked output bytes.

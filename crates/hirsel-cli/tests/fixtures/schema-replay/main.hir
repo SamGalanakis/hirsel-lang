@@ -1,0 +1,38 @@
+// Read actual host input, regenerate structured issues, and publish checked bytes.
+pub type RunError = Grant(GrantError) | File(FileError) | InvalidInput
+
+fn project(value: u8) -> u8 uses {} {
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), RunError] {
+  let output = io.stdout(rt) ? Grant
+  let dir = io.dir(rt, path.of("data")) ? File
+  let bytes = file.read_bytes(dir, path.of("input.json")) ? File
+  let Ok(text) = string.from_bytes(take bytes) else {
+    return Error(InvalidInput)
+  }
+  let b = std@1/schema.list_json(std@1/schema.u8_json())
+  let mut o = std@1/schema.default_options()
+  o.mode = All
+  let Error(Schema(Invalid(issues))) = std@1/schema.parse_json(b, text, o) else {
+    return Error(InvalidInput)
+  }
+  let _ = out.print(output, std@1/schema.format(issues))
+  // Preserve the complete machine protocol as well as its human rendering.
+  if list.len(issues.items) != 2 || issues.truncated || issues.items[0].path != [
+    Index(1)
+  ] || issues.items[0].code != "Range" || issues.items[0].stage != Wire || issues.items[0].schema_site != "u8" || issues.items[0].expected != Some(
+    "integer 0..255"
+  ) || issues.items[0].children != [] || issues.items[1].path != [Index(2)] || issues.items[1].code != "Type" || issues.items[1].stage != Wire || issues.items[1].schema_site != "u8" || issues.items[1].expected != Some(
+    "number"
+  ) || issues.items[1].children != [] {
+    return Error(InvalidInput)
+  }
+  let Ok(written) = std@1/schema.write_checked(std@1/schema.u8_json(), 7u8, project, o) else {
+    return Error(InvalidInput)
+  }
+  let _ = out.print(output, written)
+  let _ = out.print(output, "\n")
+  Ok(())
+}

@@ -158,6 +158,14 @@ fn parse(s: String) -> json.Value uses {} {
   take v
 }
 
+fn item_projection(value: Item) -> (u8, Option[String]) uses {} {
+  (value.count, unique value.note)
+}
+
+fn wire_projection(value: json.Value) -> json.Value uses {} {
+  unique value
+}
+
 fn rejects(b: schema.Boundary[Item, json.Value], input: String, code: String) -> bool uses {} {
   match schema.decode(b, parse(input), schema.default_options()) {
     Error(Invalid(issues)) => list.len(issues.items) == 1 && issues.items[0].code == code,
@@ -171,6 +179,38 @@ fn vectors() -> bool uses {} {
     return false
   }
   if item.count != 8 || item.note != None {
+    return false
+  }
+  if let Error(_) = schema.check_round_trip(
+    b,
+    item,
+    item_projection,
+    schema.default_options()
+  ) {
+    return false
+  }
+  if let Error(_) = schema.check_normalization(
+    b,
+    parse("{\"old\":8}"),
+    wire_projection,
+    schema.default_options()
+  ) {
+    return false
+  }
+  if let Error(_) = schema.check_normalization(
+    b,
+    parse("{}"),
+    wire_projection,
+    schema.default_options()
+  ) {
+    return false
+  }
+  let Ok("{\"amount\":8}") = schema.write_checked(
+    b,
+    item,
+    item_projection,
+    schema.default_options()
+  ) else {
     return false
   }
   let Ok(defaulted) = schema.decode(b, parse("{}"), schema.default_options()) else {

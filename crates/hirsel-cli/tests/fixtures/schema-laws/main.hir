@@ -1,0 +1,153 @@
+// Effect toDifferJsonPatch.test.ts:27,181: seeded structural round trips.
+// Zod codec.test.ts:392: trimming is normalization, not an inverse on all strings.
+@serializable
+type Choice = Empty | Pair(u8, String)
+
+@serializable
+type Packet {
+  rows: List[(u8, String)],
+  note: Option[String],
+  choice: Choice,
+  entries: Map[String, u8],
+}
+
+fn choice_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  Choice,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Choice), schema.strict_policy())
+
+fn choice_schema_encode(v: Choice, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Choice), schema.strict_policy())
+
+fn packet_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  Packet,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Packet), schema.strict_policy())
+
+fn packet_encode(v: Packet, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Packet), schema.strict_policy())
+
+fn packet_projection(v: Packet) -> Packet uses {} {
+  unique v
+}
+
+fn wire_projection(v: json.Value) -> json.Value uses {} {
+  unique v
+}
+
+fn generate(mut s: test.Source) -> Packet uses {} {
+  let n: u8 = int.narrow(test.choice(mut s, 255))
+  let name = if test.bool(mut s) {
+    " asdf "
+  } else {
+    "é\n\""
+  }
+  let mut entries: Map[String, u8] = map.empty()
+  let _ = map.insert(mut entries, "z", n)
+  let _ = map.insert(mut entries, "a", 255u8 - n)
+  Packet(
+    rows: [(n, copy name)],
+    note: if test.bool(mut s) {
+      Some(copy name)
+    } else {
+      None
+    },
+    choice: if test.bool(mut s) {
+      Empty
+    } else {
+      Pair(n, take name)
+    },
+    entries: take entries
+  )
+}
+
+fn invert(v: u8, mut c: schema.CheckState) -> Result[u8, schema.SchemaError] uses {} {
+  schema.charge_check(mut c)?
+  Ok(255u8 - v)
+}
+
+fn octet_projection(v: u8) -> u8 uses {} {
+  v
+}
+
+fn law(v: Packet) -> bool uses {} {
+  let b = schema.Boundary(decode: packet_decode, encode: packet_encode)
+  let o = schema.default_options()
+  let custom = schema.Boundary(decode: invert, encode: invert)
+  let (octet, _) = v.rows[0]
+  if let Error(_) = schema.check_round_trip(custom, octet, octet_projection, o) {
+    return false
+  }
+  if let Error(_) = schema.check_round_trip(b, v, packet_projection, o) {
+    return false
+  }
+  let Ok(text) = schema.write_checked(b, v, packet_projection, o) else {
+    return false
+  }
+  let Ok(wire) = json.parse(take text) else {
+    return false
+  }
+  match schema.check_normalization(b, wire, wire_projection, o) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+}
+
+fn show(v: Packet) -> String uses {} {
+  "Packet"
+}
+
+fn trim_decode(v: String, mut c: schema.CheckState) -> Result[
+  String,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut c)?
+  Ok(unique string.trim(v))
+}
+
+fn trim_encode(v: String, mut c: schema.CheckState) -> Result[
+  String,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut c)?
+  Ok(unique v)
+}
+
+fn text_projection(v: String) -> String uses {} {
+  unique v
+}
+
+@test
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 12, generate, law, show)
+  let b = schema.Boundary(decode: trim_decode, encode: trim_encode)
+  let o = schema.default_options()
+  let Ok(()) = schema.check_normalization(b, " asdf ", text_projection, o) else {
+    return Error(())
+  }
+  let Ok(()) = schema.check_round_trip(b, "asdf", text_projection, o) else {
+    return Error(())
+  }
+  let Error(ProjectionMismatch) = schema.check_round_trip(
+    b,
+    " asdf ",
+    text_projection,
+    o
+  ) else {
+    return Error(())
+  }
+  let json_boundary = schema.then(schema.text_json(), take b)
+  let Error(ProjectionMismatch) = schema.write_checked(
+    json_boundary,
+    " asdf ",
+    text_projection,
+    o
+  ) else {
+    return Error(())
+  }
+  Ok(())
+}

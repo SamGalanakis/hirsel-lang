@@ -145,6 +145,10 @@ fn schema.array_json() -> Boundary[List[std@1/json.Value], std@1/json.Value] use
 fn schema.list_json[D: inert](take item: Boundary[D, std@1/json.Value]) -> Boundary[ List[D], std@1/json.Value ] uses {}
 fn schema.parse_json[D: inert]( b: Boundary[D, std@1/json.Value], input: String, o: Options ) -> Result[D, BoundaryError] uses {}
 fn schema.write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[ String, BoundaryError ] uses {}
+fn schema.write_checked[D: inert, P: serializable]( b: Boundary[D, std@1/json.Value], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[String, CheckedWriteError] uses {}
+fn schema.write_json_checked[D: inert, P: serializable]( b: Boundary[D, std@1/json.Value], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[String, CheckedWriteError] uses {}
+fn schema.check_round_trip[D: inert, W: data + inert, P: serializable]( b: Boundary[D, W], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[(), LawError] uses {}
+fn schema.check_normalization[D: inert, W: data + inert, P: serializable]( b: Boundary[D, W], wire: W, projection: fn(W) -> P uses {}, o: Options ) -> Result[(), LawError] uses {}
 fn msgpack.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
 fn msgpack.encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {}
 fn cbor.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}

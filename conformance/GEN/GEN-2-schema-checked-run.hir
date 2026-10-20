@@ -1,0 +1,186 @@
+// rule: GEN-2
+// expect: run
+// Typed endpoints alone do not imply preservation. Check actual JSON bytes.
+fn project(v: u8) -> u8 uses {} {
+  v
+}
+
+fn omit(v: u8) -> () uses {} {
+  ()
+}
+
+fn changed(v: u8, mut c: schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {} {
+  schema.charge_check(mut c)?
+  Ok(Number("0"))
+}
+
+fn malformed(v: u8, mut c: schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {} {
+  schema.charge_check(mut c)?
+  Ok(Number("NaN"))
+}
+
+fn rejected(v: u8, mut c: schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {} {
+  schema.charge_check(mut c)?
+  Ok(Text("bad"))
+}
+
+fn decode(w: json.Value, mut c: schema.CheckState) -> Result[u8, schema.SchemaError] uses {} {
+  schema.u8_json().decode(w, mut c)
+}
+
+fn drifting(v: u8, mut c: schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {} {
+  schema.charge_check(mut c)?
+  Ok(
+    Number(
+      u8.to_string(
+        if v == 255 {
+          0u8
+        } else {
+          v + 1u8
+        }
+      )
+    )
+  )
+}
+
+fn wire_projection(v: json.Value) -> json.Value uses {} {
+  unique v
+}
+
+// The domain is noncopyable and not serializable; only its owner projection is.
+pub opaque type Token: inert + noalloc_drop uses {} {
+  value: u8,
+}
+
+fn token_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  Token,
+  schema.SchemaError
+] uses {} {
+  let value = schema.u8_json().decode(w, mut c)?
+  Ok(Token(value: value))
+}
+
+fn token_encode(v: Token, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  schema.u8_json().encode(v.value, mut c)
+}
+
+fn token_projection(v: Token) -> u8 uses {} {
+  v.value
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let o = schema.default_options()
+  let tokens = schema.Boundary(decode: token_decode, encode: token_encode)
+  let token = Token(value: 9)
+  let Ok("9") = schema.write_checked(tokens, token, token_projection, o) else {
+    return Error(())
+  }
+  let Ok(()) = schema.check_round_trip(tokens, token, token_projection, o) else {
+    return Error(())
+  }
+  let weak = schema.Boundary(decode: decode, encode: changed)
+  let Ok("0") = schema.write_json(weak, 7u8, o) else {
+    return Error(())
+  }
+  let Error(ProjectionMismatch) = schema.write_checked(weak, 7u8, project, o) else {
+    return Error(())
+  }
+  let Error(ProjectionMismatch) = schema.check_round_trip(weak, 7u8, project, o) else {
+    return Error(())
+  }
+  // Omitted state is explicitly outside the guarantee.
+  let Ok("0") = schema.write_checked(weak, 7u8, omit, o) else {
+    return Error(())
+  }
+  let bad = schema.Boundary(decode: decode, encode: malformed)
+  let Error(Boundary(Json(InvalidNumber))) = schema.write_checked(bad, 7u8, project, o) else {
+    return Error(())
+  }
+  let refuses = schema.Boundary(decode: decode, encode: rejected)
+  let Ok("\"bad\"") = schema.write_json(refuses, 7u8, o) else {
+    return Error(())
+  }
+  let Error(Boundary(Schema(Invalid(issues)))) = schema.write_checked(
+    refuses,
+    7u8,
+    project,
+    o
+  ) else {
+    return Error(())
+  }
+  if issues.items[0].code != "Type" {
+    return Error(())
+  }
+  let unstable = schema.Boundary(decode: decode, encode: drifting)
+  let Error(ProjectionMismatch) = schema.check_normalization(
+    unstable,
+    Number("7"),
+    wire_projection,
+    o
+  ) else {
+    return Error(())
+  }
+  let Error(Schema(Invalid(_))) = schema.check_round_trip(refuses, 7u8, project, o) else {
+    return Error(())
+  }
+  let good = schema.u8_json()
+  let Ok("7") = schema.write_json_checked(good, 7u8, project, o) else {
+    return Error(())
+  }
+  let mut small = o
+  small.limits.max_work = 2
+  // Encode and preflight fit; the read must not start a fresh budget.
+  let Error(Boundary(Schema(Limit(cause)))) = schema.write_checked(
+    good,
+    7u8,
+    project,
+    small
+  ) else {
+    return Error(())
+  }
+  if cause.kind != Work {
+    return Error(())
+  }
+  small.limits.max_work = 3
+  let Ok("7") = schema.write_checked(good, 7u8, project, small) else {
+    return Error(())
+  }
+  let Error(Schema(Limit(normalization_limit))) = schema.check_normalization(
+    good,
+    Number("7"),
+    wire_projection,
+    small
+  ) else {
+    return Error(())
+  }
+  if normalization_limit.kind != Work {
+    return Error(())
+  }
+  small.limits.max_work = 4
+  let Ok(()) = schema.check_normalization(good, Number("7"), wire_projection, small) else {
+    return Error(())
+  }
+  small.limits.max_output_bytes = 0
+  let Error(Boundary(FormatLimit(OutputBytes(0)))) = schema.write_checked(
+    good,
+    7u8,
+    project,
+    small
+  ) else {
+    return Error(())
+  }
+  small = o
+  small.limits.max_input_bytes = 0
+  let Error(Boundary(FormatLimit(InputBytes(0)))) = schema.write_checked(
+    good,
+    7u8,
+    project,
+    small
+  ) else {
+    return Error(())
+  }
+  Ok(())
+}

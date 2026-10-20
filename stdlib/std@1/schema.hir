@@ -589,14 +589,12 @@ fn json_size(
   measured
 }
 
-pub fn write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[
-  String,
-  BoundaryError
-] uses {} {
-  let mut check = match check_state(o) {
-    Ok(check) => check,
-    Error(error) => return Error(Schema(take error)),
-  }
+fn write_json_with_state[D: inert](
+  b: Boundary[D, std@1/json.Value],
+  value: D,
+  o: Options,
+  mut check: CheckState
+) -> Result[String, BoundaryError] uses {} {
   let wire = match b.encode(value, mut check) {
     Ok(wire) => wire,
     Error(error) => return Error(Schema(take error)),
@@ -607,4 +605,15 @@ pub fn write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Optio
     Ok(text) => Ok(take text),
     Error(error) => Error(Json(take error)),
   }
+}
+
+pub fn write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[
+  String,
+  BoundaryError
+] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Schema(take error)),
+  }
+  write_json_with_state(b, value, o, mut check)
 }

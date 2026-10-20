@@ -34,6 +34,8 @@ mod remote;
 mod replay;
 #[path = "cli/runners.rs"]
 mod runners;
+#[path = "cli/schema.rs"]
+mod schema;
 #[path = "cli/select_race.rs"]
 mod select_race;
 #[path = "cli/split.rs"]

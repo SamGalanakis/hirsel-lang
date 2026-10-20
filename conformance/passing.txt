@@ -1342,6 +1342,8 @@ conformance/GEN/GEN-2-explicit-hasher.hir
 conformance/GEN/GEN-2-explicit-order.hir
 conformance/GEN/GEN-2-nominal-plain-callback-run.hir
 conformance/GEN/GEN-2-schema-boundary-run.hir
+conformance/GEN/GEN-2-schema-checked-run.hir
+conformance/GEN/GEN-2-schema-formats-run.hir
 conformance/GEN/GEN-2-schema-issues-run.hir
 conformance/GEN/GEN-2-schema-json-run.hir
 conformance/GEN/GEN-2-schema-limits-run.hir

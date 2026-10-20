@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-1 at line 27
+// expect: reject CT-1 at line 28
+// twin: CT/CT-5-schema-policy-decode-ok.hir
 // One policy validates names in both directions, including self aliases.
 type Named {
   value: u8,

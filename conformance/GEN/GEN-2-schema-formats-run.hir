@@ -1,0 +1,156 @@
+// rule: GEN-2
+// expect: run
+// Number spelling and numeric values are different equivalences.
+@serializable
+type Numbers {
+  unsigned: u64,
+  signed: i64,
+  real: f64,
+}
+
+fn decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  Numbers,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Numbers), schema.strict_policy())
+
+fn encode(v: Numbers, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Numbers), schema.strict_policy())
+
+fn projection(v: Numbers) -> Numbers uses {} {
+  v
+}
+
+fn wire_projection(v: json.Value) -> json.Value uses {} {
+  unique v
+}
+
+fn same(v: json.Value, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut c)?
+  Ok(unique v)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let b = schema.Boundary(decode: decode, encode: encode)
+  let o = schema.default_options()
+  let floats: List[f64] = [
+    0.0,
+    -0.0,
+    0.1,
+    f64.from_bits(1),
+    f64.from_bits(0x7fefffffffffffff),
+    f64.from_bits(0x7ff0000000000000),
+    f64.from_bits(0xfff0000000000000),
+    f64.from_bits(0x7ff0000000000001)
+  ]
+  for f in floats {
+    let value = Numbers(
+      unsigned: 18446744073709551615u64,
+      signed: -9223372036854775808i64,
+      real: f
+    )
+    let Ok(_) = schema.write_checked(b, value, projection, o) else {
+      return Error(())
+    }
+    // HSC1 through an admitted DTO, never canonical decoding of callbacks/domains.
+    let restored: Result[Numbers, DecodeError] = codec.decode(codec.encode(value))
+    let Ok(dto) = restored else {
+      return Error(())
+    }
+    if codec.encode(dto) != codec.encode(value) {
+      return Error(())
+    }
+  }
+  let dom = schema.Boundary(decode: same, encode: same)
+  let lexemes: List[String] = [
+    "9007199254740993",
+    "18446744073709551615",
+    "1e0",
+    "1.00",
+    "-0",
+    "1e9999"
+  ]
+  for n in lexemes {
+    let Ok(actual) = schema.write_checked(dom, Number(unique n), wire_projection, o) else {
+      return Error(())
+    }
+    if actual != n {
+      return Error(())
+    }
+  }
+  let invalid_lexemes: List[String] = ["NaN", "inf", "01", "1 2"]
+  for invalid in invalid_lexemes {
+    let Error(Boundary(Json(InvalidNumber))) = schema.write_checked(
+      dom,
+      Number(unique invalid),
+      wire_projection,
+      o
+    ) else {
+      return Error(())
+    }
+  }
+  // The other existing DOM codecs keep integer values but normalize exponent spelling.
+  // They are deliberately not exposed as schema checked adapters.
+  let integers: List[String] = ["9007199254740993", "18446744073709551615"]
+  for n in integers {
+    let Ok(cb) = cbor.encode(Number(unique n), false) else {
+      return Error(())
+    }
+    let Ok(Number(cn)) = cbor.decode(cb) else {
+      return Error(())
+    }
+    let Ok(mp) = msgpack.encode(Number(unique n)) else {
+      return Error(())
+    }
+    let Ok(Number(mn)) = msgpack.decode(mp) else {
+      return Error(())
+    }
+    if cn != n || mn != n {
+      return Error(())
+    }
+  }
+  let Ok(cb) = cbor.encode(Number("1e0"), false) else {
+    return Error(())
+  }
+  let Ok(Number(cn)) = cbor.decode(cb) else {
+    return Error(())
+  }
+  let Ok(mp) = msgpack.encode(Number("1e0")) else {
+    return Error(())
+  }
+  let Ok(Number(mn)) = msgpack.decode(mp) else {
+    return Error(())
+  }
+  if cn == "1e0" || mn == "1e0" {
+    return Error(())
+  }
+  let Ok(cb_negative) = cbor.encode(Number("-18446744073709551616"), false) else {
+    return Error(())
+  }
+  let Ok(Number("-18446744073709551616")) = cbor.decode(cb_negative) else {
+    return Error(())
+  }
+  let Error(InvalidNumber) = msgpack.encode(Number("-18446744073709551616")) else {
+    return Error(())
+  }
+  let Error(Unsupported(0)) = cbor.decode(b"\xf9\x7c\x00") else {
+    return Error(())
+  }
+  let Error(Unsupported(0)) = msgpack.decode(b"\xcb\x7f\xf0\x00\x00\x00\x00\x00\x00") else {
+    return Error(())
+  }
+  let outside: List[String] = ["18446744073709551616", "1e9999", "NaN"]
+  for n in outside {
+    if let Ok(_) = cbor.encode(Number(unique n), false) {
+      return Error(())
+    }
+    if let Ok(_) = msgpack.encode(Number(unique n)) {
+      return Error(())
+    }
+  }
+  Ok(())
+}
