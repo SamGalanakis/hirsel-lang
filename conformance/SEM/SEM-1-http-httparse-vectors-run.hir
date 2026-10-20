@@ -1,0 +1,492 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// httparse a0fa552e src/lib.rs:1352-1779: all 29 req! and 13 res! calls.
+// The audit's 44 includes the recursive macro calls at :1334/:1638.
+// Empty-buffer controls bring this file to 44 parse vectors; chunks have 14
+// upstream assertions (:1988-2002) plus 3 extension/offset controls.
+// Offsets replace borrowed slices; count is the initialized prefix on Partial.
+fn empty() -> http_wire.RawHeader uses {} {
+  http_wire.RawHeader(name_start: 0, name_end: 0, value_start: 0, value_end: 0)
+}
+
+fn headers_match(
+  t: Test,
+  buf: Bytes,
+  headers: Inline[http_wire.RawHeader, 4],
+  count: u64,
+  names: List[Bytes],
+  values: List[Bytes]
+) {
+  test.check(t, count == list.len(names))
+  for i in 0..count {
+    let h = headers[i]
+    test.check(t, bytes.slice(buf, h.name_start, h.name_end) == names[i])
+    test.check(t, bytes.slice(buf, h.value_start, h.value_end) == values[i])
+  }
+}
+
+fn request(
+  t: Test,
+  buf: Bytes,
+  expected: Result[http_wire.ParseStatus, http_wire.HeadError],
+  method: Option[Bytes],
+  target: Option[Bytes],
+  version: Option[u8],
+  names: List[Bytes],
+  values: List[Bytes]
+) {
+  let mut line = http_wire.RequestLine(
+    method_start: 0,
+    method_end: 0,
+    target_start: 0,
+    target_end: 0,
+    version: 0
+  )
+  let mut headers: Inline[http_wire.RawHeader, 4] = [empty(), empty(), empty(), empty()]
+  let mut count: u64 = 99
+  test.check(
+    t,
+    http_wire.parse_request(buf, mut line, mut headers, mut count) == expected
+  )
+  if let Some(value) = method {
+    test.check(t, bytes.slice(buf, line.method_start, line.method_end) == value)
+  }
+  if let Some(value) = target {
+    test.check(t, bytes.slice(buf, line.target_start, line.target_end) == value)
+  }
+  if let Some(value) = version {
+    test.check(t, line.version == value)
+  }
+  headers_match(t, buf, headers, count, names, values)
+}
+
+fn response(
+  t: Test,
+  buf: Bytes,
+  expected: Result[http_wire.ParseStatus, http_wire.HeadError],
+  version: Option[u8],
+  code: Option[u16],
+  reason: Option[Bytes],
+  names: List[Bytes],
+  values: List[Bytes]
+) {
+  let mut line = http_wire.StatusLine(
+    version: 0,
+    code: 0,
+    reason_start: 0,
+    reason_end: 0
+  )
+  let mut headers: Inline[http_wire.RawHeader, 4] = [empty(), empty(), empty(), empty()]
+  let mut count: u64 = 99
+  test.check(
+    t,
+    http_wire.parse_response(buf, mut line, mut headers, mut count) == expected
+  )
+  if let Some(value) = version {
+    test.check(t, line.version == value)
+  }
+  if let Some(value) = code {
+    test.check(t, line.code == value)
+  }
+  if let Some(value) = reason {
+    test.check(t, bytes.slice(buf, line.reason_start, line.reason_end) == value)
+  }
+  headers_match(t, buf, headers, count, names, values)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // src/lib.rs:1352 test_request_simple
+  request(
+    t,
+    b"GET / HTTP/1.1\r\n\r\n",
+    Ok(Complete(18)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1363 test_request_simple_with_query_params
+  request(
+    t,
+    b"GET /thing?data=a HTTP/1.1\r\n\r\n",
+    Ok(Complete(30)),
+    Some(b"GET"),
+    Some(b"/thing?data=a"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1374 test_request_simple_with_whatwg_query_params
+  request(
+    t,
+    b"GET /thing?data=a^ HTTP/1.1\r\n\r\n",
+    Ok(Complete(31)),
+    Some(b"GET"),
+    Some(b"/thing?data=a^"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1385 test_request_headers
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nHost: foo.com\r\nCookie: \r\n\r\n",
+    Ok(Complete(43)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"Host", b"Cookie"],
+    [b"foo.com", b""]
+  )
+  // src/lib.rs:1400 test_request_headers_optional_whitespace
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nHost: \tfoo.com\t \r\nCookie: \t \r\n\r\n",
+    Ok(Complete(48)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"Host", b"Cookie"],
+    [b"foo.com", b""]
+  )
+  // src/lib.rs:1415 test_request_header_value_htab_short
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nUser-Agent: some\tagent\r\n\r\n",
+    Ok(Complete(42)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"User-Agent"],
+    [b"some\tagent"]
+  )
+  // src/lib.rs:1429 test_request_header_value_htab_med
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nUser-Agent: 1234567890some\tagent\r\n\r\n",
+    Ok(Complete(52)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"User-Agent"],
+    [b"1234567890some\tagent"]
+  )
+  // src/lib.rs:1443 test_request_header_value_htab_long
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nUser-Agent: 1234567890some\t1234567890agent1234567890\r\n\r\n",
+    Ok(Complete(72)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"User-Agent"],
+    [b"1234567890some\t1234567890agent1234567890"]
+  )
+  // src/lib.rs:1457 test_request_header_no_space_after_colon
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nUser-Agent:omg-no-space1234567890some1234567890agent1234567890\r\n\r\n",
+    Ok(Complete(82)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"User-Agent"],
+    [b"omg-no-space1234567890some1234567890agent1234567890"]
+  )
+  // src/lib.rs:1471 test_request_headers_max
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nA: A\r\nB: B\r\nC: C\r\nD: D\r\n\r\n",
+    Ok(Complete(42)),
+    None(),
+    None(),
+    None(),
+    [b"A", b"B", b"C", b"D"],
+    [b"A", b"B", b"C", b"D"]
+  )
+  // src/lib.rs:1479 test_request_multibyte
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nHost: foo.com\r\nUser-Agent: \xe3\x81\xb2\xe3/1.0\r\n\r\n",
+    Ok(Complete(55)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"Host", b"User-Agent"],
+    [b"foo.com", b"\xe3\x81\xb2\xe3/1.0"]
+  )
+  // src/lib.rs:1495 test_request_one_byte_method
+  request(t, b"G", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1502 test_request_partial_method
+  request(t, b"GE", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1509 test_request_method_no_delimiter
+  request(t, b"GET", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1517 test_request_method_only
+  request(t, b"GET ", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1523 test_request_partial
+  request(t, b"GET / HTTP/1.1\r\n\r", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1529 test_request_partial_version
+  request(t, b"GET / HTTP/1.", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1535 test_request_method_path_no_delimiter
+  request(t, b"GET /", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1541 test_request_method_path_only
+  request(t, b"GET / ", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1547 test_request_partial_parses_headers_as_much_as_it_can
+  request(
+    t,
+    b"GET / HTTP/1.1\r\nHost: yolo\r\n",
+    Ok(Partial()),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [b"Host"],
+    [b"yolo"]
+  )
+  // src/lib.rs:1561 test_request_newlines
+  request(
+    t,
+    b"GET / HTTP/1.1\nHost: foo.bar\n\n",
+    Ok(Complete(30)),
+    None(),
+    None(),
+    None(),
+    [b"Host"],
+    [b"foo.bar"]
+  )
+  // src/lib.rs:1567 test_request_empty_lines_prefix
+  request(
+    t,
+    b"\r\n\r\nGET / HTTP/1.1\r\n\r\n",
+    Ok(Complete(22)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1578 test_request_empty_lines_prefix_lf_only
+  request(
+    t,
+    b"\n\nGET / HTTP/1.1\n\n",
+    Ok(Complete(18)),
+    Some(b"GET"),
+    Some(b"/"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1589 test_request_path_backslash
+  request(
+    t,
+    b"\n\nGET /\\?wayne\\=5 HTTP/1.1\n\n",
+    Ok(Complete(28)),
+    Some(b"GET"),
+    Some(b"/\\?wayne\\=5"),
+    Some(1),
+    [],
+    []
+  )
+  // src/lib.rs:1600 test_request_with_invalid_token_delimiter
+  request(
+    t,
+    b"GET\n/ HTTP/1.1\r\nHost: foo.bar\r\n\r\n",
+    Error(Token()),
+    None(),
+    None(),
+    None(),
+    [],
+    []
+  )
+  // src/lib.rs:1608 test_request_with_invalid_but_short_version
+  request(t, b"GET / HTTP/1!", Error(Version()), None(), None(), None(), [], [])
+  // src/lib.rs:1615 test_request_with_empty_method
+  request(t, b" / HTTP/1.1\r\n\r\n", Error(Token()), None(), None(), None(), [], [])
+  // src/lib.rs:1622 test_request_with_empty_path
+  request(t, b"GET  HTTP/1.1\r\n\r\n", Error(Token()), None(), None(), None(), [], [])
+  // src/lib.rs:1629 test_request_with_empty_method_and_path
+  request(t, b"  HTTP/1.1\r\n\r\n", Error(Token()), None(), None(), None(), [], [])
+  // src/lib.rs:1656 test_response_simple
+  response(
+    t,
+    b"HTTP/1.1 200 OK\r\n\r\n",
+    Ok(Complete(19)),
+    Some(1),
+    Some(200),
+    Some(b"OK"),
+    [],
+    []
+  )
+  // src/lib.rs:1666 test_response_newlines
+  response(
+    t,
+    b"HTTP/1.0 403 Forbidden\nServer: foo.bar\n\n",
+    Ok(Complete(40)),
+    None(),
+    None(),
+    None(),
+    [b"Server"],
+    [b"foo.bar"]
+  )
+  // src/lib.rs:1672 test_response_reason_missing
+  response(
+    t,
+    b"HTTP/1.1 200 \r\n\r\n",
+    Ok(Complete(17)),
+    Some(1),
+    Some(200),
+    Some(b""),
+    [],
+    []
+  )
+  // src/lib.rs:1682 test_response_reason_missing_no_space
+  response(
+    t,
+    b"HTTP/1.1 200\r\n\r\n",
+    Ok(Complete(16)),
+    Some(1),
+    Some(200),
+    Some(b""),
+    [],
+    []
+  )
+  // src/lib.rs:1692 test_response_reason_missing_no_space_with_headers
+  response(
+    t,
+    b"HTTP/1.1 200\r\nFoo: bar\r\n\r\n",
+    Ok(Complete(26)),
+    Some(1),
+    Some(200),
+    Some(b""),
+    [b"Foo"],
+    [b"bar"]
+  )
+  // src/lib.rs:1705 test_response_reason_with_space_and_tab
+  response(
+    t,
+    b"HTTP/1.1 101 Switching Protocols\t\r\n\r\n",
+    Ok(Complete(37)),
+    Some(1),
+    Some(101),
+    Some(b"Switching Protocols\t"),
+    [],
+    []
+  )
+  // src/lib.rs:1716 test_response_reason_with_obsolete_text_byte
+  response(
+    t,
+    b"HTTP/1.1 200 X\xffZ\r\n\r\n",
+    Ok(Complete(20)),
+    Some(1),
+    Some(200),
+    Some(b""),
+    [],
+    []
+  )
+  // src/lib.rs:1727 test_response_reason_with_nul_byte
+  response(
+    t,
+    b"HTTP/1.1 200 \x00\r\n\r\n",
+    Error(Status()),
+    None(),
+    None(),
+    None(),
+    [],
+    []
+  )
+  // src/lib.rs:1734 test_response_version_missing_space
+  response(t, b"HTTP/1.1", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1741 test_response_code_missing_space
+  response(t, b"HTTP/1.1 200", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1748 test_response_partial_parses_headers_as_much_as_it_can
+  response(
+    t,
+    b"HTTP/1.1 200 OK\r\nServer: yolo\r\n",
+    Ok(Partial()),
+    Some(1),
+    Some(200),
+    Some(b"OK"),
+    [b"Server"],
+    [b"yolo"]
+  )
+  // src/lib.rs:1762 test_response_empty_lines_prefix_lf_only
+  response(
+    t,
+    b"\n\nHTTP/1.1 200 OK\n\n",
+    Ok(Complete(19)),
+    None(),
+    None(),
+    None(),
+    [],
+    []
+  )
+  // src/lib.rs:1768 test_response_no_cr
+  response(
+    t,
+    b"HTTP/1.0 200\nContent-type: text/html\n\n",
+    Ok(Complete(38)),
+    Some(0),
+    Some(200),
+    Some(b""),
+    [b"Content-type"],
+    [b"text/html"]
+  )
+  // Empty-buffer controls (twins of the upstream partial-method/version cases).
+  request(t, b"", Ok(Partial()), None(), None(), None(), [], [])
+  response(t, b"", Ok(Partial()), None(), None(), None(), [], [])
+  // src/lib.rs:1988-2002 test_chunk_size (including its repeated assertion).
+  test.check(t, http_wire.parse_chunk_size(b"0\r\n", 0) == Ok(Complete(3, 0)))
+  test.check(t, http_wire.parse_chunk_size(b"12\r\nchunk", 0) == Ok(Complete(4, 18)))
+  test.check(t, http_wire.parse_chunk_size(b"3086d\r\n", 0) == Ok(Complete(7, 198765)))
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"3735AB1;foo bar*\r\n", 0) == Ok(Complete(18, 57891505))
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"3735ab1 ; baz \r\n", 0) == Ok(Complete(16, 57891505))
+  )
+  test.check(t, http_wire.parse_chunk_size(b"77a65\r", 0) == Ok(Partial()))
+  test.check(t, http_wire.parse_chunk_size(b"ab", 0) == Ok(Partial()))
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"567f8a\rfoo", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"567f8a\rfoo", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"567xf8a\r\n", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"ffffffffffffffff\r\n", 0) == Ok(
+      Complete(18, 18446744073709551615)
+    )
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"1ffffffffffffffff\r\n", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"Affffffffffffffff\r\n", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"fffffffffffffffff\r\n", 0) == Error(InvalidChunkSize())
+  )
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"ff \t;ignored\x00\xff\r\n", 0) == Ok(Complete(16, 255))
+  )
+  test.check(t, http_wire.parse_chunk_size(b"ff 0\r\n", 0) == Error(InvalidChunkSize()))
+  test.check(
+    t,
+    http_wire.parse_chunk_size(b"prefixfF\r\nbody", 6) == Ok(Complete(4, 255))
+  )
+  Ok(())
+}

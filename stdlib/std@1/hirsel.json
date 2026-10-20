@@ -1062,6 +1062,13 @@
       "module": [
         "txn_manager"
       ]
+    },
+    {
+      "path": "http1_parse.hir",
+      "module": [
+        "internal",
+        "http1_parse"
+      ]
     }
   ],
   "dependencies": []

@@ -4639,10 +4639,13 @@ conformance/SEM/SEM-1-http-client-truncated-run.hir
 conformance/SEM/SEM-1-http-client-unix-socket-run.hir
 conformance/SEM/SEM-1-http-client-upgrade-close-run.hir
 conformance/SEM/SEM-1-http-content-coding-run.hir
+conformance/SEM/SEM-1-http-go-requests-run.hir
+conformance/SEM/SEM-1-http-go-responses-run.hir
 conformance/SEM/SEM-1-http-h2-client-run.hir
 conformance/SEM/SEM-1-http-h2-server-run.hir
 conformance/SEM/SEM-1-http-headers-limits-run.hir
 conformance/SEM/SEM-1-http-headers-many-run.hir
+conformance/SEM/SEM-1-http-httparse-vectors-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-0-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-1-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-2-run.hir

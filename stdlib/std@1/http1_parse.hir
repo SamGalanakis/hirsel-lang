@@ -1,0 +1,96 @@
+// Private HTTP/1 request-URI and incoming-request adapter helpers.
+// Go request.go:1125-1155 and net/url/url.go:443-537: origin/asterisk,
+// absolute URI and CONNECT authority forms. Retain the raw target for handlers.
+fn http_server_target(method: String, target: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(target)
+  let size = core@1/bytes.len(data)
+  if size == 0 {
+    return false
+  }
+  if target == "*" {
+    return true
+  }
+  if data[0] == 47 {
+    // A double slash is still a path, never a scheme-relative authority.
+    // Go's setPath validates escapes in the path, leaving RawQuery opaque.
+    let mut i: u64 = 0
+    while i < size && data[i] != 63 {
+      if data[i] == 37 {
+        if size - i < 3 || ascii.digit_value_radix(data[i + 1], 16) == None() || ascii.digit_value_radix(
+          data[i + 2],
+          16
+        ) == None() {
+          return false
+        }
+        i += 2
+      }
+      i += 1
+    }
+    return true
+  }
+  let text = if method == "CONNECT" {
+    string.concat("http://", target)
+  } else {
+    unique target
+  }
+  let Ok(parsed) = uri.parse(text) else {
+    return false
+  }
+  if method == "CONNECT" {
+    let Some(host) = parsed.host else {
+      return false
+    }
+    let after = core@1/string.byte_len(uri.component_encoded(host, Host()))
+    if after < size {
+      if data[after] != 58 {
+        return false
+      }
+      for byte in core@1/bytes.slice(data, after + 1, size) {
+        if byte < 48 || byte > 57 {
+          return false
+        }
+      }
+    }
+  }
+  if method == "CONNECT" || parsed.host != None() {
+    // Use Hirsel's canonical host policy, shared with capability grants.
+    let Ok(_) = http.http_host(parsed) else {
+      return false
+    }
+  }
+  true
+}
+
+fn http_server_incoming(
+  buf: Bytes,
+  line: http_wire.RequestLine,
+  take headers: List[http.Header]
+) -> Result[http.ServerRequest, http.HttpError] uses {} {
+  let method = http.http_text(buf, line.method_start, line.method_end)?
+  let target = http.http_text(buf, line.target_start, line.target_end)?
+  if !http_server_target(method, target) {
+    return Error(Malformed(Token()))
+  }
+  Ok(
+    http.ServerRequest(
+      method: take method,
+      target: take target,
+      version: if line.version == 1 {
+        Http11()
+      } else {
+        Http10()
+      },
+      keep_alive: http.http_server_keep_alive(
+        headers,
+        if line.version == 1 {
+          Http11()
+        } else {
+          Http10()
+        }
+      ) && !(line.version == 0 && http.header(headers, "transfer-encoding") != None()),
+      headers: take headers,
+      body: b"",
+      trailers: []
+    )
+  )
+}

@@ -149,6 +149,20 @@ pub fn parse_response[k: size](
   mut count: u64
 ) -> Result[ParseStatus, HeadError] uses {} {
   count = 0
+  match parse_response_line(buf, mut line, false)? {
+    Partial() => Ok(Partial()),
+    Complete(start) => parse_headers(buf, start, mut headers, mut count),
+  }
+}
+
+// httparse ParserConfig / Response::parse_with_config, src/lib.rs:650-695.
+// Package-private so the HTTP adapter can select Go ReadResponse's leading
+// status-space tolerance without changing this module's strict public parser.
+@noalloc
+fn parse_response_line(buf: Bytes, mut line: StatusLine, allow_status_spaces: bool) -> Result[
+  ParseStatus,
+  HeadError
+] uses {} {
   let len = core@1/bytes.len(buf)
   let mut i: u64 = 0
   while i < len && (buf[i] == 13 || buf[i] == 10) {
@@ -190,6 +204,11 @@ pub fn parse_response[k: size](
     return Error(Version())
   }
   i += 1
+  if allow_status_spaces {
+    while i < len && buf[i] == 32 {
+      i += 1
+    }
+  }
   let mut code: u16 = 0
   j = 0
   while j < 3 {
@@ -243,7 +262,7 @@ pub fn parse_response[k: size](
   } else {
     reason_end
   }
-  parse_headers(buf, i, mut headers, mut count)
+  Ok(Complete(i))
 }
 
 // httparse parse_chunk_size: <=16 hex digits, implied LWS before ';', opaque
@@ -345,7 +364,8 @@ pub fn find_header[k: size](
 }
 
 // Zig lib/std/http/Client.zig Response.Head.parse, bff490a2 (MIT).
-// Deviations: reject CL+TE and every coding except chunked.
+// HTTP/1.1 rejects CL+TE and every coding except chunked. HTTP/1.0 ignores
+// Transfer-Encoding and closes, as Go transfer.go:632-644 requires.
 @noalloc
 pub fn framing[k: size](
   buf: Bytes,
@@ -362,6 +382,7 @@ pub fn framing[k: size](
   let mut length: Option[u64] = None()
   let mut chunked: bool = false
   let mut keep_alive = version == 1
+  let mut http10_transfer: bool = false
   let mut i: u64 = 0
   while i < count {
     let h = headers[i]
@@ -374,10 +395,16 @@ pub fn framing[k: size](
     if equal_name(buf, h.name_start, h.name_end, b"connection") {
       keep_alive = !equal_name(buf, h.value_start, h.value_end, b"close")
     } else if equal_name(buf, h.name_start, h.name_end, b"transfer-encoding") {
-      if chunked || !equal_name(buf, h.value_start, h.value_end, b"chunked") {
-        return Error(TransferEncoding())
+      // Go net/http/transfer.go:632-644: HTTP/1.0 transfer codings do not
+      // frame the message, and their presence requires connection close.
+      if version == 0 {
+        http10_transfer = true
+      } else {
+        if chunked || !equal_name(buf, h.value_start, h.value_end, b"chunked") {
+          return Error(TransferEncoding())
+        }
+        chunked = true
       }
-      chunked = true
     } else if equal_name(buf, h.name_start, h.name_end, b"content-length") {
       if h.value_start == h.value_end {
         return Error(ContentLength())
@@ -411,7 +438,13 @@ pub fn framing[k: size](
       return Error(TransferEncoding())
     }
   }
-  Ok(Framing(content_length: length, chunked: chunked, keep_alive: keep_alive))
+  Ok(
+    Framing(
+      content_length: length,
+      chunked: chunked,
+      keep_alive: keep_alive && !http10_transfer
+    )
+  )
 }
 
 // Zig lib/std/http/HeaderIterator.zig init/next and test next, bff490a2.

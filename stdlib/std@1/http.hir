@@ -712,7 +712,7 @@ fn http_add_header_batch(
     if http_same(name, "content-length") {
       batch_cl = true
     }
-    if http_same(name, "transfer-encoding") {
+    if version == 1 && http_same(name, "transfer-encoding") {
       batch_te = true
     }
     hi += 1
@@ -764,7 +764,7 @@ fn http_add_header_batch(
   Ok(())
 }
 
-fn http_parse_head(buf: Bytes, config: Config) -> Result[
+fn http_parse_head(buf: Bytes, config: Config, head_request: bool) -> Result[
   Option[(ResponseHead, u64)],
   HttpError
 ] uses {} {
@@ -803,8 +803,17 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   let mut start: u64 = 0
   let mut fields = HttpHeaderFields(headers: [], content_length: None(), chunked: false)
   while true {
-    let parsed = if first {
-      http_wire.parse_response(buf, mut line, mut raw, mut count)
+    let parsed: Result[http_wire.ParseStatus, http_wire.HeadError] = if first {
+      match http_wire.parse_response_line(buf, mut line, true) {
+        Ok(Partial()) => Ok(Partial()),
+        Ok(Complete(header_start)) => http_wire.parse_headers(
+          buf,
+          header_start,
+          mut raw,
+          mut count
+        ),
+        Error(error) => Error(error),
+      }
     } else {
       http_wire.parse_headers(buf, start, mut raw, mut count)
     }
@@ -851,7 +860,7 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
         } else {
           Http10()
         }
-      )
+      ) && !(line.version == 0 && header(headers, "transfer-encoding") != None()) && (head_request || chunked || content_length != None() || line.code < 200 || line.code == 204 || line.code == 304)
       return Ok(
         Some(
           (
@@ -898,7 +907,7 @@ fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
     let buf = http_input_contents(r.transport.input)
-    if let Some((head, end)) = http_parse_head(buf, r.config)? {
+    if let Some((head, end)) = http_parse_head(buf, r.config, r.method == Head())? {
       if end > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
@@ -1085,7 +1094,7 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
     }
     http_input_consume(mut r.transport.input, count)
     let buf = core@1/bytes.from_list(copy collected)
-    if let Some((head, end)) = http_parse_head(buf, r.config)? {
+    if let Some((head, end)) = http_parse_head(buf, r.config, true)? {
       if end - 17 > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
@@ -1868,26 +1877,7 @@ fn http_server_head(buf: Bytes, config: HttpServerConfig) -> Result[
       return Ok(
         Some(
           (
-            ServerRequest(
-              method: http_text(buf, line.method_start, line.method_end)?,
-              target: http_text(buf, line.target_start, line.target_end)?,
-              version: if line.version == 1 {
-                Http11()
-              } else {
-                Http10()
-              },
-              keep_alive: http_server_keep_alive(
-                headers,
-                if line.version == 1 {
-                  Http11()
-                } else {
-                  Http10()
-                }
-              ),
-              headers: take headers,
-              body: b"",
-              trailers: []
-            ),
+            internal.http1_parse.http_server_incoming(buf, line, take headers)?,
             frame,
             end
           )

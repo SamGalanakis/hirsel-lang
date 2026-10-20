@@ -1,0 +1,613 @@
+// rule: SEM-1
+// expect: test
+// Go ebe2feefc400 src/net/http/{response_test.go:39,readrequest_test.go:30}.
+// Literal upstream tables, adapted to owned headers, raw request targets and
+// scripted Net. See docs/http1-prior-art.md for representation/policy differences.
+fn incoming(
+  t: Test,
+  raw: Bytes,
+  method: http.Method,
+  status: u16,
+  reason: String,
+  version: http.Version,
+  length: Option[u64],
+  chunked: bool,
+  keep: bool,
+  headers: List[http.Header],
+  body: Bytes,
+  trailers: List[http.Header]
+) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(unique raw), Close()])]
+      )
+    ],
+    []
+  )
+  let mut request = http.request(
+    n,
+    http.default_config(),
+    method,
+    "http://example.com/",
+    []
+  )?
+  http.send_bodiless(mut request)?
+  let head = http.receive_head(mut request)?
+  test.check(
+    t,
+    head.status == status && head.reason == reason && head.version == version
+  )
+  test.check(
+    t,
+    head.content_length == length && head.chunked == chunked && head.keep_alive == keep
+  )
+  test.check(t, head.headers == headers)
+  test.check(t, http.read_all(mut request, 4096)? == body)
+  test.check(t, http.trailers(request) == trailers)
+  Ok(())
+}
+
+fn rejected(t: Test, raw: Bytes, expected: http.HttpError) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(unique raw), Close()])]
+      )
+    ],
+    []
+  )
+  let mut request = http.request(
+    n,
+    http.default_config(),
+    Get(),
+    "http://example.com/",
+    []
+  )?
+  http.send_bodiless(mut request)?
+  test.check(t, http.receive_head(mut request) == Error(expected))
+  Ok(())
+}
+
+// response_test.go:41, respTests[0]: Unchunked response without Content-Length
+@test
+fn response_0(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nConnection: close\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    None(),
+    false,
+    false,
+    [http.Header(name: "Connection", value: "close")],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:71, respTests[1]: Unchunked HTTP/1.1 response without Content-Length or Connection
+@test
+fn response_1(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http11(),
+    None(),
+    false,
+    false,
+    [],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:98, respTests[2]: Unchunked HTTP/1.1 204 response without Content-Length
+@test
+fn response_2(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 204 No Content\r\n\r\nBody should not be read!\n",
+    Get(),
+    204,
+    "No Content",
+    Http11(),
+    None(),
+    false,
+    true,
+    [],
+    b"",
+    []
+  )
+}
+
+// response_test.go:123, respTests[3]: Unchunked response with Content-Length
+@test
+fn response_3(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    Some(10),
+    false,
+    false,
+    [
+      http.Header(name: "Content-Length", value: "10"),
+      http.Header(name: "Connection", value: "close")
+    ],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:156, respTests[4]: Chunked response without Content-Length
+@test
+fn response_4(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0a\r\nBody here\n\r\n09\r\ncontinued\r\n0\r\n\r\n",
+    Get(),
+    200,
+    "OK",
+    Http11(),
+    None(),
+    true,
+    true,
+    [http.Header(name: "Transfer-Encoding", value: "chunked")],
+    b"Body here\ncontinued",
+    []
+  )
+}
+
+// response_test.go:193, respTests[5]: Trailer header but no TransferEncoding
+@test
+fn response_5(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nTrailer: Content-MD5, Content-Sources\r\nContent-Length: 10\r\nConnection: close\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    Some(10),
+    false,
+    false,
+    [
+      http.Header(name: "Trailer", value: "Content-MD5, Content-Sources"),
+      http.Header(name: "Content-Length", value: "10"),
+      http.Header(name: "Connection", value: "close")
+    ],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:228, respTests[6]: Chunked response with Content-Length
+@test
+fn response_6(t: Test) -> Result[(), http.HttpError] {
+  rejected(
+    t,
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 10\r\n\r\n0a\r\nBody here\n\r\n0\r\n\r\n",
+    Malformed(TransferEncoding())
+  )
+}
+
+// response_test.go:265, respTests[7]: Chunked response in response to a HEAD request
+@test
+fn response_7(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http11(),
+    None(),
+    true,
+    true,
+    [http.Header(name: "Transfer-Encoding", value: "chunked")],
+    b"",
+    []
+  )
+}
+
+// response_test.go:292, respTests[8]: Content-Length in response to a HEAD request
+@test
+fn response_8(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nContent-Length: 256\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http10(),
+    Some(256),
+    false,
+    false,
+    [http.Header(name: "Content-Length", value: "256")],
+    b"",
+    []
+  )
+}
+
+// response_test.go:320, respTests[9]: Content-Length in response to a HEAD request with HTTP/1.1
+@test
+fn response_9(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nContent-Length: 256\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http11(),
+    Some(256),
+    false,
+    true,
+    [http.Header(name: "Content-Length", value: "256")],
+    b"",
+    []
+  )
+}
+
+// response_test.go:347, respTests[10]: No Content-Length or Chunked in response to a HEAD request
+@test
+fn response_10(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http10(),
+    None(),
+    false,
+    false,
+    [],
+    b"",
+    []
+  )
+}
+
+// response_test.go:373, respTests[11]: explicit Content-Length of 0
+@test
+fn response_11(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+    Get(),
+    200,
+    "OK",
+    Http11(),
+    Some(0),
+    false,
+    true,
+    [http.Header(name: "Content-Length", value: "0")],
+    b"",
+    []
+  )
+}
+
+// response_test.go:401, respTests[12]: Status line without a Reason-Phrase, but trailing space
+@test
+fn response_12(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 303 \r\n\r\n",
+    Head(),
+    303,
+    "",
+    Http10(),
+    None(),
+    false,
+    false,
+    [],
+    b"",
+    []
+  )
+}
+
+// response_test.go:426, respTests[13]: Status line without a Reason-Phrase, and no trailing space
+@test
+fn response_13(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 303\r\n\r\n",
+    Head(),
+    303,
+    "",
+    Http10(),
+    None(),
+    false,
+    false,
+    [],
+    b"",
+    []
+  )
+}
+
+// response_test.go:452, respTests[14]: Issue 4767
+@test
+fn response_14(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 206 Partial Content\nConnection: close\nContent-Type: multipart/byteranges; boundary=18a75608c8f47cef\n\nsome body",
+    Get(),
+    206,
+    "Partial Content",
+    Http11(),
+    None(),
+    false,
+    false,
+    [
+      http.Header(name: "Connection", value: "close"),
+      http.Header(
+        name: "Content-Type",
+        value: "multipart/byteranges; boundary=18a75608c8f47cef"
+      )
+    ],
+    b"some body",
+    []
+  )
+}
+
+// response_test.go:484, respTests[15]: Unchunked response without Content-Length, Request is nil
+@test
+fn response_15(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nConnection: close\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    None(),
+    false,
+    false,
+    [http.Header(name: "Connection", value: "close")],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:513, respTests[16]: 206 Partial Content
+@test
+fn response_16(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain; charset=utf-8\r\nAccept-Ranges: bytes\r\nContent-Range: bytes 0-5/1862\r\nContent-Length: 6\r\n\r\nfoobar",
+    Get(),
+    206,
+    "Partial Content",
+    Http11(),
+    Some(6),
+    false,
+    true,
+    [
+      http.Header(name: "Content-Type", value: "text/plain; charset=utf-8"),
+      http.Header(name: "Accept-Ranges", value: "bytes"),
+      http.Header(name: "Content-Range", value: "bytes 0-5/1862"),
+      http.Header(name: "Content-Length", value: "6")
+    ],
+    b"foobar",
+    []
+  )
+}
+
+// response_test.go:551, respTests[17]: Both keep-alive and close, on the same Connection line
+@test
+fn response_17(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nContent-Length: 256\r\nConnection: keep-alive, close\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http11(),
+    Some(256),
+    false,
+    false,
+    [
+      http.Header(name: "Content-Length", value: "256"),
+      http.Header(name: "Connection", value: "keep-alive, close")
+    ],
+    b"",
+    []
+  )
+}
+
+// response_test.go:583, respTests[18]: Both keep-alive and close, on different Connection lines
+@test
+fn response_18(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nContent-Length: 256\r\nConnection: keep-alive\r\nConnection: close\r\n\r\n",
+    Head(),
+    200,
+    "OK",
+    Http11(),
+    Some(256),
+    false,
+    false,
+    [
+      http.Header(name: "Content-Length", value: "256"),
+      http.Header(name: "Connection", value: "keep-alive"),
+      http.Header(name: "Connection", value: "close")
+    ],
+    b"",
+    []
+  )
+}
+
+// response_test.go:618, respTests[19]: HTTP1.0 bogus T-E no C-L
+@test
+fn response_19(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nTransfer-Encoding: bogus\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    None(),
+    false,
+    false,
+    [http.Header(name: "Transfer-Encoding", value: "bogus")],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:648, respTests[20]: HTTP1.0 bogus T-E with C-L
+@test
+fn response_20(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nTransfer-Encoding: bogus\r\nContent-Length: 10\r\n\r\nBody here\n",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    Some(10),
+    false,
+    false,
+    [
+      http.Header(name: "Transfer-Encoding", value: "bogus"),
+      http.Header(name: "Content-Length", value: "10")
+    ],
+    b"Body here\n",
+    []
+  )
+}
+
+// response_test.go:680, respTests[21]: keep-alive timeout
+@test
+fn response_21(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 23\r\nConnection: keep-alive\r\nKeep-Alive: timeout=7200\r\n\r\n\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x00s\xf3\xf7\x07\x00\xab'\xd4\x1a\x03\x00\x00\x00",
+    Get(),
+    200,
+    "OK",
+    Http11(),
+    Some(23),
+    false,
+    true,
+    [
+      http.Header(name: "Content-Encoding", value: "gzip"),
+      http.Header(name: "Content-Length", value: "23"),
+      http.Header(name: "Connection", value: "keep-alive"),
+      http.Header(name: "Keep-Alive", value: "timeout=7200")
+    ],
+    b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x00s\xf3\xf7\x07\x00\xab'\xd4\x1a\x03\x00\x00\x00",
+    []
+  )
+}
+
+// response_test.go:717, respTests[22]: Two spaces between HTTP version and status
+@test
+fn response_22(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0  401 Unauthorized\r\nContent-type: text/html\r\nWWW-Authenticate: Basic realm=\"\"\r\n\r\nYour Authentication failed.\r\n",
+    Get(),
+    401,
+    "Unauthorized",
+    Http10(),
+    None(),
+    false,
+    false,
+    [
+      http.Header(name: "Content-type", value: "text/html"),
+      http.Header(name: "WWW-Authenticate", value: "Basic realm=\"\"")
+    ],
+    b"Your Authentication failed.\r\n",
+    []
+  )
+}
+
+// HTTP/1.0 Transfer-Encoding also wins over an explicit keep-alive token.
+@test
+fn http10_transfer_encoding_closes(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok",
+    Get(),
+    200,
+    "OK",
+    Http10(),
+    Some(2),
+    false,
+    false,
+    [
+      http.Header(name: "Transfer-Encoding", value: "chunked"),
+      http.Header(name: "Content-Length", value: "2"),
+      http.Header(name: "Connection", value: "keep-alive")
+    ],
+    b"ok",
+    []
+  )
+}
+
+// Skip only the head's extra status spaces; count the original wire bytes,
+// including when the spaces and status arrive in different reads.
+@test
+fn status_spaces_fragmented(t: Test) -> Result[(), http.HttpError] {
+  let raw: Bytes = b"HTTP/1.1   200 OK\r\nContent-Length: 2\r\n\r\nok"
+  let head_size = bytes.len(raw) - 2
+  for extra in 0u64..2u64 {
+    let n = test.net(
+      t,
+      [
+        NetPeer(
+          address: "example.com",
+          port: 80u16,
+          resolves_to: [],
+          tls: Plain(),
+          connections: [
+            Open(
+              [
+                Send(b"HTTP/1.1  "),
+                Send(b" 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+                Close()
+              ]
+            )
+          ]
+        )
+      ],
+      []
+    )
+    let mut config = http.default_config()
+    config.max_head_bytes = head_size - extra
+    let mut r = http.request(n, config, Get(), "http://example.com/", [])?
+    http.send_bodiless(mut r)?
+    if extra == 0 {
+      let head = http.receive_head(mut r)?
+      test.check(
+        t,
+        head.status == 200 && head.keep_alive && head.content_length == Some(2)
+      )
+      test.check(t, http.read_all(mut r, 2)? == b"ok")
+    } else {
+      test.check(t, http.receive_head(mut r) == Error(HeadTooLarge()))
+    }
+  }
+  Ok(())
+}

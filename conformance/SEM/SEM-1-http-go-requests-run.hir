@@ -1,0 +1,382 @@
+// rule: SEM-1
+// expect: test
+// Go ebe2feefc400 src/net/http/{response_test.go:39,readrequest_test.go:30}.
+// Literal upstream tables, adapted to owned headers, raw request targets and
+// scripted Net. See docs/http1-prior-art.md for representation/policy differences.
+fn incoming(
+  t: Test,
+  raw: Bytes,
+  method: String,
+  target: String,
+  version: http.Version,
+  keep: bool,
+  body: Bytes,
+  headers: List[http.Header],
+  trailers: List[http.Header],
+  consumed: u64
+) -> Result[(), http.HttpError] {
+  match http.parse_server_request(raw, http.default_config())? {
+    Some((request, end)) => {
+      test.check(t, request.method == method && request.target == target)
+      test.check(t, request.version == version && request.keep_alive == keep)
+      test.check(t, request.body == body && request.trailers == trailers)
+      test.check(t, request.headers == headers && end == consumed)
+    },
+    None() => test.check(t, false),
+  }
+  Ok(())
+}
+
+fn rejected(t: Test, raw: Bytes, expected: http.HttpError) {
+  test.check(
+    t,
+    http.parse_server_request(raw, http.default_config()) == Error(expected)
+  )
+}
+
+// readrequest_test.go:33, reqTests[0]
+@test
+fn request_0(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"GET http://www.techcrunch.com/ HTTP/1.1\r\nHost: www.techcrunch.com\r\nUser-Agent: Fake\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-us,en;q=0.5\r\nAccept-Encoding: gzip,deflate\r\nAccept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\nKeep-Alive: 300\r\nContent-Length: 7\r\nProxy-Connection: keep-alive\r\n\r\nabcdef\n???",
+    "GET",
+    "http://www.techcrunch.com/",
+    Http11(),
+    true,
+    b"abcdef\n",
+    [
+      http.Header(name: "Host", value: "www.techcrunch.com"),
+      http.Header(name: "User-Agent", value: "Fake"),
+      http.Header(
+        name: "Accept",
+        value: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      ),
+      http.Header(name: "Accept-Language", value: "en-us,en;q=0.5"),
+      http.Header(name: "Accept-Encoding", value: "gzip,deflate"),
+      http.Header(name: "Accept-Charset", value: "ISO-8859-1,utf-8;q=0.7,*;q=0.7"),
+      http.Header(name: "Keep-Alive", value: "300"),
+      http.Header(name: "Content-Length", value: "7"),
+      http.Header(name: "Proxy-Connection", value: "keep-alive")
+    ],
+    [],
+    345
+  )
+}
+
+// readrequest_test.go:79, reqTests[1]
+@test
+fn request_1(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"GET / HTTP/1.1\r\nHost: foo.com\r\n\r\n",
+    "GET",
+    "/",
+    Http11(),
+    true,
+    b"",
+    [http.Header(name: "Host", value: "foo.com")],
+    [],
+    33
+  )
+}
+
+// readrequest_test.go:105, reqTests[2]
+@test
+fn request_2(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"GET //user@host/is/actually/a/path/ HTTP/1.1\r\nHost: test\r\n\r\n",
+    "GET",
+    "//user@host/is/actually/a/path/",
+    Http11(),
+    true,
+    b"",
+    [http.Header(name: "Host", value: "test")],
+    [],
+    60
+  )
+}
+
+// readrequest_test.go:130, reqTests[3]
+@test
+fn request_3(t: Test) -> Result[(), http.HttpError] {
+  rejected(
+    t,
+    b"GET ../../../../etc/passwd HTTP/1.1\r\nHost: test\r\n\r\n",
+    Malformed(Token())
+  )
+  Ok(())
+}
+
+// readrequest_test.go:140, reqTests[4]
+@test
+fn request_4(t: Test) -> Result[(), http.HttpError] {
+  rejected(t, b"GET  HTTP/1.1\r\nHost: test\r\n\r\n", Malformed(Token()))
+  Ok(())
+}
+
+// readrequest_test.go:150, reqTests[5]
+@test
+fn request_5(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"POST / HTTP/1.1\r\nHost: foo.com\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nfoo\r\n3\r\nbar\r\n0\r\nTrailer-Key: Trailer-Value\r\n\r\n",
+    "POST",
+    "/",
+    Http11(),
+    true,
+    b"foobar",
+    [
+      http.Header(name: "Host", value: "foo.com"),
+      http.Header(name: "Transfer-Encoding", value: "chunked")
+    ],
+    [http.Header(name: "Trailer-Key", value: "Trailer-Value")],
+    111
+  )
+}
+
+// readrequest_test.go:182, reqTests[6]
+@test
+fn request_6(t: Test) -> Result[(), http.HttpError] {
+  rejected(
+    t,
+    b"POST / HTTP/1.1\r\nHost: foo.com\r\nTransfer-Encoding: chunked\r\nContent-Length: 9999\r\n\r\n3\r\nfoo\r\n3\r\nbar\r\n0\r\n\r\n",
+    Malformed(TransferEncoding())
+  )
+  Ok(())
+}
+
+// readrequest_test.go:213, reqTests[7]
+@test
+fn request_7(t: Test) -> Result[(), http.HttpError] {
+  rejected(
+    t,
+    b"POST / HTTP/1.1\r\nHost: foo.com\r\nTransfer-Encoding: chunked\r\nContent-Length: notdigits\r\n\r\n3\r\nfoo\r\n3\r\nbar\r\n0\r\n\r\n",
+    Malformed(TransferEncoding())
+  )
+  Ok(())
+}
+
+// readrequest_test.go:229, reqTests[8]
+@test
+fn request_8(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"CONNECT www.google.com:443 HTTP/1.1\r\n\r\n",
+    "CONNECT",
+    "www.google.com:443",
+    Http11(),
+    true,
+    b"",
+    [],
+    [],
+    39
+  )
+}
+
+// readrequest_test.go:253, reqTests[9]
+@test
+fn request_9(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"CONNECT 127.0.0.1:6060 HTTP/1.1\r\n\r\n",
+    "CONNECT",
+    "127.0.0.1:6060",
+    Http11(),
+    true,
+    b"",
+    [],
+    [],
+    35
+  )
+}
+
+// readrequest_test.go:277, reqTests[10]
+@test
+fn request_10(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"CONNECT /_goRPC_ HTTP/1.1\r\n\r\n",
+    "CONNECT",
+    "/_goRPC_",
+    Http11(),
+    true,
+    b"",
+    [],
+    [],
+    29
+  )
+}
+
+// readrequest_test.go:301, reqTests[11]
+@test
+fn request_11(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"NOTIFY * HTTP/1.1\r\nServer: foo\r\n\r\n",
+    "NOTIFY",
+    "*",
+    Http11(),
+    true,
+    b"",
+    [http.Header(name: "Server", value: "foo")],
+    [],
+    34
+  )
+}
+
+// readrequest_test.go:325, reqTests[12]
+@test
+fn request_12(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"OPTIONS * HTTP/1.1\r\nServer: foo\r\n\r\n",
+    "OPTIONS",
+    "*",
+    Http11(),
+    true,
+    b"",
+    [http.Header(name: "Server", value: "foo")],
+    [],
+    35
+  )
+}
+
+// readrequest_test.go:349, reqTests[13]
+@test
+fn request_13(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"GET / HTTP/1.1\r\nHost: issue8261.com\r\nConnection: close\r\n\r\n",
+    "GET",
+    "/",
+    Http11(),
+    false,
+    b"",
+    [
+      http.Header(name: "Host", value: "issue8261.com"),
+      http.Header(name: "Connection", value: "close")
+    ],
+    [],
+    58
+  )
+}
+
+// readrequest_test.go:377, reqTests[14]
+@test
+fn request_14(t: Test) -> Result[(), http.HttpError] {
+  incoming(
+    t,
+    b"HEAD / HTTP/1.1\r\nHost: issue8261.com\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+    "HEAD",
+    "/",
+    Http11(),
+    false,
+    b"",
+    [
+      http.Header(name: "Host", value: "issue8261.com"),
+      http.Header(name: "Connection", value: "close"),
+      http.Header(name: "Content-Length", value: "0")
+    ],
+    [],
+    78
+  )
+}
+
+// readrequest_test.go:402, reqTests[15]
+@test
+fn request_15(t: Test) -> Result[(), http.HttpError] {
+  rejected(t, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", Malformed(Version()))
+  Ok(())
+}
+
+// readrequest_test.go:464, badRequestTests[0]
+@test
+fn bad_connect_host(t: Test) {
+  rejected(
+    t,
+    b"CONNECT []%20%48%54%54%50%2f%31%2e%31%0a%4d%79%48%65%61%64%65%72%3a%20%31%32%33%0a%0a HTTP/1.0\r\n\r\n",
+    Malformed(Token())
+  )
+}
+
+// readrequest_test.go:465, badRequestTests[1]
+@test
+fn smuggle_two_contentlen(t: Test) {
+  rejected(
+    t,
+    b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc\r\n\r\n",
+    Malformed(ContentLength())
+  )
+}
+
+// readrequest_test.go:470, badRequestTests[2]
+@test
+fn smuggle_two_content_len_head(t: Test) {
+  rejected(
+    t,
+    b"HEAD / HTTP/1.1\r\nHost: foo\r\nContent-Length: 4\r\nContent-Length: 5\r\n\r\n1234\r\n\r\n",
+    Malformed(ContentLength())
+  )
+}
+
+// readrequest_test.go:478, badRequestTests[3]
+@test
+fn leading_space_in_header(t: Test) {
+  rejected(t, b"GET / HTTP/1.1\r\n Host: foo\r\n\r\n", Malformed(Continuation()))
+}
+
+// readrequest_test.go:480, badRequestTests[4]
+@test
+fn leading_tab_in_header(t: Test) {
+  rejected(t, b"GET / HTTP/1.1\r\n\tHost: foo\r\n\r\n", Malformed(Continuation()))
+}
+
+// Twins for the URI validation and HTTP/1.0 framing rules exposed above.
+@test
+fn target_boundaries(t: Test) -> Result[(), http.HttpError] {
+  rejected(t, b"GET /bad% HTTP/1.1\r\n\r\n", Malformed(Token()))
+  rejected(t, b"GET /bad%xx HTTP/1.1\r\n\r\n", Malformed(Token()))
+  rejected(t, b"CONNECT [::1]garbage HTTP/1.1\r\n\r\n", Malformed(Token()))
+  incoming(
+    t,
+    b"GET /ok%20path?q=%xx HTTP/1.1\r\n\r\n",
+    "GET",
+    "/ok%20path?q=%xx",
+    Http11(),
+    true,
+    b"",
+    [],
+    [],
+    33
+  )?
+  incoming(
+    t,
+    b"CONNECT [::1]:443 HTTP/1.1\r\n\r\n",
+    "CONNECT",
+    "[::1]:443",
+    Http11(),
+    true,
+    b"",
+    [],
+    [],
+    30
+  )?
+  incoming(
+    t,
+    b"POST / HTTP/1.0\r\nTransfer-Encoding: bogus\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok",
+    "POST",
+    "/",
+    Http10(),
+    false,
+    b"ok",
+    [
+      http.Header(name: "Transfer-Encoding", value: "bogus"),
+      http.Header(name: "Content-Length", value: "2"),
+      http.Header(name: "Connection", value: "keep-alive")
+    ],
+    [],
+    90
+  )
+}
