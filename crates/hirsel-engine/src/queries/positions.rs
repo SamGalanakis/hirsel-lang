@@ -142,11 +142,19 @@ impl Rebaser<'_> {
             *owner = file.clone();
             return;
         }
-        let Some(m) = self.moves.get(&owner.file).and_then(|moves| moves.first()) else {
+        let movement = self.moves.get(&owner.file).and_then(|moves| moves.first());
+        if movement.is_none()
+            && !owner
+                .tokens
+                .iter()
+                .any(|t| self.moves.contains_key(&t.span.file))
+        {
             return;
-        };
+        }
         let mut file = (**owner).clone();
-        file.file = m.new_file;
+        if let Some(m) = movement {
+            file.file = m.new_file;
+        }
         for token in &mut file.tokens {
             self.span(&mut token.span);
         }
@@ -154,6 +162,11 @@ impl Rebaser<'_> {
             self.span(&mut item.origin.span);
             self.span(&mut item.name_span);
             self.attributes(&mut item.attributes);
+            if let Some(hirsel_syntax::Generated::Body(parameters)) = &mut item.generated {
+                for (_, span) in parameters {
+                    self.span(span);
+                }
+            }
             if let ItemKind::Function { signature, .. } = &mut item.kind {
                 self.attributes(&mut signature.attributes);
             }
@@ -229,6 +242,12 @@ impl QueryEngine {
             moves: grouped,
             owners: BTreeMap::new(),
         };
+        for generated in self.generated.values_mut() {
+            let mut span = Span::new(generated.file, 0, generated.text.len() as u32).unwrap();
+            r.span(&mut span);
+            generated.file = span.file;
+            r.span(&mut generated.site);
+        }
         for snapshots in self.items.values_mut() {
             for s in snapshots {
                 r.file(&mut s.file);

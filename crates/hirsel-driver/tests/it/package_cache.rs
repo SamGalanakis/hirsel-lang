@@ -69,6 +69,133 @@ fn fresh(f: &Fixture, root: &str) -> CheckOutput {
         .unwrap()
 }
 
+fn generated_body_graph(value: u64) -> Fixture {
+    let f = Fixture::new();
+    f.write(
+        "lib.hir",
+        &"fn generator() -> Result[Body[fn() -> u64 uses {}], String] { Ok(codegen.body(\"fn() -> u64 uses {} {3u64}\")) }\n\
+         pub fn generated() -> u64 uses {} = comptime generator()\n".replace("3u64", &format!("{value}u64")),
+    );
+    f.package("lib", &[], false);
+    f.write("app.hir", "pub fn main() { let n = lib@1/generated() }\n");
+    f.package("app", &["lib"], true);
+    f
+}
+
+#[test]
+fn shared_cache_preserves_generated_body_sources_across_relocation() {
+    with_compiler_stack(|| {
+        let first = generated_body_graph(3);
+        let second = generated_body_graph(3);
+        // The ordinary loader uses the process-wide PackageCache::shared.
+        let mut original = load_program_source(&first.0.join("app.json"), None).unwrap();
+        original.check_for_execution().unwrap();
+        let entry = definition("app", "main");
+        let revision = original.engine.semantic_program_revision(&entry).unwrap();
+        let mut relocated = load_program_source(&second.0.join("app.json"), None).unwrap();
+        relocated.check_for_execution().unwrap();
+        assert_eq!(
+            revision,
+            relocated.engine.semantic_program_revision(&entry).unwrap()
+        );
+        let generated = definition("lib", "generated");
+        assert_eq!(
+            relocated
+                .engine
+                .recompute_count(&generated, QueryKind::Check),
+            0
+        );
+        let source = relocated.engine.generated_source(&generated).unwrap();
+        assert!(
+            relocated
+                .engine
+                .sources
+                .file(source.file)
+                .unwrap()
+                .path
+                .starts_with(&second.0)
+        );
+    });
+}
+
+#[test]
+fn shared_cache_preserves_generated_body_sources_on_repeated_checks() {
+    with_compiler_stack(|| {
+        let f = generated_body_graph(4);
+        let mut original = load_program_source(&f.0.join("app.json"), None).unwrap();
+        original.check_for_execution().unwrap();
+        let entry = definition("app", "main");
+        let revision = original.engine.semantic_program_revision(&entry).unwrap();
+        original.check_for_execution().unwrap();
+        let mut reloaded = load_program_source(&f.0.join("app.json"), None).unwrap();
+        reloaded.check_for_execution().unwrap();
+        assert_eq!(
+            revision,
+            reloaded.engine.semantic_program_revision(&entry).unwrap()
+        );
+        let generated = definition("lib", "generated");
+        assert_eq!(
+            reloaded
+                .engine
+                .recompute_count(&generated, QueryKind::Check),
+            0
+        );
+        assert!(reloaded.engine.generated_source(&generated).is_some());
+        // The next load reuses the adopted image, including its generated files.
+        let mut from_image = load_program_source(&f.0.join("app.json"), None).unwrap();
+        from_image.check_for_execution().unwrap();
+        assert_eq!(
+            revision,
+            from_image.engine.semantic_program_revision(&entry).unwrap()
+        );
+    });
+}
+
+#[test]
+fn generated_body_sources_rebase_when_only_their_file_ids_move() {
+    with_compiler_stack(|| {
+        let f = generated_body_graph(5);
+        // A root ordered after lib leaves lib's source FileId unchanged when
+        // another root source is added, but shifts every generated FileId.
+        f.write("zzz.hir", "pub fn main() { let n = lib@1/generated() }\n");
+        f.package("zzz", &["lib"], true);
+        let cache = PackageCache::new();
+        let mut original = f.load("zzz", &cache);
+        original.check_for_execution().unwrap();
+        let entry = definition("zzz", "main");
+        let revision = original.engine.semantic_program_revision(&entry).unwrap();
+        let generated = definition("lib", "generated");
+        let old = original
+            .engine
+            .generated_source(&generated)
+            .unwrap()
+            .clone();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(f.0.join("zzz.json")).unwrap()).unwrap();
+        manifest["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"path":"extra.hir","module":["extra"]}));
+        f.write("extra.hir", "");
+        f.write("zzz.json", &manifest.to_string());
+        let mut reloaded = f.load("zzz", &cache);
+        reloaded.check_for_execution().unwrap();
+        let new = reloaded.engine.generated_source(&generated).unwrap();
+        assert_eq!(old.site.file, new.site.file);
+        assert_ne!(old.file, new.file);
+        assert_eq!(
+            reloaded
+                .engine
+                .recompute_count(&generated, QueryKind::Check),
+            0
+        );
+        assert_eq!(
+            revision,
+            reloaded.engine.semantic_program_revision(&entry).unwrap()
+        );
+    });
+}
+
 #[test]
 fn rejected_clients_reuse_checked_dependencies_and_complete_lowering_later() {
     with_compiler_stack(|| {

@@ -641,6 +641,10 @@ shared package images (below): an image adopts an artifact once per placement,
 rebasing changed FileIds and diagnostic obligations with copy-on-write in a
 private transport engine, leaving the artifact unchanged. Mutable adapters and
 execution state stay engine-local. No cross-process encoding is implied.
+CT-5 syntax also retains its generated token sources and generation sites.
+Transport places those sources relative to the current manifest source, rebases
+their spans independently of the written header's FileId, and keeps the text
+in the package image for later engines.
 
 An image validates every adopted receipt once, including negative lookups. An
 engine installs a package proof for a proven package at check time, and walks

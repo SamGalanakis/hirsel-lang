@@ -39,6 +39,9 @@ struct Adopted {
 }
 
 pub(crate) struct PackageImage {
+    /// Sources appended while adopting generated bodies, in FileId order.
+    sources: Vec<(FileId, hirsel_span::SourceFile)>,
+    generated: BTreeMap<DefPath, GeneratedSource>,
     source_revision: u64,
     cache_sequence: u64,
     items: Base<DefPath, Vec<ItemSnapshot>>,
@@ -252,7 +255,7 @@ impl PackageImage {
                 proven: false,
             })
             .collect();
-        Self::freeze(engine, adopted, None)
+        Self::freeze(engine, adopted, None, input.files.len())
     }
 
     /// Adopt `artifacts` (when given) and `lowerings` on `base`, rebasing their
@@ -319,17 +322,26 @@ impl PackageImage {
                 a
             })
             .collect();
-        Self::freeze(engine, adopted, parsed_only)
+        Self::freeze(engine, adopted, parsed_only, input.files.len())
     }
 
     fn freeze(
         mut engine: QueryEngine,
         adopted: Vec<Adopted>,
         parsed_only: Option<Arc<PackageImage>>,
+        source_count: usize,
     ) -> PackageImage {
+        let mut sources = vec![];
+        while let Some(file) = u32::try_from(source_count + sources.len()).ok().map(FileId)
+            && let Some(source) = engine.sources.file(file)
+        {
+            sources.push((file, source.clone()));
+        }
         let state = engine.adapters.compiler_state.take().unwrap();
         let mut state = state.borrow_mut();
         PackageImage {
+            sources,
+            generated: std::mem::take(&mut engine.generated),
             source_revision: engine.source_revision,
             cache_sequence: engine.cache_sequence,
             items: engine.items.freeze(),
@@ -365,6 +377,14 @@ impl QueryEngine {
     /// The engine's sources must hold the image's files at the same FileIds.
     pub(crate) fn install_image(&mut self, image: &PackageImage) {
         let _timing = timings::interval(Interval::S0);
+        for (file, source) in &image.sources {
+            let placed = self
+                .sources
+                .add(&source.path, source.text().into())
+                .expect("cached generated sources fit the source map");
+            assert_eq!(placed, *file, "package image source placement");
+        }
+        self.generated = image.generated.clone();
         self.source_revision = image.source_revision;
         self.cache_sequence = image.cache_sequence;
         self.items = Layered::shared(image.items.clone());

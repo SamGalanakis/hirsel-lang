@@ -43,6 +43,8 @@ pub(super) struct PackagePublication {
 /// Graphs retain exact TypeId provenance and syntax arena identity. There is no
 /// Rc, RefCell, interpreter, or mutable adapter state in a published artifact.
 pub(crate) struct PackageSnapshot {
+    sources: Vec<PackageSource>,
+    generated: BTreeMap<DefPath, GeneratedSource>,
     signatures: BTreeMap<DefPath, Arc<Cached<hirsel_types::SignatureRef>>>,
     resolutions: BTreeMap<DefPath, Arc<Cached<Resolution>>>,
     checked: BTreeMap<DefPath, Arc<Cached<TypedBody>>>,
@@ -53,6 +55,13 @@ pub(crate) struct PackageSnapshot {
     representations: BTreeMap<DefPath, crate::representation::OwnerRecord>,
     constants: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
     mode_diagnostics: Vec<(Diagnostic, String)>,
+}
+/// Generated text is placed relative to a manifest source, never its old host root.
+struct PackageSource {
+    file: FileId,
+    origin: FileId,
+    suffix: String,
+    text: String,
 }
 impl PackageSnapshot {
     pub(crate) fn contains_lowering(&self, path: &DefPath) -> bool {
@@ -137,7 +146,9 @@ impl QueryEngine {
                 .first()
                 .map(|s| s.file.tree.items[s.item.0 as usize].origin.span)
         });
-        Some(PackageSnapshot {
+        let mut snapshot = PackageSnapshot {
+            sources: vec![],
+            generated: retain!(self.generated),
             signatures: retain!(self.signatures),
             resolutions: retain!(self.resolutions),
             checked: retain!(self.checked),
@@ -162,7 +173,59 @@ impl QueryEngine {
                 })
                 .cloned()
                 .collect(),
-        })
+        };
+        // A generated body's syntax mixes the written header's tokens with
+        // tokens in its generated source. Both sources must travel with it.
+        let mut files = BTreeSet::new();
+        let mut owners = BTreeSet::new();
+        let mut syntax = |file: &Arc<SyntaxFile>| {
+            if !owners.insert(Arc::as_ptr(file) as usize) {
+                return;
+            }
+            files.insert(file.file);
+            files.extend(file.tokens.iter().map(|t| t.span.file));
+        };
+        for c in snapshot.checked.values() {
+            if let Ok(output) = &c.result {
+                syntax(&output.value.file);
+            }
+        }
+        for c in snapshot.modes.values() {
+            if let Ok(output) = &c.result {
+                syntax(&output.value.typed.file);
+            }
+        }
+        for s in snapshot
+            .resolver_outputs
+            .values()
+            .chain(snapshot.signature_resolutions.values())
+        {
+            syntax(&s.file);
+        }
+        for g in snapshot.generated.values() {
+            files.extend([g.file, g.site.file]);
+        }
+        for file in files {
+            if self.parsed.contains_key(&file) {
+                continue;
+            }
+            let source = self.sources.file(file)?;
+            let path = source.path.display().to_string();
+            let (origin, suffix) = self.parsed.keys().find_map(|origin| {
+                let written = self.sources.file(*origin)?.path.display().to_string();
+                let suffix = path.strip_prefix(&written)?;
+                suffix
+                    .starts_with('#')
+                    .then(|| (*origin, suffix.to_owned()))
+            })?;
+            snapshot.sources.push(PackageSource {
+                file,
+                origin,
+                suffix,
+                text: source.text().into(),
+            });
+        }
+        Some(snapshot)
     }
     pub(crate) fn register_package_publication(
         &mut self,
@@ -245,6 +308,25 @@ impl QueryEngine {
         transport.package_manifests = self.package_manifests.clone();
         transport.comptime_limits = self.comptime_limits;
         transport.cache_sequence = self.cache_sequence;
+        let mut moves = moves.to_vec();
+        for source in &snapshot.sources {
+            let origin = moves
+                .iter()
+                .find(|(old, _, _)| *old == source.origin)
+                .expect("generated source's manifest placement")
+                .1;
+            let path = format!(
+                "{}{}",
+                self.sources.file(origin).unwrap().path.display(),
+                source.suffix
+            );
+            let file = self
+                .sources
+                .add(path, source.text.clone())
+                .expect("cached generated sources fit the source map");
+            moves.push((source.file, file, source.text.len() as u32));
+        }
+        transport.generated = snapshot.generated.clone();
         macro_rules! adopt {
             ($field:ident) => {
                 for (path, node) in &snapshot.$field {
@@ -274,8 +356,9 @@ impl QueryEngine {
             state.constant_values = snapshot.constants.clone().into_iter().collect();
             state.mode_diagnostics = snapshot.mode_diagnostics.clone();
         }
-        transport.rebase_package_snapshot(moves);
+        transport.rebase_package_snapshot(&moves);
         self.cache_sequence = transport.cache_sequence;
+        self.generated.append(&mut transport.generated);
         macro_rules! merge {
             ($field:ident) => {
                 for c in transport.$field.values() {
