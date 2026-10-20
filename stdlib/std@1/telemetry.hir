@@ -1,0 +1,278 @@
+// Explicit inert telemetry data. Legacy log.Entry and its encoding are unchanged.
+@serializable
+pub type Value = Bool(bool) | Signed(i64) | Unsigned(u64) | Text(String) | Bytes(Bytes)
+
+@serializable
+pub type Attribute {
+  name: String,
+  value: Value,
+}
+
+@serializable
+pub type TraceContext {
+  trace_id: Inline[u8, 16],
+  span_id: Inline[u8, 8],
+  sampled: bool,
+  remote: bool,
+  tracestate: List[(String, String)],
+}
+
+@serializable
+pub type Metadata {
+  trace: Option[TraceContext],
+  fields: List[Attribute],
+}
+
+@serializable
+pub type SpanKind = Internal | Server | Client | Producer | Consumer
+
+@serializable
+pub type Status = Unset | Success | Error(String) | Canceled(CancelCause)
+
+pub type LogRecord {
+  level: log.Level,
+  name: String,
+  message: String,
+  metadata: Metadata,
+}
+
+// Errors contain no input strings, bytes, or values.
+@serializable
+pub type EventError = DuplicateKey | KeyLimit | ValueLimit | AttributeLimit | EventLimit | InvalidContext
+
+pub opaque type CheckedLog: copyable + inert + noalloc_drop uses {} {
+  record: LogRecord,
+  encoded: String,
+}
+
+fn value_size(value: Value) -> u64 uses {} {
+  match value {
+    Text(s) => core@1/string.byte_len(s),
+    Bytes(b) => core@1/bytes.len(b),
+    _ => 0,
+  }
+}
+
+@noalloc
+fn attribute_order(a: Attribute, b: Attribute) -> i32 uses {} {
+  string.compare(a.name, b.name)
+}
+
+/// Rejects duplicate keys, validates fixed limits, then sorts by UTF-8 bytes.
+pub fn check_metadata(metadata: Metadata) -> Result[Metadata, EventError] uses {} {
+  if core@1/list.len(metadata.fields) > 32 {
+    return Error(AttributeLimit())
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(metadata.fields) {
+    let field = metadata.fields[i]
+    if core@1/string.byte_len(field.name) == 0 || core@1/string.byte_len(field.name) > 128 {
+      return Error(KeyLimit())
+    }
+    if value_size(field.value) > 4096 {
+      return Error(ValueLimit())
+    }
+    let mut j: u64 = 0
+    while j < i {
+      if metadata.fields[j].name == field.name {
+        return Error(DuplicateKey())
+      }
+      j += 1
+    }
+    i += 1
+  }
+  match metadata.trace {
+    Some(ctx) => match validate_trace(ctx) {
+      Error(_) => return Error(InvalidContext()),
+      Ok(()) => (),
+    },
+    None() => (),
+  }
+  let mut fields = unique metadata.fields
+  list.sort(mut fields, attribute_order)
+  Ok(Metadata(trace: unique metadata.trace, fields: take fields))
+}
+
+/// Explicit enrichment replaces base keys; duplicates within either set fail.
+pub fn enrich(base: Metadata, fields: List[Attribute]) -> Result[Metadata, EventError] uses {} {
+  let checked_base = check_metadata(base)?
+  let additions = check_metadata(Metadata(trace: None(), fields: unique fields))?
+  let mut merged: List[Attribute] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(checked_base.fields) {
+    let field = checked_base.fields[i]
+    let mut replaced = false
+    let mut j: u64 = 0
+    while j < core@1/list.len(additions.fields) {
+      if field.name == additions.fields[j].name {
+        replaced = true
+      }
+      j += 1
+    }
+    if !replaced {
+      core@1/list.push(mut merged, unique field)
+    }
+    i += 1
+  }
+  i = 0
+  while i < core@1/list.len(additions.fields) {
+    core@1/list.push(mut merged, unique additions.fields[i])
+    i += 1
+  }
+  check_metadata(Metadata(trace: unique checked_base.trace, fields: take merged))
+}
+
+/// Retains only explicitly allowed attributes, before checking/capture. Trace
+/// propagation and free-form name/message redaction remain explicit caller policy.
+pub fn allow_fields(fields: List[Attribute], allow: List[String]) -> List[Attribute] uses {} {
+  let mut out: List[Attribute] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(fields) {
+    let mut found = false
+    let mut j: u64 = 0
+    while j < core@1/list.len(allow) {
+      if fields[i].name == allow[j] {
+        found = true
+      }
+      j += 1
+    }
+    if found {
+      core@1/list.push(mut out, unique fields[i])
+    }
+    i += 1
+  }
+  take out
+}
+
+fn value_json(value: Value) -> json.Value uses {} {
+  match value {
+    Bool(b) => Bool(b),
+    Signed(n) => Number(i64.to_string(n)),
+    Unsigned(n) => Number(u64.to_string(n)),
+    Text(s) => Text(unique s),
+    Bytes(b) => {
+      let mut tagged: Map[String, json.Value] = core@1/map.empty()
+      core@1/map.insert(
+        mut tagged,
+        "base64",
+        Text(base64.encode(b, Standard(), Required()))
+      )
+      Object(take tagged)
+    },
+  }
+}
+
+fn render_data(record: LogRecord) -> String uses {} {
+  let mut object: Map[String, json.Value] = core@1/map.empty()
+  core@1/map.insert(mut object, "version", Number("1"))
+  core@1/map.insert(
+    mut object,
+    "level",
+    Text(
+      match record.level {
+        Debug() => "debug",
+        Info() => "info",
+        Warn() => "warn",
+        Error() => "error",
+      }
+    )
+  )
+  core@1/map.insert(mut object, "name", Text(unique record.name))
+  core@1/map.insert(mut object, "message", Text(unique record.message))
+  let mut fields: Map[String, json.Value] = core@1/map.empty()
+  let mut i: u64 = 0
+  while i < core@1/list.len(record.metadata.fields) {
+    let field = record.metadata.fields[i]
+    core@1/map.insert(mut fields, unique field.name, value_json(field.value))
+    i += 1
+  }
+  core@1/map.insert(mut object, "fields", Object(take fields))
+  let trace: json.Value = match record.metadata.trace {
+    None() => Null(),
+    Some(ctx) => {
+      let mut data: Map[String, json.Value] = core@1/map.empty()
+      core@1/map.insert(
+        mut data,
+        "trace_id",
+        Text(hex.encode(bytes.from_inline(ctx.trace_id)))
+      )
+      core@1/map.insert(
+        mut data,
+        "span_id",
+        Text(hex.encode(bytes.from_inline(ctx.span_id)))
+      )
+      core@1/map.insert(mut data, "sampled", Bool(ctx.sampled))
+      core@1/map.insert(mut data, "remote", Bool(ctx.remote))
+      let mut state: List[json.Value] = []
+      i = 0
+      while i < core@1/list.len(ctx.tracestate) {
+        let (key, value) = ctx.tracestate[i]
+        let values: List[json.Value] = [Text(unique key), Text(unique value)]
+        core@1/list.push(mut state, Array(take values))
+        i += 1
+      }
+      core@1/map.insert(mut data, "tracestate", Array(take state))
+      Object(take data)
+    },
+  }
+  core@1/map.insert(mut object, "trace", take trace)
+  match json.stringify(Object(take object)) {
+    Ok(s) => string.concat(s, "\n"),
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+/// Checks all fixed limits, including 16 KiB for the complete JSON line.
+pub fn check_log(record: LogRecord) -> Result[CheckedLog, EventError] uses {} {
+  if core@1/string.byte_len(record.name) == 0 || core@1/string.byte_len(record.name) > 128 {
+    return Error(KeyLimit())
+  }
+  if core@1/string.byte_len(record.message) > 4096 {
+    return Error(ValueLimit())
+  }
+  let metadata = check_metadata(record.metadata)?
+  let canonical = LogRecord(
+    level: record.level,
+    name: unique record.name,
+    message: unique record.message,
+    metadata: take metadata
+  )
+  let encoded = render_data(canonical)
+  if core@1/string.byte_len(encoded) > 16384 {
+    return Error(EventLimit())
+  }
+  Ok(CheckedLog(record: take canonical, encoded: take encoded))
+}
+
+/// Explicit plain-data projection; CheckedLog itself is intentionally opaque.
+pub fn log_data(record: CheckedLog) -> LogRecord uses {} {
+  unique record.record
+}
+
+pub fn render(record: CheckedLog) -> String uses {} {
+  unique record.encoded
+}
+
+@noalloc
+fn level_rank(level: log.Level) -> u8 uses {} {
+  match level {
+    Debug() => 0,
+    Info() => 1,
+    Warn() => 2,
+    Error() => 3,
+  }
+}
+
+/// Existing fallible stderr effect, including its cancellation/scheduling rules.
+pub fn write_stderr(sink: Stderr, minimum: log.Level, record: CheckedLog) -> Result[
+  (),
+  OutputError
+] {
+  if level_rank(record.record.level) < level_rank(minimum) {
+    return Ok(())
+  }
+  core@1/err.print(sink, record.encoded)
+}

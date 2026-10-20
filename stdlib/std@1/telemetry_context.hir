@@ -1,0 +1,283 @@
+// W3C Trace Context Recommendation 2021-11-23, wire version 00.
+// Adapted validation vectors: opentelemetry-rust propagation/trace_context.rs;
+// unlike that SDK, malformed tracestate is an explicit error, never discarded.
+@serializable
+pub type ContextError = MissingParent | DuplicateHeader | InvalidParent | InvalidState | ContextLimit
+
+fn state_key(key: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(key)
+  let size = core@1/bytes.len(data)
+  if size == 0 || size > 256 {
+    return false
+  }
+  let mut at = size
+  let mut i: u64 = 0
+  while i < size {
+    let b = data[i]
+    if b == b'@' {
+      if at != size {
+        return false
+      }
+      at = i
+    } else if !(ascii.is_lower(b) || ascii.is_digit(b) || b == b'_' || b == b'-' || b == b'*' || b == b'/') {
+      return false
+    }
+    i += 1
+  }
+  if at == size {
+    return ascii.is_lower(data[0])
+  }
+  at > 0 && at <= 241 && size - at - 1 > 0 && size - at - 1 <= 14 && (ascii.is_lower(
+    data[0]
+  ) || ascii.is_digit(data[0])) && ascii.is_lower(data[at + 1])
+}
+
+fn state_value(value: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(value)
+  let size = core@1/bytes.len(data)
+  if size == 0 || size > 256 || data[size - 1] == b' ' {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < size {
+    let b = data[i]
+    if b < 0x20 || b > 0x7e || b == b',' || b == b'=' {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+/// Validates raw program-created IDs and ordered tracestate. No authority.
+pub fn validate_trace(ctx: TraceContext) -> Result[(), ContextError] uses {} {
+  let mut trace_nonzero = false
+  let mut span_nonzero = false
+  let mut i: u64 = 0
+  while i < 16 {
+    if ctx.trace_id[i] != 0 {
+      trace_nonzero = true
+    }
+    i += 1
+  }
+  i = 0
+  while i < 8 {
+    if ctx.span_id[i] != 0 {
+      span_nonzero = true
+    }
+    i += 1
+  }
+  if !trace_nonzero || !span_nonzero {
+    return Error(InvalidParent())
+  }
+  let count = core@1/list.len(ctx.tracestate)
+  if count > 32 {
+    return Error(ContextLimit())
+  }
+  let mut size: u64 = 0
+  i = 0
+  while i < count {
+    let (key, value) = ctx.tracestate[i]
+    if !state_key(key) || !state_value(value) {
+      return Error(InvalidState())
+    }
+    let mut j: u64 = 0
+    while j < i {
+      let (other, _) = ctx.tracestate[j]
+      if other == key {
+        return Error(InvalidState())
+      }
+      j += 1
+    }
+    size += core@1/string.byte_len(key) + 1 + core@1/string.byte_len(value)
+    if i > 0 {
+      size += 1
+    }
+    if size > 512 {
+      return Error(ContextLimit())
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn context_piece(data: Bytes, start: u64, end: u64) -> String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+@noalloc
+fn lower_hex(b: u8) -> bool uses {} {
+  ascii.is_digit(b) || b >= b'a' && b <= b'f'
+}
+
+/// Extracts exactly one v00 traceparent and at most one tracestate header.
+/// Header names are ASCII case insensitive; baggage is never forwarded.
+pub fn extract_trace(headers: List[(String, String)]) -> Result[
+  TraceContext,
+  ContextError
+] uses {} {
+  if core@1/list.len(headers) > 128 {
+    return Error(ContextLimit())
+  }
+  let mut parent: Option[String] = None()
+  let mut state: Option[String] = None()
+  let mut total: u64 = 0
+  let mut i: u64 = 0
+  while i < core@1/list.len(headers) {
+    let (key, value) = headers[i]
+    let n = core@1/string.byte_len(key)
+    let v = core@1/string.byte_len(value)
+    if n > 16384 || v > 16384 {
+      return Error(ContextLimit())
+    }
+    total += n + v
+    if total > 16384 {
+      return Error(ContextLimit())
+    }
+    let name = string.ascii_lower(key)
+    if name == "traceparent" {
+      if parent != None() {
+        return Error(DuplicateHeader())
+      }
+      parent = Some(unique value)
+    } else if name == "tracestate" {
+      if state != None() {
+        return Error(DuplicateHeader())
+      }
+      state = Some(unique value)
+    }
+    i += 1
+  }
+  let Some(raw) = parent else {
+    return Error(MissingParent())
+  }
+  let data = core@1/string.as_bytes(raw)
+  if core@1/bytes.len(data) != 55 {
+    return Error(InvalidParent())
+  }
+  if data[0] != b'0' || data[1] != b'0' || data[2] != b'-' || data[35] != b'-' || data[52] != b'-' {
+    return Error(InvalidParent())
+  }
+  i = 3
+  while i < 55 {
+    if i != 35 && i != 52 && !lower_hex(data[i]) {
+      return Error(InvalidParent())
+    }
+    i += 1
+  }
+  let Ok(tid) = hex.decode(context_piece(data, 3, 35)) else {
+    return Error(InvalidParent())
+  }
+  let Ok(sid) = hex.decode(context_piece(data, 36, 52)) else {
+    return Error(InvalidParent())
+  }
+  let Ok(flags) = hex.decode(context_piece(data, 53, 55)) else {
+    return Error(InvalidParent())
+  }
+  let mut trace_id: Inline[u8, 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  let mut span_id: Inline[u8, 8] = [0, 0, 0, 0, 0, 0, 0, 0]
+  i = 0
+  while i < 16 {
+    trace_id[i] = tid[i]
+    i += 1
+  }
+  i = 0
+  while i < 8 {
+    span_id[i] = sid[i]
+    i += 1
+  }
+  let mut pairs: List[(String, String)] = []
+  match state {
+    None() => (),
+    Some(raw_state) => {
+      if core@1/string.byte_len(raw_state) > 512 {
+        return Error(ContextLimit())
+      }
+      let bytes = core@1/string.as_bytes(raw_state)
+      let size = core@1/bytes.len(bytes)
+      let mut start: u64 = 0
+      while start <= size {
+        if core@1/list.len(pairs) == 32 {
+          return Error(ContextLimit())
+        }
+        let mut end = start
+        while end < size && bytes[end] != b',' {
+          end += 1
+        }
+        let mut first = start
+        let mut last = end
+        while first < last && (bytes[first] == b' ' || bytes[first] == b'\t') {
+          first += 1
+        }
+        while first < last && (bytes[last - 1] == b' ' || bytes[last - 1] == b'\t') {
+          last -= 1
+        }
+        let mut equals = first
+        while equals < last && bytes[equals] != b'=' {
+          equals += 1
+        }
+        if equals == last {
+          return Error(InvalidState())
+        }
+        core@1/list.push(
+          mut pairs,
+          (context_piece(bytes, first, equals), context_piece(bytes, equals + 1, last))
+        )
+        start = end + 1
+      }
+    },
+  }
+  let ctx = TraceContext(
+    trace_id: trace_id,
+    span_id: span_id,
+    sampled: flags[0] & 1u8 != 0,
+    remote: true,
+    tracestate: take pairs
+  )
+  validate_trace(ctx)?
+  Ok(take ctx)
+}
+
+/// Validates raw context, emits only v00 sampling bit and explicit tracestate.
+/// Remote is local metadata and is not a wire flag.
+pub fn inject_trace(ctx: TraceContext) -> Result[List[(String, String)], ContextError] uses {} {
+  validate_trace(ctx)?
+  let mut parent: List[u8] = []
+  text.append(mut parent, "00-")
+  text.append(mut parent, hex.encode(bytes.from_inline(ctx.trace_id)))
+  text.append(mut parent, "-")
+  text.append(mut parent, hex.encode(bytes.from_inline(ctx.span_id)))
+  text.append(
+    mut parent,
+    if ctx.sampled {
+      "-01"
+    } else {
+      "-00"
+    }
+  )
+  let mut headers: List[(String, String)] = [
+    ("traceparent", text.finish_valid(take parent))
+  ]
+  if core@1/list.len(ctx.tracestate) > 0 {
+    let mut state: List[u8] = []
+    let mut i: u64 = 0
+    while i < core@1/list.len(ctx.tracestate) {
+      if i > 0 {
+        text.append(mut state, ",")
+      }
+      let (key, value) = ctx.tracestate[i]
+      text.append(mut state, key)
+      text.append(mut state, "=")
+      text.append(mut state, value)
+      i += 1
+    }
+    core@1/list.push(mut headers, ("tracestate", text.finish_valid(take state)))
+  }
+  Ok(take headers)
+}

@@ -1007,6 +1007,18 @@
       "module": [
         "schedule"
       ]
+    },
+    {
+      "path": "telemetry.hir",
+      "module": [
+        "telemetry"
+      ]
+    },
+    {
+      "path": "telemetry_context.hir",
+      "module": [
+        "telemetry"
+      ]
     }
   ],
   "dependencies": []

@@ -1,0 +1,142 @@
+// rule: SEM-3
+// expect: run
+// OpenTelemetry Rust trace_context.rs vectors, adapted to strict wire v00.
+pub fn main() -> Result[(), ()] {
+  let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  let Ok(ctx) = std@1/telemetry.extract_trace(
+    [
+      ("TraceParent", copy parent),
+      ("TraceState", "foo=bar,1tenant@vendor=value"),
+      ("baggage", "secret=never")
+    ]
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(ctx.remote && ctx.sampled, TextInvariant())
+  let Ok(record) = std@1/telemetry.check_log(
+    std@1/telemetry.LogRecord(
+      level: Warn(),
+      name: "request",
+      message: "",
+      metadata: std@1/telemetry.Metadata(trace: Some(copy ctx), fields: [])
+    )
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    std@1/telemetry.render(record) == "{\"version\":1,\"level\":\"warn\",\"name\":\"request\",\"message\":\"\",\"fields\":{},\"trace\":{\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\",\"span_id\":\"00f067aa0ba902b7\",\"sampled\":true,\"remote\":true,\"tracestate\":[[\"foo\",\"bar\"],[\"1tenant@vendor\",\"value\"]]}}\n",
+    TextInvariant()
+  )
+  let Ok(headers) = std@1/telemetry.inject_trace(ctx) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    headers == [
+      ("traceparent", copy parent),
+      ("tracestate", "foo=bar,1tenant@vendor=value")
+    ],
+    TextInvariant()
+  )
+  failure.check(std@1/telemetry.extract_trace(headers) == Ok(copy ctx), TextInvariant())
+  let flags_cases: List[String] = ["00", "01", "03", "09", "fe"]
+  for flags in flags_cases {
+    let wire = std@1/string.concat(
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-",
+      flags
+    )
+    let Ok(parsed) = std@1/telemetry.extract_trace([("traceparent", wire)]) else {
+      failure.check(false, TextInvariant())
+      return Ok(())
+    }
+    failure.check(parsed.sampled == (flags != "00" && flags != "fe"), TextInvariant())
+  }
+  let invalid_parents: List[String] = [
+    "0000-00000000000000000000000000000000-0000000000000000-01",
+    "00-ab00000000000000000000000000000000-cd00000000000000-01",
+    "00-ab000000000000000000000000000000-cd0000000000000000-01",
+    "00-ab000000000000000000000000000000-cd00000000000000-0100",
+    "qw-00000000000000000000000000000000-0000000000000000-01",
+    "00-qw000000000000000000000000000000-cd00000000000000-01",
+    "00-ab000000000000000000000000000000-qw00000000000000-01",
+    "00-ab000000000000000000000000000000-cd00000000000000-qw",
+    "A0-00000000000000000000000000000000-0000000000000000-01",
+    "00-AB000000000000000000000000000000-cd00000000000000-01",
+    "00-ab000000000000000000000000000000-CD00000000000000-01",
+    "00-ab000000000000000000000000000000-cd00000000000000-A1",
+    "00-00000000000000000000000000000000-0000000000000000-01",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-",
+    "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+    "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  ]
+  for bad in invalid_parents {
+    failure.check(
+      std@1/telemetry.extract_trace([("traceparent", bad)]) == Error(InvalidParent()),
+      TextInvariant()
+    )
+  }
+  let invalid_states: List[String] = [
+    "",
+    "foo",
+    "foo=bar,foo=again",
+    "Upper=bad",
+    "foo=bad=value",
+    "foo=bad\\value\n",
+    "foo=",
+    "foo=bar,",
+    "@vendor=x",
+    "foo@1vendor=x"
+  ]
+  for bad in invalid_states {
+    failure.check(
+      std@1/telemetry.extract_trace([("traceparent", copy parent), ("tracestate", bad)]) == Error(
+        InvalidState()
+      ),
+      TextInvariant()
+    )
+  }
+  failure.check(
+    std@1/telemetry.extract_trace([]) == Error(MissingParent()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.extract_trace(
+      [("traceparent", copy parent), ("TRACEPARENT", copy parent)]
+    ) == Error(DuplicateHeader()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.extract_trace(
+      [("traceparent", copy parent), ("tracestate", "a=b"), ("Tracestate", "c=d")]
+    ) == Error(DuplicateHeader()),
+    TextInvariant()
+  )
+  let Ok(trimmed) = std@1/telemetry.extract_trace(
+    [("traceparent", copy parent), ("tracestate", "  foo=bar \t, \tother=value ")]
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    trimmed.tracestate == [("foo", "bar"), ("other", "value")],
+    TextInvariant()
+  )
+  let bad = std@1/telemetry.TraceContext(
+    trace_id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    span_id: ctx.span_id,
+    sampled: true,
+    remote: false,
+    tracestate: []
+  )
+  failure.check(
+    std@1/telemetry.inject_trace(bad) == Error(InvalidParent()),
+    TextInvariant()
+  )
+  Ok(())
+}

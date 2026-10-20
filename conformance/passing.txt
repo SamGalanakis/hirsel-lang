@@ -5594,6 +5594,8 @@ conformance/SEM/SEM-3-tar-write-global-run.hir
 conformance/SEM/SEM-3-tar-write-pax-run.hir
 conformance/SEM/SEM-3-tar-write-run.hir
 conformance/SEM/SEM-3-tar-write-ustar-run.hir
+conformance/SEM/SEM-3-telemetry-context-run.hir
+conformance/SEM/SEM-3-telemetry-run.hir
 conformance/SEM/SEM-3-test-extra-run.hir
 conformance/SEM/SEM-3-text-perf-append-push-run.hir
 conformance/SEM/SEM-3-text-perf-arena-run.hir

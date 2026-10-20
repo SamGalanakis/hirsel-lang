@@ -1,0 +1,67 @@
+// rule: SEM-3
+// expect: run
+// Checked typed JSON, explicit enrichment and pre-capture allowlisting.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let fields: List[std@1/telemetry.Attribute] = [
+    std@1/telemetry.Attribute(name: "secret", value: Text("must disappear")),
+    std@1/telemetry.Attribute(name: "z", value: Bytes(core@1/string.as_bytes("hi"))),
+    std@1/telemetry.Attribute(name: "a", value: Bool(true)),
+    std@1/telemetry.Attribute(name: "u", value: Unsigned(18446744073709551615)),
+    std@1/telemetry.Attribute(name: "s", value: Signed(-9223372036854775808)),
+    std@1/telemetry.Attribute(name: "t", value: Text("é\n\""))
+  ]
+  let selected = std@1/telemetry.allow_fields(fields, ["a", "z", "u", "s", "t"])
+  let metadata = std@1/telemetry.Metadata(trace: None(), fields: take selected)
+  let Ok(enriched) = std@1/telemetry.enrich(
+    metadata,
+    [std@1/telemetry.Attribute(name: "a", value: Bool(false))]
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(enriched.fields[0].name == "a", TextInvariant())
+  failure.check(enriched.fields[0].value == Bool(false), TextInvariant())
+  let raw = std@1/telemetry.LogRecord(
+    level: Info(),
+    name: "event",
+    message: "ok",
+    metadata: take enriched
+  )
+  let Ok(record) = std@1/telemetry.check_log(raw) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    std@1/telemetry.render(record) == "{\"version\":1,\"level\":\"info\",\"name\":\"event\",\"message\":\"ok\",\"fields\":{\"a\":false,\"s\":-9223372036854775808,\"t\":\"é\\n\\\"\",\"u\":18446744073709551615,\"z\":{\"base64\":\"aGk=\"}},\"trace\":null}\n",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.log_data(record).metadata.fields[0].value == Bool(false),
+    TextInvariant()
+  )
+  let duplicate = std@1/telemetry.Metadata(
+    trace: None(),
+    fields: [
+      std@1/telemetry.Attribute(name: "secret", value: Text("not in error")),
+      std@1/telemetry.Attribute(name: "secret", value: Text("not retained"))
+    ]
+  )
+  failure.check(
+    std@1/telemetry.check_metadata(duplicate) == Error(DuplicateKey()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.enrich(metadata, duplicate.fields) == Error(DuplicateKey()),
+    TextInvariant()
+  )
+  let sink = io.stderr(rt)?
+  failure.check(
+    std@1/telemetry.write_stderr(sink, Error(), record) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.write_stderr(sink, Info(), record) == Ok(()),
+    TextInvariant()
+  )
+  Ok(())
+}

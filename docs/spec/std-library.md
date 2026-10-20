@@ -3621,3 +3621,65 @@ the wait and returns `Sleep(Wait(Canceled(cause)))` without another call.
 `next(clock, random, mut schedule, start)` exposes the same state machine to
 custom drivers, returning `Result[Option[time.Duration], ScheduleError]`; pass
 the instant from before the initial operation. `None()` stays terminal.
+
+### Explicit telemetry data (`std@1/telemetry`)
+
+`telemetry` is ordinary source and inert data. `Value` admits only Bool,
+Signed(i64), Unsigned(u64), Text and Bytes. `Attribute` pairs a name and value;
+`Metadata` carries an optional explicit `TraceContext` and attributes. Neither
+context nor metadata grants authority, selects a current task/span, or supplies
+implicit inputs. Existing `log.Entry`, `log.to_string` and `log.write` are unchanged.
+Counted fields follow ordinary ownership and sendability rules; serialization
+never makes a counted value sendable.
+
+`check_metadata` rejects duplicate names and sorts attributes by UTF-8 bytes.
+`enrich(base, fields)` checks each input set, replaces base names explicitly
+present in fields, then checks/sorts the union. Limits are 32 attributes, 1–128
+UTF-8 bytes per name, and at most 4096 bytes per Text/Bytes value. Scalar integer
+values retain their full widths. Errors are payload-free `EventError` variants;
+no rejected name or value is retained in the error.
+
+`allow_fields(fields, allow)` drops unlisted attributes before validation and
+capture. Applications must apply this or their own redaction policy before
+`check_log`; free-form names/messages, propagated tracestate and allowed values
+require the application's explicit policy too. No automatic baggage forwarding
+or secret discovery is performed.
+
+`LogRecord` contains a `log.Level`, nonempty name (at most 128 UTF-8 bytes),
+message (at most 4096 bytes), and Metadata. `check_log` validates and copies the
+canonical record into an opaque `CheckedLog`, rejecting a complete rendered
+line above 16384 bytes, including its newline. The accepted payload is immutable;
+`log_data` returns a separate plain-data projection, and `render` returns its
+validated JSON line. The opaque wrapper has no derived codec.
+
+The v1 line has ordered top-level keys `version`, `level`, `name`, `message`,
+`fields`, `trace`. Fields are a sorted JSON object; bool/integers/text render as
+JSON scalars and Bytes as `{"base64":"..."}` using RFC 4648 standard padded
+base64. Trace is null or an object with ordered keys `trace_id`, `span_id`,
+`sampled`, `remote`, `tracestate` (an ordered array of name/value pairs). IDs are
+lowercase hex. No timestamp is invented. `write_stderr(sink, minimum, checked)`
+filters before output, then uses existing `err.print`: it is fallible and retains
+that operation's cancellation and scheduling semantics. It is not the production
+Telemetry capture contract. Recorded stderr bytes remain exact replay inputs.
+
+`TraceContext` contains nonzero 16-byte trace and 8-byte span IDs, sampled/remote
+bits and ordered tracestate. `validate_trace` checks raw contexts;
+`extract_trace(headers)` returns an explicit ContextError on missing/malformed
+input. Header names are ASCII case insensitive. This API pins W3C Trace Context
+Recommendation 2021-11-23 wire **00**: exactly 55 lowercase characters with fixed
+separators, nonzero IDs, and two hex flag digits. Only the sampled flag is kept;
+unknown bits never become a W3C random flag. Newer versions are rejected.
+Duplicate traceparent or tracestate headers fail. Tracestate keys/values follow
+the W3C grammar, with no duplicate keys, at most 32 entries and 512 wire bytes.
+Optional whitespace surrounding list members is removed; empty members and
+malformed values fail. An empty tracestate header fails; an absent one is valid.
+Extraction bounds the entire input to 128 headers and 16384 combined name/value
+bytes, including ignored headers.
+
+`inject_trace(raw)` is fallible so invalid program-created contexts cannot emit
+malformed headers. It validates, emits one lowercase v00 traceparent and, when
+nonempty, one tracestate in supplied order. It omits remote and baggage.
+Applications explicitly choose whether to start a new root after extraction
+fails. Context remains usable after its originating span ends and carries no
+output, deadline or task authority. `SpanKind` and `Status` provide inert domain
+vocabulary; live spans and capture are defined separately.

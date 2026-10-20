@@ -1,0 +1,210 @@
+// Larger exact-boundary fixtures run above the corpus's 1M-step budget.
+fn repeated(value: String, count: u64) -> String {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    std@1/text.append(mut out, value)
+    i += 1
+  }
+  std@1/text.finish_valid(take out)
+}
+
+fn raw(value: std@1/telemetry.Value) -> std@1/telemetry.LogRecord {
+  std@1/telemetry.LogRecord(
+    level: Debug(),
+    name: "n",
+    message: "",
+    metadata: std@1/telemetry.Metadata(
+      trace: None(),
+      fields: [std@1/telemetry.Attribute(name: "k", value: unique value)]
+    )
+  )
+}
+
+fn error_of(record: std@1/telemetry.LogRecord) -> Option[std@1/telemetry.EventError] {
+  match std@1/telemetry.check_log(record) {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let value = repeated("a", 4096)
+  failure.check(error_of(raw(Text(copy value))) == None(), TextInvariant())
+  failure.check(
+    error_of(raw(Bytes(core@1/string.as_bytes(value)))) == None(),
+    TextInvariant()
+  )
+  let over = repeated("a", 4097)
+  failure.check(error_of(raw(Text(copy over))) == Some(ValueLimit()), TextInvariant())
+  failure.check(
+    error_of(raw(Bytes(core@1/string.as_bytes(over)))) == Some(ValueLimit()),
+    TextInvariant()
+  )
+  failure.check(error_of(raw(Text(repeated("\n", 4096)))) == None(), TextInvariant())
+  // NUL expands to six JSON bytes: encoded-size rejection is independent of scalar size.
+  failure.check(
+    error_of(raw(Text(repeated("\u{0}", 4096)))) == Some(EventLimit()),
+    TextInvariant()
+  )
+  let exact = std@1/string.concat(repeated("\u{0}", 2716), "aaa")
+  let Ok(maximum) = std@1/telemetry.check_log(raw(Text(copy exact))) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    core@1/string.byte_len(std@1/telemetry.render(maximum)) == 16384,
+    TextInvariant()
+  )
+  failure.check(
+    error_of(raw(Text(std@1/string.concat(exact, "a")))) == Some(EventLimit()),
+    TextInvariant()
+  )
+  let hidden = std@1/telemetry.allow_fields(
+    [std@1/telemetry.Attribute(name: "secret", value: Text(copy over))],
+    []
+  )
+  failure.check(core@1/list.len(hidden) == 0, TextInvariant())
+  let message = std@1/telemetry.LogRecord(
+    level: Debug(),
+    name: "n",
+    message: over,
+    metadata: std@1/telemetry.Metadata(trace: None(), fields: [])
+  )
+  failure.check(error_of(message) == Some(ValueLimit()), TextInvariant())
+  let key = repeated("é", 64)
+  failure.check(
+    std@1/telemetry.check_metadata(
+      std@1/telemetry.Metadata(
+        trace: None(),
+        fields: [std@1/telemetry.Attribute(name: key, value: Bool(true))]
+      )
+    ) != Error(KeyLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.check_metadata(
+      std@1/telemetry.Metadata(
+        trace: None(),
+        fields: [std@1/telemetry.Attribute(name: repeated("é", 65), value: Bool(true))]
+      )
+    ) == Error(KeyLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.check_metadata(
+      std@1/telemetry.Metadata(
+        trace: None(),
+        fields: [std@1/telemetry.Attribute(name: "", value: Bool(true))]
+      )
+    ) == Error(KeyLimit()),
+    TextInvariant()
+  )
+  let mut fields: List[std@1/telemetry.Attribute] = []
+  let mut i: u64 = 0
+  while i < 32 {
+    core@1/list.push(
+      mut fields,
+      std@1/telemetry.Attribute(name: std@1/u64.to_string(i), value: Unsigned(i))
+    )
+    i += 1
+  }
+  failure.check(
+    error_of(
+      std@1/telemetry.LogRecord(
+        level: Debug(),
+        name: "n",
+        message: "",
+        metadata: std@1/telemetry.Metadata(trace: None(), fields: copy fields)
+      )
+    ) == None(),
+    TextInvariant()
+  )
+  core@1/list.push(
+    mut fields,
+    std@1/telemetry.Attribute(name: "extra", value: Bool(true))
+  )
+  failure.check(
+    std@1/telemetry.check_metadata(
+      std@1/telemetry.Metadata(trace: None(), fields: take fields)
+    ) == Error(AttributeLimit()),
+    TextInvariant()
+  )
+  let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  let Ok(ctx) = std@1/telemetry.extract_trace([("traceparent", copy parent)]) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut states: List[(String, String)] = []
+  i = 0
+  while i < 32 {
+    core@1/list.push(
+      mut states,
+      (std@1/string.concat("k", std@1/u64.to_string(i)), "v")
+    )
+    i += 1
+  }
+  let max = std@1/telemetry.TraceContext(
+    trace_id: ctx.trace_id,
+    span_id: ctx.span_id,
+    sampled: true,
+    remote: false,
+    tracestate: copy states
+  )
+  failure.check(std@1/telemetry.validate_trace(max) == Ok(()), TextInvariant())
+  core@1/list.push(mut states, ("extra", "v"))
+  let over_count = std@1/telemetry.TraceContext(
+    trace_id: ctx.trace_id,
+    span_id: ctx.span_id,
+    sampled: true,
+    remote: false,
+    tracestate: take states
+  )
+  failure.check(
+    std@1/telemetry.validate_trace(over_count) == Error(ContextLimit()),
+    TextInvariant()
+  )
+  // 1+1+256 + comma + 1+1+251 = 512.
+  let state = std@1/string.concat(
+    std@1/string.concat("a=", repeated("x", 256)),
+    std@1/string.concat(",b=", repeated("y", 251))
+  )
+  failure.check(
+    std@1/telemetry.extract_trace(
+      [("traceparent", copy parent), ("tracestate", copy state)]
+    ) != Error(ContextLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.extract_trace(
+      [("traceparent", copy parent), ("tracestate", std@1/string.concat(state, "y"))]
+    ) == Error(ContextLimit()),
+    TextInvariant()
+  )
+  let mut headers: List[(String, String)] = [("traceparent", copy parent)]
+  i = 1
+  while i < 128 {
+    core@1/list.push(mut headers, ("ignored", ""))
+    i += 1
+  }
+  failure.check(std@1/telemetry.extract_trace(headers) == Ok(copy ctx), TextInvariant())
+  core@1/list.push(mut headers, ("ignored", ""))
+  failure.check(
+    std@1/telemetry.extract_trace(headers) == Error(ContextLimit()),
+    TextInvariant()
+  )
+  let fill = repeated("x", 16317)
+  failure.check(
+    std@1/telemetry.extract_trace([("traceparent", copy parent), ("x", copy fill)]) == Ok(
+      copy ctx
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/telemetry.extract_trace(
+      [("traceparent", copy parent), ("x", std@1/string.concat(fill, "x"))]
+    ) == Error(ContextLimit()),
+    TextInvariant()
+  )
+  Ok(())
+}

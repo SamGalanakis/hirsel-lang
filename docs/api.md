@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1590 exported definitions; 587 variants.
+1610 exported definitions; 612 variants.
 
 ## Types and roots
 
@@ -10983,6 +10983,306 @@ References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-cor
 <a id="def-core_401_2ftask_2fset"></a>
 
 - `fn task.set[R](s: Scope) -> TaskSet[R] of s`
+
+
+## telemetry
+
+<a id="def-std_401_2ftelemetry_2fAttribute"></a>
+
+- `@serializable pub type telemetry.Attribute { name: String, value: Value, }`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Value`](#def-std_401_2ftelemetry_2fValue)
+
+<a id="def-std_401_2ftelemetry_2fCheckedLog"></a>
+
+- `pub opaque type telemetry.CheckedLog: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2ftelemetry_2fContextError"></a>
+
+- `@serializable pub type telemetry.ContextError = MissingParent | DuplicateHeader | InvalidParent | InvalidState | ContextLimit`
+
+<a id="def-std_401_2ftelemetry_2fContextError_23ContextLimit"></a>
+
+- `ContextLimit -> telemetry.ContextError`
+
+Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fContextError_23DuplicateHeader"></a>
+
+- `DuplicateHeader -> telemetry.ContextError`
+
+Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fContextError_23InvalidParent"></a>
+
+- `InvalidParent -> telemetry.ContextError`
+
+Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fContextError_23InvalidState"></a>
+
+- `InvalidState -> telemetry.ContextError`
+
+Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fContextError_23MissingParent"></a>
+
+- `MissingParent -> telemetry.ContextError`
+
+Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fEventError"></a>
+
+- `@serializable pub type telemetry.EventError = DuplicateKey | KeyLimit | ValueLimit | AttributeLimit | EventLimit | InvalidContext`
+
+<a id="def-std_401_2ftelemetry_2fEventError_23AttributeLimit"></a>
+
+- `AttributeLimit -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fEventError_23DuplicateKey"></a>
+
+- `DuplicateKey -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fEventError_23EventLimit"></a>
+
+- `EventLimit -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fEventError_23InvalidContext"></a>
+
+- `InvalidContext -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fEventError_23KeyLimit"></a>
+
+- `KeyLimit -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fEventError_23ValueLimit"></a>
+
+- `ValueLimit -> telemetry.EventError`
+
+Variant of telemetry.EventError.
+
+<a id="def-std_401_2ftelemetry_2fLogRecord"></a>
+
+- `pub type telemetry.LogRecord { level: log.Level, name: String, message: String, metadata: Metadata, }`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/log/Level`](#def-std_401_2flog_2fLevel), [`std@1/telemetry/Metadata`](#def-std_401_2ftelemetry_2fMetadata)
+
+<a id="def-std_401_2ftelemetry_2fMetadata"></a>
+
+- `@serializable pub type telemetry.Metadata { trace: Option[TraceContext], fields: List[Attribute], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2fSpanKind"></a>
+
+- `@serializable pub type telemetry.SpanKind = Internal | Server | Client | Producer | Consumer`
+
+<a id="def-std_401_2ftelemetry_2fSpanKind_23Client"></a>
+
+- `Client -> telemetry.SpanKind`
+
+Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fSpanKind_23Consumer"></a>
+
+- `Consumer -> telemetry.SpanKind`
+
+Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fSpanKind_23Internal"></a>
+
+- `Internal -> telemetry.SpanKind`
+
+Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fSpanKind_23Producer"></a>
+
+- `Producer -> telemetry.SpanKind`
+
+Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fSpanKind_23Server"></a>
+
+- `Server -> telemetry.SpanKind`
+
+Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fStatus"></a>
+
+- `@serializable pub type telemetry.Status = Unset | Success | Error(String) | Canceled(CancelCause)`
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftelemetry_2fStatus_23Canceled"></a>
+
+- `Canceled(CancelCause) -> telemetry.Status`
+
+Variant of telemetry.Status.
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause)
+
+<a id="def-std_401_2ftelemetry_2fStatus_23Error"></a>
+
+- `Error(String) -> telemetry.Status`
+
+Variant of telemetry.Status.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftelemetry_2fStatus_23Success"></a>
+
+- `Success -> telemetry.Status`
+
+Variant of telemetry.Status.
+
+<a id="def-std_401_2ftelemetry_2fStatus_23Unset"></a>
+
+- `Unset -> telemetry.Status`
+
+Variant of telemetry.Status.
+
+<a id="def-std_401_2ftelemetry_2fTraceContext"></a>
+
+- `@serializable pub type telemetry.TraceContext { trace_id: Inline[u8, 16], span_id: Inline[u8, 8], sampled: bool, remote: bool, tracestate: List[(String, String)], }`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2ftelemetry_2fValue"></a>
+
+- `@serializable pub type telemetry.Value = Bool(bool) | Signed(i64) | Unsigned(u64) | Text(String) | Bytes(Bytes)`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftelemetry_2fValue_23Bool"></a>
+
+- `Bool(bool) -> telemetry.Value`
+
+Variant of telemetry.Value.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2ftelemetry_2fValue_23Bytes"></a>
+
+- `Bytes(Bytes) -> telemetry.Value`
+
+Variant of telemetry.Value.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2ftelemetry_2fValue_23Signed"></a>
+
+- `Signed(i64) -> telemetry.Value`
+
+Variant of telemetry.Value.
+
+References: [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2ftelemetry_2fValue_23Text"></a>
+
+- `Text(String) -> telemetry.Value`
+
+Variant of telemetry.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftelemetry_2fValue_23Unsigned"></a>
+
+- `Unsigned(u64) -> telemetry.Value`
+
+Variant of telemetry.Value.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftelemetry_2fallow_5ffields"></a>
+
+- `pub fn telemetry.allow_fields(fields: List[Attribute], allow: List[String]) -> List[Attribute] uses {}`
+
+Retains only explicitly allowed attributes, before checking/capture. Trace
+propagation and free-form name/message redaction remain explicit caller policy.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute)
+
+<a id="def-std_401_2ftelemetry_2fcheck_5flog"></a>
+
+- `pub fn telemetry.check_log(record: LogRecord) -> Result[CheckedLog, EventError] uses {}`
+
+Checks all fixed limits, including 16 KiB for the complete JSON line.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/LogRecord`](#def-std_401_2ftelemetry_2fLogRecord)
+
+<a id="def-std_401_2ftelemetry_2fcheck_5fmetadata"></a>
+
+- `pub fn telemetry.check_metadata(metadata: Metadata) -> Result[Metadata, EventError] uses {}`
+
+Rejects duplicate keys, validates fixed limits, then sorts by UTF-8 bytes.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/Metadata`](#def-std_401_2ftelemetry_2fMetadata)
+
+<a id="def-std_401_2ftelemetry_2fenrich"></a>
+
+- `pub fn telemetry.enrich(base: Metadata, fields: List[Attribute]) -> Result[Metadata, EventError] uses {}`
+
+Explicit enrichment replaces base keys; duplicates within either set fail.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/Metadata`](#def-std_401_2ftelemetry_2fMetadata)
+
+<a id="def-std_401_2ftelemetry_2fextract_5ftrace"></a>
+
+- `pub fn telemetry.extract_trace(headers: List[(String, String)]) -> Result[ TraceContext, ContextError ] uses {}`
+
+Extracts exactly one v00 traceparent and at most one tracestate header.
+Header names are ASCII case insensitive; baggage is never forwarded.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/ContextError`](#def-std_401_2ftelemetry_2fContextError), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2finject_5ftrace"></a>
+
+- `pub fn telemetry.inject_trace(ctx: TraceContext) -> Result[List[(String, String)], ContextError] uses {}`
+
+Validates raw context, emits only v00 sampling bit and explicit tracestate.
+Remote is local metadata and is not a wire flag.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/ContextError`](#def-std_401_2ftelemetry_2fContextError), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2flog_5fdata"></a>
+
+- `pub fn telemetry.log_data(record: CheckedLog) -> LogRecord uses {}`
+
+Explicit plain-data projection; CheckedLog itself is intentionally opaque.
+
+References: [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog), [`std@1/telemetry/LogRecord`](#def-std_401_2ftelemetry_2fLogRecord)
+
+<a id="def-std_401_2ftelemetry_2frender"></a>
+
+- `pub fn telemetry.render(record: CheckedLog) -> String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog)
+
+<a id="def-std_401_2ftelemetry_2fvalidate_5ftrace"></a>
+
+- `pub fn telemetry.validate_trace(ctx: TraceContext) -> Result[(), ContextError] uses {}`
+
+Validates raw program-created IDs and ordered tracestate. No authority.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/ContextError`](#def-std_401_2ftelemetry_2fContextError), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2fwrite_5fstderr"></a>
+
+- `pub fn telemetry.write_stderr(sink: Stderr, minimum: log.Level, record: CheckedLog) -> Result[ (), OutputError ]`
+
+Existing fallible stderr effect, including its cancellation/scheduling rules.
+
+References: [`core@1/OutputError`](#def-core_401_2fOutputError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stderr`](#def-core_401_2fStderr), [`std@1/log/Level`](#def-std_401_2flog_2fLevel), [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog)
 
 
 ## test
