@@ -25,6 +25,8 @@ target_platform_detector_spec = target:root//...->root//tools/buck2:dev target:t
 execution_platforms = root//tools/buck2:platforms
 # Many lanes share one host: cap each daemon's local parallelism.
 threads = 4
+# The daemon otherwise starts one async worker per CPU (24–32 seen per lane).
+num_tokio_workers = 4
 [buck2]
 digest_algorithms = SHA256
 # Prune inactive outputs hourly after 6 h; below 10% free, adapt down to 1 h.
