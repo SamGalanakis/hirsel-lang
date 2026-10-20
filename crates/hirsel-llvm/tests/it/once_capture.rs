@@ -23,7 +23,7 @@ fn schema() -> Schema {
     s.name("many", many);
     let mut once = s.types.store.get(many).unwrap().clone();
     once.modes.multiplicity = Multiplicity::Once;
-    let once = s.types.store.push(once);
+    let once = s.types.store.intern(once);
     s.name("once", once);
     s.environment("leaf_env", "leaf", &[(block, Passing::Take)]);
     s.shaped("many_leaf", CallableShape::Closure, &[], unit);

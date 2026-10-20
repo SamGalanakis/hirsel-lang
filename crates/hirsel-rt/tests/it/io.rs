@@ -113,7 +113,7 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
-        let mut ty = support::schema::Ty::default();
+        let mut ty = support::schema::ty();
         let u32ty = ty.p(Primitive::U32);
         let u64ty = ty.p(Primitive::U64);
         let cancel = ty.variant(&[&[], &[], &[]]);
@@ -121,7 +121,7 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         let file = ty.named(&support::schema::path("File"), Vec::new());
         let mut owners = Owners::default();
         owners.nominals.insert(
-            support::schema::path("File"),
+            hirsel_syntax::DefId::intern(&support::schema::path("File")),
             OwnerRepresentation::Handle {
                 resource: true,
                 revision: Default::default(),
@@ -234,7 +234,7 @@ fn niche_images_match_derived_layouts_on_both_targets() {
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
-        let mut ty = support::schema::Ty::default();
+        let mut ty = support::schema::ty();
         let (u8ty, u32ty) = (ty.p(Primitive::U8), ty.p(Primitive::U32));
         let (string, bytes) = (ty.p(Primitive::String), ty.p(Primitive::Bytes));
         let env_error = ty.variant(&[&[], &[]]);

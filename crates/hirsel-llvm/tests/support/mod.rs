@@ -76,19 +76,32 @@ pub fn failure_codes() -> FailureCodes {
 
 pub use hirsel_types::testing::Types;
 
+thread_local! {
+    /// A test's session interner: every row a test builds, owner shapes
+    /// included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<hirsel_types::TypeInterner> =
+        hirsel_types::TypeInterner::new(None);
+}
+
+/// A type builder over this test thread's session interner.
+pub fn session_types() -> Types {
+    Types {
+        store: SESSION.with(|s| s.clone()),
+    }
+}
+
 /// A `@packed` nominal record `Wire { u8, u64, u16 }`.
 pub fn wire_owner(owners: &mut Owners) -> DefPath {
-    let mut t = Types::default();
+    let mut t = session_types();
     let (a, b, c) = (t.p(Primitive::U8), t.p(Primitive::U64), t.p(Primitive::U16));
     let shape = t.record(&[a, b, c]);
     let definition = path("Wire");
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Wire revision"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: Layout {
                 packed: true,
@@ -152,7 +165,7 @@ impl Default for Schema {
 impl Schema {
     pub fn new() -> Self {
         Self {
-            types: Types::default(),
+            types: session_types(),
             owners: Owners::default(),
             named: Vec::new(),
             signatures: Vec::new(),
@@ -216,16 +229,14 @@ impl Schema {
             );
         }
         for (name, definition, captures, movable) in &self.environments {
-            let definition = path(definition);
             let shape = EnvironmentShape {
-                definition: &definition,
+                definition: hirsel_syntax::DefId::intern(&path(definition)),
                 body: 0,
-                store: &self.types.store,
                 captures,
                 sizes: &[],
                 movable,
             };
-            layouts.insert(*name, builder.environment(&shape).expect("an environment"));
+            layouts.insert(*name, builder.environment(&self.types.store, &shape).expect("an environment"));
         }
         let mut abis = BTreeMap::new();
         for &(name, ty, shape) in &self.signatures {

@@ -499,7 +499,7 @@ fn file_walk_step_matches_the_derived_iter_next_abi_on_both_targets() {
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
-        let mut ty = support::schema::Ty::default();
+        let mut ty = support::schema::ty();
         let mut owners = Owners::default();
         let path = ty.named(&support::schema::handle(&mut owners, "Path", false), vec![]);
         let u32ty = ty.p(Primitive::U32);

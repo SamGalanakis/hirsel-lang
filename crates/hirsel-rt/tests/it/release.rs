@@ -925,7 +925,7 @@ mod schema_release {
             let r = t.named(&res, Vec::new());
             t.variant(&[&[a], &[r], &[]])
         });
-        let mut t = Ty::default();
+        let mut t = support::schema::ty();
         let (u, r, rc, pr, pa, re) = (
             t.p(U64),
             t.named(&res, Vec::new()),
@@ -1066,7 +1066,7 @@ mod schema_release {
             let next = t.boxed(next);
             t.variant(&[&[], &[next]])
         });
-        let mut t = Ty::default();
+        let mut t = support::schema::ty();
         let named = t.named(&chain, Vec::new());
         let boxed = t.boxed(named);
         let (d, ids) = derive(&owners, &t.store, &[boxed]);

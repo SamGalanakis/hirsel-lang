@@ -23,7 +23,7 @@ fn program(target: &TargetSpec) -> Program {
     let mut arena_path = path("Arena");
     arena_path.0.package.name = "core".into();
     schema.owners.nominals.insert(
-        arena_path.clone(),
+        hirsel_syntax::DefId::intern(&arena_path),
         OwnerRepresentation::Handle {
             revision: hash("arena"),
             resource: false,
@@ -210,7 +210,7 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
     let mut arena_path = path("Arena");
     arena_path.0.package.name = "core".into();
     schema.owners.nominals.insert(
-        arena_path.clone(),
+        hirsel_syntax::DefId::intern(&arena_path),
         OwnerRepresentation::Handle {
             revision: hash("arena"),
             resource: false,

@@ -15,9 +15,9 @@ use hirsel_lir::layout_types::{
 use hirsel_lir::layout_validate::validate_table;
 use hirsel_lir::rt_program::{self, Descriptor, StepKind};
 use hirsel_rt::{Config, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, Step, TaskCtx};
-use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
+use hirsel_syntax::{ContentHash, DefId, DefPath, ItemPath, PackageId};
 use hirsel_tir::{BodyId, RepresentationRecord};
-use hirsel_types::{Layout as Promises, TypeId, TypeStore};
+use hirsel_types::{Layout as Promises, TypeId, TypeInterner};
 
 use super::{Ctx, leak};
 
@@ -33,6 +33,19 @@ pub fn path(name: &str) -> DefPath {
 }
 
 pub use hirsel_types::testing::Types as Ty;
+
+thread_local! {
+    /// A test's session interner: every row a test builds, owner shapes
+    /// included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<TypeInterner> = TypeInterner::new(None);
+}
+
+/// A type builder over this test thread's session interner.
+pub fn ty() -> Ty {
+    Ty {
+        store: SESSION.with(|s| s.clone()),
+    }
+}
 
 /// How a nominal is represented.
 #[derive(Clone, Copy, Default)]
@@ -50,15 +63,14 @@ pub fn nominal(
     spec: Nominal,
     shape: impl FnOnce(&mut Ty) -> TypeId,
 ) -> DefPath {
-    let mut t = Ty::default();
+    let mut t = ty();
     let private_shape = shape(&mut t);
     owners.nominals.insert(
-        path(name),
+        DefId::intern(&path(name)),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: path(name),
             representation_revision: ContentHash::of_bytes(name.as_bytes()),
             generics: Vec::new(),
-            types: t.store,
             private_shape,
             layout_promises: Promises {
                 soa: spec.soa,
@@ -77,7 +89,7 @@ pub fn nominal(
 /// Declare a run-context handle type; a resource handle closes on drop.
 pub fn handle(owners: &mut Owners, name: &str, resource: bool) -> DefPath {
     owners.nominals.insert(
-        path(name),
+        DefId::intern(&path(name)),
         OwnerRepresentation::Handle {
             revision: ContentHash::of_bytes(name.as_bytes()),
             resource,
@@ -173,7 +185,7 @@ pub struct Derived {
 
 /// Derive `types` on x86-64, validate the table, and materialize descriptors for every layout
 /// a block of these types holds (and every layout those name).
-pub fn derive(owners: &Owners, store: &TypeStore, types: &[TypeId]) -> (Derived, Vec<LayoutId>) {
+pub fn derive(owners: &Owners, store: &TypeInterner, types: &[TypeId]) -> (Derived, Vec<LayoutId>) {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut builder = LayoutBuilder::new(&target, owners);
     let ids: Vec<LayoutId> = types
@@ -573,7 +585,7 @@ pub fn resources(unsafe_ffi: bool) -> Resources {
             t.record(&[a, s, b])
         },
     );
-    let mut t = Ty::default();
+    let mut t = ty();
     let r = t.named(&res, Vec::new());
     let boxed = t.boxed(r);
     let (derived, ids) = derive(&owners, &t.store, &[boxed]);

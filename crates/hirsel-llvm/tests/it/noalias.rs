@@ -170,17 +170,16 @@ fn packed_program(target: &TargetSpec, scalar: hirsel_lir::layout_types::ScalarK
     let mut schema = Schema::new();
     let primitive = support::programs::primitive(scalar);
     let definition = path("Wire");
-    let mut t = Types::default();
+    let mut t = crate::support::session_types();
     let byte = t.p(Primitive::U8);
     let field = t.p(primitive);
     let shape = t.record(&[byte, field, byte]);
     schema.owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("packed mut wire"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout {
                 packed: true,
