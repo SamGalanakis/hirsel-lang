@@ -263,7 +263,9 @@ def classify(paths, members, buck_text: str) -> Classified:
         elif path.startswith('crates/'):
             parts = path.split('/')
             crate = parts[1]
-            if crate not in members:
+            # A crate this copy of the table does not know yet (tools/land runs
+            # main's copy on a lane's tree that adds a crate) selects broadly.
+            if crate not in members or crate not in CRATE_CAMPAIGNS:
                 result.unknown_crates.add(crate)
                 continue
             result.owned.append(path)
