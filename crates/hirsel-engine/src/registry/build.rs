@@ -549,16 +549,18 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     {
         publish(signature, &mut out);
     }
-    // `@preserves_unique(p)`, then `@unretained(q, ..)` naming the borrowed
+    // Existing @preserves_captures(p), @preserves_unique(p), then
+    // @unretained(q, ..) naming the borrowed
     // parameters it reads and stores nothing of, may prefix a ledger line
     // (MODE-2, CLO-2).
     let ledger = SECTION22.lines().map(|line| {
+        let (preserves_captures, line) = ledger_prefix(line, "@preserves_captures(");
         let (preserves_unique, line) = ledger_prefix(line, "@preserves_unique(");
         let (unretained, line) = ledger_prefix(line, "@unretained(");
-        (preserves_unique, unretained, line)
+        (preserves_captures, preserves_unique, unretained, line)
     });
-    for (preserves_unique, unretained, line) in
-        ledger.filter(|(_, _, l)| l.starts_with("fn ") || l.starts_with("N fn "))
+    for (preserves_captures, preserves_unique, unretained, line) in
+        ledger.filter(|(_, _, _, l)| l.starts_with("fn ") || l.starts_with("N fn "))
     {
         let noalloc = line.starts_with("N ");
         let text = line.trim_start_matches("N ").trim_start_matches("fn ");
@@ -630,6 +632,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         } else {
             assert!(unretained.is_none(), "{name}: @unretained needs a promise");
         }
+        if let Some(selected) = preserves_captures {
+            let mut promises = f.state_promises.to_vec();
+            for selected in selected.split(", ") {
+                promises.push(StatePromise {
+                    selector: ParameterRef::bound(ordinal(selected)).into(),
+                    advance_only: false,
+                    preserve_captures: true,
+                    preserve_unique: false,
+                    unretained: Default::default(),
+                });
+            }
+            f.state_promises = promises.into();
+            apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
+        }
         let mut signature = b.signature(name, SignatureKind::Function(f), false);
         signature.metadata.track_caller = matches!(name, "task.await_any" | "task.cancel_all");
         publish(signature, &mut out);
@@ -637,11 +653,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     // `net.read_into`'s compiled body passes its buffer's size to one fixed runtime
     // entry, which no size generic can name.
     let mut b = Builder::new("k: size").with_declarations(&out);
-    let f = b.function(
+    let mut f = b.function(
         "n: Net, mut s: Stream of n, mut buffer: Inline[u8, k], capacity: u64",
         "Result[u64, NetError]",
         true,
     );
+    f.state_promises = vec![StatePromise {
+        selector: ParameterRef::bound(ParamId(1)).into(),
+        advance_only: false,
+        preserve_captures: true,
+        preserve_unique: false,
+        unretained: Default::default(),
+    }]
+    .into();
+    apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
     publish(
         b.signature("$intrinsic.NetReadInto", SignatureKind::Function(f), false),
         &mut out,

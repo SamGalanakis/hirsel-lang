@@ -63,7 +63,23 @@ pub fn main(t: Test) -> Result[(), Error] {
   let mut old: List[u8] = []
   let _ = file.read(dir, mut unchanged, mut old, 32) ? File
   test.check(t, bytes.from_list(take old) == b"a\xc3\xa9z")
-  let empty = file.create(dir, path.of("empty")) ? File
+  let write_only = file.create(dir, path.of("empty")) ? File
+  let mut invalid = stream.file_chunks(dir, take write_only, limit)
+  test.check(
+    t,
+    match stream.next(mut invalid) {
+      Some(Error(FileFault(_))) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match stream.next(mut invalid) {
+      None => true,
+      _ => false,
+    }
+  )
+  let empty = file.open(dir, path.of("empty")) ? File
   let mut ended = stream.file_chunks(dir, take empty, limit)
   test.check(
     t,

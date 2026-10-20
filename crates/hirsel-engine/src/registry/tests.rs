@@ -58,7 +58,7 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
     for line in SECTION22
         .lines()
         .map(|l| {
-            ["@preserves_unique(", "@unretained("]
+            ["@preserves_captures(", "@preserves_unique(", "@unretained("]
                 .iter()
                 .fold(l, |l, prefix| {
                     l.strip_prefix(prefix)

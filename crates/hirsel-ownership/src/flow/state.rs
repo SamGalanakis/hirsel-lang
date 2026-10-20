@@ -215,6 +215,81 @@ impl Checker<'_> {
             && ty.is_some_and(|ty| self.closed_type(ty))
     }
 
+    fn fixed_inert_content(&self, root: TypeId) -> bool {
+        let mut pending = vec![root];
+        let mut seen = BTreeSet::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            let row = self.body.types.get(ty).unwrap();
+            if row.erased_captures.is_some()
+                || row.brand != Brand::default()
+                || ty != root && !row.modes.relation.is_global()
+                || row.modes.multiplicity != Multiplicity::Many
+                || row.drop_allocation != DropAllocation::NoAlloc
+            {
+                return false;
+            }
+            match &row.kind {
+                TypeKind::Parameter(_)
+                | TypeKind::Function(_)
+                | TypeKind::Builtin {
+                    kind: BuiltinType::Iter,
+                    ..
+                } => return false,
+                TypeKind::Named { .. } if !self.properties[ty.index()].copyable => return false,
+                kind => pending.extend(kind.value_parts()),
+            }
+        }
+        structural_authority(
+            &self.body.types,
+            root,
+            &self.own.metadata.roles,
+            &self.body.resolution.generic_declarations,
+            &mut |_, path| {
+                Ok::<_, QueryError>(path.and_then(|path| {
+                    if path == &self.own.definition {
+                        Some(Arc::new(self.own.clone()))
+                    } else {
+                        self.signatures.cached(path)
+                    }
+                }))
+            },
+        )
+        .map(|authority| authority == AuthoritySummary::inert())
+        .unwrap_or_else(|error| {
+            *self.proof_error.borrow_mut() = Some(error);
+            false
+        })
+    }
+
+    // A counted field is read through its owner's local view. That view is
+    // not the field's stored locality: an independently global, owned inert
+    // replacement introduces no new environment input. Keep this separate from
+    // closed_effect: an arbitrary mutable callback can still share or replace
+    // the field and therefore needs its own preservation promise.
+    fn owned_data_replacement(
+        &self,
+        state: &State,
+        selection: &Selection,
+        relation: Meet,
+        target: Option<TypeId>,
+        incoming: ExprId,
+    ) -> bool {
+        if selection.advance || relation != Meet::Inside {
+            return false;
+        }
+        let Some(target) = target else { return false };
+        if !self.fixed_inert_content(target) {
+            return false;
+        }
+        let value = self.value(state, incoming);
+        self.arenas.global(&value.modes.relation)
+            && (value.modes.uniqueness == Uniqueness::Unique
+                || self.captured_sendability(incoming, &value) == Sendability::Sendable)
+    }
+
     fn callee_covers(
         &self,
         callee: ExprId,
@@ -261,6 +336,7 @@ impl Checker<'_> {
             Op::Write {
                 place: expression,
                 operation,
+                value,
                 ..
             } => {
                 let Some(place) = place(self.body, *expression, self.source_rows) else {
@@ -268,7 +344,9 @@ impl Checker<'_> {
                 };
                 let ty = self.ty(*expression);
                 for (selection, relation, _) in self.met(state, &place) {
-                    if !self.closed_effect(&selection, relation, ty) {
+                    if !self.closed_effect(&selection, relation, ty)
+                        && !self.owned_data_replacement(state, &selection, relation, ty, *value)
+                    {
                         self.state_violation(selection.binding, selection.advance, *operation);
                     }
                 }
@@ -334,7 +412,37 @@ impl Checker<'_> {
                     };
                     let ty = self.ty(argument.value);
                     for (selection, relation, fields) in self.met(state, &place) {
+                        let inert_advance = !selection.advance
+                            && relation == Meet::Inside
+                            && ty.is_some_and(|ty| self.fixed_inert_content(ty))
+                            && self
+                                .ty(*callee)
+                                .and_then(|ty| self.body.types.get(ty))
+                                .is_some_and(|row| match &row.kind {
+                                    TypeKind::Function(f) => f.state_promises.iter().any(|p| {
+                                        p.preserve_unique
+                                            && p.selector.fields.is_empty()
+                                            && p.selector.parameter
+                                                == ParameterRef::bound(ParamId(
+                                                    requirement.parameter as u32,
+                                                ))
+                                    }),
+                                    _ => false,
+                                })
+                            && arguments.iter().zip(requirements).all(|(arg, req)| {
+                                req.as_ref().is_none_or(|req| {
+                                    req.passing != PassingMode::Take
+                                        || self.property(arg.value).is_some_and(|p| p.plain)
+                                        || {
+                                            let value = self.value(state, arg.value);
+                                            self.arenas.global(&value.modes.relation)
+                                                && self.captured_sendability(arg.value, &value)
+                                                    == Sendability::Sendable
+                                        }
+                                })
+                            });
                         if !self.closed_effect(&selection, relation, ty)
+                            && !inert_advance
                             && !self.callee_covers(
                                 *callee,
                                 requirement.parameter,

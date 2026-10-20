@@ -20,6 +20,7 @@ type FileChunks {
   max: u64,
 }
 
+@preserves_captures(s)
 fn file_chunk(mut s: FileChunks) -> Option[Result[Bytes, FileError]] uses {s} {
   let mut buffer: List[u8] = []
   let count = match core@1/file.read(s.dir, mut s.file, mut buffer, s.max) {
@@ -42,7 +43,7 @@ pub fn file_chunks(dir: Dir, take file: File of dir, limit: ChunkLimit) -> Flow[
   from_results(
     core@1/iter.from(
       take FileChunks(dir: dir, file: take file, max: limit.bytes),
-      file_chunk
+      fn(mut s: FileChunks) -> Option[Result[Bytes, FileError]] { file_chunk(mut s) }
     )
   )
 }
@@ -53,6 +54,7 @@ type NetChunks {
   max: u64,
 }
 
+@preserves_captures(s)
 fn net_chunk(mut s: NetChunks) -> Option[Result[Bytes, NetError]] uses {s} {
   let mut buffer: List[u8] = []
   let count = match core@1/net.read(s.net, mut s.socket, mut buffer, s.max) {
@@ -75,7 +77,7 @@ pub fn net_chunks(net: Net, take socket: Stream of net, limit: ChunkLimit) -> Fl
   from_results(
     core@1/iter.from(
       take NetChunks(net: net, socket: take socket, max: limit.bytes),
-      net_chunk
+      fn(mut s: NetChunks) -> Option[Result[Bytes, NetError]] { net_chunk(mut s) }
     )
   )
 }
@@ -85,6 +87,7 @@ type HttpChunks {
   max: u64,
 }
 
+@preserves_captures(s)
 fn http_chunk(mut s: HttpChunks) -> Option[Result[Bytes, http.HttpError]] uses {s} {
   let mut buffer: List[u8] = []
   let count = match http.read_body(mut s.request, mut buffer, s.max) {
@@ -107,7 +110,7 @@ pub fn http_chunks(take request: http.Request, limit: ChunkLimit) -> Flow[
   from_results(
     core@1/iter.from(
       take HttpChunks(request: take request, max: limit.bytes),
-      http_chunk
+      fn(mut s: HttpChunks) -> Option[Result[Bytes, http.HttpError]] { http_chunk(mut s) }
     )
   )
 }

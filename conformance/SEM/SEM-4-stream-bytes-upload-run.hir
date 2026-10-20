@@ -35,7 +35,7 @@ pub fn main(t: Test) -> Result[(), Error] {
           Open(
             [
               Expect(
-                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\nX-End: yes\r\n\r\n"
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\nX-End: yes\r\n\r\n"
               ),
               Send(b"HTTP/1.1 204 No Content\r\n\r\n"),
               Close()
@@ -44,7 +44,7 @@ pub fn main(t: Test) -> Result[(), Error] {
           Open(
             [
               Expect(
-                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n"
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n2\r\nhi\r\n"
               ),
               Stall()
             ]

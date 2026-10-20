@@ -1,0 +1,7 @@
+// rule: CLO-4
+// expect: accept
+@preserves_captures(r)
+fn advance(mut r: http.Request) -> () {
+  let mut buffer: List[u8] = []
+  let _ = http.read_body(mut r, mut buffer, 1)
+}

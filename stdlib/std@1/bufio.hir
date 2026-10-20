@@ -35,6 +35,7 @@ pub fn contents(r: Reader) -> unique Bytes uses {} {
   core@1/bytes.from_list(take out)
 }
 
+@preserves_captures(r)
 pub fn consume(mut r: Reader, count: u64) -> () uses {} {
   let have = buffered(r)
   r.offset += if count < have {
@@ -219,21 +220,24 @@ pub fn stream_read_until(
   )
 }
 
+@preserves_captures(s)
+@preserves_captures(r)
 pub fn stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[
   u64,
   ReadError[NetError]
 ] {
-  read_more(
-    mut r,
-    mut s,
-    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
-      u64,
-      NetError
-    ] {
-      core@1/net.read(n, mut stream, mut buffer, requested)
-    },
-    max
-  )
+  if max == 0 { return Ok(0) }
+  let mut unread: List[u8] = []
+  let mut i = r.offset
+  while i < core@1/list.len(r.input) {
+    core@1/list.push(mut unread, r.input[i])
+    i += 1
+  }
+  r.input = take unread
+  r.offset = 0
+  let limit = if max < r.capacity { max } else { r.capacity }
+  let n = core@1/net.read(n, mut s, mut r.input, limit) ? Source
+  Ok(n)
 }
 
 @preserves_unique(out)

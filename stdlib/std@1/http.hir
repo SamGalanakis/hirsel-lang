@@ -890,6 +890,7 @@ fn http_buffer_error(error: bufio.ReadError[NetError]) -> HttpError uses {} {
   }
 }
 
+@preserves_captures(r)
 fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
   http_transport_read_more(mut r.transport, max)
 }
@@ -1020,6 +1021,7 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 }
 
 // Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
+@preserves_captures(r)
 fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   if r.chunk_suffix {
     while http_input_buffered(r.transport.input) < 2 {
@@ -1109,6 +1111,7 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
 }
 
 @preserves_unique(out)
+@preserves_captures(r)
 pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError] {
   if http_is_h2(r.transport) {
     return http_h2_read_body(mut r, mut out, max)

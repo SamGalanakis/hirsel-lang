@@ -19,6 +19,7 @@ fn http_input_contents(r: HttpInput) -> unique Bytes uses {} {
   core@1/bytes.from_list(take out)
 }
 
+@preserves_captures(r)
 fn http_input_consume(mut r: HttpInput, count: u64) -> () uses {} {
   let have = http_input_buffered(r)
   r.offset += if count < have {
@@ -81,6 +82,7 @@ fn http_transport(
   )
 }
 
+@preserves_captures(t)
 fn http_h2_endpoint[R](
   mut t: HttpTransport,
   body: fn(mut endpoint: http2.Session) -> R uses {}
@@ -90,7 +92,7 @@ fn http_h2_endpoint[R](
   }
   let mut current = take endpoint
   let outcome = body(mut current)
-  t.endpoint = Some(take current)
+  t.endpoint = Some(unique current)
   Ok(take outcome)
 }
 
@@ -99,11 +101,13 @@ fn http_is_h2(t: HttpTransport) -> bool uses {} {
   t.version == Http2()
 }
 
+@preserves_captures(t)
 fn http_transport_write(mut t: HttpTransport, data: Bytes) -> Result[(), HttpError] {
   core@1/net.write_all(t.net, mut t.stream, data) ? http_net_error
   Ok(())
 }
 
+@preserves_captures(stream, r)
 fn http_input_read(n: Net, mut stream: Stream of n, mut r: HttpInput, max: u64) -> Result[
   u64,
   HttpError
@@ -129,10 +133,12 @@ fn http_input_read(n: Net, mut stream: Stream of n, mut r: HttpInput, max: u64) 
   Ok(core@1/net.read(n, mut stream, mut r.bytes, limit) ? http_net_error)
 }
 
+@preserves_captures(t)
 fn http_transport_read_more(mut t: HttpTransport, max: u64) -> Result[u64, HttpError] {
   http_input_read(t.net, mut t.stream, mut t.input, max)
 }
 
+@preserves_captures(t)
 fn http_transport_read_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Result[
   (),
   HttpError
@@ -141,6 +147,7 @@ fn http_transport_read_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Res
   Ok(())
 }
 
+@preserves_captures(t)
 fn http_transport_write_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Result[
   (),
   HttpError
@@ -164,6 +171,7 @@ fn http_h2_error(error: http2.Error) -> HttpError uses {} {
   }
 }
 
+@preserves_captures(t)
 fn http_h2_flush(mut t: HttpTransport) -> Result[(), HttpError] {
   if t.closed {
     return Error(Closed())
@@ -191,10 +199,12 @@ fn http_h2_frame_error(error: http2_wire.FrameError) -> HttpError uses {} {
   Malformed(HeaderValue())
 }
 
+@preserves_captures(t)
 fn http_h2_next(mut t: HttpTransport) -> Result[http2.Event, HttpError] {
   http_h2_next_until(mut t, None(), None())
 }
 
+@preserves_captures(t)
 fn http_h2_next_until(
   mut t: HttpTransport,
   clock: Option[MonotonicClock],
@@ -341,6 +351,7 @@ fn http_h2_event_size(event: http2.Event) -> u64 uses {} {
   }
 }
 
+@preserves_captures(t)
 fn http_h2_pending(mut t: HttpTransport, take event: http2.Event) -> Result[
   (),
   HttpError
@@ -351,16 +362,18 @@ fn http_h2_pending(mut t: HttpTransport, take event: http2.Event) -> Result[
     return Error(BodyTooLarge())
   }
   t.pending_bytes += size
-  core@1/list.push(mut t.pending, take event)
+  core@1/list.push(mut t.pending, unique event)
   Ok(())
 }
 
 // Only one exchange is checked out today. Other streams retain bounded events
 // while this exchange waits for credit or its body, without misrouting DATA.
+@preserves_captures(t)
 fn http_h2_for(mut t: HttpTransport, id: u32) -> Result[http2.Event, HttpError] {
   http_h2_for_until(mut t, id, None(), None())
 }
 
+@preserves_captures(t)
 fn http_h2_for_until(
   mut t: HttpTransport,
   id: u32,
@@ -374,7 +387,7 @@ fn http_h2_for_until(
       t.pending_bytes -= http_h2_event_size(event)
       selected = Some(take event)
     } else {
-      core@1/list.push(mut t.pending, take event)
+      core@1/list.push(mut t.pending, unique event)
     }
   }
   if let Some(event) = take selected {
@@ -739,6 +752,7 @@ fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 }
 
 @preserves_unique(out)
+@preserves_captures(r)
 fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
   u64,
   HttpError

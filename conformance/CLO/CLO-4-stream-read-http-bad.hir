@@ -1,0 +1,11 @@
+// rule: CLO-4
+// expect: reject CLO-4
+fn unproved(mut r: http.Request) -> () {
+  let mut buffer: List[u8] = []
+  let _ = http.read_body(mut r, mut buffer, 1)
+}
+
+@preserves_captures(r)
+fn advance(mut r: http.Request) -> () {
+  unproved(mut r)
+}
