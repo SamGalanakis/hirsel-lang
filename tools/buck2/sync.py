@@ -139,8 +139,8 @@ TEST_DATA = {
     "hirsel-cli-test-examples": ["examples/tasks/**"],
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
-    # Relative spec links reach generated documentation outside docs/spec.
-    "hirsel-conformance-test-spec_links": ["crates/**", "docs/tour.md", "docs/api.md"],
+    # Relative spec links reach the top-level docs outside docs/spec.
+    "hirsel-conformance-test-spec_links": ["crates/**", "docs/*.md"],
     # memcheck:: compiles a C program against the runtime header.
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
