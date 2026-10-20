@@ -1,11 +1,12 @@
 //! Private ordered facts with shared key numbering and radix snapshot rows.
+//! Entries are shared between snapshots until a write replaces one.
 use hirsel_intern::work::Counter;
 use hirsel_types::rows::Rows;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 #[derive(Clone)]
 pub(super) struct Indexed<K, V> {
     keys: Rc<RefCell<BTreeMap<K, usize>>>,
-    values: Rows<Option<(K, V)>>,
+    values: Rows<Option<Rc<(K, V)>>>,
 }
 impl<K: Clone + Ord, V: Clone> Default for Indexed<K, V> {
     fn default() -> Self {
@@ -19,7 +20,7 @@ impl<K: Clone + Ord, V: Clone> Default for Indexed<K, V> {
 impl<K: Clone + Ord, V: Clone + PartialEq> Indexed<K, V> {
     pub fn get(&self, key: &K) -> Option<&V> {
         let i = *self.keys.borrow().get(key)?;
-        self.values[i].as_ref().map(|(_, value)| value)
+        self.values[i].as_ref().map(|entry| &entry.1)
     }
     pub fn contains_key(&self, key: &K) -> bool {
         self.get(key).is_some()
@@ -34,7 +35,7 @@ impl<K: Clone + Ord, V: Clone + PartialEq> Indexed<K, V> {
             return;
         }
         let i = self.number(key.clone());
-        self.values[i] = Some((key, value));
+        self.values[i] = Some(Rc::new((key, value)));
     }
     pub fn remove(&mut self, key: &K) {
         let i = self.keys.borrow().get(key).copied();
@@ -52,7 +53,7 @@ impl<K: Clone + Ord, V: Clone + PartialEq> Indexed<K, V> {
             .values
             .entries()
             .into_iter()
-            .map(|(_, row)| row.as_ref().unwrap())
+            .map(|(_, row)| &**row.as_ref().unwrap())
             .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
         entries.into_iter().map(|(key, value)| (key, value))
@@ -65,12 +66,22 @@ impl<K: Clone + Ord, V: Clone + PartialEq> Indexed<K, V> {
     pub fn union(&mut self, other: &Self, mut join: impl FnMut(&mut V, &V)) {
         if Rc::ptr_eq(&self.keys, &other.keys) {
             self.values.union(&other.values, |row, incoming| {
-                if let Some((_, value)) = incoming {
-                    if let Some((_, old)) = row {
-                        join(old, value);
-                    } else {
-                        *row = incoming.clone();
+                let Some(incoming) = incoming else {
+                    return;
+                };
+                match row {
+                    Some(old) if !Rc::ptr_eq(old, incoming) => {
+                        let mut value = old.1.clone();
+                        join(&mut value, &incoming.1);
+                        // An equal join result keeps the incoming entry.
+                        if value == incoming.1 {
+                            *row = Some(incoming.clone());
+                        } else if value != old.1 {
+                            Rc::make_mut(old).1 = value;
+                        }
                     }
+                    Some(_) => {}
+                    None => *row = Some(incoming.clone()),
                 }
             });
         } else {
@@ -89,9 +100,7 @@ pub(super) struct Entry<'a, K, V> {
 impl<'a, K: Clone + Ord, V: Clone + Default + PartialEq> Entry<'a, K, V> {
     pub fn or_insert_with(self, make: impl FnOnce() -> V) -> &'a mut V {
         let i = self.map.number(self.key.clone());
-        &mut self.map.values[i]
-            .get_or_insert_with(|| (self.key, make()))
-            .1
+        &mut Rc::make_mut(self.map.values[i].get_or_insert_with(|| Rc::new((self.key, make())))).1
     }
 }
 impl<K: Clone + Ord, V: Clone + PartialEq> PartialEq for Indexed<K, V> {

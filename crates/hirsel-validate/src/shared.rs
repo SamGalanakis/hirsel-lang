@@ -30,6 +30,14 @@ impl<T> Shared<T> {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
+impl<T: Default + RowCount> Shared<T> {
+    /// Empty this snapshot without copying rows another snapshot still shares.
+    pub fn clear(&mut self) {
+        if self.0.rows() > 0 {
+            *self = T::default().into();
+        }
+    }
+}
 impl<T> Deref for Shared<T> {
     type Target = T;
     fn deref(&self) -> &T {

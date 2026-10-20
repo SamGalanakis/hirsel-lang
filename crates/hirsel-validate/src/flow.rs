@@ -1100,9 +1100,9 @@ impl Model {
                 state.must[local].set(MustFacts::SENDABLE, true);
             }
             tags::capture(&mut state, local as u32, &capture.tags);
-            state.origins.identities[root] = capture.identities.clone();
-            state.origins.parts[root] = capture.parts.clone();
-            state.origins.owners[root] = capture.owners.clone();
+            state.origins.identities[root] = capture.identities.clone().into();
+            state.origins.parts[root] = capture.parts.clone().into();
+            state.origins.owners[root] = capture.owners.clone().into();
             for (place, p) in body.places.iter().enumerate() {
                 let introduced = body.blocks.iter().flat_map(|b| &b.instructions).any(|i| matches!(i.kind, InstructionKind::BindOrigin { place: target, .. } if target.0 as usize == place));
                 if !introduced && p.root.0 as usize == local && p.projection.is_empty() {
@@ -1860,10 +1860,11 @@ impl Checker<'_> {
             .get(&(access.root.0, access.projection.clone()))
         {
             if !state.origins.identities[index].is_empty() {
-                return state.origins.identities[index].clone();
+                return (*state.origins.identities[index]).clone();
             }
         }
-        let mut identities = state.origins.identities[model.roots[access.root.0 as usize]].clone();
+        let mut identities =
+            (*state.origins.identities[model.roots[access.root.0 as usize]]).clone();
         for projection in &access.projection {
             let field = match projection {
                 Projection::Field(f) | Projection::VariantField { field: f, .. } => {
@@ -2031,7 +2032,7 @@ impl Checker<'_> {
             .collect();
         state.origins.expire(origin);
         state.origins.introduce(origin);
-        state.origins.identities[root] = BTreeSet::from([fresh.clone()]);
+        state.origins.identities[root] = BTreeSet::from([fresh.clone()]).into();
         state.origins.parts[root] = parts;
         state
             .origins
@@ -2041,7 +2042,7 @@ impl Checker<'_> {
             .canonical
             .get(&(access.root.0, access.projection.clone()))
         {
-            state.origins.identities[index] = BTreeSet::from([origin.clone()]);
+            state.origins.identities[index] = BTreeSet::from([origin.clone()]).into();
             state.origins.owners[index].insert(origin.clone());
         }
         true
@@ -2223,7 +2224,7 @@ impl Checker<'_> {
                     })
                     .collect()
             };
-            state.origins.identities[index] = identity.clone();
+            state.origins.identities[index] = identity.clone().into();
             let path: Option<Vec<_>> = access
                 .projection
                 .iter()
@@ -2240,7 +2241,7 @@ impl Checker<'_> {
                 parts.insert(path, identity.clone());
             }
             if state.must[root].has(MustFacts::OWNED) {
-                state.origins.owners[index] = identity.clone();
+                state.origins.owners[index] = identity.clone().into();
             }
             state.origins.locations.insert(
                 origin.root.clone(),
@@ -3577,7 +3578,7 @@ impl Checker<'_> {
             }
         }
         if state.places[index] & LIVE != 0 {
-            for owner in state.origins.owners[index].clone() {
+            for owner in (*state.origins.owners[index]).clone() {
                 state.origins.expire(&owner);
             }
         }
@@ -4549,7 +4550,7 @@ impl Checker<'_> {
                                 for identity in &identities {
                                     state.origins.introduce(identity);
                                 }
-                                state.origins.identities[root] = identities.clone();
+                                state.origins.identities[root] = identities.clone().into();
                                 state
                                     .origins
                                     .bindings
@@ -4563,7 +4564,7 @@ impl Checker<'_> {
                             for identity in &identities {
                                 state.origins.introduce(identity);
                             }
-                            state.origins.identities[index] = identities.clone();
+                            state.origins.identities[index] = identities.clone().into();
                             state.origins.owners[index].extend(identities);
                         }
                         // The written field takes the binding's own name
@@ -4598,11 +4599,12 @@ impl Checker<'_> {
                                 .collect();
                             state.origins.parts[model.roots[to.root.0 as usize]]
                                 .insert(path, BTreeSet::from([origin.clone()]));
-                            state.origins.identities[index] = BTreeSet::from([origin.clone()]);
-                            state.origins.owners[index] = BTreeSet::from([origin.clone()]);
+                            state.origins.identities[index] =
+                                BTreeSet::from([origin.clone()]).into();
+                            state.origins.owners[index] = BTreeSet::from([origin.clone()]).into();
                         }
                     } else {
-                        state.origins.identities[index] = identity;
+                        state.origins.identities[index] = identity.into();
                     }
                     if origin.fields.is_empty() {
                         state.origins.locations.insert(
@@ -4610,15 +4612,15 @@ impl Checker<'_> {
                             BTreeSet::from([(index, to.loan.map(|id| id.0))]),
                         );
                         state.origins.ended.remove(&origin.root);
-                        state
-                            .origins
-                            .bindings
-                            .insert(origin.root.clone(), state.origins.identities[index].clone());
+                        state.origins.bindings.insert(
+                            origin.root.clone(),
+                            (*state.origins.identities[index]).clone(),
+                        );
                         // The structural projection check proved the layout.
                         // Introducing the owner supplies its field-path proofs.
                         let names = BTreeMap::from([(
                             origin.root.clone(),
-                            state.origins.identities[index].clone(),
+                            (*state.origins.identities[index]).clone(),
                         )]);
                         for &ordinal in &model.root_accesses[model.places[index].root.0 as usize] {
                             let access = &self.body.places[ordinal];
@@ -4897,7 +4899,7 @@ impl Checker<'_> {
                                             .collect()
                                     },
                                     owners: if operand.usage == UseKind::Take {
-                                        state.origins.owners[index].clone()
+                                        (*state.origins.owners[index]).clone()
                                     } else {
                                         BTreeSet::new()
                                     },
@@ -5208,8 +5210,9 @@ impl Checker<'_> {
                     }
 
                     state.origins.identities[model.mapping[destination.0 as usize]] =
-                        origin_identity;
-                    state.origins.parts[model.mapping[destination.0 as usize]] = origin_parts;
+                        origin_identity.into();
+                    state.origins.parts[model.mapping[destination.0 as usize]] =
+                        origin_parts.into();
                     self.set_origin_proof(model, state, *destination, origin_proof, origin_expired);
                     state.origins.owners[model.mapping[destination.0 as usize]] = origin_owners;
                     self.set_environment(model, state, *destination, &environment);
@@ -5249,8 +5252,9 @@ impl Checker<'_> {
                     self.install_tags(model, state, *destination, tag_parts);
                     self.set_dependencies(model, state, *destination, BTreeSet::new());
                     self.set_origin_proof(model, state, *destination, proof, expired);
-                    state.origins.identities[model.mapping[destination.0 as usize]] = identity;
-                    state.origins.parts[model.mapping[destination.0 as usize]] = parts;
+                    state.origins.identities[model.mapping[destination.0 as usize]] =
+                        identity.into();
+                    state.origins.parts[model.mapping[destination.0 as usize]] = parts.into();
                     state.origins.owners[model.mapping[destination.0 as usize]].clear();
                     self.set_environment(model, state, *destination, &environment);
                 }
@@ -5837,7 +5841,7 @@ impl Checker<'_> {
                                     owned_identities
                                 };
                                 let index = model.mapping[place.0 as usize];
-                                state.origins.identities[index] = identities.clone();
+                                state.origins.identities[index] = identities.clone().into();
                                 state.origins.ended.remove(&origin.root);
                                 state
                                     .origins

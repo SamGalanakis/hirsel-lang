@@ -2,6 +2,7 @@
 //! derived from semantic introductions and storage transfers, never claimed brands.
 use super::indexed::Indexed;
 use super::origin_dependencies::DependencyRows;
+use super::shared::Shared;
 use super::*;
 use hirsel_types::rows::Rows;
 use hirsel_types::{Origin, OriginRoot};
@@ -181,11 +182,29 @@ impl Environment {
     }
 }
 
+/// A row's origin set. Snapshots and joins share it until a write.
+pub(super) type Origins = Shared<BTreeSet<Origin>>;
+/// A row's per-field-path identities. Snapshots and joins share it until a write.
+pub(super) type Parts = Shared<BTreeMap<Vec<hirsel_types::FieldId>, BTreeSet<Origin>>>;
+
+/// The union of `incoming` into `row`, reusing `incoming` itself when it
+/// already holds every element of `row`.
+pub(super) fn union_origins(row: &mut Origins, incoming: &Origins) {
+    if row.shares(incoming) || incoming.is_subset(row) {
+        return;
+    }
+    if row.is_subset(incoming) {
+        *row = incoming.clone();
+    } else {
+        row.extend(incoming.iter().cloned());
+    }
+}
+
 #[derive(Clone, Default, Eq, PartialEq)]
 pub(super) struct OriginState {
-    pub identities: Rows<BTreeSet<Origin>>,
-    pub parts: Rows<BTreeMap<Vec<hirsel_types::FieldId>, BTreeSet<Origin>>>,
-    pub owners: Rows<BTreeSet<Origin>>,
+    pub identities: Rows<Origins>,
+    pub parts: Rows<Parts>,
+    pub owners: Rows<Origins>,
     pub ended: Indexed<OriginRoot, bool>,
     pub dead: Indexed<OriginRoot, BTreeSet<hirsel_types::SharedPath<hirsel_types::FieldId>>>,
     pub bindings: Indexed<OriginRoot, BTreeSet<Origin>>,
@@ -199,11 +218,11 @@ pub(super) struct OriginState {
 impl OriginState {
     pub fn new(places: usize) -> Self {
         Self {
-            identities: Rows::new(BTreeSet::new(), places)
+            identities: Rows::new(Origins::default(), places)
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            parts: Rows::new(BTreeMap::new(), places)
+            parts: Rows::new(Parts::default(), places)
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            owners: Rows::new(BTreeSet::new(), places)
+            owners: Rows::new(Origins::default(), places)
                 .with_copy_counter(Counter::ValidateCopiedRows),
             ended: Indexed::default(),
             dead: Indexed::default(),
@@ -219,11 +238,9 @@ impl OriginState {
     }
     pub fn join(&mut self, other: &Self) {
         for i in self.parts.differences(&other.parts) {
-            let paths: BTreeSet<_> = self.parts[i]
-                .keys()
-                .chain(other.parts[i].keys())
-                .cloned()
-                .collect();
+            let (mine, incoming) = (&self.parts[i], &other.parts[i]);
+            let paths: BTreeSet<_> = mine.keys().chain(incoming.keys()).cloned().collect();
+            let mut joined = BTreeMap::new();
             for path in paths {
                 let fallback = |identities: &BTreeSet<Origin>| {
                     identities
@@ -235,24 +252,30 @@ impl OriginState {
                         })
                         .collect::<BTreeSet<_>>()
                 };
-                let mut identities = self.parts[i]
+                let mut identities = mine
                     .get(&path)
                     .cloned()
                     .unwrap_or_else(|| fallback(&self.identities[i]));
                 identities.extend(
-                    other.parts[i]
+                    incoming
                         .get(&path)
                         .cloned()
                         .unwrap_or_else(|| fallback(&other.identities[i])),
                 );
-                self.parts[i].insert(path, identities);
+                joined.insert(path, identities);
+            }
+            // Equal rows keep their current or incoming allocation.
+            if joined == **incoming {
+                let incoming = incoming.clone();
+                self.parts.set(i, incoming);
+            } else if joined != **mine {
+                self.parts.set(i, joined.into());
             }
         }
         self.ended.union(&other.ended, |a, b| *a |= b);
         self.dead
             .union(&other.dead, |a, b| a.extend(b.iter().cloned()));
-        self.owners
-            .union(&other.owners, |a, b| a.extend(b.iter().cloned()));
+        self.owners.union(&other.owners, union_origins);
         self.proofs.union(&other.proofs, |a, b| {
             for (name, values) in b {
                 a.entry(name.clone())
@@ -260,8 +283,7 @@ impl OriginState {
                     .extend(values.iter().cloned());
             }
         });
-        self.identities
-            .union(&other.identities, |a, b| a.extend(b.iter().cloned()));
+        self.identities.union(&other.identities, union_origins);
         self.environments
             .union(&other.environments, |a, b| a.join(b));
         self.retained
