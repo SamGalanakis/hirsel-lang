@@ -4,6 +4,14 @@ use hirsel_intern::Symbol;
 use hirsel_span::Anchor;
 use hirsel_syntax::*;
 use hirsel_types::*;
+/// The session interner these tests' rows share.
+pub fn session_arc() -> &'static std::sync::Arc<TypeInterner> {
+    static SESSION: std::sync::OnceLock<std::sync::Arc<TypeInterner>> = std::sync::OnceLock::new();
+    SESSION.get_or_init(|| TypeInterner::new(None))
+}
+pub fn session() -> &'static TypeInterner {
+    session_arc()
+}
 pub fn path(name: &str) -> DefPath {
     DefPath(ItemPath {
         package: PackageId {
@@ -50,10 +58,10 @@ impl Fixture {
         self.syntax.owner().site(site)
     }
     pub fn new(primitive: Primitive) -> Self {
-        let mut types = TypeStore::default();
-        let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
-        let boolean = types.push(ty(TypeKind::Primitive(Primitive::Bool)));
-        let scalar = types.push(ty(TypeKind::Primitive(primitive)));
+        let types = session();
+        let unit = types.intern(ty(TypeKind::Tuple(vec![].into())));
+        let boolean = types.intern(ty(TypeKind::Primitive(Primitive::Bool)));
+        let scalar = types.intern(ty(TypeKind::Primitive(primitive)));
         let syntax = ItemSyntax {
             item: Item {
                 name_span: Span::default(),
@@ -80,7 +88,6 @@ impl Fixture {
                 tails: vec![],
                 places: vec![],
                 calls: vec![],
-                types,
                 bindings: vec![],
                 patterns: vec![],
                 resolution: Resolution::default(),
@@ -98,12 +105,12 @@ impl Fixture {
             owner: NameSite::Item,
             syntax,
             next_local: 0,
-            declarations: Default::default(),
+            declarations: hirsel_validate::SignatureMap::new(session_arc().clone()),
             parameters: vec![],
         }
     }
     pub fn type_(&mut self, kind: TypeKind) -> TypeId {
-        self.checked.types.push(ty(kind))
+        session().intern(ty(kind))
     }
     pub fn expr(&mut self, kind: ExprKind, ty: TypeId, usage: UseKind, line: u32) -> ExprId {
         let id = ExprId(self.syntax.tree.expressions.len() as u32);
@@ -448,15 +455,14 @@ impl Fixture {
         );
         self.register(Signature {
             metadata: SignatureMetadata::default(),
-            definition: path(name),
-            types: self.checked.types.clone(),
+            definition: DefId::intern(&path(name)),
             kind: SignatureKind::Function(function),
             fingerprint: ContentHash::default(),
         });
     }
     pub fn register(&mut self, signature: Signature) {
         self.declarations
-            .insert(signature.definition.clone(), signature);
+            .insert(signature.definition, signature);
     }
     pub fn closure(&mut self, info: ClosureInfo, result: TypeId, capture_owner: NameSite) {
         self.frames
@@ -484,6 +490,7 @@ impl Fixture {
         result_types: &'a [(NameSite, TypeId)],
     ) -> Input<'a> {
         Input {
+            types: session(),
             track_caller: false,
             syntax: &self.syntax,
             checked: &self.checked,
@@ -506,13 +513,12 @@ impl Fixture {
         result: TypeId,
     ) -> std::result::Result<Definition, LowerError> {
         let mut declarations = self.declarations.clone();
-        if !declarations.contains_key(&path(name)) {
+        if declarations.get(&path(name)).is_none() {
             declarations.insert(
-                path(name),
+                &path(name),
                 Signature {
                     metadata: SignatureMetadata::default(),
-                    definition: path(name),
-                    types: self.checked.types.clone(),
+                    definition: DefId::intern(&path(name)),
                     kind: SignatureKind::Function(function(self.parameters.clone(), result)),
                     fingerprint: ContentHash::default(),
                 },
@@ -530,7 +536,7 @@ impl Fixture {
             },
         );
         let definition = lower(input)?;
-        hirsel_validate::assert_valid(&definition, &declarations);
+        hirsel_validate::assert_valid(&definition, session(), &declarations);
         Ok(definition)
     }
 }

@@ -16,10 +16,10 @@ fn core(name: &str) -> DefPath {
     })
 }
 fn declaration(f: &mut Fixture, path: DefPath, mut kind: SignatureKind) {
-    let mut types = f.checked.types.clone();
+    let types = session();
     if let SignatureKind::Function(function) = &mut kind {
         let mut abstract_type = |t| {
-            map_parameter_references(&mut types, t, |p, depth| {
+            map_parameter_references(types, t, |p, depth| {
                 Ok(match p {
                     ParameterRef::Body { scope, parameter } if scope == f.scope(f.owner) => {
                         ParameterRef::Bound { depth, parameter }
@@ -36,8 +36,7 @@ fn declaration(f: &mut Fixture, path: DefPath, mut kind: SignatureKind) {
     }
     f.register(Signature {
         metadata: SignatureMetadata::default(),
-        definition: path,
-        types,
+        definition: DefId::intern(&path),
         kind,
         fingerprint: ContentHash::default(),
     });
@@ -122,7 +121,7 @@ fn fixture() -> (Fixture, ExprId) {
     let mut f = Fixture::new(Primitive::U32);
     let item = f.scalar;
     let source_ty = f.type_(TypeKind::Named {
-        definition: core("ScalarView"),
+        definition: DefId::intern(&core("ScalarView")),
         arguments: vec![].into(),
     });
     let shape = f.type_(TypeKind::Builtin {
@@ -134,7 +133,7 @@ fn fixture() -> (Fixture, ExprId) {
     // The private cursor result keeps counted items in the source locality;
     // plain StrPos bits retain their Global declaration (OWN-8).
     let item = normalize_type_properties(
-        &mut f.checked.types,
+        session(),
         item,
         &GenericDeclarations::default(),
         &mut |path| {
@@ -147,16 +146,16 @@ fn fixture() -> (Fixture, ExprId) {
     let cursor_name = "$intrinsic.ViewCursor";
     let next_arguments = vec![GenericArgument::Type(item)];
     let mut cursor_ty = ty(TypeKind::Named {
-        definition: core(cursor_name),
+        definition: DefId::intern(&core(cursor_name)),
         arguments: next_arguments.clone().into(),
     });
     cursor_ty.modes.relation = Relation::environment();
-    let cursor = f.checked.types.push(cursor_ty.clone());
+    let cursor = session().intern(cursor_ty.clone());
     cursor_ty.kind = TypeKind::Named {
-        definition: core("Option"),
+        definition: DefId::intern(&core("Option")),
         arguments: vec![GenericArgument::Type(item)].into(),
     };
-    let option = f.checked.types.push(cursor_ty);
+    let option = session().intern(cursor_ty);
     nominal(&mut f, cursor_name, 1, None);
     let option_shape = f.type_(TypeKind::Variant(
         vec![
@@ -173,7 +172,7 @@ fn fixture() -> (Fixture, ExprId) {
     ));
     nominal(&mut f, "Option", 1, Some(option_shape));
     let option = normalize_type_properties(
-        &mut f.checked.types,
+        session(),
         option,
         &GenericDeclarations::default(),
         &mut |path| {
@@ -229,7 +228,7 @@ fn fixture() -> (Fixture, ExprId) {
     });
     let result = f.read(binding, f.scalar, UseKind::Copy);
     let root = f.block(vec![count, statement], result);
-    f.plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, root).unwrap();
+    f.plans = Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, root).unwrap();
     let open = core("$intrinsic.UnicodeScalars_open");
     let next = core("$intrinsic.UnicodeScalars_next");
     operation(

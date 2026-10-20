@@ -161,11 +161,10 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
     value_type.modes.relation =
         hirsel_types::Relation::environment().union(&hirsel_types::Relation::place(origin.clone()));
     value_type.brand.alternatives.push(origin);
-    let value_type = f.checked.types.push(value_type);
+    let value_type = session().intern(value_type);
     let parameter = f.parameter(0, value_type, U::Borrow);
     let read = f.read(parameter, value_type, U::Copy);
-    let mut declaration_types = hirsel_types::TypeStore::default();
-    let scalar = declaration_types.push(ty(TypeKind::Primitive(P::U8)));
+    let scalar = session().intern(ty(TypeKind::Primitive(P::U8)));
     let mut declared_box = ty(TypeKind::Box(scalar));
     let declared_origin = hirsel_types::Origin {
         root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
@@ -176,11 +175,10 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
     declared_box.modes.relation = hirsel_types::Relation::environment()
         .union(&hirsel_types::Relation::place(declared_origin.clone()));
     declared_box.brand.alternatives.push(declared_origin);
-    let declared_box = declaration_types.push(declared_box);
+    let declared_box = session().intern(declared_box);
     f.register(hirsel_types::Signature {
         metadata: hirsel_types::SignatureMetadata::default(),
-        definition: path("main"),
-        types: declaration_types,
+        definition: hirsel_syntax::DefId::intern(&path("main")),
         kind: hirsel_types::SignatureKind::Function(hirsel_types::FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
@@ -203,7 +201,7 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
         fingerprint: ContentHash::default(),
     });
     let mut producer = hirsel_check_protocol::body::Plans::default();
-    let mut h_result = f.checked.types.get(value_type).unwrap().clone();
+    let mut h_result = session().get(value_type).unwrap().clone();
     for origin in &mut h_result.brand.alternatives {
         origin.root = hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
             hirsel_types::ParamId(0),
@@ -220,16 +218,16 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
         }
         r => vec![r.clone()],
     });
-    let h_result = f.checked.types.push(h_result);
+    let h_result = session().intern(h_result);
     producer
         .functions
         .push(hirsel_check_protocol::body::FunctionPlan {
             owner: f.owner.clone(),
             result: h_result,
         });
-    f.plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, read).unwrap();
+    f.plans = Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, read).unwrap();
     let definition = f.lower(read, "main", value_type).unwrap();
-    assert_eq!(definition.types, f.checked.types);
+    assert_no_new_rows(&f, &definition);
     // A different declaring site with the same declaration ordinal cannot
     // silently resolve to this function's Parameter(0): neither another site
     // of this item nor the same site of another item.
@@ -245,7 +243,7 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
     ] {
         let checked = f.checked.clone();
         let wrong =
-            hirsel_types::map_parameter_references(&mut f.checked.types, value_type, |p, _| {
+            hirsel_types::map_parameter_references(session(), value_type, |p, _| {
                 Ok(match p {
                     hirsel_types::ParameterRef::Body { parameter, .. } => {
                         hirsel_types::ParameterRef::body(other, parameter)
@@ -275,7 +273,7 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
     let mut f = Fixture::new(P::U8);
     let source_error = f.type_(TypeKind::Primitive(P::U16));
     let source_result = f.type_(TypeKind::Named {
-        definition: path("SourceResult"),
+        definition: hirsel_syntax::DefId::intern(&path("SourceResult")),
         arguments: vec![
             hirsel_types::GenericArgument::Type(f.scalar),
             hirsel_types::GenericArgument::Type(source_error),
@@ -283,7 +281,7 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
         .into(),
     });
     let target_result = f.type_(TypeKind::Named {
-        definition: path("TargetResult"),
+        definition: hirsel_syntax::DefId::intern(&path("TargetResult")),
         arguments: vec![
             hirsel_types::GenericArgument::Type(f.scalar),
             hirsel_types::GenericArgument::Type(f.scalar),
@@ -312,7 +310,7 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
         error_type: f.scalar,
         propagated_result: target_result,
     });
-    let plans = Plans::from_body(&f.syntax.tree, &f.checked, &producer, expression).unwrap();
+    let plans = Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, expression).unwrap();
     let propagation = &plans.propagation[0].1;
     assert_eq!(propagation.success_type, f.scalar);
     assert_eq!(propagation.error_type, source_error);
@@ -337,7 +335,6 @@ fn materialization_cannot_change_the_checked_root_type() {
     f.plans.materialized.push((
         expression,
         Materialized {
-            types: f.checked.types.clone(),
             root: ValueNode {
                 ty: f.boolean,
                 kind: ValueKind::Constant(Constant::Bool(true)),
@@ -415,9 +412,7 @@ fn formal_results_have_no_empty_table_or_invalid_type_fallback() {
         lower(f.input(root, "main", &[])).unwrap_err().message,
         "missing J formal frame result"
     );
-    let mut extended = f.checked.types.clone();
-    let invalid = extended.push(ty(TypeKind::Primitive(P::U8)));
-    let rows = [(f.owner, invalid)];
+    let rows = [(f.owner, hirsel_types::TypeId::DANGLING)];
     assert!(lower(f.input(root, "main", &rows)).is_err());
 }
 
@@ -503,9 +498,9 @@ fn captures_require_one_scoped_owner_row() {
 #[test]
 fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
     let mut f = Fixture::new(P::String);
-    let mut part = f.checked.types.get(f.scalar).unwrap().clone();
+    let mut part = session().get(f.scalar).unwrap().clone();
     part.modes.relation = Relation::environment();
-    let refined = f.checked.types.push(part);
+    let refined = session().intern(part);
     let sequence = f.type_(TypeKind::Builtin {
         kind: hirsel_types::BuiltinType::Array,
         arguments: vec![hirsel_types::GenericArgument::Type(f.scalar)].into(),
@@ -544,7 +539,7 @@ fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
         }],
         ..Default::default()
     };
-    let output = Plans::from_body(&f.syntax.tree, &f.checked, &producer, root).unwrap();
+    let output = Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, root).unwrap();
     let hirsel_check_protocol::body::ForExecution::Indexed {
         read: hirsel_check_protocol::body::LoopRead::Index { result },
         ..
@@ -555,7 +550,7 @@ fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
     assert_eq!(*result, refined);
     f.checked.patterns.clear();
     assert!(
-        Plans::from_body(&f.syntax.tree, &f.checked, &producer, root)
+        Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, root)
             .unwrap_err()
             .message
             .contains("pattern")
@@ -596,16 +591,37 @@ fn closure_bodies_copy_at_most_linear_type_rows() {
         let root = f.block(statements, tail);
         let mut frames = vec![(f.owner, f.scalar)];
         frames.extend(f.frames.iter().copied());
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
+        let input_rows = checked_rows(&f).len() as u64;
+        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
         let definition = lower(f.input(root, "main", &frames)).unwrap();
-        let copied =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - before;
+        let interned =
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before;
         assert_eq!(definition.bodies.len(), count + 1);
         assert!(
-            copied <= f.checked.types.len() as u64,
-            "{count} closures copied {copied} rows from {} input rows",
-            f.checked.types.len()
+            interned <= input_rows,
+            "{count} closures interned {interned} rows from {input_rows} input rows"
         );
-        assert_eq!(definition.types, f.checked.types);
+        assert_no_new_rows(&f, &definition);
+    }
+}
+
+/// Every row the fixture's checked tables and frames reach.
+fn checked_rows(f: &Fixture) -> std::collections::HashSet<hirsel_types::TypeId> {
+    let roots = f
+        .checked
+        .expressions
+        .iter()
+        .map(|e| e.ty)
+        .chain(f.checked.bindings.iter().map(|b| b.ty))
+        .chain(f.checked.patterns.iter().map(|p| p.ty))
+        .chain(f.frames.iter().map(|(_, t)| *t))
+        .chain([f.unit, f.boolean, f.scalar]);
+    hirsel_types::closure(session(), roots).iter().copied().collect()
+}
+/// Lowering transports checked rows: its type table adds none of its own.
+fn assert_no_new_rows(f: &Fixture, definition: &Definition) {
+    let known = checked_rows(f);
+    for t in definition.types.iter() {
+        assert!(known.contains(t), "lowering introduced {t:?}");
     }
 }

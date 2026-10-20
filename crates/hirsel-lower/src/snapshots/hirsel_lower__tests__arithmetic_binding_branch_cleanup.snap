@@ -3,37 +3,37 @@ source: crates/hirsel-lower/src/tests.rs
 expression: printed
 ---
 definition main entry b0
-body 0 result t2 parameters []
-  slot 0: t2 Temporary scope 1
-  slot 1: t2 Temporary scope 1
-  slot 2: t2 Temporary scope 1
-  slot 3: t2 Temporary scope 1
-  slot 4: t2 Temporary scope 1
-  slot 5: t2 Temporary scope 1
-  slot 6: t2 Local scope 1
+body 0 result t0 parameters []
+  slot 0: t0 Temporary scope 1
+  slot 1: t0 Temporary scope 1
+  slot 2: t0 Temporary scope 1
+  slot 3: t0 Temporary scope 1
+  slot 4: t0 Temporary scope 1
+  slot 5: t0 Temporary scope 1
+  slot 6: t0 Local scope 1
   slot 7: t1 Temporary scope 1
-  slot 8: t2 Temporary scope 1
-  slot 9: t2 Temporary scope 1
-  slot 10: t2 Temporary scope 0
-  place 0: slot 0 [] t2
-  place 1: slot 0 [] t2
-  place 2: slot 1 [] t2
-  place 3: slot 2 [] t2
-  place 4: slot 2 [] t2
-  place 5: slot 3 [] t2
-  place 6: slot 4 [] t2
-  place 7: slot 4 [] t2
-  place 8: slot 5 [] t2
-  place 9: slot 6 [] t2
-  place 10: slot 6 [] t2
+  slot 8: t0 Temporary scope 1
+  slot 9: t0 Temporary scope 1
+  slot 10: t0 Temporary scope 0
+  place 0: slot 0 [] t0
+  place 1: slot 0 [] t0
+  place 2: slot 1 [] t0
+  place 3: slot 2 [] t0
+  place 4: slot 2 [] t0
+  place 5: slot 3 [] t0
+  place 6: slot 4 [] t0
+  place 7: slot 4 [] t0
+  place 8: slot 5 [] t0
+  place 9: slot 6 [] t0
+  place 10: slot 6 [] t0
   place 11: slot 7 [] t1
   place 12: slot 7 [] t1
-  place 13: slot 8 [] t2
-  place 14: slot 9 [] t2
-  place 15: slot 9 [] t2
-  place 16: slot 8 [] t2
-  place 17: slot 10 [] t2
-  place 18: slot 10 [] t2
+  place 13: slot 8 [] t0
+  place 14: slot 9 [] t0
+  place 15: slot 9 [] t0
+  place 16: slot 8 [] t0
+  place 17: slot 10 [] t0
+  place 18: slot 10 [] t0
   rvalue 0: Constant(Integer(3))
   rvalue 1: Use(Operand { place: PlaceId(1), usage: Take })
   rvalue 2: Constant(Integer(1))
