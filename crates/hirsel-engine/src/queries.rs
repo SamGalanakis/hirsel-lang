@@ -1430,7 +1430,7 @@ impl QueryEngine {
             forget: Some(hirsel_syntax::DefPath::core(
                 hirsel_interp::library::FORGET_OPERATION,
             )),
-            ..Default::default()
+            ..hirsel_interp::aggregate::RuntimeTypes::new(self.types().clone())
         };
         let mut signatures: Vec<_> = self.registry.signatures().cloned().collect();
         for path in self.items.keys().cloned().collect::<Vec<_>>() {
@@ -1439,7 +1439,7 @@ impl QueryEngine {
         }
         runtime.serialization = signatures
             .iter()
-            .map(|s| (s.definition.clone(), s.clone()))
+            .map(|s| (s.definition.path().clone(), s.clone()))
             .collect();
         for signature in signatures {
             let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
@@ -1447,7 +1447,7 @@ impl QueryEngine {
             };
             let fields = t
                 .representation
-                .and_then(|id| signature.types.get(id))
+                .and_then(|id| self.types().get(id))
                 .map(|r| match &r.kind {
                     hirsel_types::TypeKind::Record(fs) => fs.len(),
                     hirsel_types::TypeKind::Variant(vs) => {
@@ -1480,14 +1480,12 @@ impl QueryEngine {
                 None => None,
             };
             runtime.nominals.push(hirsel_interp::aggregate::Nominal {
-                definition: signature.definition.clone(),
+                definition: signature.definition.path().clone(),
                 resource: t.resource,
                 distinct: t.distinct,
                 finalizer,
                 fields,
-                representation: t
-                    .representation
-                    .map(|shape| (signature.types.clone(), shape)),
+                representation: t.representation,
             });
         }
         Ok(runtime)

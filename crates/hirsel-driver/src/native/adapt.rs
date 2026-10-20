@@ -93,7 +93,6 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
                     definition: path.clone(),
                     representation_revision: signature.fingerprint,
                     generics: t.generics.clone(),
-                    types: signature.types.clone(),
                     private_shape: shape,
                     layout_promises: t.layout.clone(),
                     resource: t.resource,
@@ -105,10 +104,12 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
                 None => continue,
             },
         };
-        owners.nominals.insert(path.clone(), owner);
+        owners.nominals.insert(hirsel_syntax::DefId::intern(path), owner);
     }
     Program {
         input: input_identity(input),
+        types: input.types.clone(),
+        memo: std::sync::Arc::new(hirsel_types::TypeMemo::new()),
         definitions: input.definitions.clone(),
         signatures: input.signatures.clone(),
         revisions: input
@@ -145,7 +146,6 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
                 kind: kind(e.kind),
                 callee: e.callee.clone(),
                 binder: e.binder,
-                types: e.types.clone(),
                 arguments: e.arguments.clone(),
             })
             .collect(),

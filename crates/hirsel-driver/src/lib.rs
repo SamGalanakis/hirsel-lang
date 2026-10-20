@@ -641,7 +641,7 @@ fn run_path_on_host_observed(
         }
         _ => operations
             .library
-            .entry_arguments(&signature)
+            .entry_arguments(&runtime.types, &signature)
             .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?,
     };
     let sources = program.engine.sources.clone();
@@ -747,17 +747,17 @@ fn call_schemas(
     };
     let schema = |ty| {
         hirsel_types::serialization::serializable_schema(
-            &signature.types,
+            &runtime.types,
             ty,
             &hirsel_types::GenericDeclarations::default(),
-            &mut |path| Ok(runtime.serialization.get(path).cloned()),
+            &mut |d: hirsel_syntax::DefId| Ok(runtime.serialization.get(d.path()).cloned()),
         )
         .ok()
         .flatten()
         .ok_or_else(invalid)
     };
     let Some(hirsel_types::TypeKind::Named { arguments, .. }) =
-        signature.types.get(function.result).map(|t| &t.kind)
+        runtime.types.get(function.result).map(|t| &t.kind)
     else {
         return Err(invalid());
     };

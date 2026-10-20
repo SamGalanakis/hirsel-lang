@@ -152,6 +152,7 @@ impl InterpreterPhase for InterpreterAdapter {
         } else {
             hirsel_interp::run(
                 definitions,
+                &self.runtime.types,
                 sources,
                 config,
                 self.arguments.clone(),
