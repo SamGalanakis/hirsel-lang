@@ -133,7 +133,6 @@ pub const BODIES: &[&LibraryBody] = &[
     &sorted::I64,
     &sorted::I128,
     &iter::FROM_STEP,
-    &iter::MAP_STEP,
     // net (net-t2): net.read_into and read_half.read_into over their fixed runtime entry.
     &net::READ_INTO,
     &net::HALF_READ_INTO,
@@ -190,7 +189,6 @@ pub const INLINE: &[&InlineLowering] = &[
     &sorted::LEN,
     &sorted::PUBLIC_LEN,
     &iter::FROM,
-    &iter::MAP,
     &iter::NEXT,
     &views::AS_BYTES,
     &views::SCALARS,

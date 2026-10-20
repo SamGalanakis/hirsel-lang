@@ -650,7 +650,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 .trim(),
             noalloc,
         );
-        if matches!(name, "iter.from" | "iter.map") {
+        if name == "iter.from" {
             let mut result = b.types.get(f.result).unwrap().clone();
             result.erased_captures = Some(ErasedCaptures::FromArguments(
                 vec![

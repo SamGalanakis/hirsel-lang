@@ -471,9 +471,9 @@ fn a_library_local_result_keeps_the_borrowed_binding_scope() {
 }
 
 #[test]
-fn native_callbacks_cannot_return_their_ended_parameter_storage() {
+fn callbacks_cannot_return_their_ended_parameter_storage() {
     with_compiler_stack(|| {
-        let mut engine = accepted(
+        let mut engine = accepted_with_std(
             "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let grant_stdout = io.stdout(rt)?\n\n  let it = iter.from(0u64, fn(mut n: u64) -> Option[String] {\n    if n == 0u64 { n = 1u64; Some(\"item\") } else { None }\n  })\n  let mut mapped = iter.map(take it, fn(x: String) -> List[String] { [\"fresh\"] })\n  let item = iter.next(mut mapped)\n  match item { Some(xs) => { let _ = out.print(grant_stdout, \"one\\n\") }, None => {} }\n  Ok(())\n}",
         );
         assert_eq!(printed(run(&mut engine, &[], true)), "one\n");

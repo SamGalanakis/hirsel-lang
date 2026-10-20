@@ -320,7 +320,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             .metadata
             .visibility = ast::Visibility::Public;
         // SEM-4 constructor semantics, supplied by the real core registry too.
-        if matches!(name, "iter.from" | "iter.map") {
+        if name == "iter.from" {
             let signature = Arc::make_mut(registry.signatures.get_mut(&p).unwrap());
             if let SignatureKind::Function(f) = &mut signature.kind {
                 let mut result = signature.types.get(f.result).unwrap().clone();

@@ -199,7 +199,6 @@ N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
 N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()
 @preserves_unique(xs) fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()
 fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
-fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
 fn iter.next[T](mut it: Iter[T]) -> Option[T]
 
 // SEM-1/2/3/5, GEN-2, MEM-8/9

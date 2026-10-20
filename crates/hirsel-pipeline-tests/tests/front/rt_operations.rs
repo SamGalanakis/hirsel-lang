@@ -181,7 +181,6 @@ fn inventory_set_equality_and_digest_control() {
         "slots.get",
         "slots.remove",
         "iter.from",
-        "iter.map",
         "$intrinsic.ArrayConsume_open",
         "$intrinsic.ArrayConsume_next",
         "$intrinsic.ListConsume_open",

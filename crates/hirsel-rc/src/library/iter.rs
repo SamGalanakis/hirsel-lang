@@ -14,10 +14,6 @@ pub static FROM: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("iter.from"),
     lower: from,
 };
-pub static MAP: InlineLowering = InlineLowering {
-    path: || hirsel_syntax::DefPath::core("iter.map"),
-    lower: map,
-};
 pub static NEXT: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("iter.next"),
     lower: next,
@@ -25,10 +21,6 @@ pub static NEXT: InlineLowering = InlineLowering {
 pub static FROM_STEP: LibraryBody = LibraryBody {
     path: || native_path("iter_from_step"),
     build: from_step,
-};
-pub static MAP_STEP: LibraryBody = LibraryBody {
-    path: || native_path("iter_map_step"),
-    build: map_step,
 };
 
 fn construct(cx: &mut ImportCx<'_>, call: &CallShape<'_>, name: &str) -> R<bool> {
@@ -47,9 +39,6 @@ fn construct(cx: &mut ImportCx<'_>, call: &CallShape<'_>, name: &str) -> R<bool>
 }
 fn from(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     construct(cx, call, "iter_from_step")
-}
-fn map(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
-    construct(cx, call, "iter_map_step")
 }
 fn next(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     if call.arguments.len() != 1 || call.arguments[0].value.usage != UseKind::Mut {
@@ -198,117 +187,4 @@ pub(crate) fn drop_local(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId)
         slot,
         if_live: false,
     });
-}
-fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
-    let mut b = Body::new(cx)?;
-    let [it, mapper] = captures(&mut b)?;
-    let it_type = b.cx.type_actual(0)?;
-    let TypeKind::Builtin { arguments, .. } = &b.cx.store.get(it_type).unwrap().kind else {
-        return Err(PassError::Malformed(
-            "map capture is not an iterator".into(),
-        ));
-    };
-    let generics = arguments.to_vec();
-    let body = super::body_index(&native_path("iter_from_step")).unwrap();
-    let mut request = super::Request::operation(
-        b.cx.program,
-        body,
-        &hirsel_syntax::DefPath::core("iter.next"),
-        b.cx.store.clone(),
-        generics,
-    )?;
-    let mut callable = request.actuals.store.get(request.callable).unwrap().clone();
-    let TypeKind::Function(ref mut function) = callable.kind else {
-        unreachable!()
-    };
-    function.parameters = Vec::new().into();
-    let callable = request.actuals.store.push(callable);
-    let abi =
-        b.cx.layouts
-            .fn_abi(&request.actuals.store, callable, CallableShape::IterNext)
-            .map_err(|e| PassError::Layout(b.cx.path.clone(), e))?;
-    let (callee, loan) = b.borrow(it.address, true)?;
-    let pulled = call(&mut b, callee, abi, vec![], &[loan])?.unwrap();
-    let (pulled_slot, pulled_address) = local(&mut b, pulled)?;
-    let (tag, tag_loan) = b.borrow(pulled_address, false)?;
-    let none = b.block(BlockKind::Body, &[]);
-    let some = b.block(BlockKind::Body, &[]);
-    let none_edge = b.edge(none, &[]);
-    let some_edge = b.edge(some, &[]);
-    let arms = PoolRange::push(
-        &mut b.ed.unit.pools.switch_arms,
-        [SwitchArm {
-            value: 1,
-            edge: some_edge,
-        }],
-    );
-    b.terminate(Terminator::Switch {
-        value: tag,
-        arms,
-        otherwise: none_edge,
-    });
-    let result_layout = b.cx.fn_abi().result.unwrap().layout;
-    b.at(none);
-    b.end_loan(tag_loan);
-    drop_local(&mut b, pulled_slot, pulled_address);
-    let result = option(&mut b, result_layout, 0, &[]);
-    b.ret(Some(result));
-    b.at(some);
-    b.end_loan(tag_loan);
-    // Restore the compile-time held list for the alternate path.
-    b.hold(pulled_slot, pulled_address);
-    let layout = b.layout_of(pulled);
-    let item_layout = b
-        .record(layout)
-        .tag
-        .as_ref()
-        .unwrap()
-        .variants
-        .iter()
-        .find(|v| v.ordinal == 1)
-        .unwrap()
-        .fields[0]
-        .layout;
-    let item = b.place(
-        AddressBase::Address(pulled_address),
-        &[ProjectionStep::VariantField {
-            variant: 1,
-            field: 0,
-        }],
-        item_layout,
-        None,
-    )?;
-    let (item, item_loan) = b.borrow(item, false)?;
-    let (callee, mapper_loan) = b.borrow(mapper.address, false)?;
-    let abi = callback_abi(&mut b, 1)?;
-    let mapped = call(
-        &mut b,
-        callee,
-        abi,
-        vec![CallArgument {
-            parameter: 0,
-            passing: Passing::Borrow,
-            value: ArgumentValue::Value(item),
-        }],
-        &[item_loan, mapper_loan],
-    )?;
-    // Keep the prepared mapped result across destruction of the pulled item.
-    let value = match mapped {
-        Some(value) => value,
-        None => {
-            let ty = b.cx.store.push(hirsel_types::Type::unit());
-            let unit = b.cx.layout(ty)?;
-            b.constant(unit, ConstantValue::Unit)
-        }
-    };
-    let (mapped_slot, mapped_address) = local(&mut b, value)?;
-    drop_local(&mut b, pulled_slot, pulled_address);
-    let value = b.take(mapped_address)?;
-    b.push(Inst::StorageDead {
-        slot: mapped_slot,
-        if_live: false,
-    });
-    let result = option(&mut b, result_layout, 1, &[value]);
-    b.ret(Some(result));
-    Ok(b.finish())
 }

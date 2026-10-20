@@ -2190,15 +2190,6 @@ primary_operations! { self, call, context, name, a, value;
                     .transferring([0, 1]),
                 ));
             },
-    Primitive: "iter.map" => {
-                return Ok(Some(
-                    OperationResult::returned(super::callbacks::mapped(
-                        arg(a, 0)?.clone(),
-                        arg(a, 1)?.clone(),
-                    ))
-                    .transferring([0, 1]),
-                ));
-            },
     Primitive: "iter.next" => return self.next_iterator(arg(a, 0)?.clone()).map(Some),
     Primitive: "simd.splat" => {
                 let n = call

@@ -4,25 +4,25 @@ pub opaque type Pipe[T]: () uses {} {
   inner: Iter[T],
 }
 
-@captures(input)
-pub fn wrap[T](take input: Iter[T]) -> Pipe[T] uses {input} {
-  Pipe(inner: take input)
+@captures(carrier)
+pub fn wrap[T](take carrier: Iter[T]) -> Pipe[T] uses {carrier} {
+  Pipe(inner: take carrier)
 }
 
-@captures(input, f)
-pub fn map[T, U](take input: Pipe[T], take f: fn(T) -> U) -> Pipe[U] uses {input, f} {
-  let Pipe(inner: inner) = take input
+@captures(carrier, f)
+pub fn map[T, U](take carrier: Pipe[T], take f: fn(T) -> U) -> Pipe[U] uses {carrier, f} {
+  let Pipe(inner: inner) = take carrier
   Pipe(inner: iter.map(take inner, take f))
 }
 
-@advance_only(input)
-pub fn next[T](mut input: Pipe[T]) -> Option[T] uses {input} {
-  iter.next(mut input.inner)
+@advance_only(carrier)
+pub fn next[T](mut carrier: Pipe[T]) -> Option[T] uses {carrier} {
+  iter.next(mut carrier.inner)
 }
 
-@captures(input)
-pub fn unwrap[T](take input: Pipe[T]) -> Iter[T] uses {input} {
-  let Pipe(inner: inner) = take input
+@captures(carrier)
+pub fn unwrap[T](take carrier: Pipe[T]) -> Iter[T] uses {carrier} {
+  let Pipe(inner: inner) = take carrier
   inner
 }
 

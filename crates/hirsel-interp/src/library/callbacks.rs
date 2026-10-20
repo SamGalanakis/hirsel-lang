@@ -12,11 +12,6 @@ pub(super) enum Comparison {
 pub(super) enum Pending {
     Pull {
         next: Value,
-        maps: Vec<Value>,
-    },
-    Map {
-        iterator: Value,
-        maps: Vec<Value>,
     },
     Compare {
         by: Value,
@@ -60,8 +55,14 @@ fn record(name: &str, fields: Vec<Value>) -> Value {
 pub(super) fn iterator(state: Value, next: Value) -> Value {
     record("IterState", vec![state, next])
 }
-pub(super) fn mapped(it: Value, f: Value) -> Value {
-    record("IterMap", vec![it, f])
+/// `iter.next`'s result: the advanced iterator written back and the pulled item.
+fn pulled(it: Value, item: Option<Value>) -> OperationResult {
+    OperationResult::Complete {
+        consumed: vec![],
+        released: vec![],
+        value: item.map_or_else(none, some),
+        arguments: vec![(0, it)],
+    }
 }
 pub(super) fn sorted(by: Value, entries: Vec<Value>) -> Value {
     record(
@@ -205,27 +206,14 @@ impl Library {
             vec![],
         ))
     }
-    pub(super) fn next_iterator(&mut self, mut it: Value) -> Result<OperationResult, Error> {
-        let mut maps = vec![];
-        loop {
-            if matches!(&it, Value::Record { definition, .. } if definition.is_core("IterMap")) {
-                let mut fields = unpack(it, "IterMap")?;
-                maps.push(fields.pop().unwrap());
-                it = fields.pop().unwrap();
-            } else {
-                break;
-            }
-        }
+    pub(super) fn next_iterator(&mut self, it: Value) -> Result<OperationResult, Error> {
         if matches!(&it, Value::Record { definition, .. } if definition.is_core("IterState")) {
             let mut fields = unpack(it, "IterState")?;
             let next = fields.pop().unwrap();
             let state = fields.pop().unwrap();
-            let fields = vec![0; maps.len() + 1];
+            let fields = vec![0];
             let mut result = self.schedule(
-                Pending::Pull {
-                    next: next.clone(),
-                    maps,
-                },
+                Pending::Pull { next: next.clone() },
                 next,
                 vec![state],
                 vec![0],
@@ -247,58 +235,7 @@ impl Library {
         } else {
             Some(items.remove(0))
         };
-        self.map_item(collection::sequence(BuiltinType::Iter, items), maps, item)
-    }
-    fn map_item(
-        &mut self,
-        mut it: Value,
-        mut maps: Vec<Value>,
-        item: Option<Value>,
-    ) -> Result<OperationResult, Error> {
-        for f in maps.iter().rev() {
-            it = mapped(it, f.clone());
-        }
-        let Some(item) = item else {
-            return Ok(OperationResult::Complete {
-                consumed: vec![],
-                released: vec![],
-                value: none(),
-                arguments: vec![(0, it)],
-            });
-        };
-        if let Some(f) = maps.pop() {
-            Ok(self.schedule_mapper(it, maps, f, item))
-        } else {
-            Ok(OperationResult::Complete {
-                consumed: vec![],
-                released: vec![],
-                value: some(item),
-                arguments: vec![(0, it)],
-            })
-        }
-    }
-    fn schedule_mapper(
-        &mut self,
-        iterator: Value,
-        maps: Vec<Value>,
-        callee: Value,
-        item: Value,
-    ) -> OperationResult {
-        let saved = iterator.clone();
-        let mut result = self.schedule(
-            Pending::Map { iterator, maps },
-            callee,
-            vec![item.clone()],
-            vec![],
-            vec![item],
-        );
-        let OperationResult::Call { updates, .. } = &mut result else {
-            unreachable!()
-        };
-        // The moved item belongs only to scheduler-owned cleanup, including on
-        // callback failure/abandonment; restoration keeps the advanced iterator.
-        updates.push((0, saved));
-        result
+        Ok(pulled(collection::sequence(BuiltinType::Iter, items), item))
     }
     /// One lookup; hit callbacks borrow the existing value, including on failure.
     pub(super) fn map_edit(
@@ -525,7 +462,7 @@ impl Library {
                 ))),
                 _ => Err(invalid("a codec check must return bool")),
             },
-            Pending::Pull { next, maps } => {
+            Pending::Pull { next } => {
                 let OperationResult::Complete {
                     value, arguments, ..
                 } = result
@@ -539,22 +476,7 @@ impl Library {
                 if arguments.next().is_some() {
                     return Err(invalid("iterator mut parameter ordinal"));
                 }
-                self.map_item(iterator(state, next), maps, option(value)?)
-            }
-            Pending::Map { iterator, mut maps } => {
-                let OperationResult::Complete { value: item, .. } = result else {
-                    return Err(invalid("mapper result"));
-                };
-                if let Some(f) = maps.pop() {
-                    Ok(self.schedule_mapper(iterator, maps, f, item))
-                } else {
-                    Ok(OperationResult::Complete {
-                        consumed: vec![],
-                        released: vec![],
-                        value: some(item),
-                        arguments: vec![(0, iterator)],
-                    })
-                }
+                Ok(pulled(iterator(state, next), option(value)?))
             }
             Pending::MapUpdated { inserted } => Ok(OperationResult::returned(if inserted {
                 Value::Unit

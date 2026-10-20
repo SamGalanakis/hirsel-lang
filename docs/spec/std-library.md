@@ -2679,6 +2679,8 @@ has no upper bound (FoundationDB's `strinc`).
 ## Lazy iteration
 
 ```text
+@captures(it, f)
+fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
 @captures(it, predicate)
 fn iter.filter[T](take it: Iter[T], take predicate: fn(T) -> bool) -> Iter[T] uses {it, predicate}
 @captures(it)
@@ -2692,8 +2694,11 @@ fn iter.fold[T, A](take it: Iter[T], take initial: A, take f: fn(take A, take T)
 ```
 
 These source helpers own their inputs and callbacks through core `iter.from`.
-Adapters are lazy and fused: after their first `None`, later polls return `None`
-without advancing either source. `take_n` (the word `take` is reserved) advances
+`map` is Rust's `Iterator::map` (core/src/iter/adapters/map.rs): each poll pulls
+its source once and lends a `Some` item to `f`, then releases the item and yields
+`f`'s result; it is not fused, as Rust's is not. The other adapters are lazy and
+fused: after their first `None`, later polls return `None` without advancing
+either source. `take_n` (the word `take` is reserved) advances
 at most `count` times, and zero never polls its input. Filter drops each rejected
 item. Zip polls left before right; if right ends, the unmatched left item is
 dropped. Enumerate starts at zero and checks its increment with SEM-1 arithmetic

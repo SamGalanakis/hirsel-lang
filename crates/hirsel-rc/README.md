@@ -507,10 +507,10 @@ rows transferred by cleanup's version-state solves and replays; the driver's
 `it-scaling` regression bounds independent joins without using elapsed time.
 
 `library::iter` constructs `Iter` values as closures owning state and callback,
-with compiled `iter_from_step` and `iter_map_step` bodies. `iter.next` and
-iterator loops call the step indirectly through the exclusive iterator place.
-Captured state writes survive callback failure; mapped items belong to the
-adapter before its mapper runs and finalize before the remaining iterator state.
+with a compiled `iter_from_step` body; std's adapters (`map` among them) are source
+over `iter.from`. `iter.next` and iterator loops call the step indirectly through
+the exclusive iterator place. Captured state writes survive callback failure; a
+mapped item finalizes before the remaining iterator state.
 `hirsel-pipeline-tests/tests/rc/rc_library_iter.rs` checks all fourteen iterator conformance programs,
 injected failure cleanup, finalizer order and both native targets.
 

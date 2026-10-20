@@ -249,8 +249,8 @@ continuation }`. Callee is a Value::Closure; arguments enter its parameter slots
 mutable operation arguments. The scheduler publishes them after callback cleanup
 on return, failure and tooling abandonment, before restoring caller storage; nested
 native callbacks forward them through each suspended operation. Targets must name
-mutable arguments and live fields. `iter.next` uses this for its state beneath any
-`iter.map` wrappers, so cleanup releases the current state without rollback.
+mutable arguments and live fields. `iter.next` uses this for its `iter.from` state,
+so cleanup releases the current state without rollback.
 Mut argument ordinals are also collected from the finished callback and delivered as
 `OperationResult::Complete { value, arguments, consumed, released }` to
 `Operations::resume(token, result, context)`. Callback completion carries empty

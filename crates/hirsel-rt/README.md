@@ -880,8 +880,8 @@ Body entries in `hirsel-rc`, with callable FunctionRef symbols and no raw C orde
 exports. SortedMap empty/len are Instruction rows, insertion/get/remove/open/next are Body
 rows; its owned cursor finalizer is a private library body.
 
-`iter.from` and `iter.map` are Body rows whose inline constructions own compiled
-step thunks in `hirsel-rc`; `iter.next` is an Instruction row lowering to one
+`iter.from` is a Body row whose inline construction owns a compiled step thunk in
+`hirsel-rc` (std's adapters, `map` among them, are source over it); `iter.next` is an Instruction row lowering to one
 indirect call. No runtime iterator model or operation export implements them.
 
 Unicode views (SEM-3) inline to a Copy of the String slice. `views.rs` exports

@@ -223,11 +223,11 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         .unwrap_or_else(|e| panic!("{name}: {e:?}"))
         .value;
         // The written header oracle remains exact. SEM-4 additionally specifies
-        // the erased environments of these two constructors; source syntax has
+        // the erased environment of this constructor; source syntax has
         // no capture-selection clause. Supply that independent semantic oracle,
         // and compare it along with every previously checked header property.
         let expected_captures = match name {
-            "iter.from" | "iter.map" => Some(ErasedCaptures::FromArguments(
+            "iter.from" => Some(ErasedCaptures::FromArguments(
                 vec![
                     ParameterRef::bound(ParamId(0)).into(),
                     ParameterRef::bound(ParamId(1)).into(),

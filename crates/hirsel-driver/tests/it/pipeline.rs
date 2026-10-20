@@ -520,7 +520,7 @@ fn erased_iterator_state_retains_authority_and_sendability_on_compiler_thread() 
         "fn probe() { let it: Iter[u64] = iter.from(0u64, fn(mut n: u64) -> Option[u64] { None }) }",
         "fn inert[T: inert](take value: T) {}\nfn next(mut n: u32) -> Option[u32] { None }\nfn probe() { let it = iter.from(0u32, next); inert(take it) }",
         "fn send[T: sendable](take value: T) {}\nfn next(mut n: u32) -> Option[u32] { None }\nfn probe() { let it = iter.from(0u32, next); send(take it) }",
-        "fn inert[T: inert](take value: T) {}\nfn probe() { let it = iter.from(0u32, fn(mut n: u32) -> Option[u32] { None }); let mapped = iter.map(take it, fn(n: u32) -> u32 { n }); inert(take mapped) }",
+        "fn inert[T: inert](take value: T) {}\nfn probe() { let it = iter.from(0u32, fn(mut n: u32) -> Option[u32] { None }); let outer = iter.from(take it, fn(mut inner: Iter[u32]) -> Option[u32] { iter.next(mut inner) }); inert(take outer) }",
     ] {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         edit(&mut engine, source);

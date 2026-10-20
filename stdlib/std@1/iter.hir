@@ -1,5 +1,10 @@
-// Rust core/src/iter/adapters/{filter,take,enumerate,zip}.rs, f6c1107f.
+// Rust core/src/iter/adapters/{map,filter,take,enumerate,zip}.rs, f6c1107f.
 // Each adapter fuses at the first None; state and callbacks remain owned.
+type Mapped[T, U] {
+  inner: Iter[T],
+  f: fn(T) -> U,
+}
+
 type Filtered[T] {
   inner: Iter[T],
   predicate: fn(T) -> bool,
@@ -21,6 +26,20 @@ type Zipped[T, U] {
   left: Iter[T],
   right: Iter[U],
   ended: bool,
+}
+
+// Rust core/src/iter/adapters/map.rs: each pull applies `f` to the borrowed item.
+@captures(it, f)
+pub fn map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f} {
+  core@1/iter.from(
+    take Mapped(inner: take it, f: take f),
+    fn(mut s: Mapped[T, U]) -> Option[U] {
+      match core@1/iter.next(mut s.inner) {
+        Some(item) => Some(s.f(item)),
+        None => None,
+      }
+    }
+  )
 }
 
 @captures(it, predicate)

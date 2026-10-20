@@ -237,7 +237,6 @@ N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
 N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()
 @preserves_unique(xs) fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()
 fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
-fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
 fn iter.next[T](mut it: Iter[T]) -> Option[T]
 
 // SEM-1/2/3/5, GEN-2, MEM-8/9
@@ -1446,8 +1445,8 @@ composes the payloads' effects. An erased closure's or iterator's destruction ca
 cleanup summary of its construction site in its type, independently of its call
 allocation effect. `iter.from` accepts a global `next` function or closure, owns it and its
 state, and computes sendability and authority from both; `next` need not be noalloc.
-`iter.map` owns its inputs; advancing it preserves the iterator and moves out each `Some`
-item. The `file.walk` iterator stops on `Error`; user `iter.from` callbacks decide their own
+Adapters such as `map` are std source over `iter.from`
+([lazy iteration](std-library.md#lazy-iteration)). The `file.walk` iterator stops on `Error`; user `iter.from` callbacks decide their own
 termination. For terminal-error composition, use the opaque
 [`std@1/stream` Flow](std-library.md#terminal-streams). Its capture contracts retain
 the inner iterator's complete environment; its mutable `next` operation preserves

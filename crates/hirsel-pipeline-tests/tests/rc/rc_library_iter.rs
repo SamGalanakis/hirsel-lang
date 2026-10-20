@@ -6,8 +6,23 @@ use hirsel_engine::{
     entry_path, run_observed_snapshot, with_compiler_stack,
 };
 use support::*;
+
+/// std@1/iter.map's source: these programs compile without std.
+const MAP: &str = r#"type Mapped[T, U] { inner: Iter[T], f: fn(T) -> U }
+@captures(it, f)
+fn map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f} {
+  iter.from(take Mapped(inner: take it, f: take f), fn(mut s: Mapped[T, U]) -> Option[U] {
+    match iter.next(mut s.inner) { Some(item) => Some(s.f(item)), None => None }
+  })
+}
+"#;
+
+/// A program using `iter.map`, with std's map spelled in its own source.
+fn with_map(source: &str) -> String {
+    format!("{MAP}{}", source.replace("iter.map(", "map("))
+}
 fn observed_heap(source: &str) -> hirsel_driver::native::HeapRun {
-    let source = source.to_owned();
+    let source = with_map(source);
     with_compiler_stack(move || {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let file = engine.sources.add("test.hir", source.clone()).unwrap();
@@ -182,6 +197,7 @@ fn iterator_resource_cleanup_agrees_on_both_targets_and_all_native_configuration
         ("owned-result", mapped_owned_result(false)),
         ("owned-result-drop-failure", mapped_owned_result(true)),
     ] {
+        let source = with_map(&source);
         let directory = dir.join(name);
         std::fs::create_dir_all(&directory).unwrap();
         let toolchain = &toolchain;
@@ -221,8 +237,9 @@ fn iterator_resource_cleanup_agrees_on_both_targets_and_all_native_configuration
 fn iterator_construction_and_steps_keep_their_indirect_lir_shape() {
     use hirsel_lir::ir::{ArgumentValue, Callee, CaptureUse, Inst, Terminator, UnitOrigin};
     let source = include_str!("../../../../conformance/MODE/MODE-4-let-relation-iter-map-run.hir");
-    let lowered = hirsel_rc::import::lower(&compile(source), &target()).unwrap();
-    let mut closures = 0;
+    let lowered = hirsel_rc::import::lower(&compile(&with_map(source)), &target()).unwrap();
+    // The constructing units: main's own `iter.from`, then one per `map` instance.
+    let mut closures = Vec::new();
     for unit in &lowered.units {
         for inst in &unit.instructions {
             if let Inst::Closure {
@@ -240,7 +257,7 @@ fn iterator_construction_and_steps_keep_their_indirect_lir_shape() {
                         .unwrap();
                     assert_eq!(captures.len(), 2);
                     assert!(captures.iter().all(|c| c.usage == CaptureUse::Take));
-                    closures += 1;
+                    closures.push(unit.header.definition.0.name.to_string());
                 }
             }
         }
@@ -259,9 +276,6 @@ fn iterator_construction_and_steps_keep_their_indirect_lir_shape() {
                     .unwrap();
                 assert!(matches!(args[0].value, ArgumentValue::Address { .. }));
             }
-            if unit.header.definition.0.name == "iter_map_step" {
-                assert_eq!(unit.tables.calls.len(), 2);
-            }
         }
         for terminator in &unit.terminators {
             if let Terminator::Call { call, .. } = terminator {
@@ -271,7 +285,12 @@ fn iterator_construction_and_steps_keep_their_indirect_lir_shape() {
             }
         }
     }
-    assert_eq!(closures, 3);
+    closures.sort();
+    assert_eq!(closures[0], "main", "{closures:?}");
+    assert!(
+        closures.len() >= 3 && closures[1..].iter().all(|name| name == "map"),
+        "{closures:?}"
+    );
 }
 
 fn mapped_owned_result(failing_drop: bool) -> String {

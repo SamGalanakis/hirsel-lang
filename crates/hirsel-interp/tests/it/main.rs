@@ -13,7 +13,6 @@ mod library_callbacks;
 mod library_cursors;
 mod library_launch;
 mod library_net;
-mod library_resources;
 mod observation;
 mod operation_mutation;
 mod patterns;

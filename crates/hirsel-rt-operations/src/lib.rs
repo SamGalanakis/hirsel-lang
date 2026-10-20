@@ -105,7 +105,6 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "list.reserve"
             | "list.push"
             | "iter.from"
-            | "iter.map"
             | "$intrinsic.ListConsume_open"
             | "$intrinsic.ListConsume_next"
             | "$intrinsic.ArrayConsume_open"
@@ -2479,7 +2478,6 @@ pub const NATIVE_PATHS: &[&str] = &[
     "proc.wait_group",
     "group.kill",
     "iter.from",
-    "iter.map",
     "iter.next",
     "list.len",
     "list.push",
