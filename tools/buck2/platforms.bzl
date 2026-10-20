@@ -7,9 +7,9 @@ below, plus the pool's own `hirsel.remote_properties`, and reserves the
 requested CPUs and memory for the action.
 
 A budget is (CPU, memory, CPU class). Only the critical-path compiles named in
-CPU_CLASSES (tools/buck2/action_sizes_from_log.py) and the conformance shards
-(TEST_REQUESTS) ask for `cpu_class=fast`; every other compile, test run and gate
-shard runs on any worker.
+CPU_CLASSES (tools/buck2/action_sizes_from_log.py), the std precheck
+(PRECHECK_REQUEST) and the conformance shards (TEST_REQUESTS) ask for
+`cpu_class=fast`; every other compile, test run and gate shard runs on any worker.
 
 Every hirsel remote action, compile or test run, gate, focus or full, queues
 at priority 50 (land's at 75, below): below the pool's lane and CI class (100), so that work
@@ -88,6 +88,14 @@ DEFAULT_REQUEST = [1, 1048576]
 
 # Every Clippy twin's request (defs.bzl): Clippy is a single-threaded front end.
 CLIPPY_REQUEST = [1, 524288, ""]
+
+# The std precheck's request (defs.bzl): every test and tool run that loads std
+# waits on it, so it is the longest step of an edit's serial chain and runs on
+# the fast workers like that chain's compiles. One CPU: the checker is
+# single-threaded. Its memory is the precheck's own bound (PRECHECK_MEMORY_LIMIT),
+# which it measured 1850-1950 MiB of; the default 1 GiB request put the pool's
+# kill at twice that, at the bound itself.
+PRECHECK_REQUEST = [1, 2097152, "fast"]
 
 # `-c hirsel.probe_cpus=N` gives every CPU_CLASSES compile N CPUs (and, in
 # release, N codegen units, defs.bzl) for one invocation: the calibration that a compile
@@ -193,7 +201,7 @@ _platforms_rule = rule(
 def declare_platforms(name, constraints):
     native.constraint_setting(name = "budget")
     budgets = {}
-    requests = [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST)]
+    requests = [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST), tuple(PRECHECK_REQUEST)]
     if PROBE_CPUS:
         requests += [tuple(compile_request(profile, target)) for profile, targets in COMPILE_CLASSES.items() for target in targets]
     # The first platform is what a target without a budget (third-party

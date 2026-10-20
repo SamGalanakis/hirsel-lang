@@ -434,8 +434,9 @@ them into a shared directory.
   CPU class)` budget, with a 1 CPU/1 GiB compile default, 1 CPU/512 MiB Clippy
   twins and measured test requests (below), carrying the pool's platform
   properties. Only the critical-path compiles named in `CPU_CLASSES`
-  (`action_sizes_from_log.py`) and the conformance shards ask for
-  `cpu_class=fast`; other tests and gate shards run on any worker. Every
+  (`action_sizes_from_log.py`), the std precheck (`PRECHECK_REQUEST`, 1 CPU
+  and 2 GiB) and the conformance shards ask for `cpu_class=fast`; other tests
+  and gate shards run on any worker. Every
   remote action, compile or test run, gate, focus or full, queues at priority
   50: below the pool's lane and CI class (100), above its warming class (0),
   which gets no reserved worker. One priority, since the scheduler merges

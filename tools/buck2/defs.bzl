@@ -12,7 +12,7 @@ names the crate from any package directory, locally or on the pool, and so do
 CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
-load(":platforms.bzl", "CLIPPY_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
+load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -608,7 +608,7 @@ def hirsel_precheck(name, hirsel, **kwargs):
     # CARGO_BIN_EXE tools, independent of the precheck action's reservation.
     compiler = name + "-compiler"
     native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
-    _hirsel_precheck(name = name, hirsel = ":" + compiler, **kwargs)
+    _hirsel_precheck(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
 
 def _toolchain_bundle_impl(ctx):
     # Copy the executable: a symlink would make current_exe resolve outside the

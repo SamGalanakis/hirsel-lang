@@ -59,7 +59,9 @@ streaming them through a scratch file, and then releases the source's checked
 bodies, so its peak memory follows the largest definition rather than the size
 of std. `//:hirsel-std-precheck` runs under `HIRSEL_MEMORY_LIMIT=2G`
 (`PRECHECK_MEMORY_LIMIT` in `tools/buck2/defs.bzl`); std needed 1850 to 1950
-MiB of it on 2026-10-20. A precheck that reaches the bound is a memory
+MiB of it on 2026-10-20. Every test run that loads std waits on it, so it
+requests the pool's fast workers and that memory (`PRECHECK_REQUEST` in
+`tools/buck2/platforms.bzl`). A precheck that reaches the bound is a memory
 regression to find, not a bound to raise.
 
 ## Cargo
