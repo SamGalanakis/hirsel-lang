@@ -869,3 +869,9 @@ Repeat-literal counts use the ordinary closed compile-time evaluator as u64.
 Before lowering, O checks Array/Inline target kind and exact Inline length.
 Counts depending on abstract size parameters report CT-2 at the count; this
 form currently requires a definition-time-known size.
+
+`table_keys` propagates STORE-6 obligations backward over the source's checked
+generic instantiations. A wrapper's abstract key parameter defers its schema
+proof to the wrapper's callers, including through another wrapper. The verdict
+shares the existing program-verdict invalidation and adds no signature or TIR
+metadata. Programs without table calls build no schema for this check.

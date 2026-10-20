@@ -150,6 +150,26 @@ pub(super) fn eligible(
     generics: &GenericDeclarations,
     signatures: &dyn SignatureLookup,
 ) -> Result<bool, QueryError> {
+    eligible_with_key_order(source, root, generics, signatures, false)
+}
+
+/// STORE-6 proof over declared representations, independent of H's descriptor.
+pub(super) fn ordered_key(
+    source: &TypeStore,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    signatures: &dyn SignatureLookup,
+) -> Result<bool, QueryError> {
+    eligible_with_key_order(source, root, generics, signatures, true)
+}
+
+fn eligible_with_key_order(
+    source: &TypeStore,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    signatures: &dyn SignatureLookup,
+    ordered: bool,
+) -> Result<bool, QueryError> {
     let mut store = source.clone();
     let mut pending = vec![(root, false)];
     let mut seen = BTreeSet::new();
@@ -251,6 +271,14 @@ pub(super) fn eligible(
                 pending.push((root, false));
             }
             TypeKind::Builtin { kind, arguments } => {
+                if ordered
+                    && matches!(
+                        kind,
+                        BuiltinType::Map | BuiltinType::Set | BuiltinType::Simd
+                    )
+                {
+                    return Ok(false);
+                }
                 let (types, size) = match kind {
                     BuiltinType::Array
                     | BuiltinType::List

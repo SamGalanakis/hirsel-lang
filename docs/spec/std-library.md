@@ -2914,7 +2914,7 @@ entries, and all subsequent lookups retain the existing Dir confinement.
 
 ```text
 StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults, limits: StoreLimits }
-StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64 }
+StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64, range_rows: u64 }
 StoreFaults = NoFaults | StopAfterWrites(u64)
 StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed
 TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StoreError) | Limit(TxLimit) | Unknown(StoreError)
@@ -3936,3 +3936,61 @@ Applications explicitly choose whether to start a new root after extraction
 fails. Context remains usable after its originating span ends and carries no
 output, deadline or task authority. `SpanKind` and `Status` provide inert domain
 vocabulary; live spans and capture are defined separately.
+
+## Typed tables
+
+`Table` stores its bounded UTF-8 name in an inline byte array, so copied names
+retain their sendability without counted storage.
+
+`std@1/table` holds typed table names and performs row operations through a
+`store.Tx`. `Table[K, V]` is opaque inert data holding a name; it grants no
+access by itself. Every key requires `key + serializable`, and every value
+requires `serializable`. A key schema containing `Map`, `Set` or `Simd` is
+refused with STORE-6, including nested and inactive-arm occurrences.
+
+```text
+fn table.named[K: key + serializable, V: serializable](name: String) -> table.Table[K, V]
+fn table.create[K: key + serializable, V: serializable](mut tx: store.Tx, t: table.Table[K, V]) -> Result[(), table.TxError]
+fn table.get[K: key + serializable, V: serializable](tx: store.Tx, t: table.Table[K, V], key: K) -> Result[Option[V], table.TxError]
+fn table.put[K: key + serializable, V: serializable](mut tx: store.Tx, t: table.Table[K, V], key: K, value: V) -> Result[(), table.TxError]
+fn table.delete[K: key + serializable, V: serializable](mut tx: store.Tx, t: table.Table[K, V], key: K) -> Result[bool, table.TxError]
+fn table.range[K: key + serializable, V: serializable](tx: store.Tx, t: table.Table[K, V], from: table.RangeBound[K], to: table.RangeBound[K], limit: u64, order: table.ScanOrder) -> Result[List[(K, V)], table.TxError]
+fn table.history(tx: store.Tx, name: String) -> Result[List[table.SchemaEntry], table.TxError]
+fn table.rename(mut tx: store.Tx, name: String, from: String, to: String) -> Result[(), table.TxError]
+```
+
+Creation is explicit. `get` returns fresh owned data; `delete` reports whether a
+row existed. `RangeBound` is `Unbounded | Included(K) | Excluded(K)` and
+`ScanOrder` is `Ascending | Descending`; scans return at most a positive `limit`
+rows, with `Excluded(last key)` for paging. Names are 1–255 UTF-8 bytes with no
+NUL and no `hirsel.` prefix.
+
+Schemas use names and shape with package versions excluded. Record fields
+match by name, so declaration reordering reads old values correctly. Other
+name differences return `Schema(Renamed(from, to))`. Declare that spelling
+change with `rename`: nominal paths omit versions (`package/module/Type`),
+and field/variant names append `.name`. Renames append history and rewrite no
+row. A changed type requires a migration; it is never coerced on a read.
+`range_rows` defaults to 4096; a larger requested limit is `Limit(RangeRows)`.
+Writes preflight the complete prospective write set against the store limits.
+
+History entries expose the epoch, SHA-256 of both storage descriptors and the
+change. Rows retain their epoch followed by the canonical value payload;
+decoding projects the stored field order into the expected type and applies
+all canonical codec validation.
+
+`TxError` is `InvalidInput | ReadOnly | NoTable | TableExists | Schema(SchemaError)
+| Migrating | Limit(store.TxLimit) | Storage(store.StoreError)`;
+`SchemaError` is `Renamed(String, String) | KeyMismatch | ValueMismatch`.
+These and the history records are serializable. An operation's refusal leaves
+the transaction running with no changes from that operation.
+
+`table.migrate` and the reserved `table.drop` spelling are not implemented yet.
+The former needs pure Entry invocation and code identity support; the latter
+conflicts with the current reserved `drop` keyword.
+
+A table's first key layout remains physical until a key migration. When a
+record-key declaration is reordered, lookups project back to that layout and
+ranges sort the projected keys in the caller's order. That fallback reads the
+table's rows into an ordinary in-memory ordered map; schemas whose key layout
+already agrees use a bounded index scan.

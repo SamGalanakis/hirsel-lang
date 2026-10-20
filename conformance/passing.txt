@@ -6302,3 +6302,15 @@ conformance/STORE/STORE-3-body-capture-bad.hir
 conformance/STORE/STORE-3-body-capture-ok.hir
 conformance/STORE/STORE-3-tx-escape-bad.hir
 conformance/STORE/STORE-3-tx-escape-ok.hir
+conformance/STORE/STORE-6-function-key-bad.hir
+conformance/STORE/STORE-6-function-key-ok.hir
+conformance/STORE/STORE-6-generic-key-bad.hir
+conformance/STORE/STORE-6-generic-key-ok.hir
+conformance/STORE/STORE-6-map-key-bad.hir
+conformance/STORE/STORE-6-map-key-ok.hir
+conformance/STORE/STORE-6-nested-key-bad.hir
+conformance/STORE/STORE-6-nested-key-ok.hir
+conformance/STORE/STORE-6-set-key-bad.hir
+conformance/STORE/STORE-6-set-key-ok.hir
+conformance/STORE/STORE-6-simd-key-bad.hir
+conformance/STORE/STORE-6-simd-key-ok.hir

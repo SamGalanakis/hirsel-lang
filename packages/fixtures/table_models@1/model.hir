@@ -1,0 +1,21 @@
+@serializable
+pub type Row {
+  label: String,
+  count: u64,
+}
+
+@serializable
+pub type A {
+  value: u64,
+}
+
+@serializable
+pub type B {
+  value: u64,
+}
+
+@serializable
+pub type Pair {
+  left: A,
+  right: B,
+}

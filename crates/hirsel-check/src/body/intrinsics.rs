@@ -85,3 +85,44 @@ impl Checker<'_, '_> {
         Ok(true)
     }
 }
+
+impl Checker<'_, '_> {
+    pub(super) fn table_key_arguments(
+        &mut self,
+        id: ast::ExprId,
+        path: &ast::DefPath,
+        arguments: &[GenericArgument],
+    ) -> Result<bool, QueryError> {
+        for &position in core_roles::table_key_parameters(path) {
+            let Some(GenericArgument::Type(actual)) = arguments.get(position) else {
+                continue;
+            };
+            let declarations = self.body.resolution.generic_declarations.clone();
+            let schema = serializable_schema(
+                &self.body.types.clone(),
+                *actual,
+                &declarations,
+                &mut |path| self.snapshot(path).map(Some),
+            )?;
+            if schema.is_some_and(|schema| {
+                schema.nodes.iter().any(|node| {
+                    matches!(
+                        node,
+                        serialization::SchemaNode::Builtin {
+                            kind: BuiltinType::Map | BuiltinType::Set | BuiltinType::Simd,
+                            ..
+                        }
+                    )
+                })
+            }) {
+                self.report(
+                    const { RuleId::of("STORE-6") },
+                    self.span(id),
+                    "table key schemas cannot contain Map, Set or Simd",
+                );
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}

@@ -298,20 +298,20 @@ fn read_fse(data: Bytes, mut c: Cursor, max_symbols: u64, max_log: u64) -> Resul
 // that crosses the bitstream end emits the other state's final symbol too.
 fn fse_weights(data: Bytes) -> Result[unique List[u64], ZstdError] uses {} {
   let mut c = Cursor(pos: 0)
-  let table = read_fse(data, mut c, 256, 6)?
+  let decoding_table = read_fse(data, mut c, 256, 6)?
   let stream = core@1/bytes.slice(data, c.pos, core@1/bytes.len(data))
   let mut b = reverse(stream)?
-  let mut state = backward(stream, mut b, table.log)?
-  let mut other = backward(stream, mut b, table.log)?
+  let mut state = backward(stream, mut b, decoding_table.log)?
+  let mut other = backward(stream, mut b, decoding_table.log)?
   let mut weights: List[u64] = []
   while core@1/list.len(weights) < 255 {
-    let entry = table.entries[state]
+    let entry = decoding_table.entries[state]
     if entry.symbol > 11 {
       return Error(Corrupt())
     }
     core@1/list.push(mut weights, entry.symbol)
     if entry.bits > b.left {
-      let last = table.entries[other].symbol
+      let last = decoding_table.entries[other].symbol
       if last > 11 || core@1/list.len(weights) >= 255 {
         return Error(Corrupt())
       }
@@ -675,10 +675,13 @@ fn predefined(which: u64) -> Result[Fse, ZstdError] uses {} {
   )
 }
 
-fn sequence_table(data: Bytes, mut c: Cursor, mode: u64, which: u64, mut table: Fse) -> Result[
-  (),
-  ZstdError
-] uses {} {
+fn sequence_table(
+  data: Bytes,
+  mut c: Cursor,
+  mode: u64,
+  which: u64,
+  mut decoding_table: Fse
+) -> Result[(), ZstdError] uses {} {
   let max_symbol = if which == 0 {
     35u64
   } else if which == 1 {
@@ -687,15 +690,15 @@ fn sequence_table(data: Bytes, mut c: Cursor, mode: u64, which: u64, mut table: 
     52u64
   }
   if mode == 0 {
-    table = predefined(which)?
+    decoding_table = predefined(which)?
   } else if mode == 1 {
     let symbol = word(data, mut c, 1)?
     if symbol > max_symbol {
       return Error(Corrupt())
     }
-    table = Fse(log: 0, entries: [Entry(symbol: symbol, bits: 0, baseline: 0)])
+    decoding_table = Fse(log: 0, entries: [Entry(symbol: symbol, bits: 0, baseline: 0)])
   } else if mode == 2 {
-    table = read_fse(
+    decoding_table = read_fse(
       data,
       mut c,
       max_symbol + 1,
@@ -705,7 +708,7 @@ fn sequence_table(data: Bytes, mut c: Cursor, mode: u64, which: u64, mut table: 
         9u64
       }
     )?
-  } else if core@1/list.len(table.entries) == 0 {
+  } else if core@1/list.len(decoding_table.entries) == 0 {
     return Error(Corrupt())
   }
   Ok(())

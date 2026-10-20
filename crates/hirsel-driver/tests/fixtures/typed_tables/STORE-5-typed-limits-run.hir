@@ -1,0 +1,47 @@
+// rule: STORE-5
+// expect: run
+// Refused operations leave no partial write, and a body can commit another
+// valid operation after the refusal. Limits include catalog metadata.
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut config = store.default_config()
+  config.limits.value_bytes = 2048
+  config.limits.range_rows = 2
+  let mut s = store.open(d, config)?
+  let rows: table.Table[u32, Bytes] = table.named("rows")
+  let changed = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[bool, table.TxError] {
+      table.create(mut tx, rows)?
+      let mut oversized: List[u8] = []
+      for _ in 0u64..2049u64 {
+        list.push(mut oversized, 1u8)
+      }
+      match table.put(mut tx, rows, 1, bytes.from_list(take oversized)) {
+        Error(Limit(_)) => (),
+        _ => return Ok(false),
+      }
+      if table.get(tx, rows, 1)? != None() {
+        return Ok(false)
+      }
+      table.put(mut tx, rows, 2, b"ok")?
+      match table.range(tx, rows, Unbounded(), Unbounded(), 3, Ascending()) {
+        Error(Limit(_)) => (),
+        _ => return Ok(false),
+      }
+      let invalid: table.Table[u32, Bytes] = table.named("hirsel.reserved")
+      if table.create(mut tx, invalid) != Error(InvalidInput()) {
+        return Ok(false)
+      }
+      if table.rename(mut tx, "rows", "missing", "other") != Error(InvalidInput()) {
+        return Ok(false)
+      }
+      if list.len(table.history(tx, "rows")?) != 1 {
+        return Ok(false)
+      }
+      Ok(table.get(tx, rows, 2)? == Some(b"ok"))
+    }
+  )
+  test.check(t, changed == Ok(true))
+  Ok(())
+}

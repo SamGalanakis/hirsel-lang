@@ -92,6 +92,7 @@ pub type StoreLimits {
   key_bytes: u64,
   value_bytes: u64,
   transaction_bytes: u64,
+  range_rows: u64,
 }
 
 /// A test seam: `StopAfterWrites(n)` refuses the store's storage mutation after
@@ -199,6 +200,7 @@ pub opaque type Txn: copyable uses {} {
 @capability(local)
 pub opaque type Tx: () uses {} {
   txn: Txn,
+  limits: StoreLimits,
 }
 
 /// The writer of one store directory.
@@ -249,7 +251,8 @@ pub fn default_config() -> StoreConfig uses {} {
     limits: StoreLimits(
       key_bytes: 4096,
       value_bytes: 1048576,
-      transaction_bytes: 16777216
+      transaction_bytes: 16777216,
+      range_rows: 4096
     )
   )
 }
@@ -529,9 +532,9 @@ pub fn transact[S, R: inert, E: inert](
   if s.closed {
     return Error(Storage(Closed()))
   }
-  let mut tx = Tx(txn: serial(mut s))
+  let mut tx = Tx(txn: serial(mut s), limits: s.config.limits)
   let returned = body(mut tx)
-  let Tx(txn: t) = take tx
+  let Tx(txn: t, limits: _) = take tx
   match take returned {
     Ok(v) => {
       if let Some(l) = over_limit(s.config.limits, t) {
@@ -613,9 +616,9 @@ pub fn call[S, R: inert + serializable, E: inert + serializable](
       Error(f) => Error(Tx(take f)),
     }
   }
-  let mut tx = Tx(txn: take t)
+  let mut tx = Tx(txn: take t, limits: s.config.limits)
   let returned = body(mut tx)
-  let Tx(txn: done) = take tx
+  let Tx(txn: done, limits: _) = take tx
   let limit = over_limit(s.config.limits, done)
   let outcome: Result[R, TxFailure[E]] = match take returned {
     Ok(v) => match limit {
@@ -1461,4 +1464,28 @@ fn decode_snapshot(data: Bytes, id: u64, seq: u64) -> Result[
     return Error(())
   }
   Ok(take index)
+}
+
+// Typed operations preflight the complete prospective write set before mutating
+// the live Tx, so a limit refusal changes nothing and the body can continue.
+fn check_put(tx: Tx, key: Bytes, value: Bytes) -> Option[TxLimit] uses {} {
+  let mut trial = copy tx.txn
+  txn.put(mut trial, unique key, unique value)
+  over_limit(tx.limits, trial)
+}
+
+fn check_delete(tx: Tx, key: Bytes) -> Option[TxLimit] uses {} {
+  let mut trial = copy tx.txn
+  txn.delete(mut trial, unique key)
+  over_limit(tx.limits, trial)
+}
+
+// Only the typed-table module writes its reserved catalog and row namespaces.
+// A raw scoped transaction retains the public reserved-key refusal.
+fn table_put(mut tx: Tx, take key: Bytes, take value: Bytes) -> () uses {} {
+  txn.put(mut tx.txn, take key, take value)
+}
+
+fn table_delete(mut tx: Tx, take key: Bytes) -> () uses {} {
+  txn.delete(mut tx.txn, take key)
 }

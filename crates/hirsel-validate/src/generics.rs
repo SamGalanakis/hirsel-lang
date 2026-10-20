@@ -32,6 +32,32 @@ fn implies(bounds: &[Bound], bound: Bound) -> bool {
     bounds.contains(&bound) || (bound == Bound::NoallocDrop && bounds.contains(&Bound::Plain))
 }
 impl Checker<'_> {
+    pub(super) fn table_key_arguments(
+        &mut self,
+        path: &hirsel_syntax::DefPath,
+        arguments: &[GenericArgument],
+    ) {
+        for &position in core_roles::table_key_parameters(path) {
+            let valid = arguments.get(position).is_some_and(|argument| {
+                let GenericArgument::Type(root) = argument else {
+                    return false;
+                };
+                super::serialization::ordered_key(
+                    &self.definition.types,
+                    *root,
+                    &self.generic_declarations(),
+                    self.signatures,
+                )
+                .unwrap_or_else(|error| self.proof_failure(error, false))
+            });
+            if !valid {
+                self.error(ViolationKind::TypeMismatch {
+                    entity: "table key schema",
+                });
+            }
+        }
+    }
+
     /// A copy of this row is an independent global value: plain bits and
     /// `Shared`, `Mutex` or `Atomic` handles only (MEM-11, CONC-2).
     pub(super) fn copy_detaches(&self, source: &TypeStore, root: TypeId) -> bool {

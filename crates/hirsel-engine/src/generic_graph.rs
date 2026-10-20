@@ -487,21 +487,19 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
             return verdict.result.clone();
         }
     }
-    let result = engine.gen5_source_graph().map(|graph| {
-        crate::select_diagnostics(
-            graph
-                .growing_sites()
-                .into_iter()
-                .map(|site| {
-                    Diagnostic::error(
-                        const { RuleId::of("GEN-5") },
-                        site,
-                        "a recursive instantiation cycle grows its type arguments",
-                    )
-                })
-                .collect(),
+    let result = engine.gen5_source_graph().and_then(|graph| {
+        let mut diagnostics = crate::table_keys::check(engine)?;
+        diagnostics.extend(graph.growing_sites().into_iter().map(|site| {
+            Diagnostic::error(
+                const { RuleId::of("GEN-5") },
+                site,
+                "a recursive instantiation cycle grows its type arguments",
+            )
+        }));
+        Ok(crate::select_diagnostics(
+            diagnostics,
             Some(&engine.sources),
-        )
+        ))
     });
     // A query may index synthetic owners. Such a change requires a new audit;
     // unavailable/operational results never establish this proof.

@@ -34,6 +34,7 @@ mod stdlib_patterns;
 mod stdlib_priority_queue;
 mod stdlib_schedule;
 mod stdlib_sort;
+mod stdlib_table;
 mod stdlib_testhelpers;
 mod stdlib_text_wire;
 mod stdlib_uri;

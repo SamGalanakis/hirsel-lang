@@ -1,0 +1,6 @@
+// rule: STORE-6
+// expect: reject STORE-6 at line 5
+// twin: STORE/STORE-6-simd-key-ok.hir
+pub fn main() -> () {
+  let t: table.Table[Simd[u32, 4], String] = table.named("rows")
+}

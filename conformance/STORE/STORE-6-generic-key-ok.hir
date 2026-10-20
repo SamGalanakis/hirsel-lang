@@ -1,0 +1,14 @@
+// rule: STORE-6
+// expect: accept
+fn named_row[K: key + serializable](witness: K) -> table.Table[K, String] {
+  table.named("rows")
+}
+
+fn wrapper[K: key + serializable](witness: K) -> table.Table[K, String] {
+  named_row(witness)
+}
+
+pub fn main() -> () {
+  let witness: u32 = 0u32
+  let t = wrapper(witness)
+}

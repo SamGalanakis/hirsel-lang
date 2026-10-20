@@ -251,3 +251,8 @@ run's streams (`SCM_RIGHTS`); the server replies with the child's process ID and
 then its raw wait status, and a timeout kills the child's process group.
 `runner_oracle_in` holds a configuration's executable and image to byte-identical
 output, status and observation record, and cross-replays their tapes.
+
+`tests/it-stdlib/stdlib_table.rs` runs the typed-table storage fixtures through
+the real store and checksum implementations: CRUD/reopen, limit atomicity,
+version/reorder/rename history and shared representation renames. These exceed
+the corpus step bound and run as bounded driver integration tests.

@@ -491,3 +491,35 @@ pub fn prefix_end(prefix: Bytes) -> Option[unique Bytes] uses {} {
   core@1/list.push(mut out, prefix[n - 1] + 1)
   Some(core@1/bytes.from_list(take out))
 }
+
+// Typed tables already proved and compared this descriptor. These package-local
+// bridges keep the ordered encoding in one implementation when stored field
+// order differs from the caller's declaration order.
+fn encode_payload(schema: Bytes, data: Bytes) -> Bytes uses {} {
+  let mut envelope_bytes: List[u8] = []
+  append(mut envelope_bytes, b"HSC1\x01\x00\x00\x00")
+  put_little(core@1/bytes.len(schema), 8, mut envelope_bytes)
+  append(mut envelope_bytes, schema)
+  put_little(core@1/bytes.len(data), 8, mut envelope_bytes)
+  append(mut envelope_bytes, data)
+  let whole = core@1/bytes.from_list(take envelope_bytes)
+  let parsed = envelope(whole)
+  let mut out: List[u8] = []
+  let _ = emit(parsed.nodes, 0, whole, parsed.payload_start, mut out)
+  core@1/bytes.from_list(take out)
+}
+
+fn decode_payload(schema: Bytes, data: Bytes) -> Result[Bytes, DecodeError] uses {} {
+  let mut envelope_bytes: List[u8] = []
+  append(mut envelope_bytes, b"HSC1\x01\x00\x00\x00")
+  put_little(core@1/bytes.len(schema), 8, mut envelope_bytes)
+  append(mut envelope_bytes, schema)
+  put_little(0, 8, mut envelope_bytes)
+  let parsed = envelope(core@1/bytes.from_list(take envelope_bytes))
+  let mut out: List[u8] = []
+  let end = absorb(parsed.nodes, 0, data, 0, mut out)?
+  if end != core@1/bytes.len(data) {
+    return Error(Trailing())
+  }
+  Ok(core@1/bytes.from_list(take out))
+}

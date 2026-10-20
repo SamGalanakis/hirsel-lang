@@ -1,0 +1,44 @@
+// rule: STORE-7
+// expect: run
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  let a: table.Table[table_models@1/model.Row, u32] = table.named("keys")
+  let b: table.Table[table_models@2/model.Row, u32] = table.named("keys")
+  let wrote = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), table.TxError] {
+      table.create(mut tx, a)?
+      table.put(mut tx, a, table_models@1/model.Row(label: "a", count: 9), 1)?
+      table.put(mut tx, a, table_models@1/model.Row(label: "b", count: 1), 2)?
+      Ok(())
+    }
+  )
+  test.check(t, wrote == Ok(()))
+  let read = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[bool, table.TxError] {
+      if table.get(tx, b, table_models@2/model.Row(count: 9, label: "a"))? != Some(1) {
+        return Ok(false)
+      }
+      let rows = table.range(tx, b, Unbounded(), Unbounded(), 2, Ascending())?
+      if rows != [
+        (table_models@2/model.Row(count: 1, label: "b"), 2),
+        (table_models@2/model.Row(count: 9, label: "a"), 1)
+      ] {
+        return Ok(false)
+      }
+      let bounded = table.range(
+        tx,
+        b,
+        Included(table_models@2/model.Row(count: 9, label: "a")),
+        Unbounded(),
+        2,
+        Descending()
+      )?
+      Ok(bounded == [(table_models@2/model.Row(count: 9, label: "a"), 1)])
+    }
+  )
+  test.check(t, read == Ok(true))
+  Ok(())
+}

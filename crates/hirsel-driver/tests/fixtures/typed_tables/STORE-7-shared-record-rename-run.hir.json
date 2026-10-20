@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "STORE-7-shared-record-rename-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../../../../packages/fixtures/table_models@1/hirsel.json",
+      "package": {
+        "name": "table_models",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../../../../packages/fixtures/table_models@2/hirsel.json",
+      "package": {
+        "name": "table_models",
+        "version": "2"
+      },
+      "expose": []
+    }
+  ]
+}

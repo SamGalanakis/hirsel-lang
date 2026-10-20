@@ -402,3 +402,8 @@ Repeat-literal elements receive the expected sequence element type through
 ordinary `copy` expressions. Their one-element desugaring defers Inline length
 agreement to O, which has the evaluated count; ordinary literal lengths remain
 checked by H.
+
+STORE-6: typed-table calls and specialized function values reject a key descriptor
+containing Map, Set or Simd, including inactive arms. The check inspects the
+schema, so phantom arguments do not impose a key restriction on values they do
+not represent. Program-level wrapper obligations are discharged by the engine.

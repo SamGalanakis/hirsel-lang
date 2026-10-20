@@ -2103,6 +2103,7 @@ impl<'a> Checker<'a> {
     ) {
         let (store, f, generics) = match callee {
             Callee::Definition { path, arguments } => {
+                self.table_key_arguments(path, arguments);
                 let Some(s) = self.signatures.get(path) else {
                     self.error(ViolationKind::MissingSignature(path.clone()));
                     return;
@@ -2713,6 +2714,7 @@ impl<'a> Checker<'a> {
                 definition,
                 arguments,
             } => {
+                self.table_key_arguments(definition, arguments);
                 let Some(signature) = self.signatures.get(definition) else {
                     self.error(ViolationKind::MissingSignature(definition.clone()));
                     return;

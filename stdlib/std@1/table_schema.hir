@@ -1,0 +1,1091 @@
+// Storage descriptors and by-name record projection, after serde_derive's
+// de/struct_.rs:199-319 field dispatch. Unlike serde defaults, storage requires
+// an exact shape. Codec validation remains the final construction boundary.
+type Fields {
+  names: List[String],
+  children: List[u64],
+}
+
+type Node = Scalar(u8) | Tuple(Fields) | Record(Fields) | Arms(
+  List[String],
+  List[Fields]
+) | Boxed(u64) | Builtin(u8, List[u64], List[u64]) | Nominal(String, u64)
+
+type Cursor {
+  data: Bytes,
+  at: u64,
+}
+
+fn read(mut c: Cursor, n: u64) -> Result[Bytes, DecodeError] uses {} {
+  if c.at > bytes.len(c.data) || n > bytes.len(c.data) - c.at {
+    return Error(Truncated())
+  }
+  let value = unique bytes.slice(c.data, c.at, c.at + n)
+  c.at += n
+  Ok(take value)
+}
+
+fn number(mut c: Cursor, n: u64) -> Result[u64, DecodeError] uses {} {
+  if c.at > bytes.len(c.data) || n > bytes.len(c.data) - c.at {
+    return Error(Truncated())
+  }
+  let at = c.at
+  c.at += n
+  if n == 1 {
+    Ok(int.widen(c.data[at]))
+  } else if n == 4 {
+    Ok(keys.u32_at(c.data, at))
+  } else if n == 8 {
+    Ok(keys.u64_at(c.data, at))
+  } else {
+    Error(Length())
+  }
+}
+
+fn atom(mut c: Cursor) -> Result[String, DecodeError] uses {} {
+  let n = number(mut c, 8)?
+  match string.from_bytes(read(mut c, n)?) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Scalar()),
+  }
+}
+
+fn read_fields(mut c: Cursor, style: u8) -> Result[Fields, DecodeError] uses {} {
+  let count = number(mut c, 4)?
+  if count > bytes.len(c.data) {
+    return Error(Truncated())
+  }
+  let mut names: List[String] = []
+  let mut children: List[u64] = []
+  let mut i: u64 = 0
+  while i < count {
+    let labelled = if style == 2 {
+      let marker = number(mut c, 1)?
+      if marker > 1 {
+        return Error(Tag())
+      }
+      marker == 1
+    } else {
+      style == 1
+    }
+    list.push(
+      mut names,
+      if labelled {
+        atom(mut c)?
+      } else {
+        ""
+      }
+    )
+    list.push(mut children, number(mut c, 4)?)
+    i += 1
+  }
+  Ok(Fields(names: take names, children: take children))
+}
+
+fn parse(data: Bytes) -> Result[List[Node], DecodeError] uses {} {
+  let mut c = Cursor(data: unique data, at: 0)
+  if number(mut c, 4)? != 1 || number(mut c, 4)? != 0 {
+    return Error(SchemaMismatch())
+  }
+  let count = number(mut c, 4)?
+  if count > bytes.len(data) {
+    return Error(Truncated())
+  }
+  let mut nodes: List[Node] = []
+  let mut i: u64 = 0
+  while i < count {
+    let tag = number(mut c, 1)?
+    let node: Node = if tag == 0 {
+      Scalar(int.truncate(number(mut c, 1)?))
+    } else if tag == 1 {
+      Tuple(read_fields(mut c, 0)?)
+    } else if tag == 2 {
+      Record(read_fields(mut c, 1)?)
+    } else if tag == 3 {
+      let arms = number(mut c, 4)?
+      if arms > bytes.len(data) {
+        return Error(Truncated())
+      }
+      let mut names: List[String] = []
+      let mut children: List[Fields] = []
+      let mut a: u64 = 0
+      while a < arms {
+        list.push(mut names, atom(mut c)?)
+        list.push(mut children, read_fields(mut c, 2)?)
+        a += 1
+      }
+      Arms(take names, take children)
+    } else if tag == 4 {
+      Boxed(number(mut c, 4)?)
+    } else if tag == 5 {
+      let kind: u8 = int.truncate(number(mut c, 1)?)
+      let arguments = number(mut c, 4)?
+      if arguments > bytes.len(data) {
+        return Error(Truncated())
+      }
+      let mut children: List[u64] = []
+      let mut sizes: List[u64] = []
+      let mut a: u64 = 0
+      while a < arguments {
+        let k = number(mut c, 1)?
+        if k == 0 {
+          list.push(mut children, number(mut c, 4)?)
+        } else if k == 1 {
+          list.push(mut sizes, number(mut c, 8)?)
+        } else {
+          return Error(Tag())
+        }
+        a += 1
+      }
+      Builtin(kind, take children, take sizes)
+    } else if tag == 6 {
+      let package = atom(mut c)?
+      let _ = atom(mut c)?
+      let modules = number(mut c, 4)?
+      if modules > bytes.len(data) {
+        return Error(Truncated())
+      }
+      let mut path: List[u8] = []
+      text.append(mut path, package)
+      text.append(mut path, "/")
+      let mut m: u64 = 0
+      while m < modules {
+        text.append(mut path, atom(mut c)?)
+        text.append(mut path, "/")
+        m += 1
+      }
+      text.append(mut path, atom(mut c)?)
+      Nominal(text.finish_valid(take path), number(mut c, 4)?)
+    } else {
+      return Error(Tag())
+    }
+    list.push(mut nodes, take node)
+    i += 1
+  }
+  if c.at != bytes.len(data) {
+    return Error(Trailing())
+  }
+  for node in nodes {
+    for child in edges(node) {
+      if child >= list.len(nodes) {
+        return Error(SchemaMismatch())
+      }
+    }
+    match node {
+      Scalar(kind) => if kind > 15 {
+        return Error(Tag())
+      },
+      Record(f) => if !distinct_names(f.names) {
+        return Error(SchemaMismatch())
+      },
+      Arms(names, arms) => {
+        if !distinct_names(names) {
+          return Error(SchemaMismatch())
+        }
+        for arm in arms {
+          let mut labelled: List[String] = []
+          for name in arm.names {
+            if name != "" {
+              list.push(mut labelled, unique name)
+            }
+          }
+          if !distinct_names(labelled) {
+            return Error(SchemaMismatch())
+          }
+        }
+      },
+      Builtin(kind, children, sizes) => {
+        if kind > 6 {
+          return Error(Tag())
+        }
+        let expected_children: u64 = if kind == 5 {
+          2
+        } else {
+          1
+        }
+        let expected_sizes: u64 = if kind == 2 || kind == 3 {
+          1
+        } else {
+          0
+        }
+        if list.len(children) != expected_children || list.len(sizes) != expected_sizes {
+          return Error(SchemaMismatch())
+        }
+      },
+      _ => (),
+    }
+  }
+  Ok(take nodes)
+}
+
+fn descriptor(envelope: Bytes) -> Bytes uses {} {
+  let mut c = Cursor(data: unique envelope, at: 8)
+  let n = match number(mut c, 8) {
+    Ok(n) => n,
+    Error(_) => 0,
+  }
+  unique bytes.slice(envelope, 16, 16 + n)
+}
+
+fn payload(envelope: Bytes) -> Bytes uses {} {
+  unique bytes.slice(
+    envelope,
+    24 + bytes.len(descriptor(envelope)),
+    bytes.len(envelope)
+  )
+}
+
+fn template[T: serializable](none: Option[T]) -> Bytes uses {} {
+  codec.encode(none)
+}
+
+fn schema[T: serializable](witness: Option[T]) -> Bytes uses {} {
+  let nodes: List[Node] = match parse(descriptor(template(witness))) {
+    Ok(nodes) => nodes,
+    Error(_) => [],
+  }
+  let start: u64 = match root(nodes) {
+    Ok(start) => start,
+    Error(_) => 0,
+  }
+  normalized(nodes, start, [])
+}
+
+fn root(nodes: List[Node]) -> Result[u64, DecodeError] uses {} {
+  if list.len(nodes) == 0 {
+    return Error(SchemaMismatch())
+  }
+  match nodes[0] {
+    Nominal(_, child) => if child < list.len(nodes) {
+      match nodes[child] {
+        Arms(_, arms) => if list.len(arms) == 2 && list.len(arms[1].children) == 1 {
+          return Ok(arms[1].children[0])
+        },
+        _ => (),
+      }
+    },
+    _ => (),
+  }
+  Error(SchemaMismatch())
+}
+
+fn rename_name(name: String, renames: List[(String, String)]) -> String uses {} {
+  let mut out = unique name
+  for (from, to) in renames {
+    if out == from {
+      out = unique to
+    } else {
+      let prefix = f"{from}."
+      if string.starts_with(out, prefix) {
+        let suffix = bytes.slice(
+          string.as_bytes(out),
+          string.byte_len(from),
+          string.byte_len(out)
+        )
+        let mut next: List[u8] = []
+        bytes.append(mut next, string.as_bytes(to))
+        bytes.append(mut next, suffix)
+        out = text.finish_valid(take next)
+      }
+    }
+  }
+  take out
+}
+
+fn qualified(owner: String, name: String) -> String uses {} {
+  f"{owner}.{name}"
+}
+
+// A finite pair worklist compares recursive graphs without recursively expanding
+// them. Record names select their children; tuple and arm order stay significant.
+fn equivalent(a: Bytes, b: Bytes, renames: List[(String, String)]) -> Result[
+  (),
+  table.SchemaError
+] uses {} {
+  if a == b && list.len(renames) == 0 {
+    return Ok(())
+  }
+  let left = match parse(a) {
+    Ok(n) => n,
+    Error(_) => return Error(ValueMismatch()),
+  }
+  let right = match parse(b) {
+    Ok(n) => n,
+    Error(_) => return Error(ValueMismatch()),
+  }
+  let mut pending: List[(u64, u64, String)] = [(0, 0, "")]
+  let mut seen: List[(u64, u64, String)] = []
+  let mut position: u64 = 0
+  while position < list.len(pending) {
+    let pair = unique pending[position]
+    position += 1
+    let (l, r, owner) = copy pair
+    let mut visited = false
+    for old in seen {
+      if old == pair {
+        visited = true
+      }
+    }
+    if visited {
+      continue
+    }
+    list.push(mut seen, unique pair)
+    if l >= list.len(left) || r >= list.len(right) {
+      return Error(ValueMismatch())
+    }
+    match left[l] {
+      Scalar(x) => match right[r] {
+        Scalar(y) => if x != y {
+          return Error(ValueMismatch())
+        },
+        _ => return Error(ValueMismatch()),
+      },
+      Nominal(x, xc) => match right[r] {
+        Nominal(y, yc) => {
+          if rename_name(x, renames) != y {
+            return Error(Renamed(unique x, unique y))
+          }
+          list.push(mut pending, (xc, yc, unique x))
+        },
+        _ => return Error(ValueMismatch()),
+      },
+      Boxed(x) => match right[r] {
+        Boxed(y) => list.push(mut pending, (x, y, copy owner)),
+        _ => return Error(ValueMismatch()),
+      },
+      Tuple(x) => match right[r] {
+        Tuple(y) => compare_fields(x, y, false, owner, renames, mut pending)?,
+        _ => return Error(ValueMismatch()),
+      },
+      Record(x) => match right[r] {
+        Record(y) => compare_fields(x, y, true, owner, renames, mut pending)?,
+        _ => return Error(ValueMismatch()),
+      },
+      Arms(xn, xs) => match right[r] {
+        Arms(yn, ys) => {
+          if list.len(xs) != list.len(ys) {
+            return Error(ValueMismatch())
+          }
+          let mut i: u64 = 0
+          while i < list.len(xs) {
+            if rename_name(qualified(owner, xn[i]), renames) != qualified(
+              rename_name(owner, renames),
+              yn[i]
+            ) {
+              return Error(
+                Renamed(
+                  qualified(owner, xn[i]),
+                  qualified(rename_name(owner, renames), yn[i])
+                )
+              )
+            }
+            compare_fields(xs[i], ys[i], false, owner, renames, mut pending)?
+            i += 1
+          }
+        },
+        _ => return Error(ValueMismatch()),
+      },
+      Builtin(x, xc, xn) => match right[r] {
+        Builtin(y, yc, yn) => {
+          if x != y || xn != yn || list.len(xc) != list.len(yc) {
+            return Error(ValueMismatch())
+          }
+          let mut i: u64 = 0
+          while i < list.len(xc) {
+            list.push(mut pending, (xc[i], yc[i], copy owner))
+            i += 1
+          }
+        },
+        _ => return Error(ValueMismatch()),
+      },
+    }
+  }
+  Ok(())
+}
+
+fn compare_fields(
+  a: Fields,
+  b: Fields,
+  by_name: bool,
+  owner: String,
+  renames: List[(String, String)],
+  mut pending: List[(u64, u64, String)]
+) -> Result[(), table.SchemaError] uses {} {
+  if list.len(a.children) != list.len(b.children) {
+    return Error(ValueMismatch())
+  }
+  let mut i: u64 = 0
+  while i < list.len(a.children) {
+    let mut found: Option[u64] = None()
+    let mut j: u64 = 0
+    while j < list.len(b.children) {
+      if !by_name && i == j || by_name && rename_name(
+        qualified(owner, a.names[i]),
+        renames
+      ) == qualified(rename_name(owner, renames), b.names[j]) {
+        found = Some(j)
+        break
+      }
+      j += 1
+    }
+    match found {
+      Some(k) => {
+        if !by_name && a.names[i] != b.names[k] {
+          return Error(
+            Renamed(
+              qualified(owner, a.names[i]),
+              qualified(rename_name(owner, renames), b.names[k])
+            )
+          )
+        }
+        list.push(mut pending, (a.children[i], b.children[k], ""))
+      },
+      None() => return Error(
+        Renamed(
+          qualified(owner, a.names[i]),
+          qualified(rename_name(owner, renames), b.names[i])
+        )
+      ),
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn little(mut out: List[u8], value: u64, width: u64) -> () uses {} {
+  let mut i: u64 = 0
+  while i < width {
+    list.push(mut out, int.truncate(value >> i * 8))
+    i += 1
+  }
+}
+
+fn scalar_width(kind: u8) -> u64 uses {} {
+  if kind == 0 || kind == 1 || kind == 6 {
+    1
+  } else if kind == 2 || kind == 7 {
+    2
+  } else if kind == 3 || kind == 8 || kind == 11 || kind == 15 {
+    4
+  } else if kind == 4 || kind == 9 || kind == 12 {
+    8
+  } else if kind == 5 || kind == 10 {
+    16
+  } else {
+    0
+  }
+}
+
+// The stored payload is consumed in stored order, but fragments are emitted in
+// expected field order. Every read is bounded before slicing; codec.decode then
+// validates scalar canonicity, tags, lengths, sets, maps and owner checks.
+fn project(
+  a: List[Node],
+  l: u64,
+  b: List[Node],
+  r: u64,
+  owner: String,
+  renames: List[(String, String)],
+  mut c: Cursor
+) -> Result[Bytes, DecodeError] uses {} {
+  if l >= list.len(a) || r >= list.len(b) {
+    return Error(SchemaMismatch())
+  }
+  match a[l] {
+    Scalar(k) => match b[r] {
+      Scalar(_) => {
+        let width = scalar_width(k)
+        if width > 0 {
+          read(mut c, width)
+        } else {
+          let start = c.at
+          let n = number(mut c, 8)?
+          let _ = read(mut c, n)?
+          Ok(unique bytes.slice(c.data, start, c.at))
+        }
+      },
+      _ => return Error(SchemaMismatch()),
+    },
+    Nominal(name, x) => match b[r] {
+      Nominal(_, y) => project(a, x, b, y, name, renames, mut c),
+      _ => return Error(SchemaMismatch()),
+    },
+    Boxed(x) => match b[r] {
+      Boxed(y) => project(a, x, b, y, owner, renames, mut c),
+      _ => return Error(SchemaMismatch()),
+    },
+    Tuple(x) => match b[r] {
+      Tuple(y) => project_fields(a, x, b, y, false, owner, renames, mut c),
+      _ => return Error(SchemaMismatch()),
+    },
+    Record(x) => match b[r] {
+      Record(y) => project_fields(a, x, b, y, true, owner, renames, mut c),
+      _ => return Error(SchemaMismatch()),
+    },
+    Arms(_, xs) => match b[r] {
+      Arms(_, ys) => {
+        let tag = number(mut c, 4)?
+        if tag >= list.len(xs) || tag >= list.len(ys) {
+          return Error(Tag())
+        }
+        let mut out: List[u8] = []
+        little(mut out, tag, 4)
+        bytes.append(
+          mut out,
+          project_fields(a, xs[tag], b, ys[tag], false, owner, renames, mut c)?
+        )
+        Ok(bytes.from_list(take out))
+      },
+      _ => return Error(SchemaMismatch()),
+    },
+    Builtin(kind, xs, sizes) => match b[r] {
+      Builtin(_, ys, _) => {
+        if kind == 4 {
+          return project(a, xs[0], b, ys[0], owner, renames, mut c)
+        }
+        let mut out: List[u8] = []
+        let count = if kind == 2 || kind == 3 {
+          sizes[0]
+        } else {
+          number(mut c, 8)?
+        }
+        if kind != 2 && kind != 3 {
+          little(mut out, count, 8)
+        }
+        let mut i: u64 = 0
+        let mut elements: List[Bytes] = []
+        let mut prior: Option[Bytes] = None()
+        while i < count {
+          let start = c.at
+          let part = project(a, xs[0], b, ys[0], "", renames, mut c)?
+          if kind == 6 {
+            let raw = unique bytes.slice(c.data, start, c.at)
+            if let Some(previous) = prior {
+              if previous >= raw {
+                return Error(Order())
+              }
+            }
+            prior = Some(take raw)
+          }
+          if kind == 6 {
+            list.push(mut elements, take part)
+          } else {
+            bytes.append(mut out, part)
+          }
+          if kind == 5 {
+            bytes.append(mut out, project(a, xs[1], b, ys[1], "", renames, mut c)?)
+          }
+          i += 1
+        }
+        if kind == 6 {
+          // Reordered record fields can change canonical Set order.
+          let mut sorted: ordered_map.OrderedMap[Bytes, Bytes] = ordered_map.empty(
+            store.compare_keys
+          )
+          for part in elements {
+            ordered_map.insert(mut sorted, unique part, b"")
+          }
+          if ordered_map.len(sorted) != count {
+            return Error(Scalar())
+          }
+          let parts = store.entries_in(
+            sorted,
+            Unbounded(),
+            Unbounded(),
+            Ascending(),
+            count
+          )
+          for (part, _) in parts {
+            bytes.append(mut out, part)
+          }
+        }
+        Ok(bytes.from_list(take out))
+      },
+      _ => return Error(SchemaMismatch()),
+    },
+  }
+}
+
+fn project_fields(
+  a: List[Node],
+  x: Fields,
+  b: List[Node],
+  y: Fields,
+  by_name: bool,
+  owner: String,
+  renames: List[(String, String)],
+  mut c: Cursor
+) -> Result[Bytes, DecodeError] uses {} {
+  let mut fragments: List[(u64, Bytes)] = []
+  let mut i: u64 = 0
+  while i < list.len(x.children) {
+    let mut j = i
+    if by_name {
+      j = 0
+      while j < list.len(y.children) && rename_name(
+        qualified(owner, x.names[i]),
+        renames
+      ) != qualified(rename_name(owner, renames), y.names[j]) {
+        j += 1
+      }
+    }
+    if j >= list.len(y.children) {
+      return Error(SchemaMismatch())
+    }
+    list.push(
+      mut fragments,
+      (j, project(a, x.children[i], b, y.children[j], "", renames, mut c)?)
+    )
+    i += 1
+  }
+  let mut out: List[u8] = []
+  let mut j: u64 = 0
+  while j < list.len(y.children) {
+    for (index, fragment) in fragments {
+      if index == j {
+        bytes.append(mut out, fragment)
+      }
+    }
+    j += 1
+  }
+  Ok(bytes.from_list(take out))
+}
+
+fn decode[T: serializable](stored: Bytes, data: Bytes, renames: List[(String, String)]) -> Result[
+  unique T,
+  DecodeError
+] uses {} {
+  let none: Option[T] = None()
+  let expected = template(none)
+  let left = parse(stored)?
+  let right = parse(descriptor(expected))?
+  let mut c = Cursor(data: unique data, at: 0)
+  let transformed = project(left, 0, right, root(right)?, "", renames, mut c)?
+  if c.at != bytes.len(data) {
+    return Error(Trailing())
+  }
+  let mut whole: List[u8] = []
+  bytes.append(
+    mut whole,
+    bytes.slice(expected, 0, 16 + bytes.len(descriptor(expected)))
+  )
+  little(mut whole, 4 + bytes.len(transformed), 8)
+  little(mut whole, 1, 4)
+  bytes.append(mut whole, transformed)
+  let decoded: Option[T] = codec.decode(bytes.from_list(take whole))?
+  match take decoded {
+    Some(value) => Ok(unique value),
+    None() => Error(Tag()),
+  }
+}
+
+fn text_atom(mut out: List[u8], value: String) -> () uses {} {
+  little(mut out, string.byte_len(value), 8)
+  bytes.append(mut out, string.as_bytes(value))
+}
+
+fn edges(node: Node) -> List[u64] uses {} {
+  match node {
+    Scalar(_) => [],
+    Tuple(fields) => unique fields.children,
+    Record(fields) => unique fields.children,
+    Arms(_, arms) => {
+      let mut out: List[u64] = []
+      for arm in arms {
+        for child in arm.children {
+          list.push(mut out, child)
+        }
+      }
+      take out
+    },
+    Nominal(_, child) => [child],
+    Boxed(child) => [child],
+    Builtin(_, children, _) => unique children,
+  }
+}
+
+fn mapped(ids: List[u64], old: u64) -> u64 uses {} {
+  let mut i: u64 = 0
+  while i < list.len(ids) {
+    if ids[i] == old {
+      return i
+    }
+    i += 1
+  }
+  0
+}
+
+fn field_bytes(
+  mut out: List[u8],
+  fields: Fields,
+  style: u8,
+  owner: String,
+  renames: List[(String, String)],
+  ids: List[u64]
+) -> () uses {} {
+  little(mut out, list.len(fields.children), 4)
+  let mut i: u64 = 0
+  while i < list.len(fields.children) {
+    let name = fields.names[i]
+    if style == 2 {
+      little(
+        mut out,
+        if name == "" {
+          0
+        } else {
+          1
+        },
+        1
+      )
+    }
+    if style == 1 || style == 2 && name != "" {
+      let full = rename_name(qualified(owner, name), renames)
+      let prefix = f"{rename_name(owner, renames)}."
+      let spelling = if string.starts_with(full, prefix) {
+        match string.from_bytes(
+          unique bytes.slice(
+            string.as_bytes(full),
+            string.byte_len(prefix),
+            string.byte_len(full)
+          )
+        ) {
+          Ok(n) => n,
+          Error(_) => unique name,
+        }
+      } else {
+        unique name
+      }
+      text_atom(mut out, spelling)
+    }
+    little(mut out, mapped(ids, fields.children[i]), 4)
+    i += 1
+  }
+}
+
+// Re-root to T from the Option[T] type witness, retain breadth-first numbering,
+// and omit nominal version atoms. No stored descriptor is used as a decoder.
+fn render_descriptor(nodes: List[Node], start: u64) -> Bytes uses {} {
+  let renames: List[(String, String)] = []
+  let mut ids: List[u64] = [start]
+  let mut owners: List[String] = [""]
+  let mut i: u64 = 0
+  while i < list.len(ids) {
+    let node = nodes[ids[i]]
+    let owner = match node {
+      Nominal(name, _) => unique name,
+      _ => copy owners[i],
+    }
+    for child in edges(node) {
+      let mut found = false
+      for id in ids {
+        if id == child {
+          found = true
+        }
+      }
+      if !found {
+        list.push(mut ids, child)
+        list.push(mut owners, copy owner)
+      }
+    }
+    i += 1
+  }
+  let mut out: List[u8] = []
+  little(mut out, 1, 4)
+  little(mut out, 0, 4)
+  little(mut out, list.len(ids), 4)
+  i = 0
+  while i < list.len(ids) {
+    let owner = owners[i]
+    match nodes[ids[i]] {
+      Scalar(kind) => {
+        little(mut out, 0, 1)
+        little(mut out, int.widen(kind), 1)
+      },
+      Tuple(fields) => {
+        little(mut out, 1, 1)
+        field_bytes(mut out, fields, 0, owner, renames, ids)
+      },
+      Record(fields) => {
+        little(mut out, 2, 1)
+        field_bytes(mut out, fields, 1, owner, renames, ids)
+      },
+      Arms(names, arms) => {
+        little(mut out, 3, 1)
+        little(mut out, list.len(arms), 4)
+        let mut j: u64 = 0
+        while j < list.len(arms) {
+          let full = rename_name(qualified(owner, names[j]), renames)
+          let parts = string.split(unique full, ".")
+          text_atom(mut out, parts[list.len(parts) - 1])
+          field_bytes(mut out, arms[j], 2, owner, renames, ids)
+          j += 1
+        }
+      },
+      Boxed(child) => {
+        little(mut out, 4, 1)
+        little(mut out, mapped(ids, child), 4)
+      },
+      Builtin(kind, children, sizes) => {
+        little(mut out, 5, 1)
+        little(mut out, int.widen(kind), 1)
+        little(mut out, list.len(children) + list.len(sizes), 4)
+        for child in children {
+          little(mut out, 0, 1)
+          little(mut out, mapped(ids, child), 4)
+        }
+        for size in sizes {
+          little(mut out, 1, 1)
+          little(mut out, size, 8)
+        }
+      },
+      Nominal(name, child) => {
+        let parts = string.split(rename_name(name, renames), "/")
+        little(mut out, 6, 1)
+        text_atom(mut out, parts[0])
+        text_atom(mut out, "")
+        little(mut out, list.len(parts) - 2, 4)
+        let mut j: u64 = 1
+        while j + 1 < list.len(parts) {
+          text_atom(mut out, parts[j])
+          j += 1
+        }
+        text_atom(mut out, parts[list.len(parts) - 1])
+        little(mut out, mapped(ids, child), 4)
+      },
+    }
+    i += 1
+  }
+  bytes.from_list(take out)
+}
+
+fn reverse(renames: List[(String, String)]) -> List[(String, String)] uses {} {
+  let mut out: List[(String, String)] = []
+  let mut i = list.len(renames)
+  while i > 0 {
+    i -= 1
+    let (from, to) = renames[i]
+    list.push(mut out, (unique to, unique from))
+  }
+  take out
+}
+
+fn encode[T: serializable](stored: Bytes, value: T, renames: List[(String, String)]) -> Result[
+  Bytes,
+  DecodeError
+] uses {} {
+  let whole = codec.encode(value)
+  let left = parse(descriptor(whole))?
+  let right = parse(stored)?
+  let mut c = Cursor(data: payload(whole), at: 0)
+  project(left, 0, right, 0, "", reverse(renames), mut c)
+}
+
+fn rename_schema(stored: Bytes, from: String, to: String) -> Result[Bytes, DecodeError] uses {} {
+  let nodes = parse(stored)?
+  let declarations: List[(String, String)] = [(unique from, unique to)]
+  let changed = rewritten(nodes, 0, declarations)
+  if changed == rewritten(nodes, 0, []) {
+    return Error(Invalid())
+  }
+  for node in changed {
+    match node {
+      Record(f) => if !distinct_names(f.names) {
+        return Error(Invalid())
+      },
+      Arms(names, _) => if !distinct_names(names) {
+        return Error(Invalid())
+      },
+      _ => (),
+    }
+  }
+  Ok(normalized(nodes, 0, declarations))
+}
+
+// Clone a shared structural node only when its nominal owner needs a different
+// spelling. Afterwards merge bisimilar nodes again, as SER-2 requires. The
+// refinement is the descriptor canonicalizer's finite labelled-graph partition.
+fn rewrite_id(mut pending: List[(u64, String)], child: u64, owner: String) -> u64 uses {} {
+  let mut i: u64 = 0
+  while i < list.len(pending) {
+    let (known, scope) = pending[i]
+    if known == child && scope == owner {
+      return i
+    }
+    i += 1
+  }
+  let n = list.len(pending)
+  list.push(mut pending, (child, unique owner))
+  n
+}
+
+fn field_name(owner: String, name: String, renames: List[(String, String)]) -> String uses {} {
+  let full = rename_name(qualified(owner, name), renames)
+  let prefix = f"{rename_name(owner, renames)}."
+  if string.starts_with(full, prefix) {
+    match string.from_bytes(
+      unique bytes.slice(
+        string.as_bytes(full),
+        string.byte_len(prefix),
+        string.byte_len(full)
+      )
+    ) {
+      Ok(n) => take n,
+      Error(_) => unique name,
+    }
+  } else {
+    unique name
+  }
+}
+
+fn rewrite_fields(
+  f: Fields,
+  owner: String,
+  renames: List[(String, String)],
+  mut pending: List[(u64, String)]
+) -> Fields uses {} {
+  let mut names: List[String] = []
+  let mut children: List[u64] = []
+  let mut i: u64 = 0
+  while i < list.len(f.children) {
+    list.push(
+      mut names,
+      if f.names[i] == "" {
+        ""
+      } else {
+        field_name(owner, f.names[i], renames)
+      }
+    )
+    list.push(mut children, rewrite_id(mut pending, f.children[i], owner))
+    i += 1
+  }
+  Fields(names: take names, children: take children)
+}
+
+fn rewritten(nodes: List[Node], start: u64, renames: List[(String, String)]) -> List[
+  Node
+] uses {} {
+  let mut pending: List[(u64, String)] = [(start, "")]
+  let mut out: List[Node] = []
+  let mut i: u64 = 0
+  while i < list.len(pending) {
+    let (index, owner) = copy pending[i]
+    let node: Node = match nodes[index] {
+      Scalar(k) => Scalar(k),
+      Nominal(name, child) => Nominal(
+        rename_name(name, renames),
+        rewrite_id(mut pending, child, name)
+      ),
+      Boxed(child) => Boxed(rewrite_id(mut pending, child, owner)),
+      Tuple(f) => Tuple(rewrite_fields(f, owner, renames, mut pending)),
+      Record(f) => Record(rewrite_fields(f, owner, renames, mut pending)),
+      Arms(names, arms) => {
+        let mut new_names: List[String] = []
+        let mut new_arms: List[Fields] = []
+        let mut j: u64 = 0
+        while j < list.len(arms) {
+          list.push(mut new_names, field_name(owner, names[j], renames))
+          list.push(mut new_arms, rewrite_fields(arms[j], owner, renames, mut pending))
+          j += 1
+        }
+        Arms(take new_names, take new_arms)
+      },
+      Builtin(kind, children, sizes) => {
+        let mut mapped_children: List[u64] = []
+        for child in children {
+          list.push(mut mapped_children, rewrite_id(mut pending, child, owner))
+        }
+        Builtin(kind, take mapped_children, unique sizes)
+      },
+    }
+    list.push(mut out, take node)
+    i += 1
+  }
+  take out
+}
+
+fn relabel_fields(f: Fields, classes: List[u64]) -> Fields uses {} {
+  let mut children: List[u64] = []
+  for child in f.children {
+    list.push(mut children, classes[child])
+  }
+  Fields(names: unique f.names, children: take children)
+}
+
+fn relabel(node: Node, classes: List[u64]) -> Node uses {} {
+  match node {
+    Scalar(k) => Scalar(k),
+    Nominal(name, child) => Nominal(unique name, classes[child]),
+    Boxed(child) => Boxed(classes[child]),
+    Tuple(f) => Tuple(relabel_fields(f, classes)),
+    Record(f) => Record(relabel_fields(f, classes)),
+    Arms(names, arms) => {
+      let mut out: List[Fields] = []
+      for arm in arms {
+        list.push(mut out, relabel_fields(arm, classes))
+      }
+      Arms(unique names, take out)
+    },
+    Builtin(kind, children, sizes) => {
+      let mut out: List[u64] = []
+      for child in children {
+        list.push(mut out, classes[child])
+      }
+      Builtin(kind, take out, unique sizes)
+    },
+  }
+}
+
+fn normalized(nodes: List[Node], start: u64, renames: List[(String, String)]) -> Bytes uses {} {
+  // The generated witness is already canonical when no renames are involved.
+  if list.len(renames) == 0 {
+    return render_descriptor(nodes, start)
+  }
+  let expanded = rewritten(nodes, start, renames)
+  let mut classes: List[u64] = []
+  for _ in expanded {
+    list.push(mut classes, 0)
+  }
+  while true {
+    let mut labels: List[Node] = []
+    let mut next: List[u64] = []
+    for node in expanded {
+      let label = relabel(node, classes)
+      let mut class: u64 = 0
+      while class < list.len(labels) && labels[class] != label {
+        class += 1
+      }
+      if class == list.len(labels) {
+        list.push(mut labels, unique label)
+      }
+      list.push(mut next, class)
+    }
+    if classes == next {
+      break
+    }
+    classes = take next
+  }
+  let mut representatives: List[Node] = []
+  let mut i: u64 = 0
+  while i < list.len(expanded) {
+    if classes[i] == list.len(representatives) {
+      list.push(mut representatives, relabel(expanded[i], classes))
+    }
+    i += 1
+  }
+  render_descriptor(representatives, classes[0])
+}
+
+fn distinct_names(names: List[String]) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < list.len(names) {
+    let mut j: u64 = 0
+    while j < i {
+      if names[j] == names[i] {
+        return false
+      }
+      j += 1
+    }
+    i += 1
+  }
+  true
+}

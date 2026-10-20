@@ -101,3 +101,16 @@ impl LoweredIntrinsic {
             .find(|intrinsic| intrinsic.definition() == *path)
     }
 }
+
+/// Key type argument positions of the typed store surface. This identifies an
+/// operation only; source and IR checkers independently prove its key schema.
+pub fn table_key_parameters(path: &DefPath) -> &'static [usize] {
+    if !path.package_is("std", "1") || path.0.modules.as_slice() != ["table"] {
+        return &[];
+    }
+    match path.0.name.as_str() {
+        "named" | "create" | "drop" | "get" | "put" | "delete" | "range" => &[0],
+        "migrate" => &[0, 2],
+        _ => &[],
+    }
+}

@@ -523,3 +523,7 @@ spelling, and successive nominal representation expansion. Import those modules
 directly. Core definitions, canonical CT spelling, graph transport, nominal proof
 memoization and basic property/crossing queries remain here. Cleanup-bound graph
 normalization remains with the shared property normalizer.
+
+`core_roles::table_key_parameters` identifies key argument positions of the
+std@1/table surface. It supplies operation identities, never a schema proof;
+source checking and V independently inspect the declared representations.

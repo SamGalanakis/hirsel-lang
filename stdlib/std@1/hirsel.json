@@ -1069,6 +1069,19 @@
         "internal",
         "decimal_seq"
       ]
+    },
+    {
+      "path": "table_schema.hir",
+      "module": [
+        "internal",
+        "table_schema"
+      ]
+    },
+    {
+      "path": "table.hir",
+      "module": [
+        "table"
+      ]
     }
   ],
   "dependencies": []

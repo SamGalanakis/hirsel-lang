@@ -860,3 +860,8 @@ Constant reads independently check complete size actuals, their lexical declarat
 and the substituted constant result. Constant declarations admit size parameters
 only. The hand-built constant-size controls include a valid read, missing actuals,
 an undeclared size and a wrong instantiated Inline length.
+
+STORE-6 independently walks declared, substituted key representations at typed
+store calls and specialized function references. Map, Set and Simd are refused
+at every represented depth. `table_controls.rs` contains source-free call and
+function-value controls with scalar and sequence twins.

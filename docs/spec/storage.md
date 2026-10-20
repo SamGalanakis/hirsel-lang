@@ -2,14 +2,14 @@
 
 **Status: partly shipped.** `std@1/store` ships the engine and its storage seam
 (STORE-1, STORE-11), transactions and the output gate (STORE-2, STORE-3), the key encoding
-(STORE-6, `std@1/keys`), recording (STORE-10), the store's side of call streams
-(STORE-12, `store.call`) and the failure types (STORE-13); the [standard
-library](std-library.md#stores) lists each shipped operation. Until typed tables ship, a
-body reads and writes byte keys with `store.tx_get`, `store.tx_put`, `store.tx_delete` and
-`store.tx_range`. Typed tables, rows, snapshot views, schema history and migrations
-(STORE-5, STORE-7 to STORE-9), read-only opening and `store.for_test` are planned: a
-program that names them does not resolve yet. Items marked **Reserved** are designed here
-but have no implementation owner yet.
+(STORE-6, `std@1/keys`), recording (STORE-10), call streams (STORE-12, `store.call`)
+and failure types (STORE-13). `std@1/table` ships typed names, create/get/put/delete/range,
+row epochs, storage identity and metadata-only rename history (STORE-5 to STORE-7 and
+STORE-9). The [standard library](std-library.md#typed-tables) lists the operations.
+Migrations, `table.drop` (whose spelling currently conflicts with the reserved keyword),
+snapshot views, read-only opening and `store.for_test` are planned. Their names do not
+resolve yet. The byte operations `store.tx_get`, `store.tx_put`, `store.tx_delete` and
+`store.tx_range` remain available. Items marked **Reserved** have no implementation owner.
 
 The S3 backend and its grants are implemented in `packages/s3@1`.
 
@@ -25,8 +25,8 @@ each table with a recorded schema history. A transaction's outcome is released o
 every commit it observed is durable.
 
 No core operation, TIR or LIR construct is added for stores. `Tx` is the scoped capability
-of [MODE-6](ownership.md#mode-6-scoped-capabilities); `std@1/store` declares it, together
-with `Store`, `Snapshot`, `Table`, `TxFailure` and the other types below.
+of [MODE-6](ownership.md#mode-6-scoped-capabilities); `std@1/store` declares it with
+`Store`, `Snapshot` and `TxFailure`. `std@1/table` declares `Table` and schema history.
 
 ### STORE-1: Stores
 

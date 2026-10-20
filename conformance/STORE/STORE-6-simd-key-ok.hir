@@ -1,0 +1,5 @@
+// rule: STORE-6
+// expect: accept
+pub fn main() -> () {
+  let t: table.Table[u32, String] = table.named("rows")
+}

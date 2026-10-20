@@ -21,6 +21,7 @@ pub use phases::*;
 mod diagnostics;
 mod generic_graph;
 mod layered;
+mod table_keys;
 pub use diagnostics::*;
 pub use generic_graph::{GenericParameterRef, InstanceEdge, InstanceGraph, InstanceKind};
 pub use layered::Layered;

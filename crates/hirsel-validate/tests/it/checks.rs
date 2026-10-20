@@ -8641,3 +8641,6 @@ fn sorted_map_constructor_replays_dictionary_identity() {
         entity: "constructor field"
     }));
 }
+
+#[path = "table_controls.rs"]
+mod table_controls;

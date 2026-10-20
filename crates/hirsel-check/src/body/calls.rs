@@ -63,6 +63,11 @@ impl Checker<'_, '_> {
             }
         }
         let arguments: Vec<_> = inferred.into_iter().flatten().collect();
+        if let Some((_, ResolvedName::Definition(path))) = self.input_name(id).cloned()
+            && !self.table_key_arguments(id, &path, &arguments)?
+        {
+            return Ok(self.error());
+        }
         // As for direct calls, a borrowed local result may require Copyable
         // even when the declaration did not spell that bound explicitly.
         for (parameter, actual) in local_result_generics(&self.body.types, &function)
@@ -1021,6 +1026,12 @@ impl Checker<'_, '_> {
         } else {
             self.substitute(result, &args)?
         };
+        if !bad
+            && let CallTarget::Definition(callee) = &target
+            && !self.table_key_arguments(id, callee, &args)?
+        {
+            bad = true;
+        }
         if !bad {
             if let CallTarget::Definition(callee) = &target {
                 if !args.is_empty() {

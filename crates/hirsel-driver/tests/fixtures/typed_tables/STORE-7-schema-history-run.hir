@@ -1,0 +1,67 @@
+// rule: STORE-7
+// expect: run
+// Package version text is excluded, records project by name, declared renames
+// append history without touching old row bytes, and retyping refuses.
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  let old: table.Table[u32, table_models@1/model.Row] = table.named("rows")
+  let reordered: table.Table[u32, table_models@2/model.Row] = table.named("rows")
+  let renamed: table.Table[u32, table_models@3/model.Row] = table.named("rows")
+  let retyped: table.Table[u32, table_models@4/model.Row] = table.named("rows")
+  let written = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), table.TxError] {
+      table.create(mut tx, old)?
+      table.put(mut tx, old, 1, table_models@1/model.Row(label: "one", count: 42))?
+      Ok(())
+    }
+  )
+  test.check(t, written == Ok(()))
+  let snap = store.snapshot(mut s)
+  let mut prefix_bytes: List[u8] = []
+  bytes.append(mut prefix_bytes, b"hirsel.rows/")
+  bytes.append(mut prefix_bytes, keys.encode("rows"))
+  let prefix = bytes.from_list(take prefix_bytes)
+  let (low, high) = store.prefix_bounds(prefix)
+  let prior_rows = store.range(snap, low, high, Ascending(), 10)
+  store.close(take s)?
+  let mut reopened = store.open(d, store.default_config())?
+  let evolved = store.transact(
+    mut reopened,
+    fn(mut tx: store.Tx) -> Result[bool, table.TxError] {
+      let value = table.get(tx, reordered, 1)?
+      if value != Some(table_models@2/model.Row(count: 42, label: "one")) {
+        return Ok(false)
+      }
+      match table.get(tx, renamed, 1) {
+        Error(Schema(Renamed(_, _))) => (),
+        _ => return Ok(false),
+      }
+      table.rename(
+        mut tx,
+        "rows",
+        "table_models/model/Row.count",
+        "table_models/model/Row.total"
+      )?
+      if table.get(tx, renamed, 1)? != Some(
+        table_models@3/model.Row(total: 42, label: "one")
+      ) {
+        return Ok(false)
+      }
+      if table.get(tx, retyped, 1) != Error(Schema(ValueMismatch())) {
+        return Ok(false)
+      }
+      let history = table.history(tx, "rows")?
+      Ok(list.len(history) == 2 && history[0].epoch == 0 && history[1].epoch == 1)
+    }
+  )
+  test.check(t, evolved == Ok(true))
+  let snap_after = store.snapshot(mut reopened)
+  let (after_low, after_high) = store.prefix_bounds(prefix)
+  test.check(
+    t,
+    prior_rows == store.range(snap_after, after_low, after_high, Ascending(), 10)
+  )
+  Ok(())
+}

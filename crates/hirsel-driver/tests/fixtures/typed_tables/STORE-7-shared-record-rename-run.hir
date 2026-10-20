@@ -1,0 +1,50 @@
+// rule: STORE-9
+// expect: run
+// SER-2 merges equal record representations. Renaming A.value must split
+// that shared descriptor node while keeping B.value unchanged.
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let mut s = store.open(test.dir(t, []), store.default_config())?
+  let a: table.Table[u32, table_models@1/model.Pair] = table.named("pairs")
+  let b: table.Table[u32, table_models@2/model.Pair] = table.named("pairs")
+  let setup = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), table.TxError] {
+      table.create(mut tx, a)?
+      table.put(
+        mut tx,
+        a,
+        1,
+        table_models@1/model.Pair(
+          left: table_models@1/model.A(value: 7),
+          right: table_models@1/model.B(value: 8)
+        )
+      )?
+      table.rename(
+        mut tx,
+        "pairs",
+        "table_models/model/A.value",
+        "table_models/model/A.count"
+      )?
+      Ok(())
+    }
+  )
+  test.check(t, setup == Ok(()))
+  let read = store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[Option[table_models@2/model.Pair], table.TxError] {
+      table.get(tx, b, 1)
+    }
+  )
+  test.check(
+    t,
+    read == Ok(
+      Some(
+        table_models@2/model.Pair(
+          left: table_models@2/model.A(count: 7),
+          right: table_models@2/model.B(value: 8)
+        )
+      )
+    )
+  )
+  Ok(())
+}
