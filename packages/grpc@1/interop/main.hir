@@ -228,18 +228,18 @@ fn serve_connection(n: Net, clock: Option[MonotonicClock], take stream: Stream o
 }
 
 fn server(rt: Io, port: u16) -> Result[(), AppError] {
-  let n = io.net(rt) ? Grant
+  let n = io.net(rt) ?
   let clock: Option[MonotonicClock] = match io.monotonic_clock(rt) {
     Ok(c) => Some(c),
     Error(_) => None(),
   }
-  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ?
   task.scope(
-    io.tasks(rt) ? Grant,
+    io.tasks(rt) ?,
     fn(s: Scope) -> Result[(), AppError] {
       let mut accepting = take listener
       while true {
-        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let (stream, _) = net.accept(n, mut accepting) ?
         let child = task.async(
           s,
           fn() -> bool {
@@ -270,7 +270,7 @@ fn empty_unary(mut conn: grpc.ClientConn) -> Result[(), AppError] {
     mut conn,
     testing.default_Empty(),
     grpc.call_options()
-  ) ? Rpc
+  ) ?
   check(reply == testing.default_Empty(), "EmptyCall returned a non-empty message")
 }
 
@@ -278,7 +278,7 @@ fn large_unary(mut conn: grpc.ClientConn) -> Result[(), AppError] {
   let mut request = testing.default_SimpleRequest()
   request.response_size = 314159
   request.payload = Some(payload(271828))
-  let reply = testing.TestService_UnaryCall(mut conn, request, grpc.call_options()) ? Rpc
+  let reply = testing.TestService_UnaryCall(mut conn, request, grpc.call_options()) ?
   check(
     body_size(reply.payload) == 314159,
     f"UnaryCall returned {body_size(reply.payload)} bytes"
@@ -289,15 +289,15 @@ fn client_streaming(mut conn: grpc.ClientConn) -> Result[(), AppError] {
   let mut call = testing.TestService_StreamingInputCall_start(
     mut conn,
     grpc.call_options()
-  ) ? Rpc
+  ) ?
   let mut sum: u64 = 0
   for size in REQUEST_SIZES {
     let mut request = testing.default_StreamingInputCallRequest()
     request.payload = Some(payload(size))
-    testing.TestService_StreamingInputCall_send(mut conn, call, request) ? Rpc
+    testing.TestService_StreamingInputCall_send(mut conn, call, request) ?
     sum += widen(size)
   }
-  let reply = testing.TestService_StreamingInputCall_finish(mut conn, mut call) ? Rpc
+  let reply = testing.TestService_StreamingInputCall_finish(mut conn, mut call) ?
   check(
     widen(reply.aggregated_payload_size) == sum,
     f"aggregated size {reply.aggregated_payload_size}, want {sum}"
@@ -320,13 +320,13 @@ fn server_streaming(mut conn: grpc.ClientConn) -> Result[(), AppError] {
     mut conn,
     request,
     grpc.call_options()
-  ) ? Rpc
+  ) ?
   let mut index: u64 = 0
   while true {
     let Some(reply) = testing.TestService_StreamingOutputCall_receive(
       mut conn,
       mut call
-    ) ? Rpc else {
+    ) ? else {
       break
     }
     check(index < list.len(RESPONSE_SIZES), "too many responses")?
@@ -340,13 +340,13 @@ fn server_streaming(mut conn: grpc.ClientConn) -> Result[(), AppError] {
 }
 
 fn ping_pong(mut conn: grpc.ClientConn) -> Result[(), AppError] {
-  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ?
   let mut index: u64 = 0
   while index < list.len(REQUEST_SIZES) {
     let mut request = output_request([RESPONSE_SIZES[index]])
     request.payload = Some(payload(REQUEST_SIZES[index]))
-    testing.TestService_FullDuplexCall_send(mut conn, call, request) ? Rpc
-    let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc else {
+    testing.TestService_FullDuplexCall_send(mut conn, call, request) ?
+    let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? else {
       return Error(Failed("the call ended early"))
     }
     check(
@@ -355,8 +355,8 @@ fn ping_pong(mut conn: grpc.ClientConn) -> Result[(), AppError] {
     )?
     index += 1
   }
-  grpc.close_send(mut conn, call) ? Rpc
-  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  grpc.close_send(mut conn, call) ?
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ?
   check(option.is_none(last), "a response after the last request")
 }
 
@@ -364,7 +364,7 @@ fn cancel_after_begin(mut conn: grpc.ClientConn) -> Result[(), AppError] {
   let mut call = testing.TestService_StreamingInputCall_start(
     mut conn,
     grpc.call_options()
-  ) ? Rpc
+  ) ?
   grpc.cancel(mut conn, mut call)
   match testing.TestService_StreamingInputCall_finish(mut conn, mut call) {
     Ok(_) => Error(Failed("a canceled call succeeded")),
@@ -418,11 +418,11 @@ fn status_code_and_message(mut conn: grpc.ClientConn) -> Result[(), AppError] {
       f"UnaryCall ended {grpc.code_name(s.code)}: {s.message}"
     )?,
   }
-  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ?
   let mut stream_request = testing.default_StreamingOutputCallRequest()
   stream_request.response_status = Some(echo_request())
-  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ? Rpc
-  grpc.close_send(mut conn, call) ? Rpc
+  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ?
+  grpc.close_send(mut conn, call) ?
   match testing.TestService_FullDuplexCall_receive(mut conn, mut call) {
     Ok(_) => Error(Failed("FullDuplexCall succeeded")),
     Error(s) => check(
@@ -457,36 +457,36 @@ fn custom_metadata(mut conn: grpc.ClientConn) -> Result[(), AppError] {
   let mut request = testing.default_SimpleRequest()
   request.response_size = 1
   request.payload = Some(payload(1))
-  let reply = testing.TestService_UnaryCall_reply(mut conn, request, options) ? Rpc
+  let reply = testing.TestService_UnaryCall_reply(mut conn, request, options) ?
   check(body_size(reply.message.payload) == 1, "UnaryCall returned the wrong payload")?
   check_metadata(reply.headers, reply.trailers)?
-  let mut call = testing.TestService_FullDuplexCall_start(mut conn, options) ? Rpc
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, options) ?
   let mut stream_request = output_request([1])
   stream_request.payload = Some(payload(1))
-  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ? Rpc
-  let first = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  testing.TestService_FullDuplexCall_send(mut conn, call, stream_request) ?
+  let first = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ?
   check(option.is_some(first), "FullDuplexCall returned no response")?
-  grpc.close_send(mut conn, call) ? Rpc
-  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  grpc.close_send(mut conn, call) ?
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ?
   check(option.is_none(last), "a response after the last request")?
   check_metadata(grpc.response_headers(call), grpc.response_trailers(call))
 }
 
 // grpc-go interop/test_utils.go:223-237 DoEmptyStream.
 fn empty_stream(mut conn: grpc.ClientConn) -> Result[(), AppError] {
-  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
-  grpc.close_send(mut conn, call) ? Rpc
-  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ?
+  grpc.close_send(mut conn, call) ?
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ?
   check(option.is_none(last), "empty stream returned a message")
 }
 
 // grpc-go interop/test_utils.go:462-493 DoCancelAfterFirstResponse.
 fn cancel_after_first_response(mut conn: grpc.ClientConn) -> Result[(), AppError] {
-  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ?
   let mut request = output_request([31415])
   request.payload = Some(payload(27182))
-  testing.TestService_FullDuplexCall_send(mut conn, call, request) ? Rpc
-  let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc else {
+  testing.TestService_FullDuplexCall_send(mut conn, call, request) ?
+  let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? else {
     return Error(Failed("stream ended before its first response"))
   }
   check(body_size(reply.payload) == 31415, "first response has the wrong size")?
@@ -530,9 +530,9 @@ fn unimplemented(mut conn: grpc.ClientConn, service: String) -> Result[(), AppEr
 }
 
 fn client(rt: Io, host: String, port: u16, test_case: String) -> Result[(), AppError] {
-  let n = io.net(rt) ? Grant
-  let clock = io.monotonic_clock(rt) ? Grant
-  let tasks = io.tasks(rt) ? Grant
+  let n = io.net(rt) ?
+  let clock = io.monotonic_clock(rt) ?
+  let tasks = io.tasks(rt) ?
   let mut conn = grpc.dial(n, host, port, Some(tasks))
   if test_case == "empty_unary" {
     empty_unary(mut conn)
@@ -571,7 +571,7 @@ fn flag(args: Args, name: String) -> Result[Option[String], AppError] {
   let prefix = f"--{name}="
   let mut i: u64 = 1
   while i < arg.len(args) {
-    let a = arg.text(args, i) ? Arguments
+    let a = arg.text(args, i) ?
     if string.starts_with(a, prefix) {
       let Some((_, value)) = string.split_once(a, "=") else {
         return Ok(None())
@@ -598,7 +598,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   if arg.len(args) < 1 {
     return Error(Usage(usage))
   }
-  let mode = arg.text(args, 0) ? Arguments
+  let mode = arg.text(args, 0) ?
   if mode == "server" {
     return server(rt, port_flag(args, "port")?)
   }
@@ -614,7 +614,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
     return Error(Usage("--test_case is required"))
   }
   client(rt, host, port, test_case)?
-  let stdout = io.stdout(rt) ? Grant
+  let stdout = io.stdout(rt) ?
   let _ = out.print(stdout, f"{test_case}: passed\n")
   Ok(())
 }

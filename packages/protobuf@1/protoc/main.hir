@@ -11,7 +11,7 @@ pub type AppError = Usage(String) | Files(FileError) | Generate(String) | Argume
 )
 
 fn read_source(d: Dir, name: String) -> Result[protoc.Source, AppError] {
-  let data = file.read_bytes(d, path.of(name)) ? Files
+  let data = file.read_bytes(d, path.of(name)) ?
   match string.from_bytes(take data) {
     Ok(t) => Ok(protoc.Source(name: unique name, text: take t)),
     Error(_) => Error(Usage(f"{name} is not UTF-8")),
@@ -28,14 +28,14 @@ fn builtin_name(names: List[String], name: String) -> bool {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
-  let d = io.dir(rt, path.of("")) ? Files
+  let d = io.dir(rt, path.of("")) ?
   let mut grpc = false
   let mut imports: List[String] = []
   let mut external: List[(String, String)] = []
   let mut positional: List[String] = []
   let mut i: u64 = 0
   while i < arg.len(args) {
-    let a = arg.text(args, i) ? Arguments
+    let a = arg.text(args, i) ?
     if a == "--grpc" {
       grpc = true
     } else if a == "--import" || a == "--external" {
@@ -43,7 +43,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
       if i >= arg.len(args) {
         return Error(Usage(f"{a} needs a value"))
       }
-      let value = arg.text(args, i) ? Arguments
+      let value = arg.text(args, i) ?
       if a == "--import" {
         list.push(mut imports, take value)
       } else {
@@ -81,8 +81,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   }
   let config = protoc.Config(files: take files, external: take external, grpc: grpc)
   let generated = protoc.generate(sources, config) ? Generate
-  let mut output = file.create_atomic(d, path.of(positional[0])) ? Files
-  file.write_all(d, mut output, string.as_bytes(generated)) ? Files
-  file.commit(d, take output) ? Files
+  let mut output = file.create_atomic(d, path.of(positional[0])) ?
+  file.write_all(d, mut output, string.as_bytes(generated)) ?
+  file.commit(d, take output) ?
   Ok(())
 }

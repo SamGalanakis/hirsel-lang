@@ -321,10 +321,10 @@ pub fn read_signals_value(request: http.ServerRequest) -> Result[
     let Some((_, query)) = string.split_once(request.target, "?") else {
       return Error(Missing())
     }
-    let pairs = uri.query_pairs(query) ? Query
+    let pairs = uri.query_pairs(query) ?
     for (key, value) in pairs {
       if key == DATASTAR_KEY {
-        return Ok(json.parse(unique value) ? Json)
+        return Ok(json.parse(unique value) ?)
       }
     }
     return Error(Missing())
@@ -336,7 +336,7 @@ pub fn read_signals_value(request: http.ServerRequest) -> Result[
     Ok(text) => take text,
     Error(_) => return Error(Utf8()),
   }
-  Ok(json.parse(take body) ? Json)
+  Ok(json.parse(take body) ?)
 }
 
 /// The signals a request carries, decoded by `decode`, usually a derived
@@ -376,14 +376,14 @@ pub fn new_sse(take connection: http.ServerStream) -> Result[
       http.Header(name: "Cache-Control", value: "no-cache"),
       http.Header(name: "Content-Type", value: "text/event-stream")
     ]
-  ) ? Http
+  ) ?
   Ok(ServerSentEventGenerator(connection: take c))
 }
 
 /// Writes `event`, complete event text from one of the `_event` functions. Rendering
 /// once and sending the same text to many generators is how a server broadcasts.
 pub fn send(mut sse: ServerSentEventGenerator, text: String) -> Result[(), SseError] {
-  Ok(http.write_response_body(mut sse.connection, string.as_bytes(text)) ? Http)
+  Ok(http.write_response_body(mut sse.connection, string.as_bytes(text)) ?)
 }
 
 /// Writes `patch_elements_event(elements, options)`.
@@ -432,6 +432,6 @@ pub fn redirect(mut sse: ServerSentEventGenerator, url: String) -> Result[(), Ss
 pub fn close(take sse: ServerSentEventGenerator) -> Result[(), SseError] {
   let ServerSentEventGenerator(connection: connection) = take sse
   let mut c = take connection
-  http.end_response_body(mut c) ? Http
+  http.end_response_body(mut c) ?
   Ok(())
 }

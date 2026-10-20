@@ -333,7 +333,7 @@ fn request(
   config.max_body_bytes = c.config.max_object_bytes
   config.max_idle_connections = 0
   config.idle_timeout = None()
-  let mut http_client = http.client(c.network, None(), config) ? Http
+  let mut http_client = http.client(c.network, None(), config) ?
   Ok(
     http.client_fetch(
       mut http_client,
@@ -341,7 +341,7 @@ fn request(
       string.concat(c.config.endpoint, suffix),
       headers,
       body
-    ) ? Http
+    ) ?
   )
 }
 

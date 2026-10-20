@@ -108,8 +108,8 @@ fn run(request: pb.ConformanceRequest) -> pb.ConformanceResponse {
 }
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let input = io.stdin(rt) ? Grant
-  let output = io.stdout(rt) ? Grant
+  let input = io.stdin(rt) ?
+  let output = io.stdout(rt) ?
   let mut reader = bufio.new(65536)
   while true {
     let mut header: List[u8] = []
@@ -132,7 +132,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
       Error(e) => result_of(runtime_error(decode_error(e))),
     }
     let encoded = pb.encode_ConformanceResponse(response)
-    out.print(output, f"{base64.encode(encoded, Standard(), Required())}\n") ? Output
+    out.print(output, f"{base64.encode(encoded, Standard(), Required())}\n") ?
   }
   Ok(())
 }
