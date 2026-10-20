@@ -12,7 +12,10 @@ fn run_replayed(engine: &mut QueryEngine, entry: hirsel_syntax::DefPath, config:
     };
     let execution = run_observed_snapshot(engine, &run, config.clone()).unwrap();
     assert!(
-        matches!(execution.outcome, Ok(RunOutcome::Exit(0))),
+        matches!(
+            execution.outcome,
+            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+        ),
         "{:?}",
         execution.outcome
     );
