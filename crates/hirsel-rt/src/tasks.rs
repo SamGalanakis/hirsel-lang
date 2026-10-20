@@ -866,7 +866,7 @@ unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
 /// # Safety
 /// `ctx` is live and no task can run.
 unsafe fn blocked_waits(ctx: *mut RunCtx) -> Vec<hirsel_run_config::Wait> {
-    let table = unsafe { (*ctx).failure_table.as_deref() };
+    let table = unsafe { (*ctx).failure_table };
     let s = scheduler(ctx);
     let mut waits = Vec::new();
     for (index, wait) in s.parked() {

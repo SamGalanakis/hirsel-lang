@@ -268,32 +268,37 @@ pub struct FailureTable {
 }
 
 impl FailureTable {
-    /// The table as `hirsel_rt::isolate::FailureTable::decode` reads it: little-endian u64 words, the site
-    /// count, then each site's code, line, column and definition length followed by the
-    /// definition's bytes and a length-prefixed file path, then the rule count and
-    /// each rule's length and bytes.
+    /// The table as `hirsel_rt::isolate::FailureTable::new` reads it in place: little-endian,
+    /// a u32 site count and a u32 rule count, then each site's 32-byte record (u64 code, u32
+    /// line, u32 column, then the u32 offset and length in the string pool of its definition
+    /// path and of its file path) in code order, each rule's u32 offset and length, then the
+    /// string pool, which holds each distinct string once, in first-use order.
     pub fn encode(&self) -> Vec<u8> {
+        let mut pool: Vec<u8> = Vec::new();
+        let mut placed = std::collections::HashMap::new();
+        let mut place = |text: &str| -> [u32; 2] {
+            let offset = *placed.entry(text.to_owned()).or_insert_with(|| {
+                pool.extend(text.as_bytes());
+                pool.len() - text.len()
+            });
+            [offset, text.len()].map(|n| u32::try_from(n).expect("a failure table over 4 GiB"))
+        };
+        let count = |n: usize| u32::try_from(n).expect("a failure table over 4 GiB");
         let mut out = Vec::new();
-        let word = |out: &mut Vec<u8>, w: u64| out.extend(w.to_le_bytes());
-        word(&mut out, self.sites.len() as u64);
+        out.extend(count(self.sites.len()).to_le_bytes());
+        out.extend(count(self.rules.len()).to_le_bytes());
         for (code, definition, line, column, file) in &self.sites {
-            for w in [
-                *code,
-                u64::from(*line),
-                u64::from(*column),
-                definition.len() as u64,
-            ] {
-                word(&mut out, w);
+            out.extend(code.to_le_bytes());
+            for word in [[*line, *column], place(definition), place(file)].concat() {
+                out.extend(word.to_le_bytes());
             }
-            out.extend(definition.as_bytes());
-            word(&mut out, file.len() as u64);
-            out.extend(file.as_bytes());
         }
-        word(&mut out, self.rules.len() as u64);
         for rule in &self.rules {
-            word(&mut out, rule.len() as u64);
-            out.extend(rule.as_bytes());
+            for word in place(rule) {
+                out.extend(word.to_le_bytes());
+            }
         }
+        out.extend(pool);
         out
     }
 }

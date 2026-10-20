@@ -134,7 +134,7 @@ pub struct RunCtx {
     /// Where a stop of the run returns (`crate::stop`).
     pub(crate) driver: crate::stop::Driver,
     /// The running program's failure table (`crate::isolate`).
-    pub(crate) failure_table: Option<std::sync::Arc<crate::isolate::FailureTable>>,
+    pub(crate) failure_table: Option<crate::isolate::FailureTable>,
     /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     #[cfg(feature = "measurement")]

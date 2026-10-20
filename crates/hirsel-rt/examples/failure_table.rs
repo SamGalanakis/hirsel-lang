@@ -15,21 +15,25 @@ fn main() {
         .unwrap_or("100".into())
         .parse()
         .unwrap();
+    // The encoding FailureTable::new reads: counts, 32-byte site records, then the pool.
+    let file = "benchmark/module.hir";
+    let mut pool = file.as_bytes().to_vec();
     let mut bytes = Vec::new();
-    bytes.extend(count.to_le_bytes());
+    bytes.extend((count as u32).to_le_bytes());
+    bytes.extend(0u32.to_le_bytes());
     for code in 0..count {
         let definition = format!("benchmark@1/module.function_{code}");
-        let file = "benchmark/module.hir";
-        for word in [code, 42, 7, definition.len() as u64] {
+        bytes.extend(code.to_le_bytes());
+        let offset = pool.len() as u32;
+        for word in [42, 7, offset, definition.len() as u32, 0, file.len() as u32] {
             bytes.extend(word.to_le_bytes());
         }
-        bytes.extend(definition.as_bytes());
-        bytes.extend((file.len() as u64).to_le_bytes());
-        bytes.extend(file.as_bytes());
+        pool.extend(definition.as_bytes());
     }
-    bytes.extend(0u64.to_le_bytes());
+    bytes.extend(pool);
+    let bytes: &'static [u8] = Vec::leak(bytes);
     for _ in 0..rounds {
-        black_box(FailureTable::decode(black_box(&bytes)).unwrap());
+        black_box(FailureTable::new(black_box(bytes)).unwrap());
     }
     println!("{count} {rounds}");
 }

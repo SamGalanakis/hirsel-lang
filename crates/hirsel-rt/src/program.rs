@@ -3,8 +3,6 @@
 //! [`Program`], which owns everything a run of that program needs from the process: its entry,
 //! descriptor registry, failure table, semantic digest, entry name, roots and flags. Nothing of
 //! a program is process-global, so runs of different programs share a process.
-use std::sync::Arc;
-
 use crate::isolate::FailureTable;
 use crate::launch::{Config, Entry, RootsEntry, TestEntry, ZeroEntry};
 use crate::{ABI_VERSION, Layout};
@@ -37,7 +35,7 @@ pub struct ProgramDescriptor {
     /// The entry's inline result size.
     pub result_size: u64,
     pub layouts: *const *const Layout,
-    /// The encoded failure table ([`FailureTable::decode`]).
+    /// The encoded failure table ([`FailureTable::new`]).
     pub failure_table: *const u8,
     pub failure_table_length: u64,
     /// The entry's full definition path, UTF-8.
@@ -86,7 +84,7 @@ pub struct Program {
     pub(crate) result_size: u64,
     pub(crate) layouts: *const *const Layout,
     pub(crate) layout_count: u32,
-    pub(crate) failure_table: Option<Arc<FailureTable>>,
+    pub(crate) failure_table: Option<FailureTable>,
     pub(crate) digest: [u8; 32],
     pub(crate) entry_name: String,
     pub(crate) flags: u32,
@@ -115,8 +113,9 @@ impl Program {
         }
         let roots = u8::try_from(d.roots).map_err(|_| "invalid compiled root selection")?;
         crate::standalone::required_roots(roots).map_err(|e| e.to_string())?;
-        // SAFETY: caller contract.
-        let bytes = |data: *const u8, length: u64| -> Result<&[u8], String> {
+        // SAFETY: caller contract: the data outlives the program and its runs, which hold
+        // the only views of it.
+        let bytes = |data: *const u8, length: u64| -> Result<&'static [u8], String> {
             let length = usize::try_from(length).map_err(|_| "a descriptor length overflows")?;
             if length == 0 {
                 return Ok(&[]);
@@ -126,7 +125,7 @@ impl Program {
             }
             Ok(unsafe { std::slice::from_raw_parts(data, length) })
         };
-        let table = FailureTable::decode(bytes(d.failure_table, d.failure_table_length)?)
+        let table = FailureTable::new(bytes(d.failure_table, d.failure_table_length)?)
             .ok_or("a malformed failure table")?;
         let entry_name = std::str::from_utf8(bytes(d.entry_name, d.entry_name_length)?)
             .map_err(|_| "invalid entry name")?
@@ -136,7 +135,7 @@ impl Program {
             result_size: d.result_size,
             layouts: d.layouts,
             layout_count: d.layout_count,
-            failure_table: Some(Arc::new(table)),
+            failure_table: Some(table),
             digest: d.digest,
             entry_name,
             flags: d.flags,

@@ -1778,8 +1778,8 @@ pub(crate) unsafe fn execute(
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };
-    if let Some(table) = &program.failure_table {
-        crate::isolate::attach(unsafe { &mut *ctx }, table.clone());
+    if let Some(table) = program.failure_table {
+        crate::isolate::attach(unsafe { &mut *ctx }, table);
     }
     // Zeroed and 16-aligned: the entry writes a result of any supported alignment.
     let mut result = [0u128; RESULT_MAX as usize / 16];
@@ -1916,7 +1916,7 @@ pub(crate) unsafe fn execute(
                     failure.kind, failure.rule, failure.site, failure.operation_site
                 );
             }
-            let table = program.failure_table.as_deref().unwrap_or_else(|| {
+            let table = program.failure_table.unwrap_or_else(|| {
                 crate::fault("a failed run without its program's failure table")
             });
             let mut failures = records.iter().map(|record| table.failure(record));

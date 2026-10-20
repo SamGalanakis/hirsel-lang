@@ -358,7 +358,11 @@ int32_t hirsel_rt_v2_launch(uint8_t (*entry)(hirsel_rt_v2_ctx *, uint8_t *, uint
  * The root-order adapter receives [Io, Args, Env, Unsafe, Test]; roots uses bits 0..4 in that
  * order. A STANDALONE program binds its semantic digest and entry and acquires fresh grants
  * at each launch; otherwise config binds the one run the executable was built for. The
- * runtime keeps the failure table per program, so runs of several programs share a process. */
+ * runtime keeps the failure table per program, so runs of several programs share a process.
+ * The failure table (ABI 22) is little-endian: u32 site and rule counts, 32-byte site records
+ * (u64 code, u32 line, u32 column, u32 offset and length of the definition path, then of the
+ * file path) sorted by code, 8-byte rule records (u32 offset, length), then a UTF-8 string
+ * pool; the runtime reads it in place. */
 typedef uint8_t (*hirsel_rt_v2_roots_entry)(hirsel_rt_v2_ctx *, uint8_t *, uint8_t *, uint64_t *);
 #define HIRSEL_RT_V2_PROGRAM_UNREPLAYABLE 1u
 #define HIRSEL_RT_V2_PROGRAM_STANDALONE 2u

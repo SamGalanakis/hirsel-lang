@@ -663,7 +663,10 @@ line, column and spawn path, each a fresh block. A record holds compiler codes, 
 descriptor carries its failure table (`program.rs`, `isolate::FailureTable`), which each of its
 runs' contexts reaches: one pointer-free byte string holding each site code's definition path and one-based position
 (0 and 0 for a site inside a library body, which only a resource failure reaches), sorted by
-code, and each program rule code's rule ID.
+code, and each program rule code's rule ID. Since runtime ABI 22 it is fixed-width site and
+rule records over a string pool that holds each distinct path once, read in place: loading a
+program decodes and allocates nothing, and a lookup binary-searches the site records and
+validates only the strings it returns.
 
 ## Launch and the Hirsel-ABI Io entries
 
