@@ -122,7 +122,7 @@ def compare(expected, actual):
 def ratchet(baseline, measurements):
     """Keep the lowest measured case totals beyond 1% noise, with their profile.
 
-    Measurements come only from passing runs of main's hourly suite
+    Measurements come only from passing runs of main's full suite
     (tools/main-runs). A run may have measured before another baseline
     landed: it must never raise that newer baseline. Function rows are
     diagnostic, not budgets.
@@ -296,7 +296,7 @@ def main():
     _, improvements = ratchet(baseline, [rows])
     for item in improvements:
         print(f'perf-counts: improvement {item["count"]}: {item["old"]:,} -> {item["new"]:,} Ir; '
-              'pass (main\'s hourly run, tools/main-runs, records the lower budget)', flush=True)
+              'pass (main\'s full run, tools/main-runs, records the lower budget)', flush=True)
     print(MARKER + json.dumps(rows, sort_keys=True, separators=(',', ':')))
     return 0
 

@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""The full suite on origin/main every hour, each red reported and routed to its likely lane.
+"""Main's test runs on origin/main, each red reported and routed to its likely lane.
 
-    tools/main-runs --tick    # hirsel-main-runs.timer's entry (systemd user unit, hourly, pool priority 40)
+    tools/main-runs --tick [--tier fast|full] [--dry-run]
 
-A tick that finds no run going and origin/main moved checks main out in the
-runner's worktree and runs that copy (--run), so a fix to the runner holds
-from the next run. A run executes every stage below except those
+The fast tier (the default) is the build, Clippy, fmt, the workspace and tool
+tests; hirsel-main-runs.timer (a systemd user unit, host config) ticks it
+every 2 h at pool priority 40 (Nice 10). The full tier is every stage below:
+the release gate, run only by hand before milestones. A fast tick skips while
+any run is going; a full tick waits for it. A tick skips when origin/main has
+not moved since the last run that covered its tier (a full run covers fast);
+otherwise it checks main out in the runner's worktree and runs that copy
+(--run), so a fix to the runner holds from the next run. --dry-run lists the
+tier's stages instead. A run executes its tier's stages except those
 tools/main-runs-skip.tsv lists. A red is a failed test, or a failed stage with
 none, that tools/known-failures.tsv does not explain. The report
 ($HIRSEL_MAIN_RUNS/reports/, latest.md) names each red's likely culprit: of
-the commits since the last run, the one that changed most under the red's
+the commits since the last run of its stage, the one that changed most under the red's
 crate or its failing corpus cases, with its lane from hirsel-landings.jsonl.
 New reds go to that lane (`sluice tool say`), else to the orchestrator. Then
-docs/api.md is regenerated and the instruction budgets ratchet down to what
-gate-perf-counts measured, each pushed straight to main when it changed.
+docs/api.md is regenerated and, after a full run, the instruction budgets
+ratchet down to what gate-perf-counts measured, each pushed straight to main
+when it changed.
 """
 
 import fcntl
@@ -71,24 +78,28 @@ def checkout(tree, sha):
     git('clean', '-fdq', cwd=tree)
 
 
-def tick():
+def covers(row, tier):
+    return tier == 'fast' or row.get('tier', 'full') == 'full'
+
+
+def tick(tier):
     RUNS.mkdir(parents=True, exist_ok=True)
     handle = open(RUNS / 'main-runs.lock', 'a+')
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle, fcntl.LOCK_EX | (fcntl.LOCK_NB if tier == 'fast' else 0))
     except BlockingIOError:
         return say('skip: a run is still going') or 0
     git('fetch', '-q', 'origin', 'main')
     sha = git('rev-parse', 'refs/remotes/origin/main')
-    if (previous := rows()) and previous[-1]['sha'] == sha:
-        return say(f'skip: the last run checked origin/main {sha[:12]}') or 0
+    if (covered := [r for r in rows() if covers(r, tier)]) and covered[-1]['sha'] == sha:
+        return say(f'skip: the last {tier} run checked origin/main {sha[:12]}') or 0
     checkout(RUN_TREE, sha)
     os.set_inheritable(handle.fileno(), True)  # the lock stays held through the run
-    os.execv(PY, [PY, str(RUN_TREE / 'tools/main-runs'), '--run', sha])
+    os.execv(PY, [PY, str(RUN_TREE / 'tools/main-runs'), '--run', sha, tier])
 
 
-def stages(stage):
-    """Run the full suite, one `stage(name, command)` each."""
+def stages(stage, tier):
+    """Run the tier's stages, one `stage(name, command)` each: fast is a prefix of full."""
     seed = str(int.from_bytes(os.urandom(4), 'little'))  # a new seed: no cached pass of the seeded tests
     config = ['-c', 'hirsel.full=true', '-c', f'hirsel.test_seed={seed}', '-c', 'hirsel.priority=40']
     os.environ.update(HIRSEL_BUCK2_CONFIG=' '.join(config), HIRSEL_PRIORITY='40')
@@ -118,6 +129,8 @@ def stages(stage):
     stage('workspace clippy', [PY, 'tools/buck2/clippy.py'])
     stage('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
     stage('workspace tests', test(*tests))
+    if tier == 'fast':
+        return
     stage('full gate crate tests', full_crate_tests(*libtests))
     stage('conformance validation and ratchet', [PY, 'tools/buck2/conformance.py'])
     stage('source and IR checker agreement (unrestricted)', [PY, 'tools/buck2/agree.py', '--full'])
@@ -142,14 +155,15 @@ def failing_ids(target, details):
     return list(dict.fromkeys(ids + re.findall(r'"path"\s*:\s*"(conformance/[^"]+\.hir)"', details)))
 
 
-def run_stages(directory, log):
-    """Every stage's verdict: (reds by key, skipped stages, the perf measurement)."""
+def run_stages(directory, log, tier):
+    """Every stage's verdict: (reds by key, stages run, skipped stages, the perf measurement)."""
     skip, known = table(TREE / 'tools/main-runs-skip.tsv'), table(TREE / 'tools/known-failures.tsv')
-    reds, skipped, perf = {}, [], []
+    reds, ran, skipped, perf = {}, [], [], []
 
     def stage(name, command, isolated=False):
         if name in skip:
             return skipped.append(skip[name])
+        ran.append(name)
         logs = directory / 'logs' / re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
         logs.mkdir(parents=True, exist_ok=True)
         env = ({k: v for k, v in os.environ.items() if k not in RUN_VARIABLES} if isolated
@@ -171,11 +185,11 @@ def run_stages(directory, log):
                 ids = failing_ids(target, result['details'])
                 if not ({target, re.sub(r'-shard-\d+$', '', target)} & known.keys()
                         or ids and all(i in known for i in ids)):
-                    reds[f'{name}: {target}'] = dict(target=target, ids=ids[:20])
+                    reds[f'{name}: {target}'] = dict(stage=name, target=target, ids=ids[:20])
         if status and not failed:
-            reds[f'stage: {name}'] = dict(target=None, ids=[])
-    stages(stage)
-    return reds, skipped, perf[0] if len(perf) == 1 else None
+            reds[f'stage: {name}'] = dict(stage=name, target=None, ids=[])
+    stages(stage, tier)
+    return reds, ran, skipped, perf[0] if len(perf) == 1 else None
 
 
 def lanes(commits):
@@ -220,22 +234,25 @@ def describe(key, red):
             + f', red since {red["since"][:12]}' + (f'; failing {", ".join(red["ids"][:5])}' if red['ids'] else ''))
 
 
-def route(sha, reds, previous, report):
-    """Name each red's likely culprit and lane; tell each lane its new reds."""
-    base = previous['sha'] if previous else f'{sha}~10'
-    commits = git('rev-list', '--reverse', f'{base}..{sha}').split()
-    changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
-    owners = lanes(commits)
+def route(sha, reds, history, report):
+    """Name each red's likely culprit and lane; tell each lane its new reds.
+
+    A red is compared with the last run that ran its stage (a row without a
+    stage list ran them all): a red it had keeps its culprit, a new one's
+    culprit is among the commits since it."""
     messages = {}
     for key, red in sorted(reds.items()):
+        previous = next((r for r in reversed(history) if red['stage'] in r.get('stages', [red['stage']])), None)
         if old := (previous or {}).get('reds', {}).get(key):
             red.update(culprit=old.get('culprit'), lane=old.get('lane'), since=old.get('since', previous['sha']))
             continue
+        commits = git('rev-list', '--reverse', f'{previous["sha"] if previous else sha + "~10"}..{sha}').split()
+        changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
         found = culprit(red, commits, changed)
-        red.update(culprit=found, lane=owners.get(found), since=sha)
+        red.update(culprit=found, lane=lanes(commits).get(found), since=sha)
         messages.setdefault(red['lane'] or ORCHESTRATOR, []).append(describe(key, red))
     for to, lines in messages.items():
-        body = (f'main-runs: new reds on origin/main {sha[:12]} (since {base[:12]}). Fix forward, or add a row '
+        body = (f'main-runs: new reds on origin/main {sha[:12]}. Fix forward, or add a row '
                 f'to tools/known-failures.tsv. Report: {report}\n' + '\n'.join(lines))
         if not tell(to, body) and to != ORCHESTRATOR:
             tell(ORCHESTRATOR, body)
@@ -274,15 +291,14 @@ def ratchet(measured):
     return update
 
 
-def run(sha):
+def run(sha, tier):
     start = time.time()
     directory = RUNS / 'runs' / f'{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start))}-{sha[:12]}'
     directory.mkdir(parents=True)
     with open(directory / 'run.log', 'w') as log:
-        reds, skipped, perf = run_stages(directory, log)
-    previous = (rows() or [None])[-1]
+        reds, ran, skipped, perf = run_stages(directory, log, tier)
     report = RUNS / 'reports' / f'{directory.name}.md'
-    route(sha, reds, previous, report)
+    route(sha, reds, rows(), report)
     pushed = []
     for name, update in (('Regenerate the API index.', api_index),
                          ('Ratchet the instruction budgets main measured.', ratchet(perf) if perf else None)):
@@ -292,7 +308,7 @@ def run(sha):
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError, ValueError) as error:
             pushed.append(f'{name} failed: {error}')
     minutes = (time.time() - start) / 60
-    lines = [f'# main run {sha[:12]}: {len(reds)} reds', '',
+    lines = [f'# {tier} main run {sha[:12]}: {len(reds)} reds', '',
              f'{time.strftime("%Y-%m-%d %H:%M", time.gmtime(start))}Z, {minutes:.0f} min; log {directory / "run.log"}', '']
     lines += [describe(key, red) for key, red in sorted(reds.items())]
     lines += [f'- skipped: {row[0]}: {row[1]} (owner {row[2]}, since {row[3]})' for row in skipped]
@@ -301,14 +317,20 @@ def run(sha):
     report.write_text('\n'.join(lines) + '\n')
     (RUNS / 'latest.md').write_text(report.read_text())
     with open(ROWS, 'a') as out:
-        out.write(json.dumps(dict(sha=sha, start=start, minutes=round(minutes), reds=reds, report=str(report))) + '\n')
-    say(f'{sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
+        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=reds, report=str(report))) + '\n')
+    say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
     return 0
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--tick']:
-        sys.exit(tick())
-    if sys.argv[1:2] == ['--run'] and len(sys.argv) == 3:
-        sys.exit(run(sys.argv[2]))
+    arguments, tier = sys.argv[1:], 'fast'
+    if arguments[1:3] in (['--tier', 'fast'], ['--tier', 'full']):
+        tier = arguments[2]
+        del arguments[1:3]
+    if arguments == ['--tick', '--dry-run']:
+        sys.exit(stages(lambda name, *_, **__: print(name), tier))
+    if arguments == ['--tick']:
+        sys.exit(tick(tier))
+    if arguments[:1] == ['--run'] and arguments[2:] in ([], ['fast'], ['full']) and len(arguments) > 1:
+        sys.exit(run(arguments[1], (arguments[2:] or ['fast'])[0]))  # a tick before tiers passes no tier
     sys.exit(print(__doc__, file=sys.stderr) or 2)

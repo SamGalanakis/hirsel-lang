@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tools/main-runs names each red's likely culprit and lane from the commits
-since the last run, tells each lane its new reds once, and sends a red with no
-known lane to the orchestrator."""
+since the last run of the red's stage, tells each lane its new reds once, and
+sends a red with no known lane to the orchestrator; a fast tier runs only the
+quick stages."""
 import os
 from pathlib import Path
 import runpy
@@ -51,25 +52,29 @@ class Route(unittest.TestCase):
 
     def test_each_red_goes_to_the_lane_whose_commits_match_it(self):
         reds = {
-            'workspace tests: hirsel-foo-test-it-shard-2': dict(target='hirsel-foo-test-it-shard-2',
+            'workspace tests: hirsel-foo-test-it-shard-2': dict(stage='workspace tests', target='hirsel-foo-test-it-shard-2',
                                                                 ids=['hirsel-foo-test-it::walk']),
             'conformance validation and ratchet: gate-conformance-shard-3': dict(
-                target='gate-conformance-shard-3', ids=['conformance/SEM/SEM-1-x-run.hir']),
-            'stage: native and Lean checks': dict(target=None, ids=[]),
-            'workspace tests: hirsel-bar-unittest': dict(target='hirsel-bar-unittest', ids=[]),
+                stage='conformance validation and ratchet', target='gate-conformance-shard-3', ids=['conformance/SEM/SEM-1-x-run.hir']),
+            'stage: native and Lean checks': dict(stage='native and Lean checks', target=None, ids=[]),
+            'workspace tests: hirsel-bar-unittest': dict(stage='workspace tests', target='hirsel-bar-unittest', ids=[]),
         }
-        previous = dict(sha=self.commits['base'], reds={
-            'workspace tests: hirsel-bar-unittest': dict(culprit='c0ffee', lane='lane-z', since='5eed')})
-        self.route(self.commits['bar'], reds, previous, '/report.md')
+        # The full run before has the old red; the fast run since ran only workspace tests and had it too.
+        old_red = dict(culprit='c0ffee', lane='lane-z', since='5eed')
+        history = [dict(sha=self.commits['base'], reds={'workspace tests: hirsel-bar-unittest': old_red}),
+                   dict(sha=self.commits['foo-2'], tier='fast', stages=['workspace tests'],
+                        reds={'workspace tests: hirsel-bar-unittest': old_red})]
+        self.route(self.commits['bar'], reds, history, '/report.md')
         foo, corpus, stage, old = reds.values()
-        # lane-a's two commits match the crate equally: the newer one is the culprit.
-        self.assertEqual((foo['culprit'], foo['lane']), (self.commits['foo-2'], 'lane-a'))
+        # A red in a stage the fast run ran is new since that run, so only bar can be its culprit;
+        # the corpus red's stage last ran in the full run, so its culprit is among all three commits.
+        self.assertEqual((foo['culprit'], foo['lane']), (self.commits['bar'], 'lane-b'))
         self.assertEqual((corpus['culprit'], corpus['lane']), (self.commits['bar'], 'lane-b'))
         self.assertEqual((stage['culprit'], stage['lane']), (None, None))
         self.assertEqual((old['culprit'], old['lane'], old['since']), ('c0ffee', 'lane-z', '5eed'))
         said = self.said.read_text()
-        self.assertEqual(said.count('TO '), 3)
-        for lane, key in (('lane-a', 'hirsel-foo-test-it-shard-2'), ('lane-b', 'gate-conformance-shard-3'),
+        self.assertEqual(said.count('TO '), 2)
+        for lane, key in (('lane-b', 'hirsel-foo-test-it-shard-2'), ('lane-b', 'gate-conformance-shard-3'),
                           ('@agentlang-24', 'native and Lean checks')):
             message = said.split(f'TO {lane}\n')[1].split('TO ')[0]
             self.assertIn(key, message)
@@ -78,10 +83,34 @@ class Route(unittest.TestCase):
     def test_a_lane_that_cannot_be_told_falls_back_to_the_orchestrator(self):
         landings = self.repo / '.git/hirsel-landings.jsonl'
         landings.write_text(landings.read_text().replace('lane-b', 'lane-gone'))
-        reds = {'x: hirsel-bar-unittest': dict(target='hirsel-bar-unittest', ids=[])}
-        self.route(self.commits['bar'], reds, dict(sha=self.commits['foo-2'], reds={}), '/report.md')
+        reds = {'x: hirsel-bar-unittest': dict(stage='x', target='hirsel-bar-unittest', ids=[])}
+        self.route(self.commits['bar'], reds, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
         self.assertEqual(reds['x: hirsel-bar-unittest']['lane'], 'lane-gone')
         self.assertIn('TO @agentlang-24\n', self.said.read_text())
+
+
+class Tiers(unittest.TestCase):
+    def test_fast_runs_only_the_quick_stages_and_full_runs_them_too(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        tool['subprocess'].run = lambda *a, **k: subprocess.CompletedProcess(a, 0, '', '')  # no uquery
+        named = {}
+        for tier in ('fast', 'full'):
+            named[tier] = []
+            env = dict(os.environ)
+            try:
+                tool['stages'](lambda name, *_, **__: named[tier].append(name), tier)
+            finally:
+                os.environ.clear()
+                os.environ.update(env)
+        fast = [n for n in named['fast'] if not n.startswith('tool tests: ')]
+        self.assertEqual(fast, ['Buck2 toolchains and pool configuration', 'Buck2 build files and test-cost coverage',
+                                'workspace build', 'workspace clippy', 'formatting', 'workspace tests'])
+        self.assertEqual(named['full'][:len(named['fast'])], named['fast'])
+        self.assertIn('native passing corpus with independent second hash seed', named['full'])
+        # A fast tick is skipped by a full run of main; a full tick is not skipped by a fast run.
+        covers = tool['covers']
+        self.assertTrue(covers({}, 'fast') and covers({'tier': 'full'}, 'fast') and covers({}, 'full'))
+        self.assertFalse(covers({'tier': 'fast'}, 'full'))
 
 
 if __name__ == '__main__':

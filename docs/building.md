@@ -808,7 +808,7 @@ compiled through the driver is tested in `//:hirsel-pipeline-tests-test-front`
 and `-test-rc`. Focus books one CPU per test run, so it starts at once where a
 whole-shard request waits for a worker to free its CPUs (median edit-to-result
 38 s against 114 s over twelve paired edits). Leave `-c hirsel.full=true` to
-main's hourly run.
+main's runs.
 
 Run one corpus program, including its expected outcome, checked execution and
 canonical formatter check, on the pool:
@@ -847,14 +847,15 @@ targets (`;` separates slices, `|` the paths of one slice):
 ```
 
 Corpus cases with a `// runners:` header run only interpreted. Land checks
-only what breaks everyone, and the full suite runs hourly on main.
+only what breaks everyone; main's fast run tests main every 2 h and the full
+suite runs by hand before milestones.
 
 ### Known failures
 
 Failures main is known to have are listed in `tools/known-failures.tsv` (one
 tab-separated row each: test id, reason, owner lane, date). An id is a test
 target, a binary and case (`hirsel-rt-test-it::replay::kill_order`) or a
-corpus case path. The hourly run reports no red the list explains. A lane
+corpus case path. A main run reports no red the list explains. A lane
 that meets a red it did not cause adds a row itself and pushes it straight to
 main; the lane that fixes a red removes its row.
 
@@ -871,7 +872,7 @@ error; a conflict stops land with the conflicted paths. Land runs no tests.
 After its rebase it runs the rebased tree's own `tools/land`, so a landed fix
 to it holds at once. Each push appends a row (`landed`, `branch`, `base`,
 `at`) to `hirsel-landings.jsonl` in the clone's common git directory, from
-which the hourly run names a commit's lane.
+which a main run names a commit's lane.
 
 No change commits a generated file, so no rebase conflicts on one: land
 refuses a change that touches `docs/api.md` or a gitignored build file, with
@@ -883,28 +884,40 @@ and the sorted ratchet and expectation lists keep the entries either side
 adds and drop those either side removes. Any other conflict is the lane's to
 resolve by hand.
 
-### Main's hourly run
+### Main's runs
 
-`tools/main-runs --tick` runs from a systemd user timer
-(`hirsel-main-runs.timer`, hourly; it needs no session), whose service runs
-the copy in the runner's worktree (`$HIRSEL_MAIN_RUNS/worktrees/main-runs`, by
-default under `~/.local/state/hirsel/main-runs`). A tick skips while a run is
-going or when main has not moved since the last run; otherwise it checks out
-origin/main there and runs that commit's copy, so a fix to the runner holds
-from the next run. The run executes the full suite at pool priority 40: every
-test, the whole conformance campaign, the unrestricted source/IR and native
-agreement campaigns, release tests, the `full_gate_` tests in debug and
-release, the native matrix and every `tools/check-native.sh` check, except
-the stages `tools/main-runs-skip.tsv` (stage, reason, owner lane, date) names.
+`tools/main-runs --tick --tier fast|full` runs main's suite in one of two
+tiers at pool priority 40. The fast tier (the default) runs prepare,
+`sync.py --check`, the tool tests, the workspace build, Clippy, fmt and the
+workspace tests (about 12 min). The full tier runs those and then the release
+gate: the `full_gate_` tests in debug and release, the whole conformance
+campaign and ratchet, the unrestricted source/IR and native agreement
+campaigns, the instruction budgets, native smoke, release tests, the native
+matrix, every `tools/check-native.sh` check and both hash-seed sweeps. It
+takes hours and runs only by hand, before milestones
+(`tools/main-runs --tick --tier full`, in the background with a log).
+`--dry-run` lists a tier's stages.
 
-Each run writes one report (`$HIRSEL_MAIN_RUNS/reports/<time>-<sha>.md`, the
+A systemd user timer (`hirsel-main-runs.timer`, every 2 h; host config, not
+in the repo; it needs no session) ticks the fast tier through
+`hirsel-main-runs.service` (Nice 10, at most 8 GiB and 4 CPUs), which runs the
+copy in the runner's worktree (`$HIRSEL_MAIN_RUNS/worktrees/main-runs`, by
+default under `~/.local/state/hirsel/main-runs`). One lock admits one run: a
+fast tick skips while any run is going, and a full tick waits for it. A tick
+skips when main has not moved since the last run that covered its tier (a
+full run covers fast); otherwise it checks out origin/main there and runs
+that commit's copy, so a fix to the runner holds from the next run. A run
+executes its tier's stages except those `tools/main-runs-skip.tsv` (stage,
+reason, owner lane, date) names.
+
+Each run writes one report, headed with its tier (`$HIRSEL_MAIN_RUNS/reports/<time>-<sha>.md`, the
 newest copied to `latest.md`): every red the known failures do not explain,
-with its likely culprit (of the commits since the previous run, the one that
+with its likely culprit (of the commits since the last run of its stage, the one that
 changed the most files under the red's crate or among its failing corpus
 cases) and that commit's lane from the landings log. Each new red goes to its
 lane with `sluice tool say` (as `@main-runs`), or to the orchestrator when no
 lane is known. After the run it regenerates `docs/api.md` with the built CLI
-and ratchets `tools/perf-counts.tsv` down to what `gate-perf-counts` measured
+and after a full run ratchets `tools/perf-counts.tsv` down to what `gate-perf-counts` measured
 beyond the 1% noise, pushing each change straight to main.
 `tools/perf-counts --bless` measures on the pool and rewrites the table: the
 reviewed step after an intended change of counts.
@@ -946,7 +959,7 @@ Tests that execute the full native matrix or take about a minute or longer
 carry `#[ignore = "full gate"]` and a `full_gate_` name prefix. Keep their
 inputs and assertions intact; add a separate bounded smoke test when useful.
 Cases that call `full_matrix` only for discovery, and the drift tests of
-`docs/api.md` (current on main alone, since only the hourly run writes it), are
+`docs/api.md` (current on main alone, since only main's runs write it), are
 skipped by name outside the full suite (`FULL_GATE_SKIPS` in
 `tools/buck2/sync.py`).
 
