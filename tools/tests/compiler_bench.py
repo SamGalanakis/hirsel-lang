@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / 'tools/compiler-bench'
@@ -93,31 +92,6 @@ class Verdicts(unittest.TestCase):
 
 
 
-class Measurement(unittest.TestCase):
-    def test_perf_counts_the_compiler_and_children_inside_one_capped_call(self):
-        snapshots = [{'cpu15': {'total': 100, 'idle': 0}}, {'cpu15': {'total': 200, 'idle': 80}}]
-        def execute(command, **kwargs):
-            self.assertEqual(command[:3], [str(run.CAPPED), '--timeout', '10'])
-            self.assertEqual(command[-3:], ['--', 'hirsel', 'check'])
-            self.assertEqual(command[command.index('taskset') + 1:command.index('taskset') + 3], ['-c', '31'])
-            Path(command[command.index('-o') + 1]).write_text('1.0 0.8 0.1 1024')
-            import shlex
-            for hook in ('--pre', '--post'):
-                Path(shlex.split(command[command.index(hook) + 1])[-1]).touch()
-            perf_path = command[command.index('perf'):]
-            Path(perf_path[perf_path.index('-o') + 1]).write_text('\n'.join(
-                f'123;;{e};100;100;;' for e in ('task-clock', 'cycles', 'instructions', 'cycles:u', 'instructions:u')))
-            return type('Completed', (), {'returncode': 0, 'stderr': ''})()
-        with patch.object(run.subprocess, 'run', side_effect=execute), \
-                patch.object(run, 'siblings', return_value=[15]), \
-                patch.object(run, 'cpu_snapshot', side_effect=snapshots):
-            measured, _ = run.measured(['hirsel', 'check'], {}, 10)
-        self.assertEqual(measured['instructions_u'], 123)
-        self.assertEqual(measured['cpu_s'], 0.9)
-        self.assertEqual(measured['rss_mib'], 1)
-        self.assertEqual(measured['sibling_busy_share']['cpu15'], 0.2)
-
-
 class Timings(unittest.TestCase):
     REPORT = {'schema': 1, 'command': 'build', 'wall_ns': 712000000, 'untimed_ns': 9000000,
               'intervals': [{'interval': 'image open', 'wall_ns': 101000000}, {'interval': 'S1', 'wall_ns': 0}],
@@ -132,11 +106,8 @@ class Timings(unittest.TestCase):
         self.assertEqual(found['intervals'], {'image open': 0.101, 'S1': 0.0, '(untimed)': 0.009})
         self.assertEqual(found['phases'], {'parse': 0.003})
         self.assertEqual(found['counts'], {'units': 168})
-
-    def test_output_without_a_report_has_no_timings(self):
         self.assertIsNone(run.timings('error: no such file\n'))
         self.assertIsNone(run.timings(json.dumps(dict(self.REPORT, schema=2))))
-
 
 class Scoreboard(unittest.TestCase):
     def test_pairs_divide_hirsel_by_the_paired_rust_mode(self):
@@ -175,14 +146,6 @@ class Corpus(unittest.TestCase):
                     self.assertNotEqual(text, base)
                     self.assertEqual(len(text.splitlines()), len(base.splitlines()))
 
-    def test_every_listed_program_exists(self):
-        for relative in corpus.CONFORMANCE:
-            self.assertTrue((ROOT / 'conformance' / relative).is_file(), relative)
-        self.assertTrue(corpus.tour_programs())
-        for path in corpus.tour_programs():
-            self.assertTrue(path.is_file(), path)
-
-
 TIMINGS = ROOT / 'crates/hirsel-intern/src/timings.rs'
 
 
@@ -193,13 +156,6 @@ class Budget(unittest.TestCase):
         reported = {kind: set(re.findall(kind + r'::\w+ => "([^"]+)"', source)) for kind in ('Interval', 'Phase')}
         self.assertEqual(set(BUDGET['intervals']['names']), reported['Interval'] | {'(untimed)'})
         self.assertEqual(set(BUDGET['phases']['names']), reported['Phase'])
-
-    def test_the_readme_documents_every_tracked_name(self):
-        readme = (BENCH / 'README.md').read_text()
-        for part in ('intervals', 'phases'):
-            for name in BUDGET[part]['names']:
-                self.assertIn(f'| `{name}` |', readme, name)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -81,7 +81,8 @@ class Capped(unittest.TestCase):
         self.assertRegex(result.stderr, r'capped: peak .* of 512M \(process limits\), [0-9.]+ s, exit 0\n')
 
     def test_a_malformed_limit_or_job_count_refuses_before_running(self):
-        for env in ({'HIRSEL_MEMORY_LIMIT': '4GB'}, {'HIRSEL_MEMORY_LIMIT': '0'}, {'HIRSEL_JOBS': '0'}):
+        for env in ({'HIRSEL_MEMORY_LIMIT': '4GB'}, {'HIRSEL_MEMORY_LIMIT': '0'}, {'HIRSEL_JOBS': '0'},
+                    *({'HIRSEL_CAPPED_SLOTS': count} for count in ('0', '-1', '1.5', '', 'two'))):
             result = self.capped('true', env=env)
             self.assertEqual(result.returncode, 2, env)
             self.assertFalse(self.calls.exists(), env)
@@ -190,11 +191,10 @@ with slot(Path(sys.argv[2]), 1, ['crashed']):
         self.assertIn('--timeout above 900 s requires --long', result.stderr)
         self.assertFalse(self.calls.exists())
         self.assertEqual(list(self.root.glob('*.lock')), [])
-
-    def test_900_seconds_is_allowed_without_long(self):
         result = self.capped('--timeout', '900', 'true')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / f'hirsel-capped-{os.getuid()}.slot-1.lock').exists())
+
 
     def test_long_jobs_forward_long_to_the_scoped_runner(self):
         result = self.capped('--long', '--timeout', '901', 'true')
@@ -222,14 +222,6 @@ with slot(Path(sys.argv[2]), 1, ['crashed']):
         with patch.object(Path, 'read_text', side_effect=AssertionError('must not read meminfo')):
             for count in ('1', '12'):
                 self.assertEqual(capped.slot_count(1 << 30, {'HIRSEL_CAPPED_SLOTS': count}), int(count))
-
-    def test_invalid_slot_override_refuses_before_running(self):
-        for count in ('0', '-1', '1.5', '', 'two'):
-            with self.subTest(count=count):
-                result = self.capped('true', env={'HIRSEL_CAPPED_SLOTS': count})
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn('expected a positive slot count', result.stderr)
-                self.assertFalse(self.calls.exists())
 
 
 def alive(pid: int) -> bool:

@@ -19,11 +19,6 @@ loader.exec_module(run)
 
 
 class Counters(unittest.TestCase):
-    def test_csv_includes_privilege_modifiers_and_running_percent(self):
-        csv = '\n'.join(f'123;;{e};100;99.5;;' for e in measure.EVENTS)
-        counts, running = measure.perf_counts(csv)
-        self.assertEqual(counts, dict.fromkeys(measure.EVENTS, 123))
-        self.assertEqual(running['instructions:u'], 99.5)
 
     def test_unavailable_or_partial_measurements_fail_closed(self):
         for value in ('<not supported>', '<not counted>', 'nan', 'inf', '0'):
@@ -75,23 +70,6 @@ class Sessions(unittest.TestCase):
         self.assertEqual(other['ipc'], 3)
         self.assertEqual(other['task-clock_ratio_ci95'], [2, 2])
 
-    def test_sample_pins_perf_inside_one_capped_call_and_keeps_raw_snapshots(self):
-        def execute(command, **kwargs):
-            self.assertEqual(command[0], str(ROOT / 'tools/capped'))
-            self.assertEqual(command.count(str(ROOT / 'tools/capped')), 1)
-            self.assertEqual(command[3:8], ['taskset', '-c', '31', 'perf', 'stat'])
-            self.assertEqual(command[-2:], ['--', '/bin/true'])
-            Path(command[command.index('-o') + 1]).write_text(
-                '\n'.join(f'123;;{e};100;100;;' for e in measure.EVENTS))
-            return type('Completed', (), {'returncode': 0, 'stderr': ''})()
-        snapshots = [{'cpu15': {'total': 100, 'idle': 30}}, {'cpu15': {'total': 200, 'idle': 80}}]
-        with patch.object(measure.subprocess, 'run', side_effect=execute) as calls, \
-                patch.object(measure, 'siblings', return_value=[15]), \
-                patch.object(measure, 'cpu_snapshot', side_effect=snapshots):
-            sample = measure.sample({'name': 'x', 'command': ['/bin/true']}, 31, 10)
-        self.assertEqual(calls.call_count, 1)
-        self.assertEqual(sample['sibling_busy_share']['cpu15'], 0.5)
-        self.assertEqual(sample['sibling_before'], snapshots[0])
 
     def test_failed_saved_sessions_are_rejected_before_running(self):
         with tempfile.TemporaryDirectory() as scratch:

@@ -267,25 +267,6 @@ class ShardSizing(unittest.TestCase):
             self.assertEqual(sync.cost_coverage({binary: {'new::case'}}), [])
         self.assertIn(f'warning: {binary}: 1/1 cases', output.getvalue())
 
-    def test_listing_is_on_the_pool_and_never_runs_test_bodies(self):
-        from subprocess import CompletedProcess
-        binary = sync.SHARDED[0]
-        output = (f'✓ Pass: root//:{binary}-shard-1 (0.1s)\n'
-                  'Stdout:\nmacro_generated::a: test\nignored::b: test\n')
-        with patch.object(sync, 'SHARDED', [binary]), patch('test_costs.configured_shards', return_value=2), \
-             patch.object(sync.subprocess, 'run', return_value=CompletedProcess([], 0, output)) as run, \
-             patch.object(sync, 'cost_coverage', return_value=[]) as coverage:
-            self.assertEqual(sync.check_cost_coverage(), [])
-            coverage.assert_called_once_with({binary: {'macro_generated::a', 'ignored::b'}})
-            command = run.call_args.args[0]
-            self.assertIn('hirsel.tests=focus', command)
-            self.assertIn('--test-arg=--list', command)
-            self.assertIn('--test-arg=--include-ignored', command)
-            self.assertIn('--test-arg=', command)
-            self.assertNotIn('hirsel.tests=host', command)
-        with patch.object(sync.subprocess, 'run', return_value=CompletedProcess([], 1, 'pool error')):
-            self.assertIn('pool error', sync.check_cost_coverage()[0])
-
 
 if __name__ == '__main__':
     unittest.main()

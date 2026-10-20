@@ -113,5 +113,22 @@ class Tiers(unittest.TestCase):
         self.assertFalse(covers({'tier': 'fast'}, 'full'))
 
 
+class Reds(unittest.TestCase):
+    def test_failing_ids_name_libtest_cases_once_and_corpus_cases_by_path(self):
+        failing_ids = runpy.run_path(str(ROOT / 'tools/main-runs'))['failing_ids']
+        # Parallel libtest output can split a case's `... FAILED` line; its
+        # `---- stdout ----` block still names it.
+        details = ('test a::ok ... ok\n'
+                   'test a::first ... FAILED\n'
+                   'test a::split ... test a::other ... ok\nFAILED\n'
+                   '---- a::first stdout ----\npanicked\n'
+                   '---- a::split stdout ----\npanicked\n'
+                   'conformance/MEM/MEM-7-x-run.hir: expected run, got reject\n'
+                   '{"path": "conformance/DROP/DROP-2-y-run.hir", "verdict": "mismatch"}\n')
+        self.assertEqual(failing_ids('hirsel-foo-test-it-shard-3', details),
+                         ['hirsel-foo-test-it::a::first', 'hirsel-foo-test-it::a::split',
+                          'conformance/MEM/MEM-7-x-run.hir', 'conformance/DROP/DROP-2-y-run.hir'])
+
+
 if __name__ == '__main__':
     unittest.main()

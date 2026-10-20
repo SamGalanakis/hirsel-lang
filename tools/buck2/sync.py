@@ -372,7 +372,7 @@ CRANELIFT_SHARDS = 8
 # (one 235 s), so 96 shards of about 28 cases keep each under the pool's 600 s
 # action limit.
 TRACE_ROOTS_SHARDS = 96
-# The historical replay (tools/native-plants.py --history-only) runs every
+# The historical replay (gate-native-history-shard-<i>) runs every
 # protected source under the exhaustive matrix at one CPU; single sources take
 # up to 15 minutes, so 32 path-hash shards keep each under the gate's budget.
 # 32 refines 8: an 8-way shard is the union of four 32-way shards.
@@ -453,8 +453,6 @@ GATE_TESTS = [
       for index in range(1, TRACE_ROOTS_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
-    dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",
-         args=["--hash-seed", "1"], **GATE),
     dict(name="gate-native-hash-sweep", full=True, binary="//:hirsel-conformance-bin-native", args=["--hash-sweep", "--hash-seed", "1"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
 ]
@@ -812,7 +810,6 @@ def first_party(meta: dict) -> str:
         HEADER,
         'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
-        'load("//tools/buck2:native_timeouts.bzl", "hirsel_native_timeouts")\n',
     ]
 
     def label(package_id: str) -> str:
@@ -918,7 +915,6 @@ def first_party(meta: dict) -> str:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
     out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
-    out.append("\n" + call("hirsel_native_timeouts", name="native-timeout-repro", data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for index, family in enumerate(("match_try_fields", "record_fields", "nested_loops_try", "closure_captures", "if_chain", "deep_nesting"), 1):

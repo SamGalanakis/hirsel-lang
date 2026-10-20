@@ -71,7 +71,7 @@ CPU_CLASSES = {"gate-conformance": "fast"}
 NATIVE_STAGES = {
     "gate-native-full", "gate-native-sanitize", "gate-native-hash-sweep",
     "gate-native-library-c", "gate-native-runtime-c", "gate-native-toolchain-pin",
-    "gate-agree-native-full", "gate-conformance-hash-seed",
+    "gate-agree-native-full",
     "gate-native-cranelift", "gate-native-cranelift-aarch64", "gate-native-history",
 }
 

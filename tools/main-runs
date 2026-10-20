@@ -150,7 +150,6 @@ def stages(stage, tier):
     stage('native matrix: both targets and named exclusions',
           test(*[f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)], after=long))
     stage('agreement campaign on heap and native code (unrestricted)', [PY, 'tools/buck2/agree.py', '--native-full'])
-    stage('interpreter passing corpus with independent second hash seed', test('//:gate-conformance-hash-seed', after=long))
     stage('native passing corpus with independent second hash seed', test('//:gate-native-hash-sweep', after=long))
 
 

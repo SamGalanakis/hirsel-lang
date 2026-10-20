@@ -14,7 +14,7 @@ No lane commits a generated file, so no rebase can conflict on one
   root and `third-party/` `BUCK`, `third-party/Cargo.{toml,lock}` and `lib.rs`,
   `exec_sizes.bzl`, `test_sizes.bzl`, `workspace-metadata.json` and
   `tools/native-toolchain/pins.bzl`. `bootstrap.py` (so `prepare.py`),
-  `tools/land`, `tools/main-runs`, `tools/bless.sh`, `tools/native-plants.py` and
+  `tools/land`, `tools/main-runs`, `tools/bless.sh` and
   the runtime benchmark harness run
   `sync.py --if-stale`. Generation has two parts, third-party dependencies
   (Cargo metadata, then Reindeer) and the first-party inventory (Cargo
@@ -262,7 +262,7 @@ Target names follow Cargo's targets, all in the root package:
 | a budgeted full agreement shard (`AGREE_FULL_SHARDS`, full suite only) | `//:gate-agree-full-shard-<i>` |
 | a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, full suite only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, full suite only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
-| a historical native replay shard (`HISTORY_SHARDS`; `tools/native-plants.py --history-only` runs them) | `//:gate-native-history-shard-<i>` |
+| a historical native replay shard (`HISTORY_SHARDS`, on demand) | `//:gate-native-history-shard-<i>` |
 | a root-anchor trace shard (`TRACE_ROOTS_SHARDS`, on demand; `gate-native-trace-roots` stays whole for filtered runs) | `//:gate-native-trace-roots-shard-<i>` |
 
 ## Instruction budgets

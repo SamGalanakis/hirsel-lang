@@ -319,14 +319,7 @@ AArch64 executables under qemu against `cranelift-parity-aarch64.tsv`
 prints the emission wall time of each case's one-object build under Cranelift, LLVM
 O0 and LLVM O2, and their totals.
 
-For intermittent YAML launch hangs, `.buck2/bin/buck2 build //:native-timeout-repro
---show-full-simple-output` runs eight copies each of the CRLF and explicit-key
-cases on the pool with two workers. The declared output retains `campaign.log`,
-`result.json`, source fixtures and native scratch even when the campaign fails.
-This is a diagnostic build: inspect `result.json`'s `exit_code`; a successful
-build only means the evidence was published. Set
-`-c hirsel.native_timeout_repetitions=N` or `-c hirsel.native_timeout_shard=N`
-for more repetitions or independent action keys. A launch timeout keeps its
+A launch timeout keeps its
 executable, run record, link inputs and command under `timeouts/` before the
 next configuration reuses that job directory, and records the child's status
 and kernel wait state before killing its process group. Ordinary native launches
@@ -424,8 +417,9 @@ The agreement catalogue mutates `sendable` on every writable type annotation and
 nested part, including scalar, Bytes, generic, alias, tuple, Iter and callable
 header positions. No callable-kind gate limits this edit.
 
-The full gate adds a second placement seed (`--hash-seed 1`) over the interpreter
-corpus and `native --hash-sweep --hash-seed 1`. The native sweep selects passing
+The full gate adds `native --hash-sweep --hash-seed 1`; the interpreter hashes
+Map and Set keys with seed 0 whatever `--hash-seed` says, so it has no seed sweep.
+The native sweep selects passing
 executable corpus cases, omits cases with an LLVM exclusion row, and runs exactly
 one optimized whole-program configuration on the shipped archive per target. Every selected
 case must agree; unavailable cases fail. `--filter TEXT` narrows this sweep for
@@ -504,14 +498,9 @@ whole-target run derives the same cover in scratch.
 `native-select --replay-history` executes every reconstructable historical
 source under the exhaustive matrix once and checks that all findings survive
 every rotating slim configuration cover. It reports source snapshots it could
-not execute. `--filter TEXT` or `--shard I/N` bounds this replay. `tools/native-plants.py --selection FILE --output DIR` starts
-from a clean worktree and a frozen healthy selection, checks healthy controls,
-then temporarily plants real AArch64 add lowering, system-allocator initial-count
-and regions-off release omissions. It restores each source byte-for-byte and
-requires identical full/slim finding sets for each plant. The script runs bounded Buck2 pool tests at lane priority with one CPU each,
-and freezes the healthy cover as a declared source input. Add `--history-only`
-to replay the protected historical set in pool shards, or `--plant NAME` to
-run one fault. No native campaign lock is used.
+not execute. `--filter TEXT` or `--shard I/N` bounds this replay; the
+`//:gate-native-history-shard-<i>` targets replay the protected historical set in
+pool shards.
 
 Feature coverage, pairwise coverage and historical/mutation replay are
 finite evidence, not a guarantee of identical findings for arbitrary bugs.

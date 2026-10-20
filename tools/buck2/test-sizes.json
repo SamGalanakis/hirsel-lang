@@ -184,15 +184,6 @@
       1792487024
     ]
   },
-  "gate-conformance-hash-seed": {
-    "cpu_class": "",
-    "cpu_count": 1,
-    "fallback_from": "gate-native-full",
-    "memory_kb": 4194304,
-    "memory_kills": 0,
-    "pss_runs": 0,
-    "runs": 0
-  },
   "gate-native-changed": {
     "cpu_class": "",
     "cpu_count": 2,

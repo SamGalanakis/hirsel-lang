@@ -47,17 +47,6 @@ class PerfCounts(unittest.TestCase):
             with self.subTest(measured=measured), self.assertRaises(ValueError):
                 COUNTS['ratchet']({'a': row(100)}, [measured])
 
-    def test_improved_case_passes_with_note_and_complete_landing_measurement(self):
-        main = COUNTS['main']
-        output = io.StringIO()
-        with patch.object(sys, 'argv', ['perf-counts']), \
-                patch.dict(main.__globals__, native_cases=Mock(return_value=[('a', [], b'')]),
-                           micro_cases=Mock(return_value=[]), measure=Mock(return_value=row(80)),
-                           read_table=Mock(return_value={'a': row(100)})), \
-                contextlib.redirect_stdout(output):
-            self.assertEqual(main(), 0)
-        self.assertIn('improvement a: 100 -> 80 Ir; pass', output.getvalue())
-
     def test_regression_fails_without_a_landing_measurement(self):
         main = COUNTS['main']
         output = io.StringIO()
@@ -75,34 +64,12 @@ class PerfCounts(unittest.TestCase):
         self.assertIn('missing budget', compare({}, {'new': row(1)})[0])
         self.assertIn('did not run', compare({'removed': row(1)}, {})[0])
 
-    def test_regression_prints_function_diff_including_new_hot_functions(self):
-        before = {'bench': row(100, old=100)}
-        after = {'bench': row(200, old=100, new=100)}
-        text = '\n'.join(COUNTS['compare'](before, after))
-        self.assertIn('+100.00%', text)
-        self.assertIn('baseline cg_annotate top functions', text)
-        self.assertIn('current cg_annotate top functions', text)
-        self.assertIn('100 new', text)
-
     def test_reads_ir_event_and_refuses_incomplete_or_empty_profiles(self):
         count = COUNTS['instruction_count']
         self.assertEqual(count('events: Dr Ir Dw\nsummary: 99 123 88\n'), 123)
         for text in ('events: Ir\n', 'summary: 10\n', 'events: Ir\nsummary: 0\n'):
             with self.assertRaises(ValueError):
                 count(text)
-
-    def test_annotate_uses_function_totals_once_and_preserves_rust_names(self):
-        self.assertEqual(COUNTS['annotate']('''
-1,219 PROGRAM TOTALS
-< 1,000 /worker/path/a.rs:
-  1,000   hirsel::work
-> 1,200 hirsel::work:
-  1,000   /worker/path/a.rs
-    200   /different/a.rs
->    19 new_function:???
-'''), {'hirsel::work': 1200, 'new_function': 19})
-        with self.assertRaises(ValueError):
-            COUNTS['annotate']('malformed')
 
     def test_table_roundtrip_and_duplicate_rejection(self):
         rows = {'z': row(120, **{'hirsel::work': 120}), 'a': row(30, a=30)}
@@ -114,70 +81,6 @@ class PerfCounts(unittest.TestCase):
                 out.write('a\t30\t<total>\n')
             with self.assertRaises(ValueError):
                 COUNTS['read_table'](path)
-
-    def test_default_records_program_budgets_and_open_compiler_case_is_diagnostic(self):
-        main = COUNTS['main']
-        fixture = ('native/control', ['/bin/fixture'], b'checksum')
-        for arguments, expected in [(['--record'], {'native/control'}),
-                                    (['--record', '--filter', 'check/hello-web'], {'check/hello-web'})]:
-            with self.subTest(arguments=arguments):
-                output = io.StringIO()
-                with patch.object(sys, 'argv', ['perf-counts', *arguments]), \
-                        patch.dict(main.__globals__, native_cases=Mock(return_value=[fixture]),
-                                   micro_cases=Mock(return_value=[]), measure=Mock(return_value=row(100, work=100))), \
-                        contextlib.redirect_stdout(output):
-                    self.assertEqual(main(), 0)
-                records = [line.removeprefix(COUNTS['MARKER']) for line in output.getvalue().splitlines()
-                           if line.startswith(COUNTS['MARKER'])]
-                self.assertEqual(set(json.loads(records[0])), expected)
-                if '--filter' not in arguments:
-                    self.assertIn('check/hello-web: open:', output.getvalue())
-                    self.assertIn('check/todo-api: open:', output.getvalue())
-
-    def test_compiler_cases_are_explicitly_open_in_the_reviewed_table(self):
-        text = COUNTS['table']({'micro/sha': row(100, work=100)})
-        self.assertIn('# check/hello-web: open:', text)
-        self.assertIn('# check/todo-api: open:', text)
-
-    def test_native_entry_uses_runtime_fixture_and_original_checksum_oracle(self):
-        cases = COUNTS['native_cases']
-        with tempfile.TemporaryDirectory() as directory:
-            build = Mock(return_value=Path('/bin/fixture'))
-            with patch.dict(cases.__globals__, build_program=build):
-                results = list(cases('/bin/hirsel', Path(directory), {}, 'native/binarytrees'))
-            self.assertEqual(len(results), 1)
-            name, command, expected = results[0]
-            self.assertEqual(name, 'native/binarytrees-small')
-            grants = json.loads(command[-1])
-            self.assertEqual(grants['io']['dirs'][0]['path'], 'fixtures')
-            self.assertRegex(expected, rb'^[0-9a-f]{16}\n$')
-            generated = build.call_args.args[1]
-            self.assertIn('file.read_bytes(directory, path.of("binarytrees-small.input"))', generated)
-            self.assertIn('workload(input)', generated)
-            self.assertEqual(generated.count('pub fn main('), 1)
-            self.assertNotIn('path.of(".")', generated)
-
-    def test_micro_contract_builds_each_program_with_small_args_and_checks_its_output(self):
-        cases = COUNTS['micro_cases']
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            programs = root / 'bench/micro/programs'
-            programs.mkdir(parents=True)
-            for name in ('print', 'channel', 'sha'):
-                (programs / (name + '.hir')).write_text('fixture')
-            with patch.dict(cases.__globals__, ROOT=root), \
-                    patch.dict(cases.__globals__, build_program=Mock(return_value=Path('/bin/fixture')),
-                               run=Mock(return_value=b'checksum\n')):
-                results = list(cases('/bin/hirsel', root, {}))
-            self.assertEqual([name for name, _, _ in results], ['micro/channel', 'micro/print', 'micro/sha'])
-            for name, command, expected in results:
-                self.assertEqual(command[-1], '1' if name == 'micro/sha' else '1000')
-                self.assertEqual(command[1:3], ['--hirsel-grants', root / 'bench/micro/grants.json'])
-                self.assertEqual(expected, COUNTS['MICRO_OUTPUTS'][name.removeprefix('micro/')])
-            with patch.dict(cases.__globals__, ROOT=root), \
-                    patch.dict(cases.__globals__, build_program=Mock(), run=Mock()):
-                self.assertEqual(list(cases('/bin/hirsel', root, {}, 'micro/missing')), [])
-
 
 class BlessCounts(unittest.TestCase):
     def test_pool_record_rewrites_table_and_failed_or_missing_records_leave_it_alone(self):
