@@ -96,6 +96,15 @@ class Classification(unittest.TestCase):
         self.assertFalse(c.needs_buck2)
         self.assertEqual(c.campaigns, set())
 
+    def test_each_model_selects_its_own_checks(self):
+        lean = ['proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh']
+        names = lambda *paths: [name for name, _ in impact.proof_checks(paths)]
+        self.assertEqual(names('proofs/rc/Rc/Machine.lean'), lean)
+        self.assertEqual(names('native-tests/model/alloc-dup-drop.trace'), lean[1:])
+        self.assertEqual(names('proofs/ordered/Ordered.tla'), ['proofs/ordered/check.sh'])
+        self.assertEqual(names('proofs/ordered/MC.tla', 'proofs/rc/Rc.lean'), [*lean, 'proofs/ordered/check.sh'])
+        self.assertEqual(self.classify('proofs/ordered/check.sh').proofs, ['proofs/ordered/check.sh'])
+
     def test_documentation_a_build_reads_is_an_input(self):
         # Literally (include_bytes of the grammar) or under a data glob (the corpus).
         c = self.classify('docs/grammar.md', 'conformance/M2-RUNTIME.md')

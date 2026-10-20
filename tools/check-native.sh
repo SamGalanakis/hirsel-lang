@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Native gate: LLVM emission, the runtime and its C harness, native differential and Lean
-# checks. Run by the full gate and on demand; native changes run native --full --filter
+# Native gate: LLVM emission, the runtime and its C harness, native differential, Lean and
+# TLA+ model checks. Run by the full gate and on demand; native changes run native --full --filter
 # for the programs they touch.
 # Buck2 runs native tests, C harnesses and toolchain checks on the pool, with
-# pinned tools as inputs. Lean's model checks still use the invoking host.
+# pinned tools as inputs. The Lean and TLA+ model checks still use the invoking host.
 set -Eeuo pipefail
 # Four test threads and campaign workers unless the caller says otherwise.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" HIRSEL_JOBS="${HIRSEL_JOBS:-4}" RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
@@ -61,6 +61,7 @@ run_stage "LLVM toolchain pin" buck2 test //:gate-native-toolchain-pin -- "${tim
 run_stage "LLVM backend tests" buck2 test //:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)
 run_stage "Lean RC model audit" proofs/rc/audit.sh
 run_stage "Lean RC model vectors" proofs/rc/check-vectors.sh
+run_stage "TLA+ ordered-mode model" proofs/ordered/check.sh
 mapfile -t driver < <(buck2 uquery 'attrregexfilter(name, "^hirsel-driver-test-it(-shard-[0-9]+)?$", //...)')
 run_stage "native stages end to end: full matrix on both targets and 22 link partitions" \
   buck2 test "${release[@]}" "${driver[@]}" -- "${long[@]}" \

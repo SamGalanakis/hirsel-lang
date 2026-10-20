@@ -517,7 +517,8 @@ an atomic update to every allocation, so time a run without `--mem-usage`.
 - `native-tests/` holds native-only fixtures (heap, layout, replay, topology)
   and the native exclusion list.
 - `stdlib/` and `packages/` are Hirsel library sources and package fixtures.
-- `proofs/rc/` is the Lean model of the reference-counting protocol.
+- `proofs/rc/` is the Lean model of the reference-counting protocol, and
+  `proofs/ordered/` the TLA+ model of ordered multi-core execution.
 - `bench/native/` is the native benchmark harness and its programs.
 - `tools/` holds the Buck2 build (`tools/buck2/`), the pinned LLVM toolchain
   (`tools/native-toolchain/`) and gate scripts.
@@ -529,7 +530,8 @@ The native backend needs LLVM 21.1.8 (`tools/native-toolchain/llvm-21.lock`);
 `.cargo/config.toml` points `LLVM_SYS_211_PREFIX` at `/usr/lib/llvm-21`
 unless the environment already sets it. `tools/native-toolchain/README.md`
 installs the pinned tree. Native tests carry pinned qemu, an AArch64 cross toolchain and Valgrind as
-Buck2 inputs; only the Lean checks need a host installation.
+Buck2 inputs; only the Lean checks and the TLA+ model (Java 11 or later; `check.sh` fetches
+the pinned `tla2tools.jar`) need a host installation.
 
 The build caps itself for a shared host: `.cargo/config.toml` limits Cargo
 to 4 jobs and sets `RUST_TEST_THREADS` and `HIRSEL_JOBS` (in-process worker
@@ -720,7 +722,8 @@ The floor:
   resolve, links into deleted paths are gone, and no whitespace errors;
 - the gate's own tooling under `tools/`: its tests; the Lean model under
   `proofs/` (and its vectors in `native-tests/model/`): its audit and vector
-  replay on this host;
+  replay on this host; the TLA+ model under `proofs/ordered/`: its TLC runs
+  (`proofs/ordered/check.sh`) on this host;
 - the build-file check, formatting, Clippy and the workspace build, which
   includes checking std once (the std precheck). They run first, with the
   local checks, before the gate queues for a slot; when one fails the gate
@@ -931,7 +934,7 @@ the full suite (`FULL_GATE_SKIPS` in `tools/buck2/sync.py`).
 schedules it):
 every test, budgeted source/IR and native agreement, release tests,
 the `full_gate_` tests in both debug and release, the derived native program and pairwise configuration covers and
-every `tools/check-native.sh` runtime, sanitizer, toolchain and Lean check. It
+every `tools/check-native.sh` runtime, sanitizer, toolchain, Lean and TLA+ check. It
 and `tools/check-native.sh` run every stage even after one fails and fail at
 the end. `tools/main-full-run.sh` runs it on a fresh detached worktree of
 `origin/main` and writes `latest.json`. `tools/main-stall-alarm` appends to

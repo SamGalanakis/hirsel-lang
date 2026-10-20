@@ -185,10 +185,11 @@ BUILD_WIDE = (
 # Under tools/ but read by particular tests: selected through their owners.
 TOOL_INPUTS = ('tools/buck2/test-costs/**', 'tools/native-toolchain/**')
 
-# The Lean RC model: no Buck2 target reads it; its own checks run on the host
-# (proof_checks), as do the protocol vectors it replays.
+# The Lean RC model and the TLA+ ordered-mode model: no Buck2 target reads them; their own
+# checks run on the host (proof_checks), as do the protocol vectors the Lean model replays.
 PROOFS = ('proofs/**',)
 PROOF_VECTORS = 'native-tests/model/'
+ORDERED_MODEL = ('proofs/ordered/**',)
 
 # Documentation, and repository metadata no build reads.
 DOCS = ('**.md', 'LICENSE', 'docs/**', '.gitignore')
@@ -603,9 +604,12 @@ def campaign_data(path: str) -> frozenset:
 
 
 def proof_checks(paths) -> list[tuple[str, list[str]]]:
-    """The Lean model's own checks a change selects: its audit when the model
-    changes, and its vector replay when the model or a vector changes."""
-    model = any(matches(path, PROOFS) for path in paths)
+    """The models' own checks a change selects: the Lean audit when the Lean model
+    changes, its vector replay when the model or a vector changes, and the TLC
+    runs when the ordered-mode model changes."""
+    model = any(matches(path, PROOFS) and not matches(path, ORDERED_MODEL) for path in paths)
     vectors = model or any(path.startswith(PROOF_VECTORS) for path in paths)
+    ordered = any(matches(path, ORDERED_MODEL) for path in paths)
     return ([('proofs/rc/audit.sh', ['proofs/rc/audit.sh'])] if model else []) + \
-        ([('proofs/rc/check-vectors.sh', ['proofs/rc/check-vectors.sh'])] if vectors else [])
+        ([('proofs/rc/check-vectors.sh', ['proofs/rc/check-vectors.sh'])] if vectors else []) + \
+        ([('proofs/ordered/check.sh', ['proofs/ordered/check.sh'])] if ordered else [])

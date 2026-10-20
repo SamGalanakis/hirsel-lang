@@ -370,7 +370,8 @@ class NativeGate(unittest.TestCase):
         (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
         (self.root / 'tools/buck2').mkdir()
         (self.root / 'tools/buck2/event_logs.py').write_text((RUNNER.parent / 'buck2/event_logs.py').read_text())
-        for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh'):
+        for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh',
+                     'proofs/ordered/check.sh'):
             path = self.root / tool
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f'''#!/usr/bin/env bash
@@ -396,7 +397,7 @@ if [[ $1 == build ]]; then echo /archives; fi
         # Independent Buck2 harnesses and every later stage still run.
         for target in ('gate-native-library-c', 'gate-native-toolchain-pin'):
             self.assertTrue(any(c.startswith('buck2 test') and target in c for c in commands), target)
-        for tool in ('audit.sh', 'check-vectors.sh'):
+        for tool in ('audit.sh', 'check-vectors.sh', 'check.sh'):
             self.assertTrue(any(c.startswith(tool) for c in commands), tool)
         self.assertIn('check-native.sh: Lean RC model vectors passed', result.stdout)
         self.assertTrue(commands[-1].startswith('buck2 test') and 'rc_maps_native::' in commands[-1])
