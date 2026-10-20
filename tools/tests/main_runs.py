@@ -108,7 +108,8 @@ class MainRuns(unittest.TestCase):
                                  'PATH': f'{fake}:{os.environ["PATH"]}', 'FAKE_BUCK2_BIN': str(fake),
                                  'SAID': str(self.said), 'COMMANDS': str(self.commands), 'RUNNING': 'lane-two',
                                  'HIRSEL_TEST_HISTORY': str(top / 'history.tsv')}
-        for name in ('HIRSEL_MAIN_WORKTREES', 'HIRSEL_GATE_SLOTS', 'HIRSEL_BUCK2_LOG_DIR'):
+        for name in ('HIRSEL_MAIN_WORKTREES', 'HIRSEL_GATE_SLOTS', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_PRIORITY',
+                     'HIRSEL_FULL_LOGS', 'HIRSEL_BUCK2_CONFIG'):
             self.env.pop(name, None)
         subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(self.origin)], check=True)
         subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.clone)], check=True, capture_output=True)
@@ -316,6 +317,8 @@ sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7',
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
+        for name in ('HIRSEL_PRIORITY', 'HIRSEL_FULL_LOGS', 'HIRSEL_BUCK2_CONFIG'):
+            self.env.pop(name, None)
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.write_text('''#!/usr/bin/env bash
 if [[ ${2:-} == --event-log ]]; then command=$1; shift 3; set -- "$command" "$@"; fi
@@ -334,6 +337,21 @@ printf '%s\\n' "$*" >> "$COMMANDS"
     def run_full(self):
         return subprocess.run([sys.executable, 'tools/gate', '--full'], cwd=self.root,
                               env=self.env, capture_output=True, text=True)
+
+    def test_tool_tests_run_after_the_build_files_without_the_runs_settings(self):
+        # A tool test runs fake full gates: the run's log directory and priority would leak into them.
+        (self.root / 'tools/tests/gate.py').write_text(
+            'import os\nwith open(os.environ["COMMANDS"], "a") as log:\n'
+            '    print("tool test: " + " ".join(n for n in ("HIRSEL_FULL_LOGS", "HIRSEL_PRIORITY", "HIRSEL_BUCK2_CONFIG",'
+            ' "HIRSEL_BUCK2_LOG_DIR", "HIRSEL_TEST_SEED") if n in os.environ), file=log)\n')
+        self.env |= {'HIRSEL_PRIORITY': '40', 'HIRSEL_FULL_LOGS': str(self.root / 'logs')}
+        result = self.run_full()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = self.commands.read_text().splitlines()
+        self.assertIn('tool test: ', commands)
+        self.assertLess(commands.index('sync.py --check'), commands.index('tool test: '))
+        stages = [json.loads(line)['stage'] for line in (self.root / 'logs/stages.jsonl').read_text().splitlines()]
+        self.assertEqual(stages.count('tool tests: tools/tests/gate.py'), 1)
 
     def test_full_keeps_unrestricted_campaigns_and_all_old_gates(self):
         result = self.run_full()

@@ -368,6 +368,8 @@ def gate(base_ref, tokens):
 # its own directory under $HIRSEL_FULL_LOGS, and one row per stage in
 # stages.jsonl there.
 FULL_LOGS = 'HIRSEL_FULL_LOGS'
+# The run's own settings, which the tool tests (they run fake full gates) never inherit.
+RUN_VARIABLES = (FULL_LOGS, 'HIRSEL_PRIORITY', 'HIRSEL_BUCK2_CONFIG', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_TEST_SEED')
 # A stage's probe reruns some of its failed Buck2 targets alone (main-runs' bisect).
 TARGETS = '{targets}'
 # Stages the full gate skips until their owner fixes what stops them, one row
@@ -403,10 +405,11 @@ class Stages:
         self.skip = skipped_stages()
         self.seen = set()
 
-    def run(self, stage, command, *, probe=None, tag='', **kwargs):
+    def run(self, stage, command, *, probe=None, tag='', isolated=False, **kwargs):
         """Run one stage. `probe` is the command with TARGETS in place of
         its test targets (none: the stage reruns whole); `tag` tells its
-        targets from the same names in other stages (`release`, `full`)."""
+        targets from the same names in other stages (`release`, `full`); an
+        `isolated` stage runs without the run's settings (RUN_VARIABLES)."""
         started = time.monotonic()
         self.seen.add(stage)
         if row := self.skip.get(stage):
@@ -424,7 +427,10 @@ class Stages:
                           command=[str(part) for part in command],
                           probe=[str(part) for part in probe] if probe else None)
             (self.logs / record['logs']).mkdir(parents=True, exist_ok=True)
-            kwargs['env'] = os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(self.logs / record['logs'])}
+            if not isolated:
+                kwargs['env'] = os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(self.logs / record['logs'])}
+        if isolated:
+            kwargs['env'] = {name: value for name, value in os.environ.items() if name not in RUN_VARIABLES}
         try:
             status = gating.run(command, cwd=ROOT, **kwargs).returncode
         except OSError as error:
@@ -486,10 +492,11 @@ def full_gate():
     full_probe = [*long, '--test-arg=full_gate_', '--test-arg=--ignored']
 
     stages = Stages()
-    for name, command in gating.tool_tests():
-        stages.run(f'tool tests: {name}', command)
+    # Preparation generates the gitignored build files some tool tests read.
     stages.run('Buck2 toolchains and pool configuration', [PY, 'tools/buck2/prepare.py'])
     stages.run(BUILD_FILES, [PY, 'tools/buck2/sync.py', '--check'])
+    for name, command in gating.tool_tests():
+        stages.run(f'tool tests: {name}', command, isolated=True)
     # Only the verdict matters here: the outputs stay on the pool.
     stages.run('workspace build', [*buck2, 'build', *config, '//:', '--materializations', 'none'])
     stages.run('workspace clippy', [PY, 'tools/buck2/clippy.py'])
