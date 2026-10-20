@@ -3,6 +3,7 @@
 hirsel_guard::install!();
 
 mod grants;
+mod managed_cores;
 mod net;
 mod object_stores;
 mod placement;

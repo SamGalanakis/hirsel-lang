@@ -9,6 +9,7 @@ use hirsel_run_schema::{
     call_key, callee_instance, hash_parts, hex,
 };
 use serde::{Deserialize, Serialize};
+pub mod managed_cores;
 mod placement;
 pub use placement::{AutoCores, Commit, CoreRange, Cores, Pin, Placement, Reorder};
 mod calls;

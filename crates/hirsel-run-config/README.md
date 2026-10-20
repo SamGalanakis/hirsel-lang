@@ -211,3 +211,10 @@ endpoint rule and a signing WallClock. Secrets remain in a granted credential fi
 Conflicting Env values, duplicate names, invalid origins or escaping references
 refuse. An absent or empty map keeps existing canonical bytes unchanged. The client
 and store backend are the pure Hirsel `packages/s3@1`, not host Rust code.
+
+`managed_cores` resolves placement against launcher grants, captured admission
+CPU affinity, effective cpusets and every visible ancestor quota. It also supplies
+the one-second refresh seam and JSONL metrics writer for admitted destinations.
+See [managed core resolution and metrics](../../docs/managed-cores.md) for the
+live-executor integration contract and checks. These host diagnostics are never
+canonical inputs or replay dependencies.
