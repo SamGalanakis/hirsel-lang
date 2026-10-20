@@ -46,5 +46,6 @@ runtime reports retain attribution separately from the defining operation.
 candidate obligation ids.
 
 Dependencies: `hirsel-codec`, `hirsel-diag`, `hirsel-span`, `hirsel-syntax`,
-`hirsel-tir`, `hirsel-types`, `hirsel-validate`; never an implementation crate
+`hirsel-tir`, `hirsel-types`, `hirsel-validate`, and `serde_json` for the PS-18
+findings sidecar; never an implementation crate
 or the driver. The driver collects the closure and wires `hirsel export --tir`.
