@@ -25,6 +25,7 @@ pub fn main() -> Result[(),u64] {{
         let rows = manifest(&program);
         let target = target();
         let inputs = Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &program.operation_registry(),
             target: &target,

@@ -148,6 +148,7 @@ fn stages(
         let v = hirsel_lir::validate::check(
             &rc,
             &Inputs {
+                memo: Default::default(),
                 discharge: None,
                 operations: &p.operation_registry(),
                 target: &target(),
@@ -317,6 +318,7 @@ fn the_validator_replays_the_offset_and_rejects_a_hand_built_forgery() {
     let target = target();
     let manifest = manifest(&p);
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &p.operation_registry(),
         target: &target,
@@ -522,6 +524,7 @@ fn control(forged: u8) -> Vec<ViolationKind> {
     hirsel_lir::validate::check(
         &u,
         &Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &p.operation_registry(),
             target: &target(),
@@ -767,6 +770,7 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
         Terminator::Propagate,
     ];
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &p.operation_registry(),
         target: &target(),

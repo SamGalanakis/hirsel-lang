@@ -841,6 +841,7 @@ pub fn seal(table: &Table, manifest: &Manifest, unit: LirUnit<Ready>) -> Validat
     validate::validate(
         unit,
         &Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &(),
             target: &table.target,

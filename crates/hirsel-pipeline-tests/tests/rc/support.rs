@@ -216,6 +216,7 @@ pub fn violations(program: &Program, lowered: &Lowered) -> Vec<(String, Vec<Viol
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,
@@ -460,6 +461,7 @@ pub fn unit_violations(
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,

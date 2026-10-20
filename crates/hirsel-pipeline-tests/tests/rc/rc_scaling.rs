@@ -155,6 +155,7 @@ fn middle_end(
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,

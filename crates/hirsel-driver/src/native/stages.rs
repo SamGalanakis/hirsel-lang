@@ -340,6 +340,7 @@ pub fn build_program(
     let operations = program.operation_registry();
     drop(import);
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: Some(&lowered.native_discharge),
         operations: &operations,
         target,

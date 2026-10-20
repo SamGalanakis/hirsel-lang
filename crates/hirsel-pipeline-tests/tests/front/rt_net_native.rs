@@ -482,6 +482,7 @@ fn read_into_body_calls_its_fixed_entry_and_validation_refuses_forged_calls() {
         )
         .unwrap();
         let inputs = Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &ready.operations,
             target: &ready.target,

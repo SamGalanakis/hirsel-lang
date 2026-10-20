@@ -51,6 +51,7 @@ fn unchecked_projections_require_the_exact_accepted_site_place_and_rule() {
             check(
                 unit,
                 &Inputs {
+                    memo: Default::default(),
                     target: &target,
                     layouts: &table,
                     manifest: &manifest,

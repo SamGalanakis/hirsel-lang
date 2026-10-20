@@ -410,6 +410,7 @@ fn option_finalizer(variant: u8, failing: bool) {
     let manifest = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &(),
         target: &target,

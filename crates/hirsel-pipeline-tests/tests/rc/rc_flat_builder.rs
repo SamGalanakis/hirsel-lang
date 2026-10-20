@@ -70,6 +70,7 @@ pub(crate) fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program
     let target = target();
     let operations = program.operation_registry();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &operations,
         target: &target,
@@ -300,6 +301,7 @@ pub(crate) fn violations(
     let manifest = manifest(&compiled);
     let operations = compiled.operation_registry();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &operations,
         target: &program.target,

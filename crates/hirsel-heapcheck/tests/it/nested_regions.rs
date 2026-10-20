@@ -181,6 +181,7 @@ fn check(p: &Program<Rc>) -> Vec<hirsel_lir::validate::ViolationKind> {
     hirsel_lir::validate::check(
         &p.units[0],
         &hirsel_lir::validate::Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &(),
             target: &p.target,

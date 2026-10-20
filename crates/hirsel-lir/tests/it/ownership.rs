@@ -1350,6 +1350,7 @@ fn finalize_order(swap: bool) -> Vec<K> {
     hirsel_lir::validate::check(
         &unit,
         &hirsel_lir::validate::Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &(),
             target: &target,

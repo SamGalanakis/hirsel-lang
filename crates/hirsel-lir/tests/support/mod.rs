@@ -1450,6 +1450,7 @@ impl<S: Stage> Lir<S> {
         validate::check(
             &unit,
             &Inputs {
+                memo: Default::default(),
                 discharge: None,
                 operations: &operations,
                 target: &TargetSpec::x86_64_unknown_linux_gnu(),

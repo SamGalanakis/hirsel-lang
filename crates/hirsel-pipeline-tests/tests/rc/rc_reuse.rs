@@ -55,6 +55,7 @@ fn check<S: Stage>(
 ) {
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,

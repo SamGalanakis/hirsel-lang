@@ -386,6 +386,7 @@ fn prove(fixture: Fixture) {
     let target = target();
     let manifest = hirsel_core_contract::Manifest::skeleton([]);
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &(),
         target: &target,
@@ -480,6 +481,7 @@ fn a_forged_field_flag_is_rejected_independently_by_c_and_h() {
     let violations = hirsel_lir::validate::check(
         &units[0],
         &Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &(),
             target: &target,

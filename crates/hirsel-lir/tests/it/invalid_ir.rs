@@ -1460,6 +1460,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     let digest = unit.digest();
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &(),
         target: &target,
@@ -1476,6 +1477,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     let (unit, table, manifest) = build(false);
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &(),
         target: &target,
@@ -1490,6 +1492,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     stale.layouts.pop();
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &(),
         target: &target,
@@ -1563,6 +1566,7 @@ fn corrupted_units_are_rejected_without_panicking() {
     let (unit, table, manifest) = rich();
     let run = |unit: &LirUnit<Rc>| {
         let inputs = Inputs {
+            memo: Default::default(),
             discharge: None,
             operations: &(),
             target: &hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu(),

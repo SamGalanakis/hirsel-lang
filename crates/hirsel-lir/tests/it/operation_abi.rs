@@ -386,6 +386,7 @@ fn check<S: Stage>(unit: &LirUnit<S>, table: &LayoutTable, registry: &OperationR
     hirsel_lir::validate::check(
         unit,
         &Inputs {
+            memo: Default::default(),
             discharge: None,
             target: &TargetSpec::x86_64_unknown_linux_gnu(),
             layouts: table,

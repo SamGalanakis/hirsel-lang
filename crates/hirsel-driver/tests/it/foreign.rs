@@ -615,6 +615,7 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
                 ready.units[index] = validate_ready(
                     unit,
                     &Inputs {
+                        memo: Default::default(),
                         target: &ready.target,
                         layouts: &ready.table,
                         manifest: &ready.manifest,

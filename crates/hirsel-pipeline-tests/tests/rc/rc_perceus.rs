@@ -47,6 +47,7 @@ fn check_stage<S: Stage>(
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,
@@ -363,6 +364,7 @@ fn elision_leaves_an_insertion_fault_to_the_rc_validator() {
     let target = target();
     let operations = program.operation_registry();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &operations,
         target: &target,
@@ -633,6 +635,7 @@ fn copy_on_write_detaches_a_shared_block_before_a_write() {
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
+        memo: Default::default(),
         discharge: None,
         operations: &program.operation_registry(),
         target: &target,

@@ -75,6 +75,40 @@ pub struct Inputs<'a> {
     pub manifest: &'a Manifest,
     pub operations: &'a dyn crate::operation::OperationDeclarations,
     pub discharge: Option<&'a crate::discharge::Discharge>,
+    /// The program-wide facts every unit's check and receipt read, computed once per
+    /// `Inputs` rather than once per unit. Sound because the inputs are borrowed:
+    /// nothing they name can change while this `Inputs` lives.
+    pub memo: Memo,
+}
+
+/// The facts of an [`Inputs`] that do not depend on the unit checked: the layout
+/// table's check against the target and the digests a receipt binds. Each is
+/// computed on first use.
+#[derive(Default)]
+pub struct Memo {
+    table: std::sync::OnceLock<Result<(), Vec<crate::layout_validate::Violation>>>,
+    layouts: std::sync::OnceLock<hirsel_syntax::ContentHash>,
+    manifest: std::sync::OnceLock<hirsel_syntax::ContentHash>,
+}
+
+impl Inputs<'_> {
+    /// `layout_validate::validate_table` of the layout table against the target.
+    pub fn table_check(&self) -> &Result<(), Vec<crate::layout_validate::Violation>> {
+        self.memo
+            .table
+            .get_or_init(|| crate::layout_validate::validate_table(self.layouts, self.target))
+    }
+    /// The layout table's digest.
+    pub fn layouts_digest(&self) -> hirsel_syntax::ContentHash {
+        *self.memo.layouts.get_or_init(|| self.layouts.digest())
+    }
+    /// The operation manifest's digest.
+    pub fn manifest_digest(&self) -> hirsel_syntax::ContentHash {
+        *self
+            .memo
+            .manifest
+            .get_or_init(|| crate::snapshot::digest("manifest", self.manifest))
+    }
 }
 
 /// A rejected unit, returned with every violation found.
@@ -307,8 +341,8 @@ pub fn validate<S: Stage>(
         lir_version: unit.header.lir_version,
         unit: unit.digest(),
         target: inputs.layouts.target,
-        layouts: inputs.layouts.digest(),
-        manifest: crate::snapshot::digest("manifest", inputs.manifest),
+        layouts: inputs.layouts_digest(),
+        manifest: inputs.manifest_digest(),
         validator_version: crate::VALIDATOR_VERSION,
     };
     Ok(ValidatedUnit::seal(unit, NativeReceipt::issue(raw)))
@@ -350,15 +384,15 @@ pub fn validate_ready(
 /// Every violation of `unit`, sorted. Later phases run only on a unit whose
 /// structure is sound, since they index by its facts.
 pub fn check<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation> {
-    if let Err(error) = unit.check_identity(inputs.layouts) {
+    if let Err(error) = unit.check_identity_digested(inputs.layouts, inputs.layouts_digest()) {
         return vec![Violation {
             site: Site::UNIT,
             kind: ViolationKind::Schema(schema_text(&error)),
         }];
     }
-    if let Err(errors) = crate::layout_validate::validate_table(inputs.layouts, inputs.target) {
+    if let Err(errors) = inputs.table_check() {
         return errors
-            .into_iter()
+            .iter()
             .map(|e| Violation {
                 site: Site::UNIT,
                 kind: ViolationKind::Layout(format!(
