@@ -21,6 +21,7 @@ pub mod layout_keys;
 pub mod layout_types;
 pub mod layout_validate;
 pub mod object;
+pub mod objects;
 pub mod operation;
 pub mod persistent;
 pub mod profile;
