@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Land throughput and gate time to first failure, from the logs tools/land
-and tools/gate append in the clone's common git directory.
+"""Land throughput, from the logs tools/land appends in the clone's common
+git directory.
 
-    tools/gate_land_stats.py [--since 2026-10-19T15:00:00Z] [--until ...]
+    tools/land_stats.py [--since 2026-10-19T15:00:00Z] [--until ...]
 
 Lands per hour counts landed changes (`hirsel-landings.jsonl`) over the span
 from the first to the last in the window, beside the median land wait and,
 for batched landings, the batch sizes. Batches (`hirsel-land-batches.jsonl`)
 give the median batch time, green and red apart, and what red batches spent
 on checks after their first: the bisection and the rebuild of the rest, and
-every flake (a failure that passed when repeated) with its batch. Gate
-time to first failure is `first_failure_seconds` of each failed gate
-(`hirsel-gates.jsonl`), with the floor time and the queue wait, so a red floor
-that never queued shows as such.
+every flake (a failure that passed when repeated) with its batch.
 """
 
 import argparse
@@ -72,12 +69,6 @@ def main():
             for flake in row.get('flakes', []):
                 print(f'flake: {", ".join(flake["failed"])} on {flake["tip"][:12]} at {row["at"]} '
                       f'(batch: {", ".join(flake["batch"])})')
-    gates = rows(common / 'hirsel-gates.jsonl', args.since, args.until)
-    failed = [row for row in gates if not row.get('passed')]
-    print(f'gates: {len(gates)}, {len(failed)} failed; time to first failure: median '
-          f'{median(r.get("first_failure_seconds") for r in failed)}; of those, '
-          f'{sum(r.get("slot_wait_seconds") is None for r in failed)} failed in the floor before queueing; '
-          f'median queue wait {median(r.get("slot_wait_seconds") for r in gates)}')
     return 0
 
 

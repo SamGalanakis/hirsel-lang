@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import selectors
 import signal
@@ -456,27 +457,57 @@ class Queries(unittest.TestCase):
             plan = method(selection)
         return plan, asked
 
-    def test_a_crates_source_floors_its_own_tests_and_suggests_its_campaigns(self):
+    def test_a_compiler_crate_selects_the_smoke_slice_and_no_whole_campaign(self):
         selection = self.selection(['crates/hirsel-check/src/lib.rs'])
-        floor, asked = self.run_query(gating.Selection.floor, selection)
+        floor, asked = self.run_query(gating.Selection.core, selection)
         self.assertEqual(asked, [])
-        # A crate's tests, not a longer-named crate's.
+        # A crate's tests, not a longer-named crate's, and the smoke slice.
         self.assertEqual(floor.tests, {'root//:hirsel-check-unittest'})
-        self.assertEqual((floor.campaigns, floor.conformance), (set(), set()))
+        self.assertEqual((floor.campaigns, floor.conformance, floor.smoke), (set(), set(), True))
         plan, _ = self.run_query(gating.Selection.suggest, selection)
-        self.assertEqual(plan.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
-        # Every test reading it through a dependency, but not the examples.
-        self.assertEqual(plan.tests, {'root//:hirsel-check-unittest', 'root//:hirsel-cli-test-cli',
-                                      'root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2'})
-        expected = [f'root//:gate-{name}-shard-{index}'
-                    for name, count in [('conformance', gating.CONFORMANCE_SHARDS),
-                                        ('agree', gating.AGREE_SHARDS)]
-                    for index in range(1, count + 1)]
-        self.assertCountEqual(plan.campaign_targets(), expected)
+        plan.settle(REPO)
+        self.assertEqual(plan.campaigns, set())
+        self.assertTrue(plan.smoke)
+        # Its own tests, not every test that depends on it: main's hourly run is the whole net.
+        self.assertEqual(plan.tests, {'root//:hirsel-check-unittest'})
+        targets = [gating.short(t) for t in plan.campaign_targets()]
+        self.assertTrue(targets and all(re.fullmatch(r'gate-(conformance|agree)-selected-shard-\d+', t) for t in targets),
+                        targets)
+        self.assertEqual(plan.smoke_cases, set(impact.smoke_slice(REPO)))
+        # The backend's crates select the native smoke instead of the corpus slice.
+        native, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-llvm/src/lib.rs']))
+        self.assertEqual((native.campaigns, native.smoke), ({impact.NATIVE_SMOKE}, False))
+
+    def test_the_smoke_slice_is_one_cheapest_case_per_rule_and_expectation_kind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = {'conformance/A/A-1-long-run.hir': '// rule: A-1\n// expect: run\n' + 'x\n' * 50,
+                     'conformance/A/A-1-short-run.hir': '// rule: A-1\n// expect: run\n',
+                     'conformance/A/A-1-steps-run.hir': '// rule: A-1\n// expect: run\n// steps: 2000000\n',
+                     'conformance/A/A-1-x-bad.hir': '// rule: A-1\n// expect: reject A-1 at line 3\n',
+                     'conformance/A/A-1-x-ok.hir': '// rule: A-1\n// expect: accept\n',
+                     'conformance/B/B-2-only-steps-run.hir': '// rule: B-2\n// expect: run\n// steps: 2000000\n// why\n',
+                     'conformance/B/no-header.hir': 'fn main() {}\n'}
+            for case, text in cases.items():
+                (root / case).parent.mkdir(parents=True, exist_ok=True)
+                (root / case).write_text(text)
+            self.assertEqual(impact.smoke_slice(root), [
+                'conformance/A/A-1-short-run.hir', 'conformance/A/A-1-x-bad.hir', 'conformance/A/A-1-x-ok.hir',
+                'conformance/B/B-2-only-steps-run.hir'])
+            plan = gating.Plan(smoke=True)
+            plan.settle(root)
+            # Agreement mutates the slice's accepted cases only.
+            self.assertEqual(plan.corpus(), (impact.smoke_slice(root), [
+                'conformance/A/A-1-short-run.hir', 'conformance/A/A-1-x-ok.hir', 'conformance/B/B-2-only-steps-run.hir']))
+        # The repository's slice covers every rule and kind once, in about 5 CPU-minutes.
+        found = impact.smoke_slice(REPO)
+        kinds = {impact.case_header(REPO / case)[:2] for case in found}
+        self.assertEqual(len(kinds), len(found))
+        self.assertLess(len(found), 400)
 
     def test_changed_test_code_floors_only_the_tests_that_own_it(self):
         selection = self.selection(['crates/hirsel-lexer/tests/conformance.rs'])
-        floor, asked = self.run_query(gating.Selection.floor, selection)
+        floor, asked = self.run_query(gating.Selection.core, selection)
         self.assertEqual(asked, [])
         self.assertEqual(floor.tests, {'root//:hirsel-lexer-test-it'})
 
@@ -490,7 +521,7 @@ class Queries(unittest.TestCase):
             selection.graph = graph.Graph(QUERY_BUCK.replace(
                 'name = "hirsel-lexer-test-it",', 'name = "hirsel-lexer-test-it",\n    shards = 2,'), root)
             expected = {'root//:hirsel-lexer-test-it-shard-1', 'root//:hirsel-lexer-test-it-shard-2'}
-            self.assertEqual(selection.floor().tests, expected)
+            self.assertEqual(selection.core().tests, expected)
             self.assertEqual(selection.suggest().tests, expected)
 
     def test_a_build_wide_edit_suggests_every_test_and_campaign(self):
@@ -499,7 +530,7 @@ class Queries(unittest.TestCase):
         self.assertEqual(plan.tests, {f'root//:{name}' for name in graph.Graph(QUERY_BUCK).all_tests()})
         self.assertIn('root//:hirsel-lexer', plan.tests)  # a library with doctests
         self.assertNotIn('root//:gate-conformance-shard-1', plan.tests)
-        self.assertEqual(plan.campaigns, set(impact.CAMPAIGNS))
+        self.assertEqual((plan.campaigns, plan.smoke), ({impact.NATIVE_SMOKE}, True))
 
     def test_resizing_suggests_runs_without_rdeps_or_unrelated_campaigns(self):
         selection = self.selection([])
@@ -507,14 +538,13 @@ class Queries(unittest.TestCase):
             'hirsel-cli-test-cli', 'gate-conformance', 'gate-native-full'})
         plan, _ = self.run_query(gating.Selection.suggest, selection)
         self.assertEqual(plan.tests, {'root//:hirsel-cli-test-cli'})
-        self.assertEqual(plan.campaigns, {impact.CONFORMANCE})
+        self.assertEqual((plan.campaigns, plan.smoke), (set(), True))
 
     def test_the_examples_run_only_for_the_cli_the_driver_or_an_example(self):
         examples = {'root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2'}
-        plan, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-check/src/lib.rs']))
+        plan, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-check/tests/data.txt']))
         self.assertEqual(plan.tests & examples, set())
-        self.assertIn('root//:hirsel-cli-test-cli', plan.tests)
-        for path in ['crates/hirsel-driver/src/lib.rs', 'crates/hirsel-cli/src/main.rs']:
+        for path in ['examples/tasks/main.hir', 'crates/hirsel-cli/src/main.rs']:
             with self.subTest(path=path):
                 plan, _ = self.run_query(gating.Selection.suggest, self.selection([path]))
                 self.assertTrue(examples <= plan.tests)
@@ -527,15 +557,16 @@ class Queries(unittest.TestCase):
                 (root / case).write_text('// expect: run\n')
             selection = self.selection([], root=root)
             plan, _ = self.run_query(lambda s: s.choose([
-                '//:hirsel-driver-test-it', 'hirsel-check-unittest', 'agreement', 'conformance:conformance/MODE/',
+                '//:hirsel-driver-test-it', 'hirsel-check-unittest', 'smoke', 'conformance:conformance/MODE/',
                 'agreement:conformance/SEM/x-run.hir', 'native:conformance/SEM/x-run.hir']), selection)
             self.assertEqual(plan.tests, {'root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2',
                                           'root//:hirsel-check-unittest'})
-            self.assertEqual(plan.campaigns, {impact.AGREEMENT})
+            self.assertEqual((plan.campaigns, plan.smoke), (set(), True))
             self.assertEqual(plan.conformance, {'conformance/MODE/MODE-1-a-ok.hir', 'conformance/MODE/MODE-1-a-bad.hir'})
             self.assertEqual(plan.native, {'conformance/SEM/x-run.hir'})
+            # No lane gate runs a whole conformance or agreement campaign.
             for token in ['hirsel-nothing', 'gate-conformance-shard-1', 'conformance:conformance/NONE',
-                          'native:conformance/none.hir']:
+                          'native:conformance/none.hir', 'conformance', 'agreement']:
                 with self.subTest(token=token), self.assertRaises(SystemExit):
                     self.run_query(lambda s: s.choose([token]), selection)
 
@@ -579,12 +610,10 @@ class Queries(unittest.TestCase):
             # Cases spread over up to 16 slices of at least the smallest slice's cases.
             self.assertEqual([len(part) for part in gating.slices(list(range(1000)), 20)], [63] * 8 + [62] * 8)
             self.assertEqual(gating.slices(list(range(5)), 20), [[0, 1, 2, 3, 4]])
-            # More than half the corpus is the whole campaign; a whole campaign absorbs its cases.
-            whole = gating.Plan(conformance=set(cases) | {'conformance/OTHER/case-0000-run.hir'},
-                                agreement={cases[0]}, campaigns={impact.AGREEMENT})
-            whole.settle(root)
-            self.assertEqual((whole.conformance, whole.agreement), (set(), set()))
-            self.assertEqual(whole.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
+            # Even most of the corpus stays cases: settling never makes a whole campaign.
+            most = gating.Plan(conformance=set(cases) | {f'conformance/OTHER/case-{i:04}-run.hir' for i in range(10)})
+            most.settle(root)
+            self.assertEqual((len(most.conformance), most.campaigns), (len(cases) + 10, set()))
 
 
 class Corpus(unittest.TestCase):
@@ -692,7 +721,7 @@ class Corpus(unittest.TestCase):
 
     def assert_std_floor(self, selection, previous, modules, cases):
         self.assertEqual(impact.changed_std_modules(selection.paths, impact.Std(self.root), previous), modules)
-        floor, asked = Queries.run_query(gating.Selection.floor, selection)
+        floor, asked = Queries.run_query(gating.Selection.core, selection)
         self.assertEqual(asked, [])
         self.assertEqual(floor.conformance, {f'conformance/SEM/{case}-run.hir' for case in cases})
         self.assertEqual(floor.campaigns, set())
@@ -789,16 +818,15 @@ class Corpus(unittest.TestCase):
     def test_a_std_only_change_floors_its_closure_and_suggests_its_sample_but_no_whole_campaign(self):
         self.std()
         selection = Queries.selection(['stdlib/std@1/toml.hir'], root=self.root)
-        floor, asked = Queries.run_query(gating.Selection.floor, selection)
+        floor, asked = Queries.run_query(gating.Selection.core, selection)
         self.assertEqual(asked, [])
         self.assertEqual(floor.conformance, {'conformance/SEM/toml-run.hir'})
         with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
             plan, _ = Queries.run_query(gating.Selection.suggest, selection)
-        self.assertEqual(plan.campaigns, set())
+        # Its importers, and neither a whole campaign nor the compiler crates' smoke slice.
+        self.assertEqual((plan.campaigns, plan.smoke), (set(), False))
         self.assertEqual(plan.conformance, {'conformance/SEM/toml-run.hir'})
         self.assertEqual(plan.agreement, {'conformance/SEM/toml-run.hir'})
-        plan.settle(self.root)
-        self.assertEqual(plan.slot_pool(), gating.EXPRESS_POOL)
 
     def test_std_reaches_package_tests_corpus_and_examples_through_packages(self):
         self.std()
@@ -832,7 +860,7 @@ hirsel_test(
         selection.graph = graph.Graph(buck, self.root)
         expected = {'root//:vendor-tests', 'root//:hirsel-cli-test-examples-shard-1',
                     'root//:hirsel-cli-test-examples-shard-2'}
-        for plan, wanted in [(selection.floor(), expected),
+        for plan, wanted in [(selection.core(), expected),
                              (selection.suggest(), expected | {impact.PERF_COUNTS})]:
             self.assertEqual(plan.tests, wanted)
             self.assertIn(case, plan.conformance)
@@ -842,7 +870,7 @@ hirsel_test(
         (self.root / (case + '.json')).unlink()
         selection = Queries.selection(['stdlib/std@1/format.hir'], root=self.root)
         selection.graph = graph.Graph(buck, self.root)
-        self.assertEqual(selection.floor().tests, expected)
+        self.assertEqual(selection.core().tests, expected)
         self.assertEqual(selection.std_examples(), ['tasks'])
 
     def test_a_package_fixture_selects_the_cases_whose_packages_reach_it(self):
@@ -914,10 +942,28 @@ class NativePrograms(unittest.TestCase):
                          {'hirsel-llvm'}, self.root), ['smoke-a.hir', 'smoke-b.hir'])
         self.assertEqual(impact.native_programs([], {'hirsel-parser'}, self.root), [])
 
-    def test_a_plan_summary_names_each_binary_once(self):
-        plan = gating.Plan(tests={'root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2',
-                                  'root//:hirsel-lexer-unittest'}, campaigns={impact.AGREEMENT})
-        self.assertEqual(plan.summary(), ['hirsel-cli-test-examples (2 shards)', 'hirsel-lexer-unittest', 'agreement'])
+    def test_a_case_naming_runners_runs_only_interpreted(self):
+        # The native harness has no runner fixtures: its filter would select no case.
+        (self.root / 'conformance/RUN').mkdir()
+        (self.root / 'conformance/RUN/RUN-8-place-run.hir').write_text(
+            '// rule: RUN-8\n// expect: run\n// stdout: ok\n// runners: sim@1\nfn main() {}\n')
+        (self.root / 'conformance/RUN/RUN-8-late-run.hir').write_text(
+            '// rule: RUN-8\n// expect: run\nfn main() {}\n// runners: in a body comment\n')
+        self.assertEqual(impact.native_programs(['conformance/RUN/RUN-8-place-run.hir', 'conformance/RUN/RUN-8-late-run.hir'],
+                                                {'hirsel-llvm'}, self.root), ['conformance/RUN/RUN-8-late-run.hir'])
+        # Alone, it leaves the backend its bounded smoke controls.
+        self.assertEqual(impact.native_programs(['conformance/RUN/RUN-8-place-run.hir'], {'hirsel-rt'}, self.root),
+                         ['smoke-a.hir', 'smoke-b.hir'])
+
+    def test_the_full_suites_native_baseline_lists_no_interpreter_only_case(self):
+        # tools/gate --full (the hourly main run) reads its native cases from passing.txt.
+        passing = REPO / impact.PASSING
+        if not passing.exists():
+            self.skipTest('no native baseline list')
+        listed = [line for line in passing.read_text().splitlines() if line]
+        refused = [case for case in listed if (REPO / case).is_file()
+                   and any(key in impact.header_directives((REPO / case).read_text()) for key in impact.INTERPRETER_ONLY)]
+        self.assertEqual(refused, [])
 
     def test_chosen_native_programs_run_both_backends_with_one_filter(self):
         plan = gating.Plan(native={'conformance/MEM/soa.hir'})
@@ -925,486 +971,10 @@ class NativePrograms(unittest.TestCase):
         self.assertEqual(plan.config(), ['-c', 'hirsel.native_filters=conformance/MEM/soa.hir'])
 
 
-class Identity(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        scratch_repo(self.root)
-        commit(self.root, {'a.txt': ''.join(f'{n}\n' for n in range(1, 11)), 'b.txt': 'b\n'}, 'Base')
-        self.base = git(self.root, 'rev-parse', 'HEAD')
-        git(self.root, 'switch', '-q', '-c', 'lane')
-        self.lane = ''.join(f'{n}\n' for n in range(1, 11)).replace('3\n', 'three\n')
-        commit(self.root, {'a.txt': self.lane}, 'Lane')
-
-    def identity(self):
-        return gating.change_identity(gating.merge_base('main', self.root), self.root)
-
-    def test_a_clean_rebase_keeps_the_identity_even_beside_upstream_edits(self):
-        before = self.identity()
-        git(self.root, 'switch', '-q', 'main')
-        # A sibling inserts a line above the change, edits one below it and another file.
-        upstream = '0\n' + ''.join(f'{n}\n' for n in range(1, 11)).replace('7\n', 'seven\n')
-        commit(self.root, {'a.txt': upstream, 'b.txt': 'B\n'}, 'Sibling')
-        git(self.root, 'switch', '-q', 'lane')
-        git(self.root, 'rebase', '-q', 'main')
-        self.assertEqual(self.identity(), before)
-        self.assertNotEqual(gating.merge_base('main', self.root), self.base)
-
-    def test_any_edit_of_the_change_gives_a_new_identity(self):
-        before = self.identity()
-        (self.root / 'a.txt').write_text(self.lane.replace('three', 'three!'))
-        self.assertNotEqual(self.identity(), before)
-        (self.root / 'a.txt').write_text(self.lane)
-        self.assertEqual(self.identity(), before)
-        (self.root / 'new.txt').write_text('untracked\n')
-        self.assertNotEqual(self.identity(), before)
-        self.assertIn('new.txt', gating.changed_paths(self.base, self.root))
-
-    def test_a_regenerated_api_index_keeps_the_identity_and_other_edits_do_not(self):
-        before = self.identity()
-        (self.root / 'docs').mkdir()
-        (self.root / 'docs/api.md').write_text('1 exported definitions\n')
-        self.assertEqual(self.identity(), before)
-        commit(self.root, {'docs/api.md': '2 exported definitions\n'}, 'Index')
-        self.assertEqual(self.identity(), before)
-        (self.root / 'docs/other.md').write_text('prose\n')
-        self.assertNotEqual(self.identity(), before)
-
-    def test_no_change_has_no_identity(self):
-        git(self.root, 'reset', '-q', '--hard', 'main')
-        self.assertEqual(self.identity(), '')
-
-    def test_path_digests_survive_a_clean_rebase_and_name_the_edited_path(self):
-        before = gating.path_digests(gating.merge_base('main', self.root), self.root)
-        self.assertEqual(list(before), ['a.txt'])
-        git(self.root, 'switch', '-q', 'main')
-        commit(self.root, {'a.txt': '0\n' + ''.join(f'{n}\n' for n in range(1, 11)), 'b.txt': 'B\n'}, 'Sibling')
-        git(self.root, 'switch', '-q', 'lane')
-        git(self.root, 'rebase', '-q', 'main')
-        base = gating.merge_base('main', self.root)
-        self.assertEqual(gating.path_digests(base, self.root), before)
-        (self.root / 'b.txt').write_text('lane\n')
-        after = gating.path_digests(base, self.root)
-        self.assertEqual(gating.changed_since({'digests': before}, after), ['b.txt'])
-        (self.root / 'a.txt').write_text(self.lane.replace('three', 'THREE'))
-        self.assertEqual(gating.changed_since({'digests': before}, gating.path_digests(base, self.root)),
-                         ['a.txt', 'b.txt'])
-
-    def test_a_green_record_names_the_identity_and_its_crates(self):
-        identity = self.identity()
-        self.assertFalse(gating.is_green(identity, {'hirsel-lexer'}, self.root))
-        gating.record_gate(identity, {'hirsel-lexer'}, self.root)
-        self.assertTrue(gating.is_green(identity, {'hirsel-lexer'}, self.root))
-        self.assertFalse(gating.is_green(identity, {'hirsel-llvm'}, self.root))
-        self.assertFalse(gating.is_green('', set(), self.root))
-
-
-class PoolClassification(unittest.TestCase):
-    def test_three_std_cases_and_two_tests_fit_the_express_bound(self):
-        cases = set(gating.corpus_cases('conformance/', REPO)[:3])
-        floor = gating.Plan(conformance=cases, tests={'root//:one', 'root//:two'})
-        chosen = gating.Plan(agreement=cases, tests={'root//:two'})
-        plan = gating.Plan()
-        plan.add(floor)
-        plan.add(chosen)
-        # Rejected cases are filtered by settle, so use accepted controls here.
-        with patch.object(gating, 'accepted', return_value=True):
-            plan.settle()
-        self.assertEqual(len(plan.tests | set(plan.campaign_targets())), 4)
-        self.assertEqual(plan.slot_pool(), gating.EXPRESS_POOL)
-        plan.tests.add('root//:three')
-        self.assertEqual(plan.slot_pool(), gating.NORMAL_POOL)
-
-    def test_empty_small_and_sharded_selections(self):
-        self.assertEqual(gating.Plan().slot_pool(), gating.EXPRESS_POOL)
-        for count in (1, 4, 5, 16):
-            with self.subTest(count=count):
-                plan = gating.Plan(tests={f'root//:test-shard-{i}' for i in range(count)})
-                self.assertEqual(plan.slot_pool(), gating.EXPRESS_POOL if count <= 4 else gating.NORMAL_POOL)
-
-    def test_every_whole_campaign_and_filtered_native_selection_uses_normal(self):
-        for campaign in impact.CAMPAIGNS:
-            with self.subTest(campaign=campaign):
-                self.assertEqual(gating.Plan(campaigns={campaign}).slot_pool(), gating.NORMAL_POOL)
-        plan = gating.Plan(native={'conformance/TEST/TEST-1-run.hir'})
-        self.assertEqual(plan.slot_pool(), gating.NORMAL_POOL)
-
-    def test_selected_corpus_shards_count_toward_the_bound(self):
-        # Four conformance slices fit, a fifth exceeds the bound.
-        for count in (4, 5):
-            plan = gating.Plan(conformance={f'case-{i}' for i in range(
-                count * gating.CONFORMANCE_SLICE_PROGRAMS)})
-            self.assertEqual(len(plan.campaign_targets()), count)
-            self.assertEqual(plan.slot_pool(), gating.EXPRESS_POOL if count == 4 else gating.NORMAL_POOL)
-        # settle promotes a large selection to the whole campaign before classifying.
-        cases = set(gating.corpus_cases('conformance/', REPO))
-        plan = gating.Plan(agreement=cases)
-        plan.settle()
-        self.assertIn(impact.AGREEMENT, plan.campaigns)
-        self.assertEqual(plan.slot_pool(), gating.NORMAL_POOL)
-
-
-class Slots(unittest.TestCase):
-    def test_express_has_two_slots_even_with_six_normal_holders_and_an_older_normal_waiter(self):
-        with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as held:
-            directory = Path(scratch)
-            environ = {gating.GATE_SLOTS: f'{directory}:6'}
-            for _ in range(6):
-                held.enter_context(gating.gate_slot(environ))
-            ticket = directory / 'queue' / f'0-{os.getpid()}'
-            ticket.touch()
-            with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
-                with gating.gate_slot(environ, pool=gating.EXPRESS_POOL):
-                    with gating.gate_slot(environ, pool=gating.EXPRESS_POOL):
-                        with self.assertRaises(KeyboardInterrupt):
-                            with gating.gate_slot(environ, pool=gating.EXPRESS_POOL):
-                                self.fail('express exceeded its independent cap of two')
-            self.assertEqual((directory / 'count').read_text(), '6\n')
-            self.assertEqual((directory / 'express-count').read_text(), '2\n')
-            self.assertTrue(ticket.exists())
-            self.assertEqual(list((directory / 'express-queue').iterdir()), [])
-            self.assertEqual(list(directory.glob('.express-count-*')), [])
-
-    def test_an_older_express_waiter_does_not_block_normal(self):
+class LandQueue(unittest.TestCase):
+    def test_status_names_the_holder_its_age_the_queue_and_this_worktrees_place(self):
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch)
-            queue = directory / 'express-queue'
-            queue.mkdir()
-            ticket = queue / f'0-{os.getpid()}'
-            ticket.touch()
-            environ = {gating.GATE_SLOTS: f'{directory}:1'}
-            with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
-                with gating.gate_slot(environ):
-                    with self.assertRaises(KeyboardInterrupt):
-                        with gating.gate_slot(environ, pool=gating.EXPRESS_POOL):
-                            self.fail('express bypassed its earlier waiter')
-            self.assertEqual(list(queue.iterdir()), [ticket])
-
-    def test_raising_the_count_admits_the_queued_head_into_the_new_slot(self):
-        self.raising_count(gating.NORMAL_POOL)
-
-    def test_raising_the_express_count_admits_its_queued_head(self):
-        self.raising_count(gating.EXPRESS_POOL)
-
-    def raising_count(self, pool):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch) / 'slots'
-            environ = {gating.GATE_SLOTS: f'{directory}:1'}
-            prefix = gating.POOL_PREFIX[pool]
-            gating.write_gate_slot_count(directory, 1, pool=pool)
-            polls = []
-
-            class LaterWaiterBlocked(Exception):
-                pass
-
-            def later_poll(_):
-                raise LaterWaiterBlocked
-
-            def raise_count(_):
-                polls.append('head waited')
-                gating.write_gate_slot_count(directory, 2, pool=pool)
-                # A fresh gate with a larger env cap still cannot pass the head.
-                with patch.object(gating.time, 'sleep', later_poll):
-                    with self.assertRaises(LaterWaiterBlocked):
-                        with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:6'}, pool=pool):
-                            self.fail('a later gate passed the queued head')
-                self.assertEqual((directory / (prefix + 'count')).read_text(), '2\n')
-
-            with gating.gate_slot(environ, pool=pool):
-                with patch.object(gating.time, 'sleep', raise_count), contextlib.redirect_stdout(io.StringIO()):
-                    with gating.gate_slot(environ, pool=pool):
-                        self.assertEqual(polls, ['head waited'])
-                        for slot in (0, 1):
-                            with open(directory / f'{prefix}slot-{slot}', 'a+') as handle:
-                                with self.assertRaises(BlockingIOError):
-                                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self.assertEqual(list((directory / (prefix + 'queue')).iterdir()), [])
-
-    def test_lowering_the_count_keeps_held_slots_and_excludes_retired_slots(self):
-        self.lowering_count(gating.NORMAL_POOL)
-
-    def test_lowering_the_express_count_keeps_holders_and_excludes_retired_slots(self):
-        self.lowering_count(gating.EXPRESS_POOL)
-
-    def lowering_count(self, pool):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch) / 'slots'
-            environ = {gating.GATE_SLOTS: f'{directory}:2'}
-            prefix = gating.POOL_PREFIX[pool]
-            with contextlib.ExitStack() as first, contextlib.ExitStack() as second:
-                first.enter_context(gating.gate_slot(environ, pool=pool))
-                second.enter_context(gating.gate_slot(environ, pool=pool))
-                gating.write_gate_slot_count(directory, 1, pool=pool)
-                first.close()
-                with gating.gate_slot(environ, pool=pool):
-                    with open(directory / (prefix + 'slot-1'), 'a+') as handle:
-                        with self.assertRaises(BlockingIOError):
-                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    second.close()
-                    # slot-1 is now free, but the lowered cap must exclude it.
-                    with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
-                        with self.assertRaises(KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
-                            with gating.gate_slot(environ, pool=pool):
-                                self.fail('a gate acquired a retired slot')
-                self.assertEqual((directory / (prefix + 'count')).read_text(), '1\n')
-
-    def test_a_missing_count_falls_back_to_the_host_default_not_the_environment(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch) / 'slots'
-            # A stale `:1` from a brief must not cap the host at one slot.
-            environ = {gating.GATE_SLOTS: f'{directory}:1'}
-            gating.write_gate_slot_count(directory, 1)
-            polls = []
-
-            def remove_count(_):
-                polls.append('waited')
-                (directory / 'count').unlink()
-
-            with gating.gate_slot(environ):
-                with patch.object(gating.time, 'sleep', remove_count), contextlib.redirect_stdout(io.StringIO()):
-                    with gating.gate_slot(environ):
-                        self.assertEqual(polls, ['waited'])
-                        self.assertFalse((directory / 'count').exists())
-                        self.assertTrue((directory / 'slot-1').exists())
-                        with gating.gate_slot(environ):
-                            self.assertTrue((directory / 'slot-2').exists())
-
-    def test_the_default_seeds_only_an_absent_count_and_the_environment_count_is_ignored(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch) / 'slots'
-            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:4'}):
-                self.assertEqual((directory / 'count').read_text(), '6\n')
-            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}, pool=gating.EXPRESS_POOL):
-                self.assertEqual((directory / 'express-count').read_text(), '2\n')
-            gating.write_gate_slot_count(directory, 1)
-            gating.write_gate_slot_count(directory, 6, seed=True)
-            with gating.gate_slot({gating.GATE_SLOTS: str(directory)}):
-                self.assertEqual((directory / 'count').read_text(), '1\n')
-            self.assertEqual(list(directory.glob('.count-*')), [])
-
-    def test_unset_the_host_directory_is_used_and_none_runs_uncapped(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            host = Path(scratch) / 'locks/gate-slots'
-            with patch.object(gating, 'GATE_SLOT_DIR', host):
-                self.assertIsNone(gating.gate_slot_dir({}))
-                host.parent.mkdir()
-                self.assertEqual(gating.gate_slot_dir({}), host)
-                self.assertEqual(gating.gate_slot_dir({gating.GATE_SLOTS: f'{scratch}/other:4'}), Path(scratch) / 'other')
-                self.assertIsNone(gating.gate_slot_dir({gating.GATE_SLOTS: gating.NO_SLOTS}))
-                with gating.gate_slot({}):
-                    self.assertEqual((host / 'count').read_text(), '6\n')
-
-    def test_an_invalid_count_is_refused_and_the_ticket_is_removed(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch)
-            for value in ('', '0', '-1', 'six', '1.5'):
-                with self.subTest(value=value):
-                    (directory / 'count').write_text(value)
-                    with self.assertRaisesRegex(SystemExit, 'positive slot count'):
-                        with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}):
-                            self.fail('invalid host count was ignored')
-                    self.assertEqual(list((directory / 'queue').iterdir()), [])
-
-    def test_a_gate_waits_while_every_slot_is_held_and_takes_the_first_freed(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            environ = {gating.GATE_SLOTS: f'{scratch}/slots'}
-            gating.write_gate_slot_count(Path(scratch) / 'slots', 2)
-            poll, gating.SLOT_POLL_SECONDS = gating.SLOT_POLL_SECONDS, 0.05
-            self.addCleanup(setattr, gating, 'SLOT_POLL_SECONDS', poll)
-            entered = threading.Event()
-            with gating.gate_slot(environ), gating.gate_slot(environ):
-                said = io.StringIO()
-
-                def third():
-                    with contextlib.redirect_stdout(said), gating.gate_slot(environ):
-                        entered.set()
-
-                waiter = threading.Thread(target=third)
-                waiter.start()
-                self.assertFalse(entered.wait(0.5))
-            waiter.join(5)
-            self.assertTrue(entered.is_set())
-            self.assertIn('waiting for one of 2 normal gate slots', said.getvalue())
-            self.assertIn('took normal gate slot', said.getvalue())
-
-    def test_the_earlier_waiter_acquires_before_a_later_waiter_that_retries_first(self):
-        self.fifo_order(gating.NORMAL_POOL)
-
-    def test_the_express_fifo_keeps_earlier_waiters_ahead_of_later_retries(self):
-        self.fifo_order(gating.EXPRESS_POOL)
-
-    def test_the_land_fifo_keeps_earlier_waiters_ahead_of_later_retries(self):
-        self.fifo_order(gating.NORMAL_POOL, land=True)
-
-    def fifo_order(self, pool, *, land=False):
-        with tempfile.TemporaryDirectory() as scratch:
-            environ = {gating.GATE_SLOTS: f'{scratch}/slots:1'}
-            gating.write_gate_slot_count(Path(scratch) / 'slots', 1, pool=pool)
-
-            def slot():
-                if land:
-                    return gating.fifo_slot(Path(scratch) / 'slots', 1, label='land', exclusive=True)
-                return gating.gate_slot(environ, pool=pool)
-
-            early_waiting, late_waiting = threading.Event(), threading.Event()
-            early_retry, late_retry = threading.Event(), threading.Event()
-            late_attempted, early_entered = threading.Event(), threading.Event()
-            order, errors = [], []
-            late_polls = 0
-
-            def poll(_):
-                nonlocal late_polls
-                if threading.current_thread().name == 'early':
-                    early_waiting.set()
-                    if not early_retry.wait(5):
-                        raise AssertionError('earlier waiter was never released')
-                else:
-                    late_polls += 1
-                    late_waiting.set()
-                    if late_polls == 1:
-                        if not late_retry.wait(5):
-                            raise AssertionError('later waiter was never released')
-                    else:
-                        late_attempted.set()
-                        if not early_entered.wait(5):
-                            raise AssertionError('later waiter overtook or blocked the earlier waiter')
-
-            def wait(name):
-                try:
-                    with slot():
-                        order.append(name)
-                        if name == 'early':
-                            early_entered.set()
-                        else:
-                            late_attempted.set()
-                except BaseException as error:
-                    errors.append(error)
-
-            early = threading.Thread(target=wait, args=('early',), name='early')
-            late = threading.Thread(target=wait, args=('late',), name='late')
-            with patch.object(gating.time, 'sleep', poll), contextlib.redirect_stdout(io.StringIO()):
-                try:
-                    with slot():
-                        early.start()
-                        self.assertTrue(early_waiting.wait(5))
-                        late.start()
-                        self.assertTrue(late_waiting.wait(5))
-                    late_retry.set()
-                    self.assertTrue(late_attempted.wait(5))
-                    self.assertEqual(order, [])
-                finally:
-                    early_retry.set()
-                    late_retry.set()
-                    early_entered.set()
-                    for waiter in (early, late):
-                        if waiter.ident is not None:
-                            waiter.join(5)
-                self.assertFalse(early.is_alive() or late.is_alive())
-                self.assertEqual(errors, [])
-                self.assertEqual(order, ['early', 'late'])
-                self.assertEqual(list((Path(scratch) / 'slots' / (gating.POOL_PREFIX[pool] + 'queue')).iterdir()), [])
-
-    def test_land_reclaims_a_dead_holder_without_replacing_its_lock_file(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch)
-            source = ('import fcntl, os, sys, time; '
-                      'handle = open(sys.argv[1], "w"); '
-                      'fcntl.flock(handle, fcntl.LOCK_EX); '
-                      'handle.write(str(os.getpid())); handle.flush(); '
-                      'print("held", flush=True); time.sleep(30)')
-            holder = subprocess.Popen([sys.executable, '-c', source, str(directory / 'slot-0')],
-                                      stdout=subprocess.PIPE, text=True)
-            try:
-                self.assertEqual(holder.stdout.readline().strip(), 'held')
-                inode = (directory / 'slot-0').stat().st_ino
-                queue = directory / 'queue'
-                queue.mkdir()
-                dead = queue / f'0-{holder.pid}'
-                dead.write_text(f'{gating.process_start(holder.pid)}\n')
-                holder.kill()
-                holder.wait(5)
-                with gating.fifo_slot(directory, 1, label='land', exclusive=True):
-                    self.assertFalse(dead.exists())
-                    self.assertEqual((directory / 'slot-0').stat().st_ino, inode)
-            finally:
-                if holder.poll() is None:
-                    holder.kill()
-                    holder.wait(5)
-                holder.stdout.close()
-
-    def test_land_discards_a_ticket_from_a_reused_pid_but_keeps_a_live_identity(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch)
-            queue = directory / 'queue'
-            queue.mkdir()
-            stale = queue / f'0-{os.getpid()}'
-            stale.write_text(f'{gating.process_start(os.getpid()) + 1}\n')
-            with gating.fifo_slot(directory, 1, label='land', exclusive=True):
-                self.assertFalse(stale.exists())
-            live = queue / f'0-{os.getpid()}'
-            live.write_text(f'{gating.process_start(os.getpid())}\n')
-            with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    with gating.fifo_slot(directory, 1, label='land', exclusive=True):
-                        self.fail('overtook a live waiter')
-            self.assertEqual(list(queue.iterdir()), [live])
-
-    def test_land_rereads_the_count_each_poll_and_refuses_concurrent_lands(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch)
-
-            def change_count(_):
-                gating.write_gate_slot_count(directory, 2)
-
-            with gating.fifo_slot(directory, 1, label='land', exclusive=True):
-                with patch.object(gating.time, 'sleep', change_count):
-                    with self.assertRaisesRegex(SystemExit, 'must be 1'):
-                        with gating.fifo_slot(directory, 1, label='land', exclusive=True):
-                            self.fail('concurrent lands admitted')
-                self.assertEqual(list((directory / 'queue').iterdir()), [])
-
-    def test_a_dead_ticket_is_removed_before_a_live_waiter_acquires(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            queue = Path(scratch) / 'slots/queue'
-            queue.mkdir(parents=True)
-            exited = subprocess.Popen([sys.executable, '-c', 'pass'])
-            self.assertEqual(exited.wait(), 0)
-            dead = queue / f'0-{exited.pid}'
-            dead.touch()
-            with gating.gate_slot({gating.GATE_SLOTS: f'{scratch}/slots:1'}):
-                self.assertFalse(dead.exists())
-                self.assertEqual(list(queue.iterdir()), [])
-
-    def test_an_interrupted_waiter_removes_its_ticket(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            environ = {gating.GATE_SLOTS: f'{scratch}/slots'}
-            gating.write_gate_slot_count(Path(scratch) / 'slots', 1)
-            queue = Path(scratch) / 'slots/queue'
-
-            def interrupt(_):
-                self.assertEqual(len(list(queue.iterdir())), 1)
-                raise KeyboardInterrupt
-
-            with gating.gate_slot(environ), patch.object(gating.time, 'sleep', interrupt):
-                with self.assertRaises(KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
-                    with gating.gate_slot(environ):
-                        self.fail('a waiter entered an occupied slot')
-                self.assertEqual(list(queue.iterdir()), [])
-
-    def test_no_cap_with_none_and_a_spec_without_a_directory_is_refused(self):
-        none = {gating.GATE_SLOTS: gating.NO_SLOTS}
-        with gating.gate_slot(none), gating.gate_slot(none), gating.gate_slot(none):
-            pass
-        for spec in ('', ':4'):
-            with self.subTest(spec=spec):
-                with self.assertRaises(SystemExit), gating.gate_slot({gating.GATE_SLOTS: spec}):
-                    pass
-
-    def test_status_names_holders_their_age_the_queue_and_this_worktrees_place(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            directory = Path(scratch)
-            gating.write_gate_slot_count(directory, 2)
             mine = os.getcwd()
             sleeper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=scratch)
             self.addCleanup(sleeper.wait)
@@ -1414,8 +984,6 @@ class Slots(unittest.TestCase):
             now = gating.time.time()
             (queue / f'{int((now - 600) * 1e9)}-{sleeper.pid}').write_text(f'{gating.process_start(sleeper.pid)}\n')
             (queue / f'{int((now - 40) * 1e9)}-{os.getpid()}').write_text(f'{gating.process_start(os.getpid())}\n')
-            # A slot file whose holder exited is free.
-            (directory / 'slot-1').write_text(f'{sleeper.pid} 1 /elsewhere\n')
             handle = open(directory / 'slot-0', 'a+')
             self.addCleanup(handle.close)
             fcntl.flock(handle, fcntl.LOCK_EX)
@@ -1424,15 +992,15 @@ class Slots(unittest.TestCase):
             handle.flush()
             os.utime(directory / 'slot-0', (now - 300, now - 300))
             lines = gating.queue_status(directory, me={mine}, now=now)
-            self.assertEqual(lines[0], f'gate: normal gate slots: 2 in {directory}; 1 held, 2 queued')
-            self.assertEqual(lines[1], f'  slot 0: held 5 min by {mine} (pid {os.getpid()}) (you)')
-            self.assertEqual(lines[2], f'  queued 1: waiting 10 min, {scratch} (pid {sleeper.pid})')
-            self.assertEqual(lines[3], f'  queued 2: waiting 40 s, {mine} (pid {os.getpid()}) (you)')
-            self.assertEqual(lines[4:], ['gate: you hold normal gate slot 0',
-                                         'gate: you are at 2 of 2 in the normal gate slot queue'])
+            self.assertEqual(lines, [f'land: land lock: 1 in {directory}; 1 held, 2 queued',
+                                     f'  held 5 min by {mine} (pid {os.getpid()}) (you)',
+                                     f'  queued 1: waiting 10 min, {scratch} (pid {sleeper.pid})',
+                                     f'  queued 2: waiting 40 s, {mine} (pid {os.getpid()}) (you)',
+                                     'land: you hold the land lock',
+                                     'land: you are at 2 of 2 in the land queue'])
             fcntl.flock(handle, fcntl.LOCK_UN)
             self.assertEqual(gating.queue_status(directory, me={mine}, now=now)[0],
-                             f'gate: normal gate slots: 2 in {directory}; 0 held, 2 queued')
+                             f'land: land lock: 1 in {directory}; 0 held, 2 queued')
 
 
 class Merging(unittest.TestCase):
@@ -1592,7 +1160,7 @@ if [[ $1 == kill ]]; then
   exit "${FAIL_KILL:-0}"
 fi
 [[ -n ${DAEMON_TRACE:-} ]] && printf '%s %s %s\\n' "$1" "$isolation" "$PWD" >> "$DAEMON_TRACE"
-if [[ $1 == build && -n ${READY_PIPE:-} ]]; then
+if [[ ( $1 == build || $1 == test ) && -n ${READY_PIPE:-} ]]; then
   bash -c 'echo "$BASHPID" > "$CHILD_PID"; printf "ready\\n" > "$READY_PIPE"; read -r < "$BLOCK_PIPE"'
 fi
 # Each test target passes with the counts a conformance shard prints, unless
@@ -1784,11 +1352,23 @@ class LandStats(unittest.TestCase):
                        dict(at='2026-10-20T03:00:00Z', seconds=300, checks=[check(True, 240)],
                             flakes=[dict(tip='f' * 40, failed=['root//:a'], batch=['x', 'y'])])]
             (root / '.git/hirsel-land-batches.jsonl').write_text(''.join(json.dumps(b) + '\n' for b in batches))
-            result = subprocess.run([sys.executable, str(TOOLS / 'gate_land_stats.py')], cwd=root,
+            result = subprocess.run([sys.executable, str(TOOLS / 'land_stats.py')], cwd=root,
                                     capture_output=True, text=True, check=True)
         self.assertIn('batches: 3, median 10.0 min (green 7.5 min, red 30.0 min); 2.0 checks per batch; '
                       '1 red spent 18.0 min on checks after their first', result.stdout)
         self.assertIn('flake: root//:a on ffffffffffff at 2026-10-20T03:00:00Z (batch: x, y)', result.stdout)
+
+
+@contextlib.contextmanager
+def held_land_lock(directory):
+    """Hold the land lock as a land would, so the lands a test starts queue behind it."""
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / 'slot-0', 'a+') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.truncate(0)
+        handle.write(f'{os.getpid()} {gating.process_start(os.getpid())} {os.getcwd()}\n')
+        handle.flush()
+        yield
 
 
 class Scripts(unittest.TestCase):
@@ -1848,9 +1428,6 @@ class Scripts(unittest.TestCase):
                                  'HIRSEL_LAND_LOCK_DIR': str(top / 'land-lock'),
                                  'FAKE_BUCK2_BIN': str(self.root / '.buck2/bin'),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
-        # Scratch gates must not queue for the host's slots, nor acquire one
-        # held by the gate running this test.
-        self.env[gating.GATE_SLOTS] = gating.NO_SLOTS
         self.env.pop('HIRSEL_KEEP_DAEMON', None)
         self.env.pop('BUCK_ISOLATION_DIR', None)
         # A sibling's clone, to move main.
@@ -1866,45 +1443,26 @@ class Scripts(unittest.TestCase):
         logged = self.commands.read_text().splitlines() if self.commands.exists() else []
         return result, logged
 
-    def test_buck_backed_sync_starts_after_preparation_and_the_prequeue_daemon_stop(self):
-        path = self.root / 'tools/buck2/gating.py'
-        tracing = '''
-_start_local_check = Local.start
-def traced_local_check(self, name, command):
-    if any(str(arg).endswith('sync.py') for arg in command):
-        with open(os.environ['DAEMON_TRACE'], 'a') as trace:
-            trace.write('sync-start\\n')
-    return _start_local_check(self, name, command)
-Local.start = traced_local_check
-'''
-        commit(self.root, {'tools/buck2/gating.py': path.read_text() + tracing,
-                           'bench/native/tests/test_fixture.py':
-                               'import unittest\nclass Fixture(unittest.TestCase):\n    def test_available(self): pass\n'},
-               'Trace sync lifecycle')
-        trace = self.root.parent / 'daemon-trace'
-        result, _ = self.run_tool('gate', '--tests', 'suggested', '--why', 'Buck-backed inventory',
-                                  env={'DAEMON_TRACE': str(trace)})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        rows = trace.read_text().splitlines()
-        sync = rows.index('sync-start')
-        build = next(i for i, row in enumerate(rows) if row.startswith('build '))
-        stop = next(i for i, row in enumerate(rows) if row.startswith('kill v2 '))
-        self.assertGreater(sync, build, 'inventory started before the prepared workspace build')
-        # The inventory is in the floor: it finishes before the gate stops its daemon to queue.
-        self.assertLess(sync, stop, 'inventory was live when the gate stopped its daemon')
-
     def sibling_pushes(self, files):
         commit(self.sibling, files, 'Sibling change')
         git(self.sibling, 'push', '-q', 'origin', 'HEAD:main')
 
+    def smoke_corpus(self):
+        """A corpus on main whose smoke slice fills every conformance slice; its cases
+        expect rejection, so agreement mutates none of them."""
+        count = gating.SELECTED_SLICES * gating.CONFORMANCE_SLICE_PROGRAMS
+        self.sibling_pushes({f'conformance/R/R-{n}-x-bad.hir': f'// rule: R-{n}\n// expect: reject R-{n} at line 3\n'
+                             for n in range(count)})
+        git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
+
     def daemon_change(self, tool):
         if tool == 'land':
             commit(self.root, {'README.md': 'Daemon lifecycle fixture\n'}, 'Docs')
-            result, _ = self.run_tool('gate', '--why', 'docs only')
+            result, _ = self.run_tool('gate')
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return ['land']
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        return ['gate', '--why', 'one test target']
+        return ['gate']
 
     def daemon_trace(self):
         path = self.root.parent / 'daemon-trace'
@@ -1929,12 +1487,13 @@ Local.start = traced_local_check
         for tool in ('gate', 'land'):
             with self.subTest(tool=tool):
                 arguments = self.daemon_change(tool)
-                result, _ = self.run_tool(*arguments, env=self.daemon_env() | {'FAIL_BUILD': '1'})
+                fail = {'FAIL_TARGET': 'root//:a'} if tool == 'gate' else {'FAIL_BUILD': '1'}
+                result, _ = self.run_tool(*arguments, env=self.daemon_env() | fail)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assert_daemons_stopped()
 
     def test_cleanup_attempts_every_isolation_even_when_kill_fails(self):
-        result, _ = self.run_tool('gate', '--why', 'no change',
+        result, _ = self.run_tool('gate',
                                   env=self.daemon_env() | {'FAIL_KILL': '1'})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Buck2 daemon cleanup failed', result.stderr)
@@ -2003,25 +1562,22 @@ Local.start = traced_local_check
                     finally:
                         os.close(descriptor)
 
-    def test_queued_tools_hold_no_daemon_and_restart_after_acquisition(self):
-        for tool in ('gate', 'land'):
+    def test_a_queued_land_holds_no_daemon_and_restarts_after_acquisition(self):
+        for tool in ('land',):
             arguments = self.daemon_change(tool)
             # Interrupted first: a land that completes leaves nothing to land.
             for interrupt in (True, False):
                 with self.subTest(tool=tool, interrupt=interrupt):
-                    directory = self.root.parent / ('slots' if tool == 'gate' else 'land-lock')
-                    env = {gating.GATE_SLOTS: f'{directory}:1'} if tool == 'gate' else {}
-                    pool = gating.EXPRESS_POOL if tool == 'gate' else gating.NORMAL_POOL
+                    directory = self.root.parent / 'land-lock'
+                    env = {}
                     with contextlib.ExitStack() as held:
-                        # Fill both express slots; land always has one exclusive slot.
-                        for _ in range(2 if tool == 'gate' else 1):
-                            held.enter_context(gating.fifo_slot(directory, 2 if tool == 'gate' else 1, pool=pool))
+                        held.enter_context(held_land_lock(directory))
                         with self.daemon_process(arguments, env) as process:
                             with selectors.DefaultSelector() as selector:
                                 selector.register(process.stdout, selectors.EVENT_READ)
                                 # Read bytes directly: TextIO buffering would hide lines from select.
                                 output = b''
-                                while (b'; held by:' if tool == 'gate' else b'land: waiting;') not in output:
+                                while b'land: waiting;' not in output:
                                     self.assertTrue(selector.select(timeout=10), output.decode())
                                     chunk = os.read(process.stdout.fileno(), 4096)
                                     self.assertTrue(chunk, output.decode())
@@ -2036,99 +1592,26 @@ Local.start = traced_local_check
                             self.assertEqual(process.returncode, 143 if interrupt else 0, out + err)
                             self.assert_daemons_stopped()
                             if not interrupt:
-                                # A gate built before it queued; after the slot it only tests.
-                                first = 'test ' if tool == 'gate' else 'build '
-                                self.assertTrue(any(row.startswith(first) for row in self.daemon_trace()[before:]))
-                    self.assertEqual(list((directory / (gating.POOL_PREFIX[pool] + 'queue')).iterdir()), [])
-
-    def test_set_slots_updates_each_host_count_without_checks_or_a_slot(self):
-        directory = self.root.parent / 'slots'
-        env = {gating.GATE_SLOTS: f'{directory}:1'}
-        for option, pool in (('--set-slots', gating.NORMAL_POOL), ('--set-express-slots', gating.EXPRESS_POOL)):
-            with self.subTest(pool=pool):
-                path = directory / (gating.POOL_PREFIX[pool] + 'count')
-                result, logged = self.run_tool('gate', option, '2', env=env)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(logged, [])
-                self.assertEqual(path.read_text(), '2\n')
-                with gating.gate_slot(env, pool=pool), gating.gate_slot(env, pool=pool):
-                    result, logged = self.run_tool('gate', option, '1', env=env)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(logged, [])
-                    self.assertEqual(path.read_text(), '1\n')
-        self.assertEqual((directory / 'count').read_text(), '1\n')
-        self.assertEqual(list(directory.glob('.*count-*')), [])
-
-    def test_status_runs_no_buck2_and_leaves_the_worktrees_daemon_running(self):
-        directory = self.root.parent / 'slots'
-        with gating.gate_slot({gating.GATE_SLOTS: str(directory)}):
-            result, logged = self.run_tool('gate', '--status', env={gating.GATE_SLOTS: f'{directory}:4',
-                                                                    **self.daemon_env()})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((logged, self.daemon_trace()), ([], []))
-        self.assertIn(f'gate: normal gate slots: 6 in {directory}; 1 held, 0 queued', result.stdout)
-        self.assertIn('gate: express gate slots: 2', result.stdout)
-
-    def test_set_slots_refuses_invalid_counts_missing_configuration_and_gate_options(self):
-        directory = self.root.parent / 'slots'
-        env = {gating.GATE_SLOTS: f'{directory}:2'}
-        for option in ('--set-slots', '--set-express-slots'):
-            for arguments, config in [((option, '0'), env), ((option, '-1'), env),
-                                      ((option, 'six'), env), ((option, '2'), {}),
-                                      ((option, '2', '--suggest'), env),
-                                      ((option, '2', '--why', 'check'), env),
-                                      (('--set-slots', '2', '--set-express-slots', '2'), env)]:
-                with self.subTest(arguments=arguments, config=config):
-                    result, logged = self.run_tool('gate', *arguments, env=config)
-                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                    self.assertEqual(logged, [])
-                    self.assertFalse(directory.exists())
-
-    def test_a_small_resolved_gate_uses_express_and_records_it_while_normal_is_full(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        directory = self.root.parent / 'slots'
-        env = {gating.GATE_SLOTS: f'{directory}:6'}
-        with contextlib.ExitStack() as held:
-            for _ in range(6):
-                held.enter_context(gating.gate_slot(env))
-            # Bound the subprocess so accidentally choosing normal fails rather than hangs.
-            self.env.update(env)
-            result = subprocess.run([str(self.root / 'tools/gate'), '--why', 'one test target'],
-                                    cwd=self.root, env=self.env, capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('took express gate slot', result.stdout)
-        _, record = gating.latest_green(self.root)
-        self.assertEqual(record['pool'], 'express')
-        result, _ = self.run_tool('land')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('pool: express', result.stdout)
-        [landing] = (self.root / '.git/hirsel-landings.jsonl').read_text().splitlines()
-        self.assertEqual(json.loads(landing)['pool'], 'express')
+                                self.assertTrue(any(row.startswith('build ') for row in self.daemon_trace()[before:]))
+                    self.assertEqual(list((directory / 'queue').iterdir()), [])
 
     def test_documentation_alone_runs_no_buck2_and_catches_broken_links(self):
         commit(self.root, {'docs/building.md': 'See [the grammar](grammar.md) and [x](gone.md).\n'}, 'Docs')
-        result, logged = self.run_tool('gate', '--why', 'scratch change')
+        result, logged = self.run_tool('gate')
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('docs/building.md: link gone.md names nothing', result.stdout)
         self.assertEqual(logged, [])
         commit(self.root, {'docs/building.md': 'See [the grammar](grammar.md).\nMore.\n'}, 'Docs fixed')
-        result, logged = self.run_tool('gate', '--why', 'scratch change')
+        result, logged = self.run_tool('gate')
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(logged, [])
-        self.assertEqual(gating.latest_green(self.root)[1]['pool'], 'none')
         # Moving a linked document without its links fails.
         commit(self.root, {'docs/grammar.md': None, 'docs/syntax.md': 'grammar\n'}, 'Move')
-        result, _ = self.run_tool('gate', '--why', 'scratch change')
+        result, _ = self.run_tool('gate')
         self.assertIn('docs/building.md: link grammar.md names a deleted path', result.stdout)
 
-    def test_land_refuses_an_ungated_change_and_lands_a_gated_one_after_main_moves(self):
+    def test_land_needs_no_receipt_and_lands_after_main_moves(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        result, logged = self.run_tool('land')
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('tools/gate has not passed this change', result.stdout)
-        self.assertFalse(any(c.startswith('build') for c in logged))
-        self.assertFalse(Path(self.env['HIRSEL_LAND_LOCK_DIR']).exists())
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.sibling_pushes({'LICENSE': 'MIT\n'})
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -2153,7 +1636,6 @@ Local.start = traced_local_check
 
     def test_land_builds_at_its_priority_in_one_daemon_state_without_the_std_precheck(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         configs, queries = self.root.parent / 'config-trace', self.root.parent / 'query-trace'
         result, logged = self.run_tool('land', env={'CONFIG_TRACE': str(configs), 'QUERY_TRACE': str(queries)})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2173,7 +1655,6 @@ Local.start = traced_local_check
 
     def test_land_fetches_prepares_checks_and_pushes_inside_the_lock(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         real_git = shutil.which('git')
         wrapper = self.root / '.buck2/bin/git'
         trace = self.root.parent / 'lock-trace'
@@ -2216,7 +1697,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_runs_main_s_copy_of_itself_on_the_worktree(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         land = (self.sibling / 'tools/land').read_text()
         marker = "    say('land: main copy marker ' + str(ROOT))\n"
         land = land.replace('    os.chdir(ROOT)\n', '    os.chdir(ROOT)\n' + marker, 1)
@@ -2231,9 +1711,8 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_the_batch_runs_main_s_newest_landing_scripts_not_the_waiting_lane_s(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
-        with gating.fifo_slot(directory, 1, label='land', exclusive=True), contextlib.redirect_stdout(io.StringIO()):
+        with held_land_lock(directory), contextlib.redirect_stdout(io.StringIO()):
             process = subprocess.Popen([str(self.root / 'tools/land')], cwd=self.root, env=self.env,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for _ in range(200):
@@ -2255,7 +1734,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_refuses_to_run_under_an_outer_timeout(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.commands.unlink(missing_ok=True)
         result = subprocess.run(['timeout', '60', str(self.root / 'tools/land')], cwd=self.root, env=self.env,
                                 capture_output=True, text=True)
@@ -2266,18 +1744,16 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_status_names_the_holder_its_age_and_the_waiters_without_buck2(self):
         directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
-        with gating.fifo_slot(directory, 1, label='land', exclusive=True):
+        with held_land_lock(directory):
             result, logged = self.run_tool('land', '--status', env=self.daemon_env())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((logged, self.daemon_trace()), ([], []))
         self.assertIn(f'land: land lock: 1 in {directory}; 1 held, 0 queued', result.stdout)
-        self.assertRegex(result.stdout, r'slot 0: held \d+ s by ')
+        self.assertRegex(result.stdout, r'  held \d+ s by ')
 
     def test_land_commits_the_index_generated_from_the_rebased_sources(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.sibling_pushes({'docs/catalogue.md': 'a new export\n'})
-        records = gating.green_records(self.root)
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'a new export')
@@ -2287,13 +1763,11 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
                          ['README.md', 'docs/api.md'])
         [landing] = (self.root / '.git/hirsel-landings.jsonl').read_text().splitlines()
         self.assertEqual(json.loads(landing)['landed'], git(self.origin, 'rev-parse', 'main'))
-        self.assertEqual(gating.green_records(self.root), records)
         self.assertIn('hirsel doc stdlib/std@1/hirsel.json', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
 
     def test_land_does_not_push_or_replace_the_page_when_index_generation_fails(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         before = git(self.origin, 'rev-parse', 'main')
         result, _ = self.run_tool('land', env={'FAIL_INDEX': '1'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -2304,7 +1778,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_caps_the_index_generator_and_refuses_a_scope_kill(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         before = git(self.origin, 'rev-parse', 'main')
         result, logged = self.run_tool('land', env={'FAIL_SCOPE': '1'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -2317,8 +1790,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_regenerates_after_a_push_race_without_regating_or_extra_index_commits(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
-        records = gating.green_records(self.root)
         commit(self.sibling, {'LICENSE': 'MIT\n'}, 'Main moves during generation')
         result, logged = self.run_tool('land', env={
             'INDEX_TEXT': 'a new export\n', 'INDEX_PUSH_ONCE': str(self.sibling),
@@ -2331,7 +1802,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
         self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
         self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Readme')
-        self.assertEqual(gating.green_records(self.root), records)
         self.assertEqual(logged.count('hirsel doc stdlib/std@1/hirsel.json'), 2)
         self.assertEqual(result.stdout.count('took land lock'), 1)
         self.assertEqual(result.stdout.count('held land lock for'), 1)
@@ -2339,7 +1809,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_an_expired_clippy_output_is_fetched_again(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.env['EXPIRED_ONCE'] = str(self.root.parent / 'expired')
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -2347,7 +1816,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_land_refuses_a_red_tree_and_stops_on_a_conflict(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.env['FAIL_FMT'] = '1'
         result, _ = self.run_tool('land')
         self.assertEqual(result.returncode, 1)
@@ -2373,7 +1841,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         (tree / '.buck2/bin').symlink_to(self.root / '.buck2/bin')
         bootstrap(tree)
         commit(tree, files, f'{name} change')
-        gate = subprocess.run([str(tree / 'tools/gate'), '--why', 'docs only'], cwd=tree, env=self.env,
+        gate = subprocess.run([str(tree / 'tools/gate')], cwd=tree, env=self.env,
                               capture_output=True, text=True)
         self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
         return tree
@@ -2384,7 +1852,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         directory = Path(self.env['HIRSEL_LAND_LOCK_DIR'])
         self.commands.unlink(missing_ok=True)
         processes = []
-        with gating.fifo_slot(directory, 1, label='land', exclusive=True), contextlib.redirect_stdout(io.StringIO()):
+        with held_land_lock(directory), contextlib.redirect_stdout(io.StringIO()):
             for count, tree in enumerate(trees, 1):
                 processes.append(subprocess.Popen([str(tree / 'tools/land')], cwd=tree, env=self.env,
                                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
@@ -2402,7 +1870,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_queued_changes_land_as_one_batch_with_one_build_and_one_push(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         other = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
         before = git(self.origin, 'rev-parse', 'main')
         (first, first_out), (second, second_out) = self.queued_lands([self.root, other])
@@ -2424,7 +1891,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_a_change_that_turns_the_batch_red_leaves_it_and_the_rest_lands(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         red = self.lane('poison', {'docs/poison.md': 'breaks the build\n'})
         last = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
         before = git(self.origin, 'rev-parse', 'main')
@@ -2458,7 +1924,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_a_failure_that_does_not_repeat_is_checked_again_and_the_batch_lands(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         other = self.lane('grammar', {'docs/grammar.md': 'the grammar\n'})
         self.env['FAIL_BUILD_ONCE'] = str(self.root.parent / 'flaked')
         results = self.queued_lands([self.root, other])
@@ -2475,7 +1940,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_a_failed_target_a_later_change_adds_is_that_change_s_not_an_earlier_one_s(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         api = self.lane('api', {'docs/api-change.md': 'renames a function\n'})
         user = self.lane('user', {'buck-targets': 'root//:b\n', 'docs/old-api-user.md': 'calls it by its old name\n'})
         before = git(self.origin, 'rev-parse', 'main')
@@ -2497,7 +1961,6 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
         commit(self.root, {'third-party/NOTICES.md': notices + '| go | BSD |\n', passing: 'a.hir\nm.hir\nz.hir\n',
                            'README.md': 'Hirsel, a language\n'}, 'First')
-        self.assertEqual(self.run_tool('gate', '--why', 'lists')[0].returncode, 0)
         rows = self.lane('rows', {'third-party/NOTICES.md': notices + '| roc | UPL |\n',
                                   passing: 'a.hir\nb.hir\nz.hir\n'})
         clash = self.lane('clash', {'README.md': 'Hirsel, the agent language\n'})
@@ -2517,7 +1980,8 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         main_buck = (self.root / 'BUCK').read_text()
         commit(self.root, {'crates/hirsel-span/tests/it/one.rs': '#[test]\nfn one() {}\n',
                            'docs/catalogue-one.md': 'one\n'}, 'One')
-        self.assertEqual(self.run_tool('gate', '--why', 'a test and an export')[0].returncode, 0)
+        # The lane's run of its targeted tests generates its build files.
+        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
         other = self.lane('two', {'crates/hirsel-lexer/tests/it/two.rs': '#[test]\nfn two() {}\n',
                                   'docs/catalogue-two.md': 'two\n'})
         for tree, line in ((self.root, 'crates/hirsel-span/tests/it/one.rs'),
@@ -2543,12 +2007,11 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_gate_and_land_refuse_a_change_that_touches_a_generated_file(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
         before = git(self.origin, 'rev-parse', 'main')
         commit(self.root, {'docs/api.md': 'index by hand\n'}, 'Index')
         for tool in ('gate', 'land'):
             with self.subTest(tool=tool):
-                result, logged = self.run_tool(*([tool, '--why', 'docs only'] if tool == 'gate' else [tool]))
+                result, logged = self.run_tool(tool)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f'{tool}: the change touches generated files, which no lane commits: docs/api.md',
                               result.stdout)
@@ -2564,7 +2027,7 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('docs/api.md, BUCK', result.stdout.replace('BUCK, docs/api.md', 'docs/api.md, BUCK'))
         self.assertIn('git rm -q --cached BUCK', result.stdout)
-        # Dropped as told, the change lands on the gate it already passed.
+        # Dropped as told, the change lands.
         base = git(self.root, 'merge-base', 'HEAD', 'origin/main')
         git(self.root, 'checkout', base, '--', 'docs/api.md')
         git(self.root, 'rm', '-q', '--cached', 'BUCK')
@@ -2573,97 +2036,55 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'index')
 
-    def test_the_chosen_corpus_cases_run_first_and_their_failure_stops_the_gate(self):
-        # Enough other cases that one changed case is a slice, not the whole campaign.
-        self.sibling_pushes({f'conformance/LANG/LANG-{n}-y-run.hir': '// expect: run\n' for n in (2, 3, 4)})
-        git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
-        commit(self.root, {'conformance/LANG/LANG-1-x-run.hir': '// expect: run\n',
+    def test_the_targeted_set_runs_in_one_invocation_and_a_failure_names_its_rerun(self):
+        # A rejected case: agreement mutates none, so conformance is its only corpus run.
+        commit(self.root, {'conformance/LANG/LANG-1-x-bad.hir': '// expect: reject LANG-1 at line 3\n',
                            'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Case')
-        result, logged = self.run_tool('gate', '--why', 'a case and a test',
-                                       env={'FAIL_TARGET': 'root//:gate-conformance-selected-shard-1'})
+        result, logged = self.run_tool('gate', env={'FAIL_TARGET': 'root//:gate-conformance-selected-shard-1'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         [tested] = [c for c in logged if c.startswith('test ')]
         self.assertIn('root//:gate-conformance-selected-shard-1 ', tested)
-        self.assertNotIn('root//:a ', tested)
-        self.assertIn('1 targets not run: the chosen corpus cases failed first', result.stdout)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'the case fixed')
+        self.assertIn('root//:a ', tested)
+        self.assertIn('FAIL  gate-conformance-selected-shard-1', result.stdout)
+        self.assertIn('.buck2/bin/buck2 test //:gate-conformance-selected-shard-1', result.stdout)
+        # Nothing is recorded: the same command runs everything again.
+        result, logged = self.run_tool('gate')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c.split(' -- ')[0].split()[-1] for c in logged if c.startswith('test ')],
-                         ['root//:gate-conformance-selected-shard-1', 'root//:a'])
+        [tested] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:a ', tested)
 
     def test_known_failures_on_main_are_excluded_and_printed_and_others_fail(self):
         self.sibling_pushes({'tools/known-failures.tsv': '# id\treason\towner\tdate\n'
                              'a\tthe replay kill-order flake\tnative-bugs-4\t2026-10-19\n'})
         git(self.root, 'fetch', '-q', 'origin')
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--why', 'one test target', env={'FAIL_TARGET': 'root//:a'})
+        result, _ = self.run_tool('gate', env={'FAIL_TARGET': 'root//:a'})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('pass  a (FAIL, known failures only)', result.stdout)
         self.assertIn('a: known failure a: the replay kill-order flake (owner native-bugs-4, since 2026-10-19)',
                       result.stdout)
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn u() {}\n'}, 'Other')
-        result, _ = self.run_tool('gate', '--why', 'one test target', env={'FAIL_TESTS': '1'})
+        result, _ = self.run_tool('gate', env={'FAIL_TESTS': '1'})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.sibling_pushes({'tools/known-failures.tsv': '# id\treason\towner\tdate\n'})
         git(self.root, 'fetch', '-q', 'origin')
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn v() {}\n'}, 'Another')
-        result, _ = self.run_tool('gate', '--why', 'the row expired', env={'FAIL_TARGET': 'root//:a'})
+        result, _ = self.run_tool('gate', env={'FAIL_TARGET': 'root//:a'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('FAIL  a (FAIL', result.stdout)
 
-    def test_land_refuses_added_known_failures_and_expires_the_landing_lanes_rows(self):
+    def test_a_landing_expires_its_lanes_rows_on_main_and_keeps_rows_it_adds(self):
         rows = '# id\treason\towner\tdate\nx\tflaky\tmain\t2026-10-19\ny\tred\tother\t2026-10-19\n'
         self.sibling_pushes({'tools/known-failures.tsv': rows})
         git(self.root, 'pull', '-q', '--rebase', 'origin', 'main')
-        commit(self.root, {'tools/known-failures.tsv': rows + 'z\tmine\tmain\t2026-10-20\n',
-                           'bench/native/tests/test_fixture.py':
-                               'import unittest\nclass Fixture(unittest.TestCase):\n    def test_available(self): pass\n'},
-               'Add a row')
-        gate = self.run_tool('gate', '--why', 'tooling')[0]
-        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
-        result, _ = self.run_tool('land')
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('the change adds rows to tools/known-failures.tsv: z', result.stdout)
-        git(self.root, 'reset', '-q', '--hard', 'origin/main')
-        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate', '--why', 'docs only')[0].returncode, 0)
+        # A lane may add a row itself; one its own landing adds is not expired by it.
+        commit(self.root, {'tools/known-failures.tsv': rows + 'z\tmine\tmain\t2026-10-20\n'}, 'Add a row')
         result, _ = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('expired known failures owned by the landing lanes: x', result.stdout)
         self.assertEqual(git(self.origin, 'show', 'main:tools/known-failures.tsv'),
-                         '# id\treason\towner\tdate\ny\tred\tother\t2026-10-19')
+                         '# id\treason\towner\tdate\ny\tred\tother\t2026-10-19\nz\tmine\tmain\t2026-10-20')
         self.assertIn('Expire the known failures of main.', git(self.origin, 'log', '--format=%s', '-3', 'main'))
-
-    def test_a_restarted_gate_keeps_its_place_in_the_queue(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        directory = self.root.parent / 'slots'
-        env = {gating.GATE_SLOTS: str(directory)}
-        queue = directory / 'express-queue'
-        with contextlib.ExitStack() as held:
-            for _ in range(2):
-                held.enter_context(gating.fifo_slot(directory, 2, pool=gating.EXPRESS_POOL))
-            with self.daemon_process(['gate', '--why', 'one test target'], env) as process:
-                self.wait_for_ticket(queue, 1)
-                [first] = list(queue.iterdir())
-                process.terminate()
-                process.communicate(timeout=20)
-            # A later waiter queues; the restarted gate goes back ahead of it.
-            later = queue / f'{time_ns()}-{os.getpid()}'
-            later.write_text(f'{gating.process_start(os.getpid())}\n')
-            with self.daemon_process(['gate', '--why', 'one test target'], env) as process:
-                self.wait_for_ticket(queue, 2)
-                [restarted] = [ticket for ticket in queue.iterdir() if ticket != later]
-                self.assertEqual(restarted.name.split('-')[0], first.name.split('-')[0])
-                self.assertEqual(gating.oldest_gate_ticket(queue), restarted)
-                later.unlink()
-                held.close()
-                out, err = process.communicate(timeout=30)
-                self.assertEqual(process.returncode, 0, out + err)
-                self.assertIn("keeping this worktree's place in the queue", out)
-        self.assertFalse((self.root / '.git/hirsel-gate-queue.json').exists())
-        [entry] = [json.loads(line) for line in (self.root / '.git/hirsel-gates.jsonl').read_text().splitlines()][-1:]
-        self.assertTrue(entry['passed'])
-        self.assertIsNotNone(entry['floor_seconds'])
 
     def wait_for_ticket(self, queue, count):
         for _ in range(400):
@@ -2674,84 +2095,36 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
 
     def test_a_crate_edit_checks_that_every_ignored_test_runs_in_a_gate(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\n#[ignore]\nfn tool() {}\n'}, 'Test')
-        result, logged = self.run_tool('gate', '--why', 'scratch change', env={'FAIL_IGNORED': '1'})
+        result, logged = self.run_tool('gate', env={'FAIL_IGNORED': '1'})
         self.assertIn('ignored_tests.py', logged)
         self.assertIn('FAIL  tools/tests/ignored_tests.py', result.stdout)
-        self.assertIn('pass  tools/tests/ignored_tests.py', self.run_tool('gate', '--why', 'scratch change')[0].stdout)
+        self.assertIn('pass  tools/tests/ignored_tests.py', self.run_tool('gate')[0].stdout)
 
-    def test_a_gated_change_rebased_cleanly_only_builds_and_checks_formatting(self):
-        commit(self.root, {'docs/grammar.md': 'grammar, revised\n'}, 'Grammar')
-        # docs/grammar.md is a compile input (BUCK names it): this reaches Buck2.
-        identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
-        gating.record_gate(identity, set(), self.root)
-        self.sibling_pushes({'LICENSE': 'MIT\n'})
-        git(self.root, 'pull', '-q', '--rebase')
-        result, logged = self.run_tool('gate', '--why', 'scratch change')
+    def test_land_runs_no_test_after_a_compiler_crate_gate(self):
+        # The gate ran the smoke slice; land only builds, runs Clippy and the local checks.
+        self.smoke_corpus()
+        commit(self.root, {'crates/hirsel-check/src/lib.rs': 'pub fn f() {}\n'}, 'Checker')
+        result, logged = self.run_tool('gate', '--tests', 'suggested')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('only the workspace build and formatting run', result.stdout)
-        self.assertEqual([c for c in logged if c.startswith(('build', 'test'))],
-                         ['build -c hirsel.clippy=true -c buck2.test_builds_targets=true --materializations none root//:a'])
+        self.assertIn('smoke: the corpus smoke slice, 320 cases', result.stdout)
+        self.assertTrue(any('gate-conformance-selected-shard-16' in c for c in logged if c.startswith('test ')), logged)
+        result, logged = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any(c.startswith('build ') for c in logged), logged)
+        self.assertEqual([c for c in logged if c.startswith('test')], [])
         self.assertIn('fmt.py --check', logged)
-
-
-    def test_a_gate_says_why_its_selection_suffices(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        for arguments in [(), ('--why', ' '), ('--tests', 'conformance')]:
-            with self.subTest(arguments=arguments):
-                result, logged = self.run_tool('gate', *arguments)
-                self.assertEqual(result.returncode, 2, result.stdout)
-                self.assertIn('--why', result.stderr)
-                self.assertEqual(logged, [])
-
-    def test_formatting_clippy_or_the_build_failing_stops_the_gate_before_any_test(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        for env in [{'FAIL_FMT': '1'}, {'FAIL_BUILD': '1'}]:
-            with self.subTest(env=env):
-                result, logged = self.run_tool('gate', '--why', 'scratch change', '--tests', 'conformance', env=env)
-                self.assertEqual(result.returncode, 1, result.stdout)
-                self.assertIn('no test ran', result.stdout)
-                self.assertFalse(any(c.startswith('test') for c in logged), logged)
-        result, logged = self.run_tool('gate', '--why', 'scratch change', '--tests', 'conformance')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('gate: pool: normal', result.stdout)
-        [test] = [c for c in logged if c.startswith('test')]
-        self.assertIn('root//:gate-conformance-shard-16', test)
 
     def test_suggest_runs_nothing_and_prints_the_floor_and_the_selection(self):
         commit(self.root, {'crates/hirsel-lexer/src/lib.rs': 'pub fn f() {}\n'}, 'Lexer')
         result, logged = self.run_tool('gate', '--suggest')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('the floor', result.stdout)
-        self.assertIn('conformance: the whole campaign', result.stdout)
-        self.assertIn('agreement: the whole campaign', result.stdout)
+        self.assertIn('the targeted set', result.stdout)
+        # A compiler crate selects the smoke slice, never a whole conformance or agreement campaign.
+        self.assertIn('smoke: the corpus smoke slice', result.stdout)
+        self.assertNotIn('the whole campaign', result.stdout)
         self.assertFalse(any(c.startswith(('build', 'test')) for c in logged), logged)
 
-    def test_a_local_failure_stops_the_gate_before_the_queue_and_land_refuses_red(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        directory = self.root.parent / 'slots'
-        result, logged = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus and local checks',
-                                       env={'FAIL_IGNORED': '1', gating.GATE_SLOTS: str(directory)})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('no slot taken and no test ran', result.stdout)
-        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
-        self.assertFalse((directory / 'queue').exists())
-        identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
-        record = gating.green_records(self.root)[identity]
-        self.assertFalse(gating.is_green(identity, set(), self.root))
-        self.assertEqual(record['target_results'], {})
-        self.assertEqual(gating.latest_green(self.root), (None, None))
-        self.assertEqual(self.run_tool('land')[0].returncode, 1)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'local check fixed')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(any(c.startswith('test ') for c in logged), logged)
-        self.assertIn('ignored_tests.py', logged)
-        record = gating.green_records(self.root)[identity]
-        self.assertTrue(gating.is_green(identity, set(), self.root))
-        self.assertIn('conformance', record['selection'])
-        self.assertIn('corpus and local checks', record['why'])
-        self.assertEqual(self.run_tool('land')[0].returncode, 0)
-
-    def test_normal_gate_and_extend_run_changed_test_harness_sources(self):
+    def test_a_run_selects_changed_test_harness_sources(self):
         buck = SCRIPT_BUCK + '''
 hirsel_test(
     name = "front",
@@ -2763,15 +2136,11 @@ hirsel_test(
         git(self.root, 'push', '-q', 'origin', 'main')
         path = 'crates/hirsel-lexer/tests/front/net.rs'
         commit(self.root, {path: '#[test] fn net() {}'}, 'Test source')
-        for extending in [False, True]:
-            if extending:
-                commit(self.root, {path: '#[test] fn edited_net() {}'}, 'Edit test source')
-            result, logged = self.run_tool('gate', *(['--extend'] if extending else []),
-                                           '--why', 'changed front test')
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            [tested] = [c for c in logged if c.startswith('test ')]
-            self.assertIn('root//:front-shard-1', tested)
-            self.assertIn('root//:front-shard-2', tested)
+        result, logged = self.run_tool('gate')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [tested] = [c for c in logged if c.startswith('test ')]
+        self.assertIn('root//:front-shard-1', tested)
+        self.assertIn('root//:front-shard-2', tested)
 
     def test_build_graph_changes_run_the_gate_tooling_tests(self):
         # Rule-only BUCK edits and Buck subpackage files retain their normal
@@ -2785,115 +2154,11 @@ hirsel_test(
                            ('tools/buck2/defs.bzl', '# macro change\n')]:
             with self.subTest(path=path):
                 commit(self.root, {path: text}, 'Graph change')
-                result, logged = self.run_tool('gate', '--why', 'graph tooling checks')
+                result, logged = self.run_tool('gate')
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('gate.py', logged)
                 git(self.root, 'push', '-q', 'origin', 'main')
 
-    def test_extend_reruns_failed_and_missing_targets_and_preserves_campaign_summary(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus', env={
-            'FAIL_TARGET': 'root//:gate-conformance-shard-3',
-            'OMIT_TARGET': 'root//:gate-conformance-shard-7',
-        })
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'retry failures')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        [test] = [c for c in logged if c.startswith('test ')]
-        self.assertEqual([word for word in test.split() if word.startswith('root//')],
-                         ['root//:gate-conformance-shard-3', 'root//:gate-conformance-shard-7'])
-        self.assertIn('16 validated / 16 passing', result.stdout)
-
-    def test_partial_results_never_reuse_a_changed_source(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus',
-                                  env={'FAIL_IGNORED': '1'})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn changed() {}\n'}, 'Edit')
-        result, logged = self.run_tool('gate', '--tests', 'conformance', '--why', 'changed source')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        [test] = [c for c in logged if c.startswith('test ')]
-        self.assertIn('root//:gate-conformance-shard-16', test)
-        self.assertIn('root//:a', test)
-
-    def test_partial_results_never_reuse_changed_campaign_settings(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'native:README.md', '--why', 'first program',
-                                  env={'FAIL_IGNORED': '1'})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, logged = self.run_tool('gate', '--extend', '--tests', 'native:docs/grammar.md',
-                                       '--why', 'second program')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        [test] = [c for c in logged if c.startswith('test ')]
-        self.assertIn('root//:gate-native-changed', test)
-        self.assertIn('root//:gate-native-cranelift-changed', test)
-        self.assertNotIn('reusing', result.stdout)
-
-    def test_a_build_failure_during_resume_keeps_passed_target_results(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'corpus',
-                                  env={'FAIL_TARGET': 'root//:gate-conformance-shard-3'})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'build failed', env={'FAIL_BUILD': '1'})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertFalse(any(c.startswith('test ') for c in logged), logged)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'build fixed')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        [tested] = [c for c in logged if c.startswith('test ')]
-        self.assertIn('root//:gate-conformance-shard-3 ', tested)
-        self.assertNotIn('root//:gate-conformance-shard-4 ', tested)
-
-    def test_resuming_a_failed_extension_keeps_its_scope_and_inherited_selection(self):
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--tests', 'conformance', '--why', 'initial selection')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        changed = 'crates/hirsel-lexer/tests/it/keywords.rs'
-        commit(self.root, {changed: '#[test]\nfn k() {}\n'}, 'Edit')
-        result, _ = self.run_tool('gate', '--extend', '--why', 'extension', env={'FAIL_IGNORED': '1'})
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        result, logged = self.run_tool('gate', '--extend', '--why', 'local fixed')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        # The failed extension stopped in its floor; its resumption runs its tests.
-        self.assertTrue(any(c.startswith('test ') for c in logged), logged)
-        _, record = gating.latest_green(self.root)
-        self.assertEqual(record['paths'], [changed])
-        self.assertIn('conformance', record['selection'])
-        self.assertIsNotNone(record['extends'])
-
-    def test_extend_runs_the_edits_floor_and_land_accepts_the_new_identity(self):
-        result, _ = self.run_tool('gate', '--extend', '--why', 'scratch change')
-        self.assertEqual(result.returncode, 0)
-        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
-        result, _ = self.run_tool('gate', '--extend', '--why', 'scratch change')
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('--extend needs a change this worktree passed', result.stdout)
-        result, _ = self.run_tool('gate', '--why', 'the span test alone', '--tests', 'conformance')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        first = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
-        commit(self.root, {'crates/hirsel-lexer/tests/it/keywords.rs': '#[test]\nfn k() {}\n'}, 'Fix')
-        result, logged = self.run_tool('gate', '--extend', '--why', 'one more test file')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f'extending change {first[:12]}', result.stdout)
-        self.assertIn('1 paths differ: crates/hirsel-lexer/tests/it/keywords.rs', result.stdout)
-        [test] = [c for c in logged if c.startswith('test')]
-        self.assertNotIn('gate-conformance-shard', test)
-        identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
-        record = gating.green_records(self.root)[identity]
-        self.assertEqual((record['extends'], record['why']),
-                         (first, 'one more test file (extending: the span test alone)'))
-        self.assertIn('conformance', record['selection'])
-        self.assertEqual(record['pool'], 'express')
-        result, _ = self.run_tool('land')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('land: gated ', result.stdout)
-        self.assertIn('why: one more test file (extending: the span test alone)', result.stdout)
-        self.assertIn(f'extends change {first[:12]}', result.stdout)
-        [landing] = (Path(git(self.root, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
-                     / 'hirsel-landings.jsonl').read_text().splitlines()
-        landing = json.loads(landing)
-        self.assertEqual((landing['pushed'], landing['identity'], landing['why'], landing['extends']),
-                         (git(self.origin, 'rev-parse', 'main'), identity,
-                          'one more test file (extending: the span test alone)', first))
 
 if __name__ == '__main__':
     unittest.main()

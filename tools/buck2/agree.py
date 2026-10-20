@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Run the agreement shards; refuse missing/duplicate shards and sum reports.
+"""Run the agreement shards of `tools/gate --full`; refuse missing/duplicate shards and sum reports.
 
-Without arguments: the push gate's AGREE_LIMIT ranked variants over AGREE_SHARDS
-shards. With --full: the unrestricted seed-1 campaign over AGREE_FULL_SHARDS
-shards, each under its own AGREE_FULL_TIMEOUT (`tools/gate --full`).
+    agree.py --full          the unrestricted seed-1 campaign over AGREE_FULL_SHARDS
+                             shards, each under its own AGREE_FULL_TIMEOUT
+    agree.py --native-full   the same catalogue on heap and native code
+
+A lane gate runs no whole agreement campaign: only the seed-1 sample's
+variants of its corpus cases (gate-agree-selected-shard-*, summarize_within).
 """
 
 import json
@@ -15,8 +18,7 @@ import sys
 import event_logs
 
 from conformance import BUCK2, CONFIG, ROOT, shard_outputs
-from sync import (AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_NATIVE_FULL_SHARDS,
-                  AGREE_NATIVE_FULL_TIMEOUT, AGREE_SHARDS)
+from sync import AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_NATIVE_FULL_SHARDS, AGREE_NATIVE_FULL_TIMEOUT
 
 COUNTS = ('checked', 'skipped', 'rejected', 'valid', 'unavailable', 'runtime_limits', 'executed')
 GLOBAL = ('seed', 'limit', 'hash_seed', 'programs', 'generated', 'eligible', 'variants_per_program')
@@ -42,7 +44,7 @@ def report_from_output(output):
     return reports[0]
 
 
-def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
+def summarize(outputs, shards=AGREE_FULL_SHARDS, limit=UNLIMITED):
     if len(outputs) != shards:
         raise ValueError(f'{len(outputs)} of {shards} agreement shards reported')
     reports = [report_from_output(output) for output in outputs.values()]
@@ -192,13 +194,10 @@ def native_full():
 def main():
     if sys.argv[1:] == ['--native-full']:
         return native_full()
-    if sys.argv[1:] == ['--full']:
-        name, shards, limit, timeout = 'gate-agree-full-shard', AGREE_FULL_SHARDS, UNLIMITED, AGREE_FULL_TIMEOUT
-    elif sys.argv[1:]:
+    if sys.argv[1:] != ['--full']:
         print(__doc__, file=sys.stderr)
         return 2
-    else:
-        name, shards, limit, timeout = 'gate-agree-shard', AGREE_SHARDS, AGREE_LIMIT, 300
+    name, shards, limit, timeout = 'gate-agree-full-shard', AGREE_FULL_SHARDS, UNLIMITED, AGREE_FULL_TIMEOUT
     targets = [f'//:{name}-{index}' for index in range(1, shards + 1)]
     with event_logs.recorded('agree') as event_log:
         status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,

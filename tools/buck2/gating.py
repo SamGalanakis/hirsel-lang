@@ -1,6 +1,6 @@
-"""What tools/gate and tools/land share: a change's paths and identity, the
-selection of what it can affect (impact.py), one Buck2 invocation for all of
-it, the green record and the failure summary."""
+"""What tools/gate, tools/land and tools/main-runs share: a change's paths,
+the selection of what it can affect (impact.py), one Buck2 invocation for all
+of it, the land queue's lock, known failures and the failure summary."""
 
 from __future__ import annotations
 
@@ -26,8 +26,7 @@ import impact
 import event_logs
 import generated
 import graph
-from sync import (AGREE_LIMIT, AGREE_SHARDS, AGREE_SLICE_PROGRAMS, CONFORMANCE_SHARDS, CONFORMANCE_SLICE_PROGRAMS,
-                  SELECTED_SLICES)
+from sync import AGREE_LIMIT, AGREE_SLICE_PROGRAMS, CONFORMANCE_SLICE_PROGRAMS, SELECTED_SLICES
 from test_sizes_from_usage import requests_bzl
 
 # tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
@@ -44,12 +43,12 @@ ALL_TESTS = '(kind("_rust_test", //...) + attrfilter(labels, doctest, //...)) - 
 BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
              ' - attrfilter(labels, gate, root//:)'
              # The two-host link build runs under one host-wide lock; it is part of
-             # the native-smoke campaign (gate-link-hosts depends on it), never the floor.
+             # the native-smoke campaign (gate-link-hosts depends on it), never land's build.
              ' - kind("_link_hosts_local", root//:)')
 CLIPPY_SET = 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", root//:))'
+# The one whole campaign a lane gate runs: the whole conformance and agreement
+# campaigns run hourly on main (tools/main-runs, `tools/gate --full`).
 CAMPAIGN_TARGETS = {
-    impact.CONFORMANCE: [f'root//:gate-conformance-shard-{i}' for i in range(1, CONFORMANCE_SHARDS + 1)],
-    impact.AGREEMENT: [f'root//:gate-agree-shard-{i}' for i in range(1, AGREE_SHARDS + 1)],
     impact.NATIVE_SMOKE: ['root//:gate-native-smoke', 'root//tools/buck2/native-toolchain:proof',
                           'root//:gate-link-hosts'],
 }
@@ -196,75 +195,9 @@ def daemon_lifetime():
 
 # ---------------------------------------------------------------- gate slots
 
-# The host's slot directory: its `count` and `express-count` files cap normal
-# and express gates and are re-read every poll (tools/gate --set-slots). The
-# count is the host's, never a process's: a `:N` in HIRSEL_GATE_SLOTS is
-# ignored, so a stale value in a brief or a shell cannot strand slots.
-# HIRSEL_GATE_SLOTS=<dir> selects another directory and `none` runs uncapped.
-GATE_SLOTS = 'HIRSEL_GATE_SLOTS'
-GATE_SLOT_DIR = Path('/workspace/code/hirsel-briefs/locks/gate-slots')
-NO_SLOTS = 'none'
-SLOT_POLL_SECONDS = 5
-NORMAL_POOL = 'normal'
-EXPRESS_POOL = 'express'
-# What seeds a missing count file.
-DEFAULT_SLOTS = {NORMAL_POOL: 6, EXPRESS_POOL: 2}
-# One selected conformance slice and one agreement slice, plus two test targets.
-EXPRESS_TEST_TARGETS = 4
-POOL_PREFIX = {NORMAL_POOL: '', EXPRESS_POOL: 'express-'}
-
-
-def gate_slot_dir(environ):
-    """The host's slot directory, or None for no cap: HIRSEL_GATE_SLOTS names
-    another directory (`dir`, or `dir:N` with N ignored) or `none`; unset, the
-    host default when its parent exists."""
-    spec = environ.get(GATE_SLOTS)
-    if spec is None:
-        return GATE_SLOT_DIR if GATE_SLOT_DIR.parent.is_dir() else None
-    if spec == NO_SLOTS:
-        return None
-    directory, colon, count = spec.rpartition(':')
-    if colon and count.isascii() and count.isdigit():
-        spec = directory
-    if not spec:
-        raise SystemExit(f'gate: {GATE_SLOTS}={environ[GATE_SLOTS]!r} names no directory (dir, or {NO_SLOTS})')
-    return Path(spec)
-
-
-def write_gate_slot_count(directory, count, *, pool=NORMAL_POOL, seed=False):
-    """Publish a complete count atomically; seeding never replaces a host's cap."""
-    directory.mkdir(parents=True, exist_ok=True)
-    name = POOL_PREFIX[pool] + 'count'
-    path = directory / name
-    with tempfile.NamedTemporaryFile('w', dir=directory, prefix=f'.{name}-', delete=False) as temporary:
-        pending = Path(temporary.name)
-        try:
-            temporary.write(f'{count}\n')
-            temporary.flush()
-            if seed:
-                try:
-                    os.link(pending, path)
-                except FileExistsError:
-                    pass
-            else:
-                pending.replace(path)
-        finally:
-            pending.unlink(missing_ok=True)
-
-
-def read_gate_slot_count(directory, fallback=None, *, pool=NORMAL_POOL):
-    path = directory / (POOL_PREFIX[pool] + 'count')
-    try:
-        text = path.read_text().strip()
-    except FileNotFoundError:
-        return DEFAULT_SLOTS[pool] if fallback is None else fallback
-    if not text.isascii() or not text.isdigit() or int(text) < 1:
-        raise SystemExit(f'gate: {path}={text!r} is not a positive slot count')
-    return int(text)
-
-
 def process_start(pid):
-    """Linux process identity survives PID reuse; zombies cannot keep a ticket."""
+    """Linux process identity survives PID reuse; zombies cannot keep a ticket.
+    The land queue (tools/land) keeps its waiters' tickets and its lock this way."""
     try:
         fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
     except (FileNotFoundError, ProcessLookupError):
@@ -274,7 +207,7 @@ def process_start(pid):
 
 def live_tickets(queue):
     """The queue's live waiters, earliest first, as (stamp, pid, ticket);
-    tickets left by exited gates are discarded."""
+    tickets left by exited lands are discarded."""
     live = []
     for ticket in queue.iterdir() if queue.is_dir() else ():
         try:
@@ -303,14 +236,14 @@ def live_tickets(queue):
     return sorted(live)
 
 
-def oldest_gate_ticket(queue):
+def oldest_ticket(queue):
     """The earliest live waiter's ticket."""
     live = live_tickets(queue)
     return live[0][2] if live else None
 
 
 def process_cwd(pid):
-    """A process's working directory: a gate's or a land's worktree."""
+    """A process's working directory: a land's worktree."""
     try:
         return os.readlink(f'/proc/{pid}/cwd')
     except OSError:
@@ -318,7 +251,7 @@ def process_cwd(pid):
 
 
 def holder(path):
-    """A slot file's live holder as (pid, worktree, acquired), or None when free."""
+    """The land lock's live holder as (pid, worktree, acquired), or None when free."""
     try:
         fields = path.read_text().split()
         acquired = path.stat().st_mtime
@@ -326,8 +259,7 @@ def holder(path):
         return None
     if len(fields) < 2 or not fields[0].isdigit() or str(process_start(int(fields[0]))) != fields[1]:
         return None
-    # A live process may have released the slot: probe the lock without waiting.
-    # A gate that meets the probe moves on to the next slot or the next poll.
+    # A live process may have released the lock: probe it without waiting.
     try:
         with open(path) as handle:
             fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -342,31 +274,24 @@ def minutes(seconds):
     return f'{seconds / 60:.0f} min' if seconds >= 60 else f'{seconds:.0f} s'
 
 
-def queue_status(directory, *, pool=NORMAL_POOL, label='gate', me=(), now=None):
-    """A pool's cap, its holders with their age, and its queue in order, as lines.
-    `me` are this lane's worktrees: their holders and waiters are marked."""
+def queue_status(directory, *, me=(), now=None):
+    """The land lock's holder with its age and the queue in order, as lines.
+    `me` are this lane's worktrees: their holder and waiters are marked."""
     now = time.time() if now is None else now
-    prefix = POOL_PREFIX[pool]
-    description = 'land lock' if label == 'land' else f'{pool} gate slots'
-    count = read_gate_slot_count(directory, pool=pool) if label != 'land' else 1
-    slots = sorted((int(path.name.rpartition('-')[2]), path) for path in directory.glob(prefix + 'slot-*')
-                   if path.name.rpartition('-')[2].isdigit())
-    held = [(slot, found) for slot, path in slots if (found := holder(path))]
-    waiting = [(stamp, pid, process_cwd(pid)) for stamp, pid, _ in live_tickets(directory / (prefix + 'queue'))]
-    lines = [f'{label}: {description}: {count} in {directory}; {len(held)} held, {len(waiting)} queued']
-    for slot, (pid, worktree, acquired) in held:
-        retired = ' (retired by a lowered count)' if slot >= count else ''
-        mine = ' (you)' if worktree in me else ''
-        lines.append(f'  slot {slot}{retired}: held {minutes(now - acquired)} by {worktree} (pid {pid}){mine}')
+    found = holder(directory / 'slot-0')
+    waiting = [(stamp, pid, process_cwd(pid)) for stamp, pid, _ in live_tickets(directory / 'queue')]
+    lines = [f'land: land lock: 1 in {directory}; {int(bool(found))} held, {len(waiting)} queued']
+    if found:
+        pid, worktree, acquired = found
+        lines.append(f'  held {minutes(now - acquired)} by {worktree} (pid {pid})' + (' (you)' if worktree in me else ''))
     for position, (stamp, pid, worktree) in enumerate(waiting, 1):
         mine = ' (you)' if worktree in me else ''
         lines.append(f'  queued {position}: waiting {minutes(now - stamp / 1e9)}, {worktree} (pid {pid}){mine}')
-    for slot, (pid, worktree, acquired) in held:
-        if worktree in me:
-            lines.append(f'{label}: you hold {description.removesuffix("s")} {slot}')
+    if found and found[1] in me:
+        lines.append('land: you hold the land lock')
     positions = [position for position, (_, _, worktree) in enumerate(waiting, 1) if worktree in me]
     if positions:
-        lines.append(f'{label}: you are at {positions[0]} of {len(waiting)} in the {description.removesuffix("s")} queue')
+        lines.append(f'land: you are at {positions[0]} of {len(waiting)} in the land queue')
     return lines
 
 
@@ -374,89 +299,6 @@ def queue_status(directory, *, pool=NORMAL_POOL, label='gate', me=(), now=None):
 class SlotTiming:
     wait_seconds: float
     held_seconds: float = 0
-
-
-@contextlib.contextmanager
-def gate_slot(environ=os.environ, *, pool=NORMAL_POOL, stamp=None):
-    """Hold one slot in the selected host pool, in its own FIFO waiter order;
-    `stamp` (nanoseconds) is the place a restarted gate keeps."""
-    directory = gate_slot_dir(environ)
-    if directory is None:
-        yield None
-        return
-    with fifo_slot(directory, DEFAULT_SLOTS[pool], pool=pool, stamp=stamp) as timing:
-        yield timing
-
-
-@contextlib.contextmanager
-def fifo_slot(directory, fallback, *, pool=NORMAL_POOL, label='gate', exclusive=False, stamp=None):
-    """Share the file-lock FIFO between gates and the exclusive land queue.
-
-    flock releases a crashed holder's slot without unlinking its inode. Tickets
-    include the process start time so a reused PID cannot strand the queue.
-    Legacy gate tickets remain readable while already-loaded gates finish.
-    The queue orders tickets by `stamp`, the time of the first queueing, so
-    a waiter given an earlier stamp keeps that place.
-    """
-    prefix = POOL_PREFIX[pool]
-    if not (directory / (prefix + 'count')).exists():
-        write_gate_slot_count(directory, fallback, pool=pool, seed=True)
-    queue = directory / (prefix + 'queue')
-    queue.mkdir(exist_ok=True)
-    # Publish identity and ticket together, retaining names old gates understand.
-    with tempfile.NamedTemporaryFile('w', dir=directory, prefix='.ticket-') as pending:
-        pending.write(f'{process_start(os.getpid())}\n')
-        pending.flush()
-        stamp = time.time_ns() if stamp is None else stamp
-        while True:
-            ticket = queue / f'{stamp}-{os.getpid()}'
-            try:
-                os.link(pending.name, ticket)
-                break
-            except FileExistsError:
-                stamp += 1
-    started = time.monotonic()
-    waiting = False
-    description = 'land lock' if exclusive else f'{pool} gate slot'
-    try:
-        while True:
-            count = read_gate_slot_count(directory, fallback, pool=pool)
-            if exclusive and count != 1:
-                raise SystemExit(f'{label}: {directory / "count"} must be 1 for exclusive landing')
-            if oldest_gate_ticket(queue) == ticket:
-                for slot in range(count):
-                    # Python opens files non-inheritable, so Buck2 never holds the lock.
-                    handle = open(directory / f'{prefix}slot-{slot}', 'a+')
-                    try:
-                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        handle.close()
-                        continue
-                    with handle:
-                        handle.truncate(0)
-                        # The worktree, not ROOT: land runs main's copy of the scripts.
-                        handle.write(f'{os.getpid()} {process_start(os.getpid())} {os.getcwd()}\n')
-                        handle.flush()
-                        ticket.unlink(missing_ok=True)
-                        acquired = time.monotonic()
-                        timing = SlotTiming(acquired - started)
-                        say(f'{label}: took {description} {slot} after waiting {timing.wait_seconds:.3f} s')
-                        try:
-                            yield timing
-                        finally:
-                            timing.held_seconds = time.monotonic() - acquired
-                            if exclusive:
-                                say(f'{label}: held {description} for {timing.held_seconds:.3f} s')
-                    return
-            if not waiting:
-                holders = [path.read_text().strip() if path.exists() else ''
-                           for slot in range(count)
-                           for path in [directory / f'{prefix}slot-{slot}']]
-                say(f'{label}: waiting for one of {count} {description}s in {directory}; held by: ' + '; '.join(holders))
-                waiting = True
-            time.sleep(SLOT_POLL_SECONDS)
-    finally:
-        ticket.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- git
@@ -481,99 +323,6 @@ def changed_paths(base, root=ROOT, deleted=True) -> list[str]:
         paths.extend(os.fsdecode(path) for path in subprocess.check_output(
             ['git', *arguments], cwd=root).split(b'\0') if path)
     return sorted(set(paths))
-
-
-def worktree_tree(root=ROOT) -> str:
-    """The tree object of the worktree as it is, untracked files included."""
-    with tempfile.TemporaryDirectory() as scratch:
-        env = os.environ | {'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
-        git('read-tree', 'HEAD', root=root, env=env)
-        git('add', '-A', '.', root=root, env=env)
-        return git('write-tree', root=root, env=env).strip()
-
-
-# Pathspecs leaving the pages only tools/land writes (generated.py) out of change
-# identities: land regenerates them on the rebased tree.
-GENERATED_EXCLUDE = [f':(exclude){path}' for path in generated.LAND_WRITTEN]
-
-
-def change_identity(base, root=ROOT) -> str:
-    """The patch-id of the change from `base` to the worktree, from a diff without
-    context lines: a clean rebase onto a newer main keeps it, and any edit of the
-    change, including a hand-resolved conflict, gives a new one. Empty when the
-    worktree does not differ from `base`. The pages only tools/land writes are
-    left out: land regenerates them on the rebased tree, so their diff never
-    decides whether a change passed."""
-    diff = subprocess.run(['git', 'diff', '-U0', '--binary', '--no-renames', base, worktree_tree(root),
-                           '--', '.', *GENERATED_EXCLUDE],
-                          cwd=root, check=True, capture_output=True).stdout
-    if not diff:
-        return ''
-    out = subprocess.run(['git', 'patch-id', '--stable'], cwd=root, input=diff, check=True,
-                         capture_output=True).stdout.decode()
-    return out.split()[0]
-
-
-def green_path(root=ROOT) -> Path:
-    # Per worktree: `git rev-parse --git-path` resolves inside this worktree's git dir.
-    return root / git('rev-parse', '--git-path', 'hirsel-gate-green.json', root=root).strip()
-
-
-def green_records(root=ROOT) -> dict:
-    try:
-        return json.loads(green_path(root).read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def record_gate(identity, crates, root=ROOT, *, passed=True, **record):
-    """Save a gate receipt, including partial results that never authorize land."""
-    records = green_records(root)
-    records[identity] = dict(record, passed=passed, crates=sorted(crates),
-                             at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
-    path = green_path(root)
-    temporary = path.with_name(path.name + f'.{os.getpid()}')
-    temporary.write_text(json.dumps(records, indent=1, sort_keys=True) + '\n')
-    temporary.replace(path)
-
-
-def latest_green(root=ROOT):
-    """The most recently recorded passed change of this worktree: (identity, record)."""
-    records = [(record.get('at', ''), identity, record) for identity, record in green_records(root).items()
-               if record.get('passed', True)]
-    return max(records)[1:] if records else (None, None)
-
-
-HUNK = re.compile(r'^@@ [^@]* @@', re.M)
-
-
-def path_digests(base, root=ROOT) -> dict[str, str]:
-    """Each changed path's diff from `base` to the worktree, hashed without its
-    line numbers or blob ids: a clean rebase keeps every digest, and an edit
-    changes only the edited paths'. The pages only tools/land writes are left out."""
-    import hashlib
-    diff = subprocess.run(['git', 'diff', '-U0', '--binary', '--no-renames', base, worktree_tree(root),
-                           '--', '.', *GENERATED_EXCLUDE],
-                          cwd=root, check=True, capture_output=True).stdout.decode(errors='surrogateescape')
-    digests = {}
-    for part in re.split(r'^diff --git ', diff, flags=re.M)[1:]:
-        header, _, body = part.partition('\n')
-        name = header[2:2 + (len(header) - 5) // 2]
-        body = '\n'.join(line for line in body.splitlines() if not line.startswith('index '))
-        digests[name] = hashlib.sha256(HUNK.sub('@@', body).encode(errors='surrogateescape')).hexdigest()
-    return digests
-
-
-def changed_since(record, digests) -> list[str]:
-    """The paths whose change differs from a recorded passed change's."""
-    recorded = record.get('digests', {})
-    return sorted(path for path in recorded.keys() | digests.keys() if recorded.get(path) != digests.get(path))
-
-
-def is_green(identity, crates, root=ROOT) -> bool:
-    record = green_records(root).get(identity)
-    return (bool(identity) and record is not None and record.get('passed', True)
-            and record['crates'] == sorted(crates))
 
 
 # ---------------------------------------------------------------- workspace
@@ -715,14 +464,16 @@ def uquery(expression) -> list[str]:
 # What `tools/gate --tests` takes, beyond Buck2 test targets.
 SUGGESTED = 'suggested'
 ALL = 'all-tests'
-WHOLE = {'conformance': impact.CONFORMANCE, 'agreement': impact.AGREEMENT, 'native-smoke': impact.NATIVE_SMOKE}
+WHOLE = {'native-smoke': impact.NATIVE_SMOKE}
+# The corpus smoke slice (impact.smoke_slice) with its agreement variants.
+SMOKE = 'smoke'
+# Whole campaigns no lane gate runs: they run hourly on main.
+MAIN_ONLY = ('conformance', 'agreement')
 CONFORMANCE_PREFIX, AGREEMENT_PREFIX, NATIVE_PREFIX = 'conformance:', 'agreement:', 'native:'
 # The CLI's end-to-end examples: each builds and runs a program on both
 # backends, so they run when the CLI, the driver or an example changes.
 EXAMPLES = 'hirsel-cli-test-examples'
 EXAMPLES_INPUTS = ('crates/hirsel-cli/', 'crates/hirsel-driver/', 'examples/')
-# A selection of more corpus cases than this runs the whole campaign instead.
-WHOLE_CORPUS_SHARE = 0.5
 
 
 def labels(names) -> set[str]:
@@ -761,15 +512,21 @@ def slices(cases, smallest) -> list[list[str]]:
 
 @dataclass
 class Plan:
-    """What one gate runs: Buck2 tests, whole campaigns, chosen corpus cases
-    for conformance and for agreement's seed-1 sample, and native programs."""
+    """What one gate runs: Buck2 tests, the native smoke campaign, the corpus
+    smoke slice, chosen corpus cases for conformance and for agreement's
+    seed-1 sample, and native programs. No plan holds a whole conformance or
+    agreement campaign: they run hourly on main."""
     tests: set = field(default_factory=set)
     campaigns: set = field(default_factory=set)
     conformance: set = field(default_factory=set)
     agreement: set = field(default_factory=set)
     native: set = field(default_factory=set)
+    smoke: bool = False
     # (token, why) for every part, in the order they were chosen.
     reasons: list = field(default_factory=list)
+    # The smoke slice's cases, read from the corpus by settle().
+    smoke_cases: set = field(default_factory=set)
+    smoke_agreement: set = field(default_factory=set)
 
     def add(self, other: 'Plan'):
         self.tests |= other.tests
@@ -777,65 +534,46 @@ class Plan:
         self.conformance |= other.conformance
         self.agreement |= other.agreement
         self.native |= other.native
+        self.smoke |= other.smoke
         self.reasons += [r for r in other.reasons if r not in self.reasons]
 
     def settle(self, root=ROOT):
-        """Whole campaigns absorb their parts; a large part becomes the whole."""
-        corpus = len(corpus_cases('conformance/', root)) or 1
-        for campaign, cases in ((impact.CONFORMANCE, self.conformance), (impact.AGREEMENT, self.agreement)):
-            if len(cases) > WHOLE_CORPUS_SHARE * corpus:
-                self.campaigns.add(campaign)
-            if campaign in self.campaigns:
-                cases.clear()
+        """Read the smoke slice from the corpus; agreement keeps the cases it mutates."""
+        self.smoke_cases = set(impact.smoke_slice(root)) if self.smoke else set()
+        self.smoke_agreement = {case for case in self.smoke_cases if accepted(case, root)}
         self.agreement = {case for case in self.agreement if accepted(case, root)}
 
+    def corpus(self) -> tuple[list[str], list[str]]:
+        """The conformance cases and the agreement cases the plan runs: the
+        chosen ones and the smoke slice's."""
+        return sorted(self.conformance | self.smoke_cases), sorted(self.agreement | self.smoke_agreement)
+
     def config(self) -> list[str]:
-        """The Buck2 settings carrying the chosen cases and native programs
+        """The Buck2 settings carrying the corpus cases and native programs
         (defs.bzl selected_paths and native_filters): long, so gating.buck2
         passes them through an argfile."""
         settings = []
-        if self.conformance:
+        conformance, agreement = self.corpus()
+        if conformance:
             settings.append('hirsel.conformance_paths=' + ';'.join(
-                '|'.join(part) for part in slices(sorted(self.conformance), CONFORMANCE_SLICE_PROGRAMS)))
-        if self.agreement:
+                '|'.join(part) for part in slices(conformance, CONFORMANCE_SLICE_PROGRAMS)))
+        if agreement:
             settings.append('hirsel.agree_paths=' + ';'.join(
-                '|'.join(part) for part in slices(sorted(self.agreement), AGREE_SLICE_PROGRAMS)))
+                '|'.join(part) for part in slices(agreement, AGREE_SLICE_PROGRAMS)))
         if self.native:
             settings.append('hirsel.native_filters=' + '|'.join(sorted(self.native)))
         return [argument for setting in settings for argument in ('-c', setting)]
 
     def campaign_targets(self) -> list[str]:
+        conformance, agreement = self.corpus()
         targets = [t for campaign in impact.CAMPAIGNS if campaign in self.campaigns for t in CAMPAIGN_TARGETS[campaign]]
         targets += [f'root//:gate-conformance-selected-shard-{i}' for i in
-                    range(1, len(slices(sorted(self.conformance), CONFORMANCE_SLICE_PROGRAMS)) + 1)]
+                    range(1, len(slices(conformance, CONFORMANCE_SLICE_PROGRAMS)) + 1)]
         targets += [f'root//:gate-agree-selected-shard-{i}' for i in
-                    range(1, len(slices(sorted(self.agreement), AGREE_SLICE_PROGRAMS)) + 1)]
+                    range(1, len(slices(agreement, AGREE_SLICE_PROGRAMS)) + 1)]
         if self.native:
             targets += NATIVE_TARGETS
         return targets
-
-    def slot_pool(self) -> str:
-        """Classify the settled, combined floor and choice before queueing."""
-        if self.campaigns or self.native:
-            return NORMAL_POOL
-        targets = self.tests | set(self.campaign_targets())
-        return EXPRESS_POOL if len(targets) <= EXPRESS_TEST_TARGETS else NORMAL_POOL
-
-    def summary(self) -> list[str]:
-        """The plan in a line per part, for the green record and tools/land."""
-        binaries = {}
-        for target in self.tests:
-            name = short(target)
-            binaries.setdefault(SHARD.sub(r'\1', name), set()).add(name)
-        lines = sorted(name if len(shards) == 1 and name in shards else f'{name} ({len(shards)} shards)'
-                       for name, shards in binaries.items())
-        lines += sorted(name for name, campaign in WHOLE.items() if campaign in self.campaigns)
-        for prefix, cases in ((CONFORMANCE_PREFIX, self.conformance), (AGREEMENT_PREFIX, self.agreement),
-                              (NATIVE_PREFIX, self.native)):
-            if cases:
-                shown = sorted(cases)
-                lines.append(f'{prefix}{" ".join(shown[:6])}' + (f' and {len(shown) - 6} more' if len(shown) > 6 else ''))
-        return lines
 
 
 def ensure_build_files(root=ROOT):
@@ -897,20 +635,11 @@ def ensure_build_files_for(paths, root=ROOT) -> bool:
     return documentation
 
 
-def change_crates(base, root=ROOT) -> set[str]:
-    """The crates whose source the change from `base` touches, as
-    Selection(base).crates, without comparing build graphs (tools/land)."""
-    paths = changed_paths(base, root)
-    ensure_build_files_for(paths, root)
-    return impact.classify(paths, members(root), (root / 'BUCK').read_text()).crates
-
-
 NATIVE_TARGETS = ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed']
 
 
 class Selection:
-    """What a change must run (the floor), what the gate suggests for it, and
-    what a lane chose."""
+    """What a change can affect (the targeted set) and what a lane chose."""
 
     def __init__(self, base, root=ROOT, paths=None):
         self.base = base
@@ -931,6 +660,11 @@ class Selection:
     def crates(self):
         return self.classified.crates
 
+    def compiler_crates(self) -> set[str]:
+        """The changed crates the corpus campaigns run through (impact.CRATE_CAMPAIGNS)."""
+        return {crate for crate in self.crates
+                if impact.CRATE_CAMPAIGNS.get(crate, impact.ALL) & impact.FRONT} or set(self.crates)
+
     def owner_tests(self, paths) -> set[str]:
         """The tests reading these files, including through their harnesses."""
         files = owned_paths(paths, self.root)
@@ -943,16 +677,21 @@ class Selection:
             ['git', 'diff', '-U0', self.base, '--', impact.PASSING], cwd=self.root,
             capture_output=True, text=True).stdout)
 
-    def floor(self) -> Plan:
-        """What every gate runs: the test targets of each crate whose source
-        changed and of each changed test file, and every changed or added
-        corpus case with its twins (the workspace build, Clippy and formatting
-        run before it)."""
+    def core(self) -> Plan:
+        """The targeted set's own tests: the test targets of each crate whose
+        source changed and of each changed test file, the smoke slice for a
+        compiler crate, every changed or added corpus case with its twins, and
+        the cases and package tests importing changed std."""
         plan = Plan()
         c = self.classified
         if c.crates:
             plan.tests |= labels(self.graph.crate_tests(c.crates))
             plan.reasons.append((', '.join(sorted(c.crates)), 'the crates whose source changed: all their tests'))
+        if c.campaigns & impact.FRONT:
+            # No lane runs a whole conformance or agreement campaign (main runs them hourly).
+            plan.smoke = True
+            plan.reasons.append((SMOKE, 'compiler crate source of ' + ', '.join(sorted(self.compiler_crates()))
+                                 + ': one corpus case per rule and expectation kind, and its agreement variants'))
         tests = [p for p in c.owned if p.startswith('crates/') and p.split('/')[1] not in c.crates]
         if tests:
             if owners := self.owner_tests(tests):
@@ -1029,33 +768,36 @@ class Selection:
         return self._std
 
     def suggest(self) -> Plan:
-        """What the change can affect (impact.py), as a lane's starting point."""
+        """The targeted set: what the change can affect (impact.py). A crate's
+        library source runs its own tests and the smoke slices, never every
+        test that depends on the crate: main's hourly run is the whole net."""
         plan = Plan()
         c = self.classified
         root = self.root
         if c.everything:
             plan.tests |= labels(self.graph.all_tests())
-            plan.campaigns |= set(impact.CAMPAIGNS)
-            plan.reasons.append((f'{ALL} conformance agreement native-smoke',
+            plan.campaigns.add(impact.NATIVE_SMOKE)
+            plan.smoke = True
+            plan.reasons.append((f'{ALL} {SMOKE} native-smoke',
                                  'a build-wide input, an unknown crate or the BUCK header changed'))
+            plan.add(self.core())
             return plan
         if impact.perf_counts(self.paths):
             plan.tests.add(impact.PERF_COUNTS)
             plan.reasons.append(('gate-perf-counts', 'deterministic native, micro and compiler instruction budgets'))
         scope = set()
         data = [p for p in c.owned if not p.startswith('crates/')]
-        if c.owned:
-            scope |= self.graph.owners(owned_paths(c.owned, root))
+        if read := [p for p in c.owned if not impact.library_source(p)]:
+            scope |= self.graph.owners(owned_paths(read, root))
         if isinstance(c.buck, set) and c.buck:
             scope |= self.graph.macro_targets(c.buck)
         if scope:
             plan.tests |= labels(self.graph.tests(self.graph.rdeps(scope)))
             plan.reasons.append(('<tests>', 'every Buck2 test reading a changed file, directly or through a dependency'))
-        if c.crates:
-            plan.campaigns |= c.campaigns
-            if c.campaigns:
-                plan.reasons.append((' '.join(n for n, k in WHOLE.items() if k in c.campaigns),
-                                     'library source of ' + ', '.join(sorted(c.crates)) + ' (impact.CRATE_CAMPAIGNS)'))
+        if impact.NATIVE_SMOKE in c.campaigns:
+            plan.campaigns.add(impact.NATIVE_SMOKE)
+            plan.reasons.append(('native-smoke', 'library source of ' + ', '.join(sorted(c.crates))
+                                 + ' (impact.CRATE_CAMPAIGNS)'))
         if native := impact.native_programs(self.paths, c.crates, root):
             plan.native |= set(native)
             plan.reasons.append((NATIVE_PREFIX + '<programs>', 'a native producer changed: its programs on both backends'))
@@ -1076,8 +818,10 @@ class Selection:
                                  f'{len(dependents)} corpus cases whose packages reach a changed file'))
         for path in data:
             if campaigns := impact.campaign_data(path):
-                plan.campaigns |= campaigns
-                plan.reasons.append((' '.join(n for n, k in WHOLE.items() if k in campaigns),
+                plan.campaigns |= campaigns & {impact.NATIVE_SMOKE}
+                plan.smoke |= bool(campaigns & impact.FRONT)
+                plan.reasons.append((' '.join([SMOKE] * bool(campaigns & impact.FRONT)
+                                              + ['native-smoke'] * (impact.NATIVE_SMOKE in campaigns)),
                                      f'{path} is data every case of the campaign can read'))
         if c.test_requests:
             # A reservation changes the run, not its harness or downstream users.
@@ -1086,11 +830,13 @@ class Selection:
             for campaign, targets in CAMPAIGN_TARGETS.items():
                 if any(re.sub(r'-shard-\d+$', '', short(t)) in c.test_requests for t in targets):
                     plan.campaigns.add(campaign)
+            # The corpus slices are measured as their whole campaigns' binaries.
+            plan.smoke |= bool(c.test_requests & {'gate-conformance', 'gate-agree'})
             plan.reasons.append(('<resized>', 'the binaries whose pool request changed'))
         if not any(p.startswith(EXAMPLES_INPUTS) for p in self.paths):
             plan.tests = {t for t in plan.tests if not short(t).startswith(EXAMPLES + '-shard-')
                           and short(t) != EXAMPLES}
-        plan.add(self.floor())
+        plan.add(self.core())
         return plan
 
     def choose(self, tokens) -> Plan:
@@ -1106,6 +852,12 @@ class Selection:
             elif token in WHOLE:
                 plan.campaigns.add(WHOLE[token])
                 plan.reasons.append((token, 'chosen'))
+            elif token == SMOKE:
+                plan.smoke = True
+                plan.reasons.append((token, 'chosen'))
+            elif token in MAIN_ONLY:
+                raise SystemExit(f'gate: --tests {token}: no lane gate runs a whole {token} campaign; main runs it '
+                                 f'hourly (tools/main-runs). Choose {SMOKE}, {token}:<path>, or ask for tools/gate --full')
             elif token.startswith((CONFORMANCE_PREFIX, AGREEMENT_PREFIX)):
                 prefix, _, path = token.partition(':')
                 cases = corpus_cases(path, self.root)
@@ -1167,6 +919,20 @@ def test_results(event_log, *, history=None) -> dict[str, dict]:
     return results
 
 
+def first_failing(count, fails) -> int:
+    """The least index below `count` for which `fails` holds, given that it holds
+    for `count - 1` and that once it holds it holds for every later index: the
+    bisect of tools/land (a batch's prefixes) and tools/main-runs (main's landings)."""
+    low, high = -1, count - 1
+    while high - low > 1:
+        middle = (low + high) // 2
+        if fails(middle):
+            high = middle
+        else:
+            low = middle
+    return high
+
+
 def short(target):
     return target.removeprefix('root//:').split(' ')[0]
 
@@ -1182,10 +948,10 @@ def failed_cases(details):
 
 # ---------------------------------------------------------------- known failures
 
-# Failures main is known to have, each owned by the lane fixing it: a gate
-# excludes them and prints every exclusion. Rows are added to main directly
-# (tools/land refuses a change that adds one) and expire when their owner lane
-# lands (tools/land removes them).
+# Failures main is known to have, each owned by the lane fixing it: tools/gate
+# excludes them and prints every exclusion. A lane that meets a red it did not
+# cause, and tools/main-runs for each new red it bisects, push a row straight
+# to main; a row expires when its owner lane lands (tools/land removes it).
 KNOWN_FAILURES = 'tools/known-failures.tsv'
 KNOWN_COLUMNS = ('id', 'reason', 'owner', 'date')
 
@@ -1244,18 +1010,13 @@ def known_only(target, details, known) -> list[KnownFailure] | None:
     return None
 
 
-def added_known_failures(diff) -> list[str]:
-    """Rows a `git diff` of the known-failures list adds."""
-    return [line[1:] for line in diff.splitlines()
-            if line.startswith('+') and not line.startswith('+++') and line[1:].strip()
-            and not line.startswith('+#')]
-
-
-def without_owners(text, owners) -> str:
-    """The list without the rows these lanes own."""
+def without_owners(text, owners, listed=None) -> str:
+    """The list without the rows these lanes own, of those in `listed` (main's
+    list before a landing: a row the landing itself adds stays)."""
     def kept(line):
         fields = line.split('\t')
-        return line.startswith('#') or len(fields) < 3 or fields[2].strip() not in owners
+        return (line.startswith('#') or len(fields) < 3 or fields[2].strip() not in owners
+                or (listed is not None and line.rstrip('\n') not in listed))
     return ''.join(line for line in text.splitlines(keepends=True) if kept(line))
 
 

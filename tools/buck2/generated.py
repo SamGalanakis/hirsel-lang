@@ -121,5 +121,4 @@ def refusal(paths) -> list[str]:
             *([f'  git checkout $(git merge-base HEAD origin/main) -- {" ".join(pages)}'] if pages else []),
             *([f'  git rm -q --cached {" ".join(inputs)}'] if inputs else []),
             '  git commit --amend --no-edit',
-            'then tools/gate --extend (it reruns nothing for the dropped build files), then tools/land' if inputs else
-            'docs/api.md is not part of the gated identity, so tools/land accepts the change again without a new gate.']
+            'then tools/land.']

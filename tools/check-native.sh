@@ -44,7 +44,7 @@ run_stage() {
 }
 if (( $# > 0 )); then echo "usage: tools/check-native.sh" >&2; exit 2; fi
 # Every stage is in the full gate: its campaign targets exist under hirsel.full.
-config=(-c hirsel.full=true)
+config=(-c hirsel.full=true ${HIRSEL_PRIORITY:+-c "hirsel.priority=$HIRSEL_PRIORITY"})
 export HIRSEL_BUCK2_CONFIG="${config[*]}"
 buck2() { local command=$1; shift; python3 tools/buck2/event_logs.py "$command" "${config[@]}" "$@"; }
 release=(--target-platforms //tools/buck2:release)

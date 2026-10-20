@@ -299,7 +299,8 @@ GATE = dict(cwd="crates/hirsel-conformance")
 # The conformance stage runs as shards of the corpus by path hash, each well
 # under ten minutes on a loaded pool; tools/buck2/conformance.py sums their counts.
 CONFORMANCE_SHARDS = 16
-AGREE_SHARDS = 16
+# The seed-1 sample whose variants of its corpus cases a lane gate's
+# agreement slices run (no lane gate runs the whole campaign).
 AGREE_LIMIT = 5000
 # A lane's chosen corpus cases (`tools/gate --tests conformance:<path>` and
 # `agreement:<path>`) run in up to SELECTED_SLICES slices
@@ -343,9 +344,6 @@ GATE_TESTS = [
     *(dict(name=f"gate-conformance-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format", "--shard", f"{index}/{CONFORMANCE_SHARDS}"], **GATE)
       for index in range(1, CONFORMANCE_SHARDS + 1)),
-    *(dict(name=f"gate-agree-shard-{index}", binary="//:hirsel-conformance-bin-agree",
-           args=["--seed", "1", "--limit", str(AGREE_LIMIT), "--shard", f"{index}/{AGREE_SHARDS}"],
-           **GATE) for index in range(1, AGREE_SHARDS + 1)),
     *(dict(name=f"gate-conformance-selected-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format"], selected=["conformance_paths", "--path", index],
            measured_as="gate-conformance", **GATE)

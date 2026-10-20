@@ -1,6 +1,7 @@
-"""What a change can affect: the table tools/gate computes its floor and its
-suggestion from (gating.Selection). The lane chooses what runs beyond the
-floor; this is its starting point (`tools/gate --suggest`).
+"""What a change can affect: the table tools/gate computes the targeted set
+from (gating.Selection, `tools/gate --suggest`). A lane never runs a whole
+conformance or agreement campaign: those run hourly on main (tools/main-runs,
+`tools/gate --full`).
 
 A changed path is one of:
 
@@ -10,14 +11,18 @@ A changed path is one of:
   the tooling tests, bench/native/tests among them, and `sync.py --check`;
 - the Lean RC model (PROOFS): its audit and vector replay on the host; the
   free-mode protocol models (FREE_MODEL): their loom and GenMC runs;
-- a build-wide input (BUILD_WIDE): every test and every campaign;
+- a build-wide input (BUILD_WIDE): every Buck2 test, the smoke slice and the
+  native smoke;
+- a crate's library source: the crate's own tests, and by CRATE_CAMPAIGNS
+  for a compiler crate the corpus smoke slice (smoke_slice: one case per rule
+  and expectation kind, with its agreement variants), for a backend or
+  runtime crate the native smoke and its native programs;
 - anything else: the Buck2 tests that read it, directly or through any
   dependency (the owners' reverse dependencies in graph.py's static reading of
-  the root BUCK), and a crate's library source
-  the campaigns in CRATE_CAMPAIGNS. Campaign data selects by case: a corpus
-  case its twins (changed_programs), a std module the cases whose import
-  closure includes it (Std, std_dependents), a package fixture the cases that
-  reach it (package_dependents); data every case reads its whole campaign
+  the root BUCK). Campaign data selects by case: a corpus case its twins
+  (changed_programs), a std module the cases whose import closure includes it
+  (Std, std_dependents), a package fixture the cases that reach it
+  (package_dependents); data every case reads the smoke slice
   (campaign_data).
 
 The generated root BUCK (gitignored; gating.Selection compares the tree's with
@@ -45,6 +50,8 @@ FRONT = frozenset({CONFORMANCE, AGREEMENT})
 # agreement: it is in the source checker, the IR checker or the interpreter
 # whose normal and checked runs the agreement campaign compares.
 # native smoke: it is in the backend, the runtime or what they are built on.
+# A lane gate runs conformance and agreement only as the smoke slice
+# (smoke_slice); their whole campaigns run hourly on main (tools/main-runs).
 # Every workspace member has a row (tools/tests/gate.py).
 CRATE_CAMPAIGNS = {
     # The shared contract crates every stage is built on.
@@ -149,13 +156,39 @@ def native_programs(paths, crates, root):
                        if path.startswith(('conformance/', 'native-tests/'))
                        and path.endswith(('.hir', '.hir.json'))
                        and (root / path.removesuffix('.json')).is_file()
-                       and (path.startswith('native-tests/') or
-                            any(line.startswith(('// expect: run', '// expect: fail', '// expect: blocked', '// expect: test'))
-                                for line in (root / path.removesuffix('.json')).read_text().splitlines()))})
+                       and (path.startswith('native-tests/') or native_case(root / path.removesuffix('.json')))})
     if programs:
         return programs
     return [line for line in (root / 'native-tests/regressions/smoke.txt').read_text().splitlines()
             if line and not line.startswith('#')]
+
+
+# Header directives the native harness cannot run: it has no runner fixtures
+# (sim nodes, threads), so a case naming runners runs only interpreted.
+INTERPRETER_ONLY = ('runners',)
+EXECUTED = ('run', 'fail', 'blocked', 'test')
+
+
+def header_directives(text: str) -> dict[str, str]:
+    """A corpus case's header: its leading `// key: value` comment lines."""
+    directives = {}
+    for line in text.splitlines():
+        if not line.startswith('//'):
+            break
+        key, colon, value = line[2:].strip().partition(':')
+        if colon and re.fullmatch(r'[a-z_]+', key):
+            directives.setdefault(key, value.strip())
+    return directives
+
+
+def native_case(path) -> bool:
+    """Whether the native harness can run a corpus case: an executed case
+    whose header names no runners. The full suite's native stages read the
+    same cases from conformance/passing.txt (tools/tests/gate.py checks that
+    it lists none that this refuses)."""
+    directives = header_directives(path.read_text(errors='replace'))
+    return (directives.get('expect', '').split(' ')[0] in EXECUTED
+            and not any(key in directives for key in INTERPRETER_ONLY))
 
 
 # A crate's paths that are test code or test data, not its library source:
@@ -168,12 +201,14 @@ CRATE_TEST_DIRS = ('tests', 'benches', 'examples', 'proptest-regressions')
 # except what the generated BUCK reads (bench/native/programs/**): that is
 # selected through its owners.
 TOOL_PATHS = (
-    'tools/gate', 'tools/land', 'tools/capped', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
+    'tools/gate', 'tools/land', 'tools/capped', 'tools/main-runs', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py',
+    'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
         'event_logs', 'gating', 'generated', 'graph', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs',
         'test_sizes_from_usage')),
     'tools/known-failures.tsv',
+    'tools/main-runs-skip.tsv',
     'tools/buck2/test-sizes.json',
     # Memory-guard stops, read only by test_sizes_from_usage.py.
     'tools/buck2/guard-stops.json',
@@ -267,6 +302,14 @@ def buck_globs(buck_text: str) -> set[str]:
     return _GLOBS[key]
 
 
+def library_source(path: str) -> bool:
+    """Whether a path is a crate's library source rather than its tests, test
+    data or README."""
+    parts = path.split('/')
+    return (path.startswith('crates/') and len(parts) > 2 and parts[2] not in CRATE_TEST_DIRS
+            and parts[2] != 'README.md')
+
+
 def classify(paths, members, buck_text: str) -> Classified:
     """Sort changed repository paths by what they can affect. `members` are the
     workspace crates by directory name; `buck_text` is the root BUCK."""
@@ -295,7 +338,7 @@ def classify(paths, members, buck_text: str) -> Classified:
                 result.unknown_crates.add(crate)
                 continue
             result.owned.append(path)
-            if len(parts) > 2 and parts[2] not in CRATE_TEST_DIRS and parts[2] != 'README.md':
+            if library_source(path):
                 result.crates.add(crate)
                 # A member this copy of the table does not know yet (tools/land runs
                 # main's copy on a lane's tree that adds a crate) runs every campaign,
@@ -402,7 +445,7 @@ def ratchet_programs(diff: str) -> set[str]:
 
 def changed_programs(paths, root, ratchet: set[str] = frozenset()) -> list[str]:
     """Every changed or added corpus case that still exists, with its twins: the
-    cases the floor of every gate runs. A deleted case's twins run too."""
+    cases the targeted set runs. A deleted case's twins run too."""
     programs = {program for path in paths if (program := corpus_program(path))} | set(ratchet)
     return sorted({twin for program in programs for twin in twins(program, root)})
 
@@ -605,9 +648,10 @@ def package_dependents(paths, root) -> list[str]:
 
 
 def campaign_data(path: str) -> frozenset:
-    """The whole campaigns a changed data file outside the per-case rules can
+    """The campaigns a changed data file outside the per-case rules can
     affect: the spec's rule table every case header names, a corpus file that
-    is no case (such as a list the runner reads), and the native fixtures."""
+    is no case (such as a list the runner reads), and the native fixtures. A
+    lane gate runs conformance and agreement as the smoke slice."""
     if path.startswith('docs/spec/'):
         return FRONT
     if path.startswith(('native-tests/', 'bench/native/programs/')):
@@ -616,6 +660,47 @@ def campaign_data(path: str) -> frozenset:
             and path != PASSING and not path.endswith('.md')):
         return frozenset({CONFORMANCE})
     return frozenset()
+
+
+# ---------------------------------------------------------------- the smoke slice
+
+# A corpus case's header: its rule and its expectation (conformance/README.md).
+RULE = re.compile(r'^// rule: *(\S+)', re.M)
+EXPECT = re.compile(r'^// expect: *(\w+)', re.M)
+STEPS = re.compile(r'^// steps: ', re.M)
+HEADER_LINES = 12
+
+
+def case_header(path) -> tuple[str, str, bool] | None:
+    """A case's rule, expectation kind and whether it raises its step budget."""
+    try:
+        with open(path, errors='replace') as source:
+            head = ''.join(line for _, line in zip(range(HEADER_LINES), source))
+    except OSError:
+        return None
+    rule, expect = RULE.search(head), EXPECT.search(head)
+    return (rule[1], expect[1], bool(STEPS.search(head))) if rule and expect else None
+
+
+def smoke_slice(root) -> list[str]:
+    """The corpus smoke slice a compiler-crate change runs in place of the
+    whole conformance and agreement campaigns: for every rule ID and
+    expectation kind (`run`, `accept`, `reject`, ...) in the corpus, its
+    cheapest case, read from the corpus itself, so the slice is never kept by
+    hand. Cheapest is fewest bytes among the cases with the default step
+    budget, then path order: the same corpus gives the same slice. Agreement
+    runs the slice's accepted cases' variants in the seed-1 sample."""
+    best = {}
+    for path in sorted((root / 'conformance').rglob('*.hir')):
+        header = case_header(path)
+        if header is None:
+            continue
+        rule, kind, steps = header
+        case = path.relative_to(root).as_posix()
+        rank = (steps, path.stat().st_size, case)
+        if (rule, kind) not in best or rank < best[(rule, kind)]:
+            best[(rule, kind)] = rank
+    return sorted(rank[2] for rank in best.values())
 
 
 def proof_checks(paths) -> list[tuple[str, list[str]]]:

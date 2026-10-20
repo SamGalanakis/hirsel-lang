@@ -1,8 +1,9 @@
-# Failures main is known to have, excluded by tools/gate and printed in every gate that meets them.
+# Failures main is known to have, excluded by tools/gate and printed in every run that meets them.
 # One row each, tab-separated: id, reason, owner lane (the step fixing it), date (UTC).
 # id: a test target (hirsel-rt-test-it-shard-2), a binary and case (hirsel-rt-test-it::replay::kill_order)
-# or a corpus case (conformance/MEM/MEM-7-x-run.hir). Rows are added to main directly, never through
-# tools/land (it refuses a change that adds one); tools/land removes a lane's rows when that lane lands.
+# or a corpus case (conformance/MEM/MEM-7-x-run.hir). A lane that meets a red it did not cause adds a row
+# itself and pushes it straight to main; tools/main-runs adds one for each new red it bisects to a landing.
+# tools/land removes a lane's rows when that lane lands.
 conformance/SEM/SEM-3-yaml-edit-crlf-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/SEM/SEM-3-yaml-edit-explicit-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/SEM/SEM-3-yaml-edit-merge-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
