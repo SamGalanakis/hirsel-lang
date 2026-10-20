@@ -5109,11 +5109,11 @@ fn validation_copies_type_rows_only_for_reusable_working_storage() {
         }
         owner_sig(&mut f, &[]);
         let rows = f.definition.types.len();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
+        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
         let result = validate(&f.definition, &f.signatures, &mut vec![]);
         assert!(result.violations.is_empty(), "{:?}", result.violations);
         let copied =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - before;
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before;
         assert!(
             copied <= (4 * rows) as u64,
             "{count} assignments copied {copied} type rows from {rows} owner rows"
@@ -5146,10 +5146,10 @@ fn closure_bodies_share_reusable_definition_working_storage() {
         }
         f.body().blocks[0].terminator = ret(0, cleanup);
         let rows = f.definition.types.len();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
+        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
         f.valid();
         let copied =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - before;
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before;
         assert!(
             copied <= 4 * rows as u64,
             "{count} bodies copied {copied} rows from {rows}"
