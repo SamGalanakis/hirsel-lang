@@ -117,7 +117,7 @@ fn graph_helpers_reject_cycles_and_recovery() {
     })[0];
     assert_eq!(t.validate(id), Err(GraphError::StructuralCycle(id)));
     assert_eq!(
-        substitute_type_in_place(&t, id, Substitution::default()),
+        substitute_fresh(&t, id, Substitution::default()),
         Err(GraphError::StructuralCycle(id))
     );
     assert_eq!(
@@ -130,7 +130,7 @@ fn graph_helpers_reject_cycles_and_recovery() {
     });
     assert_eq!(t.validate(id), Err(GraphError::RecoveryType(id)));
     assert_eq!(
-        substitute_type_in_place(
+        substitute_fresh(
             &t,
             id,
             Substitution {
@@ -982,7 +982,7 @@ fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
         );
     }
     let actual = types.intern(scalar());
-    let substituted = substitute_type_in_place(
+    let substituted = substitute_fresh(
         &types,
         t,
         Substitution {
@@ -1047,7 +1047,7 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
     // substituting its own replaces it.
     let actual = types.intern(scalar());
     for (scope, replaced) in [(second, false), (duplicate, false), (first, true)] {
-        let substituted = substitute_type_in_place(
+        let substituted = substitute_fresh(
             &types,
             t,
             Substitution {
@@ -1184,7 +1184,7 @@ fn graph_transport_in_place_preserves_external_transport_and_snapshot_rows() {
         authorities: &[AuthoritySummary::inert()],
         roles: &roles,
     };
-    let expected = substitute_type_in_place(&store, root, substitution).unwrap();
+    let expected = substitute_fresh(&store, root, substitution).unwrap();
     let result = substitute(&store, &TypeMemo::new(), root, &substitution).unwrap();
     assert_eq!(expected, result, "substitution is exact: one result row");
     let TypeKind::Tuple(edges) = &store.get(result).unwrap().kind else {
@@ -1449,7 +1449,7 @@ fn written_crossing_transport_never_proves_an_unproved_actual() {
         kind: TypeKind::Primitive(Primitive::Bytes),
         ..scalar()
     });
-    let substituted = substitute_type_in_place(
+    let substituted = substitute_fresh(
         &target,
         root,
         Substitution {

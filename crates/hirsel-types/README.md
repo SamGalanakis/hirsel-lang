@@ -299,22 +299,15 @@ and independent validation reject foreign Body/depth/ordinal references.
 SortedMap's retained borrowed key provisionally requires Copyable (spec #48);
 section 22 ledger signatures remain verbatim.
 
-Rooted semantic equality validates both complete graphs and compares corresponding
-rows directly; it does not intern a second canonical graph. The shared
-`hirsel_intern::work` registry counts row inspections on this thread for the
-wide-graph scaling regression.
-`visit_type_origins` retains the origin rewriter's traversal and binder policy
-without constructing output rows. `import_type_row` imports a synthetic root with
-children in an immutable source; `substitute_type_in_place` reads existing immutable
-rows and appends substituted rows in the same caller-owned store. Structural
-property and compatibility proofs borrow their inputs; nominal expansion imports
-only reachable actual arguments into private proof scratch storage.
-
-`TypeStore::mark()` records a closed immutable prefix for temporary graph work;
-`truncate_to(mark)` discards its appended suffix while keeping allocated capacity.
-The mark checks prefix closure once in debug; truncation checks the retained
-boundary identity. Immutable rows cannot gain edges into the discarded suffix,
-and fresh provenance prevents an old temporary ID selecting a replacement row.
+Rooted semantic equality is `semantic_eq`: both graphs valid and equal `sem`
+normal forms, each row normalized once per session. `shape_eq` compares `shape`
+normal forms the same way. `ContextMemo::compatible` keeps main's directional
+walk for the pairs a policy can weaken and compares the rest by receiving-contract
+normal forms; test-only copies of main's walks (`reference`) check both on every
+unit test and on random graph pairs. `visit_type_origins` retains the origin
+rewriter's traversal and binder policy without constructing output rows.
+Substitution interns its result rows into the session interner, memoized in a
+`TypeMemo`; proofs expand nominal representations the same way.
 
 `CheckedBody.tails` records H's source tail decision, kind and counted argument
 ordinals/source expressions. It carries decisions rather than proof evidence;
@@ -329,7 +322,7 @@ Revision 4 stores every child collection within a `Type` row in `SharedSlice<T>`
 (`Arc<[T]>`): structural children, function parameters/generics/contracts, variant
 fields, bounds, brands, authority terms and qualifier obligations. Row cloning
 shares unchanged children. Mutating an unpublished producer row detaches only the
-edited slice; published TypeStore rows remain immutable. Construct from a Vec or
+edited slice; interned rows are immutable. Construct from a Vec or
 iterator, borrow slices for consumers, and use `storage_identity` only for retained
 allocation accounting. Identity never affects equality or canonical encoding.
 

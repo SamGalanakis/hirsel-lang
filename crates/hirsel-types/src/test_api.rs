@@ -108,8 +108,8 @@ pub fn compatible_storage_type(
     differential(t, "storage", expected, actual, new, old)
 }
 
-/// Main's `substitute_type_in_place` and `import_type`: transport in one interner.
-pub fn substitute_type_in_place(
+/// Main's `substitute_fresh` and `import_type`: transport in one interner.
+pub fn substitute_fresh(
     t: &TypeInterner,
     root: TypeId,
     substitution: Substitution<'_>,

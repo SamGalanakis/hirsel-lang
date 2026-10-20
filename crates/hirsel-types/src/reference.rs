@@ -21,12 +21,12 @@ pub fn semantic_equal(
     b: &TypeInterner,
     b_root: TypeId,
 ) -> Result<bool, GraphError> {
-    semantic_equal_adjusted(a, a_root, None, b, b_root, None, false, None, false)
+    main_directional_walk(a, a_root, None, b, b_root, None, false, None, false)
 }
 
 // Compare row data independently of arena identity; edge correspondence is
 // checked by the worklist. This also retains canonical erased-capture policy.
-fn without_edges(row: &Type, placeholder: TypeId) -> Type {
+fn main_row_data(row: &Type, placeholder: TypeId) -> Type {
     let mut row = row.clone();
     if let Some(ErasedCaptures::FromArguments(ps)) = &mut row.erased_captures {
         ps.sort();
@@ -65,7 +65,7 @@ fn without_edges(row: &Type, placeholder: TypeId) -> Type {
     row
 }
 
-pub fn semantic_equal_adjusted(
+pub fn main_directional_walk(
     a: &TypeInterner,
     a_root: TypeId,
     a_row: Option<&Type>,
@@ -147,8 +147,8 @@ pub fn semantic_equal_adjusted(
             left == a_root && right == b_root && (a_row.is_some() || b_row.is_some());
         let left = row(a, left, a_root, a_row)?;
         let right = row(b, right, b_root, b_row)?;
-        let mut expected = without_edges(left, a_root);
-        let mut actual = without_edges(right, a_root);
+        let mut expected = main_row_data(left, a_root);
+        let mut actual = main_row_data(right, a_root);
         if (a_row.is_some() || b_row.is_some())
             && variance == Variance::Exact
             && (!matches!(
@@ -398,7 +398,7 @@ fn compatible(
     actual_row.brand = expected_row.brand.clone();
     actual_row.sendability_requirement = expected_row.sendability_requirement;
     actual_row.modes = expected_row.modes;
-    Ok(semantic_equal_adjusted(
+    Ok(main_directional_walk(
         store,
         expected,
         None,

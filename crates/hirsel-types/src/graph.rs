@@ -906,15 +906,11 @@ pub fn visit_type_origins_where(
     Ok(())
 }
 
-/// H's rooted type-shape judgment. It retains constructors, nominal identity,
-/// generic declarations/arguments, labels, passing conventions and layout flags.
-/// Modes, origins, placement, cleanup, capture/allocator evidence and callable
-/// authority/allocation/contracts are judged independently by later phases.
-/// Complete semantic equality and receiving relations remain strict.
+/// `TypeInterner::shape_eq`, under its pre-interner name until the cutover
+/// removes the last caller.
+#[deprecated(note = "use TypeInterner::shape_eq")]
 pub fn shape_equal(t: &TypeInterner, a: TypeId, b: TypeId) -> Result<bool, GraphError> {
-    t.validate(a)?;
-    t.validate(b)?;
-    Ok(a == b || t.shape(a) == t.shape(b))
+    t.shape_eq(a, b)
 }
 
 /// Compare known type shape while allowing caller-designated inference holes.
@@ -1046,7 +1042,7 @@ mod shape_tests {
         let wrong_part = store.intern(row(TypeKind::Tuple(vec![byte, byte].into())));
         let wrong_constructor = store.intern(row(TypeKind::Box(complete)));
         let is_hole = |kind: &TypeKind| matches!(kind, TypeKind::Parameter(p) if *p == variable);
-        assert!(!shape_equal(&store, partial, complete).unwrap());
+        assert!(!store.shape_eq(partial, complete).unwrap());
         assert!(shape_equal_with_holes(&store, partial, complete, is_hole).unwrap());
         assert!(!shape_equal_with_holes(&store, partial, wrong_part, is_hole).unwrap());
         assert!(!shape_equal_with_holes(&store, partial, wrong_constructor, is_hole).unwrap());
@@ -1155,7 +1151,7 @@ mod shape_tests {
         let roots = shapes(&store);
         for (i, a) in roots.iter().enumerate() {
             for (j, b) in roots.iter().enumerate() {
-                assert_eq!(shape_equal(&store, *a, *b).unwrap(), i == j);
+                assert_eq!(store.shape_eq(*a, *b).unwrap(), i == j);
             }
         }
     }
@@ -1191,7 +1187,7 @@ mod shape_tests {
             let mut changed = f.clone();
             change(&mut changed);
             let changed = store.intern(row(TypeKind::Function(changed)));
-            assert!(shape_equal(&store, root, changed).unwrap());
+            assert!(store.shape_eq(root, changed).unwrap());
         }
         for change in [
             |f: &mut FunctionType| f.parameters[0].label = Some("other".into()),
@@ -1214,13 +1210,13 @@ mod shape_tests {
             let mut changed = f.clone();
             change(&mut changed);
             let changed = store.intern(row(TypeKind::Function(changed)));
-            assert!(!shape_equal(&store, root, changed).unwrap());
+            assert!(!store.shape_eq(root, changed).unwrap());
         }
         let other = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let inner = store.intern(row(TypeKind::Function(callable(other))));
         let outer = store.intern(row(TypeKind::Function(callable(root))));
         let changed = store.intern(row(TypeKind::Function(callable(inner))));
-        assert!(!shape_equal(&store, outer, changed).unwrap());
+        assert!(!store.shape_eq(outer, changed).unwrap());
     }
     #[test]
     fn shapes_keep_field_layout_nominal_arguments_and_generic_sizes() {
@@ -1244,7 +1240,7 @@ mod shape_tests {
                 }]
                 .into(),
             )));
-            assert!(!shape_equal(&store, root, changed).unwrap());
+            assert!(!store.shape_eq(root, changed).unwrap());
         }
         let nominal = store.intern(row(TypeKind::Named {
             definition: DefId::intern(&path("Owner")),
@@ -1266,29 +1262,29 @@ mod shape_tests {
                 definition: DefId::intern(&path(name)),
                 arguments: vec![GenericArgument::Type(t), GenericArgument::Size(size)].into(),
             }));
-            assert!(!shape_equal(&store, nominal, changed).unwrap());
+            assert!(!store.shape_eq(nominal, changed).unwrap());
         }
         // Import is the identity: the nominal's own id is its only id.
-        assert!(shape_equal(&store, nominal, nominal).unwrap());
+        assert!(store.shape_eq(nominal, nominal).unwrap());
     }
     #[test]
     fn rooted_shapes_reject_malformed_reachable_graphs_and_ignore_unrelated_rows() {
         let store = TypeInterner::new(None);
         let root = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         store.intern(row(TypeKind::Error));
-        assert!(shape_equal(&store, root, root).unwrap());
+        assert!(store.shape_eq(root, root).unwrap());
         let cycle = store.intern_graph(1, |ids| vec![row(TypeKind::Box(ids[0]))])[0];
         assert!(matches!(
-            shape_equal(&store, cycle, cycle),
+            store.shape_eq(cycle, cycle),
             Err(GraphError::StructuralCycle(_))
         ));
         assert!(matches!(
-            shape_equal(&store, TypeId::DANGLING, root),
+            store.shape_eq(TypeId::DANGLING, root),
             Err(GraphError::MissingType(_))
         ));
         let recovery = store.intern(row(TypeKind::Error));
         assert!(matches!(
-            shape_equal(&store, recovery, root),
+            store.shape_eq(recovery, root),
             Err(GraphError::RecoveryType(_))
         ));
     }

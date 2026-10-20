@@ -398,11 +398,23 @@ impl TypeInterner {
         crate::normal::strip_modes(self, id)
     }
 
-    /// The type-shape normal form `shape_equal` compares: constructors, nominal
+    /// The type-shape normal form `shape_eq` compares: constructors, nominal
     /// identity, arguments, generic binders, labels, passing conventions and
     /// layout flags, with every other fact erased.
     pub fn shape(&self, id: TypeId) -> TypeId {
         crate::normal::shape(self, id)
+    }
+
+    /// H's rooted type-shape judgment: both graphs valid and equal shape
+    /// normal forms. It retains constructors, nominal identity, generic
+    /// declarations and arguments, labels, passing conventions and layout
+    /// flags; modes, origins, placement, cleanup, capture and allocator
+    /// evidence and callable authority, allocation and contracts are judged by
+    /// later phases. Semantic equality and receiving relations stay strict.
+    pub fn shape_eq(&self, a: TypeId, b: TypeId) -> Result<bool, GraphError> {
+        self.validate(a)?;
+        self.validate(b)?;
+        Ok(a == b || self.shape(a) == self.shape(b))
     }
 }
 
