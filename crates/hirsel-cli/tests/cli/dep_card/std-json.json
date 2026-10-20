@@ -36,10 +36,12 @@
             "core@1/int/widen",
             "core@1/list/len",
             "core@1/list/push",
+            "core@1/list/reserve",
             "core@1/map/empty",
             "core@1/map/get",
             "core@1/map/insert",
             "core@1/string/as_bytes",
+            "core@1/string/byte_len",
             "core@1/string/from_bytes"
           ]
         }
@@ -74,9 +76,11 @@
       },
       "package": "std@1/json",
       "public_functions": [
+        "std@1/json/check_depth",
         "std@1/json/parse",
         "std@1/json/stringify",
-        "std@1/json/stringify_into"
+        "std@1/json/stringify_into",
+        "std@1/json/write_text_into"
       ],
       "weight": {
         "cost": {
@@ -85,13 +89,13 @@
           "check_ms": null,
           "check_source_tokens": 0,
           "lower_source_tokens": 0,
-          "native_build_source_tokens": 2051,
+          "native_build_source_tokens": 2162,
           "prechecked_definitions": 12,
-          "reached_source_tokens": 2051
+          "reached_source_tokens": 2162
         },
         "definitions": {
           "reached": 12,
-          "total": 17
+          "total": 18
         },
         "transitive_dependencies": [],
         "units": {
