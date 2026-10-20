@@ -601,7 +601,7 @@ fn http_url(error: uri.UriError) -> WsError uses {} {
 
 // Answers a rejected opening handshake and reports why.
 fn refuse(
-  take c: http.ServerConnection,
+  take c: http.ServerStream,
   status: u16,
   headers: List[http.Header],
   error: HandshakeError
@@ -612,17 +612,16 @@ fn refuse(
 }
 
 /// Completes the server side of the opening handshake for `request`, the request
-/// `c` last received. A request that is not a version-13 WebSocket upgrade is
-/// answered and refused: 405 for a method other than GET, 426 with
+/// `next_stream` yielded with `c`. A request that is not a version-13 WebSocket
+/// upgrade is answered and refused: 405 for a method other than GET, 426 with
 /// `Sec-WebSocket-Version: 13` for another version, 400 otherwise. The selected
 /// protocol is the client's first offer among `config.protocols`. Bytes already read
 /// past the request belong to the connection; `config.transport`'s read and write
 /// timeouts replace the HTTP request's.
-pub fn accept(
-  take c: http.ServerConnection,
-  request: http.ServerRequest,
-  config: Config
-) -> Result[Conn, WsError] {
+pub fn accept(take c: http.ServerStream, request: http.ServerRequest, config: Config) -> Result[
+  Conn,
+  WsError
+] {
   if request.method != "GET" {
     return refuse(
       take c,

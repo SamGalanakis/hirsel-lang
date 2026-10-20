@@ -97,8 +97,15 @@ pub fn main(t: Test) -> Result[(), AppError] {
   let mut listener = net.listen(n, home()) ? Network
   for outcome in expected {
     let (stream, _) = net.accept(n, mut listener) ? Network
-    let mut connection = http.server_connection(n, take stream, http.default_config())
-    let request = http.receive_request(mut connection, None()) ? Http
+    let mut serving = http.server_connection(
+      test.tasks(t),
+      n,
+      take stream,
+      http.default_config()
+    )
+    let Some((connection, request)) = http.next_stream(mut serving, None()) ? Http else {
+      return Error(Http(Closed()))
+    }
     let ws = match websocket.accept(take connection, request, config) {
       Ok(ws) => ws,
       Error(_) => {

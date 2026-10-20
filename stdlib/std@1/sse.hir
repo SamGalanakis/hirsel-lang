@@ -329,11 +329,11 @@ pub opaque resource type Writer: noalloc_drop uses {Net} {
 }
 @noalloc drop(self) {}
 
-/// Answers the request `c` last received with a 200 event stream: `content-type:
+/// Answers the request `next_stream` yielded with `c` with a 200 event stream: `content-type:
 /// text/event-stream`, `cache-control: no-cache`, `connection: close` and
 /// `headers`, with no length, so the body ends when the stream does. Framing fields
 /// among `headers` are `Http(Malformed(ContentLength()))`.
-pub fn respond(take c: http.ServerConnection, headers: List[http.Header]) -> Result[
+pub fn respond(take c: http.ServerStream, headers: List[http.Header]) -> Result[
   Writer,
   SseError
 ] {

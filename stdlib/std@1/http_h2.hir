@@ -505,7 +505,7 @@ fn http_h2_connection_field(name: String, headers: List[Header]) -> bool uses {}
 }
 
 fn http_h2_fields(headers: List[Header]) -> Result[List[hpack.Field], HttpError] uses {} {
-  http_validate_headers(headers)?
+  validate_headers(headers)?
   let mut fields: List[hpack.Field] = []
   for h in headers {
     let name = http_h2_lower_name(h.name)

@@ -3530,7 +3530,7 @@ fn encode_frame(frame: Frame, mask: Option[Inline[u8, 4]]) -> unique Bytes uses 
 fn decode_frame(buf: Bytes, max_payload: u64) -> Result[Option[(Frame, bool, u64)], ProtocolError] uses {}
 fn decode_close(payload: Bytes) -> Result[Option[(u16, String)], ProtocolError] uses {}
 fn connect(n: Net, r: Random, url: String, headers: List[http.Header], config: Config) -> Result[Conn, WsError]
-fn accept(take c: http.ServerConnection, request: http.ServerRequest, config: Config) -> Result[Conn, WsError]
+fn accept(take c: http.ServerStream, request: http.ServerRequest, config: Config) -> Result[Conn, WsError]
 fn protocol(c: Conn) -> Option[unique String] uses {}
 fn peer_close(c: Conn) -> Option[(u16, unique String)] uses {}
 fn send_frame(mut c: Conn, frame: Frame) -> Result[(), WsError]
@@ -3614,7 +3614,7 @@ fn request(n: Net, config: http.Config, url: String, headers: List[http.Header],
 fn read_event(mut r: http.Request, mut p: Parser) -> Result[Option[Event], SseError]
 @preserves_unique(out) fn encode_into(event: Event, mut out: List[u8]) -> Result[(), SseError] uses {}
 fn encode(event: Event) -> Result[unique String, SseError] uses {}
-fn respond(take c: http.ServerConnection, headers: List[http.Header]) -> Result[Writer, SseError]
+fn respond(take c: http.ServerStream, headers: List[http.Header]) -> Result[Writer, SseError]
 fn send(mut w: Writer, event: Event) -> Result[(), SseError]
 fn comment(mut w: Writer, note: String) -> Result[(), SseError]
 ```

@@ -1604,8 +1604,8 @@ pub fn detach(take s: ServerStream) -> Result[Detached, HttpError] {
   if state != 1 || s.version == Http2() {
     return Error(OutOfOrder())
   }
-  let ServerStream(tasks: _, returned: _, exchange: current, version: _) = take s
-  let Some(transfer) = current else {
+  let mut owned = take s
+  let Some(transfer) = replace(mut owned.exchange, None()) else {
     return Error(OutOfOrder())
   }
   let HttpExchange(
