@@ -105,34 +105,45 @@ pub(super) struct State {
     sources: Rows<BTreeSet<usize>>,
     /// May precede relation between temporary evaluations. Writes reset a row
     /// and column and put the new evaluation after all live temporaries.
-    before: BTreeSet<(usize, usize)>,
+    before: Shared<BTreeSet<(usize, usize)>>,
 }
 impl State {
     fn join(&mut self, other: &Self, model: &Model) -> bool {
         let previous = self.clone();
-        self.envelopes.join(&other.envelopes, |a, b| {
-            *a = creation::join([a.clone(), b.clone()])
-        });
+        self.join_since(&previous, other, model);
+        *self != previous
+    }
+    /// Join `other`, which is `base` changed in place, into a state that
+    /// already joined `base`. Every row join is idempotent and associative, so
+    /// a row equal in `base` and `other` already holds its join: only the
+    /// change since `base` is visited. `join` is the case `base == self`.
+    fn join_since(&mut self, base: &Self, other: &Self, model: &Model) {
+        self.envelopes
+            .join_since(&base.envelopes, &other.envelopes, |a, b| {
+                *a = creation::join([a.clone(), b.clone()])
+            });
         let same_loans = self.cleanup_loans == other.cleanup_loans
             && self.cleanup_maybe_loans == other.cleanup_maybe_loans;
         let same_cleanup = self.cleanup_roots == other.cleanup_roots
             && self.cleanup_conflicts == other.cleanup_conflicts
             && self.live_temporaries == other.live_temporaries;
-        if !self.contract_readonly.shares(&other.contract_readonly) {
+        if !base.contract_readonly.shares(&other.contract_readonly)
+            && !self.contract_readonly.shares(&other.contract_readonly)
+        {
             self.contract_readonly.extend(&other.contract_readonly);
         }
-        self.origins.join(&other.origins);
-        if !self.tags.shares(&other.tags) {
+        self.origins.join_since(&base.origins, &other.origins);
+        if !base.tags.shares(&other.tags) && !self.tags.shares(&other.tags) {
             tags::join(&mut self.tags, &other.tags);
         }
-        let changed: BTreeSet<_> = self
+        let changed: BTreeSet<_> = base
             .must
             .differences(&other.must)
             .into_iter()
-            .chain(self.places.differences(&other.places))
-            .chain(self.defused.differences(&other.defused))
+            .chain(base.places.differences(&other.places))
+            .chain(base.defused.differences(&other.defused))
             .chain(
-                self.ownership_conflicts
+                base.ownership_conflicts
                     .differences(&other.ownership_conflicts),
             )
             .collect();
@@ -141,7 +152,11 @@ impl State {
             .copied()
             .filter(|i| *i < self.ownership_conflicts.len())
             .collect();
-        let loans = self.loans.differences(&other.loans);
+        let loans = base.loans.differences(&other.loans);
+        work::count_by(
+            Counter::ValidateJoinRows,
+            (changed.len() + loans.len()) as u64,
+        );
         for i in changed {
             let live = self.places[i] & LIVE != 0;
             let incoming_live = other.places[i] & LIVE != 0;
@@ -169,9 +184,20 @@ impl State {
                 self.must[i].join_live(other.must[i], live, incoming_live),
             );
         }
-        self.places.join(&other.places, |a, b| *a |= b);
-        self.loans.join(&other.loans, |a, b| *a |= b);
-        for i in 0..self.borrow_only.len() {
+        self.places
+            .join_since(&base.places, &other.places, |a, b| *a |= b);
+        self.loans
+            .join_since(&base.loans, &other.loans, |a, b| *a |= b);
+        // A borrow-only root is shared (every write keeps that), so a root
+        // whose two rows agree in `base` and `other` already holds its join.
+        let sharing: BTreeSet<_> = base
+            .shared
+            .differences(&other.shared)
+            .into_iter()
+            .chain(base.borrow_only.differences(&other.borrow_only))
+            .collect();
+        work::count_by(Counter::ValidateJoinRows, sharing.len() as u64);
+        for i in sharing {
             let only = (self.shared[i] || other.shared[i])
                 && (self.borrow_only[i] || !self.shared[i])
                 && (other.borrow_only[i] || !other.shared[i]);
@@ -179,17 +205,28 @@ impl State {
                 self.borrow_only.set(i, only);
             }
         }
-        self.shared.union(&other.shared, |a, b| *a |= b);
+        self.shared
+            .union_since(&base.shared, &other.shared, |a, b| *a |= b);
         self.borrowed_shares
-            .union(&other.borrowed_shares, |a, b| a.extend(b));
+            .union_since(&base.borrowed_shares, &other.borrowed_shares, |a, b| {
+                a.extend(b)
+            });
         self.current_unique
-            .join(&other.current_unique, |a, b| *a &= b);
+            .join_since(&base.current_unique, &other.current_unique, |a, b| *a &= b);
         self.crossing_parts
-            .join(&other.crossing_parts, |a, b| a.join(b));
-        self.before.extend(&other.before);
+            .join_since(&base.crossing_parts, &other.crossing_parts, |a, b| {
+                a.join(b)
+            });
+        if !base.before.shares(&other.before)
+            && !self.before.shares(&other.before)
+            && !other.before.is_subset(&self.before)
+        {
+            self.before.extend(other.before.iter().copied());
+        }
         self.content_loans
-            .union(&other.content_loans, |a, b| a.join(b));
-        self.sources.union(&other.sources, |a, b| a.extend(b));
+            .union_since(&base.content_loans, &other.content_loans, |a, b| a.join(b));
+        self.sources
+            .union_since(&base.sources, &other.sources, |a, b| a.extend(b));
         if !same_cleanup {
             for root in roots {
                 model.refresh_cleanup(self, root);
@@ -200,7 +237,6 @@ impl State {
                 model.refresh_cleanup_loan(self, index);
             }
         }
-        *self != previous
     }
 }
 
@@ -1093,7 +1129,7 @@ impl Model {
                 .with_copy_counter(Counter::ValidateCopiedRows),
             sources: Rows::new(BTreeSet::new(), self.places.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            before: BTreeSet::new(),
+            before: BTreeSet::new().into(),
         };
         for (i, l) in body.locals.iter().enumerate() {
             if body.parameters.contains(&LocalId(i as u32)) || l.storage == Storage::Capture {
@@ -1309,8 +1345,8 @@ impl Model {
 /// overwritten slots. Calls and captures never grant the result-read permission.
 /// The root may now share counted storage with another value (MODE-2).
 fn share_root(state: &mut State, root: usize) {
-    state.shared[root] = true;
-    state.borrow_only[root] = false;
+    state.shared.set(root, true);
+    state.borrow_only.set(root, false);
 }
 fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
     let mut incoming = vec![BTreeSet::new(); body.blocks.len()];
@@ -2771,7 +2807,9 @@ impl Checker<'_> {
             state.must[model.places[index].root.0 as usize].set(MustFacts::GLOBAL, false);
             state.must[model.places[index].root.0 as usize].set(MustFacts::SENDABLE, false);
             state.must[model.places[index].root.0 as usize].set(MustFacts::OWNED, false);
-            state.ownership_conflicts[model.places[index].root.0 as usize] = false;
+            state
+                .ownership_conflicts
+                .set(model.places[index].root.0 as usize, false);
             model.refresh_cleanup(state, model.places[index].root.0 as usize);
         }
     }
@@ -3521,15 +3559,24 @@ impl Checker<'_> {
         }
         if model.places[index].projection.is_empty() {
             state.must[root].set(MustFacts::OWNED, owned && !model.borrowed[root]);
-            state.ownership_conflicts[root] = false;
-            state.before.retain(|(a, b)| *a != root && *b != root);
+            state.ownership_conflicts.set(root, false);
+            if state.before.iter().any(|(a, b)| *a == root || *b == root) {
+                state.before.retain(|(a, b)| *a != root && *b != root);
+            }
             if model.temporary[root] && model.release[root] {
-                for i in model.cleanup_sets.borrow().members(state.live_temporaries) {
-                    work::count(Counter::ValidateCleanupRootRows);
-                    let i = i as usize;
-                    if i != root {
-                        state.before.insert((i, root));
-                    }
+                let after: Vec<_> = model
+                    .cleanup_sets
+                    .borrow()
+                    .members(state.live_temporaries)
+                    .into_iter()
+                    .map(|i| {
+                        work::count(Counter::ValidateCleanupRootRows);
+                        i as usize
+                    })
+                    .filter(|i| *i != root)
+                    .collect();
+                if !after.is_empty() {
+                    state.before.extend(after.into_iter().map(|i| (i, root)));
                 }
             }
         }
@@ -5114,12 +5161,15 @@ impl Checker<'_> {
                             .iter()
                             .any(|p| matches!(p, Projection::Index(_)))
                     });
+                    // The failure edge joins the state after every operand
+                    // prefix. `joined` is the last prefix joined, so each
+                    // join visits only what that operand changed.
                     let mut failure_state = may_fail.then(|| {
                         work::count_by(
                             Counter::ValidateFailureStateRows,
                             state.places.len() as u64,
                         );
-                        state.clone()
+                        (state.clone(), state.clone())
                     });
                     let mut content_loans = self.rvalue_loans(model, state, rvalue);
                     let mut dependencies = content_loans.held();
@@ -5146,14 +5196,15 @@ impl Checker<'_> {
                             transport,
                             report,
                         );
-                        if let Some(failure_state) = &mut failure_state {
-                            failure_state.join(state, model);
+                        if let Some((failure_state, joined)) = &mut failure_state {
+                            failure_state.join_since(joined, state, model);
+                            *joined = state.clone();
                         }
                     }
                     // Operand extraction/constructor preparation may fail on
                     // either side of a Take. Conditional drops cover the union;
                     // the destination is not initialized on any failure edge.
-                    if let Some(failure_state) = &failure_state {
+                    if let Some((failure_state, _)) = &failure_state {
                         self.failure_cleanup(
                             model,
                             failure_state,

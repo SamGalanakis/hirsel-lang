@@ -236,8 +236,18 @@ impl OriginState {
             locations: BTreeMap::new().into(),
         }
     }
-    pub fn join(&mut self, other: &Self) {
-        for i in self.parts.differences(&other.parts) {
+    /// Join `other`, which is `base` changed in place, into a state that
+    /// already joined `base` (see `State::join_since`). A part row falls back
+    /// to its place's identities, so it is revisited when either changed.
+    pub fn join_since(&mut self, base: &Self, other: &Self) {
+        let rows: BTreeSet<_> = base
+            .parts
+            .differences(&other.parts)
+            .into_iter()
+            .chain(base.identities.differences(&other.identities))
+            .collect();
+        work::count_by(Counter::ValidateJoinRows, rows.len() as u64);
+        for i in rows {
             let (mine, incoming) = (&self.parts[i], &other.parts[i]);
             let paths: BTreeSet<_> = mine.keys().chain(incoming.keys()).cloned().collect();
             let mut joined = BTreeMap::new();
@@ -272,27 +282,38 @@ impl OriginState {
                 self.parts.set(i, joined.into());
             }
         }
-        self.ended.union(&other.ended, |a, b| *a |= b);
+        self.ended
+            .union_since(&base.ended, &other.ended, |a, b| *a |= b);
         self.dead
-            .union(&other.dead, |a, b| a.extend(b.iter().cloned()));
-        self.owners.union(&other.owners, union_origins);
-        self.proofs.union(&other.proofs, |a, b| {
-            for (name, values) in b {
-                a.entry(name.clone())
-                    .or_default()
-                    .extend(values.iter().cloned());
-            }
-        });
-        self.identities.union(&other.identities, union_origins);
+            .union_since(&base.dead, &other.dead, |a, b| a.extend(b.iter().cloned()));
+        self.owners
+            .union_since(&base.owners, &other.owners, union_origins);
+        self.proofs
+            .union_since(&base.proofs, &other.proofs, |a, b| {
+                for (name, values) in b {
+                    a.entry(name.clone())
+                        .or_default()
+                        .extend(values.iter().cloned());
+                }
+            });
+        self.identities
+            .union_since(&base.identities, &other.identities, union_origins);
         self.environments
-            .union(&other.environments, |a, b| a.join(b));
+            .union_since(&base.environments, &other.environments, |a, b| a.join(b));
         self.retained
-            .union(&other.retained, |a, b| a.extend(b.iter().cloned()));
+            .union_since(&base.retained, &other.retained, |a, b| {
+                a.extend(b.iter().cloned())
+            });
         self.expired
-            .union(&other.expired, |a, b| a.extend(b.iter().cloned()));
-        self.locations.union(&other.locations, |a, b| a.extend(b));
+            .union_since(&base.expired, &other.expired, |a, b| {
+                a.extend(b.iter().cloned())
+            });
+        self.locations
+            .union_since(&base.locations, &other.locations, |a, b| a.extend(b));
         self.bindings
-            .union(&other.bindings, |a, b| a.extend(b.iter().cloned()));
+            .union_since(&base.bindings, &other.bindings, |a, b| {
+                a.extend(b.iter().cloned())
+            });
     }
 
     pub fn expire(&mut self, owner: &Origin) {
@@ -780,7 +801,8 @@ mod environment_tests {
                 .is_empty()
         );
         assert_eq!(state.expired[0], BTreeSet::from([left.clone()]));
-        state.join(&ended);
+        let base = state.clone();
+        state.join_since(&base, &ended);
         assert_eq!(
             state.expired_by(&BTreeSet::from([whole])),
             BTreeSet::from([left])

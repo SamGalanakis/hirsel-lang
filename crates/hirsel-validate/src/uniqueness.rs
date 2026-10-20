@@ -1046,8 +1046,8 @@ impl Checker<'_> {
     pub(super) fn reset_unique(&self, state: &mut State, destination: PlaceId) {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
-            state.shared[place.root.0 as usize] = false;
-            state.borrow_only[place.root.0 as usize] = false;
+            state.shared.set(place.root.0 as usize, false);
+            state.borrow_only.set(place.root.0 as usize, false);
         }
     }
     pub(super) fn mut_requires_unique(

@@ -29,6 +29,8 @@ pub enum Counter {
     ValidatePlaceRows,
     /// V's snapshot rows prepared for assignment failure unions.
     ValidateFailureStateRows,
+    /// V's rows visited while joining flow states.
+    ValidateJoinRows,
     /// V's backward result-permission block transfers.
     ValidateResultDemandSteps,
     /// V's forward ownership block transfers.

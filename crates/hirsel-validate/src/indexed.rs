@@ -63,27 +63,30 @@ impl<K: Clone + Ord, V: Clone + PartialEq> Indexed<K, V> {
             self.insert(key, value);
         }
     }
-    pub fn union(&mut self, other: &Self, mut join: impl FnMut(&mut V, &V)) {
-        if Rc::ptr_eq(&self.keys, &other.keys) {
-            self.values.union(&other.values, |row, incoming| {
-                let Some(incoming) = incoming else {
-                    return;
-                };
-                match row {
-                    Some(old) if !Rc::ptr_eq(old, incoming) => {
-                        let mut value = old.1.clone();
-                        join(&mut value, &incoming.1);
-                        // An equal join result keeps the incoming entry.
-                        if value == incoming.1 {
-                            *row = Some(incoming.clone());
-                        } else if value != old.1 {
-                            Rc::make_mut(old).1 = value;
+    /// Union `other`, which is `base` changed in place, into entries that
+    /// already joined `base`: only entries changed since `base` are visited.
+    pub fn union_since(&mut self, base: &Self, other: &Self, mut join: impl FnMut(&mut V, &V)) {
+        if Rc::ptr_eq(&self.keys, &other.keys) && Rc::ptr_eq(&base.keys, &other.keys) {
+            self.values
+                .union_since(&base.values, &other.values, |row, incoming| {
+                    let Some(incoming) = incoming else {
+                        return;
+                    };
+                    match row {
+                        Some(old) if !Rc::ptr_eq(old, incoming) => {
+                            let mut value = old.1.clone();
+                            join(&mut value, &incoming.1);
+                            // An equal join result keeps the incoming entry.
+                            if value == incoming.1 {
+                                *row = Some(incoming.clone());
+                            } else if value != old.1 {
+                                Rc::make_mut(old).1 = value;
+                            }
                         }
+                        Some(_) => {}
+                        None => *row = Some(incoming.clone()),
                     }
-                    Some(_) => {}
-                    None => *row = Some(incoming.clone()),
-                }
-            });
+                });
         } else {
             for (key, incoming) in other.iter() {
                 let mut value = self.get(key).cloned().unwrap_or_else(|| incoming.clone());
@@ -145,14 +148,16 @@ mod tests {
             actual.remove(&((key + 31) % 137));
             flat.remove(&((key + 31) % 137));
             assert!(old.iter().eq(old_flat.iter()));
-            actual.union(&old, |a, b| a.extend(b));
+            let base = actual.clone();
+            actual.union_since(&base, &old, |a, b| a.extend(b));
             for (key, values) in old_flat {
                 flat.entry(key).or_default().extend(values);
             }
             assert!(actual.iter().eq(flat.iter()));
             let independently_numbered = Indexed::from(flat.clone());
             assert!(actual == independently_numbered);
-            actual.union(&independently_numbered, |a, b| a.extend(b));
+            let base = actual.clone();
+            actual.union_since(&base, &independently_numbered, |a, b| a.extend(b));
             assert!(actual.iter().eq(flat.iter()));
         }
         let before = hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateCopiedRows);
