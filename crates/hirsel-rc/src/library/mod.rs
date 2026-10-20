@@ -40,7 +40,6 @@ use crate::instance::{
     Actuals, InstanceError, InstanceId, InstanceRole, Instances, Program, instantiate_function,
 };
 use hirsel_layout::instance::{InstanceKey, InstanceView};
-use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::LayoutId;
@@ -489,7 +488,7 @@ pub fn instantiate(
 /// are appended to `instances`.
 pub fn build(
     program: &Program,
-    layouts: &mut LayoutBuilder<'_>,
+    layouts: &mut dyn builder::Layouts,
     instances: &mut Instances,
     id: InstanceId,
 ) -> Result<LirUnit<Value>, PassError> {

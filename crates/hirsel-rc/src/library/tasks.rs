@@ -441,13 +441,13 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .environment(
             cx.types,
             &EnvironmentShape {
-            definition: DefId::intern(&path),
-            body: 0,
-            captures: &[(f, Passing::Take)],
-            sizes: &[],
-            // The child moves the callable out to drop it with its frame (CONC-2).
-            movable: &[0],
-        },
+                definition: DefId::intern(&path),
+                body: 0,
+                captures: &[(f, Passing::Take)],
+                sizes: &[],
+                // The child moves the callable out to drop it with its frame (CONC-2).
+                movable: &[0],
+            },
         )
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut request = Request::native(

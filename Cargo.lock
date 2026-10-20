@@ -968,6 +968,7 @@ dependencies = [
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]

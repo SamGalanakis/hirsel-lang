@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     pub(super) fn destination_class(&self, d: &hirsel_types::Destination) -> R<DestinationClass> {
         use hirsel_types::Destination as D;
         Ok(match d {
@@ -915,8 +915,11 @@ impl Importer<'_, '_> {
                     .ok_or_else(|| InstanceError::MissingInstance(self.def.path.path().clone()))?;
                 let (code, environment) = {
                     let digest = self.instances.view(instance).key.digest();
-                    let symbol =
-                        self.symbol(SymbolKind::Function, &self.def.path.path().clone(), Some(digest));
+                    let symbol = self.symbol(
+                        SymbolKind::Function,
+                        &self.def.path.path().clone(),
+                        Some(digest),
+                    );
                     let code = ClosureCode {
                         symbol,
                         abi: self.instances.abis[instance.index()],
@@ -1320,12 +1323,7 @@ impl Importer<'_, '_> {
             .ok_or_else(|| PassError::Unsupported("container constructor actuals".into()))?;
         let path = hirsel_syntax::DefPath::core(if is_map { "map.insert" } else { "set.insert" });
         let body = crate::library::body_index(&path).expect("registered insertion");
-        let request = crate::library::Request::operation(
-            self.program,
-            body,
-            &path,
-            actuals,
-        )?;
+        let request = crate::library::Request::operation(self.program, body, &path, actuals)?;
         let direct = self.require(request)?;
         let symbol = self.symbol(
             direct.symbol.kind,
@@ -1448,16 +1446,15 @@ impl Importer<'_, '_> {
                 false,
                 path,
             )?;
-            let instance =
-                match self
-                    .program
-                    .instance_bodies
-                    .resolve(DefId::intern(path), self.types, &callee.arguments)
-                {
-                    Ok(Some(instance)) => instance.path().clone(),
-                    Ok(None) => return unsupported(format!("{path:?} has no instance bodies")),
-                    Err(error) => return unsupported(format!("{error:?}")),
-                };
+            let instance = match self.program.instance_bodies.resolve(
+                DefId::intern(path),
+                self.types,
+                &callee.arguments,
+            ) {
+                Ok(Some(instance)) => instance.path().clone(),
+                Ok(None) => return unsupported(format!("{path:?} has no instance bodies")),
+                Err(error) => return unsupported(format!("{error:?}")),
+            };
             return self.direct(&instance, &[]);
         }
         if let Some(body) = crate::library::body_index(path) {
@@ -1487,11 +1484,8 @@ impl Importer<'_, '_> {
                 false,
                 path,
             )?;
-            let request = crate::library::Request::operation_value(
-                self.program,
-                path,
-                callee.arguments,
-            )?;
+            let request =
+                crate::library::Request::operation_value(self.program, path, callee.arguments)?;
             let direct = self.require(request)?;
             return Ok((
                 self.symbol(SymbolKind::Function, path, direct.symbol.instance),

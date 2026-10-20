@@ -373,7 +373,7 @@ enum TableId<'a> {
 /// Every `LayoutId` and `FnAbiId` `unit` names, mutably, in a fixed walk order: the
 /// header's ABI, the types, the instructions, then the call, construct, closure, init
 /// flag and codec tables. Terminators and pools name none.
-fn for_each_table_id(unit: &mut LirUnit<Ready>, f: &mut impl FnMut(TableId<'_>)) {
+fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) {
     f(TableId::Abi(&mut unit.header.abi));
     for ty in &mut unit.types {
         f(TableId::Layout(&mut ty.layout));
@@ -419,10 +419,10 @@ fn for_each_table_id(unit: &mut LirUnit<Ready>, f: &mut impl FnMut(TableId<'_>))
     }
 }
 
-/// `unit` with its program bindings erased: the input and layout-table digests zeroed,
-/// and each `LayoutId` and `FnAbiId` renumbered by first use. Returns it with the
-/// original ids in that order.
-pub fn erased(unit: &LirUnit<Ready>) -> (LirUnit<Ready>, Vec<LayoutId>, Vec<FnAbiId>) {
+/// `unit`, at any stage, with its program bindings erased: the input and layout-table
+/// digests zeroed, and each `LayoutId` and `FnAbiId` renumbered by first use. Returns it
+/// with the original ids in that order.
+pub fn erased<S: Clone>(unit: &LirUnit<S>) -> (LirUnit<S>, Vec<LayoutId>, Vec<FnAbiId>) {
     let mut erased = unit.clone();
     erased.header.input.digest = ContentHash([0; 32]);
     erased.header.layouts = ContentHash([0; 32]);
@@ -449,6 +449,31 @@ pub fn erased(unit: &LirUnit<Ready>) -> (LirUnit<Ready>, Vec<LayoutId>, Vec<FnAb
     (erased, layouts, abis)
 }
 
+/// An erased unit bound to a program again: each erased id `i` becomes `layouts[i]` or
+/// `abis[i]`, the ids that program gives the keys `erased` returned. The error names an
+/// erased id with no binding.
+pub fn rebound<S>(
+    mut unit: LirUnit<S>,
+    layouts: &[LayoutId],
+    abis: &[FnAbiId],
+) -> Result<LirUnit<S>, String> {
+    let mut missing = None;
+    for_each_table_id(&mut unit, &mut |id| match id {
+        TableId::Layout(id) => match layouts.get(id.0 as usize) {
+            Some(bound) => *id = *bound,
+            None => missing = Some(format!("erased layout {}", id.0)),
+        },
+        TableId::Abi(id) => match abis.get(id.0 as usize) {
+            Some(bound) => *id = *bound,
+            None => missing = Some(format!("erased FnAbi {}", id.0)),
+        },
+    });
+    match missing {
+        None => Ok(unit),
+        Some(message) => Err(format!("{message} has no binding")),
+    }
+}
+
 /// The digest of everything `unit`'s object bytes are a function of when `toolchain`
 /// emits it with `inputs`, `debug` line tables and the small callee bodies `copies` (by
 /// their digests) copied in: the erased unit (`erased`), the `LayoutKey`s and FnAbi keys
@@ -466,6 +491,52 @@ pub fn ready_digest(
     toolchain: &str,
     debug: bool,
     copies: &[ContentHash],
+) -> Result<ContentHash, String> {
+    unit_digest(
+        unit,
+        inputs,
+        toolchain,
+        debug,
+        copies,
+        &[],
+        "hirsel.ready-digest.v1",
+    )
+}
+
+/// The object stage's key (design §1e, the two-stage cache in followups): the digest of
+/// `unit` after the whole-program Value passes, as `ready_digest` digests a Ready unit,
+/// with `facts`, the inputs the stages from placement to ready read besides the unit
+/// (the native options, the instance's placement and proof facts, the finalizer facts of
+/// the layouts it reaches), each as bytes. Two units with one key lower and emit to the
+/// same object bytes in any program.
+pub fn object_key<S: crate::stage::Stage + Clone>(
+    unit: &LirUnit<S>,
+    inputs: &EmitInputs<'_>,
+    toolchain: &str,
+    debug: bool,
+    copies: &[ContentHash],
+    facts: &[Vec<u8>],
+) -> Result<UnitKey, String> {
+    unit_digest(
+        unit,
+        inputs,
+        toolchain,
+        debug,
+        copies,
+        facts,
+        "hirsel.object-key.v1",
+    )
+    .map(UnitKey)
+}
+
+fn unit_digest<S: crate::stage::Stage + Clone>(
+    unit: &LirUnit<S>,
+    inputs: &EmitInputs<'_>,
+    toolchain: &str,
+    debug: bool,
+    copies: &[ContentHash],
+    facts: &[Vec<u8>],
+    domain: &str,
 ) -> Result<ContentHash, String> {
     let (erased, layouts, abis) = erased(unit);
     let mut parts: Vec<Vec<u8>> = vec![
@@ -540,8 +611,10 @@ pub fn ready_digest(
     for copy in copies {
         parts.push(copy.0.to_vec());
     }
+    parts.push(format!("facts {}", facts.len()).into_bytes());
+    parts.extend(facts.iter().cloned());
     Ok(ContentHash::of_parts(
-        "hirsel.ready-digest.v1",
+        domain,
         parts.iter().map(Vec::as_slice),
     ))
 }

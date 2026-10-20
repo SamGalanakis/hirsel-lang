@@ -55,6 +55,11 @@ pub trait Layouts {
         types: &TypeInterner,
         shape: &EnvironmentShape<'_>,
     ) -> Result<LayoutId, LayoutError>;
+    /// The sequence a flat list builder appends `element`'s encoding to.
+    fn flat_builder(&mut self, element: LayoutId) -> Result<LayoutId, LayoutError>;
+    /// A library instance is about to be requested: a recorder notes it
+    /// (`crate::effects`).
+    fn request(&mut self, _request: &Request) {}
 }
 
 impl Layouts for LayoutBuilder<'_> {
@@ -90,6 +95,9 @@ impl Layouts for LayoutBuilder<'_> {
         shape: &EnvironmentShape<'_>,
     ) -> Result<LayoutId, LayoutError> {
         LayoutBuilder::environment(self, types, shape)
+    }
+    fn flat_builder(&mut self, element: LayoutId) -> Result<LayoutId, LayoutError> {
+        LayoutBuilder::flat_builder(self, element)
     }
 }
 
@@ -237,6 +245,7 @@ impl<'a> Cx<'a> {
     /// A body's requirements are exactly the requests its builder makes.
     pub fn require(&mut self, request: Request) -> R<Direct> {
         let path = request.path.clone();
+        self.layouts.request(&request);
         let instance = super::instantiate(self.layouts, self.instances, request)?;
         Ok(Direct {
             symbol: Symbol {

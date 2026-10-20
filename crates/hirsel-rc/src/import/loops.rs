@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// The loop prologue: every loop-carried parameter moves (a taken one) or
     /// is copied (a borrowed one: one count operation) into its loop slot.
     pub(super) fn enter_loop(&mut self, parameter_slots: &[Option<SlotId>]) -> R<()> {

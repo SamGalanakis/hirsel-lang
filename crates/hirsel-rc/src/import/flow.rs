@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// One emission pass from the given TIR entry states (None: not yet known).
     /// Returns every block's entry state joined over all its edges, which
     /// equals `prev` at the fixpoint, so each emitted block assumed a state

@@ -7,6 +7,7 @@ pub mod append_into;
 pub mod arena_credit;
 pub mod cleanup;
 pub mod closure_calls;
+pub mod effects;
 pub mod elide;
 pub mod flat_walk;
 pub mod import;

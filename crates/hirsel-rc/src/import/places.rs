@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     // --- places and addresses ---
 
     pub(super) fn slot_for(&self, local: usize) -> R<SlotId> {

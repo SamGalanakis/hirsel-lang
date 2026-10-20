@@ -143,7 +143,7 @@ fn terminator_places(body: &tir::Body, terminator: &tir::Terminator) -> Vec<tir:
     }
 }
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// Whether a local of this type is a byte list (`Some(true)`) or the
     /// Bytes it freezes to (`Some(false)`).
     fn byte_kind(&mut self, ty: TypeId) -> Option<bool> {

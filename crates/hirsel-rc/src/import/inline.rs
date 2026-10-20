@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Inline for Importer<'_, '_> {
+impl Inline for Importer<'_> {
     fn construct_inline(
         &mut self,
         layout: LayoutId,
@@ -257,12 +257,12 @@ impl Inline for Importer<'_, '_> {
                 .environment(
                     self.types,
                     &hirsel_layout::layout::EnvironmentShape {
-                    definition: DefId::intern(helper),
-                    body: 0,
-                    captures: &fields,
-                    sizes: &[],
-                    movable: &[],
-                },
+                        definition: DefId::intern(helper),
+                        body: 0,
+                        captures: &fields,
+                        sizes: &[],
+                        movable: &[],
+                    },
                 )
                 .map_err(|e| PassError::Layout(helper.clone(), e))?,
         );

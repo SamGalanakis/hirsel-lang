@@ -15,7 +15,7 @@ use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{
     BinderRef, BuiltinType, Field, GenericArgument, GenericParameter, Layout, Primitive,
-    SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeInterner, TypeParamId, Variant,
+    SignatureKind, SignatureRef, Type, TypeId, TypeInterner, TypeKind, TypeParamId, Variant,
 };
 use std::collections::BTreeMap;
 
@@ -187,10 +187,7 @@ fn record(
 /// The library's owner representations: the containers and SlotId, the cursor
 /// types and the string views. `signatures` are the program's
 /// registry declarations; a type the program does not declare gets no row.
-pub fn owners(
-    types: &TypeInterner,
-    signatures: &BTreeMap<DefPath, SignatureRef>,
-) -> LibraryOwners {
+pub fn owners(types: &TypeInterner, signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     let mut out = LibraryOwners::default();
 
     for (name, resource) in [

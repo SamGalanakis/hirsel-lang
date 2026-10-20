@@ -35,6 +35,7 @@
 //! and canonical places through retained and derived code.
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
+use crate::library::builder::Layouts as _;
 use crate::normalize::{Declined, Facts, Home, LoopPlan, LoopSite, NormalizeError};
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_layout::layout::LayoutBuilder;
@@ -129,6 +130,8 @@ pub enum LowerError {
     Library(InstanceId, PassError),
     /// A constant a unit reads has no static encoding (or no value).
     Static(DefPath, crate::statics::StaticError),
+    /// A cached import could not be replayed or bound: a tool error.
+    Replay(InstanceId, String),
 }
 
 impl std::fmt::Display for LowerError {
@@ -139,6 +142,7 @@ impl std::fmt::Display for LowerError {
             Self::Import(id, error) => write!(f, "import instance {}: {error}", id.0),
             Self::Library(id, error) => write!(f, "library instance {}: {error}", id.0),
             Self::Static(path, error) => write!(f, "static {path}: {error:?}"),
+            Self::Replay(id, error) => write!(f, "replay instance {}: {error}", id.0),
         }
     }
 }
@@ -166,6 +170,62 @@ pub fn lower_discharging(
     flat_walk: &crate::flat_walk::Options,
     discharge: &Discharge,
 ) -> Result<Lowered, LowerError> {
+    lower_cached(program, target, flat_walk, discharge, &mut NoImports)
+}
+
+/// The import of one instance as the import stage of the object store keeps it (design
+/// §1e, the two-stage cache in followups): its Value unit after `spare_push`, with its
+/// program bindings erased (`hirsel_lir::objects::erased`) and the content keys of the
+/// layouts and FnAbis it names in erased order, and the effects importing it had.
+#[derive(Clone, Debug)]
+pub struct CachedImport {
+    pub unit: LirUnit<Value>,
+    pub layouts: Vec<hirsel_lir::LayoutKey>,
+    pub abis: Vec<ContentHash>,
+    pub effects: crate::effects::Effects,
+}
+
+/// Where `lower_cached` looks for an instance's import before importing it, and keeps
+/// the imports it makes.
+pub trait ImportCache {
+    /// Whether the cache keeps anything: without one, imports are not erased for it.
+    fn enabled(&self) -> bool {
+        true
+    }
+    /// The cached import of `id`, asked for in plan order before `id` is imported.
+    fn get(
+        &mut self,
+        program: &Program,
+        instances: &Instances,
+        id: InstanceId,
+    ) -> Option<CachedImport>;
+    /// `id` was imported: its import, or why its effects cannot be replayed.
+    fn put(&mut self, id: InstanceId, import: Result<CachedImport, String>);
+}
+
+/// No import cache: every instance is imported.
+pub struct NoImports;
+
+impl ImportCache for NoImports {
+    fn enabled(&self) -> bool {
+        false
+    }
+    fn get(&mut self, _: &Program, _: &Instances, _: InstanceId) -> Option<CachedImport> {
+        None
+    }
+    fn put(&mut self, _: InstanceId, _: Result<CachedImport, String>) {}
+}
+
+/// `lower_discharging`, replaying the effects of each instance `cache` holds instead of
+/// importing it. An instance under a discharge plan is always imported, since its
+/// reference import is checked against it.
+pub fn lower_cached(
+    program: &Program,
+    target: &TargetSpec,
+    flat_walk: &crate::flat_walk::Options,
+    discharge: &Discharge,
+    cache: &mut dyn ImportCache,
+) -> Result<Lowered, LowerError> {
     // Results built only to be appended are built in place (append_into).
     let (fused, origins) = crate::append_into::fuse_with_origins(program, discharge);
     let program = &fused;
@@ -184,7 +244,10 @@ pub fn lower_discharging(
         crate::instance::expand(program, &mut layouts).map_err(LowerError::Instance)?;
     let mut plans = Vec::new();
     let mut declined = Vec::new();
-    let mut units = Vec::new();
+    let mut units: Vec<Option<LirUnit<Value>>> = Vec::new();
+    // Cache hits, bound to this program once every layout exists, and the imports made.
+    let mut hits = Vec::new();
+    let mut imported = Vec::new();
     // Importing a unit or building a library body may require further
     // library instances, which join the end of the list.
     let mut required = Vec::new();
@@ -192,21 +255,33 @@ pub fn lower_discharging(
     while next < instances.len() {
         let id = InstanceId(next as u32);
         next += 1;
-        if instances.roles[id.index()].is_library() {
+        let own_environment = instances.environments[id.index()];
+        let definition = instances.view(id).definition.path.path().clone();
+        let origin = origins.get(&definition);
+        let proof_owner = origin.map_or(&definition, |o| &o.definition);
+        let sites = discharge.sites(proof_owner);
+        if sites.is_none()
+            && let Some(hit) = cache.get(program, &instances, id)
+        {
+            crate::effects::replay(&hit.effects, &mut layouts, &mut instances, own_environment)
+                .map_err(|e| LowerError::Replay(id, format!("{e:?}")))?;
             plans.push(None);
-            units.push(
-                crate::library::build(program, &mut layouts, &mut instances, id)
-                    .map_err(|e| LowerError::Library(id, e))?,
-            );
+            units.push(None);
+            hits.push((id, hit));
             continue;
         }
-        let (plan, no) = plan_instance(program, &instances, id, &mut layouts)
+        let mut recorder = crate::effects::Recorder::new(&mut layouts, own_environment);
+        if instances.roles[id.index()].is_library() {
+            plans.push(None);
+            let unit = crate::library::build(program, &mut recorder, &mut instances, id)
+                .map_err(|e| LowerError::Library(id, e))?;
+            imported.push((id, recorder.finish()));
+            units.push(Some(unit));
+            continue;
+        }
+        let (plan, no) = plan_instance(program, &instances, id, &mut recorder)
             .map_err(|e| LowerError::Normalize(id, e))?;
         declined.extend(no.into_iter().map(|d| (id, d)));
-        let definition = instances.view(id).definition.path.path();
-        let origin = origins.get(definition);
-        let proof_owner = origin.map_or(definition, |o| &o.definition);
-        let sites = discharge.sites(proof_owner);
         let reference = match sites {
             // The reference's library requests are its own: only the
             // discharged unit is compiled.
@@ -218,7 +293,7 @@ pub fn lower_discharging(
                     plan.as_ref(),
                     &none,
                     origin,
-                    &mut layouts,
+                    &mut recorder,
                     &mut Vec::new(),
                 )
                 .map_err(|e| LowerError::Import(id, e))?,
@@ -232,7 +307,7 @@ pub fn lower_discharging(
             plan.as_ref(),
             sites.unwrap_or(&none),
             origin,
-            &mut layouts,
+            &mut recorder,
             &mut required,
         )
         .map_err(|e| LowerError::Import(id, e))?;
@@ -244,18 +319,74 @@ pub fn lower_discharging(
                 discharged: unit.clone(),
             });
         }
-        let proven = crate::spare_push::prove(&unit, &|l| layouts.record(l).kind.clone());
-        crate::spare_push::commit(&mut unit, &proven, &mut required, &program.types, &layouts)
+        let proven = crate::spare_push::prove(&unit, &|l| recorder.record(l).kind.clone());
+        crate::spare_push::commit(&mut unit, &proven, &mut required, &program.types, &recorder)
             .map_err(LowerError::Instance)?;
         let fields = crate::spare_push::prove_fields(&unit);
         crate::spare_push::commit_fields(&mut unit, &fields);
         plans.push(plan);
-        units.push(unit);
         for request in required.drain(..) {
-            crate::library::instantiate(&mut layouts, &mut instances, request)
+            recorder.request(&request);
+            crate::library::instantiate(&mut recorder, &mut instances, request)
                 .map_err(LowerError::Instance)?;
         }
+        if sites.is_none() {
+            imported.push((id, recorder.finish()));
+        }
+        units.push(Some(unit));
     }
+    // Bind the hits and erase the imports against one keying of the table.
+    if !hits.is_empty() || (cache.enabled() && !imported.is_empty()) {
+        let table = layouts.table();
+        let keys = hirsel_lir::LayoutKeys::new(table);
+        let mut layout_ids = HashMap::new();
+        for (index, key) in keys.all().iter().enumerate() {
+            layout_ids.entry(*key).or_insert(LayoutId(index as u32));
+        }
+        let mut abi_ids = HashMap::new();
+        for (index, abi) in table.fn_abis.iter().enumerate() {
+            abi_ids
+                .entry(keys.fn_abi(abi))
+                .or_insert(FnAbiId(index as u32));
+        }
+        for (id, hit) in hits {
+            let bind = |what: &str| LowerError::Replay(id, format!("{what} the table lacks"));
+            let layouts = hit
+                .layouts
+                .iter()
+                .map(|k| layout_ids.get(k).copied().ok_or_else(|| bind("a layout")))
+                .collect::<Result<Vec<_>, _>>()?;
+            let abis = hit
+                .abis
+                .iter()
+                .map(|k| abi_ids.get(k).copied().ok_or_else(|| bind("an FnAbi")))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut unit = hirsel_lir::objects::rebound(hit.unit, &layouts, &abis)
+                .map_err(|e| LowerError::Replay(id, e))?;
+            unit.header.input = program.input.clone();
+            units[id.index()] = Some(unit);
+        }
+        for (id, effects) in imported {
+            let unit = units[id.index()].as_ref().expect("an imported unit");
+            let import = effects.map(|effects| {
+                let (unit, layouts, abis) = hirsel_lir::objects::erased(unit);
+                CachedImport {
+                    unit,
+                    layouts: layouts.iter().map(|l| keys.key(*l)).collect(),
+                    abis: abis
+                        .iter()
+                        .map(|a| keys.fn_abi(&table.fn_abis[a.0 as usize]))
+                        .collect(),
+                    effects,
+                }
+            });
+            cache.put(id, import);
+        }
+    }
+    let mut units: Vec<LirUnit<Value>> = units
+        .into_iter()
+        .map(|u| u.expect("every instance lowered or bound"))
+        .collect();
     let statics = statics(program, &units, &mut layouts)?;
     // Units name the table by digest: seal them once no layout is added.
     // The block header is the layout of a reuse token, which a
@@ -393,7 +524,7 @@ pub fn plan_instance(
     program: &Program,
     instances: &Instances,
     id: InstanceId,
-    layouts: &mut LayoutBuilder<'_>,
+    layouts: &mut dyn crate::library::builder::Layouts,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
     let view = instances.view(id);
     let actuals = &instances.actuals[id.index()];
@@ -951,7 +1082,7 @@ fn import_mapped(
     plan: Option<&LoopPlan>,
     discharge: &BTreeSet<Discharged>,
     origin: Option<&crate::append_into::SourceMap>,
-    layouts: &mut LayoutBuilder<'_>,
+    layouts: &mut dyn crate::library::builder::Layouts,
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
     let view = instances.view(id);
@@ -1078,10 +1209,10 @@ fn converged(used: &[Option<State>], entry: &[Option<State>]) -> bool {
         })
 }
 
-struct Importer<'a, 'o> {
+struct Importer<'a> {
     program: &'a Program,
     instances: &'a Instances,
-    layouts: &'a mut LayoutBuilder<'o>,
+    layouts: &'a mut dyn crate::library::builder::Layouts,
     id: InstanceId,
     plan: Option<&'a LoopPlan>,
     /// PS-13 sites of this definition that import without their check.
@@ -1849,7 +1980,10 @@ fn core_operation(path: &DefPath, module: &str, name: &str) -> bool {
 /// A length-prefixed FlatFormatV0 encoding: a dynamic-size Flat record whose
 /// one field, its content, follows the u64 byte-length prefix (offset 8) or
 /// the prefix and the element count of a list of variable elements (16).
-fn flat_prefixed(layouts: &LayoutBuilder<'_>, layout: LayoutId) -> Option<(u64, LayoutId)> {
+fn flat_prefixed(
+    layouts: &dyn crate::library::builder::Layouts,
+    layout: LayoutId,
+) -> Option<(u64, LayoutId)> {
     let r = layouts.record(layout);
     match (&r.kind, &r.size, r.fields.as_slice()) {
         (LayoutKind::Flat, SizeSpec::Dynamic(_), [only]) if matches!(only.offset, 8 | 16) => {
@@ -1860,14 +1994,17 @@ fn flat_prefixed(layouts: &LayoutBuilder<'_>, layout: LayoutId) -> Option<(u64, 
 }
 
 /// The element of a flat sequence encoding (List, Array, String, Bytes).
-fn flat_sequence(layouts: &LayoutBuilder<'_>, layout: LayoutId) -> Option<LayoutId> {
+fn flat_sequence(
+    layouts: &dyn crate::library::builder::Layouts,
+    layout: LayoutId,
+) -> Option<LayoutId> {
     match flat_prefixed(layouts, layout)? {
         (16, element) => Some(element),
         (_, element) => flat_fixed(layouts, element).then_some(element),
     }
 }
 
-fn flat_fixed(layouts: &LayoutBuilder<'_>, layout: LayoutId) -> bool {
+fn flat_fixed(layouts: &dyn crate::library::builder::Layouts, layout: LayoutId) -> bool {
     matches!(layouts.record(layout).size, SizeSpec::Fixed(_))
 }
 
@@ -1896,7 +2033,7 @@ impl DropStep {
     fn parts(&self) -> (AddressId, bool, CleanupAnchorId) {
         (self.address, self.if_live, self.anchor)
     }
-    fn apply(&self, im: &mut Importer<'_, '_>) {
+    fn apply(&self, im: &mut Importer<'_>) {
         im.state.take(self.slot, &self.steps);
         if self.steps.is_empty() {
             im.versions[self.slot.index()] = None;

@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// `Match from k`: arms k.. tested in order, each arm's failure continuing
     /// with the next; the remaining arms are exhaustive (TIR match coverage),
     /// so the last is entered without a test.

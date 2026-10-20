@@ -15,7 +15,7 @@ use crate::abi::abi_digest;
 use crate::abi_types::FnAbi;
 use crate::ir::SiteRange;
 use crate::layout_types::{
-    LayoutId, LayoutKind, LayoutRecord, LayoutTable, ObjectFormat, ScalarKind, TargetSpec,
+    LayoutId, LayoutKind, LayoutTable, ObjectFormat, ScalarKind, TargetSpec,
 };
 use crate::object::ObjectFile;
 use crate::stage::{

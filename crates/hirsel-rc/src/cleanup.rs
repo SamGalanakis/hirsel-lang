@@ -63,12 +63,79 @@ pub struct Finalizer {
 }
 
 /// Every resource layout's drop body, keyed by the resource's layout.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Finalizers(pub BTreeMap<LayoutId, Finalizer>);
 
 impl Finalizers {
-    /// The finalizer instances of a program: each takes its resource borrowed
-    /// as its one parameter, so the parameter's layout names the resource.
+    /// The finalizer instances of a program, from its plan alone (design §1e): each takes
+    /// its resource borrowed as its first parameter, whose `FnAbi` layout names the
+    /// resource. No unit is read, so a unit's cleanup needs no other unit's RC output.
+    pub fn planned(instances: &Instances, table: &LayoutTable) -> Self {
+        let mut out = BTreeMap::new();
+        for id in instances.ids() {
+            let role = &instances.roles[id.index()];
+            if !role.is_finalizer() {
+                continue;
+            }
+            let abi = instances.abis[id.index()];
+            let Some(parameter) = table.fn_abis[abi.0 as usize].parameters.first() else {
+                continue;
+            };
+            let view = instances.view(id);
+            out.insert(
+                parameter.layout,
+                Finalizer {
+                    origin: if role.is_library() {
+                        hirsel_lir::ir::UnitOrigin::Library
+                    } else {
+                        hirsel_lir::ir::UnitOrigin::Source
+                    },
+                    definition: view.key.definition().clone(),
+                    instance: view.key.digest(),
+                    abi,
+                },
+            );
+        }
+        Self(out)
+    }
+
+    /// The finalizer facts cleanup lowering of `unit` can read, by content, for the object
+    /// stage's key: each layout the unit reaches through the table that has a finalizer,
+    /// as its `LayoutKey`, the finalizer's instance and its FnAbi key, in key order.
+    pub fn facts<S: Clone>(
+        &self,
+        unit: &LirUnit<S>,
+        table: &LayoutTable,
+        keys: &hirsel_lir::LayoutKeys,
+    ) -> Vec<u8> {
+        let (_, roots, _) = hirsel_lir::objects::erased(unit);
+        let mut seen = BTreeSet::new();
+        let mut pending = roots;
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(record) = table.layout(id) {
+                pending.extend(record.references());
+            }
+        }
+        let mut facts: Vec<[u8; 96]> = seen
+            .iter()
+            .filter_map(|id| {
+                let finalizer = self.0.get(id)?;
+                let abi = keys.fn_abi_of(table, finalizer.abi)?;
+                let mut fact = [0; 96];
+                fact[..32].copy_from_slice(&keys.key(*id).0.0);
+                fact[32..64].copy_from_slice(&finalizer.instance.0);
+                fact[64..].copy_from_slice(&abi.0);
+                Some(fact)
+            })
+            .collect();
+        facts.sort_unstable();
+        facts.concat()
+    }
+
+    /// The finalizer instances of a program read from its units: `planned` must equal it.
     pub fn new<S: Stage>(instances: &Instances, units: &[LirUnit<S>]) -> Self {
         let mut out = BTreeMap::new();
         for id in instances.ids() {

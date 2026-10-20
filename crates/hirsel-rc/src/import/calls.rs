@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     pub(super) fn terminator(&mut self, t: tir::BlockId, term: &tir::Terminator) -> R<()> {
         use tir::Terminator as T;
         match term {
@@ -323,11 +323,16 @@ impl Importer<'_, '_> {
                     let Some(&instance) =
                         self.instances.direct_calls.get(&(self.id, self.call_block))
                     else {
-                        return Err(InstanceError::MissingInstance(self.def.path.path().clone()).into());
+                        return Err(
+                            InstanceError::MissingInstance(self.def.path.path().clone()).into()
+                        );
                     };
                     let digest = self.instances.view(instance).key.digest();
-                    let code =
-                        self.symbol(SymbolKind::Function, &self.def.path.path().clone(), Some(digest));
+                    let code = self.symbol(
+                        SymbolKind::Function,
+                        &self.def.path.path().clone(),
+                        Some(digest),
+                    );
                     Some((code, self.instances.abis[instance.index()]))
                 };
                 let abi = match bound {
@@ -634,12 +639,12 @@ impl Importer<'_, '_> {
         }
         let actuals = crate::instance::Actuals::none();
         let callable = crate::instance::instantiate_function(
-        &self.program.types,
-        &self.program.memo,
-        function,
-        hirsel_types::Modes::global(),
-        &actuals,
-    )
+            &self.program.types,
+            &self.program.memo,
+            function,
+            hirsel_types::Modes::global(),
+            &actuals,
+        )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         self.layouts
             .fn_abi(self.types, callable, CallableShape::Foreign)
@@ -678,9 +683,8 @@ impl Importer<'_, '_> {
             &callee,
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let arguments =
-            hirsel_layout::operation::collect_arguments(self.types, &callee.arguments)
-                .map_err(|e| PassError::Layout(path.clone(), e))?;
+        let arguments = hirsel_layout::operation::collect_arguments(self.types, &callee.arguments)
+            .map_err(|e| PassError::Layout(path.clone(), e))?;
         let abi = self
             .layouts
             .fn_abi(self.types, callable, CallableShape::Definition)

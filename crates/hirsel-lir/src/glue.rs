@@ -16,7 +16,7 @@
 //! from the unit alone, so a cached unit carries it and glue never reads a unit body.
 use crate::codec::{CodecCheck, CodecNode, CodecPlan};
 use crate::emission::{BOUNDED_RULE, slice_storage, symbol_name};
-use crate::ir::{ConstantValue, Inst, LirUnit, Symbol, SymbolKind, Terminator, ValueRepr};
+use crate::ir::{ConstantValue, Inst, LirUnit, Symbol, Terminator, ValueRepr};
 use crate::layout_keys::LayoutKeys;
 use crate::layout_types::{LayoutId, LayoutKey, LayoutKind, LayoutTable, ScalarKind};
 use crate::stage::Ready;

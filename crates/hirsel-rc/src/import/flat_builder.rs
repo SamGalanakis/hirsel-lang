@@ -61,7 +61,7 @@ struct Web {
     consumers: Vec<(LayoutId, u32)>,
 }
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// The variable flat record a list local's elements hold, when its
     /// ordinary layout is a counted block of blocks of one.
     fn element_content(&mut self, ty: TypeId) -> Option<LayoutId> {

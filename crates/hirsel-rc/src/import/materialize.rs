@@ -4,7 +4,7 @@ use super::*;
 use crate::PassError;
 use hirsel_types::{BuiltinType, TypeKind};
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     fn scalar_constant(&mut self, ty: LirTypeId, n: u128) -> ValueId {
         let constant = self.constant(ty, ConstantValue::Integer(n));
         let result = self.value(ty, Holding::Plain);
@@ -219,12 +219,8 @@ impl Importer<'_, '_> {
     ) -> R<()> {
         let path = hirsel_syntax::DefPath::core(name);
         let body = crate::library::body_index(&path).expect("list construction body");
-        let request = crate::library::Request::operation(
-            self.program,
-            body,
-            &path,
-            actuals.to_vec(),
-        )?;
+        let request =
+            crate::library::Request::operation(self.program, body, &path, actuals.to_vec())?;
         let direct = self.require(request)?;
         let symbol = self.symbol(
             direct.symbol.kind,

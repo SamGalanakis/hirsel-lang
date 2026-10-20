@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// TIR reachability, predecessor counts and reverse postorder. A normalized
     /// self-tail site's back edge targets the entry block.
     pub(super) fn cfg(&mut self) -> R<()> {
