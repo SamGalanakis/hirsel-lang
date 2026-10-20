@@ -64,7 +64,7 @@ fn record_json_into(value: Record, mut out: List[u8], depth: u64) -> Result[
 ] uses {} = comptime derive.json_into(shape(Record))
 
 pub fn main(t: Test) -> Result[(), ()] {
-  let named = Entry(label: "雪\n\"", count: 17)
+  let named: Named = Entry(label: "雪\n\"", count: 17)
   let Ok(expected_named) = json.stringify(named_to_json(named)) else {
     return Error(())
   }
