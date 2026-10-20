@@ -1025,6 +1025,12 @@
       "module": [
         "telemetry"
       ]
+    },
+    {
+      "path": "list_block.hir",
+      "module": [
+        "list"
+      ]
     }
   ],
   "dependencies": []

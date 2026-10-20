@@ -1,0 +1,75 @@
+// rule: DROP-2
+// expect: run
+// stdout: 6
+// stdout: 17
+// stdout: 28
+// stdout: 39
+// stdout: 3
+// stdout: 14
+// stdout: 25
+// stdout: 36
+// stdout: 0
+// stdout: 11
+// stdout: 22
+// stdout: 33
+// stdout: 8
+// stdout: 19
+// stdout: 30
+// stdout: 5
+// stdout: 16
+// stdout: 27
+// stdout: 38
+// stdout: 2
+// stdout: 13
+// stdout: 24
+// stdout: 35
+// stdout: 10
+// stdout: 21
+// stdout: 32
+// stdout: 7
+// stdout: 18
+// stdout: 29
+// stdout: 4
+// stdout: 15
+// stdout: 26
+// stdout: 37
+// stdout: 1
+// stdout: 12
+// stdout: 23
+// stdout: 34
+// stdout: 9
+// stdout: 20
+// stdout: 31
+resource type Item {
+  key: u64,
+  id: u64,
+  output: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.output, f"{x.id}\n")
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.key < b.key {
+    -1
+  } else if a.key > b.key {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut items: List[Item] = []
+  for i in 0u64..40u64 {
+    list.push(mut items, Item(key: (i * 7 + 13) % 11, id: i, output: o))
+  }
+  let mut xs = unique take items
+  list.sort_stable(mut xs, compare)
+  for item in take xs {
+    let _ = take item
+  }
+  Ok(())
+}

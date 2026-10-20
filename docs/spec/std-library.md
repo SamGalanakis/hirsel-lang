@@ -1231,8 +1231,8 @@ remain visible if the callback fails, under the ordinary mutable-call contract.
 
 `std@1/list` provides `reverse`, `rotate` (left rotation by `amount`), `sort` (in place,
 unstable pattern-defeating quicksort with a heapsort fallback, `O(n log n)`, by a
-noalloc comparator), `sort_stable` (in place, stable merge sort, preserving input
-order among equal elements, `O(n log² n)` time and `O(log n)` stack without
+noalloc comparator), `sort_stable` (in place, stable block merge sort, preserving input
+order among equal elements, `O(n log n)` time and `O(1)` auxiliary space without
 allocation), `binary_search` (the first equal element
 of input sorted by the same comparator), `find`, `map`, `filter`, `fold`, `all`, `any`,
 `partition`, `concat` and `dedup` (removing consecutive equal elements). `std@1/string`

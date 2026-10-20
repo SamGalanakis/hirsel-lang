@@ -1,0 +1,789 @@
+// Zig bff490a23889750de7096d9057c0a432efc929a8, lib/std/sort/block.zig:
+// Range/Iterator/Pull :7-104; internal-buffer block merge :320-755;
+// merge/search helpers :758-983. See third-party/NOTICES.md.
+// Cache-free WikiSort: keep every T in the input, moving it only by swaps.
+// Unlike Zig's uninitialized [512]T cache this is valid for move-only T.
+type Range {
+  start: u64,
+  end: u64,
+}
+
+type Pull {
+  from: u64,
+  to: u64,
+  count: u64,
+  range: Range,
+}
+
+type BlockIterator {
+  size: u64,
+  numerator: u64,
+  decimal: u64,
+  denominator: u64,
+  decimal_step: u64,
+  numerator_step: u64,
+}
+
+@noalloc
+fn range_len(r: Range) -> u64 uses {} {
+  r.end - r.start
+}
+
+@noalloc
+fn min_size(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+// Zig lib/std/math/sqrt.zig:36-61, sqrt_int specialized to u64.
+@noalloc
+fn isqrt(n: u64) -> u64 uses {} {
+  let mut op = n
+  let mut res: u64 = 0
+  let mut one: u64 = 1u64 << 62u64
+  while one > op {
+    one >>= 2u64
+  }
+  while one != 0 {
+    let fits = op >= res + one
+    if fits {
+      op -= res + one
+    }
+    res >>= 1u64
+    if fits {
+      res += one
+    }
+    one >>= 2u64
+  }
+  res
+}
+
+@noalloc
+fn iter_begin(mut it: unique BlockIterator) -> () uses {} {
+  it.numerator = 0
+  it.decimal = 0
+}
+
+@noalloc
+fn iter_next(mut it: unique BlockIterator) -> Range uses {} {
+  let start = it.decimal
+  it.decimal += it.decimal_step
+  it.numerator += it.numerator_step
+  if it.numerator >= it.denominator {
+    it.numerator -= it.denominator
+    it.decimal += 1
+  }
+  Range(start: start, end: it.decimal)
+}
+
+@noalloc
+fn rotate_range[T](mut xs: unique List[T], begin: u64, end: u64, amount: u64) -> () uses {} {
+  reverse_range(mut xs, begin, begin + amount)
+  reverse_range(mut xs, begin + amount, end)
+  reverse_range(mut xs, begin, end)
+}
+
+/// Stable, allocation-free WikiSort. Equal elements retain their input order.
+/// O(n log n) time and O(1) auxiliary space, including move-only elements.
+@noalloc
+pub fn sort_stable[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let size = core@1/list.len(xs)
+  if size < 4 {
+    insertion(mut xs, 0, size, by)
+    return
+  }
+  let mut power: u64 = 1
+  while power <= size / 2 {
+    power *= 2
+  }
+  let denominator = power / 4
+  let mut iterator = unique BlockIterator(
+    size: size,
+    numerator: 0,
+    decimal: 0,
+    denominator: denominator,
+    decimal_step: size / denominator,
+    numerator_step: size % denominator
+  )
+  // Zig uses stable-tagged networks here. Adjacent insertion avoids a second
+  // initialized array and is bounded to groups of 4-7 elements.
+  while iterator.decimal < size {
+    let r = iter_next(mut iterator)
+    insertion(mut xs, r.start, r.end, by)
+  }
+  if size < 8 {
+    return
+  }
+  while true {
+    let buffers = discover_buffers(xs, mut iterator, by)
+    let pull0 = pull_buffer(mut xs, buffers.pull0, by)
+    let pull1 = pull_buffer(mut xs, buffers.pull1, by)
+    let block_size = iterator.decimal_step / range_len(buffers.tags) + 1
+    iter_begin(mut iterator)
+    while iterator.decimal < size {
+      let a = iter_next(mut iterator)
+      let b = iter_next(mut iterator)
+      merge_blocks(
+        mut xs,
+        a,
+        b,
+        pull0,
+        pull1,
+        buffers.tags,
+        buffers.scratch,
+        block_size,
+        by
+      )
+    }
+    insertion(mut xs, buffers.scratch.start, buffers.scratch.end, by)
+    redistribute_buffer(mut xs, pull0, by)
+    redistribute_buffer(mut xs, pull1, by)
+    iterator.decimal_step += iterator.decimal_step
+    iterator.numerator_step += iterator.numerator_step
+    if iterator.numerator_step >= iterator.denominator {
+      iterator.numerator_step -= iterator.denominator
+      iterator.decimal_step += 1
+    }
+    if iterator.decimal_step >= size {
+      break
+    }
+  }
+}
+
+type BlockBuffers {
+  pull0: Pull,
+  pull1: Pull,
+  tags: Range,
+  scratch: Range,
+}
+
+// Zig block.zig:328-518: discover one/two distinct-key buffers in the runs.
+@noalloc
+fn discover_buffers[T](
+  xs: List[T],
+  mut iterator: unique BlockIterator,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> BlockBuffers uses {} {
+  let block_size: u64 = isqrt(iterator.decimal_step)
+  let buffer_size = iterator.decimal_step / block_size + 1
+  let mut a = Range(start: 0, end: 0)
+  let mut b = Range(start: 0, end: 0)
+  let mut index: u64 = 0
+  let mut last: u64 = 0
+  let mut count: u64 = 0
+  let mut wanted: u64 = 0
+  let mut pull_index: u64 = 0
+  let mut pull0 = Pull(from: 0, to: 0, count: 0, range: Range(start: 0, end: 0))
+  let mut pull1 = pull0
+  let mut buffer1 = Range(start: 0, end: 0)
+  let mut buffer2 = Range(start: 0, end: 0)
+  wanted = buffer_size + buffer_size
+  let mut find_separately = false
+  if wanted > iterator.decimal_step {
+    wanted = buffer_size
+    find_separately = true
+  }
+  // Discover distinct tags in either end of each pair of runs.
+  iter_begin(mut iterator)
+  while iterator.decimal < iterator.size {
+    a = iter_next(mut iterator)
+    b = iter_next(mut iterator)
+    last = a.start
+    count = 1
+    while count < wanted {
+      index = find_last_forward(
+        xs,
+        xs[last],
+        Range(start: last + 1, end: a.end),
+        wanted - count,
+        by
+      )
+      if index == a.end {
+        break
+      }
+      last = index
+      count += 1
+    }
+    index = last
+    if count >= buffer_size {
+      if pull_index == 0 {
+        pull0 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: a.start
+        )
+      } else {
+        pull1 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: a.start
+        )
+      }
+      pull_index = 1
+      if count == buffer_size + buffer_size {
+        buffer1 = Range(start: a.start, end: a.start + buffer_size)
+        buffer2 = Range(start: a.start + buffer_size, end: a.start + count)
+        break
+      } else if wanted == buffer_size + buffer_size {
+        buffer1 = Range(start: a.start, end: a.start + count)
+        wanted = buffer_size
+      } else if find_separately {
+        buffer1 = Range(start: a.start, end: a.start + count)
+        find_separately = false
+      } else {
+        buffer2 = Range(start: a.start, end: a.start + count)
+        break
+      }
+    } else if pull_index == 0 && count > range_len(buffer1) {
+      buffer1 = Range(start: a.start, end: a.start + count)
+      if pull_index == 0 {
+        pull0 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: a.start
+        )
+      } else {
+        pull1 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: a.start
+        )
+      }
+    }
+    last = b.end - 1
+    count = 1
+    while count < wanted {
+      index = find_first_backward(
+        xs,
+        xs[last],
+        Range(start: b.start, end: last),
+        wanted - count,
+        by
+      )
+      if index == b.start {
+        break
+      }
+      last = index - 1
+      count += 1
+    }
+    index = last
+    if count >= buffer_size {
+      if pull_index == 0 {
+        pull0 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: b.end
+        )
+      } else {
+        pull1 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: b.end
+        )
+      }
+      pull_index = 1
+      if count == buffer_size + buffer_size {
+        buffer1 = Range(start: b.end - count, end: b.end - buffer_size)
+        buffer2 = Range(start: b.end - buffer_size, end: b.end)
+        break
+      } else if wanted == buffer_size + buffer_size {
+        buffer1 = Range(start: b.end - count, end: b.end)
+        wanted = buffer_size
+      } else if find_separately {
+        buffer1 = Range(start: b.end - count, end: b.end)
+        find_separately = false
+      } else {
+        if pull0.range.start == a.start {
+          pull0.range.end -= pull1.count
+        }
+        buffer2 = Range(start: b.end - count, end: b.end)
+        break
+      }
+    } else if pull_index == 0 && count > range_len(buffer1) {
+      buffer1 = Range(start: b.end - count, end: b.end)
+      if pull_index == 0 {
+        pull0 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: b.end
+        )
+      } else {
+        pull1 = Pull(
+          range: Range(start: a.start, end: b.end),
+          count: count,
+          from: index,
+          to: b.end
+        )
+      }
+    }
+  }
+  BlockBuffers(pull0: pull0, pull1: pull1, tags: buffer1, scratch: buffer2)
+}
+
+// Zig block.zig:520-548: pull distinct values out by stable rotations.
+@noalloc
+fn pull_buffer[T](
+  mut xs: unique List[T],
+  p_arg: Pull,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> Pull uses {} {
+  let mut p = p_arg
+  let mut index: u64 = 0
+  let mut count: u64 = 0
+  let length = p.count
+  if p.to < p.from {
+    index = p.from
+    count = 1
+    while count < length {
+      index = find_first_backward(
+        xs,
+        xs[index - 1],
+        Range(start: p.to, end: p.from - (count - 1)),
+        length - count,
+        by
+      )
+      let range = Range(start: index + 1, end: p.from + 1)
+      rotate_range(mut xs, range.start, range.end, range_len(range) - count)
+      p.from = index + count
+      count += 1
+    }
+  } else if p.to > p.from {
+    index = p.from + 1
+    count = 1
+    while count < length {
+      index = find_last_forward(
+        xs,
+        xs[index],
+        Range(start: index, end: p.to),
+        length - count,
+        by
+      )
+      let range = Range(start: p.from, end: index - 1)
+      rotate_range(mut xs, range.start, range.end, count)
+      p.from = index - 1 - count
+      count += 1
+    }
+  }
+  p
+}
+
+// Zig block.zig:558-709: tag and roll A blocks through B; merge behind them.
+@noalloc
+fn merge_blocks[T](
+  mut xs: unique List[T],
+  a_arg: Range,
+  b_arg: Range,
+  pull0: Pull,
+  pull1: Pull,
+  buffer1: Range,
+  buffer2: Range,
+  block_size: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut a = a_arg
+  let mut b = b_arg
+  let mut index: u64 = 0
+  let start = a.start
+  if start == pull0.range.start {
+    if pull0.from > pull0.to {
+      a.start += pull0.count
+      if range_len(a) == 0 {
+        return
+      }
+    } else if pull0.from < pull0.to {
+      b.end -= pull0.count
+      if range_len(b) == 0 {
+        return
+      }
+    }
+  }
+  if start == pull1.range.start {
+    if pull1.from > pull1.to {
+      a.start += pull1.count
+      if range_len(a) == 0 {
+        return
+      }
+    } else if pull1.from < pull1.to {
+      b.end -= pull1.count
+      if range_len(b) == 0 {
+        return
+      }
+    }
+  }
+  if by(xs[b.end - 1], xs[a.start]) < 0 {
+    rotate_range(mut xs, a.start, b.end, range_len(a))
+  } else if by(xs[a.end], xs[a.end - 1]) < 0 {
+    let mut find_a: u64 = 0
+    let mut block_a = Range(start: a.start, end: a.end)
+    let first_a = Range(start: a.start, end: a.start + range_len(block_a) % block_size)
+    let mut index_a = buffer1.start
+    index = first_a.end
+    while index < block_a.end {
+      core@1/list.swap(mut xs, index_a, index)
+      index_a += 1
+      index += block_size
+    }
+    let mut last_a = first_a
+    let mut last_b = Range(start: 0, end: 0)
+    let mut block_b = Range(
+      start: b.start,
+      end: b.start + min_size(block_size, range_len(b))
+    )
+    block_a.start += range_len(first_a)
+    index_a = buffer1.start
+    if range_len(buffer2) > 0 {
+      block_swap(mut xs, last_a.start, buffer2.start, range_len(last_a))
+    }
+    if range_len(block_a) > 0 {
+      while true {
+        if range_len(last_b) > 0 && !(by(xs[last_b.end - 1], xs[index_a]) < 0) || range_len(
+          block_b
+        ) == 0 {
+          let b_split = binary_first(xs, xs[index_a], last_b, by)
+          let b_remaining = last_b.end - b_split
+          let mut min_a = block_a.start
+          find_a = min_a + block_size
+          while find_a < block_a.end {
+            if by(xs[find_a], xs[min_a]) < 0 {
+              min_a = find_a
+            }
+            find_a += block_size
+          }
+          block_swap(mut xs, block_a.start, min_a, block_size)
+          core@1/list.swap(mut xs, block_a.start, index_a)
+          index_a += 1
+          if range_len(buffer2) > 0 {
+            merge_internal(
+              mut xs,
+              last_a,
+              Range(start: last_a.end, end: b_split),
+              buffer2,
+              by
+            )
+          } else {
+            merge_in_place(mut xs, last_a, Range(start: last_a.end, end: b_split), by)
+          }
+          if range_len(buffer2) > 0 {
+            block_swap(mut xs, block_a.start, buffer2.start, block_size)
+            block_swap(
+              mut xs,
+              b_split,
+              block_a.start + block_size - b_remaining,
+              b_remaining
+            )
+          } else {
+            rotate_range(
+              mut xs,
+              b_split,
+              block_a.start + block_size,
+              block_a.start - b_split
+            )
+          }
+          last_a = Range(
+            start: block_a.start - b_remaining,
+            end: block_a.start - b_remaining + block_size
+          )
+          last_b = Range(start: last_a.end, end: last_a.end + b_remaining)
+          block_a.start += block_size
+          if range_len(block_a) == 0 {
+            break
+          }
+        } else if range_len(block_b) < block_size {
+          rotate_range(
+            mut xs,
+            block_a.start,
+            block_b.end,
+            block_b.start - block_a.start
+          )
+          last_b = Range(start: block_a.start, end: block_a.start + range_len(block_b))
+          block_a.start += range_len(block_b)
+          block_a.end += range_len(block_b)
+          block_b.end = block_b.start
+        } else {
+          block_swap(mut xs, block_a.start, block_b.start, block_size)
+          last_b = Range(start: block_a.start, end: block_a.start + block_size)
+          block_a.start += block_size
+          block_a.end += block_size
+          block_b.start += block_size
+          if block_b.end > b.end - block_size {
+            block_b.end = b.end
+          } else {
+            block_b.end += block_size
+          }
+        }
+      }
+    }
+    if range_len(buffer2) > 0 {
+      merge_internal(mut xs, last_a, Range(start: last_a.end, end: b.end), buffer2, by)
+    } else {
+      merge_in_place(mut xs, last_a, Range(start: last_a.end, end: b.end), by)
+    }
+  }
+}
+
+// Zig block.zig:721-750: put the distinct values back into the merged runs.
+@noalloc
+fn redistribute_buffer[T](
+  mut xs: unique List[T],
+  p: Pull,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut index: u64 = 0
+  let mut remaining_unique = p.count * 2
+  if p.from > p.to {
+    let mut buffer = Range(start: p.range.start, end: p.range.start + p.count)
+    while range_len(buffer) > 0 {
+      index = find_first_forward(
+        xs,
+        xs[buffer.start],
+        Range(start: buffer.end, end: p.range.end),
+        remaining_unique,
+        by
+      )
+      let amount = index - buffer.end
+      rotate_range(mut xs, buffer.start, index, range_len(buffer))
+      buffer.start += amount + 1
+      buffer.end += amount
+      remaining_unique -= 2
+    }
+  } else if p.from < p.to {
+    let mut buffer = Range(start: p.range.end - p.count, end: p.range.end)
+    while range_len(buffer) > 0 {
+      index = find_last_backward(
+        xs,
+        xs[buffer.end - 1],
+        Range(start: p.range.start, end: buffer.start),
+        remaining_unique,
+        by
+      )
+      let amount = buffer.start - index
+      rotate_range(mut xs, index, buffer.end, amount)
+      buffer.start -= amount
+      buffer.end -= amount + 1
+      remaining_unique -= 2
+    }
+  }
+}
+
+@noalloc
+fn max_size(a: u64, b: u64) -> u64 uses {} {
+  if a > b {
+    a
+  } else {
+    b
+  }
+}
+
+@noalloc
+fn merge_in_place[T](
+  mut xs: unique List[T],
+  a_arg: Range,
+  b_arg: Range,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  if range_len(a_arg) == 0 || range_len(b_arg) == 0 {
+    return
+  }
+  let mut a = a_arg
+  let mut b = b_arg
+  while true {
+    let mid = binary_first(xs, xs[a.start], b, by)
+    let amount = mid - a.end
+    rotate_range(mut xs, a.start, mid, range_len(a))
+    if b.end == mid {
+      break
+    }
+    b.start = mid
+    a = Range(start: a.start + amount, end: b.start)
+    a.start = binary_last(xs, xs[a.start], a, by)
+    if range_len(a) == 0 {
+      break
+    }
+  }
+}
+
+@noalloc
+fn merge_internal[T](
+  mut xs: unique List[T],
+  a: Range,
+  b: Range,
+  buffer: Range,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut a_count: u64 = 0
+  let mut b_count: u64 = 0
+  let mut insert: u64 = 0
+  if range_len(b) > 0 && range_len(a) > 0 {
+    while true {
+      if !(by(xs[b.start + b_count], xs[buffer.start + a_count]) < 0) {
+        core@1/list.swap(mut xs, a.start + insert, buffer.start + a_count)
+        a_count += 1
+        insert += 1
+        if a_count >= range_len(a) {
+          break
+        }
+      } else {
+        core@1/list.swap(mut xs, a.start + insert, b.start + b_count)
+        b_count += 1
+        insert += 1
+        if b_count >= range_len(b) {
+          break
+        }
+      }
+    }
+  }
+  block_swap(mut xs, buffer.start + a_count, a.start + insert, range_len(a) - a_count)
+}
+
+@noalloc
+fn block_swap[T](mut xs: unique List[T], start1: u64, start2: u64, block_size: u64) -> () uses {} {
+  let mut index: u64 = 0
+  while index < block_size {
+    core@1/list.swap(mut xs, start1 + index, start2 + index)
+    index += 1
+  }
+}
+
+@noalloc
+fn find_first_forward[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  remaining_unique: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  if range_len(range) == 0 {
+    return range.start
+  }
+  let skip = max_size(range_len(range) / remaining_unique, 1)
+  let mut index = range.start + skip
+  while by(xs[index - 1], value) < 0 {
+    if index >= range.end - skip {
+      return binary_first(xs, value, Range(start: index, end: range.end), by)
+    }
+    index += skip
+  }
+  binary_first(xs, value, Range(start: index - skip, end: index), by)
+}
+
+@noalloc
+fn find_first_backward[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  remaining_unique: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  if range_len(range) == 0 {
+    return range.start
+  }
+  let skip = max_size(range_len(range) / remaining_unique, 1)
+  let mut index = range.end - skip
+  while index > range.start && !(by(xs[index - 1], value) < 0) {
+    if index < range.start + skip {
+      return binary_first(xs, value, Range(start: range.start, end: index), by)
+    }
+    index -= skip
+  }
+  binary_first(xs, value, Range(start: index, end: index + skip), by)
+}
+
+@noalloc
+fn find_last_forward[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  remaining_unique: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  if range_len(range) == 0 {
+    return range.start
+  }
+  let skip = max_size(range_len(range) / remaining_unique, 1)
+  let mut index = range.start + skip
+  while !(by(value, xs[index - 1]) < 0) {
+    if index >= range.end - skip {
+      return binary_last(xs, value, Range(start: index, end: range.end), by)
+    }
+    index += skip
+  }
+  binary_last(xs, value, Range(start: index - skip, end: index), by)
+}
+
+@noalloc
+fn find_last_backward[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  remaining_unique: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  if range_len(range) == 0 {
+    return range.start
+  }
+  let skip = max_size(range_len(range) / remaining_unique, 1)
+  let mut index = range.end - skip
+  while index > range.start && by(value, xs[index - 1]) < 0 {
+    if index < range.start + skip {
+      return binary_last(xs, value, Range(start: range.start, end: index), by)
+    }
+    index -= skip
+  }
+  binary_last(xs, value, Range(start: index, end: index + skip), by)
+}
+
+@noalloc
+fn binary_first[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  let mut curr = range.start
+  let mut size = range_len(range)
+  if range.start >= range.end {
+    return range.end
+  }
+  while size > 0 {
+    let offset = size % 2
+    size /= 2
+    let mid_item = xs[curr + size]
+    if by(mid_item, value) < 0 {
+      curr += size + offset
+    }
+  }
+  curr
+}
+
+@noalloc
+fn binary_last[T](
+  xs: List[T],
+  value: T,
+  range: Range,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  let mut curr = range.start
+  let mut size = range_len(range)
+  if range.start >= range.end {
+    return range.end
+  }
+  while size > 0 {
+    let offset = size % 2
+    size /= 2
+    let mid_item = xs[curr + size]
+    if !(by(value, mid_item) < 0) {
+      curr += size + offset
+    }
+  }
+  curr
+}
