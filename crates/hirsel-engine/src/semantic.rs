@@ -1,10 +1,7 @@
 //! Driver-owned syntax snapshots, header isolation and explicit manifest composition.
 use crate::*;
-use hirsel_resolve::{DefinitionEntry, ManifestFixture, ManifestIndex, Namespace};
-use hirsel_span::Span;
-use hirsel_syntax::{ItemKind, TypeBody, Visibility};
-use hirsel_types::{DeclarationSite, DefinitionMetadata, Metadata};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
+use hirsel_types::DeclarationSite;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct ResolverSnapshot {
@@ -29,218 +26,17 @@ pub struct CompilerState {
     pub(crate) representations:
         crate::layered::Layered<DefPath, crate::representation::OwnerRecord>,
     pub mode_diagnostics: Vec<(Diagnostic, String)>,
-    module_declarations: BTreeMap<DefPath, ModuleDeclaration>,
-    /// The items of each indexed item's file, in position order, by item
-    /// anchor: the same-file fallbacks resolution reads.
-    siblings: BTreeMap<hirsel_span::Anchor, Arc<[Arc<ItemSyntax>]>>,
-    module_input: RefCell<Option<Rc<ModuleInput>>>,
-    pub manifest_revision: ContentHash,
+    /// The frozen declaration index the engine publishes before resolution
+    /// and signature normalization read it.
+    pub(crate) declarations: Option<Arc<crate::snapshot::Declarations>>,
     pub resolver_outputs: crate::layered::Layered<DefPath, ResolverSnapshot>,
     pub signature_resolutions: crate::layered::Layered<DefPath, ResolverSnapshot>,
-    /// Additional explicit build inputs; callers must update the manifest revision.
-    pub exposures: Vec<hirsel_resolve::DependencyExposure>,
-    /// Ordinary dependency heads scoped to their importing package.
-    pub package_exposures:
-        BTreeMap<hirsel_syntax::PackageId, Vec<hirsel_resolve::DependencyExposure>>,
-    pub signature_metadata: Metadata,
-}
-struct ModuleDeclaration {
-    entry: DefinitionEntry,
-    metadata: DefinitionMetadata,
-    sites: Rc<[DeclarationSite]>,
-}
-struct ModuleInput {
-    index: ManifestIndex,
-    metadata: Metadata,
-    package_indexes: BTreeMap<hirsel_syntax::PackageId, ManifestIndex>,
 }
 impl CompilerState {
-    /// `files` holds every indexed item, by file, each file's in position
-    /// order; a definition's candidates come in occurrence order.
-    pub(crate) fn set_declarations(&mut self, files: Vec<Vec<Arc<ItemSyntax>>>) {
-        let mut declarations: Vec<_> = files.iter().flatten().collect();
-        declarations.sort_by_key(|syntax| (&syntax.item.definition, syntax.occurrence));
-        let mut rows: BTreeMap<
-            DefPath,
-            (DefinitionEntry, DefinitionMetadata, Vec<DeclarationSite>),
-        > = BTreeMap::new();
-        for syntax in declarations {
-            hirsel_intern::work::count(hirsel_intern::work::Counter::ModuleDeclarationRows);
-            let item = &syntax.item;
-            let metadata = DefinitionMetadata {
-                public: item.visibility != Visibility::Private,
-                alias: matches!(
-                    item.kind,
-                    ItemKind::Type {
-                        body: TypeBody::Alias(_),
-                        ..
-                    }
-                ),
-            };
-            let row = rows.entry(item.definition.clone()).or_insert_with(|| {
-                (
-                    DefinitionEntry {
-                        definition: item.definition.clone(),
-                        namespace: if matches!(item.kind, ItemKind::Type { .. }) {
-                            Namespace::Type
-                        } else {
-                            Namespace::Value
-                        },
-                        visibility: item.visibility,
-                        span: item.name_span,
-                    },
-                    metadata.clone(),
-                    vec![],
-                )
-            });
-            // Preserve the old first-entry/last-metadata policy for duplicates.
-            row.1 = metadata;
-            row.2.push(DeclarationSite {
-                definition: item.definition.clone(),
-                name_span: item.name_span,
-            });
-        }
-        self.siblings = files
-            .into_iter()
-            .flat_map(|file| {
-                let file: Arc<[Arc<ItemSyntax>]> = file.into();
-                file.iter()
-                    .map(|syntax| (syntax.anchor, file.clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        self.module_declarations = rows
-            .into_iter()
-            .map(|(path, (entry, metadata, sites))| {
-                (
-                    path,
-                    ModuleDeclaration {
-                        entry,
-                        metadata,
-                        sites: sites.into(),
-                    },
-                )
-            })
-            .collect();
-        *self.module_input.get_mut() = None;
-    }
-    fn module_input(&self) -> Rc<ModuleInput> {
-        if let Some(input) = self.module_input.borrow().as_ref()
-            && input.index.revision == self.manifest_revision
-        {
-            return input.clone();
-        }
-        let mut metadata = self.signature_metadata.clone();
-        let roles = crate::registry::nominal_roles();
-        metadata.unsafe_capability = roles.unsafe_capability;
-        metadata.result_type = roles.result_type;
-        metadata.tasks_capability = roles.tasks_capability;
-        metadata.scope_capability = roles.scope_capability;
-        metadata.heap = roles.heap;
-        // Source declaration sites have one indexed representation below.
-        metadata.declarations.clear();
-        let mut entries = vec![];
-        for (path, row) in &self.module_declarations {
-            for _ in row.sites.iter() {
-                hirsel_intern::work::count(hirsel_intern::work::Counter::ModuleDeclarationRows);
-            }
-            metadata
-                .definitions
-                .insert(path.clone(), row.metadata.clone());
-            entries.push(row.entry.clone());
-        }
-        let registry = crate::registry::BuiltinRegistry::new();
-        // Index core declarations alongside source metadata, so merged heads
-        // resolve members through the same lookup and visibility path.
-        entries.extend(registry.signatures().filter_map(|signature| {
-            if signature
-                .definition
-                .0
-                .modules
-                .iter()
-                .any(|m| m.starts_with('$'))
-            {
-                return None;
-            }
-            Some(DefinitionEntry {
-                definition: signature.definition.clone(),
-                namespace: if matches!(signature.kind, hirsel_types::SignatureKind::Type(_)) {
-                    Namespace::Type
-                } else {
-                    Namespace::Value
-                },
-                visibility: Visibility::Public,
-                span: Span::default(),
-            })
-        }));
-        let core_heads: std::collections::BTreeSet<_> = registry
-            .signatures()
-            .filter_map(|s| s.definition.0.modules.first().cloned())
-            .filter(|head| !head.starts_with('$'))
-            .collect();
-        let complete_heads = |mut heads: Vec<hirsel_resolve::DependencyExposure>| {
-            for head in &core_heads {
-                if !heads
-                    .iter()
-                    .any(|e| &e.head == head && !e.package.name_is("std"))
-                {
-                    heads.push(hirsel_resolve::DependencyExposure {
-                        head: head.clone(),
-                        package: hirsel_syntax::DefPath::core("Result").0.package,
-                        modules: vec![head.clone()],
-                    });
-                }
-            }
-            heads
-        };
-        let index = ManifestIndex::new(ManifestFixture {
-            package: crate::default_context().package,
-            definitions: entries,
-            exposures: complete_heads(self.exposures.clone()),
-            revision: self.manifest_revision,
-        })
-        .0;
-        let package_indexes = self
-            .package_exposures
-            .iter()
-            .map(|(package, exposures)| {
-                let mut heads = exposures.clone();
-                heads.extend(self.exposures.iter().cloned());
-                (
-                    package.clone(),
-                    index
-                        .for_package(package.clone())
-                        .with_exposures(&complete_heads(heads)),
-                )
-            })
-            .collect();
-        let input = Rc::new(ModuleInput {
-            index,
-            package_indexes,
-            metadata,
-        });
-        *self.module_input.borrow_mut() = Some(input.clone());
-        input
-    }
-    pub(crate) fn index(&self, package: hirsel_syntax::PackageId) -> ManifestIndex {
-        let input = self.module_input();
-        input
-            .package_indexes
-            .get(&package)
-            .unwrap_or(&input.index)
-            .for_package(package)
-    }
-    /// The items of `syntax`'s file; a derived item reads its source's.
-    pub(crate) fn siblings(&self, syntax: &ItemSyntax) -> Arc<[Arc<ItemSyntax>]> {
-        self.siblings
-            .get(&syntax.anchor)
-            .cloned()
-            .unwrap_or_else(|| Arc::from([]))
-    }
-    fn declaration_sites(&self, path: &DefPath) -> Rc<[DeclarationSite]> {
-        self.module_declarations
-            .get(path)
-            .map_or_else(|| Rc::from([]), |row| row.sites.clone())
+    fn declarations(&self) -> Arc<crate::snapshot::Declarations> {
+        self.declarations
+            .clone()
+            .expect("the engine publishes its declarations before resolving")
     }
 }
 fn resolver_expected() -> hirsel_resolve::ExpectedTypes {
@@ -271,13 +67,9 @@ impl ResolverPhase for ResolverAdapter {
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
-        let (index, siblings) = {
-            let state = self.state.borrow();
-            (
-                state.index(item.definition.0.package.clone()),
-                state.siblings(&syntax),
-            )
-        };
+        let declarations = self.state.borrow().declarations();
+        let index = declarations.index(item.definition.0.package.clone());
+        let siblings = declarations.siblings(&syntax);
         let result = hirsel_resolve::resolve_view(
             &syntax,
             &siblings,
@@ -356,18 +148,13 @@ impl SignatureAdapter {
             package: item.definition.0.package.clone(),
             modules: item.definition.0.modules.clone(),
         };
-        let (index, module, declaration_sites, siblings) = {
-            let state = self.state.borrow();
-            (
-                state.index(context.package.clone()),
-                state.module_input(),
-                state.declaration_sites(&item.definition),
-                state.siblings(&syntax),
-            )
-        };
+        let module = self.state.borrow().declarations();
+        let index = module.index(context.package.clone());
+        let declaration_sites = module.sites(&item.definition);
+        let siblings = module.siblings(&syntax);
         // Retained snapshots can be older than edited peers; candidates are in
         // current source order, so only this owner's indexed sites are replaced.
-        let declaration_sites: Rc<[DeclarationSite]> =
+        let declaration_sites: Arc<[DeclarationSite]> =
             candidates.map_or(declaration_sites, |candidates| {
                 candidates
                     .iter()
@@ -420,7 +207,7 @@ impl SignatureAdapter {
                 syntax: &syntax,
                 context: &context,
                 resolution: &resolution,
-                metadata: &module.metadata,
+                metadata: module.metadata(),
                 declaration_sites: &declaration_sites,
                 stage,
             },
@@ -445,43 +232,5 @@ impl SignatureAdapter {
                 .remove(&item.definition);
         }
         Ok(output.public)
-    }
-}
-
-#[cfg(test)]
-mod module_input_tests {
-    use super::*;
-
-    #[test]
-    fn explicit_manifest_revision_refreshes_shared_inputs() {
-        with_compiler_stack(|| {
-            let mut engine = QueryEngine::new(default_environment(), engine_only_adapters());
-            let context = default_context();
-            let file = engine
-                .sources
-                .add("manifest.hir", "fn f() {}".into())
-                .unwrap();
-            engine.parse_file(file, &context).unwrap();
-            let state = engine.adapters.compiler_state.as_ref().unwrap();
-            let first = state.borrow().module_input();
-            assert!(!first.index.has_head(&context, "external"));
-            assert!(Rc::ptr_eq(&first, &state.borrow().module_input()));
-            {
-                let mut state = state.borrow_mut();
-                state.exposures.push(hirsel_resolve::DependencyExposure {
-                    head: "external".into(),
-                    package: hirsel_syntax::PackageId {
-                        name: "dependency".into(),
-                        version: "1".into(),
-                    },
-                    modules: vec![],
-                });
-                state.manifest_revision = ContentHash::of_bytes(b"updated explicit inputs");
-            }
-            let second = state.borrow().module_input();
-            assert!(second.index.has_head(&context, "external"));
-            assert!(!first.index.has_head(&context, "external"));
-            assert!(Rc::ptr_eq(&second, &state.borrow().module_input()));
-        });
     }
 }

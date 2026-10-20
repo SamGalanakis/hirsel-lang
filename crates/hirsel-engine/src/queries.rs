@@ -159,7 +159,8 @@ pub struct QueryEngine {
     checked: Layered<DefPath, Arc<Cached<TypedBody>>>,
     modes: Layered<DefPath, Arc<Cached<AnalyzedBody>>>,
     lowered: Layered<DefPath, Arc<Cached<hirsel_tir::DefinitionRef>>>,
-    manifest_identity_hash: ContentHash,
+    /// Every indexed item, by file and by definition.
+    pub(crate) declarations: crate::snapshot::DeclarationIndex,
     /// Dependency packages key on their own closure's manifests, not the whole
     /// graph's, so their queries are shared across programs (package images).
     pub(crate) package_manifests: BTreeMap<hirsel_syntax::PackageId, ContentHash>,
@@ -399,7 +400,7 @@ impl QueryEngine {
             checked: Layered::default(),
             modes: Layered::default(),
             lowered: Layered::default(),
-            manifest_identity_hash: ContentHash::default(),
+            declarations: Default::default(),
             package_manifests: BTreeMap::new(),
             foreign_links: vec![],
             foreign_unreplayable: false,
@@ -472,22 +473,16 @@ impl QueryEngine {
         let text_hash = if kind == QueryKind::Signature {
             // Each header's text and its offset in its item, which positions
             // the header's spans relative to the item's anchor.
-            let hashes: Vec<_> = self
-                .items
-                .get(definition)
-                .unwrap()
-                .iter()
-                .map(|snapshot| {
-                    let header = header_span(snapshot);
-                    ContentHash::of_parts(
-                        "hirsel.signature.header.v2",
-                        [
-                            self.sources.slice(header).unwrap_or_default().as_bytes(),
-                            header.start.to_le_bytes().as_slice(),
-                        ],
-                    )
-                })
-                .collect();
+            let generated;
+            let hashes = match self.declarations.headers(definition) {
+                Some(hashes) => hashes,
+                None => {
+                    generated = self.items.get(definition).unwrap().iter().map(|syntax| {
+                        crate::snapshot::header_hash(&self.sources, syntax)
+                    }).collect::<Vec<_>>();
+                    &generated
+                }
+            };
             ContentHash::of_parts(
                 "hirsel.signature.inputs.v2",
                 hashes.iter().map(|h| h.0.as_slice()),
@@ -548,6 +543,7 @@ impl QueryEngine {
         let key = self.key(definition, QueryKind::Signature)?;
         self.start(definition, QueryKind::Signature)?;
         let candidates = self.definition_items(definition)?;
+        self.frozen_declarations();
         let adapter = self.adapters.signature.clone();
         let mut recorder = Recorder {
             owner: definition.clone(),
@@ -991,6 +987,12 @@ impl QueryEngine {
                 self.items.insert(path.clone(), candidates);
             }
         }
+        self.declarations
+            .update(file_id, &affected, &self.items, &self.sources);
+        let revision = self.manifest_revision();
+        if self.declarations.inputs().manifest_revision != revision {
+            self.declarations.inputs_mut().manifest_revision = revision;
+        }
         // Retire changed inputs. Unchanged headers survive body edits.
         let body_hashes: BTreeMap<_, _> = affected
             .iter()
@@ -1063,63 +1065,7 @@ impl QueryEngine {
                 }
             }
         }
-        self.publish_declarations();
         Ok(())
-    }
-    /// Publish the indexed declarations: manifest identities and the
-    /// resolver's module declarations.
-    pub(crate) fn publish_declarations(&mut self) {
-        let hashes: Vec<_> = self
-            .items
-            .iter()
-            .flat_map(|(path, candidates)| {
-                let item = &candidates[0].item;
-                let public = item.visibility != hirsel_syntax::Visibility::Private;
-                let kind = match &item.kind {
-                    ItemKind::Function { .. } => 0,
-                    ItemKind::Const { .. } => 1,
-                    ItemKind::Type {
-                        body: hirsel_syntax::TypeBody::Alias(_),
-                        ..
-                    } => 2,
-                    ItemKind::Type { .. } => 3,
-                };
-                [
-                    path.fingerprint(),
-                    ContentHash::of_bytes(&[u8::from(public), kind]),
-                ]
-            })
-            .collect();
-        self.manifest_identity_hash = ContentHash::of_parts(
-            "hirsel.manifest.identities.v1",
-            hashes.iter().map(|h| h.0.as_slice()),
-        );
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            let mut files: BTreeMap<FileId, Vec<Arc<ItemSyntax>>> = BTreeMap::new();
-            for item in self.items.values().flatten() {
-                files
-                    .entry(self.item_file(item))
-                    .or_default()
-                    .push(item.clone());
-            }
-            state.set_declarations(
-                files
-                    .into_values()
-                    .map(|mut items| {
-                        items.sort_by_key(|item| self.sources.anchor(item.anchor).unwrap().1);
-                        items
-                    })
-                    .collect(),
-            );
-            state.manifest_revision = ContentHash::of_parts(
-                "hirsel.manifest.v1",
-                [
-                    self.environment.package_manifest_hash.0.as_slice(),
-                    self.manifest_identity_hash.0.as_slice(),
-                ],
-            );
-        }
     }
     /// All source items sharing a semantic path, in occurrence order. Ordinals stay
     /// local; neither duplicates nor file positions are ever appended to DefPath identity.
@@ -1197,6 +1143,7 @@ impl QueryEngine {
         }
         self.start(definition, QueryKind::Resolve)?;
         let snapshot = self.snapshot(definition)?;
+        self.frozen_declarations();
         let adapter = self.adapters.resolver.clone();
         let mut recorder = Recorder {
             owner: definition.clone(),
@@ -1550,7 +1497,7 @@ impl QueryEngine {
             "hirsel.manifest.v1",
             [
                 self.environment.package_manifest_hash.0.as_slice(),
-                self.manifest_identity_hash.0.as_slice(),
+                self.declarations.identity().0.as_slice(),
             ],
         )
     }
@@ -2003,7 +1950,7 @@ fn shared_output<T>(output: QueryOutput<T>) -> QueryOutput<std::sync::Arc<T>> {
     }
 }
 
-fn header_span(syntax: &ItemSyntax) -> Span {
+pub(crate) fn header_span(syntax: &ItemSyntax) -> Span {
     let item = &syntax.item;
     let end = match item.kind {
         ItemKind::Function {

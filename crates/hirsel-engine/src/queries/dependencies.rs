@@ -73,8 +73,7 @@ impl DependencyReads {
 }
 impl QueryEngine {
     fn manifest_index(&mut self, package: &PackageId) -> Option<Rc<ManifestIndex>> {
-        let state = self.adapters.compiler_state.as_ref()?.borrow();
-        Some(Rc::new(state.index(package.clone())))
+        Some(Rc::new(self.declarations.frozen().index(package.clone())))
     }
     fn provider_result(
         &mut self,

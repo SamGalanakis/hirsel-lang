@@ -463,13 +463,7 @@ mod verdict {
                 let before = read(Counter::CacheValidationRows);
                 assert_eq!(engine.generic_graph_diagnostics().unwrap(), first);
                 assert!(read(Counter::CacheValidationRows) > before);
-                engine
-                    .adapters
-                    .compiler_state
-                    .as_ref()
-                    .unwrap()
-                    .borrow_mut()
-                    .manifest_revision = ContentHash::of_bytes(b"edited manifest");
+                engine.module_inputs_mut().manifest_revision = ContentHash::of_bytes(b"edited manifest");
                 let before = read(Counter::CacheValidationRows);
                 assert_eq!(engine.generic_graph_diagnostics().unwrap(), first);
                 assert!(read(Counter::CacheValidationRows) > before);

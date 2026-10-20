@@ -533,3 +533,73 @@ fn duplicate_definitions_report_at_the_later_name_warm_and_cold() {
         }
     });
 }
+
+/// An identical duplicate has the same DefPath and item text as the
+/// declaration it repeats, so only `DeclarationCandidates` (the count and
+/// each candidate's file and header) tells a cached signature that it
+/// appeared, disappeared or moved to another file.
+#[test]
+fn identical_duplicates_change_declaration_candidates_and_rediagnose_warm_and_cold() {
+    with_compiler_stack(|| {
+        let a = "fn a() -> u8 { 1u8 }\n";
+        let b = "fn b() -> u8 { a() }\n";
+        let one_a_b = format!("{a}{b}");
+        let one_a_a_b = format!("{a}{a}{b}");
+        let one_a_b_a = format!("{a}{b}{a}");
+        let two_a = format!("// two\n{a}");
+        // (one.hir, two.hir) per step: insert, move within the file, remove,
+        // insert in another file, move across files, remove there.
+        let steps: [(&str, &str); 7] = [
+            (&one_a_b, ""),
+            (&one_a_a_b, ""),
+            (&one_a_b_a, ""),
+            (&one_a_b, ""),
+            (&one_a_b, &two_a),
+            (b, &format!("{two_a}{a}")),
+            (&one_a_b, ""),
+        ];
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut candidates = vec![];
+        for (step, (one, two)) in steps.into_iter().enumerate() {
+            let files = [("one.hir", one), ("two.hir", two)];
+            let warm = observe_files(&mut engine, &files);
+            let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+            assert_eq!(warm, observe_files(&mut fresh, &files), "step {step}");
+            assert_eq!(
+                engine.declaration_candidates(&path("a")),
+                fresh.declaration_candidates(&path("a")),
+                "step {step}"
+            );
+            candidates.push(engine.declaration_candidates(&path("a")).unwrap());
+            let duplicates: Vec<serde_json::Value> = warm
+                .0
+                .iter()
+                .map(|d| serde_json::from_str(d).unwrap())
+                .filter(|d: &serde_json::Value| d["rule"] == "LANG-7")
+                .collect();
+            let expected = match step {
+                1 => Some(("one.hir", 2)),
+                2 => Some(("one.hir", 3)),
+                4 => Some(("two.hir", 2)),
+                5 => Some(("two.hir", 3)),
+                _ => None,
+            };
+            assert_eq!(
+                duplicates.first().map(|d| (
+                    d["primary"]["file"].as_str().unwrap().to_owned(),
+                    d["primary"]["line"].as_u64().unwrap()
+                )),
+                expected.map(|(file, line)| (file.to_owned(), line)),
+                "step {step}: {warm:?}"
+            );
+        }
+        // One candidate, two in one file (in either order), back to one, two
+        // across files, two in the other file, one again.
+        assert_eq!(candidates[0], candidates[3]);
+        assert_eq!(candidates[0], candidates[6]);
+        assert_eq!(candidates[1], candidates[2]);
+        for (x, y) in [(0, 1), (1, 4), (4, 5), (0, 4), (0, 5)] {
+            assert_ne!(candidates[x], candidates[y], "steps {x} and {y}");
+        }
+    });
+}

@@ -30,11 +30,8 @@ impl PackageDeclarations {
             modules: vec![],
         };
         self.engine
-            .adapters
-            .compiler_state
-            .as_ref()
-            .unwrap()
-            .borrow()
+            .declarations
+            .frozen()
             .index(self.package.clone())
             .access(&viewer, definition)
             .is_ok()
@@ -46,14 +43,11 @@ impl PackageDeclarations {
         context: &FileContext,
         path: &hirsel_syntax::Path,
     ) -> Result<DefPath, hirsel_types::LookupError> {
-        let state = self
+        let index = self
             .engine
-            .adapters
-            .compiler_state
-            .as_ref()
-            .unwrap()
-            .borrow();
-        let index = state.index(context.package.clone());
+            .declarations
+            .frozen()
+            .index(context.package.clone());
         match index.lookup(context, path) {
             Err(hirsel_types::LookupError::Missing)
                 if path.package.is_none() && path.segments.len() == 1 =>
@@ -75,13 +69,7 @@ pub(crate) fn load_package_declarations(
     let mut graph = Graph::default();
     let package = graph.visit(manifest, None)?;
     let mut engine = QueryEngine::new(default_environment(), compiler.adapters());
-    engine
-        .adapters
-        .compiler_state
-        .as_ref()
-        .unwrap()
-        .borrow_mut()
-        .package_exposures = graph
+    engine.declarations.inputs_mut().package_exposures = graph
         .packages
         .iter()
         .map(|(id, p)| (id.clone(), p.exposures.clone()))
@@ -795,18 +783,13 @@ pub(crate) fn load_program_source_with_cache(
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
     {
-        let mut state = engine
-            .adapters
-            .compiler_state
-            .as_ref()
-            .unwrap()
-            .borrow_mut();
-        state.package_exposures = graph
+        let inputs = engine.declarations.inputs_mut();
+        inputs.package_exposures = graph
             .packages
             .iter()
             .map(|(id, p)| (id.clone(), p.exposures.clone()))
             .collect();
-        state.signature_metadata.unsafe_ffi = unsafe_ffi_metadata;
+        inputs.signature_metadata.unsafe_ffi = unsafe_ffi_metadata;
     }
     let mut primary = None;
     let mut ids = Vec::new();

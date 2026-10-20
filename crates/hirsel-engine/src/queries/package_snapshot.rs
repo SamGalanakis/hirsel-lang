@@ -13,23 +13,14 @@ impl PackageProof {
             revision: engine.source_revision,
             environment: engine.environment.clone(),
             limits: engine.comptime_limits,
-            manifest: engine
-                .adapters
-                .compiler_state
-                .as_ref()
-                .map(|s| s.borrow().manifest_revision),
+            manifest: Some(engine.declarations.inputs().manifest_revision),
         }
     }
     pub(super) fn matches(&self, engine: &QueryEngine) -> bool {
         self.revision == engine.source_revision
             && self.environment == engine.environment
             && self.limits == engine.comptime_limits
-            && self.manifest
-                == engine
-                    .adapters
-                    .compiler_state
-                    .as_ref()
-                    .map(|s| s.borrow().manifest_revision)
+            && self.manifest == Some(engine.declarations.inputs().manifest_revision)
     }
 }
 

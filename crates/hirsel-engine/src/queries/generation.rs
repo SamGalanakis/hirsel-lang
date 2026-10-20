@@ -920,8 +920,8 @@ impl QueryEngine {
         self.items
             .entry_or_default(instance.clone())
             .push(Arc::new(syntax));
-        // The package's validated signature input now includes the instance.
-        self.source_revision += 1;
+        // The signature snapshot now includes the instance.
+        self.retire_snapshot();
         self.instance_bodies
             .declarations
             .insert(declaration.clone());

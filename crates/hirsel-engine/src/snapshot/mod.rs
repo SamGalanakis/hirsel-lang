@@ -12,7 +12,11 @@ use hirsel_validate::{SignatureLookup, ValidatedSignatures};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod declarations;
 mod views;
+pub(crate) use declarations::header_hash;
+pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
+
 pub use views::{PackageViews, View, ViewTable};
 
 /// One revision's signatures, private views and V verdicts.
@@ -143,11 +147,7 @@ impl QueryEngine {
     /// This revision's snapshot, built once after its inputs changed. It is
     /// kept only when every signature normalized, so a failed one is retried.
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
-        let manifest = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map(|s| s.borrow().manifest_revision);
+        let manifest = Some(self.declarations.inputs().manifest_revision);
         let stamp = SnapshotStamp {
             revision: self.source_revision,
             environment: self.environment.clone(),
@@ -199,6 +199,30 @@ impl QueryEngine {
             self.snapshot = Some((stamp, snapshot.clone()));
         }
         snapshot
+    }
+    /// The explicit inputs of module resolution, to change.
+    pub fn module_inputs_mut(&mut self) -> &mut ModuleInputs {
+        self.declarations.inputs_mut()
+    }
+    /// `DeclarationCandidates(path)`: H(count, then (file path, header hash)
+    /// per candidate in source order), or None for a path with no item.
+    pub fn declaration_candidates(&self, path: &DefPath) -> Option<ContentHash> {
+        self.declarations.candidates(path)
+    }
+    /// The frozen declaration index, published to the phases that read it.
+    pub(crate) fn frozen_declarations(&mut self) -> Arc<Declarations> {
+        let frozen = self.declarations.frozen();
+        if let Some(state) = &self.adapters.compiler_state {
+            let mut state = state.borrow_mut();
+            if !state
+                .declarations
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(old, &frozen))
+            {
+                state.declarations = Some(frozen.clone());
+            }
+        }
+        frozen
     }
     /// Signatures changed outside a source revision (a staged constant).
     pub(crate) fn retire_snapshot(&mut self) {

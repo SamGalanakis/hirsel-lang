@@ -416,11 +416,7 @@ impl VerdictInputs {
             revision: engine.package_cache_revision(),
             environment: engine.environment.clone(),
             limits: engine.comptime_limits,
-            manifest: engine
-                .adapters
-                .compiler_state
-                .as_ref()
-                .map(|s| s.borrow().manifest_revision),
+            manifest: Some(engine.declarations.inputs().manifest_revision),
             unavailable: engine.unavailable,
         }
     }

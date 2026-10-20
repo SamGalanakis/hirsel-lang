@@ -374,14 +374,11 @@ impl LoadedProgram {
                 },
                 modules: vec![],
             };
-            let state = program
+            let index = program
                 .engine
-                .adapters
-                .compiler_state
-                .as_ref()
-                .unwrap()
-                .borrow();
-            let index = state.index(context.package.clone());
+                .declarations
+                .frozen()
+                .index(context.package.clone());
             for syntax in &parsed.items {
                 // One item's spans share its anchor, so they compare directly.
                 let (item, tree) = (&syntax.item, &syntax.tree);

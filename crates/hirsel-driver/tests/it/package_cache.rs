@@ -441,13 +441,7 @@ fn lazy_publication_ends_on_source_environment_manifest_and_limit_edits() {
                 }
                 "environment" => engine.environment.compiler_version.push_str("-edited"),
                 "manifest" => {
-                    engine
-                        .adapters
-                        .compiler_state
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .manifest_revision = ContentHash::of_bytes(b"edited")
+                    engine.module_inputs_mut().manifest_revision = ContentHash::of_bytes(b"edited")
                 }
                 "limits" => {
                     engine.comptime_limits.steps =

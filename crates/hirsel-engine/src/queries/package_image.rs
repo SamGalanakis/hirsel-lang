@@ -217,14 +217,9 @@ impl PackageImage {
         engine.comptime_limits = input.limits;
         engine.package_manifests = input.manifests.clone();
         {
-            let mut state = engine
-                .adapters
-                .compiler_state
-                .as_ref()
-                .expect("package images need compiler state")
-                .borrow_mut();
-            state.package_exposures = input.exposures.clone();
-            state.signature_metadata.unsafe_ffi = input.unsafe_ffi.clone();
+            let inputs = engine.declarations.inputs_mut();
+            inputs.package_exposures = input.exposures.clone();
+            inputs.signature_metadata.unsafe_ffi = input.unsafe_ffi.clone();
         }
         for (path, _, text) in &input.files {
             engine
@@ -413,7 +408,9 @@ impl QueryEngine {
         state.materialization_environment = Some(self.environment.clone());
         state.materialization_limits = Some(self.comptime_limits);
         drop(state);
-        self.publish_declarations();
+        self.declarations.rebuild(&self.items, &self.sources);
+        let revision = self.manifest_revision();
+        self.declarations.inputs_mut().manifest_revision = revision;
     }
 
     /// No retained query of `package` reads outside its closure (or core).
