@@ -1,11 +1,19 @@
 // CommonMark 0.31.2 block/inline passes adapted from commonmark.js.
 // Copyright (c) 2014 John MacFarlane. BSD-2-Clause third-party/NOTICES.md.
-/// Extensions are opt-in; default_options implements CommonMark 0.31.2.
+// Safety: commonmark.js 8988869 lib/render/html.js:6-10, 100-131, 249-269.
+// Tag filter: cmark-gfm 27d942c extensions/tagfilter.c:5-60.
+/// Extensions are opt-in. Rendering omits raw HTML and unsafe destinations by default.
 pub type Options {
   tables: bool,
   strikethrough: bool,
   autolinks: bool,
   task_lists: bool,
+  /// cmark footnotes are an explicit extension, independent of GFM.
+  footnotes: bool,
+  /// Emit raw HTML and unsafe link/image destinations. Only for trusted input.
+  allow_unsafe: bool,
+  /// Escape disallowed GFM raw tags, including when allow_unsafe is enabled.
+  tagfilter: bool,
 }
 
 /// Block and inline payloads. Table alignment: 0 none, 1 left, 2 center, 3 right.
@@ -18,7 +26,9 @@ pub type Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock(
 ) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link(
   String,
   String
-) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8)
+) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8) | FootnoteDefinition(
+  String
+) | FootnoteReference(String, u64, u64) | FootnoteBackrefs(String, u64, u64)
 
 /// An owned, editable tree. HTML rendering depends only on this AST.
 pub type Node {
@@ -27,11 +37,27 @@ pub type Node {
 }
 
 pub fn default_options() -> Options uses {} {
-  Options(tables: false, strikethrough: false, autolinks: false, task_lists: false)
+  Options(
+    tables: false,
+    strikethrough: false,
+    autolinks: false,
+    task_lists: false,
+    footnotes: false,
+    allow_unsafe: false,
+    tagfilter: false
+  )
 }
 
 pub fn gfm_options() -> Options uses {} {
-  Options(tables: true, strikethrough: true, autolinks: true, task_lists: true)
+  Options(
+    tables: true,
+    strikethrough: true,
+    autolinks: true,
+    task_lists: true,
+    footnotes: false,
+    allow_unsafe: false,
+    tagfilter: true
+  )
 }
 
 // Arena links use zero as null. The document itself is slot zero.
@@ -306,7 +332,7 @@ fn can_contain(kind: u8, child: u8) -> bool uses {} {
   if kind == 4 {
     child == 5
   } else {
-    (kind == 0 || kind == 3 || kind == 5) && child != 5
+    (kind == 0 || kind == 3 || kind == 5 || kind == 22) && child != 5
   }
 }
 
@@ -641,6 +667,16 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
     }
     return 1
   }
+  if kind == 22 {
+    if p.indent >= 4 {
+      advance(mut p, 4, true)
+    } else if p.blank {
+      advance_nonspace(mut p)
+    } else {
+      return 1
+    }
+    return 0
+  }
   if kind == 5 {
     let padding = p.nodes[id].indent + p.nodes[id].padding
     if p.indent >= padding {
@@ -794,6 +830,19 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
       add_block(mut p, 8)
       p.offset = size(p.line)
       return 2
+    }
+    // cmark-gfm src/blocks.c:1218-1235: definitions are containers.
+    if p.options.footnotes && starts(s, 0, "[^") {
+      let end = label_end(s, 0)
+      if end > 3 && byte(s, end) == 58 {
+        let label = piece(s, 2, end - 1)
+        close_unmatched(mut p)
+        let id = add_block(mut p, 22)
+        p.nodes[id].value = label
+        advance_nonspace(mut p)
+        advance(mut p, end + 1, false)
+        return 1
+      }
     }
     if let Some((length, marker, start, ordered)) = list_marker(
       s,
@@ -1574,6 +1623,24 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
   }
   if !matched {
     ip.at = after
+    // cmark-gfm src/inlines.c:1238-1307: only after ordinary link matching
+    // fails, restore the raw label and remove parsed emphasis/link children.
+    if p.options.footnotes && !bracket.image && byte(ip.source, bracket.index + 1) == 94 && after > bracket.index + 3 {
+      let label = piece(ip.source, bracket.index + 2, after - 1)
+      while ip.top != bracket.delimiter && ip.top != 0 {
+        let top = ip.top
+        remove_delimiter(mut ip, top)
+      }
+      let mut child = p.nodes[bracket.node].next
+      while child != 0 {
+        let next = p.nodes[child].next
+        unlink(mut p.nodes, child)
+        child = next
+      }
+      p.nodes[bracket.node].kind = 23
+      p.nodes[bracket.node].value = label
+      return
+    }
     let _ = text_node(mut p.nodes, parent, "]", 9)
     return
   }
@@ -1845,6 +1912,9 @@ fn build_node(nodes: List[Entry], id: u64) -> Node uses {} {
     17 => Image(n.info, n.title),
     18 => Strikethrough(),
     19 => Table(),
+    22 => FootnoteDefinition(n.value),
+    23 => FootnoteReference(n.value, n.number, n.fence),
+    24 => FootnoteBackrefs(n.value, n.number, n.fence),
     20 => TableRow(n.flag),
     _ => TableCell(n.html),
   }
@@ -1916,7 +1986,87 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
   if options.autolinks {
     autolink_emails(mut p.nodes)
   }
+  if options.footnotes {
+    process_footnotes(mut p.nodes)
+  }
   build_node(p.nodes, 0)
+}
+
+// cmark-gfm src/blocks.c:465-546: collect definitions, assign indices in
+// document order, resolve references, then append only used definitions.
+fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
+  let count = core@1/list.len(nodes)
+  let mut definitions: Map[String, u64] = core@1/map.empty()
+  let mut id: u64 = 1
+  while id < count {
+    if nodes[id].kind == 22 {
+      let label = normalize_label(nodes[id].value)
+      if core@1/map.get(definitions, label) == None() {
+        core@1/map.insert(mut definitions, take label, id)
+      }
+    }
+    id += 1
+  }
+  let mut used: List[u64] = []
+  id = nodes[0].first
+  while id != 0 {
+    if nodes[id].kind == 23 {
+      let label = normalize_label(nodes[id].value)
+      if let Some(definition) = core@1/map.get(definitions, label) {
+        if nodes[definition].number == 0 {
+          core@1/list.push(mut used, definition)
+          nodes[definition].number = core@1/list.len(used)
+        }
+        nodes[definition].fence += 1
+        nodes[id].value = unique nodes[definition].value
+        nodes[id].number = nodes[definition].number
+        nodes[id].fence = nodes[definition].fence
+      } else {
+        let value = f"[^{nodes[id].value}]"
+        nodes[id].kind = 9
+        nodes[id].value = value
+      }
+    }
+    if nodes[id].first != 0 {
+      id = nodes[id].first
+    } else {
+      while id != 0 && nodes[id].next == 0 {
+        id = nodes[id].parent
+      }
+      if id != 0 {
+        id = nodes[id].next
+      }
+    }
+  }
+  id = 1
+  while id < count {
+    if nodes[id].kind == 22 {
+      unlink(mut nodes, id)
+    }
+    id += 1
+  }
+  for definition in used {
+    // Reattach without unlinking an already detached node.
+    let last = nodes[0].last
+    nodes[definition].parent = 0
+    nodes[definition].prev = last
+    if last == 0 {
+      nodes[0].first = definition
+    } else {
+      nodes[last].next = definition
+    }
+    nodes[0].last = definition
+    let mut paragraph = nodes[definition].last
+    if paragraph != 0 && nodes[paragraph].kind == 1 {
+      let _ = text_node(mut nodes, paragraph, " ", 9)
+    } else {
+      paragraph = definition
+    }
+    let backref = new_child(mut nodes, paragraph, 24)
+    nodes[backref].value = unique nodes[definition].value
+    nodes[backref].number = nodes[definition].number
+    nodes[backref].fence = nodes[definition].fence
+  }
 }
 
 fn escape_html(mut out: List[u8], s: String) -> () uses {} {
@@ -1960,11 +2110,121 @@ fn image_alt(node: Node, mut out: List[u8]) -> () uses {} {
   }
 }
 
-fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) -> () uses {} {
+// Match anchored, case-insensitive protocols after the parser normalizes entities.
+fn potentially_unsafe(url: String) -> bool uses {} {
+  let lower = string.ascii_lower(url)
+  let unsafe_scheme = string.starts_with(lower, "javascript:") || string.starts_with(
+    lower,
+    "vbscript:"
+  ) || string.starts_with(lower, "file:") || string.starts_with(lower, "data:")
+  let safe_data = string.starts_with(lower, "data:image/png") || string.starts_with(
+    lower,
+    "data:image/gif"
+  ) || string.starts_with(lower, "data:image/jpeg") || string.starts_with(
+    lower,
+    "data:image/webp"
+  )
+  unsafe_scheme && !safe_data
+}
+
+fn filtered_tag(s: String, start: u64) -> bool uses {} {
+  let mut i = start + 1
+  if byte(s, i) == 47 {
+    i += 1
+  }
+  let name_start = i
+  while ascii.is_alpha(byte(s, i)) {
+    i += 1
+  }
+  let name = string.ascii_lower(piece(s, name_start, i))
+  let disallowed = name == "title" || name == "textarea" || name == "style" || name == "xmp" || name == "iframe" || name == "noembed" || name == "noframes" || name == "script" || name == "plaintext"
+  disallowed && (whitespace(byte(s, i)) || byte(s, i) == 62 || byte(s, i) == 47 && byte(
+    s,
+    i + 1
+  ) == 62)
+}
+
+fn raw_html(s: String, mut out: List[u8], options: Options) -> () uses {} {
+  if !options.allow_unsafe {
+    text.append(mut out, "<!-- raw HTML omitted -->")
+    return
+  }
+  let mut i: u64 = 0
+  while i < size(s) {
+    if options.tagfilter && byte(s, i) == 60 && filtered_tag(s, i) {
+      text.append(mut out, "&lt;")
+    } else {
+      core@1/list.push(mut out, byte(s, i))
+    }
+    i += 1
+  }
+}
+
+fn render_node(
+  node: Node,
+  mut out: List[u8],
+  tight: bool,
+  cell_header: bool,
+  options: Options
+) -> () uses {} {
   match node.kind {
     Document() => {
+      let mut footnotes = false
       for child in node.children {
-        render_node(child, mut out, false, false)
+        if let FootnoteDefinition(_) = child.kind {
+          if !footnotes {
+            text.append(mut out, "<section class=\"footnotes\" data-footnotes>\n<ol>\n")
+            footnotes = true
+          }
+        }
+        render_node(child, mut out, false, false, options)
+      }
+      if footnotes {
+        text.append(mut out, "</ol>\n</section>\n")
+      }
+    },
+    FootnoteDefinition(label) => {
+      text.append(mut out, "<li id=\"fn-")
+      escape_html(mut out, normalize_uri(label))
+      text.append(mut out, "\">\n")
+      for child in node.children {
+        render_node(child, mut out, false, false, options)
+      }
+      newline(mut out)
+      text.append(mut out, "</li>\n")
+    },
+    FootnoteReference(label, index, occurrence) => {
+      text.append(mut out, "<sup class=\"footnote-ref\"><a href=\"#fn-")
+      escape_html(mut out, normalize_uri(label))
+      text.append(mut out, "\" id=\"fnref-")
+      escape_html(mut out, normalize_uri(label))
+      if occurrence > 1 {
+        text.append(mut out, f"-{occurrence}")
+      }
+      text.append(mut out, f"\" data-footnote-ref>{index}</a></sup>")
+    },
+    FootnoteBackrefs(label, index, count) => {
+      let mut occurrence: u64 = 1
+      while occurrence <= count {
+        if occurrence > 1 {
+          core@1/list.push(mut out, 32u8)
+        }
+        let suffix = if occurrence == 1 {
+          ""
+        } else {
+          f"-{occurrence}"
+        }
+        text.append(mut out, "<a href=\"#fnref-")
+        escape_html(mut out, normalize_uri(label))
+        text.append(
+          mut out,
+          f"{suffix}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{index}{suffix}\" aria-label=\"Back to reference {index}{suffix}\">↩"
+        )
+        if occurrence > 1 {
+          text.append(mut out, f"<sup class=\"footnote-ref\">{occurrence}</sup>")
+        }
+        text.append(mut out, "</a>")
+        occurrence += 1
       }
     },
     Text(s) => escape_html(mut out, s),
@@ -1975,10 +2235,10 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       escape_html(mut out, s)
       text.append(mut out, "</code>")
     },
-    HtmlInline(s) => text.append(mut out, s),
+    HtmlInline(s) => raw_html(s, mut out, options),
     HtmlBlock(s) => {
       newline(mut out)
-      text.append(mut out, s)
+      raw_html(s, mut out, options)
       newline(mut out)
     },
     CodeBlock(s, info) => {
@@ -2004,7 +2264,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
         text.append(mut out, "<p>")
       }
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       if !tight {
         text.append(mut out, "</p>\n")
@@ -2014,7 +2274,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       newline(mut out)
       text.append(mut out, f"<h{level}>")
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(mut out, f"</h{level}>\n")
     },
@@ -2022,7 +2282,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       newline(mut out)
       text.append(mut out, "<blockquote>\n")
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       newline(mut out)
       text.append(mut out, "</blockquote>\n")
@@ -2042,7 +2302,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
         text.append(mut out, "<ul>\n")
       }
       for child in node.children {
-        render_node(child, mut out, list_tight, false)
+        render_node(child, mut out, list_tight, false, options)
       }
       newline(mut out)
       text.append(
@@ -2067,14 +2327,17 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
         )
       }
       for child in node.children {
-        render_node(child, mut out, tight, false)
+        render_node(child, mut out, tight, false, options)
       }
       text.append(mut out, "</li>\n")
     },
     Link(dest, title) => {
-      text.append(mut out, "<a href=\"")
-      escape_html(mut out, dest)
-      core@1/list.push(mut out, 34u8)
+      text.append(mut out, "<a")
+      if options.allow_unsafe || !potentially_unsafe(dest) {
+        text.append(mut out, " href=\"")
+        escape_html(mut out, dest)
+        core@1/list.push(mut out, 34u8)
+      }
       if title != "" {
         text.append(mut out, " title=\"")
         escape_html(mut out, title)
@@ -2082,13 +2345,15 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       }
       core@1/list.push(mut out, 62u8)
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(mut out, "</a>")
     },
     Image(dest, title) => {
       text.append(mut out, "<img src=\"")
-      escape_html(mut out, dest)
+      if options.allow_unsafe || !potentially_unsafe(dest) {
+        escape_html(mut out, dest)
+      }
       text.append(mut out, "\" alt=\"")
       for child in node.children {
         image_alt(child, mut out)
@@ -2104,21 +2369,21 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
     Emphasis() => {
       text.append(mut out, "<em>")
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(mut out, "</em>")
     },
     Strong() => {
       text.append(mut out, "<strong>")
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(mut out, "</strong>")
     },
     Strikethrough() => {
       text.append(mut out, "<del>")
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(mut out, "</del>")
     },
@@ -2130,7 +2395,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       for row in node.children {
         if first {
           text.append(mut out, "<thead>\n")
-          render_node(row, mut out, false, true)
+          render_node(row, mut out, false, true, options)
           text.append(mut out, "</thead>\n")
           first = false
         } else {
@@ -2138,7 +2403,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
             text.append(mut out, "<tbody>\n")
             body = true
           }
-          render_node(row, mut out, false, false)
+          render_node(row, mut out, false, false, options)
         }
       }
       if body {
@@ -2149,7 +2414,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
     TableRow(header) => {
       text.append(mut out, "<tr>\n")
       for cell in node.children {
-        render_node(cell, mut out, false, header)
+        render_node(cell, mut out, false, header, options)
       }
       text.append(mut out, "</tr>\n")
     },
@@ -2176,7 +2441,7 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
       }
       core@1/list.push(mut out, 62u8)
       for child in node.children {
-        render_node(child, mut out, false, false)
+        render_node(child, mut out, false, false, options)
       }
       text.append(
         mut out,
@@ -2190,15 +2455,20 @@ fn render_node(node: Node, mut out: List[u8], tight: bool, cell_header: bool) ->
   }
 }
 
-/// CommonMark HTML. Raw HTML nodes are emitted verbatim.
+/// Render an editable AST safely with CommonMark defaults.
 pub fn render_html(document: Node) -> String uses {} {
+  render_html_with_options(document, default_options())
+}
+
+/// Render an AST with explicit safety and GFM tag filter options.
+pub fn render_html_with_options(document: Node, options: Options) -> String uses {} {
   let mut out: List[u8] = []
-  render_node(document, mut out, false, false)
+  render_node(document, mut out, false, false, options)
   text.finish_valid(take out)
 }
 
 pub fn to_html(take source: String, options: Options) -> String uses {} {
-  render_html(parse(take source, options))
+  render_html_with_options(parse(take source, options), options)
 }
 
 fn table_cells(s: String) -> List[String] uses {} {

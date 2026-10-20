@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark-gfm test/spec.txt:9647
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.gfm_options()
+  failed += harness.check(
+    s,
+    "gfm-tagfilter/652",
+    "<strong> <title> <style> <em>\n\n<blockquote>\n  <xmp> is disallowed.  <XMP> is also disallowed.\n</blockquote>\n",
+    "<p><strong> &lt;title> &lt;style> <em></p>\n<blockquote>\n  &lt;xmp> is disallowed.  &lt;XMP> is also disallowed.\n</blockquote>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "gfm-tagfilter/652/malformed",
+    "<strong> <title> <style> <em>\n\n<blockquote>\n  <xmp> is\u{0}[&unterminated",
+    "<p><strong> &lt;title> &lt;style> <em></p>\n<blockquote>\n  &lt;xmp> is�[&unterminated\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

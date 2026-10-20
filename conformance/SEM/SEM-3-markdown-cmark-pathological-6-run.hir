@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark-gfm test/pathological_tests.py:14-121; mismatched openers and closers
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.gfm_options()
+  failed += harness.check(
+    s,
+    "cmark-pathological/6",
+    "*a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ ",
+    "<p>*a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-pathological/6/malformed",
+    "*a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ \u{0}[&unterminated",
+    "<p>*a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ *a_ �[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// commonmark.js test/test.js:178-300; 24 openers and closers multiple of 3
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "js-pathological/10",
+    "a**bc* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* ",
+    "<p>a**bc* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c* c*</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "js-pathological/10/malformed",
+    "a**bc* c* c* c* c* c* c* c* c* c* c* c\u{0}[&unterminated",
+    "<p>a**bc* c* c* c* c* c* c* c* c* c* c* c�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

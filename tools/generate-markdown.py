@@ -65,7 +65,7 @@ def examples(path):
     number = 0
     source = []
     expected = []
-    for line in path.read_text().splitlines(keepends=True):
+    for line in path.read_bytes().decode().splitlines(keepends=True):
         if state == 0:
             if re.match(r'^`{32} example', line):
                 source = []
@@ -85,7 +85,7 @@ def examples(path):
             expected.append(line)
 
 
-def gfm_renderer(build):
+def gfm_renderer(build, footnotes=False, extensions=(b'table', b'strikethrough', b'autolink', b'tasklist', b'tagfilter')):
     """Render with the pinned cmark-gfm C API, retaining no parser allocations."""
     pointer = ctypes.c_void_p
     lib = ctypes.CDLL(str(build / 'src/libcmark-gfm.so'), mode=ctypes.RTLD_GLOBAL)
@@ -111,14 +111,14 @@ def gfm_renderer(build):
     libc.free.restype = None
 
     def render(source):
-        parser = lib.cmark_parser_new(0)
-        for name in (b'table', b'strikethrough', b'autolink', b'tasklist'):
+        parser = lib.cmark_parser_new((1 << 13) if footnotes else 0)
+        for name in extensions:
             assert lib.cmark_parser_attach_syntax_extension(parser, lib.cmark_find_syntax_extension(name))
         data = source.encode()
         lib.cmark_parser_feed(parser, data, len(data))
         root = lib.cmark_parser_finish(parser)
-        extensions = lib.cmark_parser_get_syntax_extensions(parser)
-        output = lib.cmark_render_html(root, 1 << 17, extensions)  # CMARK_OPT_UNSAFE: retain raw HTML.
+        attached_extensions = lib.cmark_parser_get_syntax_extensions(parser)
+        output = lib.cmark_render_html(root, 1 << 17, attached_extensions)  # CMARK_OPT_UNSAFE: retain raw HTML.
         result = ctypes.string_at(output).decode()
         libc.free(output)
         lib.cmark_node_free(root)

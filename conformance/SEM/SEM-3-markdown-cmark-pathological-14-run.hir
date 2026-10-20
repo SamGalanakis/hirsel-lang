@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark-gfm test/pathological_tests.py:14-121; deeply nested lists
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.gfm_options()
+  failed += harness.check(
+    s,
+    "cmark-pathological/14",
+    "* a\n  * a\n    * a\n      * a\n        * a\n          * a\n            * a\n              * a\n                * a\n                  * a\n                    * a\n                      * a\n",
+    "<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-pathological/14/malformed",
+    "* a\n  * a\n    * a\n      * a\n        * a\n          * a\n            * a\n              * a\n  \u{0}[&unterminated",
+    "<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n<ul>\n<li>a\n�[&amp;unterminated</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

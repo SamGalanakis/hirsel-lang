@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// commonmark.js test/test.js:178-300; 10 backslashes in unclosed link title
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "js-pathological/29",
+    "[test](\\url \"\\\\\\\\\\\\\\\\\\\\\n",
+    "<p>[test](\\url &quot;\\\\\\\\\\</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "js-pathological/29/malformed",
+    "[test](\\url \u{0}[&unterminated",
+    "<p>[test](\\url �[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

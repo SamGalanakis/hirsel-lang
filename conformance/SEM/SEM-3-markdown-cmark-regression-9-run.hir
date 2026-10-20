@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark test/regression.txt:133
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "cmark-regression/9",
+    "City:\n<span itemprop=\"contentLocation\" itemscope itemtype=\"https://schema.org/City\">\n  <meta itemprop=\"name\" content=\"Springfield\">\n</span>\n",
+    "<p>City:\n<span itemprop=\"contentLocation\" itemscope itemtype=\"https://schema.org/City\">\n<meta itemprop=\"name\" content=\"Springfield\">\n</span></p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-regression/9/malformed",
+    "City:\n<span itemprop=\"contentLocation\" itemscope itemtype=\"https://sch\u{0}[&unterminated",
+    "<p>City:\n&lt;span itemprop=&quot;contentLocation&quot; itemscope itemtype=&quot;https://sch�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

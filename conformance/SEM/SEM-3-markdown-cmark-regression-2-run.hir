@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark test/regression.txt:17
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "cmark-regression/2",
+    "By taking it apart\n\n- alternative solutions\n\t\nRepeatedly solving\n\t\n- how techniques\n",
+    "<p>By taking it apart</p>\n<ul>\n<li>alternative solutions</li>\n</ul>\n<p>Repeatedly solving</p>\n<ul>\n<li>how techniques</li>\n</ul>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-regression/2/malformed",
+    "By taking it apart\n\n- alternative solution\u{0}[&unterminated",
+    "<p>By taking it apart</p>\n<ul>\n<li>alternative solution�[&amp;unterminated</li>\n</ul>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

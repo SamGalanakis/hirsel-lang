@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark-gfm test/pathological_tests.py:14-121; tables
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.gfm_options()
+  failed += harness.check(
+    s,
+    "cmark-pathological/20",
+    "aaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\n",
+    "<p>aaa</p>\n<table>\n<thead>\n<tr>\n<th>bbb</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n</tbody>\n</table>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-pathological/20/malformed",
+    "aaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\naaa\rbbb\n-\u{b}\n\u{0}[&unterminated",
+    "<p>aaa</p>\n<table>\n<thead>\n<tr>\n<th>bbb</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>aaa</td>\n</tr>\n<tr>\n<td>bbb</td>\n</tr>\n<tr>\n<td>-\u{b}</td>\n</tr>\n<tr>\n<td>�[&amp;unterminated</td>\n</tr>\n</tbody>\n</table>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

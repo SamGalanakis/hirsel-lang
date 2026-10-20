@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// js test/regression.txt:507
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "js-regression/32",
+    "foo <!-- test --->\n\nfoo <!-- test ---->\n\nfoo <!----->\n\nfoo <!-- test --> more -->\n",
+    "<p>foo <!-- test ---></p>\n<p>foo <!-- test ----></p>\n<p>foo <!-----></p>\n<p>foo <!-- test --> more --&gt;</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "js-regression/32/malformed",
+    "foo <!-- test --->\n\nfoo <!-- test ---->\n\n\u{0}[&unterminated",
+    "<p>foo <!-- test ---></p>\n<p>foo <!-- test ----></p>\n<p>�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

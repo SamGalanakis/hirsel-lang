@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// js test/regression.txt:523
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  failed += harness.check(
+    s,
+    "js-regression/33",
+    "\u{b}Vertical Tab\u{b}\n\n\u{c}Form Feed\u{c}\n\n NBSP (U+00A0) NBSP \n\n Em Space (U+2003) Em Space \n\n Line Separator (U+2028) Line Separator \n\n Paragraph Separator (U+2029) Paragraph Separator \n\n　全角スペース (U+3000) 全形空白　\n\n﻿ZWNBSP (U+FEFF) ZWNBSP﻿\n",
+    "<p>\u{b}Vertical Tab\u{b}</p>\n<p>\u{c}Form Feed\u{c}</p>\n<p> NBSP (U+00A0) NBSP </p>\n<p> Em Space (U+2003) Em Space </p>\n<p> Line Separator (U+2028) Line Separator </p>\n<p> Paragraph Separator (U+2029) Paragraph Separator </p>\n<p>　全角スペース (U+3000) 全形空白　</p>\n<p>﻿ZWNBSP (U+FEFF) ZWNBSP﻿</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "js-regression/33/malformed",
+    "\u{b}Vertical Tab\u{b}\n\n\u{c}Form Feed\u{c}\n\n NBSP (U+00A0) NBSP \n\n Em Space (U+2003) Em Space \n\n Line Separator (U+2028) Line S\u{0}[&unterminated",
+    "<p>\u{b}Vertical Tab\u{b}</p>\n<p>\u{c}Form Feed\u{c}</p>\n<p> NBSP (U+00A0) NBSP </p>\n<p> Em Space (U+2003) Em Space </p>\n<p> Line Separator (U+2028) Line S�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

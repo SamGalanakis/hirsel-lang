@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark-gfm test/pathological_tests.py:14-121; reference collisions
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.gfm_options()
+  failed += harness.check(
+    s,
+    "cmark-pathological/21",
+    "[x19]: /url\n\n[x8]\n\n[x80]: /url\n\n[x8]\n\n[x91]: /url\n\n[x8]\n\n[x107]: /url\n\n[x8]\n\n[x118]: /url\n\n[x8]\n\n[x129]: /url\n\n[x8]\n\n[x190]: /url\n\n[x8]\n\n[x206]: /url\n\n[x8]\n\n[x217]: /url\n\n[x8]\n\n[x228]: /url\n\n[x8]\n\n[x239]: /url\n\n[x8]\n\n[x305]: /url\n\n[x8]\n\n[x316]: /url\n\n[x8]\n\n[x327]: /url\n\n[x8]\n\n[x338]: /url\n\n[x8]\n\n[x349]: /url\n\n[x8]\n\n[x404]: /url\n\n[x8]\n\n[x415]: /url\n\n[x8]\n\n[x426]: /url\n\n[x8]\n\n[x437]: /url\n\n[x8]\n\n[x448]: /url\n\n[x8]\n\n[x459]: /url\n\n[x8]\n\n[x503]: /url\n\n[x8]\n\n[x514]: /url\n\n[x8]\n\n[x525]: /url\n\n[x8]\n\n[x536]: /url\n\n[x8]\n\n[x547]: /url\n\n[x8]\n\n[x558]: /url\n\n[x8]\n\n[x569]: /url\n\n[x8]\n\n[x602]: /url\n\n[x8]\n\n[x613]: /url\n\n[x8]\n\n[x624]: /url\n\n[x8]\n\n[x635]: /url\n\n[x8]\n\n[x646]: /url\n\n[x8]\n\n[x657]: /url\n\n[x8]\n\n[x668]: /url\n\n[x8]\n\n[x679]: /url\n\n[x8]\n\n[x701]: /url\n\n[x8]\n\n[x712]: /url\n\n[x8]\n\n[x723]: /url\n\n[x8]\n\n[x734]: /url\n\n[x8]\n\n[x745]: /url\n\n[x8]\n\n[x756]: /url\n\n[x8]\n\n[x767]: /url\n\n[x8]\n\n[x778]: /url\n\n[x8]\n\n[x789]: /url\n\n[x8]\n\n[x800]: /url\n\n[x8]\n\n",
+    "<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-pathological/21/malformed",
+    "[x19]: /url\n\n[x8]\n\n[x80]: /url\n\n[x8]\n\n[x91]: /url\n\n[x8]\n\n[x107]: /url\n\n[x8]\n\n[x118]: /url\n\n[x8]\n\n[x129]: /url\n\n[x8]\n\n[x190]: /url\n\n[x8]\n\n[x206]: /url\n\n[x8]\n\n[x217]: /url\n\n[x8]\n\n[x228]: /url\n\n[x8]\n\n[x239]: /url\n\n[x8]\n\n[x305]: /url\n\n[x8]\n\n[x316]: /url\n\n[x8]\n\n[x327]: /url\n\n[x8]\n\n[x338]: /url\n\n[x8]\n\n[x349]: /url\n\n[x8]\n\n[x404]: /url\n\n[x8]\n\n[x415]: /url\n\n[x8]\n\n[x426]: /url\n\n[x8]\n\n[x437]: /url\n\n[x8]\n\n[x448]: /url\n\n[x8]\n\n[x459]: /url\n\n[x8]\n\n[x503]: /url\n\n[x8]\n\n[x514]: /ur\u{0}[&unterminated",
+    "<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n<p>[x8]</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

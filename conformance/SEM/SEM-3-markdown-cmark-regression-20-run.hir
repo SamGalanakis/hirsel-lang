@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark test/regression.txt:275
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  options.footnotes = true
+  failed += harness.check(
+    s,
+    "cmark-regression/20",
+    "This is some text. It has a citation.[^citation]\n\n[^another-citation]: My second citation.\n\n[^citation]: This is a long winded parapgraph that also has another citation.[^another-citation]\n",
+    "<p>This is some text. It has a citation.<sup class=\"footnote-ref\"><a href=\"#fn-citation\" id=\"fnref-citation\" data-footnote-ref>1</a></sup></p>\n<section class=\"footnotes\" data-footnotes>\n<ol>\n<li id=\"fn-citation\">\n<p>This is a long winded parapgraph that also has another citation.<sup class=\"footnote-ref\"><a href=\"#fn-another-citation\" id=\"fnref-another-citation\" data-footnote-ref>2</a></sup> <a href=\"#fnref-citation\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a></p>\n</li>\n<li id=\"fn-another-citation\">\n<p>My second citation. <a href=\"#fnref-another-citation\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2\" aria-label=\"Back to reference 2\">↩</a></p>\n</li>\n</ol>\n</section>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-regression/20/malformed",
+    "This is some text. It has a citation.[^citation]\n\n[^another-citation]: My second citation.\n\n[^\u{0}[&unterminated",
+    "<p>This is some text. It has a citation.[^citation]</p>\n<p>[^�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

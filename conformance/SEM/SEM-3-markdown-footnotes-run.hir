@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// cmark-gfm src/blocks.c:465-546; src/html.c:62-101,422-457.
+pub fn main() -> Result[(), ()] {
+  let mut options = markdown.default_options()
+  options.footnotes = true
+  failure.check(
+    markdown.to_html("[^missing_a_]", options) == "<p>[^missing_a_]</p>\n",
+    TextInvariant()
+  )
+  failure.check(markdown.to_html("[^unused]: hidden\n", options) == "", TextInvariant())
+  failure.check(
+    markdown.to_html("`[^a]`\n\n[^a]: hidden", options) == "<p><code>[^a]</code></p>\n",
+    TextInvariant()
+  )
+  let safe = markdown.to_html("x[^a]\n\n[^a]: <script>evil()</script>", options)
+  failure.check(string.contains(safe, "<!-- raw HTML omitted -->"), TextInvariant())
+  failure.check(!string.contains(safe, "<script>"), TextInvariant())
+  let repeated = markdown.to_html("x[^a] y[^a]\n\n[^a]: note", options)
+  failure.check(string.contains(repeated, "id=\"fnref-a-2\""), TextInvariant())
+  failure.check(string.contains(repeated, "href=\"#fnref-a-2\""), TextInvariant())
+  failure.check(
+    string.contains(repeated, "data-footnote-backref-idx=\"1-2\""),
+    TextInvariant()
+  )
+  let continuation = markdown.to_html("x[^a]\n\n[^a]: first\n    second", options)
+  failure.check(string.contains(continuation, "<p>first\nsecond "), TextInvariant())
+  Ok(())
+}

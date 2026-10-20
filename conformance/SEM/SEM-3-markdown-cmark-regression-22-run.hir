@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// Pinned upstream vectors; tools/generate-markdown-hostile.py.
+// cmark test/regression.txt:319
+// Each program is bounded by the corpus step budget and runner timeout.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  let mut options = std@1/markdown.default_options()
+  options.autolinks = true
+  options.footnotes = true
+  failed += harness.check(
+    s,
+    "cmark-regression/22",
+    "This is some text. Sometimes the autolinker splits up text into multiple nodes, hoping it will find a hyperlink, so this text has a footnote whose reference label begins with a `w`.[^widely-cited]\n\nIt has another footnote that contains many different characters (the autolinker was also breaking on `_`).[^sphinx-of-black-quartz_judge-my-vow-0123456789]\n\n[^sphinx-of-black-quartz_judge-my-vow-0123456789]: so does this.\n\n[^widely-cited]: this renders properly.\n",
+    "<p>This is some text. Sometimes the autolinker splits up text into multiple nodes, hoping it will find a hyperlink, so this text has a footnote whose reference label begins with a <code>w</code>.<sup class=\"footnote-ref\"><a href=\"#fn-widely-cited\" id=\"fnref-widely-cited\" data-footnote-ref>1</a></sup></p>\n<p>It has another footnote that contains many different characters (the autolinker was also breaking on <code>_</code>).<sup class=\"footnote-ref\"><a href=\"#fn-sphinx-of-black-quartz_judge-my-vow-0123456789\" id=\"fnref-sphinx-of-black-quartz_judge-my-vow-0123456789\" data-footnote-ref>2</a></sup></p>\n<section class=\"footnotes\" data-footnotes>\n<ol>\n<li id=\"fn-widely-cited\">\n<p>this renders properly. <a href=\"#fnref-widely-cited\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a></p>\n</li>\n<li id=\"fn-sphinx-of-black-quartz_judge-my-vow-0123456789\">\n<p>so does this. <a href=\"#fnref-sphinx-of-black-quartz_judge-my-vow-0123456789\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2\" aria-label=\"Back to reference 2\">↩</a></p>\n</li>\n</ol>\n</section>\n",
+    options
+  )
+  failed += harness.check(
+    s,
+    "cmark-regression/22/malformed",
+    "This is some text. Sometimes the autolinker splits up text into multiple nodes, hoping it will find a hyperlink, so this text has a footnote whose reference label begins with a `w`.[^widely-cited]\n\nIt has another footnote that con\u{0}[&unterminated",
+    "<p>This is some text. Sometimes the autolinker splits up text into multiple nodes, hoping it will find a hyperlink, so this text has a footnote whose reference label begins with a <code>w</code>.[^widely-cited]</p>\n<p>It has another footnote that con�[&amp;unterminated</p>\n",
+    options
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

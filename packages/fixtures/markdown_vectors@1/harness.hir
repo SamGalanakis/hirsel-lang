@@ -5,6 +5,19 @@ pub fn check(
   expected: String,
   options: std@1/markdown.Options
 ) -> u64 {
+  // Published CommonMark/GFM examples explicitly exercise trusted raw HTML.
+  let mut trusted = options
+  trusted.allow_unsafe = true
+  check_safe(s, label, source, expected, trusted)
+}
+
+pub fn check_safe(
+  s: Stdout,
+  label: String,
+  source: String,
+  expected: String,
+  options: std@1/markdown.Options
+) -> u64 {
   let actual = std@1/markdown.to_html(unique source, options)
   if actual == expected {
     return 0

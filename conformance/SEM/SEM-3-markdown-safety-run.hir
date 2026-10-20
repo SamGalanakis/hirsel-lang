@@ -1,0 +1,96 @@
+// rule: SEM-3
+// expect: run
+// commonmark.js lib/render/html.js:6-10,100-131,249-269; cmark-gfm extensions/tagfilter.c:5-60.
+pub fn main() -> Result[(), ()] {
+  let options = markdown.default_options()
+  failure.check(
+    markdown.to_html("<script>alert(1)</script>\n", options) == "<!-- raw HTML omitted -->\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("hello <b>world</b>", options) == "<p>hello <!-- raw HTML omitted -->world<!-- raw HTML omitted --></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("[x](jav&#x61;script:alert(1))", options) == "<p><a>x</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("[x][r]\n\n[r]: FILE:///tmp/x \"title\"", options) == "<p><a title=\"title\">x</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("<javascript:alert(1)>", options) == "<p><a>javascript:alert(1)</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("![x](DATA:IMAGE/WEBP;base64,a)", options) == "<p><img src=\"DATA:IMAGE/WEBP;base64,a\" alt=\"x\" /></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("![x](data:image/svg+xml,x)", options) == "<p><img src=\"\" alt=\"x\" /></p>\n",
+    TextInvariant()
+  )
+  let mut unsafe_options = options
+  unsafe_options.allow_unsafe = true
+  failure.check(
+    markdown.to_html("[x](javascript:x)", unsafe_options) == "<p><a href=\"javascript:x\">x</a></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("![x](file:x)", unsafe_options) == "<p><img src=\"file:x\" alt=\"x\" /></p>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("<script>x</script>\n", unsafe_options) == "<script>x</script>\n",
+    TextInvariant()
+  )
+  let document = markdown.parse("<script>x</script>\n", unsafe_options)
+  failure.check(
+    markdown.render_html(document) == "<!-- raw HTML omitted -->\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.render_html_with_options(document, unsafe_options) == "<script>x</script>\n",
+    TextInvariant()
+  )
+  let mut gfm = markdown.gfm_options()
+  failure.check(
+    markdown.to_html("<b>x</b>\n", gfm) == "<p><!-- raw HTML omitted -->x<!-- raw HTML omitted --></p>\n",
+    TextInvariant()
+  )
+  gfm.allow_unsafe = true
+  for tag in [
+    "title",
+    "textarea",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "script",
+    "plaintext"
+  ] {
+    failure.check(
+      markdown.render_html_with_options(
+        Node(kind: HtmlBlock(f"<{tag}>x</{tag}>\n"), children: []),
+        gfm
+      ) == f"&lt;{tag}>x&lt;/{tag}>\n",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    markdown.to_html("<SCRIPT/>\n", gfm) == "&lt;SCRIPT/>\n",
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html("<scripture>x</scripture>\n", gfm) == "<p><scripture>x</scripture></p>\n",
+    TextInvariant()
+  )
+  gfm.tagfilter = false
+  failure.check(
+    markdown.to_html("<script>x</script>\n", gfm) == "<script>x</script>\n",
+    TextInvariant()
+  )
+  Ok(())
+}
