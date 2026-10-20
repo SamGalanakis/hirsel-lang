@@ -126,7 +126,7 @@ fn normalize_inner(
                     "pub opaque applies only to types",
                 ));
             }
-            let mut f = n.function(signature, &attrs, false)?;
+            let mut f = n.function(signature, &attrs, false, abi.clone())?;
             let selected: Vec<_> = item
                 .attributes
                 .iter()
@@ -1093,6 +1093,7 @@ impl Normalizer<'_, '_> {
         s: &ast::FunctionSyntax,
         outer: &Attributes,
         closure: bool,
+        abi: Option<ast::ForeignAbi>,
     ) -> Result<FunctionType, QueryError> {
         let saved_g = self.generics.clone();
         self.outer_generics.push(saved_g.clone());
@@ -1143,10 +1144,11 @@ impl Normalizer<'_, '_> {
                 }
             }
         }
+        // The item's own ABI, so an extern's `@blocking` is checked as an extern's.
         let dummy = ast::ItemKind::Function {
             signature: s.clone(),
             body: None,
-            abi: None,
+            abi,
         };
         if closure
             && let Some(name) = s
@@ -1586,7 +1588,7 @@ impl Normalizer<'_, '_> {
                 self.push(TypeKind::Box(t), pos)?
             }
             ast::TypeExprKind::Function(s) => {
-                let f = self.function(s, &Attributes::default(), true)?;
+                let f = self.function(s, &Attributes::default(), true, None)?;
                 self.push(TypeKind::Function(f), pos)?
             }
             ast::TypeExprKind::Qualified {

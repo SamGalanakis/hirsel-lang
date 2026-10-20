@@ -10,6 +10,7 @@ mod differential;
 mod emit;
 mod executable;
 mod exit_report;
+mod foreign;
 mod heap;
 mod kit;
 mod link;

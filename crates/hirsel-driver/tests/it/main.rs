@@ -31,6 +31,7 @@ mod erased_release_ir;
 mod error_injection;
 mod float_bits_ir;
 mod foreign;
+mod foreign_threads;
 mod formatting;
 mod frozen_revision;
 mod generic_graph;

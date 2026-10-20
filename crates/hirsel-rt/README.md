@@ -962,14 +962,32 @@ against identical raw C writes; neither mode claims durability.
 
 ## Foreign calls
 
-An extern call (PROG-4) first calls `hirsel_rt_v2_foreign_enter(ctx, site, previous)`,
-which records its context and source site on the thread and saves the enclosing
-scope in 16 bytes of caller-owned stack storage at alignment 8. This never allocates;
-`hirsel_rt_v2_foreign_leave(previous)` restores that scope after C returns. A C callback
-thunk reads the current context back with
-`hirsel_rt_v2_callback_context`, which ends the process when the thread has none, and a
-callback that fails calls `hirsel_rt_v2_callback_failed`, which ends the process: the C
-frames between the callback and the extern call cannot run cleanup. Non-null pointer
+An extern call (PROG-4) first calls
+`hirsel_rt_v2_foreign_enter(ctx, site, previous, dispatch)`, which dispatches the call to its
+effective thread (S-13, `foreign.rs`), records its context and source site on that thread,
+and keeps its interval (the enclosing scope, its context, how it was dispatched and its
+start when metrics are on) in 40 bytes of caller-owned stack storage at alignment 8;
+`hirsel_rt_v2_foreign_leave(previous)` undoes it after C returns. The dispatch word carries
+the callee package's trusted `threads` (`home`, the default, `serial` or `any`), `@blocking`
+and the package's ordinal. In precedence order: a call inside an active interval runs on
+that interval's thread; a `home` package's call runs on the home thread, blocking or not; an
+`@blocking` call moves its task to a blocking-pool thread (`pool.rs`), which owns it until
+the call returns, then hands it back; any other call runs on the caller's worker. A
+`serial` package's gate is a logical object of the run: an outermost call takes it before C
+is entered (waiting, a CONC-8 wait named `foreign.gate`, while another call chain holds it),
+nested calls from its owner re-enter by depth, and the outermost leave frees it and polls
+its waiters. Until lane W1, a run's code runs on one thread at a time: a thread hands the
+run to another by posting the task to resume and waiting on its own idle fiber, so the
+schedule stays the cooperative one wherever a call runs, and the run's fuel moves with the
+run. A pool thread has its own worker and heap; blocks a callback allocates there are freed
+remotely. A C callback thunk reads the current context back with
+`hirsel_rt_v2_callback_context`, which ends the process when the thread has none and takes a
+compute permit unless its thread holds one, and gives the permit back with
+`hirsel_rt_v2_callback_leave` before returning to C; a blocking call holds none while it is
+in C. A callback that fails calls `hirsel_rt_v2_callback_failed`, which ends the process: the C
+frames between the callback and the extern call cannot run cleanup. `foreign::enable_metrics`
+turns on the extern row's headroom counters (`extern_ns`, `pool_queue_ns`, `gate_wait_ns`);
+without it a call pays one branch. Non-null pointer
 results, callback arguments and writable pointer words are guarded by both backends;
 zero calls `hirsel_rt_v2_foreign_violation(site)`, which reports PROG-4 and the source
 location before terminating. A callback passes site zero to select the active extern.

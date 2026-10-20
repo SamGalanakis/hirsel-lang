@@ -108,10 +108,12 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::WorkerCreate
         | R::WorkerRetire
         | R::WorkerCollect => (MemoryEffects::ReadWrite, false, &[]),
-        // The calling thread's foreign context cell: no block memory, no callbacks.
-        R::ForeignEnter | R::ForeignLeave | R::CallbackContext => {
-            (MemoryEffects::ReadWrite, true, &[])
-        }
+        // A dispatch may wait for a `serial` gate or another thread, and the run may stop
+        // meanwhile (S-13).
+        R::ForeignEnter | R::ForeignLeave => (MemoryEffects::ReadWrite, false, &[]),
+        // The calling thread's foreign context cell and the run's compute permits: no block
+        // memory, no callbacks.
+        R::CallbackContext | R::CallbackLeave => (MemoryEffects::ReadWrite, true, &[]),
     };
     module.add_attribute(function, AttributeSlot::Function, Attribute::Memory(memory));
     if returns {

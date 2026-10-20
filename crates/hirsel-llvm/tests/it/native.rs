@@ -432,6 +432,7 @@ fn every_target_executes_the_scalar_boundary_matrix() {
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
                     callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    foreign: &hirsel_lir::emission::NO_FOREIGN,
                     registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                         &program.table.table,
                         &program.finalizers,
@@ -623,6 +624,7 @@ fn every_target_executes_the_abi_probes() {
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
                     callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    foreign: &hirsel_lir::emission::NO_FOREIGN,
                     registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                         &program.table.table,
                         &program.finalizers,
@@ -721,6 +723,7 @@ fn every_target_executes_the_heap_probes() {
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
                     callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    foreign: &hirsel_lir::emission::NO_FOREIGN,
                     registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                         &program.table.table,
                         &program.finalizers,

@@ -276,7 +276,7 @@ impl Normalizer<'_, '_> {
             }
             ast::ExprKind::Closure { signature, body } => {
                 e.tag("closure");
-                let f = self.function(signature, &Attributes::default(), true)?;
+                let f = self.function(signature, &Attributes::default(), true, None)?;
                 e.function(&f, &self.types).map_err(|_| {
                     diagnostic(
                         const { RuleId::of("LANG-6") },
@@ -456,7 +456,7 @@ impl Normalizer<'_, '_> {
             } => {
                 e.tag("local-function");
                 e.tag(name.as_str());
-                let f = self.function(signature, &Attributes::default(), true)?;
+                let f = self.function(signature, &Attributes::default(), true, None)?;
                 e.function(&f, &self.types).map_err(|_| {
                     diagnostic(
                         const { RuleId::of("LANG-6") },

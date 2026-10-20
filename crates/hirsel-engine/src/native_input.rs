@@ -41,6 +41,9 @@ pub struct NativeInput {
     pub foreign_links: Vec<crate::LinkInput>,
     /// Whether executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
+    /// Each selected `unsafe ffi` package's `threads`; a package absent here is `home`
+    /// (S-13).
+    pub foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
 }
 /// Construction is private to successful revalidation, including current source stages.
 pub struct ValidatedNativeInput {
@@ -63,6 +66,26 @@ impl ValidatedNativeInput {
     }
     pub fn snapshot(&self) -> &NativeInput {
         &self.input
+    }
+    /// The first extern of a `home` package `root` reaches, on a shortest dependency path
+    /// (S-13): a callback that can reach one runs only on the home thread.
+    pub fn home_reach(&self, root: &DefPath) -> Option<crate::UnsafeReach> {
+        let home: BTreeMap<DefPath, crate::Escape> = self
+            .escapes
+            .iter()
+            .filter(|(path, escape)| {
+                **escape == crate::Escape::Extern
+                    && self
+                        .input
+                        .foreign_threads
+                        .get(&path.0.package)
+                        .copied()
+                        .unwrap_or_default()
+                        == hirsel_types::ForeignThreads::Home
+            })
+            .map(|(path, escape)| (path.clone(), *escape))
+            .collect();
+        self.semantic_program.reach(root, &home)
     }
 }
 fn invalid(message: impl Into<String>) -> QueryError {
@@ -204,6 +227,7 @@ impl QueryEngine {
             instance_bodies: self.instance_bodies(&paths),
             foreign_links: self.foreign_links.clone(),
             foreign_unreplayable: self.foreign_unreplayable,
+            foreign_threads: self.foreign_threads.clone(),
         };
         input.instances = InstanceGraph::native(&input)?;
         Ok(input)

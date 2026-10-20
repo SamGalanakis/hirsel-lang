@@ -77,6 +77,10 @@ pub struct EmitInputs<'a> {
     /// The definitions some unit of the program names as a C callback (PROG-4): each one's
     /// own object exports its `callback_thunk_name` thunk.
     pub callbacks: &'a BTreeSet<DefPath>,
+    /// Each extern's `hirsel_rt_v2_foreign_enter` dispatch word (S-13,
+    /// `runtime_abi::FOREIGN_THREADS_HOME` and the rest); an extern absent here is a
+    /// non-blocking `home` call.
+    pub foreign: &'a BTreeMap<DefPath, u64>,
     pub opt: OptLevel,
     pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
@@ -169,6 +173,8 @@ pub fn callback_thunk_name(definition: &DefPath, instance: Option<&ContentHash>)
 
 /// No callbacks, for inputs that name none.
 pub static NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
+/// No extern dispatch words: every extern a non-blocking `home` call.
+pub static NO_FOREIGN: BTreeMap<DefPath, u64> = BTreeMap::new();
 
 /// A digest names the layout's runtime descriptor: one address identity across every object.
 pub fn descriptor_name(layout: &LayoutRecord) -> String {
@@ -617,6 +623,7 @@ mod tests {
             inline_instances: &BTreeSet::new(),
             available_externally: &BTreeSet::new(),
             callbacks: &NO_CALLBACKS,
+            foreign: &NO_FOREIGN,
             registry: crate::descriptor_registry::DescriptorRegistry::new(&layouts, &finalizers),
             opt: OptLevel::None,
             measurement: false,

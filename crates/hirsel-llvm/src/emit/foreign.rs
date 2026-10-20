@@ -163,7 +163,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // deferred counts are stored and must-unique facts dropped first.
         self.flush_lengths(true)?;
         self.invalidate_uniqueness();
-        // A callback C makes during the call finds this thread's run context.
+        // The runtime dispatches the call to its effective thread (S-13), where a callback C
+        // makes during the call finds the run context.
+        let dispatch = self
+            .inputs
+            .foreign
+            .get(&symbol.definition)
+            .copied()
+            .unwrap_or(0);
         let enter = self.runtime(RuntimeEntry::ForeignEnter)?;
         let call_site = self.anchor_code(site.anchor)?;
         let previous = self.prologue.alloca(
@@ -173,8 +180,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             ),
             hirsel_lir::runtime_abi::FOREIGN_SCOPE_ALIGN,
         );
-        self.builder
-            .call(enter, &[self.context, self.const_u64(call_site), previous]);
+        self.builder.call(
+            enter,
+            &[
+                self.context,
+                self.const_u64(call_site),
+                previous,
+                self.const_u64(dispatch),
+            ],
+        );
         let returned = self.builder.call(function, &args);
         self.module
             .add_call_attribute(returned, AttributeSlot::Function, Attribute::NoUnwind);
@@ -379,6 +393,12 @@ pub(super) fn define_callback_thunk<'m>(
         RuntimeEntry::ForeignViolation,
         module.function_type(module.void_type(), &[module.int_type(64)]),
     );
+    let leave = runtime_function(
+        module,
+        manifested,
+        RuntimeEntry::CallbackLeave,
+        module.function_type(module.void_type(), &[ptr]),
+    );
     builder.position(module.append_block(thunk));
     let run = builder.call(enter, &[]);
     let mut arguments = Vec::new();
@@ -455,6 +475,8 @@ pub(super) fn define_callback_thunk<'m>(
     builder.call(failed, &[run]);
     builder.unreachable();
     builder.position(normal);
+    // The callback's Hirsel code is done: its compute permit goes back before C resumes.
+    builder.call(leave, &[run]);
     match signature.value {
         Some((kind, field)) => {
             let word = builder.extract(returned, field);

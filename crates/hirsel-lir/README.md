@@ -746,3 +746,9 @@ which `hirsel-layout` derives for every `Shared` reference and which descriptor
 version 13 lowers to `STEP_RELEASE_ROOT`. Both emitters add a root with
 `hirsel_rt_v2_root_dup` (LLVM inline by a CAS below the dup bound) and give one
 up only with `hirsel_rt_v2_root_release`; glue never releases a root inline.
+
+Runtime ABI 29 dispatches extern calls by S-13 (lane R8): `hirsel_rt_v2_foreign_enter`
+takes the extern's dispatch word (`FOREIGN_THREADS_*`, `FOREIGN_BLOCKING` and the package
+ordinal from `FOREIGN_PACKAGE_SHIFT`), which emission reads from `EmitInputs::foreign`; the
+caller-owned interval record grows to `FOREIGN_SCOPE_BYTES` 40; and callback thunks call
+`hirsel_rt_v2_callback_leave` before returning to C. The LIR vocabulary is unchanged.

@@ -215,6 +215,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         inline_instances: &empty,
         available_externally: &empty,
         callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
         registry: registry.clone(),
         opt: OptLevel::None,
         measurement: false,

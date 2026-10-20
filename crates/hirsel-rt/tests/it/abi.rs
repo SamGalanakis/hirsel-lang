@@ -464,7 +464,21 @@ fn launch_rejects_another_abi_version_and_unknown_flags() {
         LAUNCH_OK
     );
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    assert_eq!(hirsel_rt_v2_abi_version(), 28);
+    assert_eq!(hirsel_rt_v2_abi_version(), 29);
+}
+
+#[test]
+fn the_foreign_dispatch_word_and_interval_match_the_transcribed_abi() {
+    use hirsel_lir::runtime_abi as abi;
+    use hirsel_rt::foreign as rt;
+    assert_eq!(rt::FOREIGN_THREADS_HOME, abi::FOREIGN_THREADS_HOME);
+    assert_eq!(rt::FOREIGN_THREADS_SERIAL, abi::FOREIGN_THREADS_SERIAL);
+    assert_eq!(rt::FOREIGN_THREADS_ANY, abi::FOREIGN_THREADS_ANY);
+    assert_eq!(rt::FOREIGN_THREADS_MASK, abi::FOREIGN_THREADS_MASK);
+    assert_eq!(rt::FOREIGN_BLOCKING, abi::FOREIGN_BLOCKING);
+    assert_eq!(rt::FOREIGN_PACKAGE_SHIFT, abi::FOREIGN_PACKAGE_SHIFT);
+    assert_eq!(rt::FOREIGN_SCOPE_BYTES as u64, abi::FOREIGN_SCOPE_BYTES);
+    assert_eq!(rt::FOREIGN_SCOPE_ALIGN as u32, abi::FOREIGN_SCOPE_ALIGN);
 }
 
 #[test]

@@ -139,6 +139,10 @@ pub struct TaskCtx {
     pub(crate) isolated: Vec<crate::failure::Chained>,
     /// The task's innermost extern call while it is switched out (`crate::foreign`).
     foreign: crate::foreign::ForeignScope,
+    /// One bit per active callback of the task, innermost lowest: whether its entry took a
+    /// compute permit, which its leave gives back (`crate::foreign`).
+    pub(crate) callback_permits: u64,
+    pub(crate) callback_depth: u32,
     /// The task's measurement site while it is switched out.
     #[cfg(feature = "measurement")]
     site: u64,
@@ -240,6 +244,11 @@ pub(crate) struct RunShared {
     pub(crate) heaps: Box<crate::heaps::HeapRegistry>,
     /// The fuel not yet handed out as chunks (`crate::budget`).
     pub(crate) fuel: crate::budget::FuelPool,
+    /// The home thread and blocking-pool threads, from the first pool dispatch
+    /// (`crate::pool`).
+    pub(crate) execs: Option<Box<crate::pool::Execs>>,
+    /// The extern row's headroom counters, when metrics are enabled (`crate::pool`).
+    pub(crate) extern_metrics: Option<std::sync::Arc<crate::pool::ExternMetrics>>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -263,6 +272,8 @@ impl TaskCtx {
             roots: Default::default(),
             isolated: Vec::new(),
             foreign: crate::foreign::ForeignScope::NONE,
+            callback_permits: 0,
+            callback_depth: 0,
             #[cfg(feature = "measurement")]
             site: 0,
         }
@@ -656,6 +667,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),
+        execs: None,
+        extern_metrics: None,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

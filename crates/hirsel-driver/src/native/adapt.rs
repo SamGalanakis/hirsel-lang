@@ -53,6 +53,9 @@ pub fn input_identity(input: &NativeInput) -> InputIdentity {
     if input.foreign_unreplayable {
         parts.push(b"foreign-unreplayable".to_vec());
     }
+    for (package, threads) in &input.foreign_threads {
+        parts.push(format!("threads {package:?} {}", threads.name()).into_bytes());
+    }
     InputIdentity {
         interface_version: input.environment.interface_version,
         digest: ContentHash::of_parts("hirsel.native-input.v2", parts.iter().map(Vec::as_slice)),

@@ -17,9 +17,15 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 28
-#define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
+#define HIRSEL_RT_V2_ABI_VERSION 29
+#define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
+#define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0
+#define HIRSEL_RT_V2_FOREIGN_THREADS_SERIAL 1
+#define HIRSEL_RT_V2_FOREIGN_THREADS_ANY 2
+#define HIRSEL_RT_V2_FOREIGN_THREADS_MASK 3
+#define HIRSEL_RT_V2_FOREIGN_BLOCKING 4
+#define HIRSEL_RT_V2_FOREIGN_PACKAGE_SHIFT 8
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -673,12 +679,20 @@ void hirsel_rt_v2_diag_panic(void);
 /* PROG-4: an extern call records its thread's run context for C callback thunks; a
    failing callback ends the process. */
 /* previous is caller-owned storage of FOREIGN_SCOPE_BYTES at FOREIGN_SCOPE_ALIGN,
-   live until the matching leave. This scope bookkeeping never allocates. */
-void hirsel_rt_v2_foreign_enter(hirsel_rt_v2_ctx *ctx, uint64_t site, void *previous);
+   live until the matching leave. dispatch is the callee package's threads (bits 0-1:
+   0 home, 1 serial, 2 any), bit 2 for @blocking, and from bit 8 the package's ordinal,
+   which names its serial gate (S-13). The call runs on the thread enter returns on:
+   the enclosing interval's, home, a blocking-pool thread or the caller's; leave returns
+   on the caller's worker. */
+void hirsel_rt_v2_foreign_enter(hirsel_rt_v2_ctx *ctx, uint64_t site, void *previous,
+                                uint64_t dispatch);
 void hirsel_rt_v2_foreign_leave(const void *previous);
 void hirsel_rt_v2_foreign_violation(uint64_t site);
 hirsel_rt_v2_ctx *hirsel_rt_v2_callback_context(void);
 void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
+/* A callback thunk returns to C: the compute permit its Hirsel code took at
+   callback_context goes back. */
+void hirsel_rt_v2_callback_leave(hirsel_rt_v2_ctx *ctx);
 
 /* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime
    stores the next chunk, less the point the failed charge spent, in the word and returns, so

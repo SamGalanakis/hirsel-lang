@@ -56,6 +56,7 @@ fn a_diverging_call_branches_on_status_without_noreturn() {
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
         callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
         registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
         opt: OptLevel::None,
         measurement: false,

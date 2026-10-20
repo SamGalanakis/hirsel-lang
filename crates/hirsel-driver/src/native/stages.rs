@@ -169,6 +169,8 @@ pub struct ReadyProgram {
     pub foreign_links: Vec<hirsel_engine::LinkInput>,
     /// Executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
+    /// Each extern's dispatch word (S-13, `EmitInputs::foreign`).
+    pub foreign_dispatch: BTreeMap<DefPath, u64>,
     /// The launch entries that reach an escape from capability checking, which
     /// `admit.safe@1` refuses (CAP-6).
     pub(crate) escaping: BTreeSet<DefPath>,
@@ -208,6 +210,8 @@ impl ReadyProgram {
             .collect::<Result<_, _>>()?;
         self.foreign_links = input.snapshot().foreign_links.clone();
         self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
+        self.foreign_dispatch = super::foreign::dispatch(input.snapshot());
+        super::foreign::check_callbacks(self, input)?;
         self.escaping = self
             .launches
             .keys()
@@ -425,6 +429,7 @@ pub fn build_program(
         discharged,
         foreign_links: Vec::new(),
         foreign_unreplayable: false,
+        foreign_dispatch: BTreeMap::new(),
         escaping: BTreeSet::new(),
         fuel: false,
         failure_table: None,

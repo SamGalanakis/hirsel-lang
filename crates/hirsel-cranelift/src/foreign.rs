@@ -178,9 +178,18 @@ impl FnEmitter<'_, '_, '_> {
             hirsel_lir::runtime_abi::FOREIGN_SCOPE_BYTES,
             hirsel_lir::runtime_abi::FOREIGN_SCOPE_ALIGN,
         );
+        // The runtime dispatches the call to its effective thread (S-13).
+        let dispatch = self
+            .em
+            .inputs
+            .foreign
+            .get(&symbol.definition)
+            .copied()
+            .unwrap_or(0);
+        let dispatch = self.u64c(dispatch);
         self.rt(
             RuntimeEntry::ForeignEnter,
-            &[self.context, site_value, previous],
+            &[self.context, site_value, previous, dispatch],
         )?;
         let returned = self.call(function, &args);
         for (ptr, offset) in written {
@@ -324,6 +333,7 @@ impl Emitter<'_> {
         let enter = self.runtime(RuntimeEntry::CallbackContext)?;
         let failed = self.runtime(RuntimeEntry::CallbackFailed)?;
         let violation = self.runtime(RuntimeEntry::ForeignViolation)?;
+        let leave = self.runtime(RuntimeEntry::CallbackLeave)?;
         let mut ctx = Context::new();
         ctx.func = ir::Function::with_name_signature(ir::UserFuncName::default(), c_sig);
         let mut bc = FunctionBuilderContext::new();
@@ -420,6 +430,10 @@ impl Emitter<'_> {
             b.ins().call(failed, &[run]);
             b.ins().trap(TRAP);
             b.switch_to_block(normal);
+            // The callback's Hirsel code is done: its compute permit goes back before C
+            // resumes.
+            let leave = self.module.declare_func_in_func(leave, b.func);
+            b.ins().call(leave, &[run]);
             if let Some(kind) = sig.value {
                 let word = results[1];
                 let ty = scalar_type(kind);

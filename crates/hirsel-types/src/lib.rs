@@ -537,6 +537,28 @@ pub struct ForeignWrapper {
     /// may run it again.
     pub deterministic: bool,
 }
+/// Where an `unsafe ffi` package's externs run (S-13): its manifest's trusted `threads`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum ForeignThreads {
+    /// The run's admission thread (the default).
+    #[default]
+    Home,
+    /// Any thread, one call chain at a time per package; a callback's nested call to the
+    /// same package re-enters.
+    Serial,
+    /// Any thread, concurrently.
+    Any,
+}
+impl ForeignThreads {
+    /// Its manifest spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Serial => "serial",
+            Self::Any => "any",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WrapperKind {
     /// The result depends only on the arguments.

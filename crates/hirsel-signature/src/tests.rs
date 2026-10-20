@@ -477,6 +477,13 @@ fn foreign_signature_requires_an_unsafe_parameter_and_records_its_contract() {
     unsafe_parameter(&mut f);
     foreign_contract(&mut f, "borrow does not retain");
     f.attr("blocking");
+    // The parser attaches a function's attributes to its signature as well, which is
+    // checked as the extern's own.
+    f.f().attributes.push(ast::Attribute {
+        name: Symbol::intern("blocking"),
+        arguments: vec![],
+        origin: origin(),
+    });
     let s = f.sig();
     assert!(s.metadata.unsafe_ffi);
     let foreign = function(&s).foreign.as_ref().unwrap();

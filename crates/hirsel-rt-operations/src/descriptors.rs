@@ -691,7 +691,9 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_foreign_enter", &["extern.call", "gate.enter"]),
     ops("hirsel_rt_v2_foreign_leave", &["extern.call", "gate.leave"]),
     ops("hirsel_rt_v2_foreign_violation", &["stop"]),
-    entry("hirsel_rt_v2_callback_context", Local),
+    // A callback's entry and leave take and give back a compute permit (S-13).
+    entry("hirsel_rt_v2_callback_context", Concurrent),
+    entry("hirsel_rt_v2_callback_leave", Concurrent),
     ops("hirsel_rt_v2_callback_failed", &["stop"]),
     // io.rs
     ops("hirsel_rt_v2_io_close", HOST),

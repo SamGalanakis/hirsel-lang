@@ -171,6 +171,8 @@ pub struct QueryEngine {
     /// The checked entry reaches an extern outside a deterministic wrapper, so its
     /// executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
+    /// Each selected `unsafe ffi` package's `threads` (S-13).
+    pub foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
     pub(crate) execution_stack: Vec<ExecutionReads>,
     active: BTreeSet<(DefPath, QueryKind)>,
     validation_walk: Option<ValidationWalk>,
@@ -387,6 +389,7 @@ impl QueryEngine {
             package_manifests: BTreeMap::new(),
             foreign_links: vec![],
             foreign_unreplayable: false,
+            foreign_threads: BTreeMap::new(),
             execution_stack: vec![],
             active: BTreeSet::new(),
             validation_walk: None,

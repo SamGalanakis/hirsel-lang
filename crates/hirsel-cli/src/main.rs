@@ -1355,12 +1355,13 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                                     "version": package.package.version,
                                     "link": link,
                                     "headers_checked": package.headers_checked,
+                                    "threads": package.threads.name(),
                                 },
                             })
                         );
                     } else {
                         eprintln!(
-                            "note: {}@{} is an unsafe ffi package (links {}; headers {})",
+                            "note: {}@{} is an unsafe ffi package (links {}; headers {}; threads {})",
                             package.package.name,
                             package.package.version,
                             if link.is_empty() {
@@ -1373,6 +1374,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                             } else {
                                 "not checked"
                             },
+                            package.threads.name(),
                         );
                     }
                 }

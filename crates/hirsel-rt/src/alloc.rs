@@ -992,6 +992,16 @@ impl Heap {
         self.epoch += 1;
     }
 
+    /// The fuel this heap holds between tasks.
+    pub(crate) fn parked_fuel(&self) -> i64 {
+        self.compiled.fuel
+    }
+    /// Hold `fuel` between tasks: the next task bound takes it (`crate::pool` hands the run's
+    /// fuel to the thread it hands the run to).
+    pub(crate) fn park_fuel(&mut self, fuel: i64) {
+        self.compiled.fuel = fuel;
+    }
+
     /// Set the running task's fuel, which it hands on at its switch-out.
     pub(crate) fn set_fuel(&mut self, fuel: i64) {
         self.compiled.fuel = fuel;

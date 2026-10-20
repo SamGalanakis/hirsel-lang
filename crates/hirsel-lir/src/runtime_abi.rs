@@ -12,14 +12,26 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 28;
+pub const ABI_VERSION: u32 = 29;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
 
-/// Caller-owned previous foreign context/site storage (two 64-bit words).
-pub const FOREIGN_SCOPE_BYTES: u64 = 16;
+/// Caller-owned storage of one extern call's interval (five 64-bit words, runtime ABI 29):
+/// its enclosing context and site, its own context, how it was dispatched and when it began.
+pub const FOREIGN_SCOPE_BYTES: u64 = 40;
 pub const FOREIGN_SCOPE_ALIGN: u32 = 8;
+
+/// `hirsel_rt_v2_foreign_enter`'s dispatch word (S-13, runtime ABI 29): the callee package's
+/// `threads` in its low two bits, whether the extern is `@blocking`, and from
+/// [`FOREIGN_PACKAGE_SHIFT`] the package's ordinal among the program's `unsafe ffi`
+/// packages, which names its `serial` gate.
+pub const FOREIGN_THREADS_HOME: u64 = 0;
+pub const FOREIGN_THREADS_SERIAL: u64 = 1;
+pub const FOREIGN_THREADS_ANY: u64 = 2;
+pub const FOREIGN_THREADS_MASK: u64 = 3;
+pub const FOREIGN_BLOCKING: u64 = 4;
+pub const FOREIGN_PACKAGE_SHIFT: u32 = 8;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -472,9 +484,11 @@ pub enum RuntimeEntry {
     IsolateCatch,
     InvariantFault,
     DiagPanic,
-    /// Before an extern call: push its thread's run context and source site.
+    /// Before an extern call: dispatch it to its effective thread (S-13) and push that
+    /// thread's run context and source site.
     ForeignEnter,
-    /// After an extern call: restore its enclosing context and source site.
+    /// After an extern call: restore its enclosing context and source site, leave its
+    /// `serial` gate and return the task from the thread it ran on.
     ForeignLeave,
     /// A null violated a foreign contract: report the site and end the process.
     ForeignViolation,
@@ -492,6 +506,8 @@ pub enum RuntimeEntry {
     WorkerRetire,
     /// A worker's scheduling point: collect storage other workers freed to its heap.
     WorkerCollect,
+    /// A C callback thunk returns to C: its Hirsel code gives back its compute permit.
+    CallbackLeave,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -563,7 +579,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 74] = [
+    pub const ALL: [RuntimeEntry; 75] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -638,6 +654,7 @@ impl RuntimeEntry {
         Self::WorkerCreate,
         Self::WorkerRetire,
         Self::WorkerCollect,
+        Self::CallbackLeave,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1045,7 +1062,14 @@ impl RuntimeEntry {
             Self::ForeignEnter => (
                 "hirsel_rt_v2_foreign_enter",
                 VOID,
-                const { &[CTX, p("site", U64), p("previous", ptr(N::Void, 1))] },
+                const {
+                    &[
+                        CTX,
+                        p("site", U64),
+                        p("previous", ptr(N::Void, 1)),
+                        p("dispatch", U64),
+                    ]
+                },
             ),
             Self::ForeignLeave => (
                 "hirsel_rt_v2_foreign_leave",
@@ -1063,6 +1087,7 @@ impl RuntimeEntry {
                 const { &[] },
             ),
             Self::CallbackFailed => ("hirsel_rt_v2_callback_failed", VOID, const { &[CTX] }),
+            Self::CallbackLeave => ("hirsel_rt_v2_callback_leave", VOID, const { &[CTX] }),
             Self::ExitReport => (
                 "hirsel_rt_v2_exit_report",
                 VOID,
@@ -1208,4 +1233,5 @@ snapshot_enum!(RuntimeEntry {
     WorkerCreate,
     WorkerRetire,
     WorkerCollect,
+    CallbackLeave,
 });

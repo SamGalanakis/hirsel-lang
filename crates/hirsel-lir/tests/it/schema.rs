@@ -1915,6 +1915,22 @@ fn runtime_declarations_match_the_landed_c_header() {
         "FOREIGN_SCOPE_ALIGN",
         &runtime_abi::FOREIGN_SCOPE_ALIGN.to_string(),
     );
+    for (name, value) in [
+        ("FOREIGN_THREADS_HOME", runtime_abi::FOREIGN_THREADS_HOME),
+        (
+            "FOREIGN_THREADS_SERIAL",
+            runtime_abi::FOREIGN_THREADS_SERIAL,
+        ),
+        ("FOREIGN_THREADS_ANY", runtime_abi::FOREIGN_THREADS_ANY),
+        ("FOREIGN_THREADS_MASK", runtime_abi::FOREIGN_THREADS_MASK),
+        ("FOREIGN_BLOCKING", runtime_abi::FOREIGN_BLOCKING),
+        (
+            "FOREIGN_PACKAGE_SHIFT",
+            u64::from(runtime_abi::FOREIGN_PACKAGE_SHIFT),
+        ),
+    ] {
+        define(name, &value.to_string());
+    }
     define("STATUS_OK", &runtime_abi::STATUS_OK.to_string());
     define("STATUS_FAILURE", &runtime_abi::STATUS_FAILURE.to_string());
     define("LAUNCH_OK", &runtime_abi::LAUNCH_OK.to_string());

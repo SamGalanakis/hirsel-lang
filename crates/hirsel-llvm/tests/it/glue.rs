@@ -33,6 +33,7 @@ fn emit(corpus: &Corpus, opt: OptLevel) -> hirsel_lir::stage::ObjectArtifact {
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
         callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
         registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
             &program.table.table,
             &program.finalizers,

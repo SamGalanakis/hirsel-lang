@@ -736,12 +736,13 @@ pub(crate) fn load_program_source_with_cache(
         .packages
         .iter()
         .filter_map(|(id, p)| {
-            let (link, headers_checked, wrappers) = p.unsafe_ffi.clone()?;
+            let (link, headers_checked, wrappers, threads) = p.unsafe_ffi.clone()?;
             Some(UnsafeFfiPackage {
                 package: id.clone(),
                 link,
                 headers_checked,
                 wrappers,
+                threads,
             })
         })
         .collect();
@@ -752,6 +753,7 @@ pub(crate) fn load_program_source_with_cache(
                 p.package.clone(),
                 hirsel_types::UnsafeFfi {
                     wrappers: p.wrappers.clone(),
+                    threads: p.threads,
                 },
             )
         })
@@ -827,6 +829,10 @@ pub(crate) fn load_program_source_with_cache(
     engine.foreign_links = unsafe_ffi
         .iter()
         .flat_map(|p| p.link.iter().cloned())
+        .collect();
+    engine.foreign_threads = unsafe_ffi
+        .iter()
+        .map(|p| (p.package.clone(), p.threads))
         .collect();
     engine.install_image(&image);
     let mut program = LoadedProgram {
@@ -993,11 +999,12 @@ struct SelectedPackage {
     dependencies: Vec<PackageId>,
     unsafe_ffi: Option<ForeignManifest>,
 }
-/// `unsafe_ffi`: link inputs, headers_checked and wrappers (PROG-4).
+/// `unsafe_ffi`: link inputs, headers_checked, wrappers (PROG-4) and threads (S-13).
 type ForeignManifest = (
     Vec<LinkInput>,
     bool,
     BTreeMap<DefPath, hirsel_types::ForeignWrapper>,
+    hirsel_types::ForeignThreads,
 );
 #[derive(Default)]
 struct Graph {
@@ -1198,13 +1205,14 @@ impl Graph {
         Ok(package)
     }
 }
-/// Parse `{"link": [..], "headers_checked": b, "wrappers": [..]}` (PROG-4).
+/// Parse `{"link": [..], "headers_checked": b, "threads": t, "wrappers": [..]}` (PROG-4,
+/// S-13); `threads` defaults to `"home"`.
 fn foreign_manifest(
     v: &Value,
     base: &Path,
     package: &PackageId,
 ) -> Result<ForeignManifest, ToolError> {
-    let o = object_value(v, &["link", "headers_checked", "wrappers"])?;
+    let o = object_value(v, &["link", "headers_checked", "threads", "wrappers"])?;
     let link = array(required(o, "link")?)?
         .iter()
         .map(|l| {
@@ -1225,6 +1233,12 @@ fn foreign_manifest(
     let headers_checked = required(o, "headers_checked")?
         .as_bool()
         .ok_or_else(|| invalid("headers_checked must be a boolean"))?;
+    let threads = match o.get("threads").map(string).transpose()? {
+        None | Some("home") => hirsel_types::ForeignThreads::Home,
+        Some("serial") => hirsel_types::ForeignThreads::Serial,
+        Some("any") => hirsel_types::ForeignThreads::Any,
+        Some(other) => return Err(invalid(&format!("unknown unsafe_ffi threads {other:?}"))),
+    };
     let mut wrappers = BTreeMap::new();
     for w in array(required(o, "wrappers")?)? {
         let w = object_value(w, &["module", "name", "kind", "model"])?;
@@ -1252,7 +1266,7 @@ fn foreign_manifest(
             return Err(invalid(&format!("duplicate wrapper {definition}")));
         }
     }
-    Ok((link, headers_checked, wrappers))
+    Ok((link, headers_checked, wrappers, threads))
 }
 fn invalid(message: &str) -> ToolError {
     ToolError::Runtime(format!("package manifest: {message}"))

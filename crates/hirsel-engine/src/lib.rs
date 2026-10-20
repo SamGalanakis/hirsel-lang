@@ -99,6 +99,8 @@ pub struct UnsafeFfiPackage {
     /// Trusted and reported, never verified.
     pub headers_checked: bool,
     pub wrappers: std::collections::BTreeMap<DefPath, hirsel_types::ForeignWrapper>,
+    /// Where its externs run (S-13).
+    pub threads: hirsel_types::ForeignThreads,
 }
 /// One native library an `unsafe ffi` package links against.
 #[derive(Clone, Debug, Eq, PartialEq)]

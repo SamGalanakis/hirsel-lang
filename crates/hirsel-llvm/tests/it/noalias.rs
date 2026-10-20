@@ -32,6 +32,7 @@ fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String
         inline_instances: &none,
         available_externally: &none,
         callbacks,
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
         registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
         opt,
         measurement: false,

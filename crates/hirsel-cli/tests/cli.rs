@@ -2944,7 +2944,7 @@ fn check_reports_each_unsafe_ffi_package_in_both_formats() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "note: app@1 is an unsafe ffi package (links -ldemo; headers not checked)\n"
+        "note: app@1 is an unsafe ffi package (links -ldemo; headers not checked; threads home)\n"
     );
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .args(["check", "--json"])
@@ -2954,7 +2954,7 @@ fn check_reports_each_unsafe_ffi_package_in_both_formats() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "{\"schema_version\":1,\"unsafe_ffi_package\":{\"headers_checked\":false,\"link\":[\"-ldemo\"],\"name\":\"app\",\"version\":\"1\"}}\n"
+        "{\"schema_version\":1,\"unsafe_ffi_package\":{\"headers_checked\":false,\"link\":[\"-ldemo\"],\"name\":\"app\",\"threads\":\"home\",\"version\":\"1\"}}\n"
     );
 }
 

@@ -22,6 +22,8 @@ pub struct DeclarationSite {
 pub struct UnsafeFfi {
     /// The package's declared safe wrappers.
     pub wrappers: BTreeMap<ast::DefPath, ForeignWrapper>,
+    /// Where its externs run (S-13).
+    pub threads: ForeignThreads,
 }
 /// Metadata comes from the manifest and written foreign contract, never a body.
 #[derive(Clone, Debug, Default)]

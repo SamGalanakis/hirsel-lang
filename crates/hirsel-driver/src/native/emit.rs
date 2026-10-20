@@ -117,6 +117,7 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
         inline_instances: &program.inline_instances,
         available_externally: &BTreeSet::new(),
         callbacks: &program.callbacks,
+        foreign: &program.foreign_dispatch,
         opt,
         registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
             &program.table,
@@ -146,6 +147,7 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
         inline_instances: &program.inline_instances,
         available_externally: &BTreeSet::new(),
         callbacks: &program.callbacks,
+        foreign: &program.foreign_dispatch,
         opt: OptLevel::None,
         registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
             &program.table,
@@ -187,6 +189,7 @@ pub(crate) fn emit_registered(
         inline_instances: &program.inline_instances,
         available_externally: copies,
         callbacks: &program.callbacks,
+        foreign: &program.foreign_dispatch,
         opt,
         registry: registry.clone(),
         measurement,

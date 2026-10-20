@@ -109,6 +109,24 @@ enum Wait {
     /// Free mode: replay-pending (or a live wait on another task's op), until the next
     /// publish; a `cancelable` one (a receive) also until its task is canceled.
     Retry { cancelable: bool },
+    /// An outermost `gate.enter` (S-13): until `serial` gate `gate` is free, which the poll
+    /// then takes.
+    Gate { gate: u32 },
+    /// A blocking extern call, until a blocking-pool thread is free to take it.
+    Pool,
+}
+
+/// A `serial` package's foreign gate (S-13, design §6 Extern dispatch): a logical object of
+/// the run that one call chain holds at a time, from its outermost `gate.enter` to its
+/// outermost `gate.leave`. Its owner's nested calls to the package re-enter by depth.
+#[derive(Default)]
+struct ForeignGate {
+    owner: Option<u32>,
+    depth: u32,
+    /// Bumped by each outermost entry and leave: the order the tasks won the gate.
+    version: u64,
+    /// Tasks parked on [`Wait::Gate`] for it.
+    waiters: Vec<u32>,
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -158,6 +176,9 @@ struct Task {
     ended: bool,
     /// Its scheduling priority under `pct@1`, drawn when it was created.
     priority: u64,
+    /// The blocking-pool thread its foreign interval runs on, which alone resumes it
+    /// (`crate::pool`); `None` for the home thread.
+    owner: Option<u16>,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -216,6 +237,10 @@ pub(crate) struct Scheduler {
     completions: u64,
     /// The run's scheduler policy (`inputs.scheduler`).
     schedule: Schedule,
+    /// The `serial` packages' gates, by package ordinal (S-13).
+    gates: Vec<ForeignGate>,
+    /// Tasks parked on [`Wait::Pool`].
+    pool_waiters: Vec<u32>,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -367,6 +392,8 @@ impl Scheduler {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
             Wait::Receive { channel, .. } => self.channels.wait(channel, at, current),
             Wait::Any { .. } | Wait::Drain { .. } => self.set_waiters.push(current),
+            Wait::Gate { gate } => self.gate(gate).waiters.push(current),
+            Wait::Pool => self.pool_waiters.push(current),
             Wait::Exit { .. } | Wait::Host { .. } | Wait::Final | Wait::Retry { .. } => {}
         }
     }
@@ -401,9 +428,19 @@ impl Scheduler {
             }
             Some(Wait::Receive { channel, .. }) => self.channels.unwait(channel, at),
             Some(Wait::Any { .. } | Wait::Drain { .. }) => self.set_waiters.retain(|&t| t != task),
+            Some(Wait::Gate { gate }) => self.gate(gate).waiters.retain(|&t| t != task),
+            Some(Wait::Pool) => self.pool_waiters.retain(|&t| t != task),
             _ => {}
         }
         self.runnable.push_back(task);
+    }
+    /// `serial` gate `gate`, created free at its first use.
+    fn gate(&mut self, gate: u32) -> &mut ForeignGate {
+        let index = gate as usize;
+        if self.gates.len() <= index {
+            self.gates.resize_with(index + 1, ForeignGate::default);
+        }
+        &mut self.gates[index]
     }
     /// `scope`'s deadline fired (CONC-3): the scope is canceled `DeadlineExceeded`, as is each
     /// of its children, and the children of the scopes its owner entered inside it `Parent`.
@@ -551,6 +588,7 @@ impl Task {
             retried: false,
             ended: false,
             priority: 0,
+            owner: None,
         }
     }
 }
@@ -650,6 +688,8 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
                 Wait::Drain { .. } => "task.cancel_all",
                 Wait::Final => "free.final",
                 Wait::Retry { .. } => "free.retry",
+                Wait::Gate { .. } => "foreign.gate",
+                Wait::Pool => "foreign.pool",
             };
             (row.path.clone(), kind)
         })
@@ -723,6 +763,16 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     if from == next {
         return;
     }
+    let owner = s.task(next).owner;
+    if crate::pool::crosses(ctx, owner) {
+        // `next` runs on another thread: this one hands the run over and waits (`crate::pool`).
+        ctx.switch_out();
+        let save = &raw mut s.task(from).sp;
+        // SAFETY: `next` is suspended; `save` is written before any other thread runs.
+        unsafe { crate::pool::hand_off(ctx, save, owner, next, true) };
+        recycle(ctx);
+        return;
+    }
     let to_ctx = s.task(next).ctx;
     ctx.switch_out();
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
@@ -751,6 +801,15 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     drop(std::mem::take(&mut ctx.failure));
     drop(std::mem::take(&mut ctx.frozen));
     drop(std::mem::take(&mut ctx.isolated));
+    let owner = s.task(next).owner;
+    if crate::pool::crosses(ctx, owner) {
+        ctx.switch_out();
+        s.task(next).state = State::Ready;
+        let mut abandoned = std::ptr::null_mut();
+        // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
+        unsafe { crate::pool::hand_off(ctx, &raw mut abandoned, owner, next, true) };
+        fault("a completed task was resumed");
+    }
     let to_ctx = s.task(next).ctx;
     ctx.switch_out();
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
@@ -761,6 +820,133 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
     unsafe { fiber::switch(&raw mut abandoned, s.task(next).sp) };
     fault("a completed task was resumed")
+}
+
+/// The context and stack pointer of suspended task `task`, which the calling thread resumes
+/// next (`crate::pool`): it becomes the running task.
+///
+/// # Safety
+/// `run` is live and has its scheduler; `task` is suspended.
+pub(crate) unsafe fn resume_row(
+    run: *mut crate::context::RunShared,
+    task: u32,
+) -> (*mut TaskCtx, *mut u8) {
+    // SAFETY: caller contract; the thread resuming it is the only one running the run.
+    let s = unsafe { (*run).tasks.as_deref_mut() }
+        .unwrap_or_else(|| fault("a handoff in a run without tasks"));
+    s.current = task;
+    let row = s.task(task);
+    (row.ctx, row.sp)
+}
+
+/// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
+/// for a free one ([`Wait::Pool`]), then resumes there, owned by it, and this returns on that
+/// thread with no compute permit, for the C call.
+///
+/// # Safety
+/// `ctx` is the running task's, on the home thread, outside any foreign interval; it holds
+/// nothing a stop must drop.
+pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
+    let slot = loop {
+        if let Some(slot) = crate::pool::claim(ctx) {
+            break slot;
+        }
+        // SAFETY: caller contract; a pool interval's end wakes the waiters.
+        unsafe { block(ctx, Wait::Pool, false, site) };
+    };
+    let s = scheduler(ctx);
+    let me = s.current;
+    s.task(me).owner = Some(slot);
+    ctx.switch_out();
+    let save = &raw mut s.task(me).sp;
+    // SAFETY: this task is suspended at `save` before the pool thread resumes it.
+    unsafe { crate::pool::hand_off(ctx, save, Some(slot), me, false) };
+    recycle(ctx);
+    slot
+}
+
+/// The running task's pool interval ended (S-13): it goes back to the home thread, and this
+/// returns there; its pool thread takes the next blocking call, and tasks waiting for one
+/// are polled.
+///
+/// # Safety
+/// `ctx` is the running task's, on pool thread `slot` that owns it.
+pub(crate) unsafe fn from_pool(ctx: &mut TaskCtx, slot: u16) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    if s.task(me).owner.take() != Some(slot) {
+        fault("a pool interval left from a thread that does not own it");
+    }
+    ctx.switch_out();
+    let save = &raw mut s.task(me).sp;
+    // SAFETY: this task is suspended at `save` before home resumes it.
+    unsafe { crate::pool::hand_off(ctx, save, None, me, true) };
+    recycle(ctx);
+    crate::pool::release(ctx, slot);
+    let s = scheduler(ctx);
+    for task in std::mem::take(&mut s.pool_waiters) {
+        s.wake(task);
+    }
+}
+
+/// An outermost entry of `serial` gate `gate` by the running task, or a nested re-entry by
+/// the task that holds it: whether it was outermost. An outermost entry waits until the
+/// gate is free (a wait for CONC-8), then takes it.
+///
+/// # Safety
+/// `ctx` is the running task's and holds nothing a stop must drop.
+pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool {
+    let s = scheduler(ctx);
+    let me = s.current;
+    let row = s.gate(gate);
+    if row.owner == Some(me) {
+        row.depth += 1;
+        return false;
+    }
+    if row.owner.is_none() {
+        row.owner = Some(me);
+        row.depth = 1;
+        row.version += 1;
+        if let Some(metrics) = &ctx.run_ref().extern_metrics {
+            metrics.gate_entry(std::time::Duration::ZERO);
+        }
+        return true;
+    }
+    let started = ctx
+        .run_ref()
+        .extern_metrics
+        .as_ref()
+        .map(|_| std::time::Instant::now());
+    // SAFETY: caller contract; the poll takes the gate.
+    unsafe { block(ctx, Wait::Gate { gate }, false, site) };
+    if let (Some(started), Some(metrics)) = (started, &ctx.run_ref().extern_metrics) {
+        metrics.gate_entry(started.elapsed());
+    }
+    true
+}
+
+/// The running task leaves `serial` gate `gate`: an outermost leave frees it and polls the
+/// tasks waiting for it; a nested one only lowers its depth.
+pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    let row = s.gate(gate);
+    if row.owner != Some(me) || row.depth == 0 || (row.depth == 1) != outermost {
+        fault("a serial gate left by a task that does not hold it");
+    }
+    row.depth -= 1;
+    if outermost {
+        row.owner = None;
+        row.version += 1;
+        for task in std::mem::take(&mut row.waiters) {
+            s.wake(task);
+        }
+    }
+}
+
+/// `serial` gate `gate`'s version: the outermost entries and leaves so far.
+pub(crate) fn gate_version(ctx: *mut TaskCtx, gate: u32) -> u64 {
+    scheduler(ctx).gate(gate).version
 }
 
 /// A task resumed: the stack of the task that completed before it is free again.
@@ -868,6 +1054,18 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
         // SAFETY: the parked task holds the set's row.
         Some(Wait::Drain { set }) => unsafe { poll_drained(s, set) },
         Some(Wait::Final) => false,
+        Some(Wait::Gate { gate }) => {
+            let row = s.gate(gate);
+            if row.owner.is_none() {
+                row.owner = Some(task);
+                row.depth = 1;
+                row.version += 1;
+                true
+            } else {
+                false
+            }
+        }
+        Some(Wait::Pool) => crate::pool::has_slot(ctx),
         Some(Wait::Retry { cancelable }) => {
             let shield = s.task(task).shield();
             let canceled = cancelable && s.canceled_task(task, shield).is_some();
@@ -992,6 +1190,8 @@ unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::Wait> {
             Wait::Host { token } => ("host request", vec![token]),
             Wait::Final => ("free.final", vec![]),
             Wait::Retry { .. } => ("free.retry", vec![]),
+            Wait::Gate { gate } => ("foreign.gate", vec![u64::from(gate)]),
+            Wait::Pool => ("foreign.pool", vec![]),
         };
         waits.push(hirsel_run_schema::Wait {
             spawn_path,
@@ -2523,6 +2723,8 @@ fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
 /// The run ended: release the payload blocks its mutexes still hold. Their payloads are
 /// copyable, so the release runs no user code and cannot fail.
 pub(crate) fn end_run(ctx: &mut TaskCtx) {
+    // The run's code ran on this thread last, so its pool threads are idle: they leave.
+    crate::pool::shutdown(ctx.run());
     let Some(s) = ctx.run().tasks.as_deref_mut() else {
         return;
     };

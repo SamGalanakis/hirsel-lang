@@ -143,6 +143,11 @@ fn unsafe_ffi_metadata_errors_are_tool_errors() {
                 "headers_checked must be a boolean",
             ),
             (
+                "threads",
+                json!({"link":[],"headers_checked":false,"threads":"many","wrappers":[]}),
+                "unknown unsafe_ffi threads \"many\"",
+            ),
+            (
                 "field",
                 json!({"link":[],"headers_checked":false,"wrappers":[],"libraries":[]}),
                 "unknown field libraries",

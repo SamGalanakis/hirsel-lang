@@ -68,6 +68,7 @@ fn inputs<'a>(
         inline_instances: &INLINE,
         available_externally: &INLINE,
         callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
         registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
         opt,
         measurement: false,
