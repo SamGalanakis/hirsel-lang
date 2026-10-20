@@ -838,6 +838,7 @@ fn feature_collection_releases_each_cases_process_and_retains_check_errors() {
         .arg(&root)
         .arg("--derive")
         .arg(&output)
+        .args(["--shard", "1/1"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
@@ -864,7 +865,7 @@ fn feature_collection_releases_each_cases_process_and_retains_check_errors() {
             .is_empty()
     );
     assert!(
-        value["selected"]
+        value["protected"]
             .as_array()
             .unwrap()
             .iter()
