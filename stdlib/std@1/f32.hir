@@ -155,6 +155,8 @@ pub fn sum(xs: Array[f32]) -> f32 uses {} {
   pair_range(xs, 0, core@1/array.len(xs))
 }
 
+// Neal xsum.c:852-995: decompose finite terms, then split/add with deferred carries.
+// Special values and all-negative-zero follow Hirsel SEM-2.
 pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
   let mut accumulator = internal.superacc.acc_zero()
   let mut positive_infinity: bool = false

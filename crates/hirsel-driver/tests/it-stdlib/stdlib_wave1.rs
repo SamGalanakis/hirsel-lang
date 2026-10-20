@@ -184,7 +184,7 @@ fn a_package_program_exports_only_the_dependency_definitions_it_reaches() {
             ("application", "", "unused"),
             ("std", "f32", "sum_exact"),
             ("std", "internal/superacc", "acc_add"),
-            ("std", "internal/superacc", "acc_add_word"),
+            ("std", "internal/superacc", "acc_carry"),
             ("std", "internal/superacc", "acc_finish"),
             ("std", "internal/superacc", "acc_zero"),
         ]

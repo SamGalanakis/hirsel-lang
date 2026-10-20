@@ -1,186 +1,150 @@
-// Exact binary superaccumulator (Kulisch): 2240 bits, separate signs.
-// Binary64 needs 2098 value bits plus 64 count bits; 70 limbs suffice for
-// every u64-sized Array. Cancellation precedes one ties-even rounding.
-// See Kulisch, Computer Arithmetic and Validity, de Gruyter 2008.
+// Radford Neal's xsum small accumulator: signed, overlapping 32-bit chunks.
+// Port of radfordneal/xsum @ b766b3e104cdbd6769c8df033fb430700fce32dd:
+// xsum.h:59-95; xsum.c:180-459 (carry), :852-995 (split/add).
+// Copyright 2015, 2018, 2021, 2024 Radford M. Neal, MIT; see
+// native-tests/library/vectors/LICENSE.xsum and third-party/NOTICES.md.
+// Adaptations: 68 chunks cover every u64-sized Array, binary-point origin
+// is the least subnormal bit, and finish rounds directly to either precision.
 pub type Accumulator {
-  plus: Inline[u64, 70],
-  minus: Inline[u64, 70],
+  chunk: Inline[i64, 68],
+  adds_until_propagate: u64,
 }
 
 @noalloc
 pub fn acc_zero() -> Accumulator uses {} {
   Accumulator(
-    plus: [
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64
+    chunk: [
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64,
+      0i64
     ],
-    minus: [
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64,
-      0u64
-    ]
+    adds_until_propagate: 2047
   )
 }
 
+// Normalize lower chunks to [0, 2^32); the top chunk carries the sign.
+// As in xsum_carry_propagate, do not extend a negative sign into zero
+// chunks, and collapse redundant -1 top chunks after cancellation.
 @noalloc
-fn acc_add_word(mut words: Inline[u64, 70], mantissa: u64, shift: u64) -> () uses {} {
-  let mut i = shift / 32
-  let wide: u128 = core@1/int.widen(mantissa)
-  let bit_shift: u128 = core@1/int.widen(shift % 32)
-  let mut carry = wide << bit_shift
-  while carry > 0 {
-    let low: u64 = core@1/int.narrow(carry & 4294967295u128)
-    let combined = words[i] + low
-    words[i] = combined & 4294967295u64
-    carry = (carry >> 32) + core@1/int.widen(combined >> 32)
+fn acc_carry(mut accumulator: Accumulator) -> u64 uses {} {
+  let mut top: u64 = 67
+  while top > 0 && accumulator.chunk[top] == 0 {
+    top -= 1
+  }
+  let mut i: u64 = 0
+  while i <= top {
+    let value = copy accumulator.chunk[i]
+    let high = value >> 32
+    if high != 0 {
+      if i == top {
+        if high == -1 {
+          break
+        }
+        top += 1
+      }
+      accumulator.chunk[i] = value & 4294967295i64
+      accumulator.chunk[i + 1] += high
+    }
     i += 1
   }
+  while top > 0 && accumulator.chunk[top] == 0 {
+    top -= 1
+  }
+  while top > 0 && accumulator.chunk[top] == -1 {
+    accumulator.chunk[top - 1] -= 4294967296i64
+    accumulator.chunk[top] = 0
+    top -= 1
+  }
+  accumulator.adds_until_propagate = 2046
+  top
 }
 
 @noalloc
 pub fn acc_add(mut accumulator: Accumulator, mantissa: u64, shift: u64, negative: bool) -> () uses {} {
-  if negative {
-    acc_add_word(mut accumulator.minus, mantissa, shift)
-  } else {
-    acc_add_word(mut accumulator.plus, mantissa, shift)
+  if accumulator.adds_until_propagate == 0 {
+    acc_carry(mut accumulator);
   }
+  let index = shift / 32
+  let low: i64 = core@1/int.narrow(mantissa << shift % 32 & 4294967295u64)
+  let high: i64 = core@1/int.narrow(mantissa >> 32 - shift % 32)
+  if negative {
+    accumulator.chunk[index] -= low
+    accumulator.chunk[index + 1] -= high
+  } else {
+    accumulator.chunk[index] += low
+    accumulator.chunk[index + 1] += high
+  }
+  accumulator.adds_until_propagate -= 1
 }
 
+// A single guard/sticky ties-even rounding shared by binary32 and binary64.
+// Normalize the magnitude of a negative sum before extracting its bits; this
+// permits direct binary32 rounding without a binary64 intermediate.
 @noalloc
 pub fn acc_finish(
   accumulator: Accumulator,
@@ -189,59 +153,31 @@ pub fn acc_finish(
   sign_bit: u64,
   all_negative_zero: bool
 ) -> u64 uses {} {
-  let mut order: i32 = 0
-  let mut i: u64 = 70
-  while i > 0 {
-    i -= 1
-    if accumulator.plus[i] != accumulator.minus[i] {
-      order = if accumulator.plus[i] < accumulator.minus[i] {
-        -1
-      } else {
-        1
-      }
-      break
-    }
-  }
-  if order == 0 {
+  let mut state = copy accumulator
+  let mut top_index = acc_carry(mut state)
+  if top_index == 0 && state.chunk[0] == 0 {
     return if all_negative_zero {
       sign_bit
     } else {
       0
     }
   }
-  let mut words = if order < 0 {
-    accumulator.minus
-  } else {
-    accumulator.plus
-  }
-  let smaller = if order < 0 {
-    accumulator.plus
-  } else {
-    accumulator.minus
-  }
-  let mut borrow: u64 = 0
-  i = 0
-  while i < 70 {
-    let subtrahend = smaller[i] + borrow
-    if words[i] < subtrahend {
-      words[i] = words[i] + 4294967296 - subtrahend
-      borrow = 1
-    } else {
-      words[i] -= subtrahend
-      borrow = 0
+  let negative = state.chunk[top_index] < 0
+  if negative {
+    let mut j: u64 = 0
+    while j <= top_index {
+      state.chunk[j] = -state.chunk[j]
+      j += 1
     }
-    i += 1
+    top_index = acc_carry(mut state)
   }
-  let sign: u64 = if order < 0 {
+  let sign = if negative {
     sign_bit
   } else {
-    0
+    0u64
   }
-  i = 70
-  while words[i - 1] == 0 {
-    i -= 1
-  }
-  let mut top: u64 = copy words[i - 1]
+  let mut i = top_index + 1
+  let mut top: u64 = core@1/int.narrow(state.chunk[i - 1])
   let mut highest = (i - 1) * 32
   while top > 1 {
     top >>= 1
@@ -259,22 +195,24 @@ pub fn acc_finish(
   i = highest + 1
   while i > shift {
     i -= 1
-    mantissa = mantissa << 1 | words[i / 32] >> i % 32 & 1u64
+    let offset: i64 = core@1/int.narrow(i % 32)
+    let bit: u64 = core@1/int.narrow(state.chunk[i / 32] >> offset & 1i64)
+    mantissa = mantissa << 1 | bit
   }
   if highest < fraction {
     return sign | mantissa
   }
   if shift > 0 {
     let guard_limb = (shift - 1) / 32
-    let guard_offset = (shift - 1) % 32
-    let guard = words[guard_limb] >> guard_offset & 1u64
+    let guard_offset: i64 = core@1/int.narrow((shift - 1) % 32)
+    let guard = state.chunk[guard_limb] >> guard_offset & 1i64
     let mut sticky: bool = false
     i = 0
     while i < guard_limb {
-      sticky = sticky || words[i] != 0
+      sticky = sticky || state.chunk[i] != 0
       i += 1
     }
-    sticky = sticky || words[guard_limb] & (1u64 << guard_offset) - 1 != 0
+    sticky = sticky || state.chunk[guard_limb] & (1i64 << guard_offset) - 1 != 0
     if guard != 0 && (sticky || mantissa % 2 != 0) {
       mantissa += 1
     }
