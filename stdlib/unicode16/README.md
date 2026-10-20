@@ -134,12 +134,14 @@ version supplies expected values.
 
 Rust flt2dec's 97 exact rows are pinned in
 `crates/hirsel-driver/tests/fixtures/flt2dec-exact.json`, with source line numbers,
-and carried in seven `SEM-3-fstring-flt2dec-exact-*` corpus cases. A Rust test
+and carried in ten `SEM-3-fstring-flt2dec-exact-*` kernel corpus cases, with
+62 public fixed-format checks in three companion `*-public-*` cases. A Rust test
 also ports `check_exact`'s varying precision and zero-extension loops (1,706
 rounding comparisons). A shared internal rounding helper is extracted unchanged
-from `fixed`. The corpus fixtures select the std source package itself, keeping
-`internal` modules private while testing decimal cutoffs above the radix point,
-which Hirsel fstrings do not expose. The eight binary16 rows retain their exact dyadic
+from `fixed`. The kernel fixtures select just std's bigint and rounding source
+files as the std package, keeping `internal` modules private while testing
+decimal cutoffs above the radix point, which Hirsel fstrings do not expose.
+The eight binary16 rows retain their exact dyadic
 values, widened to binary32 for fstrings because Hirsel has no binary16 scalar.
 The bigint coefficient at each requested decimal cutoff replaces Rust's
 coefficient/exponent buffer pair; this is the same numeric result and checks

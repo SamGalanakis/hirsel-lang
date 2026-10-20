@@ -62,30 +62,14 @@ pub fn main(t: Test) -> Result[(), ()] {
   exact(t, 15059547u64, 71i32, "355584", 23i32)
   // mod.rs:380: 16015691p-99f32; digits=7, decimal exponent=-22.
   exact(t, 16015691u64, -99i32, "2526831", -29i32)
-  test.check(
-    t,
-    f"{core@1/f32.from_bits(435446091u32):.29}" == "0.00000000000000000000002526831"
-  )
   // mod.rs:381: 8667859p56f32; digits=8, decimal exponent=24.
   exact(t, 8667859u64, 56i32, "62458507", 16i32)
   // mod.rs:382: 14855922p-82f32; digits=9, decimal exponent=-17.
   exact(t, 14855922u64, -82i32, "307213267", -26i32)
-  test.check(
-    t,
-    f"{core@1/f32.from_bits(576892658u32):.26}" == "0.00000000000000000307213267"
-  )
   // mod.rs:383: 14855922p-83f32; digits=10, decimal exponent=-17.
   exact(t, 14855922u64, -83i32, "1536066333", -27i32)
-  test.check(
-    t,
-    f"{core@1/f32.from_bits(568504050u32):.27}" == "0.000000000000000001536066333"
-  )
   // mod.rs:384: 10144164p-110f32; digits=11, decimal exponent=-26.
   exact(t, 10144164u64, -110i32, "78147796834", -37i32)
-  test.check(
-    t,
-    f"{core@1/f32.from_bits(337299876u32):.37}" == "0.0000000000000000000000000078147796834"
-  )
   // mod.rs:385: 13248074p95f32; digits=12, decimal exponent=36.
   exact(t, 13248074u64, 95i32, "524810279937", 24i32)
   // mod.rs:460: 0.1f64; digits=38, decimal exponent=0.
@@ -96,10 +80,6 @@ pub fn main(t: Test) -> Result[(), ()] {
     "10000000000000000555111512312578270212",
     -38i32
   )
-  test.check(
-    t,
-    f"{core@1/f64.from_bits(4591870180066957722u64):.38}" == "0.10000000000000000555111512312578270212"
-  )
   // mod.rs:461: 0.45f64; digits=38, decimal exponent=0.
   exact(
     t,
@@ -107,10 +87,6 @@ pub fn main(t: Test) -> Result[(), ()] {
     -54i32,
     "45000000000000001110223024625156540424",
     -38i32
-  )
-  test.check(
-    t,
-    f"{core@1/f64.from_bits(4601778099247172813u64):.38}" == "0.45000000000000001110223024625156540424"
   )
   Ok(())
 }

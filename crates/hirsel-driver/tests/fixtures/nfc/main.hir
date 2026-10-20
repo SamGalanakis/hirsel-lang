@@ -62,7 +62,11 @@ pub fn batch_properties(s: String) -> Bytes uses {} {
       flags |= 4u8
     }
     core@1/list.push(mut out, flags)
-    for mapped in [std@1/unicode.simple_lower(c), std@1/unicode.simple_upper(c)] {
+    let mappings: Inline[char, 2] = [
+      std@1/unicode.simple_lower(c),
+      std@1/unicode.simple_upper(c)
+    ]
+    for mapped in mappings {
       let cp = core@1/char.to_u32(mapped)
       core@1/list.push(mut out, core@1/int.narrow(cp >> 16))
       core@1/list.push(mut out, core@1/int.narrow(cp >> 8 & 255u32))

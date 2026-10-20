@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "../../stdlib/std@1/big.hir",
+      "module": [
+        "internal",
+        "big"
+      ]
+    },
+    {
+      "path": "../../stdlib/std@1/format_round.hir",
+      "module": [
+        "internal",
+        "format"
+      ]
+    },
+    {
+      "path": "SEM-3-fstring-flt2dec-exact-8-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

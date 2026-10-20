@@ -1,0 +1,64 @@
+// rule: SEM-3
+// expect: run
+// Rust coretests/tests/num/flt2dec/mod.rs, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
+// MIT; third-party/NOTICES.md. Original check_exact/check_exact_one row lines below.
+fn exact(t: Test, mantissa: u64, exponent: i32, expected: String, cutoff: i32) -> () {
+  let mut actual = std@1/internal.big.big_from_word(mantissa)
+  let scale: u64 = if exponent < 0 {
+    core@1/int.narrow(-exponent)
+  } else {
+    0u64
+  }
+  std@1/internal.big.big_power(
+    mut actual,
+    if exponent < 0 {
+      5u64
+    } else {
+      2u64
+    },
+    if exponent < 0 {
+      scale
+    } else {
+      core@1/int.narrow(exponent)
+    }
+  )
+  let decimal_scale: i32 = core@1/int.narrow(scale)
+  let places = decimal_scale + cutoff
+  if places >= 0 {
+    std@1/internal.format.round_decimal(mut actual, core@1/int.narrow(places))
+  } else {
+    std@1/internal.big.big_power(mut actual, 10, core@1/int.narrow(-places))
+  }
+  let mut wanted = std@1/internal.big.big_from_word(0)
+  let mut chunk: u64 = 0
+  let mut power: u64 = 1
+  for digit in core@1/string.as_bytes(expected) {
+    chunk = chunk * 10 + core@1/int.widen(digit - 48u8)
+    power *= 10
+    if power == 1000000000 {
+      std@1/internal.big.big_mul_word(mut wanted, power)
+      std@1/internal.big.big_add_small(mut wanted, chunk)
+      chunk = 0
+      power = 1
+    }
+  }
+  std@1/internal.big.big_mul_word(mut wanted, power)
+  std@1/internal.big.big_add_small(mut wanted, chunk)
+  test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // mod.rs:533: 5592117679628511p164f64; digits=17, decimal exponent=66.
+  exact(t, 5592117679628511u64, 164i32, "13076622631878654", 49i32)
+  // mod.rs:534: 8887055249355788p665f64; digits=18, decimal exponent=217.
+  exact(t, 8887055249355788u64, 665i32, "136052020756121240", 199i32)
+  // mod.rs:535: 6994187472632449p690f64; digits=19, decimal exponent=224.
+  exact(t, 6994187472632449u64, 690i32, "3592810217475959676", 205i32)
+  // mod.rs:536: 8797576579012143p588f64; digits=20, decimal exponent=193.
+  exact(t, 8797576579012143u64, 588i32, "89125197712484551899", 173i32)
+  // mod.rs:537: 7363326733505337p272f64; digits=21, decimal exponent=98.
+  exact(t, 7363326733505337u64, 272i32, "558769757362301140950", 77i32)
+  // mod.rs:538: 8549497411294502p-448f64; digits=22, decimal exponent=-118.
+  exact(t, 8549497411294502u64, -448i32, "1176257830728540379990", -140i32)
+  Ok(())
+}

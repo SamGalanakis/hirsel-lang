@@ -1043,6 +1043,13 @@
       "module": [
         "markdown"
       ]
+    },
+    {
+      "path": "format_round.hir",
+      "module": [
+        "internal",
+        "format"
+      ]
     }
   ],
   "dependencies": []
