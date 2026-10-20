@@ -20,7 +20,7 @@ fn callback(f: &mut Fixture, guarantee: Guarantee, promised: bool) -> FunctionTy
         kind: BuiltinType::Iter,
         arguments: vec![GenericArgument::Type(element)].into(),
     }));
-    let mut result = f.definition.types.get(iterator).unwrap().clone();
+    let mut result = interner().get(iterator).unwrap().clone();
     if matches!(guarantee, Guarantee::Captures) && promised {
         result.erased_captures = Some(ErasedCaptures::FromArguments(
             vec![ParameterRef::bound(ParamId(0)).into()].into(),
@@ -68,7 +68,6 @@ fn callback(f: &mut Fixture, guarantee: Guarantee, promised: bool) -> FunctionTy
 
 fn declaration(f: &mut Fixture, name: &str, function: FunctionType) {
     let mut signature = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
-    signature.types = f.definition.types.clone();
     signature.kind = SignatureKind::Function(function);
     f.signatures.insert(signature.definition.clone(), signature);
 }

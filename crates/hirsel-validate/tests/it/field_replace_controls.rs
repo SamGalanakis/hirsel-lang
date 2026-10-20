@@ -6,7 +6,7 @@ fn declare_owner(f: &mut Fixture) {
     if let SignatureKind::Function(fun) = &mut signature.kind {
         for parameter in &mut fun.parameters[1..] {
             parameter.passing = PassingMode::Borrow;
-            parameter.ty = map_type_origins(&mut signature.types, parameter.ty, |origin, depth| {
+            parameter.ty = map_type_origins(interner(), parameter.ty, |origin, depth| {
                 let mut origin = origin.clone();
                 if let OriginRoot::Parameter(ParameterRef::Body { parameter, .. }) = origin.root {
                     origin.root = OriginRoot::Parameter(ParameterRef::Bound { depth, parameter });
@@ -49,9 +49,8 @@ fn replaced_field() -> (Fixture, u32, u32) {
     );
     let representation = f.definition.types.push(ty(record));
     let declaration = Signature {
-        definition: path("Record"),
+        definition: id("Record"),
         metadata: Default::default(),
-        types: f.definition.types.clone(),
         fingerprint: ContentHash::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
@@ -73,10 +72,10 @@ fn replaced_field() -> (Fixture, u32, u32) {
             destructor_allocation: Allocation::NoAlloc,
         }),
     };
-    f.signatures.insert(path("Record"), declaration);
+    f.signatures.insert(id("Record"), declaration);
     let receiver = f.slot(
         TypeKind::Named {
-            definition: path("Record"),
+            definition: id("Record"),
             arguments: vec![].into(),
         },
         Storage::Parameter,
@@ -125,12 +124,12 @@ fn replaced_field() -> (Fixture, u32, u32) {
         kind: OriginBindingKind::Fresh,
     });
     declare_owner(&mut f);
-    let mut callee = f.signatures[&path("main")].clone();
-    callee.definition = path("sent");
+    let mut callee = f.signatures.get(id("main")).unwrap().clone();
+    callee.definition = id("sent");
     if let SignatureKind::Function(fun) = &mut callee.kind {
         fun.parameters.truncate(1);
     }
-    f.signatures.insert(path("sent"), callee);
+    f.signatures.insert(id("sent"), callee);
     let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
@@ -162,7 +161,7 @@ fn replacement_still_requires_the_declared_sibling_owner() {
     let (mut f, incoming, _) = replaced_field();
     let scope = f.body().parameter_scope;
     let old = f.body().locals[incoming as usize].ty;
-    let mut wrong = f.definition.types.get(old).unwrap().clone();
+    let mut wrong = interner().get(old).unwrap().clone();
     wrong.brand.alternatives[0] = Origin {
         root: OriginRoot::Parameter(ParameterRef::body(scope, ParamId(2))),
         fields: vec![].into(),

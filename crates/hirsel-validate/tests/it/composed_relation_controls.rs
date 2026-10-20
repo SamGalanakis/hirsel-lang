@@ -20,9 +20,7 @@ fn composed(view: View, storage: Storage, early: u32) -> (Fixture, u32) {
     let mut f = Fixture::unit();
     let string = TypeKind::Primitive(Primitive::String);
     let localize = |f: &mut Fixture, place: u32| {
-        let mut row = f
-            .definition
-            .types
+        let mut row = interner()
             .get(f.definition.bodies[0].places[place as usize].ty)
             .unwrap()
             .clone();
@@ -163,10 +161,10 @@ fn composed(view: View, storage: Storage, early: u32) -> (Fixture, u32) {
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
-    let mut result = signature.types.get(fun.result).unwrap().clone();
+    let mut result = interner().get(fun.result).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    fun.result = signature.types.push(result);
-    f.signatures.insert(path("get"), signature);
+    fun.result = interner().intern(result);
+    f.signatures.insert(id("get"), signature);
     (f, r)
 }
 

@@ -21,10 +21,8 @@ fn holder(resource: bool) -> Holder {
     let string = f.body().places[x as usize].ty;
     let kind = if resource {
         let mut signature = function_signature("guard", vec![], TypeKind::Tuple(vec![].into()));
-        let field = signature
-            .types
-            .push(ty(TypeKind::Primitive(Primitive::String)));
-        let representation = signature.types.push(ty(TypeKind::Record(
+        let field = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
+        let representation = interner().intern(ty(TypeKind::Record(
             vec![Field {
                 name: "data".into(),
                 ty: field,
@@ -51,9 +49,9 @@ fn holder(resource: bool) -> Holder {
             fact: None,
             captures: None,
         });
-        f.signatures.insert(path("guard"), signature);
+        f.signatures.insert(id("guard"), signature);
         TypeKind::Named {
-            definition: path("guard"),
+            definition: id("guard"),
             arguments: vec![].into(),
         }
     } else {
@@ -83,7 +81,7 @@ fn holder(resource: bool) -> Holder {
     // Install a view of x as field 0: the holder now holds loan 0.
     // A holder of a view is local storage (MODE-1), as lowering types it.
     let local = |f: &mut Fixture, t: TypeId| {
-        let mut row = f.definition.types.get(t).unwrap().clone();
+        let mut row = interner().get(t).unwrap().clone();
         row.modes.relation = Relation::environment();
         f.definition.types.push(row)
     };
@@ -134,7 +132,7 @@ fn holder(resource: bool) -> Holder {
 /// Give a slot the local variant of its type.
 fn localize(f: &mut Fixture, place: u32) {
     let global = f.body().places[place as usize].ty;
-    let mut row = f.definition.types.get(global).unwrap().clone();
+    let mut row = interner().get(global).unwrap().clone();
     row.modes.relation = Relation::environment();
     let local = f.definition.types.push(row);
     let root = f.body().places[place as usize].root;

@@ -1,12 +1,70 @@
 //! Hand-built TIR fixtures. The crate's unit tests include this file by path
 //! (`src/lib.rs`), so it names the crate as `hirsel_validate` in both builds.
 use hirsel_span::Span;
-use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
+use hirsel_syntax::{ContentHash, DefId, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
 use hirsel_types::*;
 use hirsel_validate::{SignatureMap, ViolationKind, assert_valid, validate};
 
+thread_local! {
+    static SESSION: (std::sync::Arc<TypeInterner>, &'static TypeInterner) = {
+        let t = TypeInterner::new(None);
+        // Each test runs on its own thread; its interner lives as long as the test.
+        let leaked = unsafe { &*std::sync::Arc::into_raw(t.clone()) };
+        (t, leaked)
+    };
+}
+/// This test thread's session interner.
+pub(crate) fn session() -> std::sync::Arc<TypeInterner> {
+    SESSION.with(|s| s.0.clone())
+}
+/// This test thread's session interner, borrowed for the test's lifetime.
+pub(crate) fn interner() -> &'static TypeInterner {
+    SESSION.with(|s| s.1)
+}
+/// A definition's closure table as fixtures grow it: every row a fixture adds
+/// joins the table with the rows it reaches, as rows once joined a store.
+pub(crate) trait Table {
+    /// Interns `row` and adds it (with its closure) to the table.
+    fn push(&mut self, row: Type) -> TypeId;
+    /// Adds an interned row and its closure to the table.
+    fn adopt(&mut self, root: TypeId) -> TypeId;
+    /// The `index`th row of the table.
+    fn id(&self, index: usize) -> Option<TypeId>;
+}
+impl Table for std::sync::Arc<[TypeId]> {
+    fn push(&mut self, row: Type) -> TypeId {
+        let id = interner().intern(row);
+        self.adopt(id)
+    }
+    fn adopt(&mut self, root: TypeId) -> TypeId {
+        let mut rows = self.to_vec();
+        for &id in closure(interner(), [root]).iter() {
+            if !rows.contains(&id) {
+                rows.push(id);
+            }
+        }
+        *self = rows.into();
+        root
+    }
+    fn id(&self, index: usize) -> Option<TypeId> {
+        self.get(index).copied()
+    }
+}
+/// Rows a fixture interns outside any definition's table (signature rows).
+pub(crate) trait Rows {
+    fn push(&self, row: Type) -> TypeId;
+}
+impl Rows for TypeInterner {
+    fn push(&self, row: Type) -> TypeId {
+        self.intern(row)
+    }
+}
+/// The session id of a fixture item.
+pub(crate) fn id(name: &str) -> DefId {
+    DefId::intern(&path(name))
+}
 pub(crate) fn path(name: &str) -> DefPath {
     DefPath(ItemPath {
         package: PackageId {
@@ -73,14 +131,14 @@ pub(crate) struct Fixture {
 }
 impl Fixture {
     pub(crate) fn unit() -> Self {
-        let mut types = TypeStore::default();
+        let mut types: std::sync::Arc<[TypeId]> = std::sync::Arc::new([]);
         let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
         Self {
             definition: Definition {
                 caller_bodies: vec![],
                 protocol_associations: vec![],
                 types,
-                path: path("main"),
+                path: id("main"),
                 signature_hash: ContentHash::default(),
                 entry: BodyId(0),
                 contracts: vec![],
@@ -123,7 +181,7 @@ impl Fixture {
                     matches: vec![],
                 }],
             },
-            signatures: SignatureMap::new(),
+            signatures: SignatureMap::new(session()),
         }
     }
     pub(crate) fn body(&mut self) -> &mut Body {
@@ -132,7 +190,7 @@ impl Fixture {
     pub(crate) fn slot(&mut self, kind: TypeKind, storage: Storage) -> u32 {
         let body = &mut self.definition.bodies[0];
         let t = self.definition.types.push(ty(kind));
-        let t = map_generic_binders(&mut self.definition.types, t, |binder, nested| {
+        let t = map_generic_binders(interner(), t, |binder, nested| {
             Ok(match binder {
                 GenericBinder::Bound(depth) if depth == nested => {
                     GenericBinder::Body(body.parameter_scope)
@@ -141,6 +199,7 @@ impl Fixture {
             })
         })
         .unwrap();
+        self.definition.types.adopt(t);
         let id = body.locals.len() as u32;
         body.locals.push(Local {
             ty: t,
@@ -178,10 +237,10 @@ impl Fixture {
         id
     }
     pub(crate) fn valid(&self) {
-        assert_valid(&self.definition, &self.signatures);
+        assert_valid(&self.definition, interner(), &self.signatures);
     }
     pub(crate) fn kinds(&self) -> Vec<ViolationKind> {
-        validate(&self.definition, &self.signatures, &mut vec![])
+        validate(&self.definition, interner(), &self.signatures, &mut vec![])
             .violations
             .into_iter()
             .map(|v| v.kind)
@@ -286,23 +345,20 @@ pub(crate) fn function_signature(
     params: Vec<(PassingMode, TypeKind)>,
     result: TypeKind,
 ) -> Signature {
-    let mut types = TypeStore::default();
-    // Deliberately unrelated row numbering to the caller store.
-    types.push(ty(TypeKind::Primitive(Primitive::Bool)));
-    let result = types.push(ty(result));
+    let types = interner();
+    let result = types.intern(ty(result));
     let parameters = params
         .into_iter()
         .map(|(passing, kind)| Parameter {
             name: None,
             label: None,
             passing,
-            ty: types.push(ty(kind)),
+            ty: types.intern(ty(kind)),
         })
         .collect();
     Signature {
         metadata: SignatureMetadata::default(),
-        definition: path(name),
-        types,
+        definition: id(name),
         kind: SignatureKind::Function(FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
@@ -323,10 +379,9 @@ pub(crate) fn function_signature(
 pub(crate) fn owner_signature(f: &mut Fixture, passing: PassingMode) {
     let b = &f.definition.bodies[0];
     let mut s = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
-    s.types = f.definition.types.clone();
     if let SignatureKind::Function(fun) = &mut s.kind {
-        let close = |types: &mut TypeStore, root| {
-            map_generic_binders(types, root, |binder, nested| {
+        let close = |root| {
+            map_generic_binders(interner(), root, |binder, nested| {
                 Ok(match binder {
                     GenericBinder::Body(scope) if scope == b.parameter_scope => {
                         GenericBinder::Bound(nested)
@@ -336,7 +391,7 @@ pub(crate) fn owner_signature(f: &mut Fixture, passing: PassingMode) {
             })
             .unwrap()
         };
-        fun.result = close(&mut s.types, b.result);
+        fun.result = close(b.result);
         fun.parameters = b
             .parameters
             .iter()
@@ -344,11 +399,11 @@ pub(crate) fn owner_signature(f: &mut Fixture, passing: PassingMode) {
                 name: None,
                 label: None,
                 passing,
-                ty: close(&mut s.types, b.locals[l.0 as usize].ty),
+                ty: close(b.locals[l.0 as usize].ty),
             })
             .collect();
     }
-    f.signatures.insert(path("main"), s);
+    f.signatures.insert(id("main"), s);
 }
 
 /// Registers the registry Arena and adds a slot of that type.
@@ -381,10 +436,10 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
     });
-    f.signatures.insert(path("Arena"), arena);
+    f.signatures.insert(id("Arena"), arena);
     f.slot(
         TypeKind::Named {
-            definition: path("Arena"),
+            definition: id("Arena"),
             arguments: vec![].into(),
         },
         storage,
@@ -460,7 +515,7 @@ pub(crate) fn captured_generic_copy(outer_plain: bool, inner_plain: bool, alias:
     fun.uses = Uses::Unrestricted;
     let c = f.slot(TypeKind::Function(fun), Storage::Local);
     let ct = f.body().places[c as usize].ty;
-    let mut row = f.definition.types.get(ct).unwrap().clone();
+    let mut row = interner().row(ct).clone();
     row.modes.relation = Relation::environment();
     let ct = f.definition.types.push(row);
     f.body().places[c as usize].ty = ct;
@@ -511,8 +566,7 @@ pub(crate) fn captured_generic_copy(outer_plain: bool, inner_plain: bool, alias:
     let cleanup = f.cleanup(vec![drop(c)]);
     f.body().blocks[0].terminator = ret(0, cleanup);
     owner_sig(&mut f, &[PassingMode::Borrow]);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };

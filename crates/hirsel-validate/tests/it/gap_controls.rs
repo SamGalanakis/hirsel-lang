@@ -328,7 +328,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         .collect::<Vec<_>>();
     let self_place = f.slot(
         TypeKind::Named {
-            definition: path("main"),
+            definition: id("main"),
             arguments: arguments.into(),
         },
         Storage::Parameter,
@@ -364,7 +364,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         fact: None,
         captures: None,
     });
-    f.signatures.insert(path("main"), signature);
+    f.signatures.insert(id("main"), signature);
     f
 }
 

@@ -20,7 +20,7 @@ fn callback(selected: bool) -> Fixture {
     for _ in 0..2 {
         let p = f.slot(TypeKind::Function(callable.clone()), Storage::Parameter);
         let old = f.body().places[p as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.relation = Relation::environment();
         let local = f.definition.types.push(row);
         f.body().locals[p as usize].ty = local;
@@ -89,7 +89,7 @@ fn nested_once_callback(selected: Option<bool>) -> Fixture {
     };
     let input = f.slot(TypeKind::Function(callback.clone()), Storage::Parameter);
     let old = f.body().places[input as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.modes.multiplicity = Multiplicity::Once;
     let once = f.definition.types.push(row);
     f.body().locals[input as usize].ty = once;
@@ -189,7 +189,7 @@ fn byte_index(write: bool) -> Fixture {
     let mut f = Fixture::unit();
     let input = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Parameter);
     let old = f.body().places[input as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let unique = f.definition.types.push(row);
     f.body().places[input as usize].ty = unique;
@@ -254,7 +254,7 @@ fn inactive_payload(present: bool) -> Fixture {
         .definition
         .types
         .push(ty(TypeKind::Primitive(Primitive::U64)));
-    let mut branded = f.definition.types.get(scalar).unwrap().clone();
+    let mut branded = interner().get(scalar).unwrap().clone();
     branded.brand = Brand {
         alternatives: vec![Origin {
             root: OriginRoot::Parameter(ParameterRef::body(f.body().parameter_scope, ParamId(0))),
@@ -265,7 +265,7 @@ fn inactive_payload(present: bool) -> Fixture {
     let branded = f.definition.types.push(branded);
     let input = f.slot(
         TypeKind::Named {
-            definition: path("Choice"),
+            definition: id("Choice"),
             arguments: vec![GenericArgument::Type(scalar)].into(),
         },
         Storage::Temporary,
@@ -293,13 +293,13 @@ fn inactive_payload(present: bool) -> Fixture {
     );
     let output = f.slot(
         TypeKind::Named {
-            definition: path("Choice"),
+            definition: id("Choice"),
             arguments: vec![GenericArgument::Type(branded)].into(),
         },
         Storage::Temporary,
     );
     f.assign(output, Rvalue::Use(take(input)), 0);
-    let mut types = TypeStore::default();
+    let types = interner();
     let parameter = types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
@@ -317,11 +317,10 @@ fn inactive_payload(present: bool) -> Fixture {
         .into(),
     )));
     f.signatures.insert(
-        path("Choice"),
+        id("Choice"),
         Signature {
-            definition: path("Choice"),
+            definition: id("Choice"),
             metadata: Default::default(),
-            types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -366,8 +365,7 @@ fn inactive_expiry(present: bool) -> Fixture {
     let mut f = inactive_payload(false);
     if present {
         let choice = f.body().places[3].ty;
-        let TypeKind::Named { arguments, .. } = &f.definition.types.get(choice).unwrap().kind
-        else {
+        let TypeKind::Named { arguments, .. } = &interner().get(choice).unwrap().kind else {
             unreachable!()
         };
         let GenericArgument::Type(branded) = arguments[0] else {
@@ -413,14 +411,10 @@ fn inactive_expiry(present: bool) -> Fixture {
         let SignatureKind::Function(header) = &mut signature.kind else {
             unreachable!()
         };
-        let mut declared = signature
-            .types
-            .get(header.parameters[1].ty)
-            .unwrap()
-            .clone();
+        let mut declared = interner().get(header.parameters[1].ty).unwrap().clone();
         declared.brand.alternatives[0].root =
             OriginRoot::Parameter(ParameterRef::bound(ParamId(0)));
-        header.parameters[1].ty = signature.types.push(declared);
+        header.parameters[1].ty = interner().intern(declared);
     }
     f
 }
@@ -575,8 +569,7 @@ fn an_active_unbranded_call_result_cannot_acquire_a_payload_brand() {
     for forged in [false, true] {
         let mut f = captured_inactive_payload(false);
         let unbranded = f.body().places[2].ty;
-        let TypeKind::Named { arguments, .. } = &f.definition.types.get(unbranded).unwrap().kind
-        else {
+        let TypeKind::Named { arguments, .. } = &interner().get(unbranded).unwrap().kind else {
             unreachable!()
         };
         let GenericArgument::Type(scalar) = arguments[0] else {
@@ -650,7 +643,7 @@ fn an_active_unbranded_call_result_cannot_acquire_a_payload_brand() {
             })
             .unwrap();
         let old = f.body().places[closure.0 as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         let TypeKind::Function(function) = &mut row.kind else {
             unreachable!()
         };

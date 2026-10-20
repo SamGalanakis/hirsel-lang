@@ -120,25 +120,26 @@ mod tests {
 
     #[test]
     fn queries_preserve_brands_arena_filter_and_nested_binder_depths() {
-        let mut store = TypeStore::default();
+        let session = hirsel_types::TypeInterner::new(None);
+        let store = &*session;
         let origin = Origin {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
             fields: vec![].into(),
         };
-        let branded = store.push(Type {
+        let branded = store.intern(Type {
             brand: Brand {
                 alternatives: vec![origin.clone()].into(),
             },
             ..Type::unit()
         });
-        let placed = store.push(Type {
+        let placed = store.intern(Type {
             modes: hirsel_types::Modes {
                 relation: Relation::place(origin),
                 ..hirsel_types::Modes::global()
             },
             ..Type::unit()
         });
-        let callable = store.push(Type {
+        let callable = store.intern(Type {
             kind: TypeKind::Function(FunctionType {
                 state_promises: Default::default(),
                 generics: vec![].into(),
@@ -154,7 +155,7 @@ mod tests {
             }),
             ..Type::unit()
         });
-        let root = store.push(Type {
+        let root = store.intern(Type {
             kind: TypeKind::Tuple(vec![branded, placed, callable, callable].into()),
             ..Type::unit()
         });
@@ -162,7 +163,7 @@ mod tests {
         for arena in [false, true, false] {
             let mut expected = BTreeSet::new();
             hirsel_types::visit_type_origins_where(
-                &store,
+                store,
                 root,
                 |_| arena,
                 |o, d| {
@@ -173,7 +174,7 @@ mod tests {
             .unwrap();
             let mut actual = BTreeSet::new();
             cache
-                .visit(&store, root, &|_| arena, |o, d| {
+                .visit(store, root, &|_| arena, |o, d| {
                     actual.insert((o.clone(), d));
                     Ok(())
                 })
@@ -186,9 +187,10 @@ mod tests {
     #[test]
     fn repeated_plain_subtrees_are_inspected_once_per_body() {
         use hirsel_intern::work::{self, Counter};
-        let mut store = TypeStore::default();
-        let leaf = store.push(Type::unit());
-        let root = store.push(Type {
+        let session = hirsel_types::TypeInterner::new(None);
+        let store = &*session;
+        let leaf = store.intern(Type::unit());
+        let root = store.intern(Type {
             kind: TypeKind::Tuple(vec![leaf; 1024].into()),
             ..Type::unit()
         });
@@ -196,7 +198,7 @@ mod tests {
         let before = work::read(Counter::ValidateOriginDependencyRows);
         for _ in 0..1024 {
             cache
-                .visit(&store, root, &|_| true, |_, _| {
+                .visit(store, root, &|_| true, |_, _| {
                     panic!("plain subtree has an origin")
                 })
                 .unwrap();

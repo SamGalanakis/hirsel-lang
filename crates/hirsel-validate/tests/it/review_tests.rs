@@ -4,7 +4,7 @@ use super::*;
 fn nested_constructor_siblings_keep_independent_loan_cells() {
     fn localize(f: &mut Fixture, place: u32) -> TypeId {
         let old = f.body().places[place as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.relation = Relation::environment();
         let ty = f.definition.types.push(row);
         let root = f.body().places[place as usize].root;
@@ -48,7 +48,7 @@ fn nested_constructor_siblings_keep_independent_loan_cells() {
         });
         let selected = f.body().places.len() as u32;
         let selected_ty = if read_borrowed_sibling {
-            let mut row = f.definition.types.get(text).unwrap().clone();
+            let mut row = interner().get(text).unwrap().clone();
             row.modes.relation = Relation::environment();
             f.definition.types.push(row)
         } else {
@@ -193,7 +193,7 @@ fn consuming_closure(capture_usage: UseKind, multiplicity: Multiplicity, calls: 
     f.definition.bodies.push(nested);
     let c = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
     let ct = f.body().places[c as usize].ty;
-    let mut row = f.definition.types.get(ct).unwrap().clone();
+    let mut row = interner().get(ct).unwrap().clone();
     row.modes.multiplicity = multiplicity;
     let ct2 = f.definition.types.push(row);
     let cl = f.body().places[c as usize].root;
@@ -258,14 +258,13 @@ fn p5a_closure_type_forges_authority_of_its_captures() {
     for wrapper in 0..3 {
         let mut f = Fixture::unit();
         let unit = unit_ty(&mut f);
-        f.signatures
-            .insert(path("Dir"), capability_signature("Dir"));
+        f.signatures.insert(id("Dir"), capability_signature("Dir"));
         let dir = f.definition.types.push(ty(TypeKind::Named {
-            definition: path("Dir"),
+            definition: id("Dir"),
             arguments: vec![].into(),
         }));
         let kind = match wrapper {
-            0 => f.definition.types.get(dir).unwrap().kind.clone(),
+            0 => interner().get(dir).unwrap().kind.clone(),
             1 => TypeKind::Box(dir),
             _ => TypeKind::Variant(
                 vec![Variant {
@@ -338,7 +337,7 @@ fn p5b_closure_type_forges_sendability() {
         Storage::Temporary,
     );
     let ct = f.body().places[c as usize].ty;
-    let mut row = f.definition.types.get(ct).unwrap().clone();
+    let mut row = interner().get(ct).unwrap().clone();
     row.modes.sendability = Sendability::Sendable;
     let ct2 = f.definition.types.push(row);
     let cl = f.body().places[c as usize].root;
@@ -383,7 +382,7 @@ fn borrowed_resources_allow_many_but_owned_resources_require_once() {
         let mut f = Fixture::unit();
         let unit = unit_ty(&mut f);
         let mut declaration = capability_signature("Trace");
-        let representation = declaration.types.push(ty(TypeKind::Tuple(vec![].into())));
+        let representation = interner().intern(ty(TypeKind::Tuple(vec![].into())));
         let SignatureKind::Type(d) = &mut declaration.kind else {
             unreachable!()
         };
@@ -391,11 +390,11 @@ fn borrowed_resources_allow_many_but_owned_resources_require_once() {
         d.resource = true;
         d.authority = AuthoritySummary::inert();
         d.representation = Some(representation);
-        f.signatures.insert(path("Trace"), declaration);
+        f.signatures.insert(id("Trace"), declaration);
         let source = param(
             &mut f,
             TypeKind::Named {
-                definition: path("Trace"),
+                definition: id("Trace"),
                 arguments: vec![].into(),
             },
         );
@@ -409,7 +408,7 @@ fn borrowed_resources_allow_many_but_owned_resources_require_once() {
         f.definition.bodies.push(nested);
         let closure = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
         let original = f.body().places[closure as usize].ty;
-        let mut row = f.definition.types.get(original).unwrap().clone();
+        let mut row = interner().get(original).unwrap().clone();
         row.modes.relation = Relation::environment();
         row.modes.multiplicity = if owned {
             Multiplicity::Once
@@ -493,7 +492,7 @@ fn borrowed_resources_allow_many_but_owned_resources_require_once() {
 fn replace_closure_row(f: &mut Fixture, edit: impl FnOnce(&mut Type)) {
     let place = f.body().places.len() - 1;
     let ty = f.body().places[place].ty;
-    let mut row = f.definition.types.get(ty).unwrap().clone();
+    let mut row = interner().get(ty).unwrap().clone();
     edit(&mut row);
     let ty = f.definition.types.push(row);
     let root = f.body().places[place].root;
@@ -533,7 +532,7 @@ fn p3_once_callable_invoked_twice_by_borrow() {
     let gl = f.body().places[g as usize].root;
     let gt = f.body().places[g as usize].ty;
     // mark once
-    let mut row = f.definition.types.get(gt).unwrap().clone();
+    let mut row = interner().get(gt).unwrap().clone();
     row.modes.multiplicity = Multiplicity::Once;
     let once = f.definition.types.push(row);
     f.body().locals[gl.0 as usize].ty = once;
@@ -554,7 +553,7 @@ fn once_calls_consume_the_callable_exactly_once() {
     let unit = unit_ty(&mut f);
     let g = param(&mut f, TypeKind::Function(fn_type(vec![], unit)));
     let old = f.body().places[g as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.modes.multiplicity = Multiplicity::Once;
     let ty = f.definition.types.push(row);
     let root = f.body().places[g as usize].root;
@@ -624,7 +623,7 @@ fn p4_one_body_two_producers_with_different_capture_usage() {
     // independent error so differing producer conventions still reach flow.
     for place in [a, b] {
         let old = f.body().places[place as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.multiplicity = Multiplicity::Once;
         row.modes.relation = Relation::environment();
         let ty = f.definition.types.push(row);
@@ -826,7 +825,7 @@ fn p5c_global_closure_borrowing_a_borrowed_parameter_is_returned() {
         let x = param(&mut f, string_kind());
         if local {
             let xt = f.body().places[x as usize].ty;
-            let mut row = f.definition.types.get(xt).unwrap().clone();
+            let mut row = interner().get(xt).unwrap().clone();
             row.modes.relation = Relation::environment();
             let t2 = f.definition.types.push(row);
             let xl = f.body().places[x as usize].root;
@@ -879,20 +878,19 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
     ] {
         let mut f = Fixture::unit();
         let handle_owner = if control == 3 { 1 } else { 0 };
-        f.signatures
-            .insert(path("Dir"), capability_signature("Dir"));
+        f.signatures.insert(id("Dir"), capability_signature("Dir"));
         let scope = scoped(hirsel_types::NameSite::Item);
         let d = param(
             &mut f,
             TypeKind::Named {
-                definition: path("Dir"),
+                definition: id("Dir"),
                 arguments: vec![].into(),
             },
         );
         let e = param(
             &mut f,
             TypeKind::Named {
-                definition: path("Dir"),
+                definition: id("Dir"),
                 arguments: vec![].into(),
             },
         );
@@ -907,15 +905,15 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
             let SignatureKind::Function(fun) = &mut s.kind else {
                 unreachable!()
             };
-            let mut row = s.types.get(fun.parameters[2].ty).unwrap().clone();
+            let mut row = interner().get(fun.parameters[2].ty).unwrap().clone();
             row.brand.alternatives.push(Origin {
                 root: OriginRoot::Parameter(ParameterRef::bound(ParamId(handle_owner))),
                 fields: vec![].into(),
             });
-            fun.parameters[2].ty = s.types.push(row);
+            fun.parameters[2].ty = interner().intern(row);
         }
         let ht = f.body().places[h as usize].ty;
-        let mut row = f.definition.types.get(ht).unwrap().clone();
+        let mut row = interner().get(ht).unwrap().clone();
         row.brand.alternatives.push(Origin {
             root: OriginRoot::Parameter(ParameterRef::body(scope, ParamId(handle_owner))),
             fields: vec![].into(),
@@ -932,7 +930,7 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
         if refill {
             let t = f.slot(
                 TypeKind::Named {
-                    definition: path("Dir"),
+                    definition: id("Dir"),
                     arguments: vec![].into(),
                 },
                 Storage::Temporary,
@@ -956,7 +954,7 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
                 (
                     PassingMode::Borrow,
                     TypeKind::Named {
-                        definition: path("Dir"),
+                        definition: id("Dir"),
                         arguments: vec![].into(),
                     },
                 ),
@@ -965,14 +963,14 @@ fn p14_owner_slot_refilled_without_origin_events_keeps_name_identity() {
             TypeKind::Tuple(vec![].into()),
         );
         if let SignatureKind::Function(fun) = &mut s.kind {
-            let mut row = s.types.get(fun.parameters[1].ty).unwrap().clone();
+            let mut row = interner().get(fun.parameters[1].ty).unwrap().clone();
             row.brand.alternatives.push(Origin {
                 root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
                 fields: vec![].into(),
             });
-            fun.parameters[1].ty = s.types.push(row);
+            fun.parameters[1].ty = interner().intern(row);
         }
-        f.signatures.insert(path("inspect"), s);
+        f.signatures.insert(id("inspect"), s);
         let r = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
@@ -1072,13 +1070,13 @@ fn fresh_field_replacement_preserves_the_enclosing_owner_for_new_brands() {
     let rty = f.body().places[r as usize].ty;
     for name in ["make", "inspect"] {
         let mut signature = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
-        let record = import_type(&f.definition.types, rty, &mut signature.types).unwrap();
+        let record = rty;
         let mut branded = ty(TypeKind::Primitive(Primitive::U8));
         branded.brand.alternatives.push(Origin {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
             fields: vec![].into(),
         });
-        let branded = signature.types.push(branded);
+        let branded = interner().intern(branded);
         let SignatureKind::Function(fun) = &mut signature.kind else {
             unreachable!()
         };
@@ -1098,7 +1096,7 @@ fn fresh_field_replacement_preserves_the_enclosing_owner_for_new_brands() {
                 ty: branded,
             });
         }
-        f.signatures.insert(path(name), signature);
+        f.signatures.insert(id(name), signature);
     }
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
@@ -1207,19 +1205,12 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     nested.body().blocks[0].terminator = ret(0, 0);
     let mut body = nested.definition.bodies.remove(0);
     for local in &mut body.locals {
-        local.ty =
-            import_type(&nested.definition.types, local.ty, &mut f.definition.types).unwrap();
+        local.ty = local.ty;
     }
     for place in &mut body.places {
-        place.ty =
-            import_type(&nested.definition.types, place.ty, &mut f.definition.types).unwrap();
+        place.ty = place.ty;
     }
-    body.result = import_type(
-        &nested.definition.types,
-        body.result,
-        &mut f.definition.types,
-    )
-    .unwrap();
+    body.result = body.result;
     f.definition.bodies.push(body);
     let unit = unit_ty(&mut f);
     let closure = f.slot(
@@ -1246,7 +1237,7 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     f.body()
         .blocks
         .push(block(vec![construction], ret(0, exit)));
-    let report = validate(&f.definition, &f.signatures, &mut vec![]);
+    let report = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1258,7 +1249,7 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
 #[test]
 fn p6_arena_destination_with_unplaced_type_is_returned() {
     let mut f = Fixture::unit();
-    f.signatures.insert(path("Arena"), {
+    f.signatures.insert(id("Arena"), {
         let mut s = capability_signature("Arena");
         if let SignatureKind::Type(t) = &mut s.kind {
             t.capability = Some(CapabilityKind::Scoped);
@@ -1270,7 +1261,7 @@ fn p6_arena_destination_with_unplaced_type_is_returned() {
     let a = param(
         &mut f,
         TypeKind::Named {
-            definition: path("Arena"),
+            definition: id("Arena"),
             arguments: vec![].into(),
         },
     );
@@ -1346,7 +1337,7 @@ fn scoped_construction_placements_are_exact_for_aggregates_and_closures() {
         };
         assert!(f.kinds().contains(&ViolationKind::TypeMismatch { entity }));
         let old_ty = f.body().places[placed as usize].ty;
-        let mut row = f.definition.types.get(old_ty).unwrap().clone();
+        let mut row = interner().get(old_ty).unwrap().clone();
         row.modes.relation = Relation::new([Reach::Region(RegionId(0))]);
         let scoped = f.definition.types.push(row);
         let root = f.body().places[placed as usize].root;
@@ -1359,7 +1350,7 @@ fn scoped_construction_placements_are_exact_for_aggregates_and_closures() {
 fn nested_generic_parameter(outer: Vec<Bound>, inner: Option<Vec<Bound>>) -> Fixture {
     let mut f = Fixture::unit();
     owner_signature(&mut f, PassingMode::Take);
-    let sig = f.signatures.get_mut(&f.definition.path).unwrap();
+    let sig = f.signatures.get_mut(f.definition.path).unwrap();
     let SignatureKind::Function(owner) = &mut sig.kind else {
         panic!()
     };
@@ -1393,7 +1384,7 @@ fn nested_generic_parameter(outer: Vec<Bound>, inner: Option<Vec<Bound>>) -> Fix
     }
     let c = f.slot(TypeKind::Function(function), Storage::Local);
     let mut nested = empty_body(&mut f);
-    let p = bind_parameter_scopes(&mut f.definition.types, p, &[nested.parameter_scope]).unwrap();
+    let p = bind_parameter_scopes(interner(), p, &[nested.parameter_scope]).unwrap();
     let y = add_capture(&mut nested, p);
     nested.locals[y as usize].storage = Storage::Parameter;
     nested.parameters.push(LocalId(y));
@@ -1430,7 +1421,7 @@ fn generic_call_fixture(bound: Bound, kind: TypeKind) -> Fixture {
     if matches!(kind, TypeKind::Primitive(p) if !matches!(p, Primitive::String | Primitive::Bytes))
     {
         let original = f.body().places[x as usize].ty;
-        let mut row = f.definition.types.get(original).unwrap().clone();
+        let mut row = interner().get(original).unwrap().clone();
         row.modes.sendability = Sendability::Sendable;
         let t = f.definition.types.push(row);
         f.body().places[x as usize].ty = t;
@@ -1443,7 +1434,7 @@ fn generic_call_fixture(bound: Bound, kind: TypeKind) -> Fixture {
         vec![(PassingMode::Take, kind)],
         TypeKind::Tuple(vec![].into()),
     );
-    let t = s.types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+    let t = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
     let SignatureKind::Function(fun) = &mut s.kind else {
@@ -1455,7 +1446,7 @@ fn generic_call_fixture(bound: Bound, kind: TypeKind) -> Fixture {
     }]
     .into();
     fun.parameters[0].ty = t;
-    f.signatures.insert(path("callee"), s);
+    f.signatures.insert(id("callee"), s);
     let actual = f.body().places[x as usize].ty;
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
@@ -1518,7 +1509,7 @@ fn nested_generic_calls_cannot_inherit_inert_or_sendable_evidence() {
                 Some(if proven { vec![bound] } else { vec![] }),
             );
             let original = f.definition.bodies[1].places[1].ty;
-            let mut row = f.definition.types.get(original).unwrap().clone();
+            let mut row = interner().get(original).unwrap().clone();
             row.modes.sendability = if bound == Bound::Sendable && proven {
                 Sendability::Sendable
             } else {
@@ -1540,7 +1531,7 @@ fn nested_generic_calls_cannot_inherit_inert_or_sendable_evidence() {
                 *ps = vec![TypeParameterRef::bound(TypeParamId(0))].into();
             }
             let outer_p = f.definition.types.push(row);
-            let mut c_row = f.definition.types.get(c).unwrap().clone();
+            let mut c_row = interner().get(c).unwrap().clone();
             let TypeKind::Function(fun) = &mut c_row.kind else {
                 panic!()
             };
@@ -1553,7 +1544,7 @@ fn nested_generic_calls_cannot_inherit_inert_or_sendable_evidence() {
                 vec![(PassingMode::Take, TypeKind::Primitive(Primitive::U64))],
                 TypeKind::Tuple(vec![].into()),
             );
-            let t = s.types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            let t = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
             let SignatureKind::Function(fun) = &mut s.kind else {
@@ -1565,7 +1556,7 @@ fn nested_generic_calls_cannot_inherit_inert_or_sendable_evidence() {
             }]
             .into();
             fun.parameters[0].ty = t;
-            f.signatures.insert(path("accept"), s);
+            f.signatures.insert(id("accept"), s);
             let nested = &mut f.definition.bodies[1];
             nested.blocks[0].terminator = Terminator::Call {
                 callee: Callee::Definition {
@@ -1604,7 +1595,7 @@ fn nested_generic_calls_cannot_inherit_inert_or_sendable_evidence() {
 fn nominal_arguments_discharge_bounds_at_their_declaring_binders() {
     let mut f = Fixture::unit();
     let mut s = capability_signature("Wrapper");
-    let rep = s.types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+    let rep = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
     let SignatureKind::Type(d) = &mut s.kind else {
@@ -1617,12 +1608,12 @@ fn nominal_arguments_discharge_bounds_at_their_declaring_binders() {
         name: "T".into(),
         bounds: vec![Bound::Plain].into(),
     }];
-    f.signatures.insert(path("Wrapper"), s);
+    f.signatures.insert(id("Wrapper"), s);
     let actual = f.definition.types.push(ty(string_kind()));
     let w = param(
         &mut f,
         TypeKind::Named {
-            definition: path("Wrapper"),
+            definition: id("Wrapper"),
             arguments: vec![GenericArgument::Type(actual)].into(),
         },
     );
@@ -1638,7 +1629,7 @@ fn nominal_arguments_discharge_bounds_at_their_declaring_binders() {
         .push(ty(TypeKind::Primitive(Primitive::U64)));
     let root = f.body().places[w as usize].root;
     let t = f.definition.types.push(ty(TypeKind::Named {
-        definition: path("Wrapper"),
+        definition: id("Wrapper"),
         arguments: vec![GenericArgument::Type(actual)].into(),
     }));
     f.body().places[w as usize].ty = t;
@@ -1651,7 +1642,7 @@ fn nominal_arguments_discharge_bounds_at_their_declaring_binders() {
 fn sendable_bounds_use_each_complete_actual_before_generic_defaults() {
     let mut f = generic_call_fixture(Bound::Sendable, string_kind());
     let original = f.body().places[1].ty;
-    let mut row = f.definition.types.get(original).unwrap().clone();
+    let mut row = interner().get(original).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     row.modes.sendability = Sendability::Sendable;
     let unique = f.definition.types.push(row);
@@ -1685,12 +1676,12 @@ fn noalloc_drop_bounds_derive_nominal_cleanup_instead_of_trusting_the_value_row(
         let mut f = generic_call_fixture(
             Bound::NoallocDrop,
             TypeKind::Named {
-                definition: path("Resource"),
+                definition: id("Resource"),
                 arguments: vec![].into(),
             },
         );
         let mut s = capability_signature("Resource");
-        let rep = s.types.push(ty(TypeKind::Tuple(vec![].into())));
+        let rep = interner().intern(ty(TypeKind::Tuple(vec![].into())));
         let SignatureKind::Type(d) = &mut s.kind else {
             panic!()
         };
@@ -1699,10 +1690,10 @@ fn noalloc_drop_bounds_derive_nominal_cleanup_instead_of_trusting_the_value_row(
         d.resource = true;
         d.representation = Some(rep);
         d.destructor_allocation = allocation;
-        f.signatures.insert(path("Resource"), s);
+        f.signatures.insert(id("Resource"), s);
         if allocation == Allocation::NoAlloc {
             let original = f.body().places[1].ty;
-            let mut row = f.definition.types.get(original).unwrap().clone();
+            let mut row = interner().get(original).unwrap().clone();
             row.modes.sendability = Sendability::Sendable;
             let t = f.definition.types.push(row);
             f.body().places[1].ty = t;
@@ -1726,7 +1717,7 @@ fn unique_copy_fixture(plain: bool) -> Fixture {
     let mut f = Fixture::unit();
     let x = f.slot(kind.clone(), Storage::Local);
     let xt = f.body().places[x as usize].ty;
-    let mut row = f.definition.types.get(xt).unwrap().clone();
+    let mut row = interner().get(xt).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let ut = f.definition.types.push(row);
     let xl = f.body().places[x as usize].root;
@@ -1792,11 +1783,11 @@ fn unique_copy_fixture(plain: bool) -> Fixture {
         TypeKind::Tuple(vec![].into()),
     );
     if let SignatureKind::Function(fun) = &mut s.kind {
-        let mut row = s.types.get(fun.parameters[0].ty).unwrap().clone();
+        let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
-        fun.parameters[0].ty = s.types.push(row);
+        fun.parameters[0].ty = interner().intern(row);
     }
-    f.signatures.insert(path("require_unique"), s);
+    f.signatures.insert(id("require_unique"), s);
     f
 }
 
@@ -1922,15 +1913,13 @@ fn callback_bounds_inspect_complete_return_values_and_their_flowing_modes() {
             drop(c),
         ]);
         let mut sig = function_signature("callee", vec![], TypeKind::Tuple(vec![].into()));
-        let parameter = sig
-            .types
-            .push(ty(TypeKind::Parameter(TypeParameterRef::Bound {
-                depth: 1,
-                parameter: TypeParamId(0),
-            })));
+        let parameter = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::Bound {
+            depth: 1,
+            parameter: TypeParamId(0),
+        })));
         let mut callable = fn_type(vec![], parameter);
         callable.allocation = Allocation::MayAllocate;
-        let callback = sig.types.push(ty(TypeKind::Function(callable)));
+        let callback = interner().intern(ty(TypeKind::Function(callable)));
         let SignatureKind::Function(fun) = &mut sig.kind else {
             panic!()
         };
@@ -1945,7 +1934,7 @@ fn callback_bounds_inspect_complete_return_values_and_their_flowing_modes() {
             passing: PassingMode::Borrow,
             ty: callback,
         });
-        f.signatures.insert(path("callee"), sig);
+        f.signatures.insert(id("callee"), sig);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
                 path: path("callee"),
@@ -2007,7 +1996,7 @@ fn ordinary_mut_calls_end_uniqueness_before_a_later_unique_call() {
         arguments: vec![],
     };
     f.signatures.insert(
-        path("ordinary_mut"),
+        id("ordinary_mut"),
         function_signature(
             "ordinary_mut",
             vec![(PassingMode::Mut, string_kind())],
@@ -2029,7 +2018,7 @@ fn sharing_a_counted_field_ends_the_whole_owners_uniqueness() {
         let mut f = Fixture::unit();
         let x = f.slot(string_kind(), Storage::Local);
         let original = f.body().places[x as usize].ty;
-        let mut row = f.definition.types.get(original).unwrap().clone();
+        let mut row = interner().get(original).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let unique = f.definition.types.push(row);
         f.body().locals[x as usize].ty = unique;
@@ -2037,7 +2026,7 @@ fn sharing_a_counted_field_ends_the_whole_owners_uniqueness() {
         f.assign(x, Rvalue::Constant(Constant::String("field".into())), 0);
         let owner = f.slot(TypeKind::Tuple(vec![unique].into()), Storage::Temporary);
         let original = f.body().places[owner as usize].ty;
-        let mut row = f.definition.types.get(original).unwrap().clone();
+        let mut row = interner().get(original).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let tuple = f.definition.types.push(row);
         f.body().locals[owner as usize].ty = tuple;
@@ -2114,7 +2103,7 @@ fn scoped_closures_cannot_claim_unique_borrowed_counted_captures() {
     let view = f.through_loan(text, 0);
     let c = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
     let original = f.body().places[c as usize].ty;
-    let mut row = f.definition.types.get(original).unwrap().clone();
+    let mut row = interner().get(original).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     row.modes.relation = Relation::environment();
     let ty = f.definition.types.push(row.clone());
@@ -2180,7 +2169,7 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
         for alias in [false, true] {
             let mut f = captured_generic_copy(proven, !proven, alias);
             let SignatureKind::Function(owner) =
-                &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+                &mut f.signatures.get_mut(f.definition.path).unwrap().kind
             else {
                 panic!()
             };
@@ -2193,7 +2182,7 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
                 },
             };
             let c = f.body().places[2].ty;
-            let mut row = f.definition.types.get(c).unwrap().clone();
+            let mut row = interner().get(c).unwrap().clone();
             let TypeKind::Function(fun) = &mut row.kind else {
                 panic!()
             };
@@ -2224,7 +2213,7 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
                 vec![(PassingMode::Borrow, TypeKind::Primitive(Primitive::U64))],
                 TypeKind::Tuple(vec![].into()),
             );
-            let p = s.types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            let p = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
             let SignatureKind::Function(fun) = &mut s.kind else {
@@ -2236,7 +2225,7 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
             }]
             .into();
             fun.parameters[0].ty = p;
-            f.signatures.insert(path("accept"), s);
+            f.signatures.insert(id("accept"), s);
             let nested = &mut f.definition.bodies[1];
             nested.blocks[0].instructions.pop();
             edit_cleanup(nested, 0, |actions| {
@@ -2316,7 +2305,7 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
                     .definition
                     .types
                     .iter()
-                    .map(|(id, row)| (id, row.clone()))
+                    .map(|&id| (id, interner().row(id).clone()))
                     .collect();
                 for (old, mut row) in old_rows {
                     let TypeKind::Parameter(p) = row.kind else {
@@ -2339,14 +2328,14 @@ fn captured_generic_call_bounds_use_the_capture_and_alias_namespace() {
                     }
                 }
             }
-            let signature = f.signatures.get_mut(&f.definition.path).unwrap();
+            let signature = f.signatures.get_mut(f.definition.path).unwrap();
             let SignatureKind::Function(owner) = &mut signature.kind else {
                 unreachable!()
             };
-            let mut row = signature.types.get(owner.parameters[0].ty).unwrap().clone();
+            let mut row = interner().get(owner.parameters[0].ty).unwrap().clone();
             row.modes.sendability =
                 Sendability::DependsOn(vec![TypeParameterRef::bound(TypeParamId(0))].into());
-            owner.parameters[0].ty = signature.types.push(row);
+            owner.parameters[0].ty = interner().intern(row);
             if proven {
                 f.valid();
             } else {
@@ -2404,8 +2393,7 @@ fn capture_alias_names_are_proved_at_their_binding_instruction() {
 #[test]
 fn captured_type_bounds_survive_adjacent_size_parameters() {
     let mut f = captured_generic_copy(true, false, true);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -2520,9 +2508,9 @@ fn payload_access_requires_one_case_on_every_incoming_edge() {
 fn mutation_invalidates_the_switched_case() {
     let mut f = switched_payload_fixture(false, false);
     owner_sig(&mut f, &[PassingMode::Mut]);
-    let mut callee = f.signatures.get(&f.definition.path).unwrap().clone();
-    callee.definition = path("change");
-    f.signatures.insert(path("change"), callee);
+    let mut callee = f.signatures.get(f.definition.path).unwrap().clone();
+    callee.definition = id("change");
+    f.signatures.insert(id("change"), callee);
     let destination = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
     let read = f.body().blocks[1].instructions.pop().unwrap();
     f.body().blocks.push(block(vec![read], ret(0, 0)));
@@ -2555,7 +2543,7 @@ fn different_cases_share_the_same_payload_storage_for_loans() {
     owner_sig(&mut f, &[PassingMode::Mut]);
     let root = f.body().places[1].root;
     let variant_ty = f.body().places[1].ty;
-    let a_type = match f.definition.types.get(variant_ty).unwrap().kind.clone() {
+    let a_type = match interner().get(variant_ty).unwrap().kind.clone() {
         TypeKind::Variant(v) => v[0].fields[0].1,
         _ => panic!(),
     };
@@ -2627,7 +2615,7 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
     let representation = f.body().places[1].ty;
     let choice = path("Choice");
     let named = f.definition.types.push(ty(TypeKind::Named {
-        definition: choice.clone(),
+        definition: DefId::intern(&choice),
         arguments: vec![].into(),
     }));
     f.body().locals[1].ty = named;
@@ -2635,11 +2623,10 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
     f.body().parameters.clear();
     f.body().places[1].ty = named;
     f.signatures.insert(
-        choice.clone(),
+        &choice,
         Signature {
-            definition: choice.clone(),
+            definition: DefId::intern(&choice),
             metadata: Default::default(),
-            types: f.definition.types.clone(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -2689,7 +2676,7 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
     if transfer {
         let target = f.slot(
             TypeKind::Named {
-                definition: path("Choice"),
+                definition: id("Choice"),
                 arguments: vec![].into(),
             },
             Storage::Local,
@@ -2726,13 +2713,13 @@ fn mutating_an_original_does_not_invalidate_an_owned_variant_copy() {
         vec![(
             PassingMode::Mut,
             TypeKind::Named {
-                definition: path("Choice"),
+                definition: id("Choice"),
                 arguments: vec![].into(),
             },
         )],
         TypeKind::Tuple(vec![].into()),
     );
-    f.signatures.insert(path("change"), callee);
+    f.signatures.insert(id("change"), callee);
     let destination = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
     f.emit(InstructionKind::BeginLoan {
         id: LoanId(0),
@@ -2856,7 +2843,7 @@ fn comparison_of_captured_generics_requires_the_outer_data_proof() {
     for proven in [true, false] {
         let mut f = captured_generic_copy(true, true, false);
         let SignatureKind::Function(owner) =
-            &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+            &mut f.signatures.get_mut(f.definition.path).unwrap().kind
         else {
             panic!()
         };
@@ -2868,7 +2855,7 @@ fn comparison_of_captured_generics_requires_the_outer_data_proof() {
             bounds.push(Bound::Data);
         }
         let ct = f.body().places[2].ty;
-        let mut row = f.definition.types.get(ct).unwrap().clone();
+        let mut row = interner().get(ct).unwrap().clone();
         if let TypeKind::Function(inner) = &mut row.kind {
             // This control tests equality evidence after replacing Plain with
             // Data. It makes no independent cleanup-allocation promise.
@@ -2958,7 +2945,7 @@ fn copied_flat_capture_aliases_own_independent_bytes() {
     for alias in [false, true] {
         let mut f = captured_generic_copy(true, false, alias);
         let SignatureKind::Function(owner) =
-            &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+            &mut f.signatures.get_mut(f.definition.path).unwrap().kind
         else {
             panic!()
         };
@@ -2969,7 +2956,7 @@ fn copied_flat_capture_aliases_own_independent_bytes() {
         .into();
         // Flat tests independent byte ownership, without a NoAllocDrop bound.
         let original = f.body().places[2].ty;
-        let mut row = f.definition.types.get(original).unwrap().clone();
+        let mut row = interner().get(original).unwrap().clone();
         if let TypeKind::Function(function) = &mut row.kind {
             function.allocation = Allocation::MayAllocate;
         }
@@ -2985,7 +2972,7 @@ fn copied_local_flat_capture_aliases_cannot_claim_global_storage() {
     let mut f = captured_generic_copy(true, false, true);
     for (body, places) in [(0, vec![1]), (1, vec![1, 2])] {
         let body = &mut f.definition.bodies[body];
-        let mut local = f.definition.types.get(body.places[1].ty).unwrap().clone();
+        let mut local = interner().get(body.places[1].ty).unwrap().clone();
         local.modes.relation = Relation::environment();
         let local = f.definition.types.push(local);
         for place in places {
@@ -2994,8 +2981,7 @@ fn copied_local_flat_capture_aliases_cannot_claim_global_storage() {
         }
     }
     owner_sig(&mut f, &[PassingMode::Borrow]);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -3019,7 +3005,7 @@ fn flat_unique_copy_fixture() -> Fixture {
         .definition
         .types
         .iter()
-        .map(|(id, row)| (id, row.clone()))
+        .map(|&id| (id, interner().row(id).clone()))
         .collect();
     for (old, mut row) in originals {
         if row.kind != string_kind() {
@@ -3063,9 +3049,9 @@ fn flat_unique_copy_fixture() -> Fixture {
         }]
         .into();
         if name == "require_unique" {
-            let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+            let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
             row.kind = TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0)));
-            fun.parameters[0].ty = signature.types.push(row);
+            fun.parameters[0].ty = interner().intern(row);
         }
     }
     let actual = f.body().places[1].ty;
@@ -3086,7 +3072,7 @@ fn flat_copies_preserve_source_uniqueness_and_own_unique_results() {
         let mut f = flat_unique_copy_fixture();
         if unique_result {
             let original = f.body().places[2].ty;
-            let mut row = f.definition.types.get(original).unwrap().clone();
+            let mut row = interner().get(original).unwrap().clone();
             row.modes.uniqueness = Uniqueness::Unique;
             let ty = f.definition.types.push(row);
             let root = f.body().places[2].root;
@@ -3101,8 +3087,8 @@ fn flat_copies_preserve_source_uniqueness_and_own_unique_results() {
 fn flat_call_bounds_require_flat_roots_instead_of_compatible_fields() {
     for (explicit_flat, alias) in [(false, false), (true, false), (false, true)] {
         let mut flat = capability_signature("Flat");
-        let text = flat.types.push(ty(string_kind()));
-        let representation = flat.types.push(ty(TypeKind::Tuple(vec![text].into())));
+        let text = interner().intern(ty(string_kind()));
+        let representation = interner().intern(ty(TypeKind::Tuple(vec![text].into())));
         let SignatureKind::Type(declaration) = &mut flat.kind else {
             panic!()
         };
@@ -3113,16 +3099,14 @@ fn flat_call_bounds_require_flat_roots_instead_of_compatible_fields() {
         declaration.representation = Some(representation);
         let mut wrapper = capability_signature("Wrapper");
         wrapper.metadata.alias = alias;
-        let flat_ty = wrapper.types.push(ty(TypeKind::Named {
-            definition: path("Flat"),
+        let flat_ty = interner().intern(ty(TypeKind::Named {
+            definition: id("Flat"),
             arguments: vec![].into(),
         }));
         let representation = if alias {
             flat_ty
         } else {
-            wrapper
-                .types
-                .push(ty(TypeKind::Tuple(vec![flat_ty].into())))
+            interner().intern(ty(TypeKind::Tuple(vec![flat_ty].into())))
         };
         let SignatureKind::Type(declaration) = &mut wrapper.kind else {
             panic!()
@@ -3135,15 +3119,15 @@ fn flat_call_bounds_require_flat_roots_instead_of_compatible_fields() {
         let mut f = generic_call_fixture(
             Bound::Flat,
             TypeKind::Named {
-                definition: path("Wrapper"),
+                definition: id("Wrapper"),
                 arguments: vec![].into(),
             },
         );
-        f.signatures.insert(path("Flat"), flat);
-        f.signatures.insert(path("Wrapper"), wrapper);
+        f.signatures.insert(id("Flat"), flat);
+        f.signatures.insert(id("Wrapper"), wrapper);
         if explicit_flat || alias {
             let original = f.body().places[1].ty;
-            let mut row = f.definition.types.get(original).unwrap().clone();
+            let mut row = interner().get(original).unwrap().clone();
             row.modes.sendability = Sendability::Sendable;
             let ty = f.definition.types.push(row);
             f.body().places[1].ty = ty;
@@ -3173,7 +3157,7 @@ fn flat_call_bounds_require_flat_roots_instead_of_compatible_fields() {
             TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         );
         let source = f.body().places[1].ty;
-        let mut row = f.definition.types.get(source).unwrap().clone();
+        let mut row = interner().get(source).unwrap().clone();
         row.modes.sendability = Sendability::Sendable;
         let source = f.definition.types.push(row);
         f.body().places[1].ty = source;
@@ -3187,7 +3171,7 @@ fn flat_call_bounds_require_flat_roots_instead_of_compatible_fields() {
         }
         owner_sig(&mut f, &[PassingMode::Take]);
         let SignatureKind::Function(owner) =
-            &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+            &mut f.signatures.get_mut(f.definition.path).unwrap().kind
         else {
             panic!()
         };
@@ -3222,7 +3206,7 @@ fn flat_copies_are_owned_fields_of_unique_aggregates() {
     let aggregate = f.slot(TypeKind::Tuple(vec![field].into()), Storage::Local);
     let root = f.body().places[aggregate as usize].root;
     let original = f.body().places[aggregate as usize].ty;
-    let mut row = f.definition.types.get(original).unwrap().clone();
+    let mut row = interner().get(original).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let ty = f.definition.types.push(row);
     f.body().places[aggregate as usize].ty = ty;
@@ -3267,7 +3251,7 @@ fn flat_copied_aliases_prove_unique_assignments_fields_results_and_arguments() {
             TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         );
         let source = f.body().places[x as usize].ty;
-        let mut row = f.definition.types.get(source).unwrap().clone();
+        let mut row = interner().get(source).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::Sendable;
         let unique = f.definition.types.push(row);
@@ -3286,7 +3270,7 @@ fn flat_copied_aliases_prove_unique_assignments_fields_results_and_arguments() {
                     unique
                 } else {
                     let original = f.body().places[y as usize].ty;
-                    let mut row = f.definition.types.get(original).unwrap().clone();
+                    let mut row = interner().get(original).unwrap().clone();
                     row.modes.uniqueness = Uniqueness::Unique;
                     row.modes.sendability = Sendability::Sendable;
                     f.definition.types.push(row)
@@ -3336,11 +3320,11 @@ fn flat_copied_aliases_prove_unique_assignments_fields_results_and_arguments() {
                     bounds: vec![Bound::Flat].into(),
                 }]
                 .into();
-                let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+                let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
                 row.modes.uniqueness = Uniqueness::Unique;
                 row.modes.sendability = Sendability::Sendable;
-                fun.parameters[0].ty = signature.types.push(row);
-                f.signatures.insert(path("callee"), signature);
+                fun.parameters[0].ty = interner().intern(row);
+                f.signatures.insert(id("callee"), signature);
                 let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
                 f.body().blocks[0].terminator = Terminator::Call {
                     callee: Callee::Definition {
@@ -3363,7 +3347,7 @@ fn flat_copied_aliases_prove_unique_assignments_fields_results_and_arguments() {
         }
         owner_sig(&mut f, &[PassingMode::Take]);
         let SignatureKind::Function(owner) =
-            &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+            &mut f.signatures.get_mut(f.definition.path).unwrap().kind
         else {
             panic!()
         };
@@ -3450,13 +3434,13 @@ fn n2b_drop_of_a_borrowed_view_slot() {
                 t.capability = None;
                 t.resource = true;
                 t.authority = AuthoritySummary::inert();
-                t.representation = Some(s.types.push(ty(TypeKind::Tuple(vec![].into()))));
+                t.representation = Some(interner().intern(ty(TypeKind::Tuple(vec![].into()))));
             }
-            f.signatures.insert(path("Trace"), s);
+            f.signatures.insert(id("Trace"), s);
         }
         let kind = if resource {
             TypeKind::Named {
-                definition: path("Trace"),
+                definition: id("Trace"),
                 arguments: vec![].into(),
             }
         } else {
@@ -3647,7 +3631,7 @@ fn n1_mut_captured_variant_keeps_creation_time_tag_across_calls() {
         let clo = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
         {
             let ct = f.body().places[clo as usize].ty;
-            let mut row = f.definition.types.get(ct).unwrap().clone();
+            let mut row = interner().get(ct).unwrap().clone();
             row.modes.relation = Relation::environment();
             let ct2 = f.definition.types.push(row);
             let cl = f.body().places[clo as usize].root;
@@ -3867,19 +3851,18 @@ fn local_results_cannot_return_borrowed_counted_operands() {
             let mut f = Fixture::unit();
             let x = param(&mut f, string_kind());
             let original = f.body().places[x as usize].ty;
-            let mut local = f.definition.types.get(original).unwrap().clone();
+            let mut local = interner().get(original).unwrap().clone();
             local.modes.relation = Relation::environment();
             let local = f.definition.types.push(local);
             f.body().locals[x as usize].ty = local;
             f.body().places[x as usize].ty = local;
-            let mut result = f.definition.types.get(local).unwrap().clone();
+            let mut result = interner().get(local).unwrap().clone();
             result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
             let result = f.definition.types.push(result);
             f.body().result = result;
             owner_sig(&mut f, &[PassingMode::Borrow]);
             let scope = f.body().parameter_scope;
-            f.body().result =
-                bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+            f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
             let returned = if temporary {
                 let t = f.slot(string_kind(), Storage::Temporary);
                 f.body().locals[t as usize].ty = local;
@@ -3911,7 +3894,7 @@ fn generic_local_result_calls_prove_implicit_copyability() {
     for resource in [false, true] {
         let kind = if resource {
             TypeKind::Named {
-                definition: path("Trace"),
+                definition: id("Trace"),
                 arguments: vec![].into(),
             }
         } else {
@@ -3920,7 +3903,7 @@ fn generic_local_result_calls_prove_implicit_copyability() {
         let mut f = generic_call_fixture(Bound::Copyable, kind);
         if resource {
             let mut s = capability_signature("Trace");
-            let representation = s.types.push(ty(TypeKind::Tuple(vec![].into())));
+            let representation = interner().intern(ty(TypeKind::Tuple(vec![].into())));
             let SignatureKind::Type(d) = &mut s.kind else {
                 unreachable!()
             };
@@ -3928,7 +3911,7 @@ fn generic_local_result_calls_prove_implicit_copyability() {
             d.resource = true;
             d.authority = AuthoritySummary::inert();
             d.representation = Some(representation);
-            f.signatures.insert(path("Trace"), s);
+            f.signatures.insert(id("Trace"), s);
         }
         let s = f.signatures.get_mut(&path("callee")).unwrap();
         let SignatureKind::Function(fun) = &mut s.kind else {
@@ -3940,13 +3923,13 @@ fn generic_local_result_calls_prove_implicit_copyability() {
         }]
         .into();
         fun.parameters[0].passing = PassingMode::Borrow;
-        let mut row = s.types.get(fun.parameters[0].ty).unwrap().clone();
+        let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
         row.modes.relation = Relation::environment();
-        fun.parameters[0].ty = s.types.push(row.clone());
+        fun.parameters[0].ty = interner().intern(row.clone());
         row.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        fun.result = s.types.push(row);
+        fun.result = interner().intern(row);
         let actual = f.body().places[1].ty;
-        let mut local = f.definition.types.get(actual).unwrap().clone();
+        let mut local = interner().get(actual).unwrap().clone();
         local.modes.relation = Relation::environment();
         let local = f.definition.types.push(local);
         f.body().places[1].ty = local;
@@ -3987,7 +3970,7 @@ fn implicit_generic_sharing_is_confined_to_local_result_reads() {
             TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         );
         let x_ty = f.body().places[x as usize].ty;
-        let mut row = f.definition.types.get(x_ty).unwrap().clone();
+        let mut row = interner().get(x_ty).unwrap().clone();
         row.modes.relation = Relation::environment();
         let local = f.definition.types.push(row.clone());
         f.body().locals[x as usize].ty = local;
@@ -4028,11 +4011,10 @@ fn implicit_generic_sharing_is_confined_to_local_result_reads() {
         owner_sig(&mut f, &[PassingMode::Borrow]);
         if result_flow {
             let scope = f.body().parameter_scope;
-            f.body().result =
-                bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+            f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
         }
         let SignatureKind::Function(fun) =
-            &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+            &mut f.signatures.get_mut(f.definition.path).unwrap().kind
         else {
             unreachable!()
         };
@@ -4115,10 +4097,10 @@ fn local_result_calls_end_counted_source_uniqueness() {
         let SignatureKind::Function(fun) = &mut signature.kind else {
             unreachable!()
         };
-        let mut row = signature.types.get(fun.result).unwrap().clone();
+        let mut row = interner().get(fun.result).unwrap().clone();
         row.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        fun.result = signature.types.push(row);
-        f.signatures.insert(path("view"), signature);
+        fun.result = interner().intern(row);
+        f.signatures.insert(id("view"), signature);
         let original_call = f.body().blocks[0].terminator.clone();
         let begin_mut = f.body().blocks[0].instructions.pop().unwrap();
         f.body().blocks[0].instructions.pop(); // Replace the share assignment with its call form.
@@ -4238,9 +4220,9 @@ fn copying_a_borrowed_temporary_ends_its_original_sources_uniqueness() {
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
-    let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Aliased;
-    fun.parameters[0].ty = signature.types.push(row);
+    fun.parameters[0].ty = interner().intern(row);
     f.valid();
 }
 
@@ -4318,7 +4300,7 @@ fn scoped_capture_result_fixture() -> Fixture {
         Storage::Temporary,
     );
     let ty = f.body().places[closure as usize].ty;
-    let mut row = f.definition.types.get(ty).unwrap().clone();
+    let mut row = interner().get(ty).unwrap().clone();
     row.modes.relation = Relation::environment();
     let ty = f.definition.types.push(row);
     f.body().places[closure as usize].ty = ty;
@@ -4444,9 +4426,9 @@ fn a_scoped_capture_result_call_ends_its_borrowed_sources_uniqueness() {
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
-    let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Aliased;
-    fun.parameters[0].ty = signature.types.push(row);
+    fun.parameters[0].ty = interner().intern(row);
     f.valid();
 }
 
@@ -4463,7 +4445,7 @@ fn copied_scoped_capture_result_fixture() -> Fixture {
     };
     let callable = f.body().places[value.place.0 as usize].ty;
     let result = f.slot(
-        f.definition.types.get(callable).unwrap().kind.clone(),
+        interner().get(callable).unwrap().kind.clone(),
         Storage::Temporary,
     );
     let result_root = f.body().places[result as usize].root;
@@ -4503,14 +4485,12 @@ fn copied_scoped_capture_result_fixture() -> Fixture {
         }
     }
     let mut signature = function_signature("copy_function", vec![], TypeKind::Tuple(vec![].into()));
-    let abstract_ty = signature
-        .types
-        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-            TypeParamId(0),
-        ))));
-    let mut returned = signature.types.get(abstract_ty).unwrap().clone();
+    let abstract_ty = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    let mut returned = interner().get(abstract_ty).unwrap().clone();
     returned.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    let returned = signature.types.push(returned);
+    let returned = interner().intern(returned);
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
@@ -4527,8 +4507,8 @@ fn copied_scoped_capture_result_fixture() -> Fixture {
     }]
     .into();
     function.result = returned;
-    f.signatures.insert(path("copy_function"), signature);
-    let actual = generic_type_argument(&mut f.definition.types, callable, |_| false).unwrap();
+    f.signatures.insert(id("copy_function"), signature);
+    let actual = generic_type_argument(interner(), callable, |_| false).unwrap();
     let next = f.body().blocks.len() as u32;
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
@@ -4575,13 +4555,9 @@ fn copied_callable_results_keep_their_invoked_sharing_dependencies() {
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
-    let mut ordinary = signature
-        .types
-        .get(function.parameters[0].ty)
-        .unwrap()
-        .clone();
+    let mut ordinary = interner().get(function.parameters[0].ty).unwrap().clone();
     ordinary.modes.uniqueness = Uniqueness::Aliased;
-    function.parameters[0].ty = signature.types.push(ordinary);
+    function.parameters[0].ty = interner().intern(ordinary);
     f.valid();
 }
 
@@ -4642,10 +4618,10 @@ fn element_mutation_expires_container_brands_but_preserves_siblings() {
             f.body().places.push(element_place);
             owner_signature(&mut f, PassingMode::Borrow);
             let signature = f.signatures.get_mut(&path("main")).unwrap();
-            let mut marked = signature.types.get(branded).unwrap().clone();
+            let mut marked = interner().get(branded).unwrap().clone();
             marked.brand.alternatives[0].root =
                 OriginRoot::Parameter(ParameterRef::bound(ParamId(0)));
-            let marked = signature.types.push(marked);
+            let marked = interner().intern(marked);
             let SignatureKind::Function(fun) = &mut signature.kind else {
                 unreachable!()
             };
@@ -4667,7 +4643,7 @@ fn element_mutation_expires_container_brands_but_preserves_siblings() {
                     });
                 }
                 "call" => {
-                    let mut types = TypeStore::default();
+                    let types = interner();
                     let scalar = types.push(ty(TypeKind::Primitive(Primitive::U64)));
                     let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
                     let mut fun = fn_type(
@@ -4681,12 +4657,11 @@ fn element_mutation_expires_container_brands_but_preserves_siblings() {
                     );
                     fun.authority = AuthoritySummary::inert();
                     f.signatures.insert(
-                        path("bump"),
+                        id("bump"),
                         Signature {
-                            definition: path("bump"),
+                            definition: id("bump"),
                             metadata: SignatureMetadata::default(),
                             fingerprint: ContentHash::default(),
-                            types,
                             kind: SignatureKind::Function(fun),
                         },
                     );
@@ -4754,7 +4729,7 @@ fn captured_generic_binder_swaps_are_rejected_even_when_bounds_coincide() {
         fixture.valid();
         let body = &mut fixture.definition.bodies[1];
         let old = body.places[1].ty;
-        let mut row = fixture.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         let other = TypeParameterRef::body(body.parameter_scope, TypeParamId(0));
         match consumer {
             0 => row.kind = TypeKind::Parameter(other),
@@ -4834,7 +4809,7 @@ fn lexical_declarations_inspect_each_instruction_once() {
         owner_sig(&mut f, &[]);
         let before =
             hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateDeclarationRows);
-        let validation = validate(&f.definition, &f.signatures, &mut vec![]);
+        let validation = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
         assert!(
             validation.violations.is_empty(),
             "{:?}",
@@ -4927,7 +4902,7 @@ fn local_owned_receivers_accept_owned_content_without_changing_caller_storage_ru
                     },
                 );
                 let receiver_ty = f.body().places[receiver as usize].ty;
-                let mut receiver_ty = f.definition.types.get(receiver_ty).unwrap().clone();
+                let mut receiver_ty = interner().get(receiver_ty).unwrap().clone();
                 receiver_ty.modes.relation = Relation::environment();
                 let receiver_ty = f.definition.types.push(receiver_ty);
                 f.body().locals[receiver as usize].ty = receiver_ty;
@@ -4944,7 +4919,7 @@ fn local_owned_receivers_accept_owned_content_without_changing_caller_storage_ru
                 let source = param(&mut f, TypeKind::Primitive(Primitive::String));
                 if local_source {
                     let source_ty = f.body().places[source as usize].ty;
-                    let mut row = f.definition.types.get(source_ty).unwrap().clone();
+                    let mut row = interner().get(source_ty).unwrap().clone();
                     row.modes.relation = Relation::environment();
                     let ty = f.definition.types.push(row);
                     f.body().locals[source as usize].ty = ty;
@@ -5008,7 +4983,7 @@ fn borrowed_capture_promises_follow_current_source_modes() {
                 let source = f.slot(string_kind(), Storage::Local);
                 if unique_storage {
                     let ty = f.body().places[source as usize].ty;
-                    let mut row = f.definition.types.get(ty).unwrap().clone();
+                    let mut row = interner().get(ty).unwrap().clone();
                     row.modes.uniqueness = Uniqueness::Unique;
                     row.modes.sendability = Sendability::Sendable;
                     let ty = f.definition.types.push(row);
@@ -5035,7 +5010,7 @@ fn borrowed_capture_promises_follow_current_source_modes() {
                 });
                 let via = f.through_loan(source, 0);
                 let source_ty = f.body().places[source as usize].ty;
-                let mut capture = f.definition.types.get(source_ty).unwrap().clone();
+                let mut capture = interner().get(source_ty).unwrap().clone();
                 capture.modes.uniqueness = if unique_capture {
                     Uniqueness::Unique
                 } else {
@@ -5053,7 +5028,7 @@ fn borrowed_capture_promises_follow_current_source_modes() {
                 let unit = unit_ty(&mut f);
                 let closure = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
                 let ty = f.body().places[closure as usize].ty;
-                let mut row = f.definition.types.get(ty).unwrap().clone();
+                let mut row = interner().get(ty).unwrap().clone();
                 row.modes.relation = Relation::environment();
                 let ty = f.definition.types.push(row);
                 let root = f.body().places[closure as usize].root;
@@ -5100,7 +5075,7 @@ fn borrowed_capture_promises_follow_current_source_modes() {
 }
 
 #[test]
-fn validation_copies_type_rows_only_for_reusable_working_storage() {
+fn validation_interns_working_rows_bounded_by_the_owner() {
     for count in [16, 64, 256] {
         let mut f = Fixture::unit();
         for _ in 0..count {
@@ -5109,20 +5084,20 @@ fn validation_copies_type_rows_only_for_reusable_working_storage() {
         }
         owner_sig(&mut f, &[]);
         let rows = f.definition.types.len();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
-        let result = validate(&f.definition, &f.signatures, &mut vec![]);
+        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
+        let result = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
         assert!(result.violations.is_empty(), "{:?}", result.violations);
-        let copied =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before;
+        let interned =
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize - before;
         assert!(
-            copied <= (4 * rows) as u64,
-            "{count} assignments copied {copied} type rows from {rows} owner rows"
+            interned <= 4 * rows,
+            "{count} assignments interned {interned} type rows for {rows} owner rows"
         );
     }
 }
 
 #[test]
-fn closure_bodies_share_reusable_definition_working_storage() {
+fn closure_bodies_intern_working_rows_bounded_by_the_owner() {
     for count in [16, 64] {
         let mut f = Fixture::unit();
         let unit = unit_ty(&mut f);
@@ -5146,13 +5121,13 @@ fn closure_bodies_share_reusable_definition_working_storage() {
         }
         f.body().blocks[0].terminator = ret(0, cleanup);
         let rows = f.definition.types.len();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
+        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
         f.valid();
-        let copied =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before;
+        let interned =
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize - before;
         assert!(
-            copied <= 4 * rows as u64,
-            "{count} bodies copied {copied} rows from {rows}"
+            interned <= 4 * rows,
+            "{count} bodies interned {interned} rows for {rows}"
         );
     }
 }
@@ -5163,12 +5138,11 @@ fn named_function_value_uses_come_from_the_named_signature() {
         for restricted in [false, true] {
             let mut f = Fixture::unit();
             if capability {
-                f.signatures
-                    .insert(path("Dir"), capability_signature("Dir"));
+                f.signatures.insert(id("Dir"), capability_signature("Dir"));
             }
             let argument = if capability {
                 TypeKind::Named {
-                    definition: path("Dir"),
+                    definition: id("Dir"),
                     arguments: vec![].into(),
                 }
             } else {
@@ -5189,14 +5163,11 @@ fn named_function_value_uses_come_from_the_named_signature() {
             };
             function.authority = authority.clone();
             function.uses = Uses::Unrestricted;
-            let mut store = f.definition.types.clone();
-            let row = signature
+            let imported = f
+                .definition
                 .types
                 .push(ty(TypeKind::Function(function.clone())));
-            let imported = import_type(&signature.types, row, &mut store).unwrap();
-            f.definition.types = store;
-            let TypeKind::Function(mut receiving) =
-                f.definition.types.get(imported).unwrap().kind.clone()
+            let TypeKind::Function(mut receiving) = interner().get(imported).unwrap().kind.clone()
             else {
                 unreachable!()
             };
@@ -5216,7 +5187,7 @@ fn named_function_value_uses_come_from_the_named_signature() {
             );
             let cleanup = f.cleanup(vec![drop(closure)]);
             f.body().blocks[0].terminator = ret(0, cleanup);
-            f.signatures.insert(path("worker"), signature);
+            f.signatures.insert(id("worker"), signature);
             owner_sig(&mut f, &[]);
             if capability && restricted {
                 assert!(
@@ -5244,10 +5215,10 @@ fn captured_generic_fields_keep_their_receiving_lifetime() {
             .push(ty(TypeKind::Tuple(vec![outer].into())));
         f.definition.bodies[0].places[1].ty = aggregate;
         f.definition.bodies[0].locals[1].ty = aggregate;
-        let owner = f.signatures.get_mut(&f.definition.path).unwrap();
-        let root = import_type(&f.definition.types, aggregate, &mut owner.types).unwrap();
+        let owner = f.signatures.get_mut(f.definition.path).unwrap();
+        let root = aggregate;
         let scope = f.definition.bodies[0].parameter_scope;
-        let root = map_generic_binders(&mut owner.types, root, |binder, nested| {
+        let root = map_generic_binders(interner(), root, |binder, nested| {
             Ok(if binder == GenericBinder::Body(scope) {
                 GenericBinder::Bound(nested)
             } else {
@@ -5265,7 +5236,7 @@ fn captured_generic_fields_keep_their_receiving_lifetime() {
         let mut field = child.places[1].clone();
         field.projection = vec![Projection::Field(0)].into();
         if forged_local {
-            let mut row = f.definition.types.get(outer).unwrap().clone();
+            let mut row = interner().get(outer).unwrap().clone();
             row.modes.relation = Relation::environment();
             field.ty = f.definition.types.push(row);
         } else {
@@ -5306,7 +5277,7 @@ fn read_only_data_comparison_accepts_independent_root_lifetimes() {
             for (place, local) in [(left, left_local), (right, right_local)] {
                 if local {
                     let source = f.body().places[place as usize].ty;
-                    let mut row = f.definition.types.get(source).unwrap().clone();
+                    let mut row = interner().get(source).unwrap().clone();
                     row.modes.relation = Relation::environment();
                     row.modes.sendability = Sendability::NotSendable;
                     let ty = f.definition.types.push(row);
@@ -5326,7 +5297,7 @@ fn read_only_data_comparison_accepts_independent_root_lifetimes() {
             );
             owner_sig(&mut f, &[PassingMode::Borrow, PassingMode::Borrow]);
             let SignatureKind::Function(owner) =
-                &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+                &mut f.signatures.get_mut(f.definition.path).unwrap().kind
             else {
                 panic!()
             };
@@ -5337,7 +5308,7 @@ fn read_only_data_comparison_accepts_independent_root_lifetimes() {
             .into();
             f.valid();
             let SignatureKind::Function(owner) =
-                &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+                &mut f.signatures.get_mut(f.definition.path).unwrap().kind
             else {
                 panic!()
             };
@@ -5450,7 +5421,6 @@ fn contract_clauses_independently_require_borrowed_formals_and_readonly_access()
         let unit = unit_ty(&mut f);
         let string = f.definition.bodies[1].locals[1].ty;
         let mut signature = function_signature("poke", vec![], TypeKind::Tuple(vec![].into()));
-        signature.types = f.definition.types.clone();
         signature.kind = SignatureKind::Function(fn_type(
             vec![Parameter {
                 name: None,
@@ -5460,7 +5430,7 @@ fn contract_clauses_independently_require_borrowed_formals_and_readonly_access()
             }],
             unit,
         ));
-        f.signatures.insert(path("poke"), signature);
+        f.signatures.insert(id("poke"), signature);
         let child = &mut f.definition.bodies[1];
         let result = add_capture(child, unit);
         child.locals[child.places[result as usize].root.0 as usize].storage = Storage::Temporary;
@@ -5574,7 +5544,6 @@ fn contract_borrowed_formals_cannot_be_consumed_directly_or_through_an_alias() {
         };
         child.blocks.push(block(vec![], ret(0, 0)));
         let mut signature = function_signature("eat", vec![], TypeKind::Primitive(Primitive::Bool));
-        signature.types = f.definition.types.clone();
         signature.kind = SignatureKind::Function(fn_type(
             vec![Parameter {
                 name: None,
@@ -5584,7 +5553,7 @@ fn contract_borrowed_formals_cannot_be_consumed_directly_or_through_an_alias() {
             }],
             boolean,
         ));
-        f.signatures.insert(path("eat"), signature);
+        f.signatures.insert(id("eat"), signature);
         assert!(
             f.kinds()
                 .contains(&ViolationKind::InvalidUse(PlaceId(source))),
@@ -5605,11 +5574,10 @@ fn contract_calls_rederive_required_authority_instead_of_trusting_the_clause_row
         let boolean = f.definition.bodies[1].result;
         let mut signature =
             function_signature("test", vec![], TypeKind::Primitive(Primitive::Bool));
-        signature.types = f.definition.types.clone();
         let mut function = fn_type(vec![], boolean);
         function.authority = authority.clone();
         signature.kind = SignatureKind::Function(function);
-        f.signatures.insert(path("test"), signature);
+        f.signatures.insert(id("test"), signature);
         let child = &mut f.definition.bodies[1];
         child.blocks[0].instructions.clear();
         child.rvalues.clear();
@@ -5650,7 +5618,7 @@ fn replaced_local_lifetime_fixture(mixed: bool, usage: UseKind, field: bool) -> 
     };
     let x = param(&mut f, kind.clone());
     let source_ty = f.body().places[x as usize].ty;
-    let mut local = f.definition.types.get(source_ty).unwrap().clone();
+    let mut local = interner().get(source_ty).unwrap().clone();
     local.modes.relation = Relation::environment();
     let local = f.definition.types.push(local);
     f.body().locals[x as usize].ty = local;
@@ -5755,19 +5723,19 @@ fn replacement_lifetime_reaches_declared_global_fields_without_promoting_local_f
     );
     let mut local = replaced_local_lifetime_fixture(false, UseKind::Copy, true);
     let tuple = local.definition.bodies[0].locals[1].ty;
-    let TypeKind::Tuple(fields) = &local.definition.types.get(tuple).unwrap().kind else {
+    let TypeKind::Tuple(fields) = &interner().get(tuple).unwrap().kind else {
         panic!()
     };
-    let mut field = local.definition.types.get(fields[0]).unwrap().clone();
+    let mut field = interner().get(fields[0]).unwrap().clone();
     field.modes.relation = Relation::environment();
     let field = local.definition.types.push(field);
     let originals: Vec<_> = local
         .definition
         .types
         .iter()
-        .map(|(id, ty)| (id, ty.clone()))
+        .map(|&id| (id, interner().row(id).clone()))
         .collect();
-    let mut remaps = BTreeMap::new();
+    let mut remaps = std::collections::HashMap::new();
     for (id, mut row) in originals {
         if matches!(row.kind, TypeKind::Tuple(ref fields) if fields.len() == 1) {
             row.kind = TypeKind::Tuple(vec![field].into());
@@ -5823,7 +5791,6 @@ fn closure_call_effect_fixture(allocation: Allocation, callback: bool) -> Fixtur
             ty: callback,
         }]
         .into();
-        signature.types = f.definition.types.clone();
         signature.kind = SignatureKind::Function(fn_type(function.parameters.to_vec(), unit));
         child.blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
@@ -5859,7 +5826,7 @@ fn closure_call_effect_fixture(allocation: Allocation, callback: bool) -> Fixtur
         };
     }
     child.blocks.push(block(vec![], ret(0, 0)));
-    f.signatures.insert(path("invoke"), signature);
+    f.signatures.insert(id("invoke"), signature);
     f.definition.bodies.push(child);
     let closure = f.slot(TypeKind::Function(function), Storage::Local);
     f.assign(
@@ -5905,12 +5872,7 @@ fn closure_body_calls_cannot_exceed_the_written_uses_restriction() {
         function.authority = authority.clone();
         let parent = &f.definition.bodies[0];
         let root = parent.locals.len() - 1;
-        let mut row = f
-            .definition
-            .types
-            .get(parent.locals[root].ty)
-            .unwrap()
-            .clone();
+        let mut row = interner().get(parent.locals[root].ty).unwrap().clone();
         let TypeKind::Function(function) = &mut row.kind else {
             panic!()
         };
@@ -5942,21 +5904,11 @@ fn a_provided_unknown_callback_does_not_supply_unrelated_ambient_authority() {
             AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Dir"))].into());
         let parent = &f.definition.bodies[0];
         let root = parent.locals.len() - 1;
-        let mut row = f
-            .definition
-            .types
-            .get(parent.locals[root].ty)
-            .unwrap()
-            .clone();
+        let mut row = interner().get(parent.locals[root].ty).unwrap().clone();
         let TypeKind::Function(header) = &mut row.kind else {
             panic!()
         };
-        let mut callback = f
-            .definition
-            .types
-            .get(header.parameters[0].ty)
-            .unwrap()
-            .clone();
+        let mut callback = interner().get(header.parameters[0].ty).unwrap().clone();
         let TypeKind::Function(function) = &mut callback.kind else {
             panic!()
         };
@@ -5974,7 +5926,7 @@ fn a_provided_unknown_callback_does_not_supply_unrelated_ambient_authority() {
         f.definition.bodies[1].locals[input].ty = supplied;
         f.definition.bodies[1].places[input].ty = supplied;
         let signature = f.signatures.get_mut(&path("invoke")).unwrap();
-        let supplied = signature.types.push(callback);
+        let supplied = interner().intern(callback);
         let SignatureKind::Function(function) = &mut signature.kind else {
             panic!()
         };
@@ -6033,7 +5985,7 @@ fn conditional_receivers_retain_live_loan_dependencies_until_their_last_read() {
         let output = f.slot(string_kind(), Storage::Temporary);
         let incoming = f.slot(string_kind(), Storage::Temporary);
         let root_type = f.body().places[x as usize].ty;
-        let mut local = f.definition.types.get(root_type).unwrap().clone();
+        let mut local = interner().get(root_type).unwrap().clone();
         local.modes.relation = Relation::environment();
         let local = f.definition.types.push(local);
         for slot in [x, receiver, displaced, output, incoming] {
@@ -6061,17 +6013,13 @@ fn conditional_receivers_retain_live_loan_dependencies_until_their_last_read() {
         let SignatureKind::Function(function) = &mut signature.kind else {
             unreachable!()
         };
-        let mut parameter = signature
-            .types
-            .get(function.parameters[0].ty)
-            .unwrap()
-            .clone();
+        let mut parameter = interner().get(function.parameters[0].ty).unwrap().clone();
         parameter.modes.relation = Relation::environment();
-        function.parameters[0].ty = signature.types.push(parameter);
-        let mut result = signature.types.get(function.result).unwrap().clone();
+        function.parameters[0].ty = interner().intern(parameter);
+        let mut result = interner().get(function.result).unwrap().clone();
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        function.result = signature.types.push(result);
-        f.signatures.insert(path("view"), signature);
+        function.result = interner().intern(result);
+        f.signatures.insert(id("view"), signature);
         let failure = f.cleanup(vec![
             CleanupAction::EndLoan {
                 loan: LoanId(0),
@@ -6182,10 +6130,10 @@ fn derived_capability_closure_fixture(derive: bool, permitted: bool, parameter: 
     let mut f = Fixture::unit();
     let unit = unit_ty(&mut f);
     for name in ["Io", "Stdout"] {
-        f.signatures.insert(path(name), capability_signature(name));
+        f.signatures.insert(id(name), capability_signature(name));
     }
     let named = |name: &str| TypeKind::Named {
-        definition: path(name),
+        definition: id(name),
         arguments: vec![].into(),
     };
     let source = param(&mut f, named(if derive { "Io" } else { "Stdout" }));
@@ -6251,8 +6199,8 @@ fn derived_capability_closure_fixture(derive: bool, permitted: bool, parameter: 
             vec![AuthorityTerm::Parameter(ParameterRef::bound(ParamId(0)))].into(),
         );
     }
-    f.signatures.insert(path("acquire"), acquire);
-    f.signatures.insert(path("invoke"), invoke);
+    f.signatures.insert(id("acquire"), acquire);
+    f.signatures.insert(id("invoke"), invoke);
     let call = |name: &str, source: u32, destination: u32, next: u32| Terminator::Call {
         callee: Callee::Definition {
             path: path(name),
@@ -6347,7 +6295,7 @@ fn constant_reads_require_the_declared_constant_type_without_initializer_operand
                 generics: Default::default(),
             };
         }
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         f.body().rvalues[0] = Rvalue::ReadConstant {
             arguments: vec![],
             definition: path("DATA"),
@@ -6398,10 +6346,9 @@ fn named_function_references_independently_prove_allocation_and_uses() {
             ));
             header.authority =
                 AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Dir"))].into());
-            f.signatures
-                .insert(path("Dir"), capability_signature("Dir"));
+            f.signatures.insert(id("Dir"), capability_signature("Dir"));
         }
-        f.signatures.insert(path("target"), signature);
+        f.signatures.insert(id("target"), signature);
         f.body().rvalues.push(Rvalue::FunctionReference {
             definition: path("target"),
             arguments: vec![],
@@ -6436,7 +6383,7 @@ fn counted_constant_reads_independently_require_shared_root_modes() {
         let target = f.slot(string_kind(), Storage::Temporary);
         let root = f.body().places[target as usize].ty;
         if forged {
-            let mut row = f.definition.types.get(root).unwrap().clone();
+            let mut row = interner().get(root).unwrap().clone();
             row.modes.uniqueness = Uniqueness::Unique;
             row.modes.sendability = Sendability::Sendable;
             let root = f.definition.types.push(row);
@@ -6448,15 +6395,15 @@ fn counted_constant_reads_independently_require_shared_root_modes() {
             unreachable!()
         };
         let root = function.result;
-        let mut row = signature.types.get(root).unwrap().clone();
+        let mut row = interner().get(root).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::Sendable;
-        let root = signature.types.push(row);
+        let root = interner().intern(row);
         signature.kind = SignatureKind::Const {
             ty: root,
             generics: Default::default(),
         };
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         f.assign(
             target,
             Rvalue::ReadConstant {
@@ -6499,7 +6446,7 @@ fn named_reference_specializations_check_declared_bounds_independently() {
             bounds: vec![Bound::Plain].into(),
         }]
         .into();
-        f.signatures.insert(path("target"), signature);
+        f.signatures.insert(id("target"), signature);
         let actual = f.definition.types.push(ty(if valid {
             TypeKind::Primitive(Primitive::U64)
         } else {
@@ -6614,13 +6561,13 @@ fn closure_pair_part_fixture(field: u32) -> Fixture {
         .types
         .push(ty(TypeKind::Tuple(vec![string, number].into())));
     let pair = normalize_type_properties(
-        &mut f.definition.types,
+        interner(),
         pair,
         &hirsel_types::GenericDeclarations::default(),
         &mut |_| Ok::<_, hirsel_types::QueryError>(None),
     )
     .unwrap();
-    let TypeKind::Tuple(fields) = &f.definition.types.get(pair).unwrap().kind else {
+    let TypeKind::Tuple(fields) = &interner().get(pair).unwrap().kind else {
         panic!()
     };
     let [string, number] = [fields[0], fields[1]];
@@ -6744,15 +6691,11 @@ fn noalloc_callee_signatures_do_not_hide_counted_argument_construction() {
             panic!()
         };
         if !taken {
-            let mut row = signature
-                .types
-                .get(function.parameters[0].ty)
-                .unwrap()
-                .clone();
+            let mut row = interner().get(function.parameters[0].ty).unwrap().clone();
             row.modes.relation = Relation::environment();
-            function.parameters[0].ty = signature.types.push(row);
+            function.parameters[0].ty = interner().intern(row);
         }
-        f.signatures.insert(path("use_text"), signature);
+        f.signatures.insert(id("use_text"), signature);
         let child = &mut f.definition.bodies[1];
         let unit = child.result;
         let result = add_capture(child, unit);
@@ -6848,17 +6791,13 @@ fn retained_call_results_carry_the_construction_destination_of_selected_argument
         let SignatureKind::Function(function) = &mut signature.kind else {
             panic!()
         };
-        let mut parameter = signature
-            .types
-            .get(function.parameters[0].ty)
-            .unwrap()
-            .clone();
+        let mut parameter = interner().get(function.parameters[0].ty).unwrap().clone();
         parameter.modes.relation = Relation::environment();
-        function.parameters[0].ty = signature.types.push(parameter);
-        let mut result = signature.types.get(function.result).unwrap().clone();
+        function.parameters[0].ty = interner().intern(parameter);
+        let mut result = interner().get(function.result).unwrap().clone();
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        function.result = signature.types.push(result);
-        f.signatures.insert(path("view"), signature);
+        function.result = interner().intern(result);
+        f.signatures.insert(id("view"), signature);
         let child = &mut f.definition.bodies[1];
         let result_ty = child.result;
         let result = add_capture(child, result_ty);
@@ -6933,7 +6872,7 @@ fn closure_allocation_checks_counted_sequence_map_set_and_box_construction() {
                 .types
                 .push(ty(TypeKind::Primitive(Primitive::U64)));
             let old = f.definition.bodies[1].locals[1].ty;
-            let mut row = f.definition.types.get(old).unwrap().clone();
+            let mut row = interner().get(old).unwrap().clone();
             row.kind = match shape {
                 0 => TypeKind::Builtin {
                     kind: BuiltinType::List,
@@ -6952,7 +6891,7 @@ fn closure_allocation_checks_counted_sequence_map_set_and_box_construction() {
             };
             let aggregate = f.definition.types.push(row);
             let closure_root = f.body().places[1].ty;
-            let mut row = f.definition.types.get(closure_root).unwrap().clone();
+            let mut row = interner().get(closure_root).unwrap().clone();
             let TypeKind::Function(function) = &mut row.kind else {
                 panic!()
             };
@@ -6966,7 +6905,7 @@ fn closure_allocation_checks_counted_sequence_map_set_and_box_construction() {
                     .types
                     .push(ty(TypeKind::Tuple(vec![number, number].into())));
                 normalize_type_properties(
-                    &mut f.definition.types,
+                    interner(),
                     tuple,
                     &hirsel_types::GenericDeclarations::default(),
                     &mut |_| Ok::<_, hirsel_types::QueryError>(None),
@@ -7066,7 +7005,7 @@ fn replacement_loan_death_is_proved_from_installed_content() {
         let observed = f.slot(string_kind(), Storage::Temporary);
         for place in [source, receiver, displaced, observed] {
             let previous = f.body().places[place as usize].ty;
-            let mut row = f.definition.types.get(previous).unwrap().clone();
+            let mut row = interner().get(previous).unwrap().clone();
             row.modes.relation = Relation::environment();
             let local = f.definition.types.push(row);
             f.body().locals[place as usize].ty = local;
@@ -7080,13 +7019,13 @@ fn replacement_loan_death_is_proved_from_installed_content() {
         let SignatureKind::Function(function) = &mut view.kind else {
             unreachable!()
         };
-        let mut parameter = view.types.get(function.parameters[0].ty).unwrap().clone();
+        let mut parameter = interner().get(function.parameters[0].ty).unwrap().clone();
         parameter.modes.relation = Relation::environment();
-        function.parameters[0].ty = view.types.push(parameter);
-        let mut result = view.types.get(function.result).unwrap().clone();
+        function.parameters[0].ty = interner().intern(parameter);
+        let mut result = interner().get(function.result).unwrap().clone();
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        function.result = view.types.push(result);
-        f.signatures.insert(path("view"), view);
+        function.result = interner().intern(result);
+        f.signatures.insert(id("view"), view);
         let via = f.through_loan(source, 0);
         f.body().blocks[0].instructions.push(inst(
             InstructionKind::BeginLoan {
@@ -7211,7 +7150,7 @@ fn repeated_read_loan_fixture() -> Fixture {
     let displaced = f.slot(string_kind(), Storage::Temporary);
     for place in [source, receiver, prepared, displaced] {
         let previous = f.body().places[place as usize].ty;
-        let mut row = f.definition.types.get(previous).unwrap().clone();
+        let mut row = interner().get(previous).unwrap().clone();
         row.modes.relation = Relation::environment();
         let local = f.definition.types.push(row);
         f.body().locals[place as usize].ty = local;
@@ -7225,13 +7164,13 @@ fn repeated_read_loan_fixture() -> Fixture {
     let SignatureKind::Function(function) = &mut view.kind else {
         unreachable!()
     };
-    let mut parameter = view.types.get(function.parameters[0].ty).unwrap().clone();
+    let mut parameter = interner().get(function.parameters[0].ty).unwrap().clone();
     parameter.modes.relation = Relation::environment();
-    function.parameters[0].ty = view.types.push(parameter);
-    let mut result = view.types.get(function.result).unwrap().clone();
+    function.parameters[0].ty = interner().intern(parameter);
+    let mut result = interner().get(function.result).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    function.result = view.types.push(result);
-    f.signatures.insert(path("view"), view);
+    function.result = interner().intern(result);
+    f.signatures.insert(id("view"), view);
     f.assign(receiver, Rvalue::Use(copy(source)), 0);
     f.body().blocks[0].terminator = Terminator::Goto(BlockId(1));
     f.body().blocks.push(block(
@@ -7389,7 +7328,7 @@ fn projected_replacement_releases_only_its_installed_content_dependencies() {
         let displaced = f.slot(string_kind(), Storage::Temporary);
         for place in [left, right, displaced] {
             let previous = f.body().places[place as usize].ty;
-            let mut row = f.definition.types.get(previous).unwrap().clone();
+            let mut row = interner().get(previous).unwrap().clone();
             row.modes.relation = Relation::environment();
             let local = f.definition.types.push(row);
             f.body().locals[place as usize].ty = local;
@@ -7406,7 +7345,7 @@ fn projected_replacement_releases_only_its_installed_content_dependencies() {
         );
         for place in [tuple, observed] {
             let previous = f.body().places[place as usize].ty;
-            let mut row = f.definition.types.get(previous).unwrap().clone();
+            let mut row = interner().get(previous).unwrap().clone();
             row.modes.relation = Relation::environment();
             let local = f.definition.types.push(row);
             f.body().locals[place as usize].ty = local;
@@ -7536,7 +7475,7 @@ fn owned_local_field_receiver_fixture() -> Fixture {
     let observed = f.slot(string_kind(), Storage::Temporary);
     let global = f.body().places[seed as usize].ty;
     for place in [source, prepared, displaced, observed] {
-        let mut row = f.definition.types.get(global).unwrap().clone();
+        let mut row = interner().get(global).unwrap().clone();
         row.modes.relation = Relation::environment();
         let local = f.definition.types.push(row);
         f.body().locals[place as usize].ty = local;
@@ -7544,7 +7483,7 @@ fn owned_local_field_receiver_fixture() -> Fixture {
     }
     let tuple = f.slot(TypeKind::Tuple(vec![global].into()), Storage::Local);
     let previous = f.body().places[tuple as usize].ty;
-    let mut row = f.definition.types.get(previous).unwrap().clone();
+    let mut row = interner().get(previous).unwrap().clone();
     row.modes.relation = Relation::environment();
     let local = f.definition.types.push(row);
     f.body().locals[tuple as usize].ty = local;
@@ -7597,13 +7536,13 @@ fn owned_local_field_receiver_fixture() -> Fixture {
     let SignatureKind::Function(function) = &mut view.kind else {
         unreachable!()
     };
-    let mut parameter = view.types.get(function.parameters[0].ty).unwrap().clone();
+    let mut parameter = interner().get(function.parameters[0].ty).unwrap().clone();
     parameter.modes.relation = Relation::environment();
-    function.parameters[0].ty = view.types.push(parameter);
-    let mut result = view.types.get(function.result).unwrap().clone();
+    function.parameters[0].ty = interner().intern(parameter);
+    let mut result = interner().get(function.result).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    function.result = view.types.push(result);
-    f.signatures.insert(path("view"), view);
+    function.result = interner().intern(result);
+    f.signatures.insert(id("view"), view);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
             path: path("view"),
@@ -7692,7 +7631,7 @@ fn owned_local_field_receivers_use_content_lifetimes_without_relaxing_caller_sto
         unreachable!()
     };
     let previous = promoted.body().places[displaced.0 as usize].ty;
-    let mut row = promoted.definition.types.get(previous).unwrap().clone();
+    let mut row = interner().get(previous).unwrap().clone();
     row.modes.relation = Relation::global();
     let global = promoted.definition.types.push(row);
     promoted.body().locals[displaced.0 as usize].ty = global;
@@ -7742,7 +7681,7 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
         f.body().locals[source as usize].storage = Storage::Parameter;
         f.body().parameters.push(LocalId(source));
         let mut signature = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
-        let formal = signature.types.push(ty(string_kind()));
+        let formal = interner().intern(ty(string_kind()));
         let SignatureKind::Function(header) = &mut signature.kind else {
             unreachable!()
         };
@@ -7753,9 +7692,9 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
             ty: formal,
         }]
         .into();
-        f.signatures.insert(path("main"), signature);
+        f.signatures.insert(id("main"), signature);
         f.signatures.insert(
-            path("weaken"),
+            id("weaken"),
             function_signature(
                 "weaken",
                 vec![(PassingMode::Mut, string_kind())],
@@ -7808,8 +7747,7 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
         };
         let function = PlaceId(1);
         let function_type = f.body().locals[1].ty;
-        let TypeKind::Function(header) = &f.definition.types.get(function_type).unwrap().kind
-        else {
+        let TypeKind::Function(header) = &interner().get(function_type).unwrap().kind else {
             unreachable!()
         };
         let result = header.result;
@@ -7877,7 +7815,7 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
             ret(0, cleanup),
         ));
         if forged {
-            let mut row = f.definition.types.get(function_type).unwrap().clone();
+            let mut row = interner().get(function_type).unwrap().clone();
             let TypeKind::Function(header) = &mut row.kind else {
                 unreachable!()
             };
@@ -7909,9 +7847,9 @@ fn a_temporary_callee_source_must_die_after_its_result_permission() {
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
-    let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Aliased;
-    fun.parameters[0].ty = signature.types.push(row);
+    fun.parameters[0].ty = interner().intern(row);
     f.valid();
     // The result is already dead, but the permission on its callee source must
     // end before that source is destroyed. Destruction ends captured loans later.
@@ -7934,7 +7872,7 @@ fn lexical_temporary_view_fixture() -> Fixture {
     let source = f.slot(string_kind(), Storage::Temporary);
     let view = f.slot(string_kind(), Storage::Local);
     let previous = f.body().places[source as usize].ty;
-    let mut row = f.definition.types.get(previous).unwrap().clone();
+    let mut row = interner().get(previous).unwrap().clone();
     row.modes.relation = Relation::environment();
     let local = f.definition.types.push(row);
     for place in [source, view] {
@@ -8024,21 +7962,21 @@ fn constant_field_places_keep_declared_modes_independently_of_copy_receipts() {
         let field = f.definition.types.push(field);
         let root = f.slot(TypeKind::Tuple(vec![field].into()), Storage::Temporary);
         let root_ty = f.body().places[root as usize].ty;
-        let mut row = f.definition.types.get(root_ty).unwrap().clone();
+        let mut row = interner().get(root_ty).unwrap().clone();
         row.modes.sendability = Sendability::Sendable;
         let root_ty = f.definition.types.push(row);
         f.body().locals[root as usize].ty = root_ty;
         f.body().places[root as usize].ty = root_ty;
         let mut signature = function_signature("DATA", vec![], TypeKind::Tuple(vec![].into()));
-        let constant = import_type(&f.definition.types, root_ty, &mut signature.types).unwrap();
+        let constant = root_ty;
         signature.kind = SignatureKind::Const {
             ty: constant,
             generics: Default::default(),
         };
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         // Reading the constant copies its counted owner; physical field
         // contracts survive, while current whole-value evidence does not.
-        let mut copied = f.definition.types.get(root_ty).unwrap().clone();
+        let mut copied = interner().get(root_ty).unwrap().clone();
         copied.modes.sendability = Sendability::NotSendable;
         let copied = f.definition.types.push(copied);
         f.body().locals[root as usize].ty = copied;
@@ -8086,7 +8024,7 @@ fn aggregate_fields_cannot_keep_a_removed_call_locality_binder() {
         let child = &f.definition.bodies[1];
         let source = child.places[1].ty;
         let child_ty = if forged {
-            let mut row = f.definition.types.get(source).unwrap().clone();
+            let mut row = interner().get(source).unwrap().clone();
             row.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
             f.definition.types.push(row)
         } else {
@@ -8143,7 +8081,7 @@ fn closure_unique_extraction_fixture(
         1 => TypeKind::Primitive(Primitive::U64),
         2 => TypeKind::Tuple(vec![scalar, string].into()),
         3 => TypeKind::Tuple(vec![scalar, scalar].into()),
-        4 => f.definition.types.get(shared).unwrap().kind.clone(),
+        4 => interner().get(shared).unwrap().kind.clone(),
         5 => TypeKind::Tuple(vec![shared].into()),
         _ => unreachable!(),
     };
@@ -8172,7 +8110,7 @@ fn closure_unique_extraction_fixture(
         value: copy(parameter),
     };
     let function_ty = f.definition.bodies[0].locals[1].ty;
-    let mut row = f.definition.types.get(function_ty).unwrap().clone();
+    let mut row = interner().get(function_ty).unwrap().clone();
     let TypeKind::Function(header) = &mut row.kind else {
         unreachable!()
     };
@@ -8227,7 +8165,7 @@ fn noalloc_cannot_trust_unique_source_modes_or_discarded_results() {
                 child.cleanups.push(Cleanup { head: Some(node) });
                 child.blocks[0].terminator = ret(0, cleanup.0);
                 let function_ty = f.definition.bodies[0].locals[1].ty;
-                let mut row = f.definition.types.get(function_ty).unwrap().clone();
+                let mut row = interner().get(function_ty).unwrap().clone();
                 let TypeKind::Function(header) = &mut row.kind else {
                     unreachable!()
                 };
@@ -8508,7 +8446,7 @@ fn noalloc_literal_replacement_checks_counted_storage_independently() {
 fn destructor_effect_fixture(allocation: Allocation, transfer: bool, failure: bool) -> Fixture {
     let mut f = Fixture::unit();
     let mut signature = capability_signature("R");
-    let rep = signature.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let rep = interner().intern(ty(TypeKind::Tuple(vec![].into())));
     let SignatureKind::Type(resource) = &mut signature.kind else {
         unreachable!()
     };
@@ -8517,10 +8455,10 @@ fn destructor_effect_fixture(allocation: Allocation, transfer: bool, failure: bo
     resource.resource = true;
     resource.representation = Some(rep);
     resource.destructor_allocation = allocation;
-    f.signatures.insert(path("R"), signature);
+    f.signatures.insert(id("R"), signature);
     // The forged cached row claims NoAlloc; declaration evidence must win.
     let resource = f.definition.types.push(ty(TypeKind::Named {
-        definition: path("R"),
+        definition: id("R"),
         arguments: vec![].into(),
     }));
     let mut child = empty_body(&mut f);
@@ -8605,7 +8543,7 @@ fn noalloc_aggregate_cleanup_skips_the_transferred_allocating_field() {
     });
     child.blocks[0].terminator = ret(field, 1);
     let original = f.body().locals[1].ty;
-    let mut header = f.definition.types.get(original).unwrap().clone();
+    let mut header = interner().get(original).unwrap().clone();
     let TypeKind::Function(function) = &mut header.kind else {
         unreachable!()
     };
@@ -8619,7 +8557,7 @@ fn noalloc_aggregate_cleanup_skips_the_transferred_allocating_field() {
     child.result = string;
     child.places[field as usize].ty = string;
     child.places[field as usize].projection = vec![Projection::Field(1)].into();
-    let mut header = f.definition.types.get(header).unwrap().clone();
+    let mut header = interner().get(header).unwrap().clone();
     if let TypeKind::Function(function) = &mut header.kind {
         function.result = string
     }
@@ -8638,21 +8576,17 @@ fn written_generic_receipt_requires_this_actuals_proof() {
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
-    let mut required = signature
-        .types
-        .get(function.parameters[0].ty)
-        .unwrap()
-        .clone();
+    let mut required = interner().get(function.parameters[0].ty).unwrap().clone();
     required.sendability_requirement = SendabilityRequirement::Sendable;
     required.modes.sendability = Sendability::Sendable;
-    function.parameters[0].ty = signature.types.push(required);
+    function.parameters[0].ty = interner().intern(required);
     assert!(f.kinds().contains(&ViolationKind::TypeMismatch {
         entity: "call argument"
     }));
     // A checked entry assumption supplies occurrence evidence without unique
     // mutation permission. Every caller of this owner must establish it.
     let original = f.body().places[1].ty;
-    let mut actual = f.definition.types.get(original).unwrap().clone();
+    let mut actual = interner().get(original).unwrap().clone();
     actual.sendability_requirement = SendabilityRequirement::Sendable;
     actual.modes.sendability = Sendability::Sendable;
     let actual = f.definition.types.push(actual);
@@ -8678,7 +8612,7 @@ fn copying_generic_calls_cannot_hide_owned_crossing_contracts() {
     for nested in [false, true] {
         let mut f = generic_call_fixture(Bound::Copyable, string_kind());
         let original = f.body().places[1].ty;
-        let mut actual = f.definition.types.get(original).unwrap().clone();
+        let mut actual = interner().get(original).unwrap().clone();
         actual.sendability_requirement = SendabilityRequirement::Sendable;
         actual.modes.sendability = Sendability::Sendable;
         let qualified = f.definition.types.push(actual.clone());
@@ -8690,7 +8624,7 @@ fn copying_generic_calls_cannot_hide_owned_crossing_contracts() {
         f.body().places[1].ty = actual;
         let argument = if nested {
             // The forbidden qualifier is solely inside the copied payload.
-            let mut row = f.definition.types.get(actual).unwrap().clone();
+            let mut row = interner().get(actual).unwrap().clone();
             row.sendability_requirement = SendabilityRequirement::None;
             f.definition.types.push(row)
         } else {
@@ -8726,10 +8660,10 @@ fn copying_generic_calls_cannot_hide_owned_crossing_contracts() {
 fn enclosing_copy_invalidates_nested_generic_bound_evidence() {
     let mut f = generic_call_fixture(Bound::Sendable, string_kind());
     let original = f.body().places[1].ty;
-    let mut part = f.definition.types.get(original).unwrap().clone();
+    let mut part = interner().get(original).unwrap().clone();
     part.modes.sendability = Sendability::Sendable;
     let part = f.definition.types.push(part);
-    let mut row = f.definition.types.get(original).unwrap().clone();
+    let mut row = interner().get(original).unwrap().clone();
     row.kind = TypeKind::Tuple(vec![part].into());
     row.sendability_requirement = SendabilityRequirement::Sendable;
     row.modes.sendability = Sendability::Sendable;
@@ -8740,9 +8674,7 @@ fn enclosing_copy_invalidates_nested_generic_bound_evidence() {
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
-    let template = signature
-        .types
-        .push(ty(TypeKind::Tuple(vec![function.parameters[0].ty].into())));
+    let template = interner().intern(ty(TypeKind::Tuple(vec![function.parameters[0].ty].into())));
     function.parameters[0].ty = template;
     let Terminator::Call {
         callee: Callee::Definition { arguments, .. },
@@ -8771,7 +8703,7 @@ fn mutable_qualified_receipts_require_current_root_and_part_proofs_on_exit() {
         let mut f = Fixture::unit();
         let x = param(&mut f, string_kind());
         let original = f.body().places[x as usize].ty;
-        let mut qualified = f.definition.types.get(original).unwrap().clone();
+        let mut qualified = interner().get(original).unwrap().clone();
         qualified.sendability_requirement = SendabilityRequirement::Sendable;
         qualified.modes.sendability = Sendability::Sendable;
         let part = f.definition.types.push(qualified.clone());
@@ -8809,7 +8741,7 @@ fn mutable_qualified_receipts_require_current_root_and_part_proofs_on_exit() {
 fn substituted_copying_results_cannot_publish_unpromised_crossing_evidence() {
     let mut f = generic_call_fixture(Bound::Copyable, string_kind());
     let original = f.body().places[1].ty;
-    let mut incoming = f.definition.types.get(original).unwrap().clone();
+    let mut incoming = interner().get(original).unwrap().clone();
     incoming.sendability_requirement = SendabilityRequirement::Sendable;
     incoming.modes.sendability = Sendability::Sendable;
     let incoming = f.definition.types.push(incoming);
@@ -8841,7 +8773,7 @@ fn substituted_copying_results_cannot_publish_unpromised_crossing_evidence() {
     ));
     f.body().blocks[1].terminator = ret(0, 0);
     f.valid();
-    let mut claimed = f.definition.types.get(original).unwrap().clone();
+    let mut claimed = interner().get(original).unwrap().clone();
     claimed.modes.sendability = Sendability::Sendable;
     let claimed = f.definition.types.push(claimed);
     f.body().locals[root.0 as usize].ty = claimed;
@@ -8856,7 +8788,7 @@ fn selected_borrow_result_read_permissions_cannot_hide_qualified_actuals() {
     for qualified_actual in [false, true] {
         let mut f = generic_call_fixture(Bound::Copyable, string_kind());
         let original = f.body().places[1].ty;
-        let mut received = f.definition.types.get(original).unwrap().clone();
+        let mut received = interner().get(original).unwrap().clone();
         received.sendability_requirement = SendabilityRequirement::Sendable;
         received.modes.sendability = Sendability::Sendable;
         let received = f.definition.types.push(received);
@@ -8873,13 +8805,9 @@ fn selected_borrow_result_read_permissions_cannot_hide_qualified_actuals() {
         }]
         .into();
         function.parameters[0].passing = PassingMode::Borrow;
-        let mut selected = signature
-            .types
-            .get(function.parameters[0].ty)
-            .unwrap()
-            .clone();
+        let mut selected = interner().get(function.parameters[0].ty).unwrap().clone();
         selected.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        function.result = signature.types.push(selected);
+        function.result = interner().intern(selected);
         f.emit(InstructionKind::BeginLoan {
             id: LoanId(0),
             place: PlaceId(1),
@@ -8946,7 +8874,7 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
             let unit = unit_ty(&mut f);
             let x = param(&mut f, string_kind());
             let original = f.body().places[x as usize].ty;
-            let mut qualified = f.definition.types.get(original).unwrap().clone();
+            let mut qualified = interner().get(original).unwrap().clone();
             qualified.sendability_requirement = SendabilityRequirement::Sendable;
             qualified.modes.sendability = Sendability::Sendable;
             let qualified = f.definition.types.push(qualified);
@@ -8962,13 +8890,13 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
             let view = f.through_loan(x, 0);
             let mut nested = empty_body(&mut f);
             let captured = add_capture(&mut nested, qualified);
-            let mut sink = f.signatures.get(&f.definition.path).unwrap().clone();
-            sink.definition = path("sink");
+            let mut sink = f.signatures.get(f.definition.path).unwrap().clone();
+            sink.definition = id("sink");
             let SignatureKind::Function(function) = &mut sink.kind else {
                 panic!()
             };
             function.parameters[0].passing = PassingMode::Borrow;
-            f.signatures.insert(path("sink"), sink);
+            f.signatures.insert(id("sink"), sink);
             nested.locals.push(Local {
                 ty: unit,
                 storage: Storage::Temporary,
@@ -9001,7 +8929,7 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
             f.definition.bodies.push(nested);
             let closure = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
             let old = f.body().places[closure as usize].ty;
-            let mut row = f.definition.types.get(old).unwrap().clone();
+            let mut row = interner().get(old).unwrap().clone();
             row.modes.relation = Relation::environment();
             let local = f.definition.types.push(row);
             f.body().places[closure as usize].ty = local;
@@ -9065,11 +8993,10 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
                 let view = f.through_loan(closure, 1);
                 let mut signature =
                     function_signature("relay", vec![], TypeKind::Tuple(vec![].into()));
-                let parameter =
-                    import_type(&f.definition.types, callable, &mut signature.types).unwrap();
-                let mut row = signature.types.get(parameter).unwrap().clone();
+                let parameter = callable;
+                let mut row = interner().get(parameter).unwrap().clone();
                 row.modes.relation = Relation::global();
-                let parameter = signature.types.push(row);
+                let parameter = interner().intern(row);
                 let SignatureKind::Function(function) = &mut signature.kind else {
                     panic!()
                 };
@@ -9081,28 +9008,26 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
                 }]
                 .into();
                 let arguments = if route == 2 {
-                    let t = signature
-                        .types
-                        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-                            TypeParamId(0),
-                        ))));
+                    let t = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+                        TypeParamId(0),
+                    ))));
                     function.parameters[0].ty = t;
                     function.generics = vec![GenericParameter::Type {
                         name: "T".into(),
                         bounds: vec![Bound::Copyable].into(),
                     }]
                     .into();
-                    let mut result = signature.types.get(t).unwrap().clone();
+                    let mut result = interner().get(t).unwrap().clone();
                     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-                    function.result = signature.types.push(result);
+                    function.result = interner().intern(result);
                     vec![GenericArgument::Type(callable)]
                 } else {
                     vec![]
                 };
-                f.signatures.insert(path("relay"), signature);
+                f.signatures.insert(id("relay"), signature);
                 let destination = if route == 2 {
                     let copied = f.slot(
-                        f.definition.types.get(callable).unwrap().kind.clone(),
+                        interner().get(callable).unwrap().kind.clone(),
                         Storage::Local,
                     );
                     f.body().places[copied as usize].ty = callable;
@@ -9157,9 +9082,7 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
         let mut f = Fixture::unit();
         let unit = unit_ty(&mut f);
         let state = param(&mut f, string_kind());
-        let mut row = f
-            .definition
-            .types
+        let mut row = interner()
             .get(f.definition.bodies[0].places[state as usize].ty)
             .unwrap()
             .clone();
@@ -9185,9 +9108,7 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
                 unit,
             )),
         );
-        let mut callback_row = f
-            .definition
-            .types
+        let mut callback_row = interner()
             .get(f.definition.bodies[0].places[callback as usize].ty)
             .unwrap()
             .clone();
@@ -9198,20 +9119,15 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
         owner_sig(&mut f, &[PassingMode::Take, PassingMode::Take]);
 
         let mut signature = function_signature("factory", vec![], TypeKind::Tuple(vec![].into()));
-        let header_unit = signature.types.push(ty(TypeKind::Tuple(vec![].into())));
-        let state_parameter =
-            signature
-                .types
-                .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-                    TypeParamId(0),
-                ))));
-        let nested_state = signature
-            .types
-            .push(ty(TypeKind::Parameter(TypeParameterRef::Bound {
-                depth: 1,
-                parameter: TypeParamId(0),
-            })));
-        let next = signature.types.push(ty(TypeKind::Function(fn_type(
+        let header_unit = interner().intern(ty(TypeKind::Tuple(vec![].into())));
+        let state_parameter = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))));
+        let nested_state = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::Bound {
+            depth: 1,
+            parameter: TypeParamId(0),
+        })));
+        let next = interner().intern(ty(TypeKind::Function(fn_type(
             vec![Parameter {
                 name: Some("state".into()),
                 label: None,
@@ -9237,7 +9153,7 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
             ]
             .into(),
         ));
-        let iterator = signature.types.push(iterator);
+        let iterator = interner().intern(iterator);
         let SignatureKind::Function(function) = &mut signature.kind else {
             panic!()
         };
@@ -9262,7 +9178,7 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
         ]
         .into();
         function.result = iterator;
-        f.signatures.insert(path("factory"), signature);
+        f.signatures.insert(id("factory"), signature);
         let result = f.slot(
             TypeKind::Builtin {
                 kind: BuiltinType::Iter,
@@ -9270,9 +9186,7 @@ fn retained_mutable_state_uses_the_callbacks_fixed_contract() {
             },
             Storage::Temporary,
         );
-        let mut result_row = f
-            .definition
-            .types
+        let mut result_row = interner()
             .get(f.definition.bodies[0].places[result as usize].ty)
             .unwrap()
             .clone();
@@ -9332,7 +9246,7 @@ fn copied_aggregate_captures_do_not_reuse_descendant_proofs() {
     let bytes = f.definition.types.push(bytes);
     let x = param(&mut f, TypeKind::Tuple(vec![bytes, unit].into()));
     let original = f.body().places[x as usize].ty;
-    let mut source = f.definition.types.get(original).unwrap().clone();
+    let mut source = interner().get(original).unwrap().clone();
     source.sendability_requirement = SendabilityRequirement::Sendable;
     source.modes.sendability = Sendability::Sendable;
     let qualified = f.definition.types.push(source.clone());
@@ -9351,7 +9265,7 @@ fn copied_aggregate_captures_do_not_reuse_descendant_proofs() {
         Storage::Temporary,
     );
     let old = f.body().places[closure as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.modes.sendability = Sendability::Sendable;
     let forged = f.definition.types.push(row);
     f.body().locals[closure as usize].ty = forged;
@@ -9405,9 +9319,9 @@ fn copied_callable_payload_paths_survive_successive_destructuring() {
             );
         }
         let outer = *rows.last().unwrap();
-        let outer_kind = f.definition.types.get(outer).unwrap().kind.clone();
+        let outer_kind = interner().get(outer).unwrap().kind.clone();
         let input = param(&mut f, outer_kind.clone());
-        let mut qualified = f.definition.types.get(outer).unwrap().clone();
+        let mut qualified = interner().get(outer).unwrap().clone();
         qualified.sendability_requirement = SendabilityRequirement::Sendable;
         qualified.modes.sendability = Sendability::Sendable;
         let qualified = f.definition.types.push(qualified);
@@ -9426,7 +9340,7 @@ fn copied_callable_payload_paths_survive_successive_destructuring() {
             let root = f.body().places[owner as usize].root;
             let owner_type = f.body().places[owner as usize].ty;
             let projection = if matches!(
-                f.definition.types.get(owner_type).unwrap().kind,
+                interner().get(owner_type).unwrap().kind,
                 TypeKind::Builtin {
                     kind: BuiltinType::List,
                     ..
@@ -9445,11 +9359,11 @@ fn copied_callable_payload_paths_survive_successive_destructuring() {
                 ty: *inner,
             });
             let next = f.slot(
-                f.definition.types.get(*inner).unwrap().kind.clone(),
+                interner().get(*inner).unwrap().kind.clone(),
                 Storage::Temporary,
             );
             if *inner == callable {
-                let mut row = f.definition.types.get(callable).unwrap().clone();
+                let mut row = interner().get(callable).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
                 let proved = f.definition.types.push(row);
                 f.body().places[next as usize].ty = proved;
@@ -9482,7 +9396,7 @@ fn dependent_unique_call_results_accept_stronger_current_content_summaries() {
     let header_result = f.definition.types.push(result.clone());
     let callback = param(&mut f, TypeKind::Function(fn_type(vec![], header_result)));
     let original = f.body().places[callback as usize].ty;
-    let mut header = f.definition.types.get(original).unwrap().clone();
+    let mut header = interner().get(original).unwrap().clone();
     header.modes.sendability = Sendability::Sendable;
     let header = f.definition.types.push(header);
     f.body().places[callback as usize].ty = header;
@@ -9512,7 +9426,7 @@ fn copying_a_borrowed_qualified_owner_keeps_its_callable_field_proof() {
     let owner = param(&mut f, TypeKind::Tuple(vec![callable].into()));
     let root = f.body().places[owner as usize].root;
     let old = f.body().places[owner as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.sendability_requirement = SendabilityRequirement::Sendable;
     row.modes.sendability = Sendability::Sendable;
     let qualified = f.definition.types.push(row);
@@ -9531,7 +9445,7 @@ fn copying_a_borrowed_qualified_owner_keeps_its_callable_field_proof() {
         TypeKind::Function(fn_type(vec![], unit)),
         Storage::Temporary,
     );
-    let mut row = f.definition.types.get(callable).unwrap().clone();
+    let mut row = interner().get(callable).unwrap().clone();
     row.modes.sendability = Sendability::Sendable;
     let proved = f.definition.types.push(row);
     f.body().places[copied as usize].ty = proved;
@@ -9577,12 +9491,12 @@ fn dependent_result_sources_normalize_after_the_actual_lifetime_is_installed() {
         Sendability::DependsOn(vec![TypeParameterRef::bound(TypeParamId(0))].into());
     formal.drop_allocation =
         DropAllocation::DependsOn(vec![TypeParameterRef::bound(TypeParamId(0))].into());
-    let formal = signature.types.push(formal);
+    let formal = interner().intern(formal);
     let mut result = ty(TypeKind::Tuple(vec![formal].into()));
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
     result.drop_allocation =
         DropAllocation::DependsOn(vec![TypeParameterRef::bound(TypeParamId(0))].into());
-    let result = signature.types.push(result);
+    let result = interner().intern(result);
     let SignatureKind::Function(callee) = &mut signature.kind else {
         panic!()
     };
@@ -9597,7 +9511,7 @@ fn dependent_result_sources_normalize_after_the_actual_lifetime_is_installed() {
         ty: formal,
     });
     callee.result = result;
-    f.signatures.insert(path("callee"), signature);
+    f.signatures.insert(id("callee"), signature);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
             path: path("callee"),
@@ -9616,7 +9530,7 @@ fn dependent_result_sources_normalize_after_the_actual_lifetime_is_installed() {
     let cleanup = f.cleanup(vec![drop(destination)]);
     f.body().blocks.push(block(vec![], ret(0, cleanup)));
     f.valid();
-    let mut forged = f.definition.types.get(result_ty).unwrap().clone();
+    let mut forged = interner().get(result_ty).unwrap().clone();
     forged.modes.sendability = Sendability::Sendable;
     let forged = f.definition.types.push(forged);
     f.body().locals[destination as usize].ty = forged;
@@ -9636,7 +9550,7 @@ fn qualified_content_keeps_a_related_taken_sources_frame_bound() {
         let mut f = Fixture::unit();
         let source = param(&mut f, TypeKind::Primitive(Primitive::String));
         let old = f.body().places[source as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.sendability_requirement = SendabilityRequirement::Sendable;
         row.modes.sendability = Sendability::Sendable;
         row.modes.relation = Relation::environment();
@@ -9647,7 +9561,7 @@ fn qualified_content_keeps_a_related_taken_sources_frame_bound() {
         let borrowed_source = if fresh_copy {
             let fresh = f.slot(TypeKind::Primitive(Primitive::String), Storage::Temporary);
             let old = f.body().places[fresh as usize].ty;
-            let mut row = f.definition.types.get(old).unwrap().clone();
+            let mut row = interner().get(old).unwrap().clone();
             row.modes.uniqueness = Uniqueness::Unique;
             row.modes.sendability = Sendability::Sendable;
             let unique = f.definition.types.push(row);
@@ -9668,7 +9582,7 @@ fn qualified_content_keeps_a_related_taken_sources_frame_bound() {
         };
         let destination = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Temporary);
         let global = f.body().places[destination as usize].ty;
-        let mut row = f.definition.types.get(global).unwrap().clone();
+        let mut row = interner().get(global).unwrap().clone();
         row.modes.relation = Relation::environment();
         let local = f.definition.types.push(row);
         f.body().locals[destination as usize].ty = local;
@@ -9681,17 +9595,13 @@ fn qualified_content_keeps_a_related_taken_sources_frame_bound() {
         let SignatureKind::Function(callee) = &mut signature.kind else {
             panic!()
         };
-        let mut row = signature
-            .types
-            .get(callee.parameters[0].ty)
-            .unwrap()
-            .clone();
+        let mut row = interner().get(callee.parameters[0].ty).unwrap().clone();
         row.modes.relation = Relation::environment();
-        callee.parameters[0].ty = signature.types.push(row);
-        let mut row = signature.types.get(callee.result).unwrap().clone();
+        callee.parameters[0].ty = interner().intern(row);
+        let mut row = interner().get(callee.result).unwrap().clone();
         row.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        callee.result = signature.types.push(row);
-        f.signatures.insert(path("callee"), signature);
+        callee.result = interner().intern(row);
+        f.signatures.insert(id("callee"), signature);
         let borrowed = f.through_loan(borrowed_source, 0);
         f.emit(InstructionKind::BeginLoan {
             id: LoanId(0),
@@ -9768,7 +9678,7 @@ fn an_unqualified_generic_move_cannot_invent_conditional_crossing_evidence() {
         });
         let temporary = f.slot(TypeKind::Parameter(reference), Storage::Temporary);
         let temporary_ty = f.body().places[temporary as usize].ty;
-        let mut row = f.definition.types.get(temporary_ty).unwrap().clone();
+        let mut row = interner().get(temporary_ty).unwrap().clone();
         row.modes.sendability = Sendability::DependsOn(vec![reference].into());
         let receiving = f.definition.types.push(row);
         f.body().locals[temporary as usize].ty = receiving;
@@ -9776,7 +9686,7 @@ fn an_unqualified_generic_move_cannot_invent_conditional_crossing_evidence() {
         f.assign(temporary, Rvalue::Use(take(source)), 0);
         let output = f.slot(TypeKind::Parameter(reference), Storage::Temporary);
         if qualified {
-            let mut row = f.definition.types.get(receiving).unwrap().clone();
+            let mut row = interner().get(receiving).unwrap().clone();
             row.sendability_requirement = SendabilityRequirement::Sendable;
             row.modes.sendability = Sendability::Sendable;
             let receiving = f.definition.types.push(row);
@@ -9900,9 +9810,9 @@ fn scoped_seal_global_capture_has_an_independent_ir_control() {
             d.capability = Some(CapabilityKind::Scoped);
             d.bounds = vec![Bound::NoallocDrop];
         }
-        f.signatures.insert(path("Gate"), gate);
+        f.signatures.insert(id("Gate"), gate);
         let gate = f.definition.types.push(ty(TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         }));
         let kind = if erased_sibling {
@@ -9912,7 +9822,7 @@ fn scoped_seal_global_capture_has_an_independent_ir_control() {
             let callback = f.definition.types.push(ty(TypeKind::Function(callback)));
             TypeKind::Tuple(vec![gate, callback].into())
         } else {
-            f.definition.types.get(gate).unwrap().kind.clone()
+            interner().get(gate).unwrap().kind.clone()
         };
         let source = param(&mut f, kind);
         let source_ty = f.body().places[source as usize].ty;
@@ -9971,18 +9881,17 @@ fn serializable_calls_reprove_nominal_opt_in_from_hand_built_ir() {
         let mut f = generic_call_fixture(
             Bound::Serializable,
             TypeKind::Named {
-                definition: path("Data"),
+                definition: id("Data"),
                 arguments: vec![].into(),
             },
         );
-        let mut types = TypeStore::default();
+        let types = interner();
         let repr = types.push(ty(TypeKind::Primitive(Primitive::U64)));
         f.signatures.insert(
-            path("Data"),
+            id("Data"),
             Signature {
-                definition: path("Data"),
+                definition: id("Data"),
                 metadata: SignatureMetadata::default(),
-                types,
                 fingerprint: ContentHash::default(),
                 kind: SignatureKind::Type(TypeDefinition {
                     loop_source: None,
@@ -10181,7 +10090,7 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
             ty: function.result,
             generics: vec![GenericParameter::Size { name: "n".into() }].into(),
         };
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         f.body().rvalues[0] = Rvalue::ReadConstant {
             definition: path("DATA"),
             arguments: match variant {
@@ -10234,8 +10143,8 @@ fn constant_size_actuals_instantiate_the_declared_result() {
         f.body().places[0].ty = result;
         f.body().result = result;
         let mut signature = function_signature("DATA", vec![], TypeKind::Tuple(vec![].into()));
-        let element = signature.types.push(ty(TypeKind::Primitive(Primitive::U8)));
-        let root = signature.types.push(ty(TypeKind::Builtin {
+        let element = interner().intern(ty(TypeKind::Primitive(Primitive::U8)));
+        let root = interner().intern(ty(TypeKind::Builtin {
             kind: BuiltinType::Inline,
             arguments: vec![
                 GenericArgument::Type(element),
@@ -10247,7 +10156,7 @@ fn constant_size_actuals_instantiate_the_declared_result() {
             ty: root,
             generics: vec![GenericParameter::Size { name: "n".into() }].into(),
         };
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         f.body().rvalues[0] = Rvalue::ReadConstant {
             definition: path("DATA"),
             arguments: vec![Size::Constant(actual)],
@@ -10286,7 +10195,7 @@ fn constant_declarations_exclude_type_parameters() {
             }]
             .into(),
         };
-        f.signatures.insert(path("DATA"), signature);
+        f.signatures.insert(id("DATA"), signature);
         f.body().rvalues[0] = Rvalue::ReadConstant {
             definition: path("DATA"),
             arguments: vec![Size::Constant(2)],

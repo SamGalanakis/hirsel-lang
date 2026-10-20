@@ -6353,7 +6353,7 @@ impl Checker<'_> {
 #[cfg(test)]
 mod nominal_limit_tests {
     use super::*;
-    use crate::support::{Fixture, path, scoped, ty};
+    use crate::support::{Fixture, Table, id, interner, path, scoped, ty};
     use hirsel_syntax::ContentHash;
     use hirsel_types::*;
 
@@ -6362,12 +6362,11 @@ mod nominal_limit_tests {
         for depth in [128, 129, 200] {
             let mut f = Fixture::unit();
             let unit = f.definition.types.id(0).unwrap();
-            let resource = path("R");
+            let resource = id("R");
             f.signatures.insert(
-                resource.clone(),
+                resource,
                 Signature {
-                    definition: resource.clone(),
-                    types: f.definition.types.clone(),
+                    definition: resource,
                     metadata: SignatureMetadata::default(),
                     fingerprint: ContentHash::default(),
                     kind: SignatureKind::Type(TypeDefinition {
@@ -6396,9 +6395,9 @@ mod nominal_limit_tests {
                 arguments: vec![].into(),
             }));
             let mut root = leaf;
-            let mut outer = path("D0");
+            let mut outer = id("D0");
             for n in 0..depth {
-                outer = path(&format!("D{n}"));
+                outer = id(&format!("D{n}"));
                 let representation = f.definition.types.push(ty(TypeKind::Record(
                     vec![hirsel_types::Field {
                         name: "value".into(),
@@ -6408,10 +6407,9 @@ mod nominal_limit_tests {
                     .into(),
                 )));
                 f.signatures.insert(
-                    outer.clone(),
+                    outer,
                     Signature {
-                        definition: outer.clone(),
-                        types: f.definition.types.clone(),
+                        definition: outer,
                         metadata: SignatureMetadata::default(),
                         fingerprint: ContentHash::default(),
                         kind: SignatureKind::Type(TypeDefinition {
@@ -6436,7 +6434,7 @@ mod nominal_limit_tests {
                     },
                 );
                 root = f.definition.types.push(ty(TypeKind::Named {
-                    definition: outer.clone(),
+                    definition: outer,
                     arguments: vec![].into(),
                 }));
             }
@@ -6453,10 +6451,13 @@ mod nominal_limit_tests {
             let moved_id = f.definition.bodies[0].places.len();
             f.definition.bodies[0].places.push(moved);
             let declarations = vec![GenericDeclarations::default()];
-            let scratch = scratch::Scratch::new(&f.definition.types, 1);
+            let scratch = scratch::Scratch::new(f.definition.bodies.len());
+            let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
+                t: interner(),
+                memo: &memo,
                 body: &f.definition.bodies[0],
                 signatures: &reader,
                 declarations: &declarations,
@@ -6476,12 +6477,12 @@ mod nominal_limit_tests {
             let model = Model::new(&mut checker);
             let lifetime_global = |ty: TypeId| {
                 checker
-                    .lifetime(&f.definition.types.get(ty).unwrap().modes.relation)
+                    .lifetime(&interner().row(ty).modes.relation)
                     .is_global()
             };
             let mut state = model.initial(
                 checker.body,
-                &f.definition.types,
+                interner(),
                 &checker.scratch.origin_types[checker.site.body.0 as usize],
                 &lifetime_global,
                 &|o| checker.arena_place(o),
@@ -6504,7 +6505,7 @@ mod nominal_limit_tests {
 #[cfg(test)]
 mod header_name_tests {
     use super::*;
-    use crate::support::{Fixture, scoped, ty};
+    use crate::support::{Fixture, Table, interner, scoped, ty};
     use hirsel_types::*;
 
     #[test]
@@ -6566,10 +6567,13 @@ mod header_name_tests {
             });
             f.definition.bodies.push(child);
             let declarations = vec![GenericDeclarations::default(); 2];
-            let scratch = scratch::Scratch::new(&f.definition.types, 2);
+            let scratch = scratch::Scratch::new(f.definition.bodies.len());
+            let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
+                t: interner(),
+                memo: &memo,
                 body: &f.definition.bodies[1],
                 signatures: &reader,
                 declarations: &declarations,
@@ -6589,11 +6593,11 @@ mod header_name_tests {
             let model = Model::new(&mut checker);
             let state = model.initial(
                 checker.body,
-                &f.definition.types,
+                interner(),
                 &checker.scratch.origin_types[checker.site.body.0 as usize],
                 &|t| {
                     checker
-                        .lifetime(&f.definition.types.get(t).unwrap().modes.relation)
+                        .lifetime(&interner().row(t).modes.relation)
                         .is_global()
                 },
                 &|o| checker.arena_place(o),
@@ -6610,7 +6614,7 @@ mod header_name_tests {
                 "header={header}, ordinal={ordinal}: {canonical:?}"
             );
             if let Ok(canonical) = canonical {
-                assert!(t.semantic_eq(root, canonical));
+                assert!(interner().semantic_eq(root, canonical));
             }
         }
     }
@@ -6660,10 +6664,13 @@ mod header_name_tests {
             });
             f.definition.bodies.push(child);
             let declarations = vec![GenericDeclarations::default(); 2];
-            let scratch = scratch::Scratch::new(&f.definition.types, 2);
+            let scratch = scratch::Scratch::new(f.definition.bodies.len());
+            let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
+                t: interner(),
+                memo: &memo,
                 body: &f.definition.bodies[1],
                 signatures: &reader,
                 declarations: &declarations,
@@ -6683,11 +6690,11 @@ mod header_name_tests {
             let model = Model::new(&mut checker);
             let state = model.initial(
                 checker.body,
-                &f.definition.types,
+                interner(),
                 &checker.scratch.origin_types[checker.site.body.0 as usize],
                 &|t| {
                     checker
-                        .lifetime(&f.definition.types.get(t).unwrap().modes.relation)
+                        .lifetime(&interner().row(t).modes.relation)
                         .is_global()
                 },
                 &|o| checker.arena_place(o),
@@ -6707,7 +6714,7 @@ mod header_name_tests {
             assert!(!state.must[1].has(MustFacts::GLOBAL));
             assert!(state.origins.proofs[model.roots[1]].is_empty());
             if let Ok(canonical) = canonical {
-                assert!(t.semantic_eq(root, canonical));
+                assert!(interner().semantic_eq(root, canonical));
             }
         }
     }
