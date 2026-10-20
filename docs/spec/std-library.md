@@ -3548,14 +3548,21 @@ so the same policy can be reused independently. Durations, bases, factors and
 limits are `u64`; durations are nanoseconds. Growth saturates at `u64` maximum.
 
 ```hirsel
-let policy = schedule.max_attempts(
-  schedule.max_elapsed(
-    schedule.capped(schedule.jittered(schedule.exponential(100000000, 2), Full()), 5000000000),
-    30000000000
-  ),
-  6
-)
-let outcome = schedule.retry(clock, random, policy, op, should_retry)
+fn retry_request(
+  clock: MonotonicClock,
+  random: Random,
+  op: fn() -> Result[String, NetError],
+  should_retry: fn(NetError) -> bool
+) -> Result[(String, u64), schedule.Failure[NetError]] {
+  let policy = schedule.max_attempts(
+    schedule.max_elapsed(
+      schedule.capped(schedule.jittered(schedule.exponential(100000000, 2), Full()), 5000000000),
+      30000000000
+    ),
+    6
+  )
+  schedule.retry(clock, random, policy, op, should_retry)
+}
 ```
 
 Constructors are `spaced(interval)`, `fixed(interval)`, `exponential(base,
