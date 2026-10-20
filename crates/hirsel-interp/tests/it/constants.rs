@@ -27,10 +27,10 @@ impl TirProvider for ConstantsProvider {
 fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
     for shape in 0..10 {
         let mut b = Builder::new();
-        let number = b.types.push(ty(TypeKind::Primitive(Primitive::U32)));
-        let string = b.types.push(ty(TypeKind::Primitive(Primitive::String)));
-        let boolean = b.types.push(ty(TypeKind::Primitive(Primitive::Bool)));
-        let bytes = b.types.push(ty(TypeKind::Primitive(Primitive::Bytes)));
+        let number = b.types.intern(ty(TypeKind::Primitive(Primitive::U32)));
+        let string = b.types.intern(ty(TypeKind::Primitive(Primitive::String)));
+        let boolean = b.types.intern(ty(TypeKind::Primitive(Primitive::Bool)));
+        let bytes = b.types.intern(ty(TypeKind::Primitive(Primitive::Bytes)));
         let scalar = ValueNode {
             ty: number,
             kind: ValueKind::Constant(Constant::Integer(7)),
@@ -107,7 +107,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
             7 => {
                 let pair = b
                     .types
-                    .push(ty(TypeKind::Tuple(vec![number, string].into())));
+                    .intern(ty(TypeKind::Tuple(vec![number, string].into())));
                 let entry = ValueNode {
                     ty: pair,
                     kind: ValueKind::Construct {
@@ -156,7 +156,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                     Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                         definition: path("target"),
                         arguments: vec![],
-                        types: Arc::new(b.types.clone()),
+                        types: crate::support::session(),
                         ty: b.body.result,
                     })),
                 )
@@ -168,9 +168,8 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
             ),
         };
         let _ = (boolean, bytes);
-        let root = b.types.push(ty(kind));
+        let root = b.types.intern(ty(kind));
         let data = Arc::new(Materialized {
-            types: b.types.clone(),
             root: ValueNode {
                 ty: root,
                 kind: value,
@@ -189,7 +188,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                 CleanupId(0),
             );
         }
-        let pair = b.types.push(ty(TypeKind::Tuple(vec![root, root].into())));
+        let pair = b.types.intern(ty(TypeKind::Tuple(vec![root, root].into())));
         let result = b.slot(pair, Storage::Temporary);
         b.assign(
             result,
@@ -216,7 +215,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
             requests: vec![],
         };
         let execution = run(
-            &mut provider,
+            &mut provider, &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),

@@ -84,7 +84,7 @@ fn mismatch_and_explicit_reset_persist() {
 fn udp_semantic_replay_checks_payload_as_well_as_count_peer_and_truncation() {
     use super::super::SimulationConfig;
     use hirsel_tir::{CapabilityEvent, RunConfiguration};
-    use hirsel_types::{Type, TypeStore};
+    use hirsel_types::{Type, TypeInterner};
     fn exchange(run: &RunConfiguration, byte: u8) -> Result<Vec<CapabilityEvent>, Error> {
         let mut sim = Simulation::new(
             run,
@@ -111,18 +111,18 @@ fn udp_semantic_replay_checks_payload_as_well_as_count_peer_and_truncation() {
                 ..Default::default()
             },
         )?;
-        let mut types = TypeStore::default();
-        let result_type = types.push(Type::unit());
+        let runtime = crate::aggregate::RuntimeTypes::new(TypeInterner::new(None));
+        let result_type = runtime.types.intern(Type::unit());
         let invoke = |sim: &mut Simulation, name: &str, args: &[Value]| {
             sim.net_call(
                 name,
                 &OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &runtime,
                     path: &hirsel_syntax::DefPath::core(name),
                     generics: &[],
                     arguments: &mut args.to_vec(),
                     result_type,
-                    types: &types,
+                    types: &runtime.types,
                     site: Default::default(),
                 },
                 &mut OperationContext {

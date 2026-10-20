@@ -172,18 +172,18 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
     use hirsel_interp::value::NamedFunction;
     use hirsel_types::*;
     let reference = |primitive, size, padding| {
-        let mut types = TypeStore::default();
+        let types = crate::support::session();
         for _ in 0..padding {
-            types.push(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
+            types.intern(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
         }
-        let root = types.push(Type::with_kind(TypeKind::Primitive(primitive)));
+        let root = types.intern(Type::with_kind(TypeKind::Primitive(primitive)));
         Value::FunctionReference(Box::new(NamedFunction {
             definition: hirsel_syntax::DefPath::core("target"),
             arguments: vec![
                 GenericArgument::Type(root),
                 GenericArgument::Size(Size::Constant(size)),
             ],
-            types: std::sync::Arc::new(types),
+            types: types.clone(),
             ty: root,
         }))
     };
@@ -204,8 +204,8 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
 #[test]
 fn only_free_lexical_specialization_arguments_are_non_comparable() {
     use hirsel_types::*;
-    let mut types = TypeStore::default();
-    let root = types.push(Type::with_kind(TypeKind::Parameter(
+    let types = crate::support::session();
+    let root = types.intern(Type::with_kind(TypeKind::Parameter(
         TypeParameterRef::body(
             hirsel_syntax::LexicalOwner::first(&hirsel_syntax::DefPath::core("source"))
                 .site(NameSite::Item),
@@ -219,7 +219,7 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
             GenericArgument::Type(root),
             GenericArgument::Size(Size::Constant(3)),
         ],
-        types: std::sync::Arc::new(types),
+        types: types.clone(),
         ty: root,
     }));
     let observed = ObservedValue::from_value(&value);

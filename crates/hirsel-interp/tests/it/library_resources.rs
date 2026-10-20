@@ -15,7 +15,7 @@ enum Ending {
 }
 fn nominal(name: &str) -> TypeKind {
     TypeKind::Named {
-        definition: support::path(name),
+        definition: hirsel_syntax::DefId::intern(&support::path(name)),
         arguments: vec![].into(),
     }
 }
@@ -47,7 +47,6 @@ fn finalizer() -> Definition {
 }
 fn runtime() -> aggregate::RuntimeTypes {
     aggregate::RuntimeTypes {
-        trace_mode: Default::default(),
         nominals: vec![aggregate::Nominal {
             definition: support::path("R"),
             resource: true,
@@ -56,10 +55,7 @@ fn runtime() -> aggregate::RuntimeTypes {
             fields: 0,
             representation: None,
         }],
-        forget: None,
-        checked: None,
-        serialization: Default::default(),
-        budgets: Default::default(),
+        ..crate::support::runtime()
     }
 }
 fn callback(name: &str, end: Ending, boolean: bool) -> Definition {
@@ -119,8 +115,8 @@ fn mapper_cases(materialized: bool) {
             inputs: vec![],
         };
         let mut library = Library::new(&run, Default::default()).unwrap();
-        let mut types = TypeStore::default();
-        let dummy = types.push(ty(TypeKind::Tuple(vec![].into())));
+        let types = crate::support::session();
+        let dummy = types.intern(ty(TypeKind::Tuple(vec![].into())));
         let sources = sources();
         let mut stdout = vec![];
         let mut trace = vec![];
@@ -140,7 +136,7 @@ fn mapper_cases(materialized: bool) {
         let r_ty = next.body.places[r.0 as usize].ty;
         let result = next.local(
             TypeKind::Named {
-                definition: hirsel_syntax::DefPath::core("Option"),
+                definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Option")),
                 arguments: vec![GenericArgument::Type(r_ty)].into(),
             },
             Storage::Temporary,
@@ -168,7 +164,7 @@ fn mapper_cases(materialized: bool) {
             let OperationResult::Complete { value: it, .. } = library
                 .call(
                     OperationCall {
-                        runtime: &Default::default(),
+                        runtime: &crate::support::runtime(),
                         path: &hirsel_syntax::DefPath::core("iter.from"),
                         arguments: &mut [u64_value(0), closure("next")],
                         generics: &[],
@@ -195,7 +191,7 @@ fn mapper_cases(materialized: bool) {
         let OperationResult::Complete { value: it, .. } = library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &hirsel_syntax::DefPath::core("iter.map"),
                     arguments: &mut [it, closure("mapper")],
                     generics: &[],
@@ -226,7 +222,7 @@ fn mapper_cases(materialized: bool) {
         let cleanup = b.cleanup(vec![support::drop(it_slot)]);
         let result = b.local(
             TypeKind::Named {
-                definition: hirsel_syntax::DefPath::core("Option"),
+                definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Option")),
                 arguments: vec![GenericArgument::Type(n)].into(),
             },
             Storage::Temporary,

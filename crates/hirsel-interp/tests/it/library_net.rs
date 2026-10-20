@@ -5,13 +5,13 @@ use hirsel_run_schema::{
 };
 use hirsel_span::{SourceMap, Span};
 use hirsel_tir::RunConfiguration;
-use hirsel_types::{BuiltinType, Primitive, Type, TypeKind, TypeStore};
+use hirsel_types::{BuiltinType, Primitive, Type, TypeInterner, TypeKind};
 
 struct Harness {
     library: Library,
     run: RunConfiguration,
     sources: SourceMap,
-    types: TypeStore,
+    types: std::sync::Arc<TypeInterner>,
     stdout: Vec<u8>,
     trace: Vec<TraceEvent>,
 }
@@ -38,17 +38,17 @@ impl Harness {
             library: Library::new(&run, config).unwrap(),
             run,
             sources: SourceMap::default(),
-            types: TypeStore::default(),
+            types: crate::support::session(),
             stdout: vec![],
             trace: vec![],
         }
     }
     fn try_call(&mut self, name: &str, args: Vec<Value>) -> Result<OperationResult, Error> {
-        let ty = self.types.push(Type::unit());
+        let ty = self.types.intern(Type::unit());
         self.library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &hirsel_syntax::DefPath::core(name),
                     arguments: &mut args.to_vec(),
                     generics: &[],
@@ -477,7 +477,7 @@ fn replay_rejects_changed_written_bytes_and_rolls_back() {
     let mut library = Library::new(&run, h.library.simulation.config.clone()).unwrap();
     let io = library.simulation.grant_root("Io").unwrap();
     // Replay checks all prior acquisitions as well as every byte written.
-    let ty = h.types.push(Type::unit());
+    let ty = h.types.intern(Type::unit());
     let mut cx = OperationContext {
         trace_mode: TraceMode::Effects,
         anchor: None,
@@ -489,7 +489,7 @@ fn replay_rejects_changed_written_bytes_and_rolls_back() {
     let mut call = |name: &str, args: &[Value]| {
         library.call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &hirsel_syntax::DefPath::core(name),
                 arguments: &mut args.to_vec(),
                 generics: &[],
@@ -706,7 +706,7 @@ fn return_cleanup_records_real_stream_closes_in_the_requested_reverse_order() {
     });
     let mut b = support::Builder::new();
     let resource = || TypeKind::Named {
-        definition: hirsel_syntax::DefPath::core("Stream"),
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Stream")),
         arguments: vec![].into(),
     };
     let one = b.parameter(resource());
@@ -736,7 +736,7 @@ fn return_cleanup_records_real_stream_closes_in_the_requested_reverse_order() {
         vec![first, second],
         Limits::default(),
         &mut h.library,
-        &aggregate::RuntimeTypes::default(),
+        &crate::support::runtime(),
     )
     .unwrap();
     assert!(matches!(execution.outcome, Outcome::Returned { .. }));

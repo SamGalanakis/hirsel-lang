@@ -138,12 +138,12 @@ fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64)
         mutating,
     };
     let definitions = vec![fixture(failing, mutating)];
-    assert_fixtures(&definitions, &RuntimeTypes::default());
+    assert_fixtures(&definitions, &crate::support::runtime());
     let e = run_with_operations(
         &mut Provider {
             definitions,
             queries: vec![],
-        },
+        }, &crate::support::session(),
         &sources(),
         &RunConfiguration {
             entry: path("main"),
@@ -236,7 +236,7 @@ fn handle_cleanup_hook_runs_high_to_low_with_the_parent_cleanup_anchor() {
     }
     let mut b = Builder::new();
     let p = b.parameter(TypeKind::Named {
-        definition: path("Files"),
+        definition: hirsel_syntax::DefId::intern(&path("Files")),
         arguments: vec![].into(),
     });
     let c = b.cleanup(vec![drop(p)]);
@@ -276,7 +276,7 @@ fn handle_cleanup_hook_runs_high_to_low_with_the_parent_cleanup_anchor() {
         }],
         Limits::default(),
         &mut hooks,
-        &RuntimeTypes::default(),
+        &crate::support::runtime(),
     )
     .unwrap();
     assert_eq!(hooks.seen, [2, 1]);
@@ -357,7 +357,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
     fn finalizer(name: &str, fail: bool) -> Definition {
         let mut b = Builder::new();
         b.borrowed_parameter(TypeKind::Named {
-            definition: path(name),
+            definition: hirsel_syntax::DefId::intern(&path(name)),
             arguments: vec![].into(),
         });
         let u = b.unit();
@@ -384,7 +384,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
         ] {
             let mut nested = Builder::new();
             nested.borrowed_parameter(TypeKind::Named {
-                definition: path("A"),
+                definition: hirsel_syntax::DefId::intern(&path("A")),
                 arguments: vec![].into(),
             });
             let u = nested.unit();
@@ -403,7 +403,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
             let mut b = Builder::new();
             let unit = b.type_id(TypeKind::Tuple(vec![].into()));
             let a_ty = b.type_id(TypeKind::Named {
-                definition: path("A"),
+                definition: hirsel_syntax::DefId::intern(&path("A")),
                 arguments: vec![].into(),
             });
             let f = b.local(function_type(unit, vec![a_ty]), Storage::Local);
@@ -428,7 +428,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
             for name in ["A", "B"] {
                 let p = b.local(
                     TypeKind::Named {
-                        definition: path(name),
+                        definition: hirsel_syntax::DefId::intern(&path(name)),
                         arguments: vec![].into(),
                     },
                     Storage::Local,
@@ -506,7 +506,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
                             representation: None,
                         })
                         .collect(),
-                    ..RuntimeTypes::default()
+                    ..crate::support::runtime()
                 },
             )
             .unwrap();
@@ -607,7 +607,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
     for (failing, abandoned) in [(false, false), (true, false), (false, true)] {
         let mut nested = Builder::new();
         nested.borrowed_parameter(TypeKind::Named {
-            definition: path("Item"),
+            definition: hirsel_syntax::DefId::intern(&path("Item")),
             arguments: vec![].into(),
         });
         let u = nested.unit();
@@ -625,7 +625,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
         };
         let mut b = Builder::new();
         let item = b.type_id(TypeKind::Named {
-            definition: path("Item"),
+            definition: hirsel_syntax::DefId::intern(&path("Item")),
             arguments: vec![].into(),
         });
         let source = b.parameter(TypeKind::Builtin {
@@ -704,7 +704,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
         support::append_body(&mut main, &nested);
         let mut finalizer = Builder::new();
         finalizer.borrowed_parameter(TypeKind::Named {
-            definition: path("Item"),
+            definition: hirsel_syntax::DefId::intern(&path("Item")),
             arguments: vec![].into(),
         });
         let u = finalizer.unit();
@@ -720,7 +720,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                 fields: 0,
                 representation: None,
             }],
-            ..RuntimeTypes::default()
+            ..crate::support::runtime()
         };
         let definitions = vec![main, finalizer];
         assert_fixtures(&definitions, &runtime);
@@ -884,7 +884,7 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
             reference: Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                 definition: path("middle"),
                 arguments: vec![],
-                types: std::sync::Arc::new(definition.types.clone()),
+                types: crate::support::session(),
                 ty: reference,
             })),
             failing,
@@ -896,7 +896,7 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
             queries: vec![],
         };
         let execution = run_with_operations(
-            &mut provider,
+            &mut provider, &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),
@@ -966,7 +966,7 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
     }
     let mut b = Builder::new();
     let handle = b.parameter(TypeKind::Named {
-        definition: path("Files"),
+        definition: hirsel_syntax::DefId::intern(&path("Files")),
         arguments: vec![].into(),
     });
     let cleanup = b.cleanup(vec![drop(handle)]);
@@ -1026,7 +1026,7 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
                 fields: 1,
                 representation: None,
             }],
-            ..Default::default()
+            ..crate::support::runtime()
         },
     )
     .unwrap();

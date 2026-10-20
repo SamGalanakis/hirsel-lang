@@ -25,7 +25,7 @@ fn run_runtime(
 ) -> Execution {
     assert_fixtures(&definitions, runtime);
     let configuration = RunConfiguration {
-        entry: definitions[0].path.clone(),
+        entry: definitions[0].path.path().clone(),
         hash_seed: 42,
         inputs: vec![],
     };
@@ -62,7 +62,7 @@ fn nominal(name: &str, count: usize, finalizer: bool) -> Nominal {
 fn resource(b: &mut Builder, name: &str, parts: Vec<PlaceId>) -> PlaceId {
     let p = b.local(
         TypeKind::Named {
-            definition: path(name),
+            definition: hirsel_syntax::DefId::intern(&path(name)),
             arguments: vec![].into(),
         },
         Storage::Local,
@@ -82,7 +82,7 @@ fn resource(b: &mut Builder, name: &str, parts: Vec<PlaceId>) -> PlaceId {
 fn finalizer(name: &str, fail: bool) -> Definition {
     let mut b = Builder::new();
     b.borrowed_parameter(TypeKind::Named {
-        definition: path(name),
+        definition: hirsel_syntax::DefId::intern(&path(name)),
         arguments: vec![].into(),
     });
     let u = b.unit();
@@ -134,7 +134,7 @@ fn resource_finalizer_precedes_fields_and_failed_finalizer_releases_every_field(
                 nominal("A", 0, true),
                 nominal("Z", 0, true),
             ],
-            ..RuntimeTypes::default()
+            ..crate::support::runtime()
         };
         let e = run_runtime(
             vec![
@@ -166,7 +166,7 @@ fn failure_preserves_original_cause_then_records_cleanup_failures_in_order() {
     let runtime = RuntimeTypes {
         trace_mode: Default::default(),
         nominals: vec![nominal("A", 0, true), nominal("Z", 0, true)],
-        ..RuntimeTypes::default()
+        ..crate::support::runtime()
     };
     let e = run_runtime(
         vec![
@@ -209,12 +209,9 @@ fn forget_suppresses_outer_finalizer_and_all_owned_fields() {
         3,
     );
     let runtime = RuntimeTypes {
-        trace_mode: Default::default(),
         nominals: vec![nominal("A", 0, true), nominal("Outer", 1, true)],
         forget: Some(path("forget")),
-        checked: None,
-        serialization: Default::default(),
-        budgets: Default::default(),
+        ..crate::support::runtime()
     };
     let e = run_runtime(vec![b.finish("main", result)], &runtime, vec![]);
     assert!(finalizers(&e).is_empty());
@@ -322,7 +319,7 @@ fn projection_ignores_instrumentation_and_is_identical_over_one_hundred_runs() {
     let runtime = RuntimeTypes {
         trace_mode: Default::default(),
         nominals: vec![nominal("A", 0, true)],
-        ..RuntimeTypes::default()
+        ..crate::support::runtime()
     };
     let e = run_runtime(build(), &runtime, vec![]);
     let projection = e.observable(&sources()).unwrap();
@@ -398,7 +395,7 @@ fn capability_effects_are_ordered_with_resource_effects_and_exact_output() {
         &RuntimeTypes {
             trace_mode: Default::default(),
             nominals: vec![nominal("A", 0, true)],
-            ..RuntimeTypes::default()
+            ..crate::support::runtime()
         },
     )
     .unwrap();
@@ -446,7 +443,7 @@ fn instruction_failure_paths_release_temporaries_then_locals_in_list_order() {
             &RuntimeTypes {
                 trace_mode: Default::default(),
                 nominals: vec![nominal("Named", 0, true), nominal("Temporary", 0, true)],
-                ..RuntimeTypes::default()
+                ..crate::support::runtime()
             },
             vec![],
         );
@@ -458,7 +455,7 @@ fn instruction_failure_paths_release_temporaries_then_locals_in_list_order() {
 fn suspended_call_failure_drops_transferred_argument_before_callers_local() {
     let mut callee = Builder::new();
     let p = callee.parameter(TypeKind::Named {
-        definition: path("Argument"),
+        definition: hirsel_syntax::DefId::intern(&path("Argument")),
         arguments: vec![].into(),
     });
     let c = callee.cleanup(vec![drop(p)]);
@@ -502,7 +499,7 @@ fn suspended_call_failure_drops_transferred_argument_before_callers_local() {
         &RuntimeTypes {
             trace_mode: Default::default(),
             nominals: vec![nominal("Local", 0, true), nominal("Argument", 0, true)],
-            ..RuntimeTypes::default()
+            ..crate::support::runtime()
         },
         vec![],
     );

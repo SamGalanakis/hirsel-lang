@@ -1370,7 +1370,7 @@ mod tests {
     use hirsel_span::{SourceMap, Span};
     use hirsel_syntax::DefPath;
     use hirsel_tir::{BodyId, RunConfiguration};
-    use hirsel_types::{Type, TypeKind, TypeStore};
+    use hirsel_types::{Type, TypeInterner, TypeKind};
 
     fn call(
         library: &mut Library,
@@ -1378,17 +1378,19 @@ mod tests {
         arguments: &[Value],
         cx: &mut OperationContext<'_>,
     ) -> OperationResult {
-        let mut types = TypeStore::default();
-        let unit = types.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
+        let runtime = crate::aggregate::RuntimeTypes::new(TypeInterner::new(None));
+        let unit = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Tuple(vec![].into())));
         library
             .task_call(
                 name,
                 &OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &runtime,
                     path: &DefPath::core(name),
                     arguments: &mut arguments.to_vec(),
                     generics: &[],
-                    types: &types,
+                    types: &runtime.types,
                     result_type: unit,
                     site: Span::default(),
                 },
