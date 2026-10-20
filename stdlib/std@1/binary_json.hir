@@ -57,7 +57,20 @@ pub fn finite(value: f64, pos: u64) -> Result[json.Value, binary.DecodeError] us
   if core@1/f64.bits(value) >> 52 & 2047u64 == 2047 {
     return Error(Unsupported(pos))
   }
-  Ok(Number(f64.to_string(value)))
+  // serde_json src/ser.rs:1715-1722 and tests/test.rs:145-155 keep a
+  // finite float distinct from an integer. Hirsel's general Display omits .0, so add it when needed.
+  let spelling = f64.to_string(value)
+  let mut integral = true
+  for b in core@1/string.as_bytes(spelling) {
+    if b == 46 || b == 101 || b == 69 {
+      integral = false
+    }
+  }
+  if integral {
+    Ok(Number(string.concat(spelling, ".0")))
+  } else {
+    Ok(Number(spelling))
+  }
 }
 
 // Validate the public Number lexeme before conversion. Integer lexemes never

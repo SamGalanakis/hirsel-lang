@@ -166,7 +166,9 @@ the license named in its row; the license texts follow once each.
 | Rust standard library | `library/alloc/src/str.rs` Final_Sigma context rule and `library/alloctests/tests/str.rs` full casing/casefold vectors | `stdlib/std@1/string_case.hir`, Unicode casing/folding conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Unicode Character Database 16.0.0 | data files and generated tables | `stdlib/unicode16/`, `stdlib/std@1/{unicode_tables,unicode_compatibility_tables,string_case_tables,grapheme_tables,unicode_property_tables,display_width_tables}.hir`, `bench/apps/tasks/rust` (same casing/property data) | Unicode 16.0.0 | Unicode, `stdlib/unicode16/LICENSE.txt` |
 | serde_json | `src/{de,read,ser}.rs`, `tests/test.rs` | std@1 JSON parsing, escaping and writing | serde-rs/json `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8` | MIT |
-| JSONTestSuite | `test_parsing/` | std@1 JSON corpus vectors | nst/JSONTestSuite `1ef36fa01286573e846ac449e8683f8833c5b26a` | MIT |
+| JSONTestSuite | every `test_parsing/*.json` (318 inputs; explicit duplicate-key, implementation-defined and UTF-8 policies) | `tools/generate-json-vectors.py`, `conformance/SEM/SEM-3-json-import-*-run.hir`, `packages/fixtures/json_vectors@1/harness.hir` | nst/JSONTestSuite `1ef36fa01286573e846ac449e8683f8833c5b26a` | MIT |
+| CBOR test-vectors / RFC 8949 Appendix A | complete `appendix_a.json` (82 entries, including RFC 7049 bignum examples); JSON-domain decoding and explicit Unsupported checks | `tools/generate-json-vectors.py`, `conformance/SEM/SEM-3-cbor-import-*-run.hir` | cbor/test-vectors `aba89b653e484bc8573c22f3ff35641d79dfd8c1` | Simplified BSD (IETF Trust; RFC examples) |
+| MessagePack test-suite | every `src/*.yaml` row / `dist/msgpack-test-suite.json` encoding (194 JSON-domain, 39 Unsupported) | `tools/generate-json-vectors.py`, `conformance/SEM/SEM-3-msgpack-import-*-run.hir` | kawanet/msgpack-test-suite `e04f6edeaae589c768d6b70fcce80aa786b7800e` | MIT |
 | saphyr | `parser/src/{scanner,parser,char_traits}.rs` (scanner, simple keys, indentation, block and flow scalars, event state machine); `saphyr/tests/basic.rs`, `parser/tests/{issues,basic}.rs` vectors | `stdlib/std@1/yaml.hir`, `conformance/SEM/SEM-3-yaml-*-run.hir` | saphyr-rs/saphyr `b8205d5f60ea44f757f7d075fe4f3704bbe5dccc` (v0.2.2) | MIT |
 | go-yaml v3 | `decode_test.go` mergeTests, mergeTestsNested and merge rejection vectors | `conformance/SEM/SEM-3-yaml-merge-*-run.hir` | go-yaml/yaml `944c86a7d29391925ed6ac33bee98a0516f1287a` (v3.0.1) | Apache-2.0 |
 | yaml-test-suite | every case of the data branch (`in.yaml`, `in.json`, `test.event`, `error`) | `tools/generate-yaml-test.py`, `conformance/SEM/SEM-3-yaml-test-*-run.hir`, `packages/fixtures/yaml_test@1/harness.hir`, `crates/hirsel-driver/tests/fixtures/yaml-tagged-invoice.hir` | yaml/yaml-test-suite `6e6c296ae9c9d2d5c4134b4b64d01b29ac19ff6f` (data-2022-01-17) | MIT |
@@ -234,6 +236,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers
 - serde_json: Copyright (c) Serde project contributors
 - JSONTestSuite: Copyright (c) 2016 Nicolas Seriot
+- MessagePack test-suite: Copyright (c) 2017-2018 Yusuke Kawasaki
 - saphyr: Copyright (c) 2015 Chen Yuheng; Copyright (c) 2023 Ethiraric
 - go-yaml v3: Copyright 2011-2016 Canonical Ltd.
 - yaml-test-suite: Copyright (c) 2016-2020 Ingy döt Net

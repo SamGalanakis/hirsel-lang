@@ -67,15 +67,15 @@ pub fn main() -> Result[(), OutputError] {
     b"\xa2\x61\x61\x01\x61\x62\x82\x02\x03",
     "{\"a\":1,\"b\":[2,3]}"
   )
-  vector("0.0", b"\xf9\x00\x00", "0")
-  vector("-0", b"\xf9\x80\x00", "-0")
-  vector("1.0", b"\xf9\x3c\x00", "1")
+  vector("0.0", b"\xf9\x00\x00", "0.0")
+  vector("-0", b"\xf9\x80\x00", "-0.0")
+  vector("1.0", b"\xf9\x3c\x00", "1.0")
   vector("1.5", b"\xf9\x3e\x00", "1.5")
-  vector("65504.0", b"\xf9\x7b\xff", "65504")
-  vector("100000.0", b"\xfa\x47\xc3\x50\x00", "100000")
+  vector("65504.0", b"\xf9\x7b\xff", "65504.0")
+  vector("100000.0", b"\xfa\x47\xc3\x50\x00", "100000.0")
   vector("1.1", b"\xfb\x3f\xf1\x99\x99\x99\x99\x99\x9a", "1.1")
   vector("5.960464477539063e-8", b"\xf9\x00\x01", "5.960464477539063e-8")
   vector("0.00006103515625", b"\xf9\x04\x00", "0.00006103515625")
-  vector("-4.0", b"\xf9\xc4\x00", "-4")
+  vector("-4.0", b"\xf9\xc4\x00", "-4.0")
   Ok(())
 }

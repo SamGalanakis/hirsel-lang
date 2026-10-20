@@ -488,13 +488,16 @@ RFC 8949 domain. Both decode exactly one item into `json.Value`, reject trailing
 validate UTF-8, reject duplicate text map keys, and preserve insertion order. Integers
 become exact decimal `Number` lexemes, including MessagePack's unsigned 64-bit maximum
 and CBOR's negative minimum, -18446744073709551616. Finite binary16/32/64 floats become
-shortest binary64 decimal text, with signed zero preserved. A subsequent encode chooses
-integer or floating representation from that text; original wire widths are not retained.
+shortest binary64 decimal text, with signed zero preserved and `.0` appended when
+needed to retain the floating-point type (`1.0` stays a float on re-encoding). A
+subsequent encode chooses integer or floating representation from that text; original
+wire widths are not retained.
 
 There is no lossless JSON mapping for binary strings, MessagePack extensions, CBOR tags,
 nonfinite floats, non-text keys or CBOR simple values other than bool/null. These return
 `Unsupported`; they are never silently converted to strings, arrays or null. CBOR accepts
 definite and indefinite text, arrays and maps, and nonpreferred integer/float widths.
+Reserved two-byte simple values below 32 are malformed and return `Syntax`.
 Every indefinite text chunk must independently be valid UTF-8; nested indefinite text
 chunks and breaks outside indefinite containers are malformed.
 

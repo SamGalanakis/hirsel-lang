@@ -1,0 +1,155 @@
+// JSONTestSuite README.md:15-21: y accepts, n rejects, i pins a policy.
+// Binary suites check the decoded value and its preferred re-encoding.
+fn report(s: Stdout, name: String, passed: bool) -> u64 {
+  if passed {
+    return 0
+  }
+  match out.print(s, string.concat(name, "\n")) {
+    _ => 1,
+  }
+}
+
+pub fn parses(s: Stdout, name: String, take source: String, outcome: u64) -> u64 {
+  let passed = match json.parse(take source) {
+    Ok(value) => {
+      if outcome != 0 {
+        false
+      } else {
+        match json.stringify(value) {
+          Ok(encoded) => {
+            match json.parse(copy encoded) {
+              Ok(again) => {
+                match json.stringify(again) {
+                  Ok(reencoded) => encoded == reencoded,
+                  Error(_) => false,
+                }
+              },
+              Error(_) => false,
+            }
+          },
+          Error(_) => false,
+        }
+      }
+    },
+    Error(DuplicateKey(_)) => outcome == 2,
+    Error(Syntax(_)) => outcome == 1,
+    Error(Nesting(_)) => outcome == 1,
+    Error(_) => false,
+  }
+  report(s, name, passed)
+}
+
+pub fn invalid_utf8(s: Stdout, name: String, data: Bytes) -> u64 {
+  let mut builder: List[u8] = []
+  bytes.append(mut builder, data)
+  report(
+    s,
+    name,
+    match text.finish(take builder) {
+      Error(_) => true,
+      Ok(_) => false,
+    }
+  )
+}
+
+fn matches_value(value: json.Value, expected: String) -> bool {
+  // Reference JSON and Hirsel use different shortest exponent spellings.
+  // Compare floating-point bits (including signed zero); preserve the wire
+  // type separately through the byte-exact re-encoding assertion below.
+  if let Number(spelling) = value {
+    let mut float = false
+    for b in string.as_bytes(expected) {
+      if b == 46 || b == 101 || b == 69 {
+        float = true
+      }
+    }
+    if float {
+      return match f64.parse(spelling) {
+        Ok(actual) => match f64.parse(expected) {
+          Ok(wanted) => core@1/f64.bits(actual) == core@1/f64.bits(wanted),
+          Error(_) => false,
+        },
+        Error(_) => false,
+      }
+    }
+  }
+  match json.stringify(value) {
+    Ok(actual) => actual == expected,
+    Error(_) => false,
+  }
+}
+
+pub fn wire(
+  s: Stdout,
+  name: String,
+  cbor_format: bool,
+  data: Bytes,
+  expected: String,
+  canonical: Bytes
+) -> u64 {
+  let decoded = if cbor_format {
+    cbor.decode(data)
+  } else {
+    msgpack.decode(data)
+  }
+  let passed = match decoded {
+    Ok(value) => {
+      let encoded = if cbor_format {
+        cbor.encode(value, true)
+      } else {
+        msgpack.encode(value)
+      }
+      matches_value(value, expected) && match encoded {
+        Ok(actual) => actual == canonical,
+        Error(_) => false,
+      }
+    },
+    Error(_) => false,
+  }
+  report(s, name, passed)
+}
+
+pub fn unsupported(s: Stdout, name: String, cbor_format: bool, data: Bytes) -> u64 {
+  let decoded = if cbor_format {
+    cbor.decode(data)
+  } else {
+    msgpack.decode(data)
+  }
+  report(
+    s,
+    name,
+    match decoded {
+      Error(Unsupported(_)) => true,
+      _ => false,
+    }
+  )
+}
+
+pub fn edge(s: Stdout, name: String, data: Bytes, kind: u64) -> u64 {
+  report(
+    s,
+    name,
+    match msgpack.decode(data) {
+      Error(Truncated(_)) => kind == 0,
+      Error(Utf8(_)) => kind == 1,
+      _ => false,
+    }
+  )
+}
+
+// RFC 8949 section 3.3 reserves two-byte simple values below 32.
+pub fn syntax(s: Stdout, name: String, cbor_format: bool, data: Bytes) -> u64 {
+  let decoded = if cbor_format {
+    cbor.decode(data)
+  } else {
+    msgpack.decode(data)
+  }
+  report(
+    s,
+    name,
+    match decoded {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  )
+}
