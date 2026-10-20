@@ -32,7 +32,7 @@ from test_sizes_from_usage import requests_bzl
 # tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
 ROOT = Path(os.environ.get('HIRSEL_LAND_TREE') or Path(__file__).resolve().parents[2])
 BUCK2 = ROOT / '.buck2/bin/buck2'
-# Every Buck2 command of the per-push gate and of land, so the daemon keeps one
+# Every Buck2 command of tools/gate and of land, so the daemon keeps one
 # state: the Clippy twins exist, and `buck2 test` also builds the non-test
 # targets it is given, which puts the build, Clippy and the tests in one
 # invocation. Neither option changes any other action's key.
@@ -193,7 +193,7 @@ def daemon_lifetime():
                 signal.signal(sig, handler)
 
 
-# ---------------------------------------------------------------- gate slots
+# ---------------------------------------------------------------- queue tickets
 
 def process_start(pid):
     """Linux process identity survives PID reuse; zombies cannot keep a ticket.

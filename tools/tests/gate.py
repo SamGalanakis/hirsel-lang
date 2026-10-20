@@ -124,7 +124,7 @@ class Classification(unittest.TestCase):
         self.assertTrue(c.needs_buck2)
 
     def test_gate_tooling_selects_its_tests(self):
-        c = self.classify('tools/gate', 'tools/land', 'tools/buck2/sync.py', 'tools/tests/gate.py', 'tools/main-full-run.sh')
+        c = self.classify('tools/gate', 'tools/land', 'tools/buck2/sync.py', 'tools/tests/gate.py', 'tools/main-runs')
         self.assertEqual(len(c.tools), 5)
         self.assertFalse(c.needs_buck2)
 

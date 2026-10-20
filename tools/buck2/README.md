@@ -28,8 +28,8 @@ No lane commits a generated file, so no rebase can conflict on one
   regenerates the page with the built CLI on the batch's tip and amends it into
   the batch's last commit. `tools/gate` and `tools/land` refuse a change that
   touches it (or force-adds a build input) and print the commands that drop
-  it; the page's diff is not part of the gated identity. Its drift tests run in the
-  full gate (`FULL_GATE_SKIPS` in `sync.py`), on main.
+  it. Its drift tests run in the
+  full suite (`FULL_GATE_SKIPS` in `sync.py`), on main.
 - **Files many lanes add to merge themselves.** `.gitattributes` gives
   `third-party/NOTICES.md`, every `hirsel.json` and the sorted ratchet and
   expectation lists (`SORTED_LISTS` in `merging.py`) the `hirsel` merge
@@ -155,20 +155,19 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
-.buck2/bin/buck2 test //:gate-native-smoke          # one corpus campaign of tools/gate
+.buck2/bin/buck2 test //:gate-native-smoke          # the native smoke (tools/gate --tests native-smoke)
 .buck2/bin/buck2 test //:gate-link-hosts            # native-tests/link built here and on a pool worker, byte-compared
-python3 tools/buck2/conformance.py                # conformance shards and summed counts
-python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AGREE_SHARDS shards, summed JSON
-python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt
+python3 tools/buck2/conformance.py                # the whole conformance campaign's shards (full suite only)
+python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt (full suite only)
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
 python3 tools/buck2/sync.py --if-stale            # the generated build files, after any edit or rebase
 tools/gate --suggest                                 # what a change can affect
-tools/gate --tests suggested --why "<one line>"      # the per-push gate: its floor and the chosen tests (tools/land lands)
+tools/gate                                           # run those tests once (then tools/land)
 ```
 
 `tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`
-and amends a changed `docs/api.md` into the batch's last commit; this needs no
-new gate. Push retries regenerate after the next rebase. Lane gates keep the
+and amends a changed `docs/api.md` into the batch's last commit. Push retries
+regenerate after the next rebase. Lane runs keep the
 index's export-count test; its drift tests, which compare the committed page,
 run in the full gate.
 
@@ -242,7 +241,6 @@ Target names follow Cargo's targets, all in the root package:
 | a sharded test binary (`SHARDED` in `sync.py`) | `//:hirsel-x-test-it-shard-<i>` |
 | a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
-| an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
 | a slice of the corpus cases a gate chose (`-c hirsel.conformance_paths`, up to `SELECTED_SLICES`) | `//:gate-conformance-selected-shard-<i>` |
 | a slice of the chosen cases' variants in the seed-1 sample (`-c hirsel.agree_paths`) | `//:gate-agree-selected-shard-<i>` |
 | a budgeted full agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
@@ -252,7 +250,7 @@ Target names follow Cargo's targets, all in the root package:
 
 ## Instruction budgets
 
-`tools/gate --tests gate-perf-counts --why "instruction budgets"` checks the
+`tools/gate --tests gate-perf-counts` checks the
 17 small native benchmarks and all eight `bench/micro/programs/*.hir` at
 N=1000 (one epoch) on the pool. The complete 25-case measurement, including
 builds and annotation, reserved 125.37 seconds on one pool CPU (2.09
@@ -270,11 +268,13 @@ so host cache geometry and wall time cannot change the verdict.
 
 `tools/gate --bless-perf-counts` measures on the pool and regenerates
 [`tools/perf-counts.tsv`](../perf-counts.tsv) on the host. Review and commit
-that diff. Both increases and decreases beyond 1% fail; exactly 1% passes.
+that diff. An increase beyond 1% fails; exactly 1% passes. A decrease passes
+and prints `perf-counts: improvement`; main's hourly run (`tools/main-runs`)
+writes the lower counts it measures into the table with a direct push, and a
+drop of more than 15% prints `PERF-CHECK` for the orchestrator.
 The table retains the top 50 `cg_annotate` function counts per case, without
 worker source paths. Failures print the largest 20 function deltas against
-those saved counts. Missing and removed cases fail too. Blessing does not
-create a green gate receipt.
+those saved counts. Missing and removed cases fail too.
 
 The two compiler cases remain explicitly open in the runner and table:
 `check/hello-web` took 113 seconds with the checked compiler, and
@@ -430,8 +430,9 @@ them into a shared directory.
   50: below the pool's lane and CI class (100), above its warming class (0),
   which gets no reserved worker. One priority, since the scheduler merges
   identical actions at the first submitter's priority; `-c hirsel.priority=N`
-  overrides it per invocation, and only tools/land does, at 75, so the
-  batch every lane waits on does not queue behind the gates. A test run carries its
+  overrides it per invocation: tools/land at 75, so the batch every lane
+  waits on does not queue behind lanes' test runs, and main's hourly full
+  suite (tools/main-runs) at 40, below the lanes. A test run carries its
   own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
   not with their platform's. The priority is not part of an action key. The
   platforms also include the invoking host for an explicit
@@ -632,8 +633,8 @@ python3 tools/buck2/test_sizes_from_usage.py --only hirsel-cli-test-cli \
 
 A request is part of the test's action key: resizing reruns those tests once.
 The gate selects the resized binaries directly, and the bounded campaigns whose
-requests changed. Evidence-only changes run tool checks. Full-only stages remain
-on demand; a reservation update never starts a full native campaign.
+requests changed. Evidence-only changes run tool checks. Full-only stages run
+in main's hourly run; a reservation update never starts a full native campaign.
 
 `pool_usage.py` reports, read-only from the same trace and usage rows, the
 pool's reserved CPU-hours by repository and hirsel's reserved against used
@@ -716,12 +717,12 @@ a 1 CPU/512 MiB platform, declared only under `-c hirsel.clippy=true`, so
 Clippy never reserves a compile's request and `buck2 build //:` never
 compiles the twins.
 
-Agreement limits the global seed-1 catalogue to its lowest `AGREE_LIMIT` (5000)
-ranks before partitioning by stable variant rank modulo `AGREE_SHARDS` (16), both
-in `sync.py`. The sum is the unsharded sample, including
-skipped variants. `agree.py` checks unique shard identities, matching catalogue
+A lane's agreement run is the seed-1 sample's variants of its chosen cases:
+the global seed-1 catalogue limited to its lowest `AGREE_LIMIT` (5000) ranks
+(`sync.py`), in `gate-agree-selected-shard-<i>`. For the full campaign's
+shards, `agree.py` checks unique shard identities, matching catalogue
 metadata, sample coverage and classification/edit totals, and fails on any
-cluster or absent shard. Each pool action has a 300-second timeout.
+cluster or absent shard.
 `tools/gate --full` runs `agree.py --full`: a rotating sample of at most 96 variants per program over
 `AGREE_FULL_SHARDS` (96) shards by the same stable rank, each under its own
 `AGREE_FULL_TIMEOUT` (1800 s), so a slow or non-terminating variant fails one

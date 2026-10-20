@@ -8,7 +8,7 @@ reads the shards' output from the run's event log and prints the whole run's
 counts in `cargo run -p hirsel-conformance -- --check-format`'s lines. It fails
 when a shard fails or a shard's counts are missing.
 
-    python3 tools/buck2/conformance.py            # the per-push stage
+    python3 tools/buck2/conformance.py            # the whole campaign (the full suite's stage)
     python3 tools/buck2/conformance.py --self-test
 """
 

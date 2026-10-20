@@ -1,7 +1,7 @@
 """The root BUCK's targets, their inputs and their dependencies, read without
 Buck2: sync.py generates the file from Cargo, and every rule is a call of a
 tools/buck2/defs.bzl macro whose targets this module expands the same way.
-tools/gate --suggest and the floor's selection query it instead of starting a
+tools/gate --suggest and its targeted set query it instead of starting a
 Buck2 daemon, so a suggestion never waits behind the worktree's daemon.
 
 Only the per-push graph is modelled: `full` stages (including full-only script
