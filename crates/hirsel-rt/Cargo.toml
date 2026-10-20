@@ -35,5 +35,3 @@ hirsel-lir = { path = "../hirsel-lir" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types", features = ["testing"] }
-hirsel-interp = { path = "../hirsel-interp" }
-hirsel-span = { path = "../hirsel-span" }

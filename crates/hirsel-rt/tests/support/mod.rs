@@ -1,9 +1,12 @@
 //! Shared helpers for the runtime's integration tests: a per-thread counting host allocator,
 //! a context guard, descriptor builders, a finalizer event log and abort probes.
 
-pub mod io;
+pub mod filesystem;
 pub mod library;
+pub mod loopback;
+pub mod mounts;
 pub mod schema;
+pub mod tls_peer;
 
 use std::alloc::{GlobalAlloc, Layout as HostLayout, System};
 use std::cell::{Cell, RefCell};
@@ -121,8 +124,6 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { System.dealloc(block, layout) }
     }
 }
-
-hirsel_guard::install!(Counting);
 
 /// Host bytes this thread has allocated and not freed.
 pub fn host_outstanding() -> i64 {

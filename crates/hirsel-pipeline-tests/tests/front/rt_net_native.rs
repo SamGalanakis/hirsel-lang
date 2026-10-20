@@ -3,8 +3,6 @@
 //! a live run records against an in-process loopback server, and the tape replays with the
 //! server gone. Replay under rules that deny a recorded connect refuses (exit 3). A
 //! net.script@2 grant runs the same program against scripted peers and replays it.
-#[path = "../../../hirsel-rt/tests/support/io.rs"]
-mod rt_io_support;
 #[path = "../../../hirsel-driver/tests/support/source_std.rs"]
 mod source_std;
 use hirsel_driver::native::{
@@ -307,7 +305,7 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                     assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
                 }
                 sim.finish().unwrap();
-                rt_io_support::replay_interpreter(
+                crate::rt_replay::replay_interpreter(
                     &recording.events,
                     &recording.tree,
                     sim.tree(),
@@ -326,9 +324,9 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                     .expect("loopback reply bytes");
                 bytes[0] ^= 0x20;
                 let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    rt_io_support::replay_interpreter_with_fixture(
+                    crate::rt_replay::replay_interpreter_with_fixture(
                         &altered,
-                        rt_io_support::ReplayFixture {
+                        crate::rt_replay::ReplayFixture {
                             events: &recording.events,
                             pem_roots: &[],
                             tls_identities: &[],

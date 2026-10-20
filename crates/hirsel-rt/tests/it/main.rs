@@ -1,4 +1,7 @@
 //! The integration tests of this crate, linked as one binary.
+
+hirsel_guard::install!(support::Counting: support::Counting);
+
 mod abi;
 mod alloc;
 mod arena_lists;
@@ -14,7 +17,6 @@ mod model;
 mod mounts;
 mod net;
 mod net_script;
-mod network_replay;
 mod process;
 mod recorder_overlap;
 mod recording;

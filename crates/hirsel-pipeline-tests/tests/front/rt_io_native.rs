@@ -1,6 +1,4 @@
 //! Every owned Io primitive through compiled calls, C/H validation and exact replay.
-#[path = "../../../hirsel-rt/tests/support/io.rs"]
-mod rt_io_support;
 #[path = "../../../hirsel-driver/tests/support/source_std.rs"]
 mod source_std;
 use hirsel_driver::compiler_adapters;
@@ -182,7 +180,7 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                 }
                 sim.finish().unwrap();
                 if !test {
-                    rt_io_support::replay_interpreter(
+                    crate::rt_replay::replay_interpreter(
                         &recording.events,
                         &recording.tree,
                         sim.tree(),
@@ -412,7 +410,7 @@ fn partial_write_replay(
                 assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
             }
             sim.finish().unwrap();
-            rt_io_support::replay_interpreter(
+            crate::rt_replay::replay_interpreter(
                 &events,
                 &tree,
                 sim.tree(),

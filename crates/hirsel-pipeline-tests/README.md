@@ -28,13 +28,14 @@ Layout:
   --test-arg=rc_cleanup::x --test-arg=--exact`). A crate prefix such as `modes_` selects one crate's tests.
 - Each binary keeps its helpers local: `rc/support.rs` (compile a source program
   and adapt its validated native input into an rc `Program`), `rc/fixtures/`
-  (golden LIR dumps, `tools/bless.sh rc-import` rewrites them), `rc/maps/seed.c`, and
-  `front/check_support.rs`.
+  (golden LIR dumps, `tools/bless.sh rc-import` rewrites them), `rc/maps/seed.c`,
+  `front/check_support.rs` and `front/rt_replay.rs` (independent replay of
+  runtime completion tapes in the interpreter).
 - Shared files of other crates are included by path: the driver's
-  `tests/support/source_std.rs`, the runtime's `tests/support/io.rs`
-  (independent replay of runtime completion tapes), the lowering fixture
-  `crates/hirsel-lower/src/support.rs` and the LLVM emission fixtures
-  `crates/hirsel-llvm/tests/support/mod.rs`.
+  `tests/support/source_std.rs`, the runtime's `tests/support/mod.rs` (its
+  integration-test helpers; the runtime's own test binary installs their
+  counting allocator), the lowering fixture `crates/hirsel-lower/src/support.rs`
+  and the LLVM emission fixtures `crates/hirsel-llvm/tests/support/mod.rs`.
 - `full_gate_` tests keep their names and `#[ignore = "full gate"]`; the full
   gate runs them with the rest of the workspace.
 

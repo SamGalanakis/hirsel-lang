@@ -539,8 +539,9 @@ buffer size. `net.resolve` allocates its `List[SocketAddr]` under descriptor 0, 
 runtime's plain pointer-free sequence descriptor. `hirsel-pipeline-tests`
 `rt_net_native` records a compiled program against a loopback server and replays it
 both natively and independently in the interpreter, with an altered-byte control.
-The test-only `tests/support/net.rs` translator reconstructs independent interpreter
-script peers from native typed completions. `tests/support/io.rs` compares every
+The test-only `hirsel-pipeline-tests` `rt_replay/network.rs` translator reconstructs
+independent interpreter script peers from native typed completions. `rt_replay.rs`
+compares every
 completion, surviving grant, final tree and stdout, then strictly replays the
 interpreter's own tape. Corruption controls keep the fixture tape separate from
 the comparison tape, including external fault inputs. Partial native writes supply their accepted prefix to the
@@ -1222,13 +1223,13 @@ request and completion variant, including populated network and process scripts.
 Exhaustive matches require a specimen for new variants. It catches omitted,
 misframed and lossy fields; its ignored `full_gate_` version expands the draws.
 
-B12 (`tests/it/io_properties.rs`) compares real fd confinement, replay,
+B12 (`hirsel-pipeline-tests` `tests/front/rt_io_properties.rs`) compares real fd confinement, replay,
 interpreter and an independent recursive reference on generated trees with
 parent components, dangling links and cycles. Neither simulated oracle consumes
 host faults. It catches disagreement between lexical normalization and physical
 link traversal; its ignored `full_gate_` version expands trees and paths.
 
-B13 (`tests/it/io_properties.rs`) compares check precedence with the independent
+B13 (`hirsel-pipeline-tests` `tests/front/rt_io_properties.rs`) compares check precedence with the independent
 interpreter under all condition subsets for cancellable requests, including
 expired scopes, and explicitly classifies every request's cancellation policy.
 It catches rights, argument and handle checks reordered across cancellation or

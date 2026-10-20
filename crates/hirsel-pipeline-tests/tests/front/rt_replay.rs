@@ -1,7 +1,6 @@
 //! Independent reference execution of runtime completion tapes.
 use hirsel_rt::io::*;
 use std::collections::BTreeMap;
-#[path = "net.rs"]
 pub mod network;
 pub fn replay_interpreter(
     tape: &[Event],

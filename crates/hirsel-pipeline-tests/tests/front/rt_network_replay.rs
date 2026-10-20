@@ -1,5 +1,5 @@
 //! Independent interpreter replay of native typed network recordings.
-use crate::support::io::replay_interpreter;
+use crate::rt_replay::replay_interpreter;
 use hirsel_rt::{io::*, io_real::RealIo};
 use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls};
 use std::collections::BTreeMap;
@@ -13,7 +13,7 @@ fn tls_record(peer_tls: PeerTls) -> RealIo {
 }
 fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest, pem: Option<&[u8]>) -> RealIo {
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-    crate::support::host(&mut io);
+    crate::rt_support::host(&mut io);
     io.set_net_rules(
         [NetRule {
             address: "127.0.0.1".into(),
@@ -116,7 +116,7 @@ fn handshake(io: &RealIo) -> Completion {
 }
 #[test]
 fn every_failing_peer_handshake_records_its_failure_and_replays_independently() {
-    use crate::support::io::{ReplayFixture, replay_interpreter_with_fixture};
+    use crate::rt_replay::{ReplayFixture, replay_interpreter_with_fixture};
     let tree = Tree::new(BTreeMap::new()).unwrap();
     for failure in FAILURES {
         let io = tls_record(PeerTls::Fails(failure.into()));
@@ -158,7 +158,7 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
     let tree = Tree::new(BTreeMap::new()).unwrap();
     for tls in [true, false] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        crate::support::host(&mut io);
+        crate::rt_support::host(&mut io);
         io.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),
@@ -240,11 +240,11 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
 
 #[test]
 fn pem_roots_require_the_original_bundle_matching_the_recorded_digest() {
-    use crate::support::io::{ReplayFixture, replay_interpreter_with_fixture};
+    use crate::rt_replay::{ReplayFixture, replay_interpreter_with_fixture};
     use sha2::{Digest, Sha256};
     // Both engines parse the original trust bundle before the handshake. The tape
     // records its digest; the same raw bundle must be supplied on both executions.
-    let pem = include_bytes!("tls-data/ca.cert");
+    let pem = include_bytes!("../../../hirsel-rt/tests/it/tls-data/ca.cert");
     let io = tls_record_with_roots(
         PeerTls::Certificate(vec!["localhost".into()]),
         RootsDigest::Pem(Sha256::digest(pem).into()),
@@ -279,7 +279,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
         ["other.example", "localhost"],
     ] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        crate::support::host(&mut io);
+        crate::rt_support::host(&mut io);
         io.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),
@@ -359,7 +359,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
 
 #[test]
 fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
-    use crate::support::io::{ReplayFixture, replay_interpreter_with_fixture};
+    use crate::rt_replay::{ReplayFixture, replay_interpreter_with_fixture};
     use hirsel_rt::io_sim::SimIo;
     let tree = Tree::new(BTreeMap::new()).unwrap();
     let tape = vec![
@@ -380,7 +380,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
         },
     ];
     let mut native = SimIo::new(tree.clone(), tape.clone());
-    crate::support::host(&mut native);
+    crate::rt_support::host(&mut native);
     native.set_net_rules(
         [NetRule {
             address: "127.0.0.1".into(),

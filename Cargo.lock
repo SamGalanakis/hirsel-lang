@@ -951,13 +951,11 @@ version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
  "hirsel-guard",
- "hirsel-interp",
  "hirsel-kernels",
  "hirsel-layout",
  "hirsel-lir",
  "hirsel-rt",
  "hirsel-run-config",
- "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
