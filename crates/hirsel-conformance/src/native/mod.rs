@@ -756,7 +756,8 @@ pub fn run_cases_with(
                     loop {
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(case) = cases.get(index) else { break };
-                        std::fs::write(dir.join("case.txt"), &case.id).expect("scratch case identity");
+                        std::fs::write(dir.join("case.txt"), &case.id)
+                            .expect("scratch case identity");
                         let started = std::time::Instant::now();
                         let mut result =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
