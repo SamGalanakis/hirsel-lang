@@ -1,0 +1,56 @@
+// rule: MEM-13
+// expect: run
+// stdout: 42
+// stdout: 7
+// stdout: 9
+// A `mut` Packed parameter's active payload fields are places: reading and
+// updating one leaves the parameter whole, with the other variant's fields absent.
+type Choice = Large(value: u64, extra: u64) | Small(value: u64)
+
+type Holder {
+  choice: Packed[Choice],
+}
+
+fn edit(mut choice: Packed[Choice]) -> () {
+  choice.Small.value = choice.Small.value + 1
+}
+
+fn set(mut choice: Packed[Choice], value: u64) -> () {
+  choice.Small.value = value
+}
+
+fn peek(mut choice: Packed[Choice]) -> u64 {
+  choice.Small.value
+}
+
+fn edit_held(mut holder: Holder) -> () {
+  holder.choice.Small.value = 9u64
+}
+
+fn small_value(choice: Packed[Choice]) -> u64 {
+  choice.Small.value
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let mut choices: List[Packed[Choice]] = [Small(value: 41u64)]
+  for choice in mut choices {
+    edit(mut choice)
+  }
+  for choice in choices {
+    if small_value(choice) == 42u64 {
+      let _ = out.print(output, "42\n")
+    }
+  }
+  let mut one: Packed[Choice] = Small(value: 1u64)
+  set(mut one, 7u64)
+  if peek(mut one) == 7u64 {
+    let _ = out.print(output, "7\n")
+  }
+  let mut holder = Holder(choice: Small(value: 1u64))
+  edit_held(mut holder)
+  if small_value(holder.choice) == 9u64 {
+    let _ = out.print(output, "9\n")
+  }
+  Ok(())
+}

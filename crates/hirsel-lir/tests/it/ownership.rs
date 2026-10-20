@@ -737,6 +737,71 @@ fn a_caller_mut_parameter_is_whole_at_every_exit() {
     pair(mut_exit, |k| *k == K::MutExit(SlotId(0)));
 }
 
+/// A caller `mut p: None | Two(BLK, BLK)` whose tag is switched on: the
+/// None arm returns with Two's fields absent, which leaves `p` whole. The
+/// mutant's Two arm moves a field out and returns without putting it back.
+fn mut_exit_after_switch(mutant: bool) -> Vec<K> {
+    let mut t = Lir::<Rc>::new(&[(Passing::Mut, l::TWOBOX)], None);
+    let p = t.slot(l::TWOBOX, SlotKind::Parameter(0), ROOT);
+    let pv = t.version_of(p);
+    t.param(pv);
+    let whole = t.at(ENTRY, p, &[], &[]);
+    let loan = t.loan(whole, false);
+    t.begin(ENTRY, loan);
+    let view = t.read(ENTRY, whole, pv, ReadMode::Borrow, Some(loan));
+    let none = t.builder.block(BlockKind::Body, &[]);
+    let two = t.builder.block(BlockKind::Body, &[]);
+    let impossible = t.builder.block(BlockKind::Body, &[]);
+    t.builder.term(impossible, Terminator::Unreachable);
+    let none_edge = t.builder.edge(none, &[]);
+    let two_edge = t.builder.edge(two, &[]);
+    let otherwise = t.builder.edge(impossible, &[]);
+    let arms = PoolRange::push(
+        &mut t.builder.unit.pools.switch_arms,
+        [
+            SwitchArm {
+                value: 0,
+                edge: none_edge,
+            },
+            SwitchArm {
+                value: 1,
+                edge: two_edge,
+            },
+        ],
+    );
+    t.builder.term(
+        ENTRY,
+        Terminator::Switch {
+            value: view,
+            arms,
+            otherwise,
+        },
+    );
+    t.end(none, loan);
+    t.builder.ret(none, None);
+    t.end(two, loan);
+    if mutant {
+        let field = t.at(
+            two,
+            p,
+            &[ProjectionStep::VariantField {
+                variant: 1,
+                field: 0,
+            }],
+            &[],
+        );
+        let v = t.read(two, field, pv, ReadMode::Take, None);
+        t.release(two, v, &[]);
+    }
+    t.builder.ret(two, None);
+    t.check()
+}
+
+#[test]
+fn an_inactive_variant_leaves_a_caller_mut_parameter_whole() {
+    pair(mut_exit_after_switch, |k| *k == K::MutExit(SlotId(0)));
+}
+
 /// A String literal: a Plain static slice (LIR schema revision 2).
 fn static_slice(t: &mut Lir<impl hirsel_lir::stage::Stage>, b: BlockId) -> ValueId {
     let ty = t.ty(ValueRepr::Aggregate, l::SLICE);

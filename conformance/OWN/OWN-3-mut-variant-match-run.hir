@@ -1,0 +1,27 @@
+// rule: OWN-3
+// expect: run
+// stdout: 41
+// stdout: 8
+// Matching on a `mut` variant parameter leaves it whole on every arm: an
+// inactive variant's fields are absent, not moved out.
+type Choice = Large(value: u64, extra: List[u64]) | Small(value: u64)
+
+fn score(mut choice: Choice) -> u64 {
+  match choice {
+    Small(value: v) => v,
+    Large(value: v, extra: _) => v + 1u64,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let mut small: Choice = Small(value: 41u64)
+  let mut large: Choice = Large(value: 7u64, extra: [1u64, 2u64])
+  if score(mut small) == 41u64 {
+    let _ = out.print(output, "41\n")
+  }
+  if score(mut large) == 8u64 {
+    let _ = out.print(output, "8\n")
+  }
+  Ok(())
+}

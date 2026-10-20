@@ -1210,7 +1210,15 @@ impl<S: Stage> Walker<'_, '_, S> {
             .collect();
         for id in written {
             let state = &st.slots[id.index()];
-            if state.init != Tri::Yes || state.moved.values().any(|t| t.may()) {
+            // A part is missing when it was transferred out or its resource
+            // was finalized; an inactive variant's fields are absent from a
+            // whole value, not moved out of it.
+            let missing = state.taken.values().any(|t| t.may())
+                || state
+                    .moved
+                    .iter()
+                    .any(|(path, t)| t.may() && state.phase(path) != LIVE);
+            if state.init != Tri::Yes || missing {
                 self.err(site, K::MutExit(id));
             }
         }

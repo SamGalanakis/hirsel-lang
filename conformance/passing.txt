@@ -2182,6 +2182,7 @@ conformance/MEM/MEM-13-ordinary-payload-place-ok.hir
 conformance/MEM/MEM-13-packed-bounded-storage-run.hir
 conformance/MEM/MEM-13-packed-closure-capture-run.hir
 conformance/MEM/MEM-13-packed-closure-field-run.hir
+conformance/MEM/MEM-13-packed-mut-variant-field-run.hir
 conformance/MEM/MEM-13-packed-sequence-nested-run.hir
 conformance/MEM/MEM-13-packed-sequence-push-run.hir
 conformance/MEM/MEM-13-packed-sequence-walk-run.hir
@@ -3834,6 +3835,7 @@ conformance/OWN/OWN-3-mut-block-copy-run.hir
 conformance/OWN/OWN-3-mut-block-ok.hir
 conformance/OWN/OWN-3-mut-borrowed-part-bad.hir
 conformance/OWN/OWN-3-mut-borrowed-part-ok.hir
+conformance/OWN/OWN-3-mut-variant-match-run.hir
 conformance/OWN/OWN-3-noalias-captures-run.hir
 conformance/OWN/OWN-3-noalias-loops-run.hir
 conformance/OWN/OWN-3-noalias-places-run.hir
