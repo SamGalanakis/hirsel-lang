@@ -467,7 +467,6 @@ impl QueryEngine {
             self.modes.remove(path);
             self.lowered.remove(path);
         }
-        self.forget_passed(paths);
         closed
     }
 }

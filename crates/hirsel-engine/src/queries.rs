@@ -19,7 +19,6 @@ pub use precheck::Precheck;
 pub(crate) use precheck::PrecheckWriter;
 mod safety;
 pub use safety::{Escape, UnsafeReach};
-mod signature_input;
 mod type_groups;
 pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
@@ -27,8 +26,6 @@ use hirsel_intern::timings::{self, Count, Interval, Phase};
 use hirsel_span::Span;
 use hirsel_syntax::{ItemKind, ItemPath, ItemSyntax};
 pub(crate) use package_snapshot::PackageSnapshot;
-pub use signature_input::SignatureInput;
-pub(crate) use signature_input::release_signature_inputs;
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -150,11 +147,11 @@ pub struct QueryEngine {
     pub environment: QueryEnvironment,
     pub adapters: PhaseAdapters,
     /// Each definition's candidates in occurrence order.
-    items: Layered<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub(crate) items: Layered<DefPath, Vec<Arc<ItemSyntax>>>,
     /// The items the last index dropped, which the next can adopt.
     detached: Vec<Arc<ItemSyntax>>,
     parsed: Layered<FileId, ParsedFile>,
-    registry: crate::registry::BuiltinRegistry,
+    pub(crate) registry: crate::registry::BuiltinRegistry,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: Layered<(DefPath, QueryKind), DefinitionKey>,
     signatures: Layered<DefPath, Arc<Cached<hirsel_types::SignatureRef>>>,
@@ -175,7 +172,7 @@ pub struct QueryEngine {
     active: BTreeSet<(DefPath, QueryKind)>,
     validation_walk: Option<ValidationWalk>,
     cache_sequence: u64,
-    source_revision: u64,
+    pub(crate) source_revision: u64,
     /// The runtime types compile-time evaluation runs with, built from every
     /// item's signature. They change only with the items, their recorded
     /// private representations or the manifest, so each evaluation reuses
@@ -187,7 +184,12 @@ pub struct QueryEngine {
     package_proofs: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackageProof>,
     package_publications: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackagePublication>,
     pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
-    signature_input: BTreeMap<hirsel_syntax::PackageId, signature_input::ProgramInput>,
+    /// The last signature snapshot and the inputs it was built from.
+    pub(crate) snapshot: Option<(
+        crate::snapshot::SnapshotStamp,
+        Arc<crate::snapshot::SignatureSnapshot>,
+    )>,
+    pub(crate) snapshot_epoch: u64,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     reads: Layered<(DefPath, QueryKind), DependencyReads>,
@@ -224,7 +226,7 @@ impl Drop for QueryEngine {
         released("engine: syntax keys", take(&mut self.syntax_keys));
         released("engine: items", take(&mut self.items));
         released("engine: parsed", take(&mut self.parsed));
-        released("engine: signature input", take(&mut self.signature_input));
+        released("engine: signature snapshot", take(&mut self.snapshot));
         released("engine: instance bodies", take(&mut self.instance_bodies));
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
@@ -339,11 +341,17 @@ impl QueryEngine {
         definition: &hirsel_tir::Definition,
         artifact: Signature,
     ) -> Result<(), QueryError> {
-        let report = self.run_v(&definition.path.0.package, |signatures| {
-            let _timing = timings::phase(Phase::Verify);
-            timings::count(Count::VRuns);
-            signatures.validate_with_signature(definition, &artifact)
-        });
+        let report = match self.verify {
+            Verify::On => {
+                let views = self
+                    .signature_snapshot()
+                    .validation_with(&definition.path.0.package, Arc::new(artifact));
+                let _timing = timings::phase(Phase::Verify);
+                timings::count(Count::VRuns);
+                hirsel_validate::validate(definition, &views, &mut vec![])
+            }
+            Verify::Off => hirsel_validate::Validation::default(),
+        };
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
@@ -396,7 +404,8 @@ impl QueryEngine {
             package_proofs: BTreeMap::new(),
             package_publications: BTreeMap::new(),
             generic_verdict: None,
-            signature_input: BTreeMap::new(),
+            snapshot: None,
+            snapshot_epoch: 0,
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             reads: Layered::default(),
@@ -558,7 +567,7 @@ impl QueryEngine {
         }
         cached.result.clone()
     }
-    fn with_validation_walk<T>(&mut self, query: impl FnOnce(&mut Self) -> T) -> T {
+    pub(crate) fn with_validation_walk<T>(&mut self, query: impl FnOnce(&mut Self) -> T) -> T {
         let root = self.validation_walk.is_none();
         if root {
             self.validation_walk = Some(ValidationWalk::default());
@@ -1692,7 +1701,9 @@ impl DefinitionQueries for QueryEngine {
         let mut result = result.map(shared_output);
         if let Ok(lowered) = &result {
             let report = self.run_v(&definition.0.package, |signatures| {
-                signatures.validate_once(&lowered.value)
+                let _timing = timings::phase(Phase::Verify);
+                timings::count(Count::VRuns);
+                hirsel_validate::validate(&lowered.value, signatures, &mut vec![])
             });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);

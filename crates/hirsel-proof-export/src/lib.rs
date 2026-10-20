@@ -32,7 +32,7 @@ use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::{Definition, DefinitionRef, Materialized, TIR_VERSION};
 use hirsel_types::encoding::{canonical_encoding, fingerprint, sealed};
 use hirsel_types::{Signature, SignatureDependency};
-use hirsel_validate::{Signatures, ValidatedSignatures};
+use hirsel_validate::SignatureMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
@@ -741,11 +741,11 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
 
 /// V over every definition against its package's signature view.
 fn validate(export: &Export) -> Result<(), ImportError> {
-    let mut views: BTreeMap<&PackageId, ValidatedSignatures> = BTreeMap::new();
+    let mut views: BTreeMap<&PackageId, SignatureMap> = BTreeMap::new();
     for definition in &export.definitions {
         let package = &definition.path.0.package;
         let view = views.entry(package).or_insert_with(|| {
-            let signatures: Signatures = export
+            export
                 .signatures
                 .iter()
                 .map(|s| {
@@ -756,10 +756,9 @@ fn validate(export: &Export) -> Result<(), ImportError> {
                     };
                     (s.path.clone(), signature.clone())
                 })
-                .collect();
-            ValidatedSignatures::new(signatures)
+                .collect()
         });
-        let validation = view.validate(&definition.tir);
+        let validation = hirsel_validate::validate(&definition.tir, view, &mut vec![]);
         if let Some(violation) = validation.violations.first() {
             return Err(refuse(
                 definition.path.to_string(),

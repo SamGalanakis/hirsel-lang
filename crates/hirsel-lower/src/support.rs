@@ -41,7 +41,7 @@ pub struct Fixture {
     pub scalar: TypeId,
     pub owner: NameSite,
     pub next_local: u32,
-    pub declarations: hirsel_validate::Signatures,
+    pub declarations: hirsel_validate::SignatureMap,
     pub parameters: Vec<hirsel_types::Parameter>,
 }
 impl Fixture {
@@ -506,13 +506,18 @@ impl Fixture {
         result: TypeId,
     ) -> std::result::Result<Definition, LowerError> {
         let mut declarations = self.declarations.clone();
-        declarations.entry(path(name)).or_insert_with(|| Signature {
-            metadata: SignatureMetadata::default(),
-            definition: path(name),
-            types: self.checked.types.clone(),
-            kind: SignatureKind::Function(function(self.parameters.clone(), result)),
-            fingerprint: ContentHash::default(),
-        });
+        if !declarations.contains_key(&path(name)) {
+            declarations.insert(
+                path(name),
+                Signature {
+                    metadata: SignatureMetadata::default(),
+                    definition: path(name),
+                    types: self.checked.types.clone(),
+                    kind: SignatureKind::Function(function(self.parameters.clone(), result)),
+                    fingerprint: ContentHash::default(),
+                },
+            );
+        }
         let mut root = vec![(self.owner, result)];
         root.extend(self.frames.clone());
         let input = self.input(

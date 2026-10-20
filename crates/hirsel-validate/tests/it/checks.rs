@@ -3,7 +3,7 @@
 use crate::support::*;
 use hirsel_diag::RuleId;
 use hirsel_span::Span;
-use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PackageId, PassingMode};
+use hirsel_syntax::{BinaryOp, ContentHash, DefId, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
 use hirsel_types::*;
@@ -2055,8 +2055,8 @@ fn random_mutations_never_panic_and_arbitrary_cfgs_terminate() {
                 ));
             }
         };
-        let first = validate(&f.definition, &f.signatures);
-        let second = validate(&f.definition, &f.signatures);
+        let first = validate(&f.definition, &f.signatures, &mut vec![]);
+        let second = validate(&f.definition, &f.signatures, &mut vec![]);
         assert_eq!(first, second);
     }
 }
@@ -2171,7 +2171,7 @@ fn unresolved_call_origins_fail_closed() {
     if let SignatureKind::Function(fun) = &mut signature.kind {
         fun.parameters[0].ty = branded;
     }
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -2186,7 +2186,11 @@ fn unresolved_call_origins_fail_closed() {
     if let SignatureKind::Function(fun) = &mut signature.kind {
         fun.parameters[0].ty = wrong;
     }
-    assert!(!validate(&f.definition, &f.signatures).violations.is_empty());
+    assert!(
+        !validate(&f.definition, &f.signatures, &mut vec![])
+            .violations
+            .is_empty()
+    );
     let signature = f.signatures.get_mut(&path("callee")).unwrap();
     let mut fixed = signature.types.get(branded).unwrap().clone();
     fixed.brand.alternatives[0].root = OriginRoot::Definition(path("known"));
@@ -2194,7 +2198,11 @@ fn unresolved_call_origins_fail_closed() {
     if let SignatureKind::Function(fun) = &mut signature.kind {
         fun.parameters[0].ty = fixed;
     }
-    assert!(!validate(&f.definition, &f.signatures).violations.is_empty());
+    assert!(
+        !validate(&f.definition, &f.signatures, &mut vec![])
+            .violations
+            .is_empty()
+    );
 }
 
 #[test]
@@ -2256,7 +2264,7 @@ fn dependent_result_origins_require_a_live_binding() {
     if let SignatureKind::Function(fun) = &mut signature.kind {
         fun.result = expected;
     }
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report.violations.iter().any(|v| v.kind
             == ViolationKind::TypeMismatch {
@@ -4648,7 +4656,7 @@ fn local_result_source_is_checked_independently_of_matching_types() {
         on_failure: CleanupId(0),
     };
     f.body().blocks.push(block(vec![], ret(destination, 0)));
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(report.violations.is_empty(), "{report:?}");
     let callee = f.signatures.get_mut(&path("callee")).unwrap();
     let SignatureKind::Function(fun) = &mut callee.kind else {
@@ -5223,7 +5231,7 @@ fn loop_backedge_expires_a_handle_of_an_iteration_owner() {
     f.body().blocks[2].instructions.splice(0..0, replacements);
     // Moving the handle into storage after its owner ended is not a use: it
     // may sit there and be dropped. The storage holds an ended-brand value.
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(report.violations.is_empty(), "{report:?}");
     f.body().blocks[2].instructions.extend([
         inst(
@@ -5241,7 +5249,7 @@ fn loop_backedge_expires_a_handle_of_an_iteration_owner() {
             0,
         ),
     ]);
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -5263,7 +5271,7 @@ fn loop_backedge_expires_a_handle_of_an_iteration_owner() {
         yes: BlockId(1),
         no: BlockId(3),
     };
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report.violations.iter().any(|v| v.block == Some(BlockId(1))
             && v.instruction == Some(0)
@@ -6320,7 +6328,7 @@ fn loop_backedge_expires_a_retained_parameter_handle() {
     f.body().blocks[1]
         .instructions
         .push(inst(InstructionKind::EndOrigin(PlaceId(owner)), 0));
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report.violations.iter().any(|v| v.block == Some(BlockId(1))
             && v.instruction == Some(0)
@@ -7053,40 +7061,58 @@ fn independent_loan_ends_share_the_incremental_failure_proof() {
 }
 
 #[test]
-fn checked_signature_input_preserves_errors_and_replacement_order() {
+fn view_verdicts_preserve_universe_errors_and_their_order() {
     let mut f = Fixture::unit();
     for name in ["a", "z"] {
         let mut signature = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
         signature.types.push(ty(TypeKind::Error));
         f.signatures.insert(path(name), signature);
     }
-    let checked = ValidatedSignatures::new(f.signatures.clone());
+    let mut verdicts = ValidatedSignatures::default();
+    let universe = |verdicts: &mut ValidatedSignatures, signatures: &SignatureMap| {
+        verdicts.universe(
+            signatures.keys().map(DefId::intern).collect::<Vec<_>>(),
+            signatures,
+        )
+    };
+    let checked = universe(&mut verdicts, &f.signatures);
     assert_eq!(
-        checked.validate(&f.definition),
-        validate(&f.definition, &f.signatures)
+        (checked.digest, checked.errors.as_slice()),
+        f.signatures.universe_errors()
     );
+    let mut reads = vec![];
+    assert_eq!(
+        validate(&f.definition, &f.signatures, &mut reads).violations,
+        checked.errors
+    );
+    assert!(reads.contains(&VRead::UniverseErrors(checked.digest)));
     for name in ["a", "m", "z"] {
         for malformed in [false, true] {
             let mut replacement = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
             if malformed {
                 replacement.types.push(ty(TypeKind::Error));
             }
-            let mut expected = f.signatures.clone();
-            expected.insert(path(name), replacement.clone());
+            let mut replaced = f.signatures.clone();
+            replaced.insert(path(name), replacement);
+            let checked = universe(&mut verdicts, &replaced);
             assert_eq!(
-                checked.validate_with_signature(&f.definition, &replacement),
-                validate(&f.definition, &expected)
+                (checked.digest, checked.errors.as_slice()),
+                replaced.universe_errors()
+            );
+            assert_eq!(
+                validate(&f.definition, &replaced, &mut vec![]).violations,
+                checked.errors
             );
         }
     }
+    // Structural errors come first and alone.
     f.definition.entry = BodyId(u32::MAX);
-    assert_eq!(
-        checked.validate(&f.definition),
-        validate(&f.definition, &f.signatures)
-    );
     assert!(matches!(
-        checked.validate(&f.definition).violations[0].kind,
-        ViolationKind::InvalidId { .. }
+        validate(&f.definition, &f.signatures, &mut vec![]).violations[..],
+        [Violation {
+            kind: ViolationKind::InvalidId { .. },
+            ..
+        }]
     ));
 }
 
@@ -7526,14 +7552,14 @@ fn loop_feedback_expires_exact_written_prefixes_and_owned_aliases() {
                 })
                 .unwrap();
         }
-        let report = validate(&f.definition, &f.signatures);
+        let report = validate(&f.definition, &f.signatures, &mut vec![]);
         assert!(report.violations.is_empty(), "acyclic {mode}: {report:?}");
         f.body().blocks[1].terminator = Terminator::Branch {
             condition: copy(condition),
             yes: BlockId(1),
             no: BlockId(2),
         };
-        let report = validate(&f.definition, &f.signatures);
+        let report = validate(&f.definition, &f.signatures, &mut vec![]);
         if mode == "sibling" {
             assert!(report.violations.is_empty(), "{mode}: {report:?}");
         } else {

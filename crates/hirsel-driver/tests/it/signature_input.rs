@@ -4,7 +4,7 @@ use hirsel_engine::*;
 use hirsel_span::Span;
 use hirsel_tir::*;
 use hirsel_types::{Destination, Primitive, SignatureKind, Type, TypeKind, TypeStore, UseKind};
-use hirsel_validate::Signatures;
+use hirsel_validate::SignatureMap;
 
 #[test]
 fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
@@ -115,27 +115,27 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
             }],
         };
         // This program fails with the previous public-only transport.
-        let public_input: Signatures = [
+        let public_input: SignatureMap = [
             (hidden.clone(), (*public).clone()),
             (function.definition.clone(), (*function).clone()),
         ]
-        .into();
+        .into_iter()
+        .collect();
         assert!(
-            !hirsel_validate::validate(&definition, &public_input)
+            !hirsel_validate::validate(&definition, &public_input, &mut vec![])
                 .violations
                 .is_empty()
         );
-        let owner_input = engine.validated_signature_input(&context.package);
-        let report = owner_input.validate(&definition);
+        let snapshot = engine.signature_snapshot();
+        let owner_input = snapshot.validation(&context.package);
+        let report = hirsel_validate::validate(&definition, owner_input, &mut vec![]);
         assert!(report.violations.is_empty(), "{:?}", report.violations);
         let foreign = hirsel_syntax::PackageId {
             name: context.package.name.clone(),
             version: "1".into(),
         };
         assert!(
-            !engine
-                .validated_signature_input(&foreign)
-                .validate(&definition)
+            !hirsel_validate::validate(&definition, snapshot.validation(&foreign), &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -144,7 +144,11 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
             unreachable!()
         };
         fields[0].field = 1;
-        assert!(!owner_input.validate(&forged).violations.is_empty());
+        assert!(
+            !hirsel_validate::validate(&forged, owner_input, &mut vec![])
+                .violations
+                .is_empty()
+        );
         assert_eq!(public, engine.item_signature(&hidden).unwrap().value);
     });
 }

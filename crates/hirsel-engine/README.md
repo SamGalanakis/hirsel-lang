@@ -33,13 +33,15 @@ cross-file move keeps the same syntax. Package images, prechecked records and
 artifacts carry anchors as (source ordinal, base) and are placed on load, never
 rebased.
 
-Publication consumes one immutable `ValidatedSignatures` input per owning package,
-indexed source revision and explicit environment/manifest input. V independently checks every
-signature once, including unrelated malformed rows. The complete signature-set
-fingerprint and exact snapshot equality permit proof reuse after body-only edits;
-changed sets are checked together, preserving violation order. Failed header reads
-are retried. Compile-time owners use a borrowed replacement view instead of copying
-the map. This replaces the per-publication signature assembly and graph scan.
+Each revision computes one frozen `SignatureSnapshot` (`snapshot/`): every
+signature by `DefId`, each opaque type's private view (seen only by its own
+package's bodies) and V's verdict on every view. V validates a package's bodies
+against `snapshot.validation(package)`, the public `ViewTable` with that
+package's private views in place; compile-time evaluation validates a
+materialized owner against `validation_with`. Only the replaced views and the
+verdicts that read them are checked again, and a new snapshot reuses the
+previous one's digests and the verdicts whose reads still hold. Failed headers
+are retried: a snapshot is kept only when every signature normalized.
 
 Compose phases through per-definition queries; record dependency fingerprints for later caching.
 

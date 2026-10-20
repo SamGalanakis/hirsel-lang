@@ -5,7 +5,7 @@ use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
 use hirsel_types::*;
-use hirsel_validate::{Signatures, ViolationKind, assert_valid, validate};
+use hirsel_validate::{SignatureMap, ViolationKind, assert_valid, validate};
 
 pub(crate) fn path(name: &str) -> DefPath {
     DefPath(ItemPath {
@@ -69,7 +69,7 @@ pub(crate) fn ret(place: u32, cleanup: u32) -> Terminator {
 
 pub(crate) struct Fixture {
     pub(crate) definition: Definition,
-    pub(crate) signatures: Signatures,
+    pub(crate) signatures: SignatureMap,
 }
 impl Fixture {
     pub(crate) fn unit() -> Self {
@@ -123,7 +123,7 @@ impl Fixture {
                     matches: vec![],
                 }],
             },
-            signatures: Signatures::new(),
+            signatures: SignatureMap::new(),
         }
     }
     pub(crate) fn body(&mut self) -> &mut Body {
@@ -181,7 +181,7 @@ impl Fixture {
         assert_valid(&self.definition, &self.signatures);
     }
     pub(crate) fn kinds(&self) -> Vec<ViolationKind> {
-        validate(&self.definition, &self.signatures)
+        validate(&self.definition, &self.signatures, &mut vec![])
             .violations
             .into_iter()
             .map(|v| v.kind)

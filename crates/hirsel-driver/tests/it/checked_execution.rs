@@ -139,12 +139,12 @@ fn printed(outcome: Option<(Outcome, String)>) -> String {
 /// The IR checker's verdict on an edited definition.
 fn validator_rejects(engine: &mut QueryEngine, definition: &Definition) -> bool {
     let input = engine.export_native_input().unwrap();
-    let signatures: BTreeMap<_, _> = input
+    let signatures: hirsel_validate::SignatureMap = input
         .signatures
         .iter()
         .map(|(p, s)| (p.clone(), (**s).clone()))
         .collect();
-    !hirsel_validate::validate(definition, &signatures)
+    !hirsel_validate::validate(definition, &signatures, &mut vec![])
         .violations
         .is_empty()
 }

@@ -6,7 +6,7 @@ use hirsel_type_analysis::cleanup::{
 };
 use hirsel_types::*;
 
-pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
+pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
     if s.metadata.track_caller
         && !matches!(&s.kind, SignatureKind::Function(f) if f.foreign.is_none())
     {
@@ -192,7 +192,7 @@ fn global_representation(
     root: TypeId,
     roles: &NominalRoles,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> bool {
     let held = structural_authority(store, root, roles, generics, &mut |_, path| {
         Ok::<_, QueryError>(path.and_then(|p| signatures.get(p).cloned().map(std::sync::Arc::new)))
@@ -246,7 +246,7 @@ fn flat_storage(
     store: &TypeStore,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
     active: &mut BTreeSet<TypeId>,
 ) -> bool {
     if !active.insert(root) {
@@ -307,7 +307,7 @@ fn cleanup(
     store: &TypeStore,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
     active: &mut BTreeSet<TypeId>,
 ) -> DropAllocation {
     if !active.insert(root) {

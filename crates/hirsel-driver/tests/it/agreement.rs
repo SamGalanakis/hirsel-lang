@@ -6,7 +6,7 @@ use hirsel_engine::*;
 use hirsel_validate::{ViolationKind, validate};
 use std::collections::BTreeMap;
 
-type Signatures = BTreeMap<hirsel_syntax::DefPath, hirsel_types::Signature>;
+type Signatures = hirsel_validate::SignatureMap;
 
 fn lowered(source: &str, name: &str) -> (hirsel_tir::Definition, Signatures) {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -35,7 +35,7 @@ fn with(signatures: &Signatures, source: &str, name: &str) -> Signatures {
     signatures
 }
 fn kinds(definition: &hirsel_tir::Definition, signatures: &Signatures) -> Vec<ViolationKind> {
-    validate(definition, signatures)
+    validate(definition, signatures, &mut vec![])
         .violations
         .into_iter()
         .map(|v| v.kind)

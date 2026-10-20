@@ -171,7 +171,7 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         "fn key(last:u64)->Set[u64]{let mut s:Set[u64]=set.empty();set.insert(mut s,1);set.insert(mut s,last);take s}\nfn build()->Map[Set[u64],u64]{let mut m:Map[Set[u64],u64]=map.empty();map.insert(mut m,key(2),10);map.insert(mut m,key(3),20);take m}\nconst M:Map[Set[u64],u64]=build()\npub fn main()->Result[(),()]{let m=comptime build();Ok(())}\n",
     );
     let input = engine.export_native_input().unwrap();
-    let signatures = input
+    let signatures: hirsel_validate::SignatureMap = input
         .signatures
         .iter()
         .map(|(p, s)| (p.clone(), (**s).clone()))
@@ -194,7 +194,7 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         }
     }
     assert_eq!(changed, 1);
-    let report = hirsel_validate::validate(&forged, &signatures);
+    let report = hirsel_validate::validate(&forged, &signatures, &mut vec![]);
     assert!(
         report
             .violations

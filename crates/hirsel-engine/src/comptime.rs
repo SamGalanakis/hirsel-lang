@@ -636,7 +636,7 @@ impl QueryEngine {
             }) {
                 continue;
             }
-            self.invalidate_signature_input();
+            self.retire_snapshot();
             self.staged_constants.insert(
                 path,
                 StagedConstant {

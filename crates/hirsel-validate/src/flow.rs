@@ -257,7 +257,7 @@ struct Model {
 /// can exclude one: a nominal type is read through its representation, and
 /// a generic, builtin, function or opaque type admits every path.
 fn admits_path(
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
     types: &TypeStore,
     ty: TypeId,
     path: &[hirsel_types::FieldId],
@@ -6517,10 +6517,11 @@ mod nominal_limit_tests {
             f.definition.bodies[0].places.push(moved);
             let declarations = vec![GenericDeclarations::default()];
             let scratch = scratch::Scratch::new(&f.definition.types, 1);
+            let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 body: &f.definition.bodies[0],
-                signatures: &f.signatures,
+                signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
                 contract: false,
@@ -6629,10 +6630,11 @@ mod header_name_tests {
             f.definition.bodies.push(child);
             let declarations = vec![GenericDeclarations::default(); 2];
             let scratch = scratch::Scratch::new(&f.definition.types, 2);
+            let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 body: &f.definition.bodies[1],
-                signatures: &f.signatures,
+                signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
                 contract: false,
@@ -6722,10 +6724,11 @@ mod header_name_tests {
             f.definition.bodies.push(child);
             let declarations = vec![GenericDeclarations::default(); 2];
             let scratch = scratch::Scratch::new(&f.definition.types, 2);
+            let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 body: &f.definition.bodies[1],
-                signatures: &f.signatures,
+                signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
                 contract: false,

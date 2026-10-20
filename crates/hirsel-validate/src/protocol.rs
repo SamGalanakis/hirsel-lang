@@ -13,7 +13,7 @@ fn option_path() -> DefPath {
         name: "Option".into(),
     })
 }
-pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+pub(super) fn declaration(signature: &Signature, signatures: &Reader<'_>) -> bool {
     let SignatureKind::Type(nominal) = &signature.kind else {
         return true;
     };
@@ -147,7 +147,7 @@ fn instantiate(
     store: &mut TypeStore,
     actual: TypeId,
     receiver_generics: &[GenericParameter],
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Option<TypeId> {
     let formal = import_type(source, function.parameters.first()?.ty, store).ok()?;
     let mut arguments: Vec<Option<GenericArgument>> = vec![None; function.generics.len()];
@@ -379,10 +379,7 @@ fn actuals(
     Some(())
 }
 
-pub(super) fn receipts(
-    definition: &Definition,
-    signatures: &dyn SignatureLookup,
-) -> Vec<Violation> {
+pub(super) fn receipts(definition: &Definition, signatures: &Reader<'_>) -> Vec<Violation> {
     let mut errors = vec![];
     let mut seen = BTreeSet::new();
     for receipt in &definition.protocol_associations {
@@ -432,7 +429,7 @@ fn unproved(store: &TypeStore, f: &FunctionType) -> bool {
 /// declaration-owned boundaries.
 pub(super) fn unproved_promises(
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Vec<Violation> {
     let owner = signatures
         .get(&definition.path)
@@ -486,12 +483,12 @@ pub(super) fn unproved_promises(
     errors
 }
 
-pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+pub(super) fn selectors(signature: &Signature, signatures: &Reader<'_>) -> bool {
     fn field(
         mut store: TypeStore,
         mut ty: TypeId,
         fields: &SharedPath<FieldId>,
-        signatures: &dyn SignatureLookup,
+        signatures: &Reader<'_>,
     ) -> bool {
         for field in fields {
             let mut seen = BTreeSet::new();

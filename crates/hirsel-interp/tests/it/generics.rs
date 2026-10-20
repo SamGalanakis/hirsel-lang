@@ -39,7 +39,10 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
         );
         let caller = caller.finish("main", result);
         let definitions = vec![caller, reader.clone()];
-        let mut signatures = fixture_signatures(&definitions, &Default::default());
+        let mut signatures: hirsel_validate::SignatureMap =
+            fixture_signatures(&definitions, &Default::default())
+                .into_iter()
+                .collect();
         let SignatureKind::Function(f) = &mut signatures.get_mut(&path("read_size")).unwrap().kind
         else {
             unreachable!()

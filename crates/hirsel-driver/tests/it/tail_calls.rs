@@ -233,19 +233,19 @@ fn independent_ir_validation_rejects_forged_tail_obligations_and_continuations()
         let mut path = entry_path(&default_context());
         path.0.name = "descend".into();
         let base = input.definitions[&path].clone();
-        let signatures = input
+        let signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(p, s)| (p.clone(), (**s).clone()))
             .collect();
         assert!(
-            hirsel_validate::validate(&base, &signatures)
+            hirsel_validate::validate(&base, &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
         let rejected = |definition: &hirsel_tir::Definition| {
             assert!(
-                hirsel_validate::validate(definition, &signatures)
+                hirsel_validate::validate(definition, &signatures, &mut vec![])
                     .violations
                     .iter()
                     .any(|v| matches!(
@@ -332,7 +332,7 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
         let mut path = entry_path(&default_context());
         path.0.name = "serve".into();
         let base = input.definitions[&path].clone();
-        let signatures = input
+        let signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(p, s)| (p.clone(), (**s).clone()))
@@ -350,7 +350,7 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
             panic!("not a diverging call site")
         };
         assert!(
-            hirsel_validate::validate(&base, &signatures)
+            hirsel_validate::validate(&base, &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -370,7 +370,7 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
         };
         *on_failure = owing;
         assert!(
-            hirsel_validate::validate(&bad, &signatures)
+            hirsel_validate::validate(&bad, &signatures, &mut vec![])
                 .violations
                 .iter()
                 .any(|v| matches!(

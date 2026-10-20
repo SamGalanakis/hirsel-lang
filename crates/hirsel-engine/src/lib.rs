@@ -33,7 +33,9 @@ pub use summary::{
 };
 pub use layered::Layered;
 mod semantic;
+mod snapshot;
 pub use semantic::*;
+pub use snapshot::{PackageViews, SignatureSnapshot, View, ViewTable};
 mod adapters;
 mod facts;
 pub use adapters::*;

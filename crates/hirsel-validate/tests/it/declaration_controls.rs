@@ -72,7 +72,6 @@ fn verdict_with(s: Signature, extras: Vec<Signature>, accepted: bool) {
     for extra in extras {
         f.signatures.insert(extra.definition.clone(), extra);
     }
-    let mut base = f.signatures.clone();
     f.signatures.insert(s.definition.clone(), s.clone());
     let expected = if accepted {
         vec![]
@@ -80,29 +79,14 @@ fn verdict_with(s: Signature, extras: Vec<Signature>, accepted: bool) {
         vec![ViolationKind::InvalidSignature(s.definition.clone())]
     };
     f.broken(expected.clone());
-    let cached = ValidatedSignatures::new(f.signatures.clone()).validate(&f.definition);
-    assert_eq!(
-        cached
-            .violations
-            .iter()
-            .map(|v| v.kind.clone())
-            .collect::<Vec<_>>(),
-        expected
+    let mut verdicts = ValidatedSignatures::default();
+    let universe = verdicts.universe(
+        f.signatures.keys().map(DefId::intern).collect::<Vec<_>>(),
+        &f.signatures,
     );
-    base.insert(
-        s.definition.clone(),
-        declaration(
-            &s.definition.0.name,
-            TypeKind::Primitive(Primitive::U32),
-            vec![],
-            true,
-            false,
-        ),
-    );
-    let overlay = ValidatedSignatures::new(base).validate_with_signature(&f.definition, &s);
     assert_eq!(
-        overlay
-            .violations
+        universe
+            .errors
             .iter()
             .map(|v| v.kind.clone())
             .collect::<Vec<_>>(),
@@ -1104,27 +1088,27 @@ fn growing_schema_limits_remain_operational_and_owner_replacement_clears_them() 
     d.representation = Some(recur);
     let mut f = Fixture::unit();
     f.signatures.insert(s.definition.clone(), s);
-    let checked = ValidatedSignatures::new(f.signatures.clone());
     let expected = ViolationKind::TypeProofToolingLimit {
         limit: MAX_POLYMORPHIC_EXPANSIONS,
     };
-    assert_eq!(
-        checked
-            .validate(&f.definition)
-            .violations
-            .iter()
-            .map(|v| v.kind.clone())
-            .collect::<Vec<_>>(),
-        vec![expected.clone()]
-    );
+    let mut verdicts = ValidatedSignatures::default();
+    let universe = |verdicts: &mut ValidatedSignatures, f: &Fixture| {
+        verdicts
+            .universe(
+                f.signatures.keys().map(DefId::intern).collect::<Vec<_>>(),
+                &f.signatures,
+            )
+            .errors
+            .into_iter()
+            .map(|v| v.kind)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(universe(&mut verdicts, &f), vec![expected.clone()]);
     assert_eq!(f.kinds(), vec![expected]);
     let replacement = serializable_declaration(TypeKind::Primitive(Primitive::U64));
-    assert!(
-        checked
-            .validate_with_signature(&f.definition, &replacement)
-            .violations
-            .is_empty()
-    );
+    f.signatures
+        .insert(replacement.definition.clone(), replacement);
+    assert!(universe(&mut verdicts, &f).is_empty());
 }
 
 #[test]
@@ -1194,4 +1178,193 @@ fn caller_body_ids_are_checked_at_the_structural_boundary() {
             },
         }]
     );
+}
+
+// V's input: each view is identified by V's own digest, and every verdict is
+// reused only while the reads it made still hold.
+fn id(name: &str) -> DefId {
+    DefId::intern(&path(name))
+}
+fn reads_view(verdict: &ViewVerdict, name: &str) -> bool {
+    verdict
+        .reads
+        .iter()
+        .any(|read| matches!(read, VRead::View(d, _) if *d == id(name)))
+}
+fn holds(verdict: &ViewVerdict, signatures: &SignatureMap) -> bool {
+    verdict
+        .reads
+        .iter()
+        .all(|read| read_holds(read, signatures))
+}
+fn represent(signatures: &mut SignatureMap, name: &str, kind: TypeKind) {
+    let signature = signatures.get_mut(&path(name)).unwrap();
+    let root = signature.types.push(ty(kind));
+    let SignatureKind::Type(d) = &mut signature.kind else {
+        unreachable!()
+    };
+    d.representation = Some(root);
+}
+
+#[test]
+fn a_private_shape_edit_under_an_unchanged_fingerprint_rechecks_exactly_its_readers() {
+    let mut signatures = SignatureMap::new();
+    let named = |name: &str| TypeKind::Named {
+        definition: path(name),
+        arguments: vec![].into(),
+    };
+    for (name, kind) in [
+        ("Inner", TypeKind::Primitive(Primitive::U32)),
+        ("Hidden", named("Inner")),
+        ("Other", TypeKind::Primitive(Primitive::U64)),
+    ] {
+        signatures.insert(
+            path(name),
+            declaration(name, kind, vec![Bound::Plain], true, false),
+        );
+    }
+    let mut verdicts = ValidatedSignatures::default();
+    let hidden = verdicts.verdict(id("Hidden"), &signatures);
+    let other = verdicts.verdict(id("Other"), &signatures);
+    assert_eq!((&hidden.error, &other.error), (&None, &None));
+    assert!(reads_view(&hidden, "Inner") && !reads_view(&other, "Inner"));
+    let original = signatures.get(&path("Inner")).unwrap().clone();
+    let before = original.fingerprint;
+    let digest = signatures.view(id("Inner")).unwrap().1;
+    // A private field edit the producer's fingerprint does not cover.
+    represent(
+        &mut signatures,
+        "Inner",
+        TypeKind::Primitive(Primitive::String),
+    );
+    assert_eq!(signatures.get(&path("Inner")).unwrap().fingerprint, before);
+    assert_ne!(signatures.view(id("Inner")).unwrap().1, digest);
+    assert!(!holds(&hidden, &signatures) && holds(&other, &signatures));
+    let again = verdicts.verdict(id("Hidden"), &signatures);
+    assert!(!std::sync::Arc::ptr_eq(&hidden, &again) && reads_view(&again, "Inner"));
+    assert!(std::sync::Arc::ptr_eq(
+        &other,
+        &verdicts.verdict(id("Other"), &signatures)
+    ));
+    // Back to the old shape: the first verdict holds again and is reused.
+    signatures.insert(path("Inner"), original);
+    assert!(std::sync::Arc::ptr_eq(
+        &hidden,
+        &verdicts.verdict(id("Hidden"), &signatures)
+    ));
+}
+
+#[test]
+fn malformed_rows_under_an_unchanged_producer_fingerprint_are_checked_again() {
+    let mut signatures = SignatureMap::new();
+    signatures.insert(
+        path("Data"),
+        declaration(
+            "Data",
+            TypeKind::Primitive(Primitive::U32),
+            vec![],
+            false,
+            false,
+        ),
+    );
+    let mut verdicts = ValidatedSignatures::default();
+    assert_eq!(verdicts.verdict(id("Data"), &signatures).error, None);
+    let fingerprint = signatures.get(&path("Data")).unwrap().fingerprint;
+    signatures
+        .get_mut(&path("Data"))
+        .unwrap()
+        .types
+        .push(ty(TypeKind::Error));
+    assert_eq!(
+        signatures.get(&path("Data")).unwrap().fingerprint,
+        fingerprint
+    );
+    assert_eq!(
+        verdicts
+            .verdict(id("Data"), &signatures)
+            .error
+            .as_ref()
+            .map(|v| v.kind.clone()),
+        Some(ViolationKind::InvalidSignature(path("Data")))
+    );
+    // Every body reads the universe's errors, so none of them reuses a pass.
+    let f = Fixture::unit();
+    let mut universe = f.signatures.clone();
+    let mut reads = vec![];
+    assert!(
+        validate(&f.definition, &universe, &mut reads)
+            .violations
+            .is_empty()
+    );
+    universe.insert(path("Data"), signatures.get(&path("Data")).unwrap().clone());
+    assert!(!reads.iter().all(|read| read_holds(read, &universe)));
+    assert_eq!(
+        validate(&f.definition, &universe, &mut vec![])
+            .violations
+            .iter()
+            .map(|v| v.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![ViolationKind::InvalidSignature(path("Data"))]
+    );
+}
+
+#[test]
+fn a_lookup_going_from_missing_to_present_invalidates() {
+    let mut s = declaration(
+        "Hidden",
+        TypeKind::Named {
+            definition: path("Gate"),
+            arguments: vec![].into(),
+        },
+        vec![Bound::Plain],
+        true,
+        false,
+    );
+    let SignatureKind::Type(d) = &mut s.kind else {
+        unreachable!()
+    };
+    d.authority = AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Gate"))].into());
+    let mut signatures = SignatureMap::new();
+    signatures.insert(path("Hidden"), s);
+    let mut verdicts = ValidatedSignatures::default();
+    let missing = verdicts.verdict(id("Hidden"), &signatures);
+    assert!(missing.reads.contains(&VRead::Missing(id("Gate"))));
+    assert!(missing.error.is_some());
+    signatures.insert(path("Gate"), capability());
+    assert!(!holds(&missing, &signatures));
+    let present = verdicts.verdict(id("Hidden"), &signatures);
+    assert!(reads_view(&present, "Gate"));
+    assert_eq!(present.error, None);
+}
+
+#[test]
+fn a_change_in_heap_role_selection_invalidates() {
+    let heap = |arena: &str| {
+        let mut s = function_signature(arena, vec![], TypeKind::Tuple(vec![].into()));
+        s.metadata.roles.heap = Some(HeapRole {
+            arena: path(arena),
+            operation: path("heap"),
+        });
+        s
+    };
+    let mut f = Fixture::unit();
+    let mut reads = vec![];
+    let _ = arena_slot(&mut f, Storage::Local);
+    let _ = validate(&f.definition, &f.signatures, &mut reads);
+    assert!(reads.contains(&VRead::FirstHeap(Some(id("Arena")))));
+    assert!(reads_view(
+        &ViewVerdict {
+            error: None,
+            reads: reads.clone()
+        },
+        "Arena"
+    ));
+    // A role earlier in path order is selected instead.
+    f.signatures.insert(path("Aaa"), heap("Aaa"));
+    assert!(!reads.iter().all(|read| read_holds(read, &f.signatures)));
+    // Without any role, the selection is a read of absence.
+    let mut none = SignatureMap::new();
+    assert!(read_holds(&VRead::FirstHeap(None), &none));
+    none.insert(path("Zzz"), heap("Zzz"));
+    assert!(!read_holds(&VRead::FirstHeap(None), &none));
 }

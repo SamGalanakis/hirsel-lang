@@ -1246,7 +1246,7 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     f.body()
         .blocks
         .push(block(vec![construction], ret(0, exit)));
-    let report = validate(&f.definition, &f.signatures);
+    let report = validate(&f.definition, &f.signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -4834,7 +4834,7 @@ fn lexical_declarations_inspect_each_instruction_once() {
         owner_sig(&mut f, &[]);
         let before =
             hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateDeclarationRows);
-        let validation = validate(&f.definition, &f.signatures);
+        let validation = validate(&f.definition, &f.signatures, &mut vec![]);
         assert!(
             validation.violations.is_empty(),
             "{:?}",
@@ -5110,7 +5110,7 @@ fn validation_copies_type_rows_only_for_reusable_working_storage() {
         owner_sig(&mut f, &[]);
         let rows = f.definition.types.len();
         let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
-        let result = validate(&f.definition, &f.signatures);
+        let result = validate(&f.definition, &f.signatures, &mut vec![]);
         assert!(result.violations.is_empty(), "{:?}", result.violations);
         let copied =
             hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - before;

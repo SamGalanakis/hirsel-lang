@@ -411,7 +411,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
             }],
         }],
     };
-    let mut signatures: hirsel_validate::Signatures = registry
+    let mut signatures: hirsel_validate::SignatureMap = registry
         .signatures()
         .map(|s| (s.definition.clone(), (**s).clone()))
         .collect();

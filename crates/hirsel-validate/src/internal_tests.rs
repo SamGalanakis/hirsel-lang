@@ -18,12 +18,15 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     };
     *bounds = vec![Bound::Flat].into();
     let body = &f.definition.bodies[1];
-    let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
+    let declarations =
+        typing::declaration_tables(&f.definition, &crate::input::Reader::new(&f.signatures))
+            .unwrap();
     let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+    let reader = crate::input::Reader::new(&f.signatures);
     let checker = Checker {
         definition: &f.definition,
         body,
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -71,12 +74,15 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     row.modes.uniqueness = Uniqueness::Unique;
     let actual = f.definition.types.push(row);
     let body = &f.definition.bodies[1];
-    let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
+    let declarations =
+        typing::declaration_tables(&f.definition, &crate::input::Reader::new(&f.signatures))
+            .unwrap();
     let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+    let reader = crate::input::Reader::new(&f.signatures);
     let checker = Checker {
         definition: &f.definition,
         body,
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -160,12 +166,15 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
             "{kind:?}: {kinds:?}"
         );
         let body = &f.definition.bodies[0];
-        let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
+        let declarations =
+            typing::declaration_tables(&f.definition, &crate::input::Reader::new(&f.signatures))
+                .unwrap();
         let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+        let reader = crate::input::Reader::new(&f.signatures);
         let checker = Checker {
             definition: &f.definition,
             body,
-            signatures: &f.signatures,
+            signatures: &reader,
             declarations: &declarations,
             scratch: &scratch,
             contract: false,
@@ -306,11 +315,12 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
         f.signatures.insert(path("Gate"), signature);
         owner_sig(&mut f, &[PassingMode::Borrow]);
         let body = &f.definition.bodies[0];
+        let reader = crate::input::Reader::new(&f.signatures);
         let checker = Checker {
             definition: &f.definition,
             body,
-            signatures: &f.signatures,
-            declarations: &typing::declaration_tables(&f.definition, &f.signatures).unwrap(),
+            signatures: &reader,
+            declarations: &typing::declaration_tables(&f.definition, &reader).unwrap(),
             scratch: &scratch::Scratch::new(&f.definition.types, f.definition.bodies.len()),
             contract: false,
             site: Site {
@@ -394,10 +404,11 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
     }));
     let declarations = vec![GenericDeclarations::default()];
     let scratch = scratch::Scratch::new(&f.definition.types, 1);
+    let reader = crate::input::Reader::new(&f.signatures);
     let checker = Checker {
         definition: &f.definition,
         body: &f.definition.bodies[0],
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -483,10 +494,11 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
             }
             let declarations = vec![GenericDeclarations::default()];
             let scratch = scratch::Scratch::new(&f.definition.types, 1);
+            let reader = crate::input::Reader::new(&f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 body: &f.definition.bodies[0],
-                signatures: &f.signatures,
+                signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
                 contract: false,

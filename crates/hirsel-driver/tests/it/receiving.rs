@@ -45,7 +45,7 @@ fn initialized_local_receivers_cannot_export_borrowed_content_as_global() {
         let mut path = entry_path(&default_context());
         path.0.name = "probe".into();
         let mut forged = (*input.definitions[&path]).clone();
-        let mut signatures: std::collections::BTreeMap<_, _> = input
+        let mut signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(path, signature)| (path.clone(), (**signature).clone()))
@@ -60,7 +60,7 @@ fn initialized_local_receivers_cannot_export_borrowed_content_as_global() {
         let mut row = forged.types.get(forged.bodies[0].result).unwrap().clone();
         row.modes.relation = hirsel_types::Relation::global();
         forged.bodies[0].result = forged.types.push(row);
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        let violations = hirsel_validate::validate(&forged, &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,
@@ -171,12 +171,12 @@ fn current_call_content_cannot_launder_a_borrowed_result_as_global() {
                 place.ty = global;
             }
         }
-        let signatures: std::collections::BTreeMap<_, _> = input
+        let signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(p, s)| (p.clone(), (**s).clone()))
             .collect();
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        let violations = hirsel_validate::validate(&forged, &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,
@@ -241,12 +241,13 @@ fn local_iterator_receivers_cannot_invent_sendable_content() {
                     place.ty = bogus
                 }
             }
-            let signatures: std::collections::BTreeMap<_, _> = input
+            let signatures: hirsel_validate::SignatureMap = input
                 .signatures
                 .iter()
                 .map(|(p, s)| (p.clone(), (**s).clone()))
                 .collect();
-            let violations = hirsel_validate::validate(&forged, &signatures).violations;
+            let violations =
+                hirsel_validate::validate(&forged, &signatures, &mut vec![]).violations;
             assert!(
                 violations.iter().any(|v| matches!(
                     v.kind,
@@ -280,14 +281,14 @@ fn local_function_receivers_cannot_invent_sendable_content() {
         let input = engine.export_native_input().unwrap();
         let mut path = entry_path(&default_context());
         path.0.name = "probe".into();
-        let signatures: std::collections::BTreeMap<_, _> = input
+        let signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(p, s)| (p.clone(), (**s).clone()))
             .collect();
         let original = (*input.definitions[&path]).clone();
         assert!(
-            hirsel_validate::validate(&original, &signatures)
+            hirsel_validate::validate(&original, &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -317,7 +318,7 @@ fn local_function_receivers_cannot_invent_sendable_content() {
                 place.ty = bogus
             }
         }
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        let violations = hirsel_validate::validate(&forged, &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,

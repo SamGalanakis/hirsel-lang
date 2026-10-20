@@ -3,10 +3,7 @@
 use super::*;
 use hirsel_types::*;
 
-pub(super) fn declaration(
-    s: &Signature,
-    signatures: &dyn SignatureLookup,
-) -> Result<bool, QueryError> {
+pub(super) fn declaration(s: &Signature, signatures: &Reader<'_>) -> Result<bool, QueryError> {
     let SignatureKind::Type(d) = &s.kind else {
         return Ok(true);
     };
@@ -77,7 +74,7 @@ fn checked(
     s: &Signature,
     d: &TypeDefinition,
     check: &SerializableCheck,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
     if !d.serializable
         || s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
@@ -101,7 +98,7 @@ fn checked(
 }
 
 /// The exact check header for the opaque `owner`, declared in `owner`'s module.
-fn check_function(owner: &DefPath, function: &DefPath, signatures: &dyn SignatureLookup) -> bool {
+fn check_function(owner: &DefPath, function: &DefPath, signatures: &Reader<'_>) -> bool {
     if function.0.package != owner.0.package || function.0.modules != owner.0.modules {
         return false;
     }
@@ -148,7 +145,7 @@ pub(super) fn eligible(
     source: &TypeStore,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
     let mut store = source.clone();
     let mut pending = vec![(root, false)];

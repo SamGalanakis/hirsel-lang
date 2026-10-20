@@ -38,7 +38,6 @@ pub fn release_shared_caches() {
             hirsel_intern::memory::released("package cache", storage);
         }
     }
-    crate::queries::release_signature_inputs();
 }
 pub fn report_prechecks(on: bool) {
     REPORT_PRECHECKS.store(on, std::sync::atomic::Ordering::Relaxed);

@@ -413,7 +413,9 @@ pub fn assert_fixtures(
     definitions: &[Definition],
     runtime: &hirsel_interp::aggregate::RuntimeTypes,
 ) {
-    let signatures = fixture_signatures(definitions, runtime);
+    let signatures: hirsel_validate::SignatureMap = fixture_signatures(definitions, runtime)
+        .into_iter()
+        .collect();
     for definition in definitions {
         hirsel_validate::assert_valid(definition, &signatures);
     }

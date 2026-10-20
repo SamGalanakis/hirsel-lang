@@ -28,8 +28,9 @@ tests can read it.
 
 ## Static validation
 
-`hirsel_validate::validate(&Definition, &Signatures) -> Validation` is pure: signatures
-are an explicit `BTreeMap<DefPath, Signature>` owning complete type snapshots. It
+`hirsel_validate::validate(&Definition, &dyn SignatureLookup, &mut Vec<VRead>) -> Validation`
+is pure: it reads signature views only through the `SignatureLookup` it is given
+and records every read. It
 never queries a provider or executes code. Include the owner's signature when it
 has parameters, plus called and constructed nominal signatures. Missing facts
 fail closed. Call and owner origins are proved from scoped identities and
@@ -45,13 +46,22 @@ The report contains only `violations`. `hirsel_validate::assert_valid`
 panics for violations and returns unit; it is the helper for lowering's tests.
 The driver's mode-before-lowering and publication guards remain its responsibility.
 
-`ValidatedSignatures::new(Signatures)` owns and independently checks a complete
-immutable signature input once. Its `validate` method retains structural/type-graph
-error precedence and the same signature violations as `validate`. Its
-`validate_with_signature` method shadows one materialized owner through a borrowed
-view, checking that replacement and retaining all other signature errors in path
-order. `work::read(Counter::ValidateSignatureRows)` counts actual signature checks for
-scaling regressions.
+## Input (`src/input.rs`)
+
+V never trusts the producer's fingerprint. Each view V reads is identified by
+a `ValidationDigest` that V's own encoder computes over every field of the
+view, private shape and malformed rows included (`digest`). Every lookup is
+recorded as a `VRead`: `View(d, digest)`, `Missing(d)`, `FirstHeap(selection)`
+(and the view that supplies the role) and `UniverseErrors(digest)`;
+`read_holds` says whether one still observes the same value.
+`SignatureLookup` is one universe as one package's bodies see it, with the
+universe's signature errors and their aggregate digest; `validate` reports
+those errors after a definition's own, so no body passes while any signature is
+malformed. `ValidatedSignatures` keeps per-view verdicts (`check_view`) keyed by
+digest and reuses one while its reads hold, taking reusable verdicts from the
+previous revision's store (`verdict_from`). `SignatureMap` is an owned
+universe for tools and tests. `work::read(Counter::ValidateSignatureRows)`
+counts actual signature checks for scaling regressions.
 
 `Violation` identifies an optional body, block and instruction; a block with no
 instruction identifies its terminator. `ViolationKind` contains compiler-invariant

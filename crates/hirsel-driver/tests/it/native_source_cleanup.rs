@@ -96,7 +96,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
             producer.import_native_input(input.clone()).unwrap();
             let mut probe = entry_path(&default_context());
             probe.0.name = "probe".into();
-            let signatures = input
+            let signatures: hirsel_validate::SignatureMap = input
                 .signatures
                 .iter()
                 .map(|(p, s)| (p.clone(), (**s).clone()))
@@ -122,7 +122,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
             }
             assert_eq!(count, 1);
             assert!(
-                !hirsel_validate::validate(output, &signatures)
+                !hirsel_validate::validate(output, &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -227,7 +227,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             }
             let mut probe = entry_path(&default_context());
             probe.0.name = "probe".into();
-            let signatures = input
+            let signatures: hirsel_validate::SignatureMap = input
                 .signatures
                 .iter()
                 .map(|(p, s)| (p.clone(), (**s).clone()))
@@ -255,7 +255,8 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             child.cleanup_nodes[chain[0].0 as usize].action =
                 child.cleanup_nodes[chain[1].0 as usize].action.clone();
             child.cleanup_nodes[chain[1].0 as usize].action = first;
-            let violations = hirsel_validate::validate(definition, &signatures).violations;
+            let violations =
+                hirsel_validate::validate(definition, &signatures, &mut vec![]).violations;
             assert!(
                 violations.iter().any(|violation| matches!(
                     violation.kind,
@@ -293,7 +294,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             }
             assert!(changed > 0);
             assert!(
-                !hirsel_validate::validate(definition, &signatures)
+                !hirsel_validate::validate(definition, &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -338,7 +339,7 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         producer.import_native_input(input.clone()).unwrap();
         let mut probe = entry_path(&default_context());
         probe.0.name = "probe".into();
-        let signatures = input
+        let signatures: hirsel_validate::SignatureMap = input
             .signatures
             .iter()
             .map(|(path, signature)| (path.clone(), (**signature).clone()))
@@ -366,7 +367,7 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         let mut source = source.clone();
         source.usage = hirsel_types::UseKind::Take;
         *value = hirsel_tir::Rvalue::Use(source);
-        let violations = hirsel_validate::validate(definition, &signatures).violations;
+        let violations = hirsel_validate::validate(definition, &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|violation| matches!(
                 violation.kind,

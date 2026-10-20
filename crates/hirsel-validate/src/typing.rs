@@ -16,7 +16,7 @@ enum Reception {
 
 pub(super) fn declaration_tables(
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Option<Vec<GenericDeclarations>> {
     let empty: std::sync::Arc<[GenericParameter]> = [].into();
     let mut scopes: Vec<_> = definition
