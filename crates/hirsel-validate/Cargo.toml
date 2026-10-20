@@ -14,6 +14,8 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+# Seeded session id assignment for oracle O1.
+hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-span = { path = "../hirsel-span" }
