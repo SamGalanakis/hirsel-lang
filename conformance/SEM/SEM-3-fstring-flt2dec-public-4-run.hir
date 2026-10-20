@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// Public fixed-format twins of Rust flt2dec exact rows; see the exact fixtures.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(568504050u32):.27}" == "0.000000000000000001536066333"
+  )
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(337299876u32):.37}" == "0.0000000000000000000000000078147796834"
+  )
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4591870180066957722u64):.38}" == "0.10000000000000000555111512312578270212"
+  )
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4601778099247172813u64):.38}" == "0.45000000000000001110223024625156540424"
+  )
+  test.check(t, f"{core@1/f64.from_bits(4602678819172646912u64):.1}" == "0.5")
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4606732058837280358u64):.38}" == "0.94999999999999995559107901499373838305"
+  )
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4652002910794678272u64):.35}" == "999.50000000000000000000000000000000000"
+  )
+  Ok(())
+}

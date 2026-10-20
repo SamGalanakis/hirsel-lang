@@ -4981,6 +4981,10 @@ conformance/SEM/SEM-3-fstring-flt2dec-exact-9-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-1-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-2-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-3-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-4-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-5-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-6-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-7-run.hir
 conformance/SEM/SEM-3-fstring-lone-brace-bad.hir
 conformance/SEM/SEM-3-fstring-lone-brace-ok.hir
 conformance/SEM/SEM-3-fstring-multiline-hole-bad.hir
