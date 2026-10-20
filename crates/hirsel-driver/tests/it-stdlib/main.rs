@@ -4,12 +4,15 @@
 
 hirsel_guard::install!();
 
+mod numeric_native;
 mod package_s3;
 mod reference_vectors;
 #[path = "../support/source_std.rs"]
 mod source_std;
 mod source_std_cache;
 mod stdlib_aead_vectors;
+mod stdlib_bigdecimal_dectest;
+mod stdlib_bigint_toom3;
 mod stdlib_constant_time;
 mod stdlib_deque;
 mod stdlib_exact_sum_vectors;

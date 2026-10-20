@@ -16,6 +16,9 @@ pub opaque type BigInt: copyable + data + key + inert + noalloc_drop uses {} {
 // num-bigint multiplication.rs multiplies by schoolbook at or below 32 limbs.
 const KARATSUBA_THRESHOLD: u64 = 32
 
+// Measured native crossover; see docs/notes/bigint-toom3.md.
+const TOOM3_THRESHOLD: u64 = 128
+
 const LIMB_MAX: u64 = 18446744073709551615
 
 // Magnitudes are little-endian limb lists without high zero limbs; zero is empty.
@@ -237,7 +240,75 @@ fn karatsuba(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
   acc
 }
 
-// len(x) <= len(y): schoolbook, Karatsuba, or x times len(x)-limb chunks of y.
+// num-bigint 41f0b035 src/biguint/multiplication.rs:285-431 (MIT/Apache-2.0).
+// Evaluate at 0, 1, -1, -2, infinity, then Bodrato interpolation. Signed
+// temporaries matter: the evaluations at negative points need not be positive.
+fn toom3(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
+  let lx = core@1/list.len(x)
+  let ly = core@1/list.len(y)
+  let width = ly / 3 + 1
+  let x0_end = if lx < width {
+    lx
+  } else {
+    width
+  }
+  let x1_end = if lx < width * 2 {
+    lx
+  } else {
+    width * 2
+  }
+  let y1_end = if ly < width * 2 {
+    ly
+  } else {
+    width * 2
+  }
+  let x0 = make(false, slice_magnitude(x, 0, x0_end))
+  let x1 = make(false, slice_magnitude(x, x0_end, x1_end))
+  let x2 = make(false, slice_magnitude(x, x1_end, lx))
+  let y0 = make(false, slice_magnitude(y, 0, width))
+  let y1 = make(false, slice_magnitude(y, width, y1_end))
+  let y2 = make(false, slice_magnitude(y, y1_end, ly))
+  let p = add(x0, x2)
+  let q = add(y0, y2)
+  let p2 = sub(p, x1)
+  let q2 = sub(q, y1)
+  let r0 = mul(x0, y0)
+  let r4 = mul(x2, y2)
+  let r1 = mul(add(p, x1), add(q, y1))
+  let r2 = mul(p2, q2)
+  let r3 = mul(sub(shl(add(p2, x2), 1), x0), sub(shl(add(q2, y2), 1), y0))
+  let mut comp3 = toom_div_exact(sub(r3, r1), 3)
+  let mut comp1 = toom_div_exact(sub(r1, r2), 2)
+  let mut comp2 = sub(r2, r0)
+  comp3 = add(toom_div_exact(sub(comp2, comp3), 2), shl(r4, 1))
+  comp2 = add(comp2, sub(comp1, r4))
+  comp1 = sub(comp1, comp3)
+  let mut acc = zeros(lx + ly + 1)
+  // High to low, as in mac3: any negative term borrows from higher terms.
+  toom_accumulate(mut acc, width * 4, r4)
+  toom_accumulate(mut acc, width * 3, comp3)
+  toom_accumulate(mut acc, width * 2, comp2)
+  toom_accumulate(mut acc, width, comp1)
+  toom_accumulate(mut acc, 0, r0)
+  trim(mut acc)
+  acc
+}
+
+fn toom_div_exact(value: BigInt, divisor: u64) -> BigInt uses {} {
+  let (q, r) = divide_word(value.magnitude, divisor)
+  core@1/failure.check(r == 0, Arithmetic())
+  make(value.negative, take q)
+}
+
+fn toom_accumulate(mut acc: unique List[u64], offset: u64, value: BigInt) -> () uses {} {
+  if value.negative {
+    sub_at(mut acc, offset, value.magnitude)
+  } else {
+    add_at(mut acc, offset, value.magnitude)
+  }
+}
+
+// len(x) <= len(y): schoolbook, Karatsuba, Toom-3, or len(x)-limb chunks of y.
 fn mul_ordered(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
   let lx = core@1/list.len(x)
   let ly = core@1/list.len(y)
@@ -249,7 +320,10 @@ fn mul_ordered(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
     return mul_schoolbook(x, y)
   }
   if lx * 2 > ly {
-    return karatsuba(x, y)
+    if lx <= TOOM3_THRESHOLD {
+      return karatsuba(x, y)
+    }
+    return toom3(x, y)
   }
   let mut acc = zeros(lx + ly + 1)
   let mut start: u64 = 0

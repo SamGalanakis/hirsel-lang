@@ -1,0 +1,52 @@
+// Dense base-2^64 factors. Construction is outside the product loop; each
+// iteration changes a factor and observes the product's low word and bit length.
+fn operand(n: u64, salt: u64) -> bigint.BigInt {
+  let mut value = bigint.zero()
+  let mut state = salt
+  for _ in 0u64..n {
+    state = state ^ state << 13
+    state = state ^ state >> 7
+    state = state ^ state << 17
+    value = bigint.add(bigint.shl(value, 64), bigint.from_u64(state | 1u64 << 63))
+  }
+  value
+}
+
+fn arg_number(args: Args, index: u64, fallback: u64) -> u64 {
+  if arg.len(args) <= index {
+    return fallback
+  }
+  let Ok(text) = arg.text(args, index) else {
+    return fallback
+  }
+  match u64.parse(text) {
+    Ok(n) => n,
+    Error(_) => fallback,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let n = arg_number(args, 0, 256)
+  let rounds = arg_number(args, 1, 100)
+  let extra = arg_number(args, 2, 0)
+  let mut a = operand(n, 123456789)
+  let b = operand(n + extra, 987654321)
+  let one = bigint.from_u64(1)
+  let mask = bigint.from_u64(18446744073709551615)
+  let mut checksum: u64 = 0
+  for _ in 0u64..rounds {
+    let p = bigint.mul(a, b)
+    let Some(low) = bigint.to_u64(bigint.bit_and(p, mask)) else {
+      return Error("low word")
+    }
+    checksum = u64.wrapping_add(checksum, low ^ bigint.bit_length(p))
+    a = bigint.add(a, one)
+  }
+  let Ok(output) = io.stdout(rt) else {
+    return Error("stdout")
+  }
+  match out.print(output, f"{checksum}\n") {
+    Ok(()) => Ok(()),
+    Error(_) => Error("write"),
+  }
+}

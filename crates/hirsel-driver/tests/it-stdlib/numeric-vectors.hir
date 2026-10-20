@@ -1,0 +1,30 @@
+fn bigint_check(a: String, b: String, expected: String) -> bool {
+  let Ok(x) = std@1/bigint.parse_radix(a, 16) else {
+    return false
+  }
+  let Ok(y) = std@1/bigint.parse_radix(b, 16) else {
+    return false
+  }
+  let Ok(p) = std@1/bigint.parse_radix(expected, 16) else {
+    return false
+  }
+  std@1/bigint.mul(x, y) == p && std@1/bigint.mul(y, x) == p && std@1/bigint.mul(
+    std@1/bigint.neg(x),
+    y
+  ) == std@1/bigint.neg(p) && std@1/bigint.mul(std@1/bigint.neg(x), std@1/bigint.neg(y)) == p
+}
+
+fn argument(args: Args, n: u64) -> String {
+  let Ok(value) = arg.text(args, n) else {
+    return ""
+  }
+  value
+}
+
+pub fn main(args: Args) -> Result[(), ()] {
+  if bigint_check(argument(args, 0), argument(args, 1), argument(args, 2)) {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

@@ -1,0 +1,42 @@
+pub fn check(
+  a: String,
+  sa: i32,
+  b: String,
+  sb: i32,
+  e: String,
+  se: i32,
+  mode: u64,
+  op: u64
+) -> bool {
+  let Ok(ca) = std@1/bigint.parse(a) else {
+    return false
+  }
+  let Ok(cb) = std@1/bigint.parse(b) else {
+    return false
+  }
+  let Ok(ce) = std@1/bigint.parse(e) else {
+    return false
+  }
+  let da = std@1/decimal.new(ca, sa)
+  let db = std@1/decimal.new(cb, sb)
+  let rounding: std@1/decimal.RoundingMode = match mode {
+    0 => HalfEven,
+    1 => HalfUp,
+    2 => Down,
+    3 => Up,
+    4 => Floor,
+    _ => Ceiling,
+  }
+  let actual = match op {
+    0 => std@1/decimal.rescale(std@1/decimal.add(da, db), se, rounding),
+    1 => std@1/decimal.rescale(std@1/decimal.sub(da, db), se, rounding),
+    2 => std@1/decimal.rescale(std@1/decimal.mul(da, db), se, rounding),
+    3 => std@1/decimal.div(da, db, se, rounding),
+    _ => std@1/decimal.rescale(da, sb, rounding),
+  }
+  std@1/decimal.coefficient(actual) == ce && std@1/decimal.scale(actual) == se
+}
+
+pub fn main() -> () {
+  let _ = check("1", 0, "1", 0, "2", 0, 0, 0)
+}
