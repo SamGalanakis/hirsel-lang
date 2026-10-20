@@ -1,0 +1,110 @@
+// rule: CT-5
+// expect: run
+// Derived hashes stream into std@1/siphash as Rust's `#[derive(Hash)]` streams
+// into a Hasher, so each value here hashes as the Rust value of the same shape
+// does under DefaultHasher::new() (SipHasher13 with keys 0 and 0) or
+// SipHasher13::new_with_keys, computed with rustc 1.99.0: String, Vec, Option,
+// BTreeMap (a Map inserted in key order), tuples, i8 through u128, a
+// multi-variant enum's discriminant and a single-variant enum without one.
+type Todo {
+  id: u64,
+  title: String,
+  done: bool,
+  tags: List[String],
+  note: Option[String],
+}
+
+type Shape = Circle(u32) | Rect(width: u32, height: u32) | Empty
+
+type Tree = Leaf(u64) | Node(List[Tree])
+
+type Single = Only(u8)
+
+type Mixed {
+  small: i8,
+  wide: u128,
+  signed: i128,
+  pair: (u16, String),
+  single: (bool,),
+  lookup: Map[String, i32],
+  maybe: Option[Tree],
+  one: Single,
+}
+
+fn todo_hash(v: Todo, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Todo)
+)
+
+fn shape_hash(v: Shape, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Shape)
+)
+
+fn shape_digest(v: Shape) -> u64 uses {} {
+  siphash.hash_one(v, shape_hash, 0, 0)
+}
+
+fn tree_hash(v: Tree, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Tree)
+)
+
+fn single_hash(v: Single, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Single)
+)
+
+fn mixed_hash(v: Mixed, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Mixed)
+)
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let first = Todo(id: 7, title: "write", done: false, tags: ["a", "b"], note: None)
+  let changed = Todo(
+    id: 7,
+    title: "write",
+    done: true,
+    tags: ["a", "b"],
+    note: Some("n")
+  )
+  test.equal(t, siphash.hash_one(first, todo_hash, 0, 0), 0xea90a059e013d2fc)
+  test.equal(t, siphash.hash_one(changed, todo_hash, 0, 0), 0x17a12d7b0f02a983)
+  test.equal(
+    t,
+    siphash.hash_one(first, todo_hash, 0x0706050403020100, 0x0f0e0d0c0b0a0908),
+    0x837c9dae5545e04b
+  )
+  test.equal(t, shape_digest(Circle(2)), 0xd1fdc5f0568c4b01)
+  test.equal(t, shape_digest(Rect(width: 3, height: 4)), 0xa732d31000f9ef23)
+  test.equal(t, shape_digest(Empty), 0xa4d31070d122b816)
+  let mut lookup: Map[String, i32] = map.empty()
+  map.insert(mut lookup, "a", -1)
+  map.insert(mut lookup, "b", 2)
+  let mixed = Mixed(
+    small: -3,
+    wide: 1267650600228229401496703205381,
+    signed: -1237940039285380274899124224,
+    pair: (513, "pair"),
+    single: (true,),
+    lookup: take lookup,
+    maybe: Some(Node([Leaf(1), Node([Leaf(2)])])),
+    one: Only(9)
+  )
+  test.equal(t, siphash.hash_one(mixed, mixed_hash, 0, 0), 0xc02b6c538164e3c1)
+  let empty = Mixed(
+    small: 0,
+    wide: 0,
+    signed: 0,
+    pair: (0, ""),
+    single: (false,),
+    lookup: map.empty(),
+    maybe: None,
+    one: Only(0)
+  )
+  test.equal(t, siphash.hash_one(empty, mixed_hash, 0, 0), 0x2669c1597c866b7b)
+  // Streaming composes: a derived writer followed by more writes is one hash.
+  let mut state = siphash.new(0, 0)
+  shape_hash(Circle(2), mut state)
+  let mut split = siphash.new(0, 0)
+  siphash.write_u64(mut split, 0)
+  siphash.write_u32(mut split, 2)
+  test.equal(t, siphash.finish(state), siphash.finish(split))
+  Ok(())
+}

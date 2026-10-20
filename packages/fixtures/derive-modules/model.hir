@@ -15,4 +15,6 @@ pub fn draft_format(v: Draft, mut out: List[u8]) -> () uses {} = comptime derive
   shape(Draft)
 )
 
-pub fn draft_hash(v: Draft) -> u64 uses {} = comptime derive.hash(shape(Draft))
+pub fn draft_hash(v: Draft, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Draft)
+)

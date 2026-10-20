@@ -358,9 +358,37 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
   Error(f"no JSON form for {ty}")
 }
 
-// A record's JSON form is an object with a member per field. A variant without
-// payload is its name as a string; one with payloads is an object whose one
-// member, its name, holds the array of its payloads.
+// A variant's kind in serde's terms: `unit` without payload, `struct` with
+// labelled payloads, `newtype` with one positional payload and `tuple` with
+// more (serde_derive/src/internals/ast.rs `Style`).
+fn style(v: VariantShape) -> unique String uses {} {
+  let count = list.len(v.payload)
+  if count == 0 {
+    return "unit"
+  }
+  if option.is_some(v.payload[0].label) {
+    return "struct"
+  }
+  if count == 1 {
+    return "newtype"
+  }
+  "tuple"
+}
+
+// A struct payload's label.
+fn label_of(p: PayloadShape) -> unique String uses {} {
+  match p.label {
+    Some(label) => unique label,
+    None => "",
+  }
+}
+
+// A record's JSON form is an object with a member per field. A variant is
+// externally tagged as serde writes it (serde_derive/src/ser.rs
+// `serialize_externally_tagged_variant`, serde_json/src/ser.rs
+// `serialize_*_variant`): a unit variant is its name as a string, and any
+// other an object whose one member, its name, holds the newtype payload
+// itself, the array of tuple payloads or the object of struct payloads.
 pub fn json_value[T](s: TypeShape[T]) -> Result[
   Body[fn(T) -> json.Value uses {}],
   String
@@ -381,11 +409,38 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
     Choice(variants) => {
       put(mut w, "  match value {\n")
       for v in variants {
-        if list.len(v.payload) == 0 {
+        let kind = style(v)
+        if kind == "unit" {
           put(mut w, f"    {v.name} => Text(\"{v.name}\"),\n")
+          continue
+        }
+        let names = binders("p", list.len(v.payload))
+        put(mut w, f"    {variant_form(v, names)} => {{\n")
+        put(
+          mut w,
+          "      let mut tagged: Map[String, std@1/json.Value] = map.empty()\n"
+        )
+        if kind == "newtype" {
+          put(mut w, f"      map.insert(mut tagged, \"{v.name}\", ")
+          json_of(mut w, v.payload[0].ty, names[0])?
+          put(mut w, ")\n")
+        } else if kind == "struct" {
+          put(
+            mut w,
+            "      let mut fields: Map[String, std@1/json.Value] = map.empty()\n"
+          )
+          let mut i: u64 = 0
+          for p in v.payload {
+            put(mut w, f"      map.insert(mut fields, \"{label_of(p)}\", ")
+            json_of(mut w, p.ty, names[i])?
+            put(mut w, ")\n")
+            i += 1
+          }
+          put(
+            mut w,
+            f"      map.insert(mut tagged, \"{v.name}\", Object(take fields))\n"
+          )
         } else {
-          let names = binders("p", list.len(v.payload))
-          put(mut w, f"    {variant_form(v, names)} => {{\n")
           put(mut w, "      let mut payload: List[std@1/json.Value] = []\n")
           let mut i: u64 = 0
           for p in v.payload {
@@ -396,15 +451,11 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
           }
           put(
             mut w,
-            "      let mut tagged: Map[String, std@1/json.Value] = map.empty()\n"
-          )
-          put(
-            mut w,
             f"      map.insert(mut tagged, \"{v.name}\", Array(take payload))\n"
           )
-          put(mut w, "      Object(take tagged)\n")
-          put(mut w, "    },\n")
         }
+        put(mut w, "      Object(take tagged)\n")
+        put(mut w, "    },\n")
       }
       put(mut w, "  }\n")
     },
@@ -536,8 +587,68 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
   Error(f"no JSON form for {ty}")
 }
 
-// Decodes the JSON form that `json_value` writes. A missing member of an Option
-// field decodes as None; any other mismatch is an Error naming the type.
+// Writes statements decoding the members `names`, of types `types`, from the
+// Map[String, std@1/json.Value] named `members`, as serde_derive's struct
+// visitor does (serde_derive/src/de/struct_.rs `deserialize_map`): an absent
+// Option member is None, any other absent member is `missing field`, and an
+// unknown member is ignored. Returns the labelled constructor arguments.
+fn members_from(
+  mut w: Writer,
+  names: List[String],
+  types: List[String],
+  members: String,
+  indent: String
+) -> Result[List[String], String] uses {} {
+  let mut arguments: List[String] = []
+  let mut i: u64 = 0
+  for name in names {
+    let ty = types[i]
+    let member = fresh(mut w, "member")
+    let decoded = fresh(mut w, "decoded")
+    if string.starts_with(ty, "core@1/Option[") {
+      put(
+        mut w,
+        f"{indent}let {decoded}: {ty} = match map.get({members}, \"{name}\") {{\n{indent}  None => None,\n{indent}  Some({member}) => "
+      )
+      from_json_of(mut w, ty, member)?
+      put(mut w, f",\n{indent}}}\n")
+    } else {
+      put(
+        mut w,
+        f"{indent}let Some({member}) = map.get({members}, \"{name}\") else {{\n{indent}  return Error(\"missing field `{name}`\")\n{indent}}}\n{indent}let {decoded}: {ty} = "
+      )
+      from_json_of(mut w, ty, member)?
+      put(mut w, "\n")
+    }
+    list.push(mut arguments, f"{name}: take {decoded}")
+    i += 1
+  }
+  Ok(take arguments)
+}
+
+// serde's `OneOf`: `A`, `A` or `B`, or one of `A`, `B`, `C`
+// (serde_core/src/de/mod.rs).
+fn one_of(names: List[String]) -> unique String uses {} {
+  let mut quoted: List[String] = []
+  for name in names {
+    list.push(mut quoted, f"`{name}`")
+  }
+  if list.len(quoted) == 1 {
+    return unique quoted[0]
+  }
+  if list.len(quoted) == 2 {
+    return f"{quoted[0]} or {quoted[1]}"
+  }
+  f"one of {string.join(quoted, ", ")}"
+}
+
+// Decodes the JSON form that `json_value` writes, with serde_json's rules for
+// a decoded Value (serde_json/src/value/de.rs `deserialize_enum` and
+// `VariantDeserializer`): a record needs an object; a variant a string naming
+// a unit variant or an object with exactly one member, whose value is null for
+// a unit variant, the payload for a newtype variant, an array of exactly the
+// payload count for a tuple variant and an object for a struct variant.
+// Errors are serde's messages without the text position.
 pub fn from_json[T](s: TypeShape[T]) -> Result[
   Body[fn(json.Value) -> Result[T, String] uses {}],
   String
@@ -552,82 +663,180 @@ pub fn from_json[T](s: TypeShape[T]) -> Result[
   match info.body {
     Record(fields) => {
       put(mut w, "  let Object(fields) = value else {\n")
-      put(mut w, f"    return Error(\"{name}: expected a JSON object\")\n")
+      put(
+        mut w,
+        f"    return Error(std@1/derive.json_invalid_type(value, \"struct {name}\"))\n"
+      )
       put(mut w, "  }\n")
-      let mut members: List[String] = []
-      let mut i: u64 = 0
+      let mut names: List[String] = []
+      let mut types: List[String] = []
       for f in fields {
-        if string.starts_with(f.ty, "core@1/Option[") {
-          put(
-            mut w,
-            f"  let decoded{i}: {f.ty} = match map.get(fields, \"{f.name}\") {{\n"
-          )
-          put(mut w, "    None => None,\n")
-          put(mut w, f"    Some(field{i}) => ")
-          from_json_of(mut w, f.ty, f"field{i}")?
-          put(mut w, ",\n  }\n")
-        } else {
-          put(mut w, f"  let Some(field{i}) = map.get(fields, \"{f.name}\") else {{\n")
-          put(mut w, f"    return Error(\"{name}: missing member {f.name}\")\n")
-          put(mut w, "  }\n")
-          put(mut w, f"  let decoded{i}: {f.ty} = ")
-          from_json_of(mut w, f.ty, f"field{i}")?
-          put(mut w, "\n")
-        }
-        list.push(mut members, f"{f.name}: take decoded{i}")
-        i += 1
+        list.push(mut names, unique f.name)
+        list.push(mut types, unique f.ty)
       }
-      put(mut w, f"  Ok({constructor(info.name)}({string.join(members, ", ")}))\n")
+      let arguments = members_from(mut w, names, types, "fields", "  ")?
+      put(mut w, f"  Ok({constructor(info.name)}({string.join(arguments, ", ")}))\n")
     },
     Choice(variants) => {
+      let mut variant_names: List[String] = []
+      for v in variants {
+        list.push(mut variant_names, unique v.name)
+      }
+      let expected = one_of(variant_names)
       put(mut w, "  match value {\n")
       put(mut w, "    Text(tag) => {\n")
       for v in variants {
-        if list.len(v.payload) == 0 {
-          put(mut w, f"      if tag == \"{v.name}\" {{\n")
+        let kind = style(v)
+        put(mut w, f"      if tag == \"{v.name}\" {{\n")
+        if kind == "unit" {
           put(mut w, f"        return Ok({v.name})\n")
-          put(mut w, "      }\n")
+        } else {
+          put(
+            mut w,
+            f"        return Error(\"invalid type: unit variant, expected {kind} variant\")\n"
+          )
         }
+        put(mut w, "      }\n")
+      }
+      put(mut w, f"      Error(std@1/derive.unknown_variant(tag, \"{expected}\"))\n")
+      put(mut w, "    },\n")
+      put(mut w, "    Object(tagged) => {\n")
+      put(mut w, "      if core@1/map.len(tagged) != 1 {\n")
+      put(
+        mut w,
+        "        return Error(\"invalid value: map, expected map with a single key\")\n"
+      )
+      put(mut w, "      }\n")
+      put(mut w, "      for (tag, payload) in tagged {\n")
+      for v in variants {
+        let kind = style(v)
+        let count = list.len(v.payload)
+        put(mut w, f"        if tag == \"{v.name}\" {{\n")
+        if kind == "unit" {
+          put(
+            mut w,
+            f"          let Null = payload else {{\n            return Error(std@1/derive.json_invalid_type(payload, \"unit\"))\n          }}\n          return Ok({v.name})\n"
+          )
+        } else if kind == "newtype" {
+          let decoded = fresh(mut w, "decoded")
+          put(mut w, f"          let {decoded}: {v.payload[0].ty} = ")
+          from_json_of(mut w, v.payload[0].ty, "payload")?
+          put(mut w, f"\n          return Ok({v.name}(take {decoded}))\n")
+        } else if kind == "tuple" {
+          let items = fresh(mut w, "items")
+          put(
+            mut w,
+            f"          let Array({items}) = payload else {{\n            return Error(std@1/derive.json_invalid_type(payload, \"tuple variant\"))\n          }}\n          std@1/derive.json_length(core@1/list.len({items}), {count}, \"tuple variant {name}::{v.name}\")?\n"
+          )
+          let names = fresh_names(mut w, "decoded", count)
+          let mut taken: List[String] = []
+          let mut i: u64 = 0
+          for p in v.payload {
+            put(mut w, f"          let {names[i]}: {p.ty} = ")
+            from_json_of(mut w, p.ty, f"{items}[{i}]")?
+            put(mut w, "\n")
+            list.push(mut taken, f"take {names[i]}")
+            i += 1
+          }
+          put(mut w, f"          return Ok({v.name}({string.join(taken, ", ")}))\n")
+        } else {
+          let members = fresh(mut w, "members")
+          put(
+            mut w,
+            f"          let Object({members}) = payload else {{\n            return Error(std@1/derive.json_invalid_type(payload, \"struct variant\"))\n          }}\n"
+          )
+          let mut labels: List[String] = []
+          let mut types: List[String] = []
+          for p in v.payload {
+            list.push(mut labels, label_of(p))
+            list.push(mut types, unique p.ty)
+          }
+          let arguments = members_from(mut w, labels, types, members, "          ")?
+          put(mut w, f"          return Ok({v.name}({string.join(arguments, ", ")}))\n")
+        }
+        put(mut w, "        }\n")
       }
       put(
         mut w,
-        f"      Error(std@1/string.concat(\"{name}: unknown variant \", tag))\n"
+        f"        return Error(std@1/derive.unknown_variant(tag, \"{expected}\"))\n"
+      )
+      put(mut w, "      }\n")
+      put(
+        mut w,
+        "      Error(\"invalid value: map, expected map with a single key\")\n"
       )
       put(mut w, "    },\n")
-      put(mut w, "    Object(tagged) => {\n")
-      for v in variants {
-        let count = list.len(v.payload)
-        if count != 0 {
-          put(
-            mut w,
-            f"      if let Some(Array(payload)) = map.get(tagged, \"{v.name}\") {{\n"
-          )
-          put(mut w, f"        if core@1/list.len(payload) != {count} {{\n")
-          put(
-            mut w,
-            f"          return Error(\"{name}: expected {count} payloads for {v.name}\")\n"
-          )
-          put(mut w, "        }\n")
-          let names = binders("take decoded", count)
-          let mut i: u64 = 0
-          for p in v.payload {
-            put(mut w, f"        let decoded{i}: {p.ty} = ")
-            from_json_of(mut w, p.ty, f"payload[{i}]")?
-            put(mut w, "\n")
-            i += 1
-          }
-          put(mut w, f"        return Ok({variant_form(v, names)})\n")
-          put(mut w, "      }\n")
-        }
-      }
-      put(mut w, f"      Error(\"{name}: unknown variant\")\n")
-      put(mut w, "    },\n")
-      put(mut w, f"    _ => Error(\"{name}: expected a JSON string or object\"),\n")
+      put(
+        mut w,
+        "    _ => Error(std@1/derive.json_invalid_type(value, \"string or map\")),\n"
+      )
       put(mut w, "  }\n")
     },
   }
   put(mut w, "}")
   Ok(body(take w))
+}
+
+// serde_json's description of an unexpected JSON value (serde_json/src/error.rs
+// `JsonUnexpected` over serde_core/src/de/mod.rs `Display for Unexpected`, of
+// serde_json/src/value/de.rs `Value::unexpected`). A number shows its JSON
+// text, and a string its JSON spelling.
+pub fn json_unexpected(value: json.Value) -> unique String uses {} {
+  match value {
+    Null => "null",
+    Bool(b) => f"boolean `{b}`",
+    Number(text) => {
+      if string.contains(text, ".") || string.contains(text, "e") || string.contains(
+        text,
+        "E"
+      ) {
+        f"floating point `{text}`"
+      } else {
+        f"integer `{text}`"
+      }
+    },
+    Text(text) => {
+      let mut quoted: List[u8] = []
+      json.write_text_into(text, mut quoted)
+      f"string {text.finish_valid(take quoted)}"
+    },
+    Array(_) => "sequence",
+    Object(_) => "map",
+  }
+}
+
+// serde's `invalid_type` message, for generated decoders.
+pub fn json_invalid_type(value: json.Value, expected: String) -> unique String uses {} {
+  f"invalid type: {json_unexpected(value)}, expected {expected}"
+}
+
+// serde's `unknown_variant` message, for generated decoders.
+pub fn unknown_variant(tag: String, expected: String) -> unique String uses {} {
+  f"unknown variant `{tag}`, expected {expected}"
+}
+
+// Checks a tuple variant's payload array has `count` items, with serde's
+// messages: an empty array is null, a short one is an invalid length
+// (serde_derive/src/de.rs `deserialize_seq`), and a long one has more
+// elements than the visitor took (serde_json/src/value/de.rs `visit_array`).
+pub fn json_length(length: u64, count: u64, expected: String) -> Result[(), String] uses {} {
+  if length == 0 && count != 0 {
+    return Error(f"invalid type: null, expected {expected}")
+  }
+  if length < count {
+    let elements = if count == 1 {
+      "element"
+    } else {
+      "elements"
+    }
+    return Error(
+      f"invalid length {length}, expected {expected} with {count} {elements}"
+    )
+  }
+  if length > count {
+    return Error(f"invalid length {length}, expected fewer elements in array")
+  }
+  Ok(())
 }
 
 // A JSON boolean, for generated decoders.
@@ -729,7 +938,7 @@ pub fn equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], Strin
   Ok(body(take w))
 }
 
-// ---- Text and hashing ----
+// ---- Text ----
 // A statement appending the literal `piece` to the List[u8] named `out`.
 fn literal(mut w: Writer, indent: String, out: String, piece: String) -> () uses {} {
   put(mut w, f"{indent}std@1/text.append(mut {out}, \"{piece}\")\n")
@@ -737,24 +946,14 @@ fn literal(mut w: Writer, indent: String, out: String, piece: String) -> () uses
 
 // Writes statements appending the text of `read`, of canonical type `ty`, to
 // the List[u8] named `out`: Option as `Some(..)` or `None`, List as `[a, b]`,
-// Set as `{a, b}`, Map as `{k: v}` and a tuple as `(a, b)` or `(a,)`. When `hashing`, a
-// nested record or variant appends its deriver's hash in decimal and a Set the
-// xor of its elements' hashes, so equal sets hash alike in any order; floats,
-// which are not `key`, have no hash form.
-fn write_of(
-  mut w: Writer,
-  ty: String,
-  read: String,
-  indent: String,
-  out: String,
-  hashing: bool
-) -> Result[(), String] uses {} {
+// Set as `{a, b}`, Map as `{k: v}` and a tuple as `(a, b)` or `(a,)`.
+fn write_of(mut w: Writer, ty: String, read: String, indent: String, out: String) -> Result[
+  (),
+  String
+] uses {} {
   if ty == "String" {
     put(mut w, f"{indent}std@1/text.append(mut {out}, {read})\n")
     return Ok(())
-  }
-  if float(ty) && hashing {
-    return Error(f"no hash form for {ty}: floats are not key")
   }
   if ty == "bool" || integer(ty) || float(ty) {
     put(mut w, f"{indent}std@1/text.append(mut {out}, std@1/{ty}.to_string({read}))\n")
@@ -765,30 +964,13 @@ fn write_of(
     let item = fresh(mut w, "item")
     put(mut w, f"{indent}match {read} {{\n{indent}  Some({item}) => {{\n")
     literal(mut w, f"{indent}    ", out, "Some(")
-    write_of(mut w, inner, item, f"{indent}    ", out, hashing)?
+    write_of(mut w, inner, item, f"{indent}    ", out)?
     literal(mut w, f"{indent}    ", out, ")")
     put(
       mut w,
       f"{indent}  }},\n{indent}  None => std@1/text.append(mut {out}, \"None\"),\n{indent}}}\n"
     )
     return Ok(())
-  }
-  if hashing {
-    if let Some(inner) = argument(ty, "Set") {
-      let combined = fresh(mut w, "set")
-      let item = fresh(mut w, "item")
-      let bytes = fresh(mut w, "element")
-      put(
-        mut w,
-        f"{indent}let mut {combined}: u64 = 0\n{indent}for {item} in {read} {{\n{indent}  let mut {bytes}: List[u8] = []\n"
-      )
-      write_of(mut w, inner, item, inner_indent, bytes, hashing)?
-      put(
-        mut w,
-        f"{indent}  {combined} = {combined} ^ std@1/fnv.digest(core@1/bytes.from_list(take {bytes}))\n{indent}}}\n{indent}std@1/text.append(mut {out}, std@1/u64.to_string({combined}))\n"
-      )
-      return Ok(())
-    }
   }
   let list_like = option.is_some(argument(ty, "List"))
   let map_like = option.is_some(parameters(ty, "Map"))
@@ -814,15 +996,15 @@ fn write_of(
     )
     match parameters(ty, "Map") {
       Some(pair) => {
-        write_of(mut w, pair[0], item, inner_indent, out, hashing)?
+        write_of(mut w, pair[0], item, inner_indent, out)?
         literal(mut w, inner_indent, out, ": ")
-        write_of(mut w, pair[1], entry, inner_indent, out, hashing)?
+        write_of(mut w, pair[1], entry, inner_indent, out)?
       },
       None => {
         let Some(inner) = element(ty) else {
           return Error(f"no text form for {ty}")
         }
-        write_of(mut w, inner, item, inner_indent, out, hashing)?
+        write_of(mut w, inner, item, inner_indent, out)?
       },
     }
     put(mut w, f"{indent}}}\n")
@@ -838,7 +1020,7 @@ fn write_of(
       if i != 0 {
         literal(mut w, indent, out, ", ")
       }
-      write_of(mut w, component, names[i], indent, out, hashing)?
+      write_of(mut w, component, names[i], indent, out)?
       i += 1
     }
     let close = if list.len(components) == 1 {
@@ -850,18 +1032,8 @@ fn write_of(
     return Ok(())
   }
   if nominal(ty) {
-    if hashing {
-      put(
-        mut w,
-        f"{indent}std@1/text.append(mut {out}, std@1/u64.to_string({deriver(ty, "hash")}({read})))\n"
-      )
-    } else {
-      put(mut w, f"{indent}{deriver(ty, "format")}({read}, mut {out})\n")
-    }
+    put(mut w, f"{indent}{deriver(ty, "format")}({read}, mut {out})\n")
     return Ok(())
-  }
-  if hashing {
-    return Error(f"no hash form for {ty}")
   }
   Error(f"no text form for {ty}")
 }
@@ -886,7 +1058,7 @@ pub fn format[T](s: TypeShape[T]) -> Result[
           ", "
         }
         literal(mut w, "  ", "out", f"{separator}{f.name}: ")
-        write_of(mut w, f.ty, f"value.{f.name}", "  ", "out", false)?
+        write_of(mut w, f.ty, f"value.{f.name}", "  ", "out")?
         i += 1
       }
       literal(mut w, "  ", "out", ")")
@@ -905,7 +1077,7 @@ pub fn format[T](s: TypeShape[T]) -> Result[
             if i != 0 {
               literal(mut w, "      ", "out", ", ")
             }
-            write_of(mut w, p.ty, names[i], "      ", "out", false)?
+            write_of(mut w, p.ty, names[i], "      ", "out")?
             i += 1
           }
           literal(mut w, "      ", "out", ")")
@@ -919,42 +1091,147 @@ pub fn format[T](s: TypeShape[T]) -> Result[
   Ok(body(take w))
 }
 
-// An FNV-1a 64 hash (std@1/fnv) of the text `format` writes for each field, or
-// for the variant's name and payloads, each followed by a zero byte. A nested
-// record or variant contributes its own deriver's hash.
-pub fn hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {} {
+// ---- Hashing ----
+// Writes statements streaming `read`, of canonical type `ty`, into the
+// std@1/siphash.State named `state` as Rust's `Hash` impls do
+// (library/core/src/hash/mod.rs): integers and bool as their little-endian
+// bytes, a String as its bytes and 0xFF, a List as its length then each item,
+// a Map as its length then each key and value in order (alloc
+// collections/btree/map.rs `Hash for BTreeMap`), an Option as the derived
+// discriminant (None 0, Some 1) and payload, and a tuple as each component. A
+// Set, whose equality ignores order (SEM-5), is its length then the wrapping
+// sum of each element's hash under the same keys, so equal sets hash alike in
+// any order. A nested record or variant streams through its own deriver.
+// Floats are not `key` and have no hash form.
+fn hash_of(mut w: Writer, ty: String, read: String, indent: String, state: String) -> Result[
+  (),
+  String
+] uses {} {
+  if ty == "String" {
+    put(mut w, f"{indent}std@1/siphash.write_str(mut {state}, {read})\n")
+    return Ok(())
+  }
+  if float(ty) {
+    return Error(f"no hash form for {ty}: floats are not key")
+  }
+  if ty == "bool" || integer(ty) {
+    put(mut w, f"{indent}std@1/siphash.write_{ty}(mut {state}, {read})\n")
+    return Ok(())
+  }
+  let inner_indent = f"{indent}  "
+  if let Some(inner) = argument(ty, "core@1/Option") {
+    let item = fresh(mut w, "item")
+    put(
+      mut w,
+      f"{indent}match {read} {{\n{indent}  Some({item}) => {{\n{indent}    std@1/siphash.write_u64(mut {state}, 1)\n"
+    )
+    hash_of(mut w, inner, item, f"{indent}    ", state)?
+    put(
+      mut w,
+      f"{indent}  }},\n{indent}  None => std@1/siphash.write_u64(mut {state}, 0),\n{indent}}}\n"
+    )
+    return Ok(())
+  }
+  if let Some(inner) = argument(ty, "List") {
+    let item = fresh(mut w, "item")
+    put(
+      mut w,
+      f"{indent}std@1/siphash.write_u64(mut {state}, core@1/list.len({read}))\n{indent}for {item} in {read} {{\n"
+    )
+    hash_of(mut w, inner, item, inner_indent, state)?
+    put(mut w, f"{indent}}}\n")
+    return Ok(())
+  }
+  if let Some(inner) = argument(ty, "Set") {
+    let sum = fresh(mut w, "sum")
+    let item = fresh(mut w, "item")
+    let piece = fresh(mut w, "piece")
+    put(
+      mut w,
+      f"{indent}let mut {sum}: u64 = 0\n{indent}for {item} in {read} {{\n{indent}  let mut {piece} = std@1/siphash.fresh({state})\n"
+    )
+    hash_of(mut w, inner, item, inner_indent, piece)?
+    put(
+      mut w,
+      f"{indent}  {sum} = core@1/int.wrapping_add({sum}, std@1/siphash.finish({piece}))\n{indent}}}\n{indent}std@1/siphash.write_u64(mut {state}, core@1/set.len({read}))\n{indent}std@1/siphash.write_u64(mut {state}, {sum})\n"
+    )
+    return Ok(())
+  }
+  if let Some(pair) = parameters(ty, "Map") {
+    let key = fresh(mut w, "key")
+    let entry = fresh(mut w, "entry")
+    put(
+      mut w,
+      f"{indent}std@1/siphash.write_u64(mut {state}, core@1/map.len({read}))\n{indent}for ({key}, {entry}) in {read} {{\n"
+    )
+    hash_of(mut w, pair[0], key, inner_indent, state)?
+    hash_of(mut w, pair[1], entry, inner_indent, state)?
+    put(mut w, f"{indent}}}\n")
+    return Ok(())
+  }
+  if let Some(components) = tuple(ty) {
+    let names = fresh_names(mut w, "part", list.len(components))
+    put(mut w, f"{indent}let {tuple_form(names)} = {read}\n")
+    let mut i: u64 = 0
+    for component in components {
+      hash_of(mut w, component, names[i], indent, state)?
+      i += 1
+    }
+    return Ok(())
+  }
+  if nominal(ty) {
+    put(mut w, f"{indent}{deriver(ty, "hash")}({read}, mut {state})\n")
+    return Ok(())
+  }
+  Error(f"no hash form for {ty}")
+}
+
+// Streams a value into a std@1/siphash.State as Rust's `#[derive(Hash)]` does
+// (compiler/rustc_builtin_macros/src/deriving/hash.rs `hash_substructure`,
+// deriving/generic/mod.rs): a record's fields in order; a variant of a type
+// with more than one variant first writes its declaration index as a u64 (the
+// `isize` discriminant on a 64-bit target), then its payloads. With
+// `siphash.hash_one(value, item_hash, k0, k1)`, or `new`, the deriver and
+// `finish`, the result is Rust's for the same shape under SipHasher13 with
+// those keys, and keys 0 and 0 give `DefaultHasher::new()`'s.
+pub fn hash[T](s: TypeShape[T]) -> Result[
+  Body[fn(T, mut siphash.State) -> () uses {}],
+  String
+] uses {} {
   let info = type_shape.info(s)
   let mut w = writer()
   put(
     mut w,
-    f"fn(value: {info.name}) -> u64 uses {{}} {{\n  let mut out: List[u8] = []\n"
+    f"fn(value: {info.name}, mut state: std@1/siphash.State) -> () uses {{}} {{\n"
   )
   match info.body {
     Record(fields) => {
       for f in fields {
-        write_of(mut w, f.ty, f"value.{f.name}", "  ", "out", true)?
-        put(mut w, "  list.push(mut out, 0u8)\n")
+        hash_of(mut w, f.ty, f"value.{f.name}", "  ", "state")?
       }
     },
     Choice(variants) => {
+      let tagged = list.len(variants) > 1
       put(mut w, "  match value {\n")
+      let mut index: u64 = 0
       for v in variants {
         let names = binders("p", list.len(v.payload))
         put(mut w, f"    {variant_form(v, names)} => {{\n")
-        literal(mut w, "      ", "out", v.name)
-        put(mut w, "      list.push(mut out, 0u8)\n")
+        if tagged {
+          put(mut w, f"      std@1/siphash.write_u64(mut state, {index})\n")
+        }
         let mut i: u64 = 0
         for p in v.payload {
-          write_of(mut w, p.ty, names[i], "      ", "out", true)?
-          put(mut w, "      list.push(mut out, 0u8)\n")
+          hash_of(mut w, p.ty, names[i], "      ", "state")?
           i += 1
         }
         put(mut w, "    },\n")
+        index += 1
       }
       put(mut w, "  }\n")
     },
   }
-  put(mut w, "  std@1/fnv.digest(core@1/bytes.from_list(take out))\n}")
+  put(mut w, "}")
   Ok(body(take w))
 }
 
@@ -1100,28 +1377,57 @@ pub fn json_into[T](s: TypeShape[T]) -> Result[
     Choice(variants) => {
       put(mut w, "match value {\n")
       for v in variants {
+        let kind = style(v)
         let names = binders("p", list.len(v.payload))
         put(mut w, f"{variant_form(v, names)} => {{\n")
-        if list.len(v.payload) == 0 {
+        if kind == "unit" {
           put(mut w, f"std@1/json.write_text_into(\"{v.name}\", mut out)\n")
         } else {
           put(
             mut w,
-            "std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{\")\n"
+            f"std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{{\")\nstd@1/json.write_text_into(\"{v.name}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
           )
-          put(
-            mut w,
-            f"std@1/json.write_text_into(\"{v.name}\", mut out)\nstd@1/text.append(mut out, \":\")\nstd@1/json.check_depth(depth + 1)?\nstd@1/text.append(mut out, \"[\")\n"
-          )
-          let mut i: u64 = 0
-          for p in v.payload {
-            if i != 0 {
-              literal(mut w, "", "out", ",")
+          if kind == "newtype" {
+            json_into_of(mut w, v.payload[0].ty, names[0], "(depth + 1)")?
+          } else {
+            let struct_like = kind == "struct"
+            put(mut w, "std@1/json.check_depth(depth + 1)?\n")
+            literal(
+              mut w,
+              "",
+              "out",
+              if struct_like {
+                "{"
+              } else {
+                "["
+              }
+            )
+            let mut i: u64 = 0
+            for p in v.payload {
+              if i != 0 {
+                literal(mut w, "", "out", ",")
+              }
+              if struct_like {
+                put(
+                  mut w,
+                  f"std@1/json.write_text_into(\"{label_of(p)}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
+                )
+              }
+              json_into_of(mut w, p.ty, names[i], "(depth + 2)")?
+              i += 1
             }
-            json_into_of(mut w, p.ty, names[i], "(depth + 2)")?
-            i += 1
+            literal(
+              mut w,
+              "",
+              "out",
+              if struct_like {
+                "}"
+              } else {
+                "]"
+              }
+            )
           }
-          literal(mut w, "", "out", "]}")
+          literal(mut w, "", "out", "}")
         }
         put(mut w, "},\n")
       }

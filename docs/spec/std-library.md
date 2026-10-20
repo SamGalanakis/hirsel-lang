@@ -2302,7 +2302,7 @@ fn derive.json_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses
 fn derive.from_json[T](s: TypeShape[T]) -> Result[Body[fn(json.Value) -> Result[T, String] uses {}], String] uses {}
 fn derive.equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], String] uses {}
 fn derive.format[T](s: TypeShape[T]) -> Result[Body[fn(T, mut List[u8]) -> () uses {}], String] uses {}
-fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {}
+fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T, mut siphash.State) -> () uses {}], String] uses {}
 ```
 
 ```text
@@ -2348,22 +2348,80 @@ order; integers are JSON numbers, and so are finite floats, written by
 `to_string`; `NaN`, `inf` and `-inf` are those JSON strings. `None` is `null`,
 so `Option[Option[T]]`, at any depth, has no JSON form. A list, a set and a
 tuple are arrays; a `Map[String, V]` is an object and any other map an array of
-`[key, value]` arrays. A variant without payload is its name as a JSON string,
-and one with payloads is an object whose single member, its name, holds the
-array of its payloads. `from_json` reads that form back. An absent member of an
-`Option` field decodes as `None`. A duplicate set element or map key, and any
-other mismatch, is `Error`. Its body builds every value fresh, so a header may
+`[key, value]` arrays. A variant is externally tagged, as serde writes it
+(serde_derive `serialize_externally_tagged_variant`, serde_json
+`serialize_*_variant`): a variant without payload is its name as a JSON string,
+and any other is an object whose single member, its name, holds a single
+positional payload itself, the array of two or more positional payloads, or the
+object of labelled payloads:
+
+```text
+type Animal = Dog | Frog(String, List[i64]) | Cat(age: u64, name: String) | AntHive(List[String])
+Dog                         "Dog"
+Frog("Henry", [349, 102])   {"Frog":["Henry",[349,102]]}
+Cat(age: 5, name: "Kate")   {"Cat":{"age":5,"name":"Kate"}}
+AntHive(["Bob", "Stuart"])  {"AntHive":["Bob","Stuart"]}
+```
+
+`from_json` reads that form back with serde_json's rules for a decoded value
+(`serde_json::from_value`). A unit variant is also read from `{"Name": null}`.
+An object holding a variant has exactly one member. A positional variant's
+array has exactly its payload count, and a labelled variant needs an object.
+Labelled payloads and record fields decode alike: an absent member of an
+`Option` field is `None`, any other absent member is an error, and unknown
+members are ignored. A duplicate set element or map key, and any other mismatch,
+is `Error`. Structural errors carry serde's messages without a text position,
+such as `unknown variant `x`, expected one of `Dog`, `Frog`, `Cat`, `AntHive``,
+`invalid type: unit variant, expected tuple variant`, `invalid type: map,
+expected unit`, `invalid length 1, expected tuple variant Animal::Frog with 2
+elements`, `missing field `age`` and `invalid type: string "x", expected struct
+Todo`. Its body builds every value fresh, so a header may
 declare `-> Result[unique T, String]` (CT-5 decides uniqueness from the header).
+`json_into` writes the same text as `json_value` followed by
+`json.stringify_into`, under the same nesting limit.
+
+**Format note (2026-10-20).** Derived JSON variants used to be an object whose
+member held the array of all payloads, `{"Circle":[2]}` and `{"Rect":[3,4]}`
+for `Circle(u32)` and `Rect(width: u32, height: u32)`. They are now serde's
+externally tagged form, `{"Circle":2}` and `{"Rect":{"width":3,"height":4}}`,
+so derived JSON interoperates with Rust serde types of the same shape. Unit
+variants, records and every non-variant form are unchanged. The old form is
+not read. A derived `hash` used to be FNV-1a over formatted text; it now
+streams into SipHash-1-3, so every hash value changed.
+
 `format` writes `Name(field: value, ..)` for a record and `Variant(payload, ..)`
 or `Variant` for a variant; strings are written unquoted, `Option` as `Some(..)`
 or `None`, lists as `[a, b]`, sets as `{a, b}`, maps as `{k: v}` and tuples as
-`(a, b)` or `(a,)`. Its header is that of an `@format` function. `hash` is the
-FNV-1a hash of each field's value as `format` writes it, or of the variant's
-name and each payload, with a zero byte after each; a nested type contributes
-its own `_hash` in decimal and a set the xor of its elements' hashes, so equal
-sets hash alike. Floats are not `key` ([GEN-1](generics.md#gen-1-bounds)) and
-have no hash form. `json_bool`, `json_text`, `json_number`, `json_float`,
-`json_float_text` and `parsed` are the helpers generated bodies call.
+`(a, b)` or `(a,)`. Its header is that of an `@format` function.
+
+`hash` streams a value into a `std@1/siphash.State`, as Rust's
+`#[derive(Hash)]` streams into a `Hasher`. A record writes its fields in order.
+A variant of a type with more than one variant writes its declaration index as
+a `u64` and then its payloads. Integers and `bool` are their little-endian
+bytes, a `String` its bytes and then 0xFF, a list its length and then each item,
+a map its length and then each key and value in order, an `Option` its index
+(`None` 0, `Some` 1) and payload, and a tuple each component. A nested type
+streams through its own `_hash`. A set, whose equality ignores order, writes
+its length and then the wrapping sum of each element's hash under the same
+keys, so equal sets hash alike. Floats are not `key` ([GEN-1](generics.md#gen-1-bounds))
+and have no hash form. `siphash.hash_one(value, item_hash, k0, k1)` returns the
+hash. For a shape Rust can spell, it equals Rust's under `SipHasher13` with
+those keys, and keys 0 and 0 give `DefaultHasher::new()`'s. The keys are always the
+caller's, never the run's hidden placement seed ([SEM-5](semantics.md#sem-5-maps)),
+so a hash is the same in every run. `json_bool`, `json_text`, `json_number`,
+`json_float`, `json_float_text`, `parsed`, `json_unexpected`,
+`json_invalid_type`, `unknown_variant` and `json_length` are the helpers
+generated bodies call.
+
+`std@1/siphash` is SipHash-1-3 after Rust's `core::hash::sip`, the hash behind
+Rust's `DefaultHasher` and the runtime's keyed table hash.
+`siphash.new(k0, k1)` starts a state. `write(mut state, data)`,
+`write_str` (bytes, then 0xFF), `write_bool` and `write_u8` through
+`write_i128` (little-endian bytes) feed it, and how input is split across
+writes never changes the hash. `finish(state)` returns the `u64` hash without
+consuming the state. `fresh(state)` starts a new state under the same keys, and
+`digest(k0, k1, data)` is the one-shot form. It is a keyed hash for tables, not
+a cryptographic MAC.
 
 ## ASCII radix digits
 

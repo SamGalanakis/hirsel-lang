@@ -1,6 +1,6 @@
 // rule: CT-5
 // expect: run
-// stdout: {"name":"s","origin":{"x":-0,"y":2.5},"colors":["Red",{"Custom":[1,2,3]}],"tags":["a"],"weights":{"w":0.5},"ids":[[3,{"x":1e-7,"y":0.1}],[4,null]],"span":[7,"seven"],"single":[true],"tree":{"Node":[[{"Leaf":[1]},{"Node":[[{"Leaf":[2]}]]}]]}}
+// stdout: {"name":"s","origin":{"x":-0,"y":2.5},"colors":["Red",{"Custom":[1,2,3]}],"tags":["a"],"weights":{"w":0.5},"ids":[[3,{"x":1e-7,"y":0.1}],[4,null]],"span":[7,"seven"],"single":[true],"tree":{"Node":[{"Leaf":1},{"Node":[{"Leaf":2}]}]}}
 // stdout: round trip equal: true
 // stdout: Scene(name: s, origin: Point(x: -0, y: 2.5), colors: [Red, Custom(1, 2, 3)], tags: {a}, weights: {w: 0.5}, ids: {3: Some(Point(x: 1e-7, y: 0.1)), 4: None}, span: (7, seven), single: (true,), tree: Node([Leaf(1), Node([Leaf(2)])]))
 // stdout: true true
@@ -57,7 +57,9 @@ fn color_format(c: Color, mut out: List[u8]) -> () uses {} = comptime derive.for
   shape(Color)
 )
 
-fn color_hash(c: Color) -> u64 uses {} = comptime derive.hash(shape(Color))
+fn color_hash(c: Color, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Color)
+)
 
 fn tree_to_json(t: Tree) -> json.Value uses {} = comptime derive.json_value(shape(Tree))
 
@@ -69,13 +71,25 @@ fn tree_format(t: Tree, mut out: List[u8]) -> () uses {} = comptime derive.forma
   shape(Tree)
 )
 
-fn tree_hash(t: Tree) -> u64 uses {} = comptime derive.hash(shape(Tree))
+fn tree_hash(t: Tree, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Tree)
+)
 
 type Bag {
   items: Set[String],
 }
 
-fn bag_hash(b: Bag) -> u64 uses {} = comptime derive.hash(shape(Bag))
+fn tree_digest(t: Tree) -> u64 uses {} {
+  siphash.hash_one(t, tree_hash, 0, 0)
+}
+
+fn color_digest(c: Color) -> u64 uses {} {
+  siphash.hash_one(c, color_hash, 0, 0)
+}
+
+fn bag_hash(b: Bag, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Bag)
+)
 
 fn scene_to_json(s: Scene) -> json.Value uses {} = comptime derive.json_value(
   shape(Scene)
@@ -136,8 +150,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   }
   let _ = out.print(
     out,
-    f"{bool.to_string(tree_hash(Node([Leaf(1)])) == tree_hash(Node([Leaf(1)])))} {bool.to_string(
-      color_hash(Red) != color_hash(Custom(0, 0, 0))
+    f"{bool.to_string(tree_digest(Node([Leaf(1)])) == tree_digest(Node([Leaf(1)])))} {bool.to_string(
+      color_digest(Red) != color_digest(Custom(0, 0, 0))
     )}\n"
   )
   let mut first: Set[String] = set.empty()
@@ -146,7 +160,12 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   let mut second: Set[String] = set.empty()
   set.insert(mut second, "y")
   set.insert(mut second, "x")
-  let same = bag_hash(Bag(items: take first)) == bag_hash(Bag(items: take second))
+  let same = siphash.hash_one(Bag(items: take first), bag_hash, 7, 9) == siphash.hash_one(
+    Bag(items: take second),
+    bag_hash,
+    7,
+    9
+  )
   let _ = out.print(out, f"set order hash equal: {bool.to_string(same)}\n")
   let odd = Point(x: wide("NaN"), y: narrow("-inf"))
   let odd_text = json_text(point_to_json(odd))

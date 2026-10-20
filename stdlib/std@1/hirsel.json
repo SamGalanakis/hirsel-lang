@@ -870,6 +870,12 @@
       ]
     },
     {
+      "path": "siphash.hir",
+      "module": [
+        "siphash"
+      ]
+    },
+    {
       "path": "derive.hir",
       "module": [
         "derive"

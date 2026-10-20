@@ -22,7 +22,9 @@ fn item_from_json(v: json.Value) -> Result[unique Item, String] uses {} = compti
   shape(Item)
 )
 
-fn item_hash(v: Item) -> u64 uses {} = comptime derive.hash(shape(Item))
+fn item_hash(v: Item, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Item)
+)
 
 fn page_to_json[T](v: Page[T]) -> json.Value uses {} = comptime derive.json_value(
   shape(Page[T])
@@ -32,7 +34,15 @@ fn page_from_json[T](v: json.Value) -> Result[unique Page[T], String] uses {} = 
   shape(Page[T])
 )
 
-fn page_hash[T](v: Page[T]) -> u64 uses {} = comptime derive.hash(shape(Page[T]))
+fn page_hash[T](v: Page[T], mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Page[T])
+)
+
+fn page_digest(v: Page[Item]) -> u64 uses {} {
+  let mut state = siphash.new(0, 0)
+  page_hash(v, mut state)
+  siphash.finish(state)
+}
 
 fn json_text(v: json.Value) -> unique String uses {} {
   match json.stringify(v) {
@@ -63,7 +73,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         None => 0u64,
       }
       text.append(mut text, f"round trip: {list.len(back.items)} items, next {next}\n")
-      text.append(mut text, f"hash equal: {page_hash(items) == page_hash(back)}\n")
+      text.append(mut text, f"hash equal: {page_digest(items) == page_digest(back)}\n")
     },
     Error(e) => text.append(mut text, f"{e}\n"),
   }

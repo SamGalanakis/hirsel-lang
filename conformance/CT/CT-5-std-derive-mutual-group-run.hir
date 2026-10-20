@@ -1,6 +1,6 @@
 // rule: CT-5
 // expect: run
-// stdout: {"Items":[[{"name":"a","value":{"Number":[1]}},{"name":"c","value":{"Items":[[{"name":"b","value":"Null"}]]}}]]}
+// stdout: {"Items":[{"name":"a","value":{"Number":1}},{"name":"c","value":{"Items":[{"name":"b","value":"Null"}]}}]}
 // stdout: round trip equal: true
 // stdout: Items([Member(name: a, value: Number(1)), Member(name: c, value: Items([Member(name: b, value: Null)]))])
 // Derivers of declarations recursive through each other call each other.

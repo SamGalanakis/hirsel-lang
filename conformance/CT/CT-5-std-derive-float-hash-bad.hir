@@ -7,4 +7,6 @@ type Sample {
   value: f64,
 }
 
-fn sample_hash(s: Sample) -> u64 uses {} = comptime derive.hash(shape(Sample))
+fn sample_hash(s: Sample, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Sample)
+)

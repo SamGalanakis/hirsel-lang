@@ -1,0 +1,247 @@
+// Rust core library/core/src/hash/sip.rs (MIT OR Apache-2.0): SipHash-1-3, the
+// hash behind Rust's DefaultHasher and the runtime's keyed table hash
+// (crates/hirsel-kernels/src/siphash.rs). A State takes its input in pieces;
+// how the input is split never changes the hash. The integer writes are their
+// little-endian bytes, as Rust's `Hasher::write_u64` and friends on a
+// little-endian target, so `new(0, 0)` followed by the writes `derive.hash`
+// emits gives Rust's `DefaultHasher::new()` result for the same shape. It is a
+// keyed hash for tables, not a cryptographic MAC.
+pub opaque type State: plain + inert uses {} {
+  k0: u64,
+  k1: u64,
+  v0: u64,
+  v1: u64,
+  v2: u64,
+  v3: u64,
+  // Unprocessed input, little-endian, and how many of its bytes are valid.
+  tail: u64,
+  ntail: u64,
+  // Bytes written, modulo 2^64; finish folds in the low byte.
+  length: u64,
+}
+
+@noalloc
+pub fn new(k0: u64, k1: u64) -> State uses {} {
+  State(
+    k0: k0,
+    k1: k1,
+    v0: k0 ^ 0x736f6d6570736575,
+    v1: k1 ^ 0x646f72616e646f6d,
+    v2: k0 ^ 0x6c7967656e657261,
+    v3: k1 ^ 0x7465646279746573,
+    tail: 0,
+    ntail: 0,
+    length: 0
+  )
+}
+
+// A fresh state under the keys of `state`, for hashing a part on its own.
+@noalloc
+pub fn fresh(state: State) -> State uses {} {
+  new(state.k0, state.k1)
+}
+
+@noalloc
+fn rotl(value: u64, bits: u64) -> u64 uses {} {
+  value << bits | value >> 64u64 - bits
+}
+
+// One SipRound (sip.rs `compress!`).
+@noalloc
+fn compress(mut s: State) -> () uses {} {
+  s.v0 = core@1/int.wrapping_add(s.v0, s.v1)
+  s.v2 = core@1/int.wrapping_add(s.v2, s.v3)
+  s.v1 = rotl(s.v1, 13) ^ s.v0
+  s.v3 = rotl(s.v3, 16) ^ s.v2
+  s.v0 = rotl(s.v0, 32)
+  s.v2 = core@1/int.wrapping_add(s.v2, s.v1)
+  s.v0 = core@1/int.wrapping_add(s.v0, s.v3)
+  s.v1 = rotl(s.v1, 17) ^ s.v2
+  s.v3 = rotl(s.v3, 21) ^ s.v0
+  s.v2 = rotl(s.v2, 32)
+}
+
+// Absorbs one message word: SipHash-1-3 has one compression round per word.
+@noalloc
+fn absorb(mut s: State, word: u64) -> () uses {} {
+  s.v3 = s.v3 ^ word
+  compress(mut s)
+  s.v0 = s.v0 ^ word
+}
+
+// The little-endian word of the `count` bytes (0 to 8) of `data` at `at`
+// (sip.rs `u8to64_le`).
+@noalloc
+fn load(data: Bytes, at: u64, count: u64) -> u64 uses {} {
+  let mut value: u64 = 0
+  let mut j = count
+  while j > 0 {
+    j -= 1
+    let byte: u64 = core@1/int.widen(data[at + j])
+    value = value << 8 | byte
+  }
+  value
+}
+
+// Writes the low `size` bytes (1 to 8) of `x`, little-endian; its higher bytes
+// are zero. This is `short_write` of rustc_data_structures/src/sip128.rs, the
+// integer path sip.rs's comment points to, and absorbs the same stream as
+// writing those bytes.
+@noalloc
+fn short_write(mut s: State, x: u64, size: u64) -> () uses {} {
+  s.length = core@1/int.wrapping_add(s.length, size)
+  let needed = 8 - s.ntail
+  s.tail = s.tail | x << 8 * s.ntail
+  if size < needed {
+    s.ntail += size
+    return
+  }
+  let word = s.tail
+  absorb(mut s, word)
+  s.ntail = size - needed
+  s.tail = if needed == 8 {
+    0
+  } else {
+    x >> 8 * needed
+  }
+}
+
+// Absorbs `data` (sip.rs `Hasher::write`): it first fills a partial word left
+// by an earlier write, then takes whole words, and keeps the rest as the tail.
+@noalloc
+pub fn write(mut s: State, data: Bytes) -> () uses {} {
+  let length = core@1/bytes.len(data)
+  s.length = core@1/int.wrapping_add(s.length, length)
+  let mut i: u64 = 0
+  if s.ntail != 0 {
+    let needed = 8 - s.ntail
+    let count = if length < needed {
+      length
+    } else {
+      needed
+    }
+    s.tail = s.tail | load(data, 0, count) << 8 * s.ntail
+    if length < needed {
+      s.ntail += length
+      return
+    }
+    let word = s.tail
+    absorb(mut s, word)
+    s.ntail = 0
+    i = needed
+  }
+  while i + 8 <= length {
+    absorb(mut s, load(data, i, 8))
+    i += 8
+  }
+  s.tail = load(data, i, length - i)
+  s.ntail = length - i
+}
+
+// A string's bytes and then 0xFF, which no UTF-8 text contains, so the
+// sequence of strings written is recoverable (Rust `Hasher::write_str`).
+@noalloc
+pub fn write_str(mut s: State, text: String) -> () uses {} {
+  write(mut s, core@1/string.as_bytes(text))
+  short_write(mut s, 0xff, 1)
+}
+
+@noalloc
+pub fn write_bool(mut s: State, value: bool) -> () uses {} {
+  short_write(
+    mut s,
+    if value {
+      1
+    } else {
+      0
+    },
+    1
+  )
+}
+
+@noalloc
+pub fn write_u8(mut s: State, value: u8) -> () uses {} {
+  short_write(mut s, core@1/int.widen(value), 1)
+}
+
+@noalloc
+pub fn write_u16(mut s: State, value: u16) -> () uses {} {
+  short_write(mut s, core@1/int.widen(value), 2)
+}
+
+@noalloc
+pub fn write_u32(mut s: State, value: u32) -> () uses {} {
+  short_write(mut s, core@1/int.widen(value), 4)
+}
+
+@noalloc
+pub fn write_u64(mut s: State, value: u64) -> () uses {} {
+  short_write(mut s, value, 8)
+}
+
+@noalloc
+pub fn write_u128(mut s: State, value: u128) -> () uses {} {
+  short_write(mut s, core@1/int.truncate(value), 8)
+  short_write(mut s, core@1/int.truncate(value >> 64), 8)
+}
+
+@noalloc
+pub fn write_i8(mut s: State, value: i8) -> () uses {} {
+  let bits: u8 = core@1/int.truncate(value)
+  write_u8(mut s, bits)
+}
+
+@noalloc
+pub fn write_i16(mut s: State, value: i16) -> () uses {} {
+  let bits: u16 = core@1/int.truncate(value)
+  write_u16(mut s, bits)
+}
+
+@noalloc
+pub fn write_i32(mut s: State, value: i32) -> () uses {} {
+  let bits: u32 = core@1/int.truncate(value)
+  write_u32(mut s, bits)
+}
+
+@noalloc
+pub fn write_i64(mut s: State, value: i64) -> () uses {} {
+  let bits: u64 = core@1/int.truncate(value)
+  write_u64(mut s, bits)
+}
+
+@noalloc
+pub fn write_i128(mut s: State, value: i128) -> () uses {} {
+  let bits: u128 = core@1/int.truncate(value)
+  write_u128(mut s, bits)
+}
+
+// The hash of everything written so far; the state is unchanged, so more
+// writes may follow (sip.rs `Hasher::finish`).
+@noalloc
+pub fn finish(state: State) -> u64 uses {} {
+  let mut s = state
+  let b = (s.length & 0xff) << 56 | s.tail
+  absorb(mut s, b)
+  s.v2 = s.v2 ^ 0xff
+  compress(mut s)
+  compress(mut s)
+  compress(mut s)
+  s.v0 ^ s.v1 ^ s.v2 ^ s.v3
+}
+
+// SipHash-1-3 of `data` under the keys `k0` and `k1`.
+@noalloc
+pub fn digest(k0: u64, k1: u64, data: Bytes) -> u64 uses {} {
+  let mut s = new(k0, k1)
+  write(mut s, data)
+  finish(s)
+}
+
+// The hash of `value` as `writer` streams it into a fresh state under `k0` and
+// `k1` (Rust `BuildHasher::hash_one`). A derived hash (`derive.hash`) is such
+// a writer; `hash_one(value, item_hash, 0, 0)` is Rust's DefaultHasher result.
+pub fn hash_one[T](value: T, writer: fn(T, mut State) -> () uses {}, k0: u64, k1: u64) -> u64 uses {} {
+  let mut s = new(k0, k1)
+  writer(value, mut s)
+  finish(s)
+}

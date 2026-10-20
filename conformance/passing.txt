@@ -811,6 +811,7 @@ conformance/CT/CT-5-std-derive-box-ok.hir
 conformance/CT/CT-5-std-derive-float-hash-bad.hir
 conformance/CT/CT-5-std-derive-float-hash-ok.hir
 conformance/CT/CT-5-std-derive-generic-run.hir
+conformance/CT/CT-5-std-derive-hash-vectors-run.hir
 conformance/CT/CT-5-std-derive-modules-run.hir
 conformance/CT/CT-5-std-derive-mutual-group-run.hir
 conformance/CT/CT-5-std-derive-nested-deriver-bad.hir
@@ -819,6 +820,7 @@ conformance/CT/CT-5-std-derive-nested-option-bad.hir
 conformance/CT/CT-5-std-derive-nested-option-ok.hir
 conformance/CT/CT-5-std-derive-nested-run.hir
 conformance/CT/CT-5-std-derive-run.hir
+conformance/CT/CT-5-std-derive-serde-enum-run.hir
 conformance/CT/CT-5-std-derive-unsupported-bad.hir
 conformance/CT/CT-5-std-derive-unsupported-ok.hir
 conformance/CT/CT-5-unique-result-bad.hir
@@ -5500,6 +5502,7 @@ conformance/SEM/SEM-3-shlex-compat-run.hir
 conformance/SEM/SEM-3-shlex-posix-1-run.hir
 conformance/SEM/SEM-3-shlex-posix-2-run.hir
 conformance/SEM/SEM-3-shlex-quote-run.hir
+conformance/SEM/SEM-3-siphash-vectors-run.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-common-run.hir

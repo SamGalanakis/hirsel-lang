@@ -18,7 +18,7 @@ fn create_signals_format(v: CreateSignals, mut out: List[u8]) -> () uses {} = co
   shape(CreateSignals)
 )
 
-fn create_signals_hash(v: CreateSignals) -> u64 uses {} = comptime derive.hash(
+fn create_signals_hash(v: CreateSignals, mut state: siphash.State) -> () uses {} = comptime derive.hash(
   shape(CreateSignals)
 )
 
@@ -39,7 +39,12 @@ pub fn main() -> Result[(), String] {
     TextInvariant()
   )
   failure.check(
-    create_signals_hash(source) == create_signals_hash(decoded),
+    siphash.hash_one(source, create_signals_hash, 0, 0) == siphash.hash_one(
+      decoded,
+      create_signals_hash,
+      0,
+      0
+    ),
     TextInvariant()
   )
   Ok(())

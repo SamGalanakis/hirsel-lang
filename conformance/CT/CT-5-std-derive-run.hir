@@ -6,10 +6,10 @@
 // stdout: changed equal: false
 // stdout: changed hash differs: true
 // stdout: Todo(id: 7, title: write, done: true, tags: [a, b], note: Some(n))
-// stdout: {"Circle":[2]} Circle(2) true
-// stdout: {"Rect":[3,4]} Rect(3, 4) true
+// stdout: {"Circle":2} Circle(2) true
+// stdout: {"Rect":{"width":3,"height":4}} Rect(3, 4) true
 // stdout: "Empty" Empty true
-// stdout: Todo: expected a JSON object
+// stdout: invalid type: string "x", expected struct Todo
 // std@1/derive generates JSON encoding and decoding, equality, text and hashing for a
 // record and a variant from their shapes.
 type Todo {
@@ -34,7 +34,9 @@ fn todo_format(t: Todo, mut out: List[u8]) -> () uses {} = comptime derive.forma
   shape(Todo)
 )
 
-fn todo_hash(t: Todo) -> u64 uses {} = comptime derive.hash(shape(Todo))
+fn todo_hash(t: Todo, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Todo)
+)
 
 fn shape_value(s: Shape) -> json.Value uses {} = comptime derive.json_value(
   shape(Shape)
@@ -50,7 +52,17 @@ fn shape_format(s: Shape, mut out: List[u8]) -> () uses {} = comptime derive.for
   shape(Shape)
 )
 
-fn shape_hash(s: Shape) -> u64 uses {} = comptime derive.hash(shape(Shape))
+fn shape_hash(s: Shape, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Shape)
+)
+
+fn todo_digest(t: Todo) -> u64 uses {} {
+  siphash.hash_one(t, todo_hash, 0, 0)
+}
+
+fn shape_digest(s: Shape) -> u64 uses {} {
+  siphash.hash_one(s, shape_hash, 0, 0)
+}
 
 fn show(mut out: List[u8], text: String) -> () uses {} {
   text.append(mut out, text)
@@ -76,13 +88,13 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   match todo_from(parsed) {
     Ok(back) => {
       show(mut text, f"round trip equal: {todo_equal(t, back)}")
-      show(mut text, f"hash equal: {todo_hash(t) == todo_hash(back)}")
+      show(mut text, f"hash equal: {todo_digest(t) == todo_digest(back)}")
     },
     Error(e) => show(mut text, e),
   }
   let u = Todo(id: 7, title: "write", done: true, tags: ["a", "b"], note: Some("n"))
   show(mut text, f"changed equal: {todo_equal(t, u)}")
-  show(mut text, f"changed hash differs: {todo_hash(t) != todo_hash(u)}")
+  show(mut text, f"changed hash differs: {todo_digest(t) != todo_digest(u)}")
   let mut formatted: List[u8] = []
   todo_format(u, mut formatted)
   show(mut text, text.finish_valid(take formatted))
@@ -95,7 +107,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
       return Ok(())
     }
     let same = match shape_from(shape_parsed) {
-      Ok(back) => shape_equal(s, back) && shape_hash(s) == shape_hash(back),
+      Ok(back) => shape_equal(s, back) && shape_digest(s) == shape_digest(back),
       Error(_) => false,
     }
     show(mut text, f"{shape_json} {text.finish_valid(take line)} {same}")
