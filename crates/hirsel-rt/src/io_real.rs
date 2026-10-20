@@ -21,6 +21,9 @@ pub struct RealIo {
     /// The recording level's gate: every request and event passes through it.
     journal: crate::journal::Journaled,
     retain_history: bool,
+    /// Last validated read/write stream. Only ordinary calls mutate stream
+    /// authority; call clears both slots before executing one of them.
+    live_streams: [Option<(u64, u64, u64)>; 2],
     /// The host network provider, once a net entry handed its constructor over
     /// (`Adapter::net`); without it a host network request is a tool refusal.
     net: Option<Box<dyn NetProvider>>,
@@ -196,6 +199,7 @@ impl RealIo {
             stderr: Box::new(std::io::sink()),
             journal: Default::default(),
             retain_history: true,
+            live_streams: [None; 2],
             net: None,
             cooperative: None,
             cooperative_net: false,
@@ -508,11 +512,18 @@ impl Adapter for RealIo {
             NetBuffer::Read(bytes) => (false, bytes.is_empty()),
             _ => (true, false),
         };
-        let id = match self.state.host_stream(net, stream, write, empty) {
-            Ok(Some(Ok(id))) => id,
-            Ok(Some(Err(error))) => return Some(Ok(Err(error))),
-            Ok(None) => return None,
-            Err(error) => return Some(Err(error)),
+        let slot = usize::from(write);
+        let id = match self.live_streams[slot] {
+            Some((owner, handle, id)) if owner == net && handle == stream && !empty => id,
+            _ => match self.state.host_stream(net, stream, write, empty) {
+                Ok(Some(Ok(id))) => {
+                    self.live_streams[slot] = Some((net, stream, id));
+                    id
+                }
+                Ok(Some(Err(error))) => return Some(Ok(Err(error))),
+                Ok(None) => return None,
+                Err(error) => return Some(Err(error)),
+            },
         };
         if inline
             && let Some(provider) = &mut self.net
@@ -633,6 +644,9 @@ impl Adapter for RealIo {
         self.journal.issuer(task);
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        // Close, split/join, TLS and new grants use this protocol. Invalidate
+        // before any authority mutation, including failed or canceled operations.
+        self.live_streams = [None; 2];
         if self.state.awaits_injection(&request) {
             return Err(AdapterError::Blocked);
         }
@@ -2547,6 +2561,25 @@ pub(crate) mod borrowed_net_tests {
         let mut response = [0; 8];
         peer.read_exact(&mut response).unwrap();
         assert_eq!(&response, b"response");
+    }
+
+    #[test]
+    fn a_closed_stream_does_not_reuse_a_cached_live_grant() {
+        let (mut io, net, stream, mut peer) = connection();
+        io.discard_history();
+        peer.write_all(b"ab").unwrap();
+        let mut byte = [MaybeUninit::uninit(); 1];
+        assert_eq!(
+            io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut byte)),
+            Some(Ok(Ok(1)))
+        );
+        assert!(io.live_streams[0].is_some());
+        io.call(Request::Close { handle: stream }).unwrap();
+        assert_eq!(io.live_streams, [None; 2]);
+        assert!(matches!(
+            io.net_io(2, net, stream, false, &mut NetBuffer::Read(&mut byte)),
+            Some(Err(AdapterError::InvalidHandle(_)))
+        ));
     }
 
     #[test]

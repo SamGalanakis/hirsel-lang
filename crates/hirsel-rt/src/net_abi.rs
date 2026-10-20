@@ -231,6 +231,7 @@ pub(crate) unsafe fn call_recording(ctx: *mut TaskCtx, request: Request) -> Opti
         }
     }
 }
+#[inline(always)]
 unsafe fn borrowed_call(
     ctx: *mut TaskCtx,
     net: u64,
