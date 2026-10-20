@@ -14,7 +14,7 @@ mod origins;
 pub use hirsel_intern::IdHasher;
 #[cfg(feature = "id-salt")]
 pub use hirsel_intern::salt_ids;
-pub use ids::{DefId, DefMap};
+pub use ids::{DefId, DefMap, with_def_numbering, with_def_source};
 
 /// Stable SHA-256 digest of domain-separated, length-framed inputs (PROG-5).
 #[derive(
@@ -1363,16 +1363,13 @@ pub struct LexicalOwner {
 }
 impl serde::Serialize for LexicalOwner {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        serde::Serialize::serialize(&(self.def.path(), self.occurrence), s)
+        serde::Serialize::serialize(&(self.def, self.occurrence), s)
     }
 }
 impl<'de> serde::Deserialize<'de> for LexicalOwner {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let (path, occurrence): (DefPath, u32) = serde::Deserialize::deserialize(d)?;
-        Ok(Self {
-            def: DefId::intern(&path),
-            occurrence,
-        })
+        let (def, occurrence): (DefId, u32) = serde::Deserialize::deserialize(d)?;
+        Ok(Self { def, occurrence })
     }
 }
 /// A lexical site inside one item's arenas. `Item` is the item itself.

@@ -705,6 +705,7 @@ dependencies = [
  "hirsel-guard",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

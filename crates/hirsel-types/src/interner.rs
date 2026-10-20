@@ -136,6 +136,10 @@ impl TypeBase {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+    /// The id of base row `position`: the same in every interner over a base.
+    pub(crate) fn id(position: u32) -> TypeId {
+        TypeId::at(position)
+    }
     fn find(&self, hash: u64, row: &Type) -> Option<TypeId> {
         self.index
             .get(&hash)?

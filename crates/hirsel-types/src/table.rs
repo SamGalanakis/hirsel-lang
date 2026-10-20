@@ -179,10 +179,103 @@ impl TypeBase {
     }
 }
 
+/// A canonical table that grows as values serialize (the std image's one
+/// table): each id gets the next position the first time a serialization
+/// meets it, and `finish` adds every row reachable from those. A
+/// deterministic serialization order numbers rows the same in every session.
+pub struct TableBuilder {
+    types: Arc<TypeInterner>,
+    index: HashMap<TypeId, u32>,
+    order: Vec<TypeId>,
+}
+impl TableBuilder {
+    pub fn new(types: Arc<TypeInterner>) -> Self {
+        Self {
+            types,
+            index: HashMap::new(),
+            order: vec![],
+        }
+    }
+    fn position(&mut self, id: TypeId) -> u32 {
+        if !self.types.contains(id) {
+            return MISSING;
+        }
+        let next = self.order.len() as u32;
+        *self.index.entry(id).or_insert_with(|| {
+            self.order.push(id);
+            next
+        })
+    }
+    /// Serialize in `f` with each `TypeId` written as its position here.
+    pub fn with_encoding<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        let builder = std::mem::replace(self, Self::new(self.types.clone()));
+        SCOPE.with_borrow_mut(|s| s.push(Scope::Grow(builder)));
+        struct Restore<'a>(&'a mut TableBuilder);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                if let Some(Scope::Grow(builder)) = SCOPE.with_borrow_mut(|s| s.pop()) {
+                    *self.0 = builder;
+                }
+            }
+        }
+        let _restore = Restore(self);
+        f()
+    }
+    /// How many rows have a position.
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+    /// The table: every positioned row, then the rows they reach, each in
+    /// first-encounter order, with edges written as positions.
+    pub fn finish(mut self) -> TypeTable {
+        let mut rows = Vec::with_capacity(self.order.len());
+        let mut next = 0;
+        while next < self.order.len() {
+            let mut row = self.types.row(self.order[next]).clone();
+            row.kind = row.kind.map_edges(|edge| TypeId::raw(self.position(edge)));
+            rows.push(row);
+            next += 1;
+        }
+        TypeTable { rows }
+    }
+}
+
+impl TypeTable {
+    /// The immutable base holding this table's rows: position p becomes base
+    /// row p, so values decoded under `with_base_decoding` name them.
+    pub fn into_base(self) -> Arc<TypeBase> {
+        let len = self.rows.len();
+        let mut rows = Some(self.rows);
+        TypeBase::build(len, |ids| {
+            let mut rows = rows.take().expect("built once");
+            for row in &mut rows {
+                row.kind = row.kind.map_edges(|edge| {
+                    ids.get(edge.raw_index() as usize)
+                        .copied()
+                        .unwrap_or(TypeId::DANGLING)
+                });
+            }
+            rows
+        })
+    }
+}
+
+/// Deserialize in `f` with each table position read as the base row it is
+/// (`TypeTable::into_base`) in a base of `len` rows.
+pub fn with_base_decoding<R>(len: usize, f: impl FnOnce() -> R) -> R {
+    scoped(Scope::Base(len as u32), f)
+}
+
 /// How `TypeId` serializes on this thread: as a table position.
 enum Scope {
     Encode(HashMap<TypeId, u32>),
+    Grow(TableBuilder),
     Decode(Vec<TypeId>),
+    /// Positions of a base built by `TypeTable::into_base`.
+    Base(u32),
     /// Table rows, whose edges already are positions.
     Raw,
 }
@@ -231,8 +324,9 @@ impl TypeId {
 
 impl serde::Serialize for TypeId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let position = SCOPE.with_borrow(|scopes| match scopes.last() {
+        let position = SCOPE.with_borrow_mut(|scopes| match scopes.last_mut() {
             Some(Scope::Encode(index)) => Some(index.get(self).copied().unwrap_or(MISSING)),
+            Some(Scope::Grow(builder)) => Some(builder.position(*self)),
             Some(Scope::Raw) => Some(self.raw_index()),
             _ => None,
         });
@@ -254,6 +348,11 @@ impl<'de> serde::Deserialize<'de> for TypeId {
                         .copied()
                         .unwrap_or(TypeId::DANGLING),
                 ),
+                Some(Scope::Base(len)) => Some(if position < *len {
+                    TypeBase::id(position)
+                } else {
+                    TypeId::DANGLING
+                }),
                 Some(Scope::Raw) => Some(TypeId::raw(position)),
                 _ => None,
             })

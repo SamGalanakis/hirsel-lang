@@ -23,7 +23,10 @@ Wire tests use run-config's shared `hex` formatter as a dev dependency.
 - Persisted forms use canonical per-definition tables (`closure`,
   `encode_table`, `decode_table`): first-encounter order from the roots, never
   interner numbering. `TypeId` serializes only inside `with_table_encoding`/
-  `with_table_decoding`, as a table position.
+  `with_table_decoding`, as a table position. The std image's one table grows
+  as its values serialize (`TableBuilder`), and its rows become an immutable
+  `TypeBase` (`TypeTable::into_base`) whose positions values decode to
+  directly (`with_base_decoding`).
 - `GeneratedActualKey` is main's CT-5 key, the CT-3 closed spelling of each
   actual, interned once and memoized per TypeId.
 - `Signature` is self-contained. Fixed header defaults never come from bodies

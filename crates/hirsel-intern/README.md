@@ -24,6 +24,12 @@ Invariants and boundary:
   It must run before any id is assigned. `under_salts` reruns one test in a
   child process per seed and returns each run's output, for the O1 invariance
   tests.
+- `persist` lets a persisted form carry its own id tables (the std image): inside
+  an encoding scope an id serializes as its number in a `Numbering`, assigned in
+  first-encounter order, and inside a decoding scope a number reads back
+  through a `Source`. Symbols use `with_symbol_numbering`/`with_symbol_source`;
+  hirsel-syntax keeps DefId's scope stack. Outside a scope a Symbol is its
+  spelling.
 
 `jobs::map(jobs, tasks, cost, work)` is the one fan-out path. Tasks start
 longest first by `cost`, ties by input index; results come back in input order.

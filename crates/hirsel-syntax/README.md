@@ -21,7 +21,9 @@ Invariants and boundary:
   path order under any id assignment. `DefMap<T>` is a `HashMap` keyed by id in
   unspecified order: sort before any output. DefPath stays the persisted,
   hashed, printed and mangled form. `salt_ids` (feature `id-salt`) is
-  hirsel-intern's, re-exported.
+  hirsel-intern's, re-exported. A DefId (and a `LexicalOwner`'s) serializes as
+  its DefPath, or inside `with_def_numbering`/`with_def_source` as its number
+  in a definition table persisted beside the value (the std image).
 - The token tape covers every source byte once, in order, plus empty EOF; comments and invalid tokens remain (LANG-1).
 - Origin ranges cover significant syntax. An item's tokens include its leading trivia and the rest of its last line; the file owns leftover EOF trivia.
 - `ItemSyntax.text_hash` hashes the exact bytes of the item's tokens, including attributes, contracts and drop; no newline normalization.
