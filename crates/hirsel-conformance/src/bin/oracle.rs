@@ -156,7 +156,7 @@ fn produce(options: Options) -> ExitCode {
         eprintln!("produce requires --out DIR and a program\n{USAGE}");
         return ExitCode::from(2);
     };
-    match oracle::produce(&program, &options.config, &oracle::fresh_cache()) {
+    match oracle::produce(&program, &options.config, &oracle::fresh_prechecks()) {
         Ok(artifacts) => match write_artifacts(&out, &artifacts) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
