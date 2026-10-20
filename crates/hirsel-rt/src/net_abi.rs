@@ -233,7 +233,7 @@ pub(crate) unsafe fn call_recording(ctx: *mut TaskCtx, request: Request) -> Opti
 }
 unsafe fn borrowed_call(
     ctx: *mut TaskCtx,
-    request: Request,
+    request: &Request,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Option<Result<Completion, ()>> {
     let result =
@@ -448,13 +448,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
             payload.add(crate::alloc::sequence_elements_offset(1) as usize + count as usize)
         };
         let storage = unsafe { std::slice::from_raw_parts_mut(at.cast(), room as usize) };
-        if let Some(result) = unsafe {
-            borrowed_call(
-                ctx,
-                request.clone(),
-                &mut crate::io::NetBuffer::Read(storage),
-            )
-        } {
+        if let Some(result) =
+            unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Read(storage)) }
+        {
             let value = match result {
                 Ok(Completion::Count(value)) => value,
                 Ok(Completion::NetBytes(Err(error))) => Err(error),
@@ -503,13 +499,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
     // SAFETY: the caller grants capacity writable bytes; MaybeUninit preserves
     // the suffix and permits the same helper to fill a List's spare capacity.
     let storage = unsafe { std::slice::from_raw_parts_mut(buffer.cast(), capacity as usize) };
-    if let Some(result) = unsafe {
-        borrowed_call(
-            ctx,
-            request.clone(),
-            &mut crate::io::NetBuffer::Read(storage),
-        )
-    } {
+    if let Some(result) =
+        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Read(storage)) }
+    {
         let value = match result {
             Ok(Completion::Count(value)) => value,
             Ok(Completion::NetBytes(Err(error))) => Err(error),
@@ -551,13 +543,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
         stream: unsafe { s.read() },
         bytes: Vec::new(),
     };
-    if let Some(result) = unsafe {
-        borrowed_call(
-            ctx,
-            request.clone(),
-            &mut crate::io::NetBuffer::Write(bytes),
-        )
-    } {
+    if let Some(result) =
+        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Write(bytes)) }
+    {
         match result {
             Ok(Completion::Count(value)) => {
                 unsafe { out.write(NetWordResult::of(value)) };
@@ -603,13 +591,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
         stream: unsafe { s.read() },
         bytes: Vec::new(),
     };
-    if let Some(result) = unsafe {
-        borrowed_call(
-            ctx,
-            request.clone(),
-            &mut crate::io::NetBuffer::WriteAll(bytes),
-        )
-    } {
+    if let Some(result) =
+        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::WriteAll(bytes)) }
+    {
         match result {
             Ok(Completion::NetUnit(value)) => {
                 unsafe { out.write(NetUnitResult::of(value)) };

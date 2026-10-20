@@ -737,9 +737,20 @@ impl crate::io::State {
             _ => Err(AdapterError::InvalidHandle(listener)),
         }
     }
-    pub(crate) fn host_stream(&self, net: u64, stream: u64) -> Result<Option<u64>, AdapterError> {
+    pub(crate) fn host_stream(
+        &self,
+        request: &crate::io::Request,
+        net: u64,
+        stream: u64,
+    ) -> Result<Option<Result<u64, NetError>>, AdapterError> {
         let grant = self.stream_grant(net, stream)?;
-        Ok(matches!(grant.world, NetWorld::Host).then_some(grant.id))
+        if !matches!(grant.world, NetWorld::Host) {
+            return Ok(None);
+        }
+        Ok(Some(match self.stream_error(request, stream, &grant)? {
+            Some(error) => Err(error),
+            None => Ok(grant.id),
+        }))
     }
     /// Select the provider serving a world. Scripted worlds (`test.net`, `net.script@2`)
     /// attach here.
@@ -907,81 +918,7 @@ impl crate::io::State {
             | R::TlsAccept { net, stream, .. }
             | R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
-                if !self.half_serves(request, *stream) {
-                    return Err(AdapterError::InvalidHandle(*stream));
-                }
-                let invalid_tls = match request {
-                    R::TlsConnect {
-                        server_name,
-                        roots,
-                        identity,
-                        alpn,
-                        ..
-                    } => {
-                        !hirsel_run_schema::tls::alpn_valid(alpn)
-                            || identity.is_some_and(|digest| {
-                                self.tls_identities.get(stream).is_none_or(|known| {
-                                    known.chain != digest || known.key.is_none()
-                                })
-                            })
-                            || !self.tls().valid_name(server_name)
-                            || match roots {
-                                RootsDigest::WebPki(version) => {
-                                    version != crate::net_tls::WEBPKI_VERSION
-                                }
-                                RootsDigest::Pem(digest) => {
-                                    self.pem_validity.get(stream) != Some(&(*digest, true))
-                                }
-                            }
-                    }
-                    R::TlsAccept { server, .. } => self
-                        .tls_servers
-                        .get(stream)
-                        .is_none_or(|known| known.digest != *server || known.loaded.is_none()),
-                    _ => false,
-                };
-                // A TLS-only rule's stream carries no plaintext before its handshake.
-                let plaintext = !grant.tls
-                    && matches!(
-                        request,
-                        R::NetRead { .. }
-                            | R::NetWrite { .. }
-                            | R::NetWriteAll { .. }
-                            | R::Shutdown { .. }
-                    );
-                let denied = match grant.operation {
-                    NetOperation::ConnectTls => {
-                        plaintext
-                            || matches!(request, R::TlsConnect { server_name, .. } if *server_name != grant.address)
-                    }
-                    NetOperation::ListenTls => plaintext || matches!(request, R::TlsConnect { .. }),
-                    // Streams never carry a UDP rule.
-                    NetOperation::Connect
-                    | NetOperation::Listen
-                    | NetOperation::UdpBind
-                    | NetOperation::UdpPeer
-                    | NetOperation::UnixConnect
-                    | NetOperation::UnixListen
-                    | NetOperation::UnixListenRemoveStale => false,
-                } || matches!(request, R::TlsAccept { .. })
-                    && !matches!(
-                        grant.operation,
-                        NetOperation::Listen
-                            | NetOperation::ListenTls
-                            | NetOperation::UnixListen
-                            | NetOperation::UnixListenRemoveStale
-                    );
-                if invalid_tls
-                    || matches!(request, R::NetRead { max: 0, .. })
-                    || matches!(request, R::SetTimeout { timeout, .. } if zero(timeout))
-                    || matches!(request, R::TlsConnect { .. } | R::TlsAccept { .. } if grant.tls)
-                {
-                    Some(NetError::InvalidInput)
-                } else if denied {
-                    Some(NetError::NotGranted)
-                } else {
-                    None
-                }
+                self.stream_error(request, *stream, &grant)?
             }
             R::Accept { net, listener } | R::LocalAddr { net, listener } => {
                 self.listener_grant(*net, *listener)?;
@@ -989,6 +926,87 @@ impl crate::io::State {
             }
             _ => None,
         })
+    }
+    /// One stream authority/argument check, shared by the owned and borrowed paths.
+    fn stream_error(
+        &self,
+        request: &crate::io::Request,
+        stream: u64,
+        grant: &StreamGrant<'_>,
+    ) -> Result<Option<NetError>, AdapterError> {
+        use crate::io::Request as R;
+        if !self.half_serves(request, stream) {
+            return Err(AdapterError::InvalidHandle(stream));
+        }
+        let invalid_tls = match request {
+            R::TlsConnect {
+                server_name,
+                roots,
+                identity,
+                alpn,
+                ..
+            } => {
+                !hirsel_run_schema::tls::alpn_valid(alpn)
+                    || identity.is_some_and(|digest| {
+                        self.tls_identities
+                            .get(&stream)
+                            .is_none_or(|known| known.chain != digest || known.key.is_none())
+                    })
+                    || !self.tls().valid_name(server_name)
+                    || match roots {
+                        RootsDigest::WebPki(version) => version != crate::net_tls::WEBPKI_VERSION,
+                        RootsDigest::Pem(digest) => {
+                            self.pem_validity.get(&stream) != Some(&(*digest, true))
+                        }
+                    }
+            }
+            R::TlsAccept { server, .. } => self
+                .tls_servers
+                .get(&stream)
+                .is_none_or(|known| known.digest != *server || known.loaded.is_none()),
+            _ => false,
+        };
+        // A TLS-only rule's stream carries no plaintext before its handshake.
+        let plaintext = !grant.tls
+            && matches!(
+                request,
+                R::NetRead { .. } | R::NetWrite { .. } | R::NetWriteAll { .. } | R::Shutdown { .. }
+            );
+        let denied = match grant.operation {
+            NetOperation::ConnectTls => {
+                plaintext
+                    || matches!(request, R::TlsConnect { server_name, .. } if *server_name != grant.address)
+            }
+            NetOperation::ListenTls => plaintext || matches!(request, R::TlsConnect { .. }),
+            // Streams never carry a UDP rule.
+            NetOperation::Connect
+            | NetOperation::Listen
+            | NetOperation::UdpBind
+            | NetOperation::UdpPeer
+            | NetOperation::UnixConnect
+            | NetOperation::UnixListen
+            | NetOperation::UnixListenRemoveStale => false,
+        } || matches!(request, R::TlsAccept { .. })
+            && !matches!(
+                grant.operation,
+                NetOperation::Listen
+                    | NetOperation::ListenTls
+                    | NetOperation::UnixListen
+                    | NetOperation::UnixListenRemoveStale
+            );
+        Ok(
+            if invalid_tls
+                || matches!(request, R::NetRead { max: 0, .. })
+                || matches!(request, R::SetTimeout { timeout, .. } if matches!(timeout, NetTimeout::Nanos(0)))
+                || matches!(request, R::TlsConnect { .. } | R::TlsAccept { .. } if grant.tls)
+            {
+                Some(NetError::InvalidInput)
+            } else if denied {
+                Some(NetError::NotGranted)
+            } else {
+                None
+            },
+        )
     }
     /// Check every grant before any provider effect (CAP-1), then ask the
     /// provider of the Net's world. Input validation precedes the grant check (docs/spec/core-library.md).

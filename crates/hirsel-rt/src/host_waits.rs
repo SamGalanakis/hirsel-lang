@@ -252,7 +252,7 @@ pub(crate) unsafe fn is_runner_call(ctx: *mut TaskCtx, token: u64) -> bool {
 /// Same context/binding contract as issue; buffer's storage lives through the call.
 pub(crate) unsafe fn issue_net(
     ctx: *mut TaskCtx,
-    request: Request,
+    request: &Request,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Stopped<Option<(Result<Completion, AdapterError>, bool)>> {
     // Use the ordinary cancellation path, including its preflight checks.
@@ -265,7 +265,7 @@ pub(crate) unsafe fn issue_net(
     binding.waits.next += 1;
     binding.adapter.enter(token);
     loop {
-        match binding.adapter.net_io(&request, buffer) {
+        match binding.adapter.net_io(request, buffer) {
             None => {
                 binding.adapter.finish(token);
                 return Ok(None);
@@ -285,7 +285,7 @@ pub(crate) unsafe fn issue_net(
     binding.waits.parked.insert(
         token,
         Parked {
-            request,
+            request: request.clone(),
             // SAFETY: issue_net cannot return until the row is removed. A stop abandons
             // the run, including its wait table; no pointer escapes the run.
             borrowed: Some((buffer as *mut crate::io::NetBuffer<'_>).cast()),

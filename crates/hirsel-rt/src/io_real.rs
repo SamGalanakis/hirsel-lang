@@ -507,15 +507,15 @@ impl Adapter for RealIo {
             | Request::NetWriteAll { net, stream, .. } => (*net, *stream),
             _ => return None,
         };
-        let id = match self.state.host_stream(net, stream) {
-            Ok(Some(id)) => id,
+        let id = match self.state.host_stream(request, net, stream) {
+            Ok(Some(Ok(id))) => id,
+            Ok(Some(Err(error))) => {
+                return Some(Ok(crate::io_checks::net_completion(request, error)));
+            }
             Ok(None) => return None,
             Err(error) => return Some(Err(error)),
         };
         Some((|| {
-            if let Some(completion) = self.state.preflight(request)? {
-                return Ok(completion);
-            }
             let provider = self
                 .net
                 .as_mut()
