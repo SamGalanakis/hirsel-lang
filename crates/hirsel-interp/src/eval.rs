@@ -1713,20 +1713,21 @@ pub(crate) fn execute_frames(
             }
             continue;
         }
-        // Fuel and the memory model are charged at function entries and back-edges.
+        // Fuel is charged at function entries and back-edges, and the memory model is
+        // measured before the step after a charge that may pass the budget.
         if frames.last().is_some_and(|f| f.fuel_due) {
             frames.last_mut().unwrap().fuel_due = false;
             budgets.run.fuel().map_err(Error::BudgetExceeded)?;
-            if budgets.run.due() {
-                let live = frames
-                    .iter()
-                    .chain(runnable.iter().flat_map(|(_, stack, _)| stack))
-                    .chain(parked.iter().flat_map(|(_, stack, _)| stack))
-                    .chain(hand_offs.iter().flat_map(|h| &h.frames))
-                    .map(Frame::logical_bytes)
-                    .fold(operations.retained_bytes(), u64::saturating_add);
-                budgets.run.measured(live).map_err(Error::BudgetExceeded)?;
-            }
+        }
+        if budgets.run.due() {
+            let live = frames
+                .iter()
+                .chain(runnable.iter().flat_map(|(_, stack, _)| stack))
+                .chain(parked.iter().flat_map(|(_, stack, _)| stack))
+                .chain(hand_offs.iter().flat_map(|h| &h.frames))
+                .map(Frame::logical_bytes)
+                .fold(operations.retained_bytes(), u64::saturating_add);
+            budgets.run.measured(live).map_err(Error::BudgetExceeded)?;
         }
         let frame = frames.last_mut().unwrap();
         let code = match frame.code {

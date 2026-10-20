@@ -647,7 +647,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_payload", Local),
     entry("hirsel_rt_v2_capacity", Local),
     // budget.rs
-    entry("hirsel_rt_v2_fuel_exhausted", Local),
+    entry("hirsel_rt_v2_fuel_refill", Local),
     // codec.rs
     entry("hirsel_rt_v2_codec_encode", Local),
     // A failed decode drops what it built.

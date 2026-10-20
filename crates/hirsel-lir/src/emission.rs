@@ -83,7 +83,7 @@ pub struct EmitInputs<'a> {
     pub measurement: bool,
     /// Charge the run's fuel at every fuel point (`crate::fuel::fuel_points`): the word at
     /// `runtime_abi::CTX_FUEL_OFFSET` loses one, and a negative result calls
-    /// `hirsel_rt_v2_fuel_exhausted`. Without it no code reads the word, so a run without a
+    /// `hirsel_rt_v2_fuel_refill` and continues. Without it no code reads the word, so a run without a
     /// fuel budget pays nothing.
     pub fuel: bool,
 }

@@ -16,7 +16,7 @@ const ENGINES: [&[&str]; 3] = [&[], &["--native"], &["--native", "--backend", "c
 const GRANTS: &str =
     r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[]}"#;
 /// `finite_release` spends its fuel inside a releasing walk.
-const FUEL_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@1","fuel":200000}}"#;
+const FUEL_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@2","fuel":200000}}"#;
 
 /// Each trace, its grants and the live outcome every recording of it ends with.
 const TRACES: [(&str, &str, &str); 8] = [

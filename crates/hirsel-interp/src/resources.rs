@@ -60,7 +60,7 @@ impl Drop for OperationState {
     }
 }
 impl OperationState {
-    /// The logical bytes this suspended operation holds (`budgets.limits@1`).
+    /// The logical bytes this suspended operation holds (`budgets.limits@2`).
     pub(crate) fn logical_bytes(&self) -> u64 {
         let mut total = self
             .arguments

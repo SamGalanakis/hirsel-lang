@@ -142,7 +142,7 @@ uses its `speed` level. Release builds use LLVM; combining `--release` with
 `--backend cranelift` exits 2 with that diagnostic. Its parity gate covers x86-64
 and AArch64. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args. `--fuel` compiles fuel checks at function entries and loop heads, so the executable
-can enforce a fuel budget (`budgets.limits@1`); without it a fuel budget is refused, and
+can enforce a fuel budget (`budgets.limits@2`); without it a fuel budget is refused, and
 `hirsel run --native` adds the checks only when its run has a fuel budget. A run that
 spends a budget prints `budget exceeded: <kind>` and exits 5 in every launcher.
 

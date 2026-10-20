@@ -929,7 +929,7 @@ fn a_fuel_budget_binds_only_to_code_that_charges_fuel_and_a_memory_budget_to_any
     };
     let mut record = empty();
     record.budgets = Some(Budgets {
-        provider: "budgets.limits@1".into(),
+        provider: "budgets.limits@2".into(),
         fuel: Some(1000),
         memory_bytes: None,
     });
@@ -940,7 +940,7 @@ fn a_fuel_budget_binds_only_to_code_that_charges_fuel_and_a_memory_budget_to_any
         Err(RunRefusal::Unsupported { field }) if field == "budgets.fuel"
     ));
     record.budgets = Some(Budgets {
-        provider: "budgets.limits@1".into(),
+        provider: "budgets.limits@2".into(),
         fuel: None,
         memory_bytes: Some(1 << 20),
     });
@@ -951,7 +951,7 @@ fn a_fuel_budget_binds_only_to_code_that_charges_fuel_and_a_memory_budget_to_any
 #[test]
 fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound() {
     let limits = |fuel, memory_bytes| Budgets {
-        provider: "budgets.limits@1".into(),
+        provider: "budgets.limits@2".into(),
         fuel,
         memory_bytes,
     };
@@ -962,7 +962,7 @@ fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound(
     let text = std::str::from_utf8(run.canonical()).unwrap();
     assert!(
         text.ends_with(
-            r#""budgets":{"provider":"budgets.limits@1","fuel":1000,"memory_bytes":null}}"#
+            r#""budgets":{"provider":"budgets.limits@2","fuel":1000,"memory_bytes":null}}"#
         ),
         "{text}"
     );
@@ -990,9 +990,10 @@ fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound(
             },
             "invalid",
         ),
+        // `budgets.limits@2` retires @1.
         (
             Budgets {
-                provider: "budgets.limits@2".into(),
+                provider: "budgets.limits@1".into(),
                 fuel: Some(1),
                 memory_bytes: None,
             },
@@ -1012,7 +1013,7 @@ fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound(
     }
     // A grants template chooses the budget like any other host policy.
     let run = RunConfig::bind_grants(
-        br#"{"budgets":{"provider":"budgets.limits@1","fuel":5}}"#,
+        br#"{"budgets":{"provider":"budgets.limits@2","fuel":5}}"#,
         [0; 32],
         "probe@1/main".into(),
         LaunchKind::Main,
@@ -1021,7 +1022,7 @@ fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound(
     assert_eq!(run.budgets(), Some(&limits(Some(5), None)));
     assert!(
         RunConfig::bind_grants(
-            br#"{"budgets":{"provider":"budgets.limits@1","fuel":5,"wall":1}}"#,
+            br#"{"budgets":{"provider":"budgets.limits@2","fuel":5,"wall":1}}"#,
             [0; 32],
             "probe@1/main".into(),
             LaunchKind::Main,

@@ -1162,8 +1162,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         hirsel_lir::runtime_abi::CTX_HEAP_ID_OFFSET == hirsel_lir::runtime_abi::CTX_FUEL_OFFSET + 8
     );
 
-    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word loses one,
-    /// and a negative result ends the run in `hirsel_rt_v2_fuel_exhausted`.
+    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word, the running
+    /// task's chunk, loses one, and a negative result calls `hirsel_rt_v2_fuel_refill`, which
+    /// stores the next chunk (or stops the run) and returns to the code after the charge.
     fn charge_fuel(&mut self) -> Emitted {
         let offset = hirsel_lir::runtime_abi::CTX_FUEL_OFFSET;
         let fuel = self.load_ty(types::I64, self.context, offset);
@@ -1177,8 +1178,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.b.ins().brif(spent, cold, &[], next, &[]);
         self.b.switch_to_block(cold);
         let context = self.context;
-        self.rt(RuntimeEntry::FuelExhausted, &[context])?;
-        self.b.ins().trap(TRAP);
+        self.rt(RuntimeEntry::FuelRefill, &[context])?;
+        self.b.ins().jump(next, &[]);
         self.b.switch_to_block(next);
         Ok(())
     }

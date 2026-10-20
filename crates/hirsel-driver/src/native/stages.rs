@@ -173,7 +173,7 @@ pub struct ReadyProgram {
     /// `admit.safe@1` refuses (CAP-6).
     pub(crate) escaping: BTreeSet<DefPath>,
     /// Emit fuel checks (`EmitInputs::fuel`), so the executable enforces a fuel budget
-    /// (`budgets.limits@1`); without them it refuses one.
+    /// (`budgets.limits@2`); without them it refuses one.
     pub fuel: bool,
     /// The failure table a program that isolates registers at launch (FAIL-2), bound with
     /// the revisions.

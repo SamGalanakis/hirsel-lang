@@ -592,6 +592,11 @@ pub(crate) struct RegionPool {
 // hand a segment over with release/acquire ordering.
 unsafe impl Send for RegionPool {}
 
+/// The size of the segment an empty pool gives a request of `need` bytes.
+fn canonical_size(need: u64) -> u64 {
+    need.max(SEGMENT_SIZE as u64).next_multiple_of(16)
+}
+
 fn segment_layout(size: u64) -> HostLayout {
     // SAFETY: sizes are validated multiples of 16 below isize::MAX.
     unsafe { HostLayout::from_size_align_unchecked(size as usize, 16) }
@@ -623,11 +628,16 @@ impl RegionPool {
     /// A segment with at least `need` bytes including its header, lent to a region. A standard
     /// request takes a pooled standard segment and an oversized one the first pooled segment
     /// that fits, so small regions never pin large segments; otherwise it allocates.
+    ///
+    /// Under a memory budget the region is charged the segment an empty pool would give it
+    /// ([`canonical_size`]), and an oversized request takes only a pooled segment of exactly
+    /// that size, so the region's segment sequence, and every later charge, is the one a cold
+    /// pool gives (`budgets.limits@2`).
     fn take(&mut self, need: u64) -> *mut Segment {
+        let size = canonical_size(need);
+        self.meter.charge(size);
         let mut found = self.unlink_idle(need);
         if found.is_null() {
-            let size = need.max(SEGMENT_SIZE as u64).next_multiple_of(16);
-            self.meter.hold(size);
             // SAFETY: nonzero size.
             found = unsafe { host_alloc(segment_layout(size)) }.cast::<Segment>();
             if found.is_null() {
@@ -649,8 +659,11 @@ impl RegionPool {
     }
 
     /// An idle standard segment lent to a region, or null when the pool has none: it never
-    /// allocates.
+    /// allocates. Under a memory budget it lends none, since a cold pool has none to lend.
     fn take_idle(&mut self) -> *mut Segment {
+        if self.meter.metered() {
+            return ptr::null_mut();
+        }
         let found = self.unlink_idle(SEGMENT_SIZE as u64);
         if !found.is_null() {
             // SAFETY: `found` is this pool's segment.
@@ -662,6 +675,7 @@ impl RegionPool {
     /// Unlink and return the pooled segment a request of `need` bytes takes, or null.
     fn unlink_idle(&mut self, need: u64) -> *mut Segment {
         let standard = need <= SEGMENT_SIZE as u64;
+        let exact = self.meter.metered();
         let mut found = ptr::null_mut();
         let mut link: *mut *mut Segment = &mut self.idle;
         // SAFETY: the idle list holds this pool's segments.
@@ -671,6 +685,8 @@ impl RegionPool {
                 let size = (*segment).size;
                 if if standard {
                     size == SEGMENT_SIZE as u64
+                } else if exact {
+                    size == canonical_size(need)
                 } else {
                     size >= need
                 } {
@@ -727,6 +743,8 @@ impl RegionPool {
     ) {
         // SAFETY: caller contract.
         unsafe {
+            // The region's logical storage ends at its exit, wherever the segment returns.
+            self.meter.credit((*segment).size);
             if (*segment).owner == self.id {
                 self.give_back(segment);
             } else {
@@ -787,7 +805,6 @@ impl RegionPool {
             unsafe {
                 self.idle = (*segment).prev;
                 self.idle_bytes -= (*segment).size;
-                self.meter.give((*segment).size);
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
             }
         }
@@ -810,7 +827,6 @@ impl RegionPool {
                 }
                 #[cfg(feature = "memcheck")]
                 memcheck::destroy_pool(segment.cast());
-                self.meter.give((*segment).size);
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
                 segment = next;
             }

@@ -119,7 +119,7 @@ pub fn build_path_native_backend(
             options.discharge = proofs.discharge.clone();
         }
         let mut program = super::build(&validated, &options)?;
-        // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
+        // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).
         program.fuel = fuel;
         let scratch = Scratch::new()?;
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")

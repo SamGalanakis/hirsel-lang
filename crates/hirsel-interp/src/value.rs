@@ -724,7 +724,7 @@ impl Value {
     }
 }
 
-/// The interpreter's memory model for `budgets.limits@1` (`memory_bytes`): every value
+/// The interpreter's memory model for `budgets.limits@2` (`memory_bytes`): every value
 /// node is 16 bytes, and a String's or Bytes' contents add their length. A frozen
 /// `Shared` root counts as its node only, so a value several roots share is never
 /// counted twice.

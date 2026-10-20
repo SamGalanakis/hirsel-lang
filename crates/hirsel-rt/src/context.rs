@@ -238,6 +238,8 @@ pub(crate) struct RunShared {
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
     pub(crate) heaps: Box<crate::heaps::HeapRegistry>,
+    /// The fuel not yet handed out as chunks (`crate::budget`).
+    pub(crate) fuel: crate::budget::FuelPool,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -413,11 +415,22 @@ impl TaskCtx {
     pub unsafe fn bind_io_data(&mut self, data: *mut std::ffi::c_void) {
         self.run().io_data = data;
     }
-    /// Apply the run's budgets (`budgets.limits@1`) before its entry runs.
+    /// Apply the run's budgets (`budgets.limits@2`) before its entry runs. At width 1 the
+    /// fuel pool hands the whole budget out as one chunk, so exhaustion is exact; the running
+    /// task's word is emptied, so its next fuel point takes that chunk. Under a memory budget
+    /// every heap of the run stops allocating and freeing inline, so the meter sees each one.
     pub(crate) fn set_budgets(&mut self, fuel: Option<u64>, memory_bytes: Option<u64>) {
-        let fuel = fuel.map_or(i64::MAX, |f| i64::try_from(f).unwrap_or(i64::MAX));
-        self.heap().set_fuel(fuel);
-        self.heap().meter.set_limit(memory_bytes.unwrap_or(0));
+        self.run().fuel = crate::budget::FuelPool::new(fuel, true);
+        self.heap().set_fuel(0);
+        let limit = memory_bytes.unwrap_or(0);
+        self.heap().meter.set_limit(limit);
+        if limit != 0 {
+            let heaps: Vec<_> = self.run_ref().heaps.heaps().collect();
+            for heap in heaps {
+                // SAFETY: the run's heaps are live, and no other task runs before the entry.
+                unsafe { (*heap).set_metered() };
+            }
+        }
     }
     /// Retrieve the explicitly bound adapter; there is no ambient fallback.
     pub(crate) fn io_data(&self) -> *mut std::ffi::c_void {
@@ -489,6 +502,11 @@ impl TaskCtx {
         let audit = Audit::default();
         #[cfg(feature = "measurement")]
         if let Some(mut output) = self.run().measurement_output.take() {
+            let budget = self.budget_counters();
+            let measurement = &mut self.heap().measurement;
+            measurement.meter_ops = budget.meter_ops;
+            measurement.metered_allocations = budget.allocations;
+            measurement.fuel_refills = budget.fuel_refills;
             // Snapshot before forced teardown, so leaks remain visible in the counters.
             self.heap()
                 .measurement
@@ -516,6 +534,7 @@ impl TaskCtx {
         let heap = self.heap();
         heap.regions.release_all();
         heap.release_all();
+        heap.meter.clear();
         self.failure.clear();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
@@ -636,6 +655,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free: None,
         root_overflow: Default::default(),
         heaps,
+        fuel: Default::default(),
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

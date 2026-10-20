@@ -1,4 +1,4 @@
-//! Fuel points (`budgets.limits@1`, docs/spec/determinism.md "Budgets"): the blocks where
+//! Fuel points (`budgets.limits@2`, docs/spec/determinism.md "Budgets"): the blocks where
 //! a fuel build charges one unit of the run's fuel each time the block starts. They are
 //! the entry block and the target of every feedback edge of the loop nesting forest
 //! (`hirsel_graph::feedback_edges`), over normal and failure edges alike, so every

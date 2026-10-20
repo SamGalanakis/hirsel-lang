@@ -33,6 +33,11 @@ pub struct Counters {
     pub remote_collected: u64,
     /// Orphaned heaps a new worker took over.
     pub heap_adoptions: u64,
+    /// Logical charges and credits under a memory budget, heap allocations charged and fuel
+    /// chunks handed out (`crate::budget`; design §5 headroom row "Meter, permits").
+    pub meter_ops: u64,
+    pub metered_allocations: u64,
+    pub fuel_refills: u64,
 }
 
 impl Default for Counters {
@@ -55,6 +60,9 @@ impl Default for Counters {
             remote_frees: 0,
             remote_collected: 0,
             heap_adoptions: 0,
+            meter_ops: 0,
+            metered_allocations: 0,
+            fuel_refills: 0,
         }
     }
 }
@@ -108,6 +116,9 @@ impl Counters {
             ("remote_frees", self.remote_frees),
             ("remote_collected", self.remote_collected),
             ("heap_adoptions", self.heap_adoptions),
+            ("meter_ops", self.meter_ops),
+            ("metered_allocations", self.metered_allocations),
+            ("fuel_refills", self.fuel_refills),
         ] {
             writeln!(out, "{name} {value}")?;
         }

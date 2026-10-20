@@ -1,4 +1,4 @@
-//! Run budgets (`budgets.limits@1`): on the interpreter and both native backends, an
+//! Run budgets (`budgets.limits@2`): on the interpreter and both native backends, an
 //! infinite loop and an unbounded allocation each end their run with a typed
 //! BudgetExceeded outcome after the output they produced, and their twins, a bounded loop
 //! and an allocation that frees what it allocates, run to completion under the same
@@ -75,12 +75,13 @@ complete 2\n\
 
 fn grants(budgets: &str) -> String {
     format!(
-        r#"{{"io":{{"stdout":"stdout.bytes@1","dirs":[]}},"args":[],"budgets":{{"provider":"budgets.limits@1",{budgets}}}}}"#
+        r#"{{"io":{{"stdout":"stdout.bytes@1","dirs":[]}},"args":[],"budgets":{{"provider":"budgets.limits@2",{budgets}}}}}"#
     )
 }
 const FUEL: &str = r#""fuel":100000"#;
 const MEMORY: &str = r#""memory_bytes":65536"#;
-/// Natively memory is backing storage, 64 KiB slabs and large blocks.
+/// Natively memory is logical storage: size classes, large requests rounded up to 4 KiB and
+/// canonical region segments.
 const NATIVE_MEMORY: &str = r#""memory_bytes":8388608"#;
 
 /// The interpreter, then each native backend.
@@ -313,4 +314,50 @@ fn an_executable_built_without_fuel_checks_refuses_a_fuel_budget() {
     assert_eq!(spent.stdout, b"start\n", "{spent:?}");
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(exe).unwrap();
+}
+
+/// A fuel build without a fuel budget takes a 64 Ki-point chunk at a time: a loop of 300 000
+/// iterations refills its chunk several times (`hirsel_rt_v2_fuel_refill` returns into the
+/// loop) and finishes on both backends, and a budget below its charges still stops it.
+#[test]
+fn a_fuel_build_without_a_budget_refills_its_chunk_and_finishes_on_both_backends() {
+    const LONG: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut i: u64 = 0
+  while i < 300000u64 {
+    i += 1
+  }
+  let _ = out.print(io.stdout(rt)?, "done\n")
+  Ok(())
+}
+"#;
+    let source = super::file(LONG);
+    for backend in ["llvm", "cranelift"] {
+        let exe = source.with_extension(format!("{backend}.exe"));
+        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("build")
+            .arg("--fuel")
+            .arg("--backend")
+            .arg(backend)
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert_eq!(built.status.code(), Some(0), "{built:?}");
+        let finished = Command::new(&exe)
+            .arg("--hirsel-grants")
+            .arg(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#)
+            .output()
+            .unwrap();
+        assert_done(&finished);
+        let spent = Command::new(&exe)
+            .arg("--hirsel-grants")
+            .arg(grants(FUEL))
+            .output()
+            .unwrap();
+        assert_eq!(spent.status.code(), Some(5), "{spent:?}");
+        assert!(spent.stdout.is_empty(), "{spent:?}");
+        std::fs::remove_file(exe).unwrap();
+    }
+    std::fs::remove_file(source).unwrap();
 }

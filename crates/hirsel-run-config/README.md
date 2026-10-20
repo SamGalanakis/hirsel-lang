@@ -68,7 +68,7 @@ artifact/compiler/position/instance details never belong in those fields.
 Known provider contracts have one closed enumeration, `ProviderContract`:
 `tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1` and
 `clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1`,
-`process.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@1`. The validator checks the exact projection and version.
+`process.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@2`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
 belongs to tooling provenance. Unknown contracts and versions refuse as Unsupported.
 `inputs.scheduler` names `fifo`, `random` or `pct`, version 1 (docs/spec/determinism.md,
@@ -163,7 +163,7 @@ admission checked.
 
 `budgets` is the record's last member: absent for `budgets.none@1` (null and an explicit
 `{"provider":"budgets.none@1"}` normalize to absence, and the canonical bytes omit it, so
-records without budgets keep their pre-budget identity), or `budgets.limits@1` with `fuel` and
+records without budgets keep their pre-budget identity), or `budgets.limits@2` with `fuel` and
 `memory_bytes`, each a positive u64 or null, at least one present. `ValidatedRun::budgets`
 returns it; budgets are host policy, part of run identity, and grant nothing. Templates may
 choose them. An adapter that cannot enforce one refuses the launch (`BudgetKind` names the

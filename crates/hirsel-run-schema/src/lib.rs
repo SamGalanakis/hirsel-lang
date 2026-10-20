@@ -121,7 +121,7 @@ impl ProviderContract {
             Self::AdmitAny => "admit.any@1",
             Self::AdmitSafe => "admit.safe@1",
             Self::BudgetsNone => "budgets.none@1",
-            Self::BudgetsLimits => "budgets.limits@1",
+            Self::BudgetsLimits => "budgets.limits@2",
             Self::RunnerLocalThreads => "local.threads@1",
             Self::RunnerSim => "sim@1",
             Self::TelemetryCapture => "telemetry.capture@1",
@@ -274,9 +274,10 @@ pub enum CodeReach {
     Escapes(Vec<String>),
 }
 /// The run's resource budgets: host policy, never authority. `budgets.none@1`
-/// imposes none and normalizes to an absent entry; `budgets.limits@1` bounds the
-/// run's fuel (function entries and loop back-edges) and the bytes its engine's
-/// allocator holds for it, each null for unbounded and at least one present.
+/// imposes none and normalizes to an absent entry; `budgets.limits@2` bounds the
+/// run's fuel (function entries and loop back-edges) and its logical storage (live blocks'
+/// size classes, large requests rounded up to 4 KiB, regions' canonical segments), each null
+/// for unbounded and at least one present; it retires `budgets.limits@1`, which refuses.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Budgets {

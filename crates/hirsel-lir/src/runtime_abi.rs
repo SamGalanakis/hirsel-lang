@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 26;
+pub const ABI_VERSION: u32 = 27;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
@@ -113,9 +113,10 @@ pub const CTX_FREE_INLINE_OFFSET: u64 = 4;
 pub const CTX_IDLE_SLABS_OFFSET: u64 = 8;
 pub const CTX_PAGES_OFFSET: u64 = 16;
 pub const POOL_COUNT: u64 = 64;
-/// After the pages, the `i64` fuel the run has left (`budgets.limits@1`): a fuel build's
-/// code subtracts one at each fuel point and calls `hirsel_rt_v2_fuel_exhausted` when the
-/// result is negative. A run without a fuel budget starts it at `i64::MAX`.
+/// After the pages, the running task's `i64` fuel chunk (`budgets.limits@2`, runtime ABI 27): a
+/// fuel build's code subtracts one at each fuel point and, when the result is negative, calls
+/// `hirsel_rt_v2_fuel_refill`, which stores the next chunk in the word and returns (or stops the
+/// run), so the code continues after the call.
 pub const CTX_FUEL_OFFSET: u64 = CTX_PAGES_OFFSET + 8 * POOL_COUNT;
 /// After the fuel word, the `u32` id of the running worker's heap (runtime ABI 26). A page's
 /// `u32` owner at [`PAGE_OWNER_OFFSET`] is its heap's id: compiled code frees a small block
@@ -482,8 +483,9 @@ pub enum RuntimeEntry {
     /// A callback failed: the process ends (PROG-4).
     CallbackFailed,
     ExitReport,
-    /// A fuel point found the run's fuel spent: the run ends with BudgetExceeded.
-    FuelExhausted,
+    /// A fuel point found the running task's chunk spent: the runtime stores the next chunk
+    /// and returns, or ends the run with BudgetExceeded (runtime ABI 27).
+    FuelRefill,
     /// A context for a new worker of a run, on its own heap (runtime ABI 26).
     WorkerCreate,
     /// A worker retires; its heap stays in the run, orphaned.
@@ -632,7 +634,7 @@ impl RuntimeEntry {
         Self::CallbackContext,
         Self::CallbackFailed,
         Self::ExitReport,
-        Self::FuelExhausted,
+        Self::FuelRefill,
         Self::WorkerCreate,
         Self::WorkerRetire,
         Self::WorkerCollect,
@@ -1074,7 +1076,7 @@ impl RuntimeEntry {
                     ]
                 },
             ),
-            Self::FuelExhausted => ("hirsel_rt_v2_fuel_exhausted", VOID, const { &[CTX] }),
+            Self::FuelRefill => ("hirsel_rt_v2_fuel_refill", VOID, const { &[CTX] }),
             Self::WorkerCreate => (
                 "hirsel_rt_v2_worker_create",
                 ptr(N::Ctx, 1),
@@ -1202,7 +1204,7 @@ snapshot_enum!(RuntimeEntry {
     CallbackContext,
     CallbackFailed,
     ExitReport,
-    FuelExhausted,
+    FuelRefill,
     WorkerCreate,
     WorkerRetire,
     WorkerCollect,

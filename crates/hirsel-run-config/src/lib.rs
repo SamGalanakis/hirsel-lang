@@ -409,7 +409,7 @@ impl RunConfig {
                     if budgets.fuel.is_none() && budgets.memory_bytes.is_none() {
                         return Err(invalid(
                             "budgets",
-                            "budgets.limits@1 needs fuel or memory_bytes",
+                            "budgets.limits@2 needs fuel or memory_bytes",
                         ));
                     }
                     if budgets.fuel == Some(0) || budgets.memory_bytes == Some(0) {
@@ -513,7 +513,7 @@ impl ValidatedRun {
     pub fn net_grant(&self) -> Option<&NetGrant> {
         self.record.io.as_ref()?.net.as_ref()
     }
-    /// The run's `budgets.limits@1` entry, or None under `budgets.none@1`.
+    /// The run's `budgets.limits@2` entry, or None under `budgets.none@1`.
     pub fn budgets(&self) -> Option<&Budgets> {
         self.record.budgets.as_ref()
     }

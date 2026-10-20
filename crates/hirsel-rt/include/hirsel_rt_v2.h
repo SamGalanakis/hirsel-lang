@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 26
+#define HIRSEL_RT_V2_ABI_VERSION 27
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -111,9 +111,9 @@ extern "C" {
 #define HIRSEL_RT_V2_CTX_IDLE_SLABS_OFFSET 8
 #define HIRSEL_RT_V2_CTX_PAGES_OFFSET 16
 #define HIRSEL_RT_V2_POOL_COUNT 64
-/* Run budgets (budgets.limits@1): after the pages, the i64 fuel the run has left. A fuel
- * build's code subtracts one at each fuel point and calls hirsel_rt_v2_fuel_exhausted when
- * the result is negative; a run without a fuel budget starts it at INT64_MAX. */
+/* Run budgets (budgets.limits@2, runtime ABI 27): after the pages, the running task's i64 fuel
+ * chunk. A fuel build's code subtracts one at each fuel point and, when the result is negative,
+ * calls hirsel_rt_v2_fuel_refill and continues after the call. */
 #define HIRSEL_RT_V2_CTX_FUEL_OFFSET 528
 /* Runtime ABI 26: after the fuel word, the u32 id of the heap whose pages the context holds
  * (the running worker's). A slab's u32 owner is its heap's id; its xthread_free word is the
@@ -680,9 +680,11 @@ void hirsel_rt_v2_foreign_violation(uint64_t site);
 hirsel_rt_v2_ctx *hirsel_rt_v2_callback_context(void);
 void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
 
-/* A fuel point found the run's fuel spent: the run ends with BudgetExceeded (fuel), as a
-   Blocked run ends, and the call does not return. */
-void hirsel_rt_v2_fuel_exhausted(hirsel_rt_v2_ctx *ctx);
+/* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime
+   stores the next chunk, less the point the failed charge spent, in the word and returns, so
+   the code continues; when the run's fuel is spent the run ends with BudgetExceeded (fuel), as
+   a Blocked run ends, and the call does not return (runtime ABI 27). */
+void hirsel_rt_v2_fuel_refill(hirsel_rt_v2_ctx *ctx);
 
 #ifdef __cplusplus
 }

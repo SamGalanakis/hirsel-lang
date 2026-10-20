@@ -88,7 +88,7 @@ impl std::fmt::Display for UndefinedBehavior {
 pub enum Outcome {
     /// CONC-8: stopped without exit, failure or speculative destruction.
     Blocked(Vec<BlockedWait>),
-    /// The run spent a host budget (`budgets.limits@1`) and stopped where it was, as a
+    /// The run spent a host budget (`budgets.limits@2`) and stopped where it was, as a
     /// Blocked run does: no cleanup, finalizer or further effect ran.
     BudgetExceeded(BudgetKind),
     ToolingLimit(hirsel_tir::ToolingLimit),
@@ -337,7 +337,7 @@ operation_boundary! {
     /// when the wait parks. An unwatched wait is polled at every poll.
     fn watched(&self, _token: u64) -> bool { false }
     /// The logical bytes of the values this layer holds for the run (channel buffers,
-    /// task results), measured with the evaluator's own (`budgets.limits@1`).
+    /// task results), measured with the evaluator's own (`budgets.limits@2`).
     fn retained_bytes(&self) -> u64 { 0 }
     }
     mutable {

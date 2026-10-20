@@ -104,7 +104,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::CallbackFailed
         | R::ForeignViolation
         | R::ExitReport
-        | R::FuelExhausted
+        | R::FuelRefill
         | R::WorkerCreate
         | R::WorkerRetire
         | R::WorkerCollect => (MemoryEffects::ReadWrite, false, &[]),

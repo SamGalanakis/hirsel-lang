@@ -29,11 +29,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.terminator(&terminator)
     }
 
-    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word loses one,
-    /// and a negative result ends the run in `hirsel_rt_v2_fuel_exhausted`.
+    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word, the running
+    /// task's chunk, loses one, and a negative result calls `hirsel_rt_v2_fuel_refill`, which
+    /// stores the next chunk (or stops the run) and returns to the code after the charge.
     fn charge_fuel(&mut self) -> Emitted {
         use crate::context::{BinOp, IntPredicate};
-        let exhausted = self.runtime(RuntimeEntry::FuelExhausted)?;
+        let refill = self.runtime(RuntimeEntry::FuelRefill)?;
         let i64_ty = self.module.int_type(64);
         let at = self.builder.offset(
             self.context,
@@ -56,8 +57,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             go,
         );
         self.builder.position(spent);
-        self.builder.call(exhausted, &[self.context]);
-        self.builder.unreachable();
+        self.builder.call(refill, &[self.context]);
+        self.builder.br(go);
         self.builder.position(go);
         Ok(())
     }

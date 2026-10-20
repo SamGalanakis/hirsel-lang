@@ -984,7 +984,7 @@ impl Frame {
         self.block = block;
         self.instruction = 0;
     }
-    /// The logical bytes this frame holds (`budgets.limits@1`): its slots, values its
+    /// The logical bytes this frame holds (`budgets.limits@2`): its slots, values its
     /// loops carry, a suspended operation and its callbacks, and pending releases.
     pub fn logical_bytes(&self) -> u64 {
         use crate::resources::Work;

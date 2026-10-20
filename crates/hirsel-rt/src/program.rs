@@ -17,7 +17,7 @@ pub const STANDALONE: u32 = 2;
 /// `admit.safe@1` run of it is refused (CAP-6).
 pub const ESCAPES: u32 = 4;
 /// [`ProgramDescriptor::flags`]: the code charges fuel at its fuel points, so a run of it can
-/// be given a fuel budget (`budgets.limits@1`).
+/// be given a fuel budget (`budgets.limits@2`).
 pub const FUELED: u32 = 8;
 const KNOWN_FLAGS: u32 = UNREPLAYABLE | STANDALONE | ESCAPES | FUELED;
 

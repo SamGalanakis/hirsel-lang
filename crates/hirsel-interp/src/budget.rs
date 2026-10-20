@@ -1,14 +1,14 @@
-//! Run budgets (`budgets.limits@1`, docs/spec/determinism.md "Budgets"): fuel, charged
+//! Run budgets (`budgets.limits@2`, docs/spec/determinism.md "Budgets"): fuel, charged
 //! at every function entry and at every jump to the same or an earlier block, and
 //! memory, the logical bytes of every value the run holds (`Value::logical_bytes`).
 //!
-//! Memory is measured exactly, by walking the run's values, and only the decision of
-//! *when* to measure is estimated: constructions and library results charge their
-//! shallow size, and a measurement is due once the charges since the last one pass
-//! the remaining headroom (at least a sixteenth of the budget, so a run near its
-//! budget is not walked at every charge), or once enough fuel has passed for
-//! uncharged growth. Every input is deterministic, so a replay stops where the
-//! recorded run stopped.
+//! Memory is measured exactly, by walking the run's values. Constructions and library
+//! results charge their shallow size, which bounds what they add, so the logical bytes are
+//! at most the last measurement plus the charges since. A measurement is due as soon as
+//! that bound passes the budget, and the evaluator takes it before its next step, so the
+//! first charge that takes the run over its budget stops it, before anything else runs; a
+//! measurement is also due once enough fuel has passed, for growth no charge covers. Every
+//! input is deterministic, so a replay stops where the recorded run stopped.
 use crate::BudgetKind;
 
 /// The host's budgets for one run; None leaves a dimension unbounded.
@@ -57,12 +57,12 @@ impl Meter {
     pub fn charge(&mut self, bytes: u64) {
         self.charged = self.charged.saturating_add(bytes);
     }
-    /// Whether the next fuel point measures.
+    /// Whether the evaluator measures before its next step.
     pub fn due(&self) -> bool {
         let Some(limit) = self.budgets.memory_bytes else {
             return false;
         };
-        self.charged > limit.saturating_sub(self.live).max(limit / 16)
+        self.charged > limit.saturating_sub(self.live)
             || self.fuel - self.measured_at >= MEASURE_FUEL.max(self.live / 64)
     }
     /// Record a measurement of `live` bytes, or report that it exceeds the budget.

@@ -464,7 +464,7 @@ fn launch_rejects_another_abi_version_and_unknown_flags() {
         LAUNCH_OK
     );
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    assert_eq!(hirsel_rt_v2_abi_version(), 26);
+    assert_eq!(hirsel_rt_v2_abi_version(), 27);
 }
 
 #[test]

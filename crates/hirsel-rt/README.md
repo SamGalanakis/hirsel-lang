@@ -787,12 +787,17 @@ kinds and target ordinals, before abandoning their contexts. Observation version
 the blocking task/channel primitives; only the parked path stores the site.
 The caller (generated `main`, or a host running several programs) decides what
 to do with the outcome; no outcome exits the process.
-`src/budget.rs` enforces both budgets. The memory meter (`budget::Meter`, shared by the heap
-and the region pool) charges backing storage before it is taken: slabs, large and bare blocks
-and region segments. It credits that storage when released, and returns idle slabs before
-stopping a run over budget. Fuel is the context word at `HIRSEL_RT_V2_CTX_FUEL_OFFSET`. Code
-compiled with fuel checks decrements it at each fuel point and calls
-`hirsel_rt_v2_fuel_exhausted` when it goes negative. A spent budget raises
+`src/budget.rs` enforces both budgets (`budgets.limits@2`). The memory meter (`budget::Meter`,
+shared by the run's heaps and region pools) charges logical storage only: a small block its size
+class, a large one its request rounded up to 4 KiB, and a region segment the size an empty pool
+would give it, so a stop never depends on what the pools held. A block is credited when it is
+freed, on the freeing task, and a segment when its region exits. Under a memory budget compiled
+code allocates and frees nothing inline (`Heap::set_metered`), and a region pool reuses only a
+segment of exactly the canonical size. Fuel is the running task's chunk, the context word at
+`HIRSEL_RT_V2_CTX_FUEL_OFFSET`. Code compiled with fuel checks decrements it at each fuel point
+and calls `hirsel_rt_v2_fuel_refill` when it goes negative, which stores the next chunk from the
+run's `FuelPool` and returns (runtime ABI 27): the whole budget at width 1, so exhaustion is
+exact, and 64 Ki points without a budget. A spent budget raises
 `Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
 an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
 `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
@@ -1014,7 +1019,10 @@ reset/reuse retains the same allocation. The remaining rows are `KEY VALUE`:
   and idle segment bytes, including segment headers/unused capacity;
 - `remote_frees`, `remote_collected`, `heap_adoptions`: frees of another worker's block, large
   block or segment, what this heap's collector took back, and orphaned heaps a new worker took
-  over (design §5 headroom row "Root traffic; remote frees"); and
+  over (design §5 headroom row "Root traffic; remote frees");
+- `meter_ops`, `metered_allocations`, `fuel_refills`: logical charges and credits and heap
+  allocations under a memory budget, and fuel chunks handed out (headroom row "Meter, permits";
+  zero without a budget or a fuel build); and
 - `arena_high_water_bytes unavailable`: native arenas are dependency-owned.
 
 The report snapshots before forced task-exit reclamation, so an unbalanced run
