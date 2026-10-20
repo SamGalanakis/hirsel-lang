@@ -323,3 +323,35 @@ fn adding_a_private_shape_retries_a_cached_owner_rejection() {
         engine.lower_to_tir(&build).unwrap();
     });
 }
+
+/// A constant in another file reflects the opaque type through a helper: no
+/// text it executed and no public fingerprint changes when the private field
+/// does, so only the recorded `Representation` read can invalidate it.
+#[test]
+fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edits() {
+    with_compiler_stack(|| {
+        let hidden = "pub opaque type Hidden: data uses {} { value: u64 }\n";
+        let reflect = "fn first(take info: ShapeInfo) -> String {\n\
+                       match info.body { Record(fields) => copy fields[0].ty, Choice(_) => \"\" }\n\
+                       }\n\
+                       fn first_field[T](s: TypeShape[T]) -> String { first(type_shape.info(s)) }\n\
+                       const field: String = first_field(shape(Hidden))\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("reflect.hir", reflect.into()).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let mut field = entry_path(&default_context());
+        field.0.name = "field".into();
+        for (source, spelling) in [
+            (hidden.to_owned(), "u64"),
+            (hidden.replace("value: u64", "value: u32"), "u32"),
+            (hidden.to_owned(), "u64"),
+        ] {
+            let file = engine.sources.add("hidden.hir", source).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            assert_eq!(
+                engine.materialize_constant(&field).unwrap(),
+                hirsel_tir::Constant::String(spelling.into())
+            );
+        }
+    });
+}

@@ -174,14 +174,9 @@ pub struct QueryEngine {
     validation_walk: Option<ValidationWalk>,
     cache_sequence: u64,
     pub(crate) source_revision: u64,
-    /// The runtime types compile-time evaluation runs with, built from every
-    /// item's signature. They change only with the items, their recorded
-    /// private representations or the manifest, so each evaluation reuses
-    /// them rather than reading every signature again (GAP 5).
-    comptime_runtime: Option<(
-        (usize, ContentHash),
-        Arc<hirsel_interp::aggregate::RuntimeTypes>,
-    )>,
+    /// The runtime types compile-time evaluation runs with, and the epoch of
+    /// the signature snapshot they were built from.
+    comptime_runtime: Option<(crate::memo::Revision, Arc<hirsel_interp::aggregate::RuntimeTypes>)>,
     package_proofs: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackageProof>,
     package_publications: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackagePublication>,
     pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
@@ -786,7 +781,15 @@ impl QueryEngine {
         self.source_revision += 1;
         self.comptime_runtime = None;
         let source_path = self.sources.file(file.file).unwrap().path.clone();
-        let from_source = |engine: &Self, old: &ItemSyntax| engine.position(old).0 == source_path;
+        // Every snapshot of this source, each at its own FileId.
+        let mut snapshots = self.declarations.snapshots(&source_path);
+        snapshots.insert(file.file);
+        let from_source = |engine: &Self, old: &ItemSyntax| {
+            engine
+                .sources
+                .anchor(old.anchor)
+                .is_some_and(|(file, _)| snapshots.contains(&file))
+        };
         // Only definitions this source owned or now owns can change; every
         // other entry, including a shared image's, is left untouched.
         let owned: Vec<DefPath> = self
@@ -1348,8 +1351,19 @@ impl QueryEngine {
         }
         self.last_phase.map(|p| p.phase_name().into())
     }
+    /// The runtime types a program runs with: every item's view as its own
+    /// package's bodies see it, with each owned drop body lowered.
     pub fn runtime_types(&mut self) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
-        self.runtime_types_with_finalizers(true)
+        let mut views: Vec<_> = self
+            .registry
+            .signatures()
+            .map(|s| (s.clone(), ContentHash::default()))
+            .collect();
+        for path in self.items.keys().cloned().collect::<Vec<_>>() {
+            let public = self.item_signature(&path)?.value;
+            views.push((self.body_signature(&path.0.package, public)?.0, ContentHash::default()));
+        }
+        self.build_runtime_types(views, true)
     }
     /// Runtime metadata plus the declared facts checked execution enforces:
     /// `@noalloc` definitions, library `in ..` results and `arena.with`.
@@ -1397,32 +1411,68 @@ impl QueryEngine {
         runtime.checked = Some(checked);
         Ok(runtime)
     }
+    /// The runtime types compile-time evaluation runs with, built once per
+    /// signature snapshot from its body views. Reflection and codecs read
+    /// them through the recorded serialization view.
     pub(crate) fn comptime_runtime_types(
         &mut self,
     ) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
-        let representations = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map_or(0, |state| state.borrow().representations.len());
-        let key = (representations, self.manifest_revision());
-        if let Some((cached, runtime)) = &self.comptime_runtime {
-            if *cached == key {
-                return Ok(runtime.clone());
+        let snapshot = self.signature_snapshot();
+        if let Some((epoch, runtime)) = &self.comptime_runtime
+            && *epoch == snapshot.epoch()
+        {
+            return Ok(runtime.clone());
+        }
+        let mut views: Vec<_> = self
+            .registry
+            .signatures()
+            .map(|s| {
+                let digest = snapshot
+                    .representation(s.definition)
+                    .and_then(Result::ok)
+                    .map_or_else(ContentHash::default, |(_, digest)| digest.0);
+                (s.clone(), digest)
+            })
+            .collect();
+        for path in self.items.keys() {
+            match snapshot.representation(hirsel_syntax::DefId::intern(path)) {
+                Some(Ok((view, digest))) => views.push((view.clone(), digest.0)),
+                Some(Err(error)) => return Err(error.clone()),
+                None => {}
             }
         }
-        let runtime = Arc::new(self.runtime_types_with_finalizers(false)?);
-        // Building them may record a representation; key on the state after.
-        let representations = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map_or(0, |state| state.borrow().representations.len());
-        self.comptime_runtime = Some(((representations, key.1), runtime.clone()));
+        let runtime = Arc::new(self.build_runtime_types(views, false)?);
+        self.comptime_runtime = Some((snapshot.epoch(), runtime.clone()));
         Ok(runtime)
     }
-    fn runtime_types_with_finalizers(
+    /// The digest a reflection of `path` now records: its view in its own
+    /// package, from the current snapshot when one is kept.
+    pub(crate) fn representation_digest(&mut self, path: &DefPath) -> ContentHash {
+        let d = hirsel_syntax::DefId::intern(path);
+        if let Some((stamp, snapshot)) = &self.snapshot
+            && *stamp == self.snapshot_stamp()
+            && let Some(view) = snapshot.representation(d)
+        {
+            return view.map_or_else(|_| ContentHash::default(), |(_, digest)| digest.0);
+        }
+        let view = match self.registry.get(path) {
+            Some(signature) => Ok(signature.clone()),
+            None if self.items.contains_key(path) => self
+                .item_signature(path)
+                .and_then(|public| self.body_signature(&path.0.package, public.value))
+                .map(|(view, _)| view),
+            None => return ContentHash::default(),
+        };
+        view.map_or_else(|_| ContentHash::default(), |view| {
+            hirsel_validate::digest(self.types(), &view).0
+        })
+    }
+    /// Runtime types over `views` (each with the digest a reflection of it
+    /// records). A program's run lowers each owned drop body; compile-time
+    /// evaluation names the entry body and lowers a finalizer when it runs.
+    fn build_runtime_types(
         &mut self,
+        views: Vec<(hirsel_types::SignatureRef, ContentHash)>,
         eager: bool,
     ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
         let mut runtime = hirsel_interp::aggregate::RuntimeTypes {
@@ -1432,16 +1482,12 @@ impl QueryEngine {
             )),
             ..hirsel_interp::aggregate::RuntimeTypes::new(self.types().clone())
         };
-        let mut signatures: Vec<_> = self.registry.signatures().cloned().collect();
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
-            let public = self.item_signature(&path)?.value;
-            signatures.push(self.body_signature(&path.0.package, public)?.0);
-        }
-        runtime.serialization = signatures
-            .iter()
-            .map(|s| (s.definition.path().clone(), s.clone()))
-            .collect();
-        for signature in signatures {
+        runtime.serialization = hirsel_interp::aggregate::Serialization::new(
+            views
+                .iter()
+                .map(|(s, digest)| (s.definition.path().clone(), s.clone(), *digest)),
+        );
+        for (signature, _) in views {
             let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
                 continue;
             };

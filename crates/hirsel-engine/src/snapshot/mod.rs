@@ -8,7 +8,7 @@ use crate::memo::Revision;
 use crate::*;
 use hirsel_syntax::{DefId, DefMap, PackageId};
 use hirsel_types::{SignatureRef, TypeInterner};
-use hirsel_validate::{SignatureLookup, ValidatedSignatures};
+use hirsel_validate::{SignatureLookup, ValidatedSignatures, ValidationDigest};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -114,6 +114,21 @@ impl SignatureSnapshot {
             _ => self.signature(d),
         }
     }
+    /// `d`'s view in its own package (an opaque type's private view) with
+    /// V's digest of it: what compile-time reflection of `d` reads.
+    pub fn representation(
+        &self,
+        d: DefId,
+    ) -> Option<Result<(&SignatureRef, ValidationDigest), &QueryError>> {
+        let package = &d.path().0.package;
+        if let Some(view) = self.packages.get(package).and_then(|p| p.replacement(d)) {
+            return Some(Ok((&view.signature, view.digest)));
+        }
+        match self.signatures.get(&d)? {
+            Ok(_) => self.views.get(d).map(|v| Ok((&v.signature, v.digest))),
+            Err(error) => Some(Err(error)),
+        }
+    }
     /// V's verdicts on this snapshot's views.
     pub fn validated(&self) -> &ValidatedSignatures {
         &self.validated
@@ -147,13 +162,7 @@ impl QueryEngine {
     /// This revision's snapshot, built once after its inputs changed. It is
     /// kept only when every signature normalized, so a failed one is retried.
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
-        let manifest = Some(self.declarations.inputs().manifest_revision);
-        let stamp = SnapshotStamp {
-            revision: self.source_revision,
-            environment: self.environment.clone(),
-            manifest,
-            unavailable: self.unavailable,
-        };
+        let stamp = self.snapshot_stamp();
         if let Some((kept, snapshot)) = &self.snapshot
             && *kept == stamp
         {
@@ -199,6 +208,15 @@ impl QueryEngine {
             self.snapshot = Some((stamp, snapshot.clone()));
         }
         snapshot
+    }
+    /// The inputs a snapshot built now would be built from.
+    pub(crate) fn snapshot_stamp(&self) -> SnapshotStamp {
+        SnapshotStamp {
+            revision: self.source_revision,
+            environment: self.environment.clone(),
+            manifest: Some(self.declarations.inputs().manifest_revision),
+            unavailable: self.unavailable,
+        }
     }
     /// The explicit inputs of module resolution, to change.
     pub fn module_inputs_mut(&mut self) -> &mut ModuleInputs {

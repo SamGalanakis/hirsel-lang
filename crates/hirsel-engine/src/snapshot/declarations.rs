@@ -93,11 +93,14 @@ impl Declarations {
 }
 
 /// The index of every indexed item.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DeclarationIndex {
     rows: BTreeMap<DefPath, Row>,
     files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
     anchors: HashMap<Anchor, FileId>,
+    /// The FileIds listing items, by source path: each indexing of a
+    /// source adds a snapshot at a new FileId.
+    paths: HashMap<std::path::PathBuf, std::collections::BTreeSet<FileId>>,
     /// The sum of every row's identity part, which a row change updates.
     identity: [u64; 4],
     inputs: ModuleInputs,
@@ -143,7 +146,10 @@ impl DeclarationIndex {
     ) {
         // The files whose item lists can change: this one, and each file a
         // changed definition's candidate stands in.
-        let mut files = std::collections::BTreeSet::from([file]);
+        // A source indexed again stands at a new FileId; its earlier
+        // snapshots list nothing now.
+        let mut files = self.snapshots(&sources.file(file).unwrap().path);
+        files.insert(file);
         for path in affected {
             for candidate in items.get(path).into_iter().flatten() {
                 files.insert(place(sources, candidate).0);
@@ -177,6 +183,16 @@ impl DeclarationIndex {
         for path in affected {
             self.set_row(path, items.get(path).map(Vec::as_slice), sources);
         }
+    }
+    /// `image`'s index, built over the same items at the same FileIds,
+    /// under this index's explicit inputs.
+    pub(crate) fn adopt(&mut self, image: &DeclarationIndex) {
+        let inputs = std::mem::take(&mut self.inputs);
+        *self = Self {
+            inputs,
+            frozen: OnceLock::new(),
+            ..image.clone()
+        };
     }
     /// Index every item afresh, except generated instances.
     pub(crate) fn rebuild(
@@ -216,6 +232,16 @@ impl DeclarationIndex {
         }
         for item in &listed {
             self.anchors.insert(item.anchor, file);
+        }
+        let path = sources.file(file).unwrap().path.clone();
+        let snapshots = self.paths.entry(path.clone()).or_default();
+        if listed.is_empty() {
+            snapshots.remove(&file);
+            if snapshots.is_empty() {
+                self.paths.remove(&path);
+            }
+        } else {
+            snapshots.insert(file);
         }
         let changed = self
             .files
@@ -309,6 +335,10 @@ impl DeclarationIndex {
             }
         }
         self.frozen = OnceLock::new();
+    }
+    /// The FileIds whose items stand in snapshots of the source at `path`.
+    pub(crate) fn snapshots(&self, path: &std::path::Path) -> std::collections::BTreeSet<FileId> {
+        self.paths.get(path).cloned().unwrap_or_default()
     }
     /// The manifest identity: every definition's path, visibility and kind.
     pub fn identity(&self) -> ContentHash {

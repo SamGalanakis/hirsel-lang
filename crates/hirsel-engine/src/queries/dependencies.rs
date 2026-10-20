@@ -8,6 +8,8 @@ use hirsel_types::{DependencyRead, LookupError};
 pub(crate) struct ExecutionReads {
     pub bodies: BTreeMap<DefPath, ContentHash>,
     pub signatures: BTreeMap<DefPath, ContentHash>,
+    /// Each view reflection or a codec read, with the digest it saw.
+    pub representations: BTreeMap<DefPath, ContentHash>,
 }
 #[derive(Clone, Default)]
 pub(super) struct LookupInputs {
@@ -24,6 +26,7 @@ impl ExecutionReads {
         self.bodies
             .keys()
             .chain(self.signatures.keys())
+            .chain(self.representations.keys())
             .all(|p| inside(&p.0.package))
     }
 }
@@ -192,11 +195,22 @@ impl QueryEngine {
                 .signatures
                 .iter()
                 .all(|(path, hash)| self.signature(path).is_ok_and(|s| s.fingerprint == *hash))
+            && reads
+                .representations
+                .iter()
+                .all(|(path, digest)| self.representation_digest(path) == *digest)
     }
     pub(crate) fn inherit_execution(&mut self, reads: &ExecutionReads) {
         for frame in &mut self.execution_stack {
             frame.bodies.extend(reads.bodies.clone());
             frame.signatures.extend(reads.signatures.clone());
+            frame.representations.extend(reads.representations.clone());
+        }
+    }
+    /// Views compile-time reflection or a codec read during an evaluation.
+    pub(crate) fn read_representations(&mut self, reads: &BTreeMap<DefPath, ContentHash>) {
+        for frame in &mut self.execution_stack {
+            frame.representations.extend(reads.clone());
         }
     }
     pub(crate) fn read_execution_signatures(&mut self, reads: &[SignatureDependency]) {

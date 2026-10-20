@@ -1,8 +1,9 @@
 //! Nominal runtime facts are supplied by the driver from declared signatures.
 use crate::{Error, Value, invalid};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, Constructor};
 use hirsel_types::{BuiltinType, TypeInterner, TypeKind, TypeMemo};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +18,79 @@ pub struct Nominal {
     /// charge reads (MEM-6); None for an opaque nominal.
     pub representation: Option<hirsel_types::TypeId>,
 }
+/// The declared views codecs and reflection read: a recorded view. Each read
+/// of a path records the digest of the view it saw (or its absence) into the
+/// innermost open recording, so the evaluation that read it can be retired
+/// when the view changes, an opaque owner's private shape included.
+#[derive(Default)]
+pub struct Serialization {
+    views: std::sync::Arc<BTreeMap<DefPath, (hirsel_types::SignatureRef, ContentHash)>>,
+    recordings: std::sync::Mutex<Vec<BTreeMap<DefPath, ContentHash>>>,
+}
+impl Clone for Serialization {
+    /// The same views, with no recording open.
+    fn clone(&self) -> Self {
+        Self {
+            views: self.views.clone(),
+            recordings: Default::default(),
+        }
+    }
+}
+impl std::fmt::Debug for Serialization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.views.keys()).finish()
+    }
+}
+impl Serialization {
+    /// Each path's view with its digest.
+    pub fn new(
+        views: impl IntoIterator<Item = (DefPath, hirsel_types::SignatureRef, ContentHash)>,
+    ) -> Self {
+        Self {
+            views: std::sync::Arc::new(
+                views
+                    .into_iter()
+                    .map(|(path, view, digest)| (path, (view, digest)))
+                    .collect(),
+            ),
+            recordings: Default::default(),
+        }
+    }
+    /// `path`'s view, recording the read.
+    pub fn get(&self, path: &DefPath) -> Option<&hirsel_types::SignatureRef> {
+        let view = self.views.get(path);
+        if let Some(recording) = self.recordings.lock().unwrap().last_mut() {
+            recording.insert(path.clone(), view.map_or_else(ContentHash::default, |v| v.1));
+        }
+        view.map(|(view, _)| view)
+    }
+    /// The digest a read of `path` records: its view's, or the default when
+    /// it has none.
+    pub fn digest(&self, path: &DefPath) -> ContentHash {
+        self.views.get(path).map_or_else(ContentHash::default, |v| v.1)
+    }
+    pub fn len(&self) -> usize {
+        self.views.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.views.is_empty()
+    }
+    /// Open a recording: reads go to it until the matching `finish`.
+    pub fn record(&self) {
+        self.recordings.lock().unwrap().push(BTreeMap::new());
+    }
+    /// Close the innermost recording and return its reads, which also join
+    /// the enclosing recording: an evaluation's reads include its nested ones.
+    pub fn finish(&self) -> BTreeMap<DefPath, ContentHash> {
+        let mut recordings = self.recordings.lock().unwrap();
+        let reads = recordings.pop().unwrap_or_default();
+        if let Some(outer) = recordings.last_mut() {
+            outer.extend(reads.iter().map(|(path, digest)| (path.clone(), *digest)));
+        }
+        reads
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeTypes {
     /// The session interner: every TypeId the run reads is one of its rows.
@@ -24,7 +98,7 @@ pub struct RuntimeTypes {
     /// Structural substitution memo for closing invocation types.
     pub memo: Arc<TypeMemo>,
     /// Declared snapshots used to prove and specialize codec schemas.
-    pub serialization: std::collections::BTreeMap<DefPath, hirsel_types::SignatureRef>,
+    pub serialization: Serialization,
     /// Full for diagnostic clients; Effects for ordinary observed execution.
     pub trace_mode: crate::TraceMode,
     pub nominals: Vec<Nominal>,

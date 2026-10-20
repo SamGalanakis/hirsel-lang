@@ -60,6 +60,8 @@ pub(crate) struct PackageImage {
     representations: Base<DefPath, crate::representation::OwnerRecord>,
     constant_values: Base<DefPath, crate::comptime::EvaluatedConstant>,
     mode_diagnostics: Vec<(Diagnostic, String)>,
+    /// The builder's declaration index over `items`, at the same FileIds.
+    declarations: crate::snapshot::DeclarationIndex,
     adopted: Vec<Adopted>,
     /// The parse-only image publications were adopted on.
     parsed_only: Option<Arc<PackageImage>>,
@@ -352,6 +354,7 @@ impl PackageImage {
             representations: state.representations.freeze(),
             constant_values: state.constant_values.freeze(),
             mode_diagnostics: std::mem::take(&mut state.mode_diagnostics),
+            declarations: std::mem::take(&mut engine.declarations),
             adopted,
             parsed_only,
         }
@@ -408,7 +411,7 @@ impl QueryEngine {
         state.materialization_environment = Some(self.environment.clone());
         state.materialization_limits = Some(self.comptime_limits);
         drop(state);
-        self.declarations.rebuild(&self.items, &self.sources);
+        self.declarations.adopt(&image.declarations);
         let revision = self.manifest_revision();
         self.declarations.inputs_mut().manifest_revision = revision;
     }

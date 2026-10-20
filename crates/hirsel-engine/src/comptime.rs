@@ -442,6 +442,7 @@ impl QueryEngine {
         let runtime = self.comptime_runtime_types()?;
         let mut library = hirsel_interp::library::Library::new(&configuration, Default::default())
             .map_err(|e| operational(format!("{e:?}")))?;
+        runtime.serialization.record();
         let execution = hirsel_interp::run_with_runtime(
             &mut Evaluation {
                 root: Arc::new(definition),
@@ -453,8 +454,10 @@ impl QueryEngine {
             limits,
             &mut library,
             &runtime,
-        )
-        .map_err(|e| match e.error {
+        );
+        let reflected = runtime.serialization.finish();
+        self.read_representations(&reflected);
+        let execution = execution.map_err(|e| match e.error {
             hirsel_interp::Error::Query(e) => e,
             other => operational(format!("{other:?}")),
         })?;
