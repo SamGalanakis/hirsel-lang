@@ -774,7 +774,8 @@ Native program selections use measured per-case costs from
 `tools/buck2/test-costs/gate-native-{changed,cranelift-changed}.tsv`.
 `tools/gate` packs the slower backend's cost into 600-second slices; programs
 without a measurement, or above that budget, run alone. Both backends run
-every slice in separate pool actions. Each selected smoke or parity case runs
+every slice in separate pool actions. The gate uses exact `--case` IDs; the
+CLI's `--filter` continues to match substrings. Each selected smoke or parity case runs
 in a fresh process within its action, releasing compiler and interpreter
 state before that worker takes another case. The existing memory cap and
 1800-second action timeout still apply.

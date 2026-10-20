@@ -24,7 +24,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: native --std-compile [--filter MODULE] [--shard I/N] | --corpus [--seed N] [--shard I/N] | --bugs | --smoke [--filter TEXT]... | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --trace-roots [--filter TEXT]... [--shard I/N] | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
-                     options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
+                     options: [--case ID]... [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
+
 
 fn main() -> ExitCode {
     let started = std::time::Instant::now();
@@ -43,7 +44,7 @@ fn main() -> ExitCode {
 /// The cases `--filter` and `--shard` select: every case whose ID contains
 /// any given text (all of them without one) and that the shard holds.
 #[derive(Default)]
-struct Filter(Vec<String>, Option<Shard>);
+struct Filter(Vec<String>, Option<Shard>, Vec<String>);
 
 impl Filter {
     fn keeps(&self, id: &str) -> bool {
@@ -55,7 +56,9 @@ impl Filter {
         if let Some(selected) = isolate::selected() {
             return id == selected;
         }
-        self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str()))
+        self.is_empty()
+            || self.0.iter().any(|text| id.contains(text.as_str()))
+            || self.2.iter().any(|case| id == case)
     }
 
     /// A run that selected no case fails unless it is a shard and the text
@@ -67,7 +70,7 @@ impl Filter {
 
     /// No text selects: the run covers every case of its shard.
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_empty() && self.2.is_empty()
     }
 }
 
@@ -110,6 +113,7 @@ fn generated_cases(seed: u64, count: u64, filter: &Filter) -> Vec<Case> {
     for case in filter
         .0
         .iter()
+        .chain(&filter.2)
         .filter_map(|id| native::generate::from_id(id))
     {
         if !cases.iter().any(|existing| existing.id == case.id) {
@@ -418,6 +422,7 @@ fn run() -> Result<bool, String> {
                 Long("seed") => seed = args.value()?.parse()?,
                 Long("out") => out = Some(PathBuf::from(args.value()?)),
                 Long("filter") => filter.0.push(args.value()?.string()?),
+                Long("case") => filter.2.push(args.value()?.string()?),
                 Long("engine") => {
                     use hirsel_driver::native::Runtime;
                     let (class, runtime) = match args.value()?.string()?.as_str() {
@@ -674,7 +679,7 @@ fn run() -> Result<bool, String> {
                     filter.0
                 ));
             }
-            if !filter.0.is_empty()
+            if !filter.is_empty()
                 && let Some(ok) = isolate::cases(&cases, jobs)?
             {
                 return Ok(ok);
@@ -1490,7 +1495,7 @@ mod tests {
             source: String::new(),
             path: None,
         });
-        let filter = Filter(vec!["new-program.hir".into()], None);
+        let filter = Filter(vec!["new-program.hir".into()], None, Vec::new());
         // The explicit case need not occur in the fixed smoke list. No list is
         // read, and unrelated programs must not be compiled on this backend.
         let selected = smoke_cranelift_cases(Path::new("no-smoke-list"), &filter, &cases).unwrap();
@@ -1509,8 +1514,23 @@ mod tests {
     }
 
     #[test]
+    fn exact_gate_cases_do_not_expand_into_a_generated_window() {
+        let filter = Filter(Vec::new(), None, vec!["generated/success-28".into()]);
+        assert!(!filter.is_empty());
+        assert!(filter.keeps("generated/success-28"));
+        assert!(!filter.keeps("generated/success-2823603195720935296"));
+        let cases = generated_cases(13590946479063591582, 64, &filter);
+        let ids: Vec<_> = cases
+            .iter()
+            .filter(|case| filter.keeps(&case.id))
+            .map(|case| case.id.as_str())
+            .collect();
+        assert_eq!(ids, ["generated/success-28"]);
+    }
+
+    #[test]
     fn a_repeated_filter_keeps_a_case_any_text_selects() {
-        let filter = Filter(vec!["SEM-2".into(), "MEM-4".into()], None);
+        let filter = Filter(vec!["SEM-2".into(), "MEM-4".into()], None, Vec::new());
         assert!(filter.keeps("conformance/SEM/SEM-2-a.hir"));
         assert!(filter.keeps("conformance/MEM/MEM-4-b.hir"));
         assert!(!filter.keeps("conformance/OWN/OWN-7-c.hir"));
@@ -1524,14 +1544,14 @@ mod tests {
             .collect();
         let selected = |filter: &Filter| ids.iter().filter(|id| filter.keeps(id)).count();
         let shards: Vec<_> = (1..=4)
-            .map(|i| Filter(Vec::new(), Shard::parse(&format!("{i}/4"))))
+            .map(|i| Filter(Vec::new(), Shard::parse(&format!("{i}/4")), Vec::new()))
             .collect();
         assert_eq!(shards.iter().map(selected).sum::<usize>(), ids.len());
         for id in &ids {
             assert_eq!(shards.iter().filter(|s| s.keeps(id)).count(), 1, "{id}");
         }
         assert!(shards.iter().all(|s| selected(s) > 0 && s.is_empty()));
-        let narrowed = Filter(vec!["SEM-1".into()], Shard::parse("1/4"));
+        let narrowed = Filter(vec!["SEM-1".into()], Shard::parse("1/4"), Vec::new());
         assert!(
             ids.iter()
                 .filter(|id| narrowed.keeps(id))
@@ -1546,6 +1566,7 @@ mod tests {
             Filter(
                 filter.into_iter().map(Into::into).collect(),
                 shard.and_then(Shard::parse),
+                Vec::new(),
             )
         };
         let holder = (1..=8)

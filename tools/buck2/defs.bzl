@@ -443,7 +443,7 @@ def _native_changed_test(name, binary, args, data, cwd, runtime_archives, preche
     _rust_test(
         name = name,
         harness = binary,
-        args = args + [arg for path in filters for arg in ["--filter", path]],
+        args = args + [arg for path in filters for arg in ["--case", path]],
         data = data,
         cwd = cwd,
         llvm = "root//tools/buck2/native-toolchain:llvm",
