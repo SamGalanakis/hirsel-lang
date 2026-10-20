@@ -1,0 +1,37 @@
+// oracle: expected-stdout
+// oracle-reason: Large published libzstd outputs exceed bounded interpretation; lengths and XXH64 values are independently pinned below.
+// rule: SEM-3
+// expect: run
+// Large published outputs and generated entropy streams; native execution only.
+fn verify(data: Bytes, size: u64, digest: u64) -> () {
+  let Ok(out) = zstd.decode(data, size, 2097152) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    bytes.len(out) == size && xxhash64.digest(out) == digest,
+    TextInvariant()
+  )
+  failure.check(
+    match zstd.decode(bytes.slice(data, 0, bytes.len(data) - 1), size, 2097152) {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  verify(vectors.golden_block_128k(), 131068, 3181036610908725994)
+  verify(vectors.golden_rle_first_block(), 1048576, 9787062747061960433)
+  verify(vectors.large_literal_and_match_lengths(), 199998, 3918699346004000772)
+  verify(vectors.varied_fse(), 129301, 5396644064944026111)
+  // The three-byte sequence-count form starts at 0x7f00 sequences.
+  // libzstd 1.5.5 independently decodes this RLE-table frame to 130048 'a' bytes.
+  verify(
+    b"\x28\xb5\x2f\xfd\x00\x38\x65\x00\x00\x0d\xf0\x07a\xff\x00\x00T\x01\x00\x00\x01",
+    130048,
+    4553133942100067130
+  )
+  Ok(())
+}

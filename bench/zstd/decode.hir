@@ -1,0 +1,28 @@
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let Ok(stdout) = io.stdout(rt) else {
+    return Error(())
+  }
+  let Ok(dir) = io.dir(rt, path.of("data")) else {
+    return Error(())
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(())
+  }
+  let Ok(data) = file.read_bytes(dir, path.of(name)) else {
+    return Error(())
+  }
+  let mut sum = 0u64
+  for i in 0u64..10u64 {
+    let Ok(output) = zstd.decode(data, 20000000, 20000000) else {
+      return Error(())
+    }
+    if i == 0 {
+      sum = xxhash64.digest(output)
+    }
+    let n = bytes.len(output)
+    failure.check(n > 0, TextInvariant())
+    sum = int.wrapping_add(sum, n + int.widen(output[0]) + int.widen(output[n - 1]))
+  }
+  let _ = out.print(stdout, f"{sum}\n")
+  Ok(())
+}

@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Build identical whole-buffer zstd workloads for bench/micro/run."""
+import argparse
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / 'bench/native'))
+from suite import buck2_build, native_environment  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--old', type=Path, help='previous executable built from decode.hir')
+    args = parser.parse_args()
+    source_input = args.input.resolve(strict=True)
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    data = output / source_input.name
+    if data != source_input:
+        shutil.copyfile(source_input, data)
+    source = output / 'decode.hir'
+    if source != HERE / 'decode.hir':
+        shutil.copyfile(HERE / 'decode.hir', source)
+    manifest = {
+        'schema': 1, 'package': {'name': 'zstd_perf', 'version': '1'},
+        'entry': {'module': [], 'name': 'main'},
+        'sources': [{'path': source.name, 'module': []}],
+        'dependencies': [{'manifest': str(ROOT / 'stdlib/std@1/hirsel.json'),
+                          'package': {'name': 'std', 'version': '1'}, 'expose': []}],
+    }
+    source.with_suffix('.hir.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    bundle = buck2_build('--target-platforms', '//tools/buck2:release',
+                         '//:hirsel-toolchain')['hirsel-toolchain']
+    environment = native_environment({'HIRSEL_MEMORY_LIMIT': '2560M'})
+    capped = str(ROOT / 'tools/capped')
+    subprocess.run([capped, str(Path(bundle) / 'hirsel'), 'build', '--release',
+                    str(source), '-o', str(output / 'new')], env=environment, check=True)
+    commands = [
+        ['cc', '-O3', str(HERE / 'decode.c'), '-Wl,-l:libzstd.so.1',
+         '-Wl,-l:libxxhash.so.0', '-o', str(output / 'c')],
+        ['rustc', '--edition=2021', '-O', str(HERE / 'decode.rs'), '-o', str(output / 'rust')],
+        ['zig', 'build-exe', str(HERE / 'decode.zig'), '-O', 'ReleaseFast', '-lc',
+         '-femit-bin=' + str(output / 'zig')],
+    ]
+    for command in commands:
+        subprocess.run([capped, *command], env=environment, check=True)
+    grants = output / 'grants.json'
+    grants.write_text(json.dumps({'io': {'stdout': 'stdout.bytes@1', 'dirs': [
+        {'path': 'data', 'host': str(output), 'access': 'read'}]}}) + '\n')
+    participants = [
+        {'name': 'c', 'command': [str(output / 'c'), str(data)]},
+        {'name': 'rust-libzstd', 'command': [str(output / 'rust'), str(data)]},
+        {'name': 'zig', 'command': [str(output / 'zig'), str(data)]},
+        {'name': 'new', 'command': [str(output / 'new'), '--hirsel-grants', str(grants), data.name]},
+    ]
+    if args.old:
+        participants.append({'name': 'old', 'command': [str(args.old.resolve(strict=True)),
+                             '--hirsel-grants', str(grants), data.name]})
+    path = output / 'participants.json'
+    path.write_text(json.dumps(participants, indent=2) + '\n')
+    print(path)
+
+
+if __name__ == '__main__':
+    main()

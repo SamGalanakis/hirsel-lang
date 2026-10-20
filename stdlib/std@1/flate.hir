@@ -409,12 +409,8 @@ fn copy_match(mut z: Inflate, limit: u64, mut out: List[u8]) -> bool uses {} {
   } else {
     room
   }
-  let from = end - z.copy_distance
-  let mut i: u64 = 0
-  while i < n {
-    let byte = out[from + i]
-    core@1/list.push(mut out, byte)
-    i += 1
+  if n > 0 {
+    core@1/bytes.append_from_history(mut out, z.copy_distance, n)
   }
   z.copy_length -= n
   z.copy_length == 0

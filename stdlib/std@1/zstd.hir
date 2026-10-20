@@ -10,15 +10,11 @@ pub type ZstdError = Truncated | BadMagic | ReservedBit | Corrupt | BlockOversiz
   u64
 ) | OutputTooLarge | DictionaryRequired(u64) | DictionaryMismatch | InvalidDictionary
 
-type Entry {
-  symbol: u64,
-  bits: u64,
-  baseline: u64,
-}
-
+// FSE entry: eight-bit symbol, four-bit consumed width, nine-bit baseline.
+// Every table state fits one word instead of a three-word record.
 type Fse {
   log: u64,
-  entries: List[Entry],
+  entries: List[u64],
 }
 
 // Packed Huffman lookup entries: symbol << 4 | code length. The table is at
@@ -52,10 +48,16 @@ type Cursor {
 
 type Bits {
   pos: u64,
+  loaded: u64,
+  buffer: u64,
+  valid: u64,
 }
 
 type Reverse {
   left: u64,
+  pos: u64,
+  buffer: u64,
+  valid: u64,
 }
 
 fn empty_tables() -> Tables uses {} {
@@ -114,35 +116,21 @@ fn section(data: Bytes, mut c: Cursor, n: u64) -> Option[Bytes] in data uses {} 
   Some(core@1/bytes.slice(data, start, c.pos))
 }
 
-// Read n little-endian bits starting at an absolute bit position. All callers
-// bound n to at most 32 and prove the section contains these bits first.
-@noalloc
-fn extract(data: Bytes, start: u64, n: u64) -> u64 uses {} {
-  let mut at = start
-  let mut left = n
-  let mut shift: u64 = 0
-  let mut value: u64 = 0
-  while left > 0 {
-    let room: u64 = 8 - at % 8
-    let count = if left < room {
-      left
-    } else {
-      room
-    }
-    let byte: u64 = core@1/int.widen(data[at / 8])
-    value = value | (byte >> at % 8 & (1u64 << count) - 1) << shift
-    at += count
-    left -= count
-    shift += count
-  }
-  value
-}
-
+// Forward normalized-count headers use a low-aligned 64-bit reservoir.
 fn forward(data: Bytes, mut b: Bits, n: u64) -> Result[u64, ZstdError] uses {} {
   if n > core@1/bytes.len(data) * 8 - b.pos {
     return Error(Truncated())
   }
-  let value = extract(data, b.pos, n)
+  if b.valid < n {
+    while b.valid <= 56 && b.loaded < core@1/bytes.len(data) {
+      b.buffer = b.buffer | core@1/int.widen(data[b.loaded]) << b.valid
+      b.loaded += 1
+      b.valid += 8
+    }
+  }
+  let value = b.buffer & (1u64 << n) - 1
+  b.buffer = b.buffer >> n
+  b.valid -= n
   b.pos += n
   Ok(value)
 }
@@ -156,15 +144,40 @@ fn reverse(data: Bytes) -> Result[Reverse, ZstdError] uses {} {
   if last == 0 {
     return Error(Corrupt())
   }
-  Ok(Reverse(left: (len - 1) * 8 + log2(last)))
+  let valid = log2(last)
+  let buffer = if valid == 0 {
+    0u64
+  } else {
+    (last & (1u64 << valid) - 1) << 64 - valid
+  }
+  Ok(Reverse(left: (len - 1) * 8 + valid, pos: len - 1, buffer: buffer, valid: valid))
+}
+
+// A high-aligned 64-bit reservoir. Each input byte is loaded only once;
+// the section end and stop bit are checked before any refill, including tails.
+fn refill(data: Bytes, mut b: Reverse) -> () uses {} {
+  while b.valid <= 56 && b.pos > 0 {
+    b.pos -= 1
+    b.buffer = b.buffer | core@1/int.widen(data[b.pos]) << 56 - b.valid
+    b.valid += 8
+  }
 }
 
 fn backward(data: Bytes, mut b: Reverse, n: u64) -> Result[u64, ZstdError] uses {} {
   if n > b.left {
     return Error(Corrupt())
   }
+  if n == 0 {
+    return Ok(0)
+  }
+  if b.valid < n {
+    refill(data, mut b)
+  }
+  let value = b.buffer >> 64 - n
+  b.buffer = b.buffer << n
+  b.valid -= n
   b.left -= n
-  Ok(extract(data, b.left, n))
+  Ok(value)
 }
 
 // libzstd FSE_buildDTable_internal: -1 counts occupy the table's high end;
@@ -218,17 +231,15 @@ fn build_fse(values: List[u64], accuracy: u64) -> Result[Fse, ZstdError] uses {}
   if position != 0 {
     return Error(Corrupt())
   }
-  let mut entries: List[Entry] = []
+  let mut entries: List[u64] = []
+  core@1/list.reserve(mut entries, size)
   let mut i: u64 = 0
   while i < size {
     let sym = symbols[i]
     let state = next[sym]
     next[sym] += 1
     let bits = accuracy - log2(state)
-    core@1/list.push(
-      mut entries,
-      Entry(symbol: sym, bits: bits, baseline: (state << bits) - size)
-    )
+    core@1/list.push(mut entries, sym | bits << 8 | (state << bits) - size << 12)
     i += 1
   }
   Ok(Fse(log: accuracy, entries: take entries))
@@ -240,7 +251,7 @@ fn read_fse(data: Bytes, mut c: Cursor, max_symbols: u64, max_log: u64) -> Resul
   ZstdError
 ] uses {} {
   let bytes = core@1/bytes.slice(data, c.pos, core@1/bytes.len(data))
-  let mut b = Bits(pos: 0)
+  let mut b = Bits(pos: 0, loaded: 0, buffer: 0, valid: 0)
   let accuracy = forward(bytes, mut b, 4)? + 5
   if accuracy > max_log {
     return Error(Corrupt())
@@ -306,19 +317,19 @@ fn fse_weights(data: Bytes) -> Result[unique List[u64], ZstdError] uses {} {
   let mut weights: List[u64] = []
   while core@1/list.len(weights) < 255 {
     let entry = decoding_table.entries[state]
-    if entry.symbol > 11 {
+    if entry & 255 > 11 {
       return Error(Corrupt())
     }
-    core@1/list.push(mut weights, entry.symbol)
-    if entry.bits > b.left {
-      let last = decoding_table.entries[other].symbol
+    core@1/list.push(mut weights, entry & 255)
+    if entry >> 8 & 15 > b.left {
+      let last = decoding_table.entries[other] & 255
       if last > 11 || core@1/list.len(weights) >= 255 {
         return Error(Corrupt())
       }
       core@1/list.push(mut weights, last)
       return Ok(take weights)
     }
-    let next = entry.baseline + backward(stream, mut b, entry.bits)?
+    let next = (entry >> 12) + backward(stream, mut b, entry >> 8 & 15)?
     state = other
     other = next
   }
@@ -418,18 +429,18 @@ fn huffman_stream(data: Bytes, tree: Huffman, n: u64, mut out: List[u8]) -> Resu
   let mut b = reverse(data)?
   let mut i: u64 = 0
   while i < n {
-    let count = if b.left < tree.log {
-      b.left
-    } else {
-      tree.log
+    if b.valid < tree.log {
+      refill(data, mut b)
     }
-    let prefix = extract(data, b.left - count, count) << tree.log - count
+    let prefix = b.buffer >> 64 - tree.log
     let entry = tree.entries[prefix]
     let bits = entry & 15
     if bits == 0 || bits > b.left {
       return Error(Corrupt())
     }
     b.left -= bits
+    b.valid -= bits
+    b.buffer = b.buffer << bits
     core@1/list.push(mut out, core@1/int.narrow(entry >> 4))
     i += 1
   }
@@ -481,19 +492,17 @@ fn read_literals(
     return Error(OutputTooLarge())
   }
   let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
   if kind == 0 {
     let Some(bytes) = section(data, mut c, size) else {
       return Error(Truncated())
     }
-    for byte in bytes {
-      core@1/list.push(mut out, byte)
-    }
+    core@1/bytes.append(mut out, bytes)
   } else if kind == 1 {
     let byte: u8 = core@1/int.narrow(word(data, mut c, 1)?)
-    let mut i: u64 = 0
-    while i < size {
+    if size > 0 {
       core@1/list.push(mut out, byte)
-      i += 1
+      core@1/bytes.append_from_history(mut out, 1, size - 1)
     }
   } else {
     let Some(bytes) = section(data, mut c, compressed) else {
@@ -696,7 +705,7 @@ fn sequence_table(
     if symbol > max_symbol {
       return Error(Corrupt())
     }
-    decoding_table = Fse(log: 0, entries: [Entry(symbol: symbol, bits: 0, baseline: 0)])
+    decoding_table = Fse(log: 0, entries: [symbol])
   } else if mode == 2 {
     decoding_table = read_fse(
       data,
@@ -957,7 +966,9 @@ fn compressed_block(
 ) -> Result[(), ZstdError] uses {} {
   let start = core@1/list.len(out)
   let mut c = Cursor(pos: 0)
-  let literals = read_literals(data, mut c, mut t, block_limit, max_output - start)?
+  let literals = core@1/bytes.from_list(
+    read_literals(data, mut c, mut t, block_limit, max_output - start)?
+  )
   let first = word(data, mut c, 1)?
   let count = if first < 128 {
     first
@@ -985,19 +996,15 @@ fn compressed_block(
       let l = t.literals.entries[ll]
       let o = t.offsets.entries[offset_state]
       let m = t.matches.entries[ml]
-      if l.symbol > 35 || o.symbol > 31 || m.symbol > 52 {
+      if l & 255 > 35 || o & 255 > 31 || m & 255 > 52 {
         return Error(Corrupt())
       }
-      let off = (1u64 << o.symbol) + backward(stream, mut b, o.symbol)?
-      let match_length = ML_BASE[m.symbol] + backward(stream, mut b, ML_BITS[m.symbol])?
-      let literal_length = LL_BASE[l.symbol] + backward(
-        stream,
-        mut b,
-        LL_BITS[l.symbol]
-      )?
+      let off = (1u64 << (o & 255)) + backward(stream, mut b, o & 255)?
+      let match_length = ML_BASE[m & 255] + backward(stream, mut b, ML_BITS[m & 255])?
+      let literal_length = LL_BASE[l & 255] + backward(stream, mut b, LL_BITS[l & 255])?
       let distance = offset(off, literal_length, mut t)?
       let produced = core@1/list.len(out) - start
-      if literal_length > core@1/list.len(literals) - used {
+      if literal_length > core@1/bytes.len(literals) - used {
         return Error(Corrupt())
       }
       let length = literal_length + match_length
@@ -1007,11 +1014,10 @@ fn compressed_block(
       if length > max_output - core@1/list.len(out) {
         return Error(OutputTooLarge())
       }
-      let mut j: u64 = 0
-      while j < literal_length {
-        core@1/list.push(mut out, literals[used + j])
-        j += 1
-      }
+      core@1/bytes.append(
+        mut out,
+        core@1/bytes.slice(literals, used, used + literal_length)
+      )
       used += literal_length
       let frame_size = core@1/list.len(out) - base
       let dict_size = core@1/bytes.len(dict_content)
@@ -1024,22 +1030,28 @@ fn compressed_block(
       } else if distance > window {
         return Error(Corrupt())
       }
-      j = 0
-      while j < match_length {
-        let available = core@1/list.len(out) - base
-        let byte = if distance > available {
-          dict_content[dict_size - (distance - available)]
+      let mut remaining = match_length
+      if distance > frame_size {
+        let missing = distance - frame_size
+        let n = if remaining < missing {
+          remaining
         } else {
-          out[core@1/list.len(out) - distance]
+          missing
         }
-        core@1/list.push(mut out, byte)
-        j += 1
+        core@1/bytes.append(
+          mut out,
+          core@1/bytes.slice(dict_content, dict_size - missing, dict_size - missing + n)
+        )
+        remaining -= n
+      }
+      if remaining > 0 {
+        core@1/bytes.append_from_history(mut out, distance, remaining)
       }
       i += 1
       if i < count {
-        ll = l.baseline + backward(stream, mut b, l.bits)?
-        ml = m.baseline + backward(stream, mut b, m.bits)?
-        offset_state = o.baseline + backward(stream, mut b, o.bits)?
+        ll = (l >> 12) + backward(stream, mut b, l >> 8 & 15)?
+        ml = (m >> 12) + backward(stream, mut b, m >> 8 & 15)?
+        offset_state = (o >> 12) + backward(stream, mut b, o >> 8 & 15)?
       }
     }
     if b.left != 0 {
@@ -1048,17 +1060,17 @@ fn compressed_block(
   } else if c.pos != core@1/bytes.len(data) {
     return Error(Corrupt())
   }
-  let remaining = core@1/list.len(literals) - used
+  let remaining = core@1/bytes.len(literals) - used
   if remaining > block_limit - (core@1/list.len(out) - start) {
     return Error(BlockOversize())
   }
   if remaining > max_output - core@1/list.len(out) {
     return Error(OutputTooLarge())
   }
-  while used < core@1/list.len(literals) {
-    core@1/list.push(mut out, literals[used])
-    used += 1
-  }
+  core@1/bytes.append(
+    mut out,
+    core@1/bytes.slice(literals, used, core@1/bytes.len(literals))
+  )
   Ok(())
 }
 
@@ -1245,17 +1257,11 @@ fn decode_frames(
         ) else {
           return Error(Truncated())
         }
-        let mut i: u64 = 0
-        while i < size {
-          core@1/list.push(
-            mut out,
-            bytes[if kind == 1 {
-              0u64
-            } else {
-              i
-            }]
-          )
-          i += 1
+        if kind == 0 {
+          core@1/bytes.append(mut out, bytes)
+        } else if size > 0 {
+          core@1/list.push(mut out, bytes[0])
+          core@1/bytes.append_from_history(mut out, 1, size - 1)
         }
       }
       if width > 0 && core@1/list.len(out) - base > content_size {
