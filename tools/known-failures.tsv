@@ -8,3 +8,4 @@ conformance/SEM/SEM-3-yaml-edit-explicit-run.hir	fails natively on main (launch 
 conformance/SEM/SEM-3-yaml-edit-merge-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/FAIL/FAIL-4-mutex-payload-drop-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/LANG/LANG-7-facade-map-reserved-bad.hir	obsolete since 01f4f3f8 lets a user type be named Map (case from c24c7b38 expects LANG-7)	testsmash-apply	2026-10-20
+hirsel-pipeline-tests-test-rc::rc_library_sorted::sorted_map_corpus_controls_agree_and_pass_terminal_failure_audits	standalone test loader omits u32_maps helper used by migrated sorted-map corpus cases; unresolved u32_maps.insert on main	if-facade	2026-10-20
