@@ -110,10 +110,10 @@ pub struct QueryEngine {
     pub(crate) session: bool,
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
-    pub(crate) comptime_stack: Vec<(DefPath, hirsel_span::Span)>,
-    /// Per open evaluation, the requests it made so far with their depth
-    /// evidence, in request order (design §1c).
-    pub(crate) depth_frames: Vec<Vec<(crate::memo::DepthEvidence<Span>, Span)>>,
+    /// This engine's S1 stack: the open evaluations, generators and staged
+    /// instances with their requests' depth evidence, claimed through the
+    /// session's coordinator (design §1c).
+    pub(crate) s1: crate::memo::S1Worker<DefPath, Span>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
@@ -378,8 +378,7 @@ impl QueryEngine {
             session: false,
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
-            comptime_stack: vec![],
-            depth_frames: vec![],
+            s1: crate::memo::S1Coordinator::new().worker(),
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
             generated: BTreeMap::new(),
@@ -602,7 +601,12 @@ impl QueryEngine {
         let mut entry = self.finish(key, text, reads, result.map(shared_output), observed);
         entry.covered = covered;
         let entry = Arc::new(entry);
-        keep(&mut self.signatures, &mut self.graph, entry.clone());
+        keep(
+            &mut self.signatures,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
         entry.result()
     }
     /// The name site of `path`'s first item in the file of `owner`'s first
@@ -1050,7 +1054,12 @@ impl QueryEngine {
         let reads = recorder.reads;
         let key = MemoKey::new(QueryKind::Resolve, id);
         let entry = Arc::new(self.finish(key, text, reads, result.map(|o| o), observed));
-        keep(&mut self.resolutions, &mut self.graph, entry.clone());
+        keep(
+            &mut self.resolutions,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
         entry.result()
     }
     pub fn mode_definition(
@@ -1105,7 +1114,12 @@ impl QueryEngine {
                 let reads = recorder.reads;
                 let key = MemoKey::new(QueryKind::Modes, id);
                 let entry = Arc::new(self.finish(key, text, reads, result, observed));
-                keep(&mut self.modes, &mut self.graph, entry.clone());
+                keep(
+                    &mut self.modes,
+                    &mut self.graph,
+                    entry.clone(),
+                    self.s1.failure_is_own(),
+                );
                 entry
             }
         };
@@ -1184,7 +1198,12 @@ impl QueryEngine {
         }
         let key = MemoKey::new(QueryKind::Check, id);
         let entry = Arc::new(self.finish(key, text, reads, result, observed));
-        keep(&mut self.checked, &mut self.graph, entry.clone());
+        keep(
+            &mut self.checked,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
         entry.result()
     }
     /// GEN-5 owns these body snapshots independently of per-definition cache keys.
@@ -1613,7 +1632,12 @@ impl DefinitionQueries for QueryEngine {
         observed.merged.extend(executed);
         let key = MemoKey::new(QueryKind::Lower, id);
         let entry = Arc::new(self.finish(key, text, reads, result, observed));
-        keep(&mut self.lowered, &mut self.graph, entry.clone());
+        keep(
+            &mut self.lowered,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
         // Execution closure by union: whoever executes this body reads all it read.
         self.merge_execution(entry.reads());
         entry.output()
@@ -1874,11 +1898,15 @@ pub(crate) fn has_errors(diagnostics: &[Diagnostic]) -> bool {
     diagnostics.iter().any(|d| d.severity == Severity::Error)
 }
 
-/// Keeps a recorded memo in its table, or forgets it when its result is not
-/// cacheable (an operational failure or a missing phase).
-fn keep<T>(table: &mut Table<T>, graph: &mut MemoGraph, entry: Arc<Entry<T>>) {
+/// Keeps a recorded memo in its table, or forgets it to be recomputed:
+/// inconsistent reads, an uncacheable result (an operational failure or a
+/// missing phase), or a failure that met a compile-time cycle or the depth
+/// limit outside its own frames (`own` false), which another stack would not
+/// meet.
+fn keep<T>(table: &mut Table<T>, graph: &mut MemoGraph, entry: Arc<Entry<T>>, own: bool) {
     let key = entry.memo.key;
-    if !entry.consistent || entry.memo.value.as_ref().is_err_and(|e| !e.cacheable()) {
+    let value = entry.memo.value.as_ref();
+    if !entry.consistent || value.is_err_and(|e| !e.cacheable()) || (value.is_err() && !own) {
         graph.remove(&key);
         table.remove(&key.def);
     } else {

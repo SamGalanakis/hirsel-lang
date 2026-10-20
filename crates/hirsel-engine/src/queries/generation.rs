@@ -7,6 +7,7 @@
 //! with the declared one, and its body follows the written header in one token
 //! tape that is parsed, resolved and checked like a written body.
 use super::*;
+use crate::memo::Entered;
 use hirsel_syntax::{
     ExprId, ExprKind, FunctionSyntax, Generated, Keyword, PackageId, Path, TokenKind, TypeArgument,
     TypeExpr, TypeExprId, TypeExprKind, TypeModifier, Visibility,
@@ -147,11 +148,8 @@ impl QueryEngine {
         }
         let site = snapshot.tree.expressions[body.0 as usize].origin.span;
         // CT-4: a generator that needs its own declaration's body.
-        if self
-            .comptime_stack
-            .iter()
-            .any(|(path, _)| path == definition)
-        {
+        if self.s1.on_stack(definition).is_some() {
+            self.s1.fail_cycle();
             return Err(diagnostic(
                 "CT-4",
                 site,
@@ -166,7 +164,7 @@ impl QueryEngine {
             && self.memo_valid(definition, &entry, text)
         {
             if let Some(depth) = &entry.depth {
-                self.depth_admit_nested(depth)?;
+                self.depth_admit(depth, site)?;
                 self.depth_requested(depth, site);
             }
             self.merge_execution(entry.reads());
@@ -185,26 +183,34 @@ impl QueryEngine {
             definition: definition.clone(),
             fingerprint: signature.value.fingerprint,
         });
-        self.start(definition, QueryKind::Check)?;
-        self.comptime_stack.push((definition.clone(), site));
+        if self.s1.enter(definition.clone(), site) == Entered::Settled {
+            // Another worker finished it: its entry is in the memo, or this
+            // stack generates it again.
+            return self.generated_check_query(definition, snapshot, body);
+        }
+        if let Err(error) = self.start(definition, QueryKind::Check) {
+            self.s1.leave();
+            return Err(error);
+        }
         self.execution_stack.push(ReadsBuilder::new());
-        self.depth_frames.push(vec![]);
         let timing = timings::phase(Phase::Comptime);
         let result = self.generate(definition, &snapshot, body, &signature.value, &mut reads);
         drop(timing);
-        let depth = self.depth_composed();
+        let depth = self.depth_composed(false);
         let executed = self
             .execution_stack
             .pop()
             .expect("generation execution frame");
-        self.depth_frames.pop();
-        self.comptime_stack.pop();
         reads.observed.merged.extend(executed);
         let key = MemoKey::new(QueryKind::Check, id);
         let mut entry = self.finish(key, text, reads.reads, result, reads.observed);
         entry.depth = Some(depth.clone());
         let entry = Arc::new(entry);
-        keep(&mut self.checked, &mut self.graph, entry.clone());
+        // Its own frame is on the stack still: stored before leaving, so a
+        // waiting worker finds it.
+        let own = self.s1.failure_is_own();
+        keep(&mut self.checked, &mut self.graph, entry.clone(), own);
+        self.s1.leave();
         self.merge_execution(entry.reads());
         self.depth_requested(&depth, site);
         entry.result()
@@ -775,7 +781,12 @@ impl QueryEngine {
             });
         let key = MemoKey::new(QueryKind::Check, id);
         let entry = Arc::new(self.finish(key, text, reads.reads, result, reads.observed));
-        keep(&mut self.checked, &mut self.graph, entry.clone());
+        keep(
+            &mut self.checked,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
         entry.result()
     }
 

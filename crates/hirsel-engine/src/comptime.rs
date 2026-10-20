@@ -1,5 +1,5 @@
 //! Compile-time execution uses the runtime interpreter; lowering receives plain values.
-use crate::memo::DepthEvidence;
+use crate::memo::{DepthEvidence, Entered};
 use crate::*;
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
@@ -127,7 +127,7 @@ impl QueryEngine {
         if let Some(value) = self.prechecked_constant(path)? {
             return Ok(value);
         }
-        if self.comptime_stack.is_empty() {
+        if self.s1.is_empty() {
             self.last_comptime_limit = None;
         }
         if let Some(value) = self.registry_dictionary_value(path)? {
@@ -175,11 +175,11 @@ impl QueryEngine {
             }
             state.borrow_mut().constant_values.remove(path);
         }
-        if let Some(start) = self.comptime_stack.iter().position(|(p, _)| p == path) {
-            let mut diagnostics: Vec<_> = self.comptime_stack[start + 1..]
-                .iter()
-                .map(|(_, s)| *s)
-                .chain([reference])
+        if let Some(start) = self.s1.on_stack(path) {
+            self.s1.fail_cycle();
+            let mut diagnostics: Vec<_> = self
+                .s1
+                .cycle_sites(start, reference)
                 .map(|site| {
                     Diagnostic::error(
                         const { hirsel_diag::RuleId::of("CT-4") },
@@ -193,9 +193,12 @@ impl QueryEngine {
         }
         // Keep recursive compiler queries bounded separately from the interpreter's guard.
         self.depth_admit(&DepthEvidence::leaf(self.depth_limit()), reference)?;
-        self.comptime_stack.push((path.clone(), reference));
+        if self.s1.enter(path.clone(), reference) == Entered::Settled {
+            // Another worker finished it: its success is in the memo, or this
+            // stack evaluates it again.
+            return self.constant_at(path, reference);
+        }
         self.execution_stack.push(Default::default());
-        self.depth_frames.push(vec![]);
         self.read_implementation(path);
         let result = (|| {
             let syntax = self.parse_definition(path)?.value;
@@ -235,17 +238,18 @@ impl QueryEngine {
                 value: constant,
                 substitutions: constants,
                 executed,
-                depth: self.depth_composed(),
+                depth: self.depth_composed(true),
             })
         })();
-        self.comptime_stack.pop();
         self.execution_stack.pop();
-        self.depth_frames.pop();
         if let Ok(evaluated) = &result {
             state
                 .borrow_mut()
                 .constant_values
                 .insert(path.clone(), evaluated.clone());
+        }
+        self.s1.leave();
+        if let Ok(evaluated) = &result {
             self.depth_requested(&evaluated.depth, reference);
         }
         result
@@ -256,15 +260,14 @@ impl QueryEngine {
     }
     /// Requests a result with `evidence` at `site` from the current stack
     /// length: the cache-free evaluation's verdict, whether the result was
-    /// computed, stored or came from elsewhere. A leaf's evidence decides only
-    /// the zero-budget case, before computing.
+    /// computed, stored or came from another worker. A leaf's evidence decides
+    /// only the zero-budget case, before computing.
     pub(crate) fn depth_admit(
         &mut self,
         evidence: &DepthEvidence<Span>,
         site: Span,
     ) -> Result<(), QueryError> {
-        let n = self.comptime_stack.len() as u32;
-        evidence.request(n, site).map_err(|site| {
+        self.s1.admit(evidence, site).map_err(|site| {
             self.comptime_limit(hirsel_tir::ToolingLimit {
                 kind: hirsel_tir::ToolingLimitKind::CallDepth,
                 limit: evidence.limit() as u64,
@@ -272,35 +275,14 @@ impl QueryEngine {
             })
         })
     }
-    /// Requests a generator result: only its own requests can overflow, at
-    /// stack length n + 1 (a generator itself is not bounded).
-    pub(crate) fn depth_admit_nested(
-        &mut self,
-        evidence: &DepthEvidence<Span>,
-    ) -> Result<(), QueryError> {
-        let m = (self.comptime_stack.len() as u32 + 1).min(evidence.limit());
-        match evidence.first[m as usize] {
-            Some(site) => Err(self.comptime_limit(hirsel_tir::ToolingLimit {
-                kind: hirsel_tir::ToolingLimitKind::CallDepth,
-                limit: evidence.limit() as u64,
-                site: Some(site),
-            })),
-            None => Ok(()),
-        }
-    }
     /// Records a completed request in the requester's frame, in request order.
     pub(crate) fn depth_requested(&mut self, evidence: &DepthEvidence<Span>, site: Span) {
-        if let Some(frame) = self.depth_frames.last_mut() {
-            frame.push((evidence.clone(), site));
-        }
+        self.s1.requested(evidence, site);
     }
-    /// The evidence of the evaluation whose frame is on top.
-    pub(crate) fn depth_composed(&self) -> DepthEvidence<Span> {
-        let limit = self.depth_limit();
-        match self.depth_frames.last() {
-            Some(frame) => DepthEvidence::compose(limit, frame.iter().map(|(e, s)| (e, *s))),
-            None => DepthEvidence::leaf(limit),
-        }
+    /// The evidence of the evaluation whose frame is on top; `bounded` for a
+    /// constant or staged evaluation, not for a generator.
+    pub(crate) fn depth_composed(&self, bounded: bool) -> DepthEvidence<Span> {
+        self.s1.composed(self.depth_limit(), bounded)
     }
     /// The compile-time products lowering `analyzed` reads.
     pub fn prepare_comptime(
@@ -770,7 +752,7 @@ impl QueryEngine {
         arguments: &[u64],
     ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
-        if self.comptime_stack.is_empty() {
+        if self.s1.is_empty() {
             self.last_comptime_limit = None;
         }
         let key = (path.clone(), arguments.to_vec());
@@ -802,7 +784,8 @@ impl QueryEngine {
         let staged = self.prepare_staged_types(&body.value)?;
         let file = &body.value.typed.syntax;
         let instance = hirsel_tir::constant_instance_path(path, arguments);
-        if self.comptime_stack.iter().any(|(p, _)| *p == instance) {
+        if self.s1.on_stack(&instance).is_some() {
+            self.s1.fail_cycle();
             return Err(QueryError::Diagnostics(vec![Diagnostic::error(
                 const { hirsel_diag::RuleId::of("CT-4") },
                 site,
@@ -810,9 +793,10 @@ impl QueryEngine {
             )]));
         }
         self.depth_admit(&DepthEvidence::leaf(self.depth_limit()), site)?;
-        self.comptime_stack.push((instance, site));
+        if self.s1.enter(instance, site) == Entered::Settled {
+            return self.materialize_staged(path, arguments);
+        }
         self.execution_stack.push(Default::default());
-        self.depth_frames.push(vec![]);
         self.read_implementation(&constant.owner);
         self.read_execution_signatures(&body.dependencies);
         let result = (|| {
@@ -858,15 +842,16 @@ impl QueryEngine {
                     .clone()
                     .finish()
                     .map_err(|_| QueryError::NotImplemented)?,
-                depth: self.depth_composed(),
+                depth: self.depth_composed(true),
             })
         })();
-        self.comptime_stack.pop();
         self.execution_stack.pop();
-        self.depth_frames.pop();
+        if let Ok(value) = &result {
+            self.staged_values.insert(key, value.clone());
+        }
+        self.s1.leave();
         if let Ok(value) = &result {
             self.merge_execution(&value.executed);
-            self.staged_values.insert(key, value.clone());
             self.depth_requested(&value.depth, site);
         }
         result

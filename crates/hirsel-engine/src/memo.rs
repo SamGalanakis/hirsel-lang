@@ -11,6 +11,8 @@ pub use graph::{
 };
 mod depth;
 pub use depth::{DepthEvidence, SiteSpan, dependency_limit};
+mod coordinator;
+pub use coordinator::{CoordinatorStats, Entered, Frame, S1Coordinator, S1Worker, WorkerId};
 mod holds;
 pub use holds::{HoldStats, Holds, Retention, default_hold_bytes};
 mod worklist;

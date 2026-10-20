@@ -25,6 +25,10 @@ pub fn dependency_limit(call_depth: usize) -> u32 {
 pub struct DepthEvidence<S = SiteSpan> {
     pub height: u32,
     pub first: Box<[Option<S>]>,
+    /// The result is itself subject to the limit (a constant or staged
+    /// evaluation). A generator is not: requesting it never overflows at its
+    /// own site, only at its own requests'.
+    pub bounded: bool,
 }
 
 impl<S: Copy> DepthEvidence<S> {
@@ -33,6 +37,7 @@ impl<S: Copy> DepthEvidence<S> {
         Self {
             height: 0,
             first: vec![None; limit as usize + 1].into_boxed_slice(),
+            bounded: true,
         }
     }
     pub fn limit(&self) -> u32 {
@@ -60,20 +65,24 @@ impl<S: Copy> DepthEvidence<S> {
         evidence
     }
     /// Requesting this result at `site` from stack length `n`: `Err(site)` of
-    /// the failure, or `Ok` when no request overflows.
+    /// the failure, or `Ok` when no request overflows. An unbounded result's
+    /// own requests run at n + 1; at or past the limit they all fail as they
+    /// do at the limit, so its table saturates there.
     pub fn request(&self, n: u32, site: S) -> Result<(), S> {
-        if n >= self.limit() {
+        if self.bounded && n >= self.limit() {
             return Err(site);
         }
-        match self.first[n as usize + 1] {
+        match self.first[(n as usize + 1).min(self.limit() as usize)] {
             Some(failure) => Err(failure),
             None => Ok(()),
         }
     }
-    /// Persisted form: height, limit, then per slot a presence byte and the site.
+    /// Persisted form: height, limit, whether it is bounded, then per slot a
+    /// presence byte and the site.
     pub fn encode(&self, out: &mut Vec<u8>, mut site: impl FnMut(&S, &mut Vec<u8>)) {
         out.extend(self.height.to_le_bytes());
         out.extend(self.limit().to_le_bytes());
+        out.push(self.bounded as u8);
         for slot in self.first.iter().skip(1) {
             match slot {
                 Some(s) => {
