@@ -20,9 +20,9 @@ fn grow(cap: u64) -> Result[u64, OutOfSpace] {
       let by = u64.order
       let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
       for i in 0u64..100u64 {
-        u64_maps.insert(mut m, i, i)
+        sorted_map.insert(by, mut m, i, i)
       }
-      u64_maps.len(m)
+      sorted_map.len(by, m)
     }
   )
 }
@@ -34,12 +34,12 @@ fn removed(cap: u64) -> Result[u64, OutOfSpace] {
     cap,
     fn(a: Arena) -> u64 {
       let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
-      u64_maps.insert(mut m, 1u64, 1u64)
-      u64_maps.insert(mut m, 1u64, 9u64)
-      let _ = u64_maps.remove(mut m, 8u64)
-      let _ = u64_maps.remove(mut m, 1u64)
-      u64_maps.insert(mut m, 2u64, 2u64)
-      u64_maps.len(m)
+      sorted_map.insert(by, mut m, 1u64, 1u64)
+      sorted_map.insert(by, mut m, 1u64, 9u64)
+      let _ = sorted_map.remove(by, mut m, 8u64)
+      let _ = sorted_map.remove(by, mut m, 1u64)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, m)
     }
   )
 }
@@ -51,11 +51,11 @@ fn shared(cap: u64) -> Result[u64, OutOfSpace] {
     cap,
     fn(a: Arena) -> u64 {
       let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
-      u64_maps.insert(mut m, 1u64, 1u64)
+      sorted_map.insert(by, mut m, 1u64, 1u64)
       let snapshot = copy m
-      u64_maps.insert(mut m, 1u64, 9u64)
-      u64_maps.insert(mut m, 2u64, 2u64)
-      u64_maps.len(snapshot) + u64_maps.len(m)
+      sorted_map.insert(by, mut m, 1u64, 9u64)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, snapshot) + sorted_map.len(by, m)
     }
   )
 }
@@ -64,13 +64,13 @@ fn shared(cap: u64) -> Result[u64, OutOfSpace] {
 fn copied(cap: u64) -> Result[u64, OutOfSpace] {
   let by = u64.order
   let mut source: SortedMap[u64, u64] of by = sorted_map.empty(by)
-  u64_maps.insert(mut source, 1u64, 1u64)
+  sorted_map.insert(by, mut source, 1u64, 1u64)
   arena.bounded(
     cap,
     fn(a: Arena) -> u64 {
       let mut m = copy_to(a, source)
-      u64_maps.insert(mut m, 2u64, 2u64)
-      u64_maps.len(m)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, m)
     }
   )
 }
@@ -82,7 +82,7 @@ fn empty() -> Result[u64, OutOfSpace] {
     0u64,
     fn(a: Arena) -> u64 {
       let m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
-      u64_maps.len(m)
+      sorted_map.len(by, m)
     }
   )
 }
@@ -91,12 +91,12 @@ fn empty() -> Result[u64, OutOfSpace] {
 fn list_value(cap: u64) -> Result[u64, OutOfSpace] {
   let by = u64.order
   let mut source: SortedMap[u64, List[u64]] of by = sorted_map.empty(by)
-  u64_maps.insert(mut source, 1u64, [1u64, 2u64])
+  sorted_map.insert(by, mut source, 1u64, [1u64, 2u64])
   arena.bounded(
     cap,
     fn(a: Arena) -> u64 {
       let m = copy_to(a, source)
-      match u64_maps.get(m, 1u64) {
+      match sorted_map.get(by, m, 1u64) {
         Some(xs) => {
           let mut ys = xs
           list.push(mut ys, 3u64)

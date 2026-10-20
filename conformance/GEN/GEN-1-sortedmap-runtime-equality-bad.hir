@@ -3,7 +3,7 @@
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let by = u32.order
   let mut m: SortedMap[u32, u8] of by = sorted_map.empty(by)
-  u32_maps.insert(mut m, 1, 1)
+  sorted_map.insert(by, mut m, 1, 1)
   let _ = out.print(
     io.stdout(rt)?,
     if m == m {

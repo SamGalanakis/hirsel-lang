@@ -10,23 +10,7 @@
       "module": []
     }
   ],
-  "dependencies": [
-    {
-      "manifest": "../../packages/fixtures/sorted_facades@1/hirsel.json",
-      "package": {
-        "name": "sorted_facades",
-        "version": "1"
-      },
-      "expose": [
-        {
-          "head": "u64_maps",
-          "module": [
-            "u64_maps"
-          ]
-        }
-      ]
-    }
-  ],
+  "dependencies": [],
   "entry": {
     "module": [],
     "name": "main"

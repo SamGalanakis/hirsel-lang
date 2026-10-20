@@ -5,11 +5,11 @@
 fn lookup(cap: u64) -> Result[u64, OutOfSpace] {
   let by = u64.order
   let mut m: SortedMap[u64, List[u64]] of by = sorted_map.empty(by)
-  u64_maps.insert(mut m, 0u64, [1u64, 2u64])
+  sorted_map.insert(by, mut m, 0u64, [1u64, 2u64])
   arena.bounded(
     cap,
     fn(a: Arena) -> u64 {
-      let source = match u64_maps.get(m, 0u64) {
+      let source = match sorted_map.get(by, m, 0u64) {
         Some(items) => take items,
         None => [],
       }
@@ -17,7 +17,7 @@ fn lookup(cap: u64) -> Result[u64, OutOfSpace] {
       let shared = copy values
       list.push(mut values, 3u64)
       list.push(mut values, 4u64)
-      let stored_len = match u64_maps.get(m, 0u64) {
+      let stored_len = match sorted_map.get(by, m, 0u64) {
         Some(items) => list.len(items),
         None => 0u64,
       }
