@@ -1481,26 +1481,12 @@ impl<'a> Checker<'a> {
         })
         .unwrap()
     }
-    fn imported(
-        &self,
-        source: &TypeInterner,
-        root: TypeId,
-        target: &TypeInterner,
-        arguments: &[GenericArgument],
-    ) -> Option<TypeId> {
-        self.imported_in(
-            source,
-            root,
-            target,
-            arguments,
-            &self.generic_declarations(),
-        )
+    fn imported(&self, root: TypeId, arguments: &[GenericArgument]) -> Option<TypeId> {
+        self.imported_in(root, arguments, &self.generic_declarations())
     }
     pub(super) fn imported_in(
         &self,
-        source: &TypeInterner,
         root: TypeId,
-        target: &TypeInterner,
         arguments: &[GenericArgument],
         generics: &GenericDeclarations,
     ) -> Option<TypeId> {
@@ -1527,7 +1513,7 @@ impl<'a> Checker<'a> {
                 if self.t.semantic_eq(root, imported) {
                     imported
                 } else {
-                    hirsel_types::canonical_current_type(target, imported, generics, &mut |path| {
+                    hirsel_types::canonical_current_type(self.t, imported, generics, &mut |path| {
                         Ok::<_, hirsel_types::QueryError>(
                             self.signatures.get(path).cloned().map(std::sync::Arc::new),
                         )
@@ -1584,7 +1570,7 @@ impl<'a> Checker<'a> {
         entity: &'static str,
     ) {
         let target = self.t;
-        let matches = if let Some(expected) = self.imported(source, root, target, args) {
+        let matches = if let Some(expected) = self.imported(root, args) {
             let expected = if matches!(entity, "body parameter" | "body result") {
                 match bind_parameter_scopes(target, expected, &[self.body.parameter_scope]) {
                     Ok(t) => t,
@@ -1729,7 +1715,7 @@ impl<'a> Checker<'a> {
         let actual = self.place_type(operand.place);
         if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
             let store = self.t;
-            if let Some(expected) = self.imported(source, root, store, &[]) {
+            if let Some(expected) = self.imported(root, &[]) {
                 self.storage_value_type_in(store, expected, actual, operand, "closure capture");
             } else {
                 self.error(ViolationKind::TypeMismatch {
@@ -1740,12 +1726,10 @@ impl<'a> Checker<'a> {
         }
         if operand.usage != UseKind::Copy {
             let target = self.t;
-            let matches = self
-                .imported(source, root, target, &[])
-                .is_some_and(|expected| {
-                    let actual = self.taken_current_content(target, expected, actual, operand);
-                    self.compatible(target, expected, actual, TypeRelation::Exact)
-                });
+            let matches = self.imported(root, &[]).is_some_and(|expected| {
+                let actual = self.taken_current_content(target, expected, actual, operand);
+                self.compatible(target, expected, actual, TypeRelation::Exact)
+            });
             if !matches {
                 self.error(ViolationKind::TypeMismatch {
                     entity: "closure capture",
@@ -1754,33 +1738,31 @@ impl<'a> Checker<'a> {
             return;
         }
         let target = self.t;
-        let matches = self
-            .imported(source, root, target, &[])
-            .is_some_and(|expected| {
-                // A flat copy owns independent bytes. Counted copies share
-                // storage, so derive both uniqueness and sendability before
-                // comparing the independently declared capture type.
-                let actual = if self.copy_detaches(&target, actual) {
-                    let mut row = target.get(actual).unwrap().clone();
-                    row.modes.relation = Relation::global();
-                    row.modes.sendability = target.get(expected).unwrap().modes.sendability.clone();
-                    target.intern(row)
-                } else {
-                    actual
-                };
-                let adjusted = if self.flat_value(operand.place) {
-                    let mut row = target.get(actual).unwrap().clone();
-                    row.modes.uniqueness = target.get(expected).unwrap().modes.uniqueness;
-                    target.intern(row)
-                } else {
-                    self.weakened_type(target, actual, &self.generic_declarations())
-                };
-                let mut row = target.get(adjusted).unwrap().clone();
-                row.sendability_requirement = hirsel_types::SendabilityRequirement::None;
-                let adjusted = target.intern(row);
-                let valid = self.compatible(target, expected, adjusted, TypeRelation::Exact);
-                valid
-            });
+        let matches = self.imported(root, &[]).is_some_and(|expected| {
+            // A flat copy owns independent bytes. Counted copies share
+            // storage, so derive both uniqueness and sendability before
+            // comparing the independently declared capture type.
+            let actual = if self.copy_detaches(&target, actual) {
+                let mut row = target.get(actual).unwrap().clone();
+                row.modes.relation = Relation::global();
+                row.modes.sendability = target.get(expected).unwrap().modes.sendability.clone();
+                target.intern(row)
+            } else {
+                actual
+            };
+            let adjusted = if self.flat_value(operand.place) {
+                let mut row = target.get(actual).unwrap().clone();
+                row.modes.uniqueness = target.get(expected).unwrap().modes.uniqueness;
+                target.intern(row)
+            } else {
+                self.weakened_type(target, actual, &self.generic_declarations())
+            };
+            let mut row = target.get(adjusted).unwrap().clone();
+            row.sendability_requirement = hirsel_types::SendabilityRequirement::None;
+            let adjusted = target.intern(row);
+            let valid = self.compatible(target, expected, adjusted, TypeRelation::Exact);
+            valid
+        });
         if !matches {
             self.error(ViolationKind::TypeMismatch {
                 entity: "closure capture",
@@ -1790,7 +1772,6 @@ impl<'a> Checker<'a> {
 
     fn parameter_type(
         &mut self,
-        source: &TypeInterner,
         root: TypeId,
         actual: TypeId,
         args: &[GenericArgument],
@@ -2319,7 +2300,6 @@ impl<'a> Checker<'a> {
             };
             if let Some(origins) = origins {
                 self.parameter_type(
-                    store,
                     p.ty,
                     self.place_type(a.value.place),
                     generics,
@@ -2677,14 +2657,13 @@ impl<'a> Checker<'a> {
                 }
                 let store = self.t;
                 for parameter in &mut function.parameters {
-                    let Some(imported) = self.imported(self.t, parameter.ty, store, arguments)
-                    else {
+                    let Some(imported) = self.imported(parameter.ty, arguments) else {
                         self.error(ViolationKind::InvalidTypeGraph);
                         return;
                     };
                     parameter.ty = imported;
                 }
-                let Some(result) = self.imported(self.t, function.result, store, arguments) else {
+                let Some(result) = self.imported(function.result, arguments) else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;
                 };
@@ -2815,7 +2794,7 @@ impl<'a> Checker<'a> {
                     .map(GenericArgument::Size)
                     .collect();
                 let store = self.t;
-                let Some(mut expected) = self.imported(self.t, *root, store, &actuals) else {
+                let Some(mut expected) = self.imported(*root, &actuals) else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;
                 };

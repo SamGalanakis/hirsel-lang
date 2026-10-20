@@ -61,6 +61,24 @@ impl Rows for TypeInterner {
         self.intern(row)
     }
 }
+/// `definition` with the closure table lowering computes for it
+/// (`hirsel_tir::definition_types`) after the rows the fixture listed itself.
+pub(crate) fn tabled(definition: &Definition) -> Definition {
+    let mut definition = definition.clone();
+    let computed = hirsel_tir::definition_types(interner(), &definition);
+    let mut rows = definition.types.to_vec();
+    let listed: std::collections::HashSet<_> = rows.iter().copied().collect();
+    rows.extend(computed.iter().copied().filter(|id| !listed.contains(id)));
+    definition.types = rows.into();
+    definition
+}
+fn kinds_of(definition: &Definition, signatures: &SignatureMap) -> Vec<ViolationKind> {
+    validate(definition, interner(), signatures, &mut vec![])
+        .violations
+        .into_iter()
+        .map(|v| v.kind)
+        .collect()
+}
 /// The session id of a fixture item.
 pub(crate) fn id(name: &str) -> DefId {
     DefId::intern(&path(name))
@@ -237,17 +255,17 @@ impl Fixture {
         id
     }
     pub(crate) fn valid(&self) {
-        assert_valid(&self.definition, interner(), &self.signatures);
+        assert_valid(&tabled(&self.definition), interner(), &self.signatures);
     }
     pub(crate) fn kinds(&self) -> Vec<ViolationKind> {
-        validate(&self.definition, interner(), &self.signatures, &mut vec![])
-            .violations
-            .into_iter()
-            .map(|v| v.kind)
-            .collect()
+        kinds_of(&tabled(&self.definition), &self.signatures)
     }
     pub(crate) fn broken(&self, expected: Vec<ViolationKind>) {
         assert_eq!(self.kinds(), expected);
+    }
+    /// As `broken`, validating the closure table exactly as the fixture built it.
+    pub(crate) fn broken_as_built(&self, expected: Vec<ViolationKind>) {
+        assert_eq!(kinds_of(&self.definition, &self.signatures), expected);
     }
     pub(crate) fn string() -> Self {
         let mut f = Self::unit();

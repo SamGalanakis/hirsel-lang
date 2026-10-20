@@ -8,8 +8,7 @@ use hirsel_types::*;
 #[test]
 fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     let mut f = captured_generic_copy(true, false, false);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -18,9 +17,12 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     };
     *bounds = vec![Bound::Flat].into();
     let body = &f.definition.bodies[1];
-    let declarations =
-        typing::declaration_tables(interner(), &f.definition, &crate::input::Reader::new(&f.signatures))
-            .unwrap();
+    let declarations = typing::declaration_tables(
+        interner(),
+        &f.definition,
+        &crate::input::Reader::new(&f.signatures),
+    )
+    .unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
     let reader = crate::input::Reader::new(&f.signatures);
     let memo = TypeMemo::new();
@@ -45,11 +47,7 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
         proof_errors: std::cell::RefCell::new(Vec::new()),
     };
     let types = interner();
-    let weakened = checker.weakened_type(
-        types,
-        body.places[1].ty,
-        &checker.generic_declarations(),
-    );
+    let weakened = checker.weakened_type(types, body.places[1].ty, &checker.generic_declarations());
     assert_eq!(
         types.get(weakened).unwrap().modes.sendability,
         Sendability::Sendable
@@ -59,8 +57,7 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
 #[test]
 fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let mut f = captured_generic_copy(false, true, false);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -77,9 +74,12 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     row.modes.uniqueness = Uniqueness::Unique;
     let actual = f.definition.types.push(row);
     let body = &f.definition.bodies[1];
-    let declarations =
-        typing::declaration_tables(interner(), &f.definition, &crate::input::Reader::new(&f.signatures))
-            .unwrap();
+    let declarations = typing::declaration_tables(
+        interner(),
+        &f.definition,
+        &crate::input::Reader::new(&f.signatures),
+    )
+    .unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
     let reader = crate::input::Reader::new(&f.signatures);
     let memo = TypeMemo::new();
@@ -111,7 +111,7 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let arguments = [GenericArgument::Type(actual)];
     let declarations = checker.generic_declarations();
     let expected = checker
-        .imported_in(declaration, formal, types, &arguments, &declarations)
+        .imported_in(formal, &arguments, &declarations)
         .unwrap();
     assert_ne!(
         types.get(expected).unwrap().modes.sendability,
@@ -124,13 +124,11 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let mut forged_row = types.get(actual).unwrap().clone();
     forged_row.kind = TypeKind::Box(forged_parameter);
     let forged_actual = types.push(forged_row);
-    let forged = hirsel_types::normalize_type_properties(
-        types,
-        forged_actual,
-        &declarations,
-        &mut |_| Ok::<_, hirsel_types::QueryError>(None),
-    )
-    .unwrap();
+    let forged =
+        hirsel_types::normalize_type_properties(types, forged_actual, &declarations, &mut |_| {
+            Ok::<_, hirsel_types::QueryError>(None)
+        })
+        .unwrap();
     assert_eq!(
         types.get(forged).unwrap().modes.sendability,
         Sendability::Sendable
@@ -143,7 +141,9 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
     for kind in [BuiltinType::Map, BuiltinType::SortedMap] {
         let mut f = Fixture::unit();
         let scalar = f
-            .definition.types.push(ty(TypeKind::Primitive(Primitive::U32)));
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::U32)));
         let source = param(
             &mut f,
             TypeKind::Builtin {
@@ -170,9 +170,12 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
             "{kind:?}: {kinds:?}"
         );
         let body = &f.definition.bodies[0];
-        let declarations =
-            typing::declaration_tables(interner(), &f.definition, &crate::input::Reader::new(&f.signatures))
-                .unwrap();
+        let declarations = typing::declaration_tables(
+            interner(),
+            &f.definition,
+            &crate::input::Reader::new(&f.signatures),
+        )
+        .unwrap();
         let scratch = scratch::Scratch::new(f.definition.bodies.len());
         let reader = crate::input::Reader::new(&f.signatures);
         let memo = TypeMemo::new();
@@ -404,7 +407,9 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
         },
     );
     let scalar = f
-        .definition.types.push(ty(TypeKind::Primitive(Primitive::U32)));
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::U32)));
     let root = f.definition.types.push(ty(TypeKind::Named {
         definition: id("Grow"),
         arguments: vec![GenericArgument::Type(scalar)].into(),
@@ -462,7 +467,9 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                     arguments: vec![GenericArgument::Type(variant)].into(),
                 }))
             } else {
-                f.definition.types.push(ty(TypeKind::Primitive(Primitive::U8)))
+                f.definition
+                    .types
+                    .push(ty(TypeKind::Primitive(Primitive::U8)))
             };
             let mut root = base;
             for n in 0..depth {

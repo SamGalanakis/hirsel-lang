@@ -40,7 +40,7 @@ pub(super) fn declaration(
         return false;
     };
     if signature.metadata.visibility != hirsel_syntax::Visibility::Private {
-        for (operation, function) in [(open, open_f), (next, next_f)] {
+        for function in [open_f, next_f] {
             let mut pending: Vec<_> = function
                 .parameters
                 .iter()

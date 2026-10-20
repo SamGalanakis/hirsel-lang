@@ -1237,7 +1237,12 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     f.body()
         .blocks
         .push(block(vec![construction], ret(0, exit)));
-    let report = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
+    let report = validate(
+        &tabled(&f.definition),
+        interner(),
+        &f.signatures,
+        &mut vec![],
+    );
     assert!(
         report
             .violations
@@ -4809,7 +4814,12 @@ fn lexical_declarations_inspect_each_instruction_once() {
         owner_sig(&mut f, &[]);
         let before =
             hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateDeclarationRows);
-        let validation = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
+        let validation = validate(
+            &tabled(&f.definition),
+            interner(),
+            &f.signatures,
+            &mut vec![],
+        );
         assert!(
             validation.violations.is_empty(),
             "{:?}",
@@ -5084,8 +5094,9 @@ fn validation_interns_working_rows_bounded_by_the_owner() {
         }
         owner_sig(&mut f, &[]);
         let rows = f.definition.types.len();
+        let definition = tabled(&f.definition);
         let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
-        let result = validate(&f.definition, interner(), &f.signatures, &mut vec![]);
+        let result = validate(&definition, interner(), &f.signatures, &mut vec![]);
         assert!(result.violations.is_empty(), "{:?}", result.violations);
         let interned =
             hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize - before;

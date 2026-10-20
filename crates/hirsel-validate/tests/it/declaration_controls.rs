@@ -78,7 +78,9 @@ fn verdict_with(s: Signature, extras: Vec<Signature>, accepted: bool) {
     };
     f.broken(expected.clone());
     let mut verdicts = ValidatedSignatures::default();
-    let universe = verdicts.universe(interner(), f.signatures.keys().collect::<Vec<_>>(),
+    let universe = verdicts.universe(
+        interner(),
+        f.signatures.keys().collect::<Vec<_>>(),
         &f.signatures,
     );
     assert_eq!(
@@ -1099,7 +1101,9 @@ fn growing_schema_limits_remain_operational_and_owner_replacement_clears_them() 
     let mut verdicts = ValidatedSignatures::default();
     let universe = |verdicts: &mut ValidatedSignatures, f: &Fixture| {
         verdicts
-            .universe(interner(), f.signatures.keys().collect::<Vec<_>>(),
+            .universe(
+                interner(),
+                f.signatures.keys().collect::<Vec<_>>(),
                 &f.signatures,
             )
             .errors
@@ -1272,9 +1276,16 @@ fn malformed_rows_under_an_unchanged_producer_fingerprint_are_checked_again() {
         ),
     );
     let mut verdicts = ValidatedSignatures::default();
-    assert_eq!(verdicts.verdict(interner(), id("Data"), &signatures).error, None);
+    assert_eq!(
+        verdicts.verdict(interner(), id("Data"), &signatures).error,
+        None
+    );
     let fingerprint = signatures.get(&path("Data")).unwrap().fingerprint;
-    interner().intern(ty(TypeKind::Error));
+    // The view's rows change under the same producer fingerprint.
+    let SignatureKind::Type(d) = &mut signatures.get_mut(&path("Data")).unwrap().kind else {
+        unreachable!()
+    };
+    d.representation = Some(interner().intern(ty(TypeKind::Error)));
     assert_eq!(
         signatures.get(&path("Data")).unwrap().fingerprint,
         fingerprint
@@ -1292,14 +1303,14 @@ fn malformed_rows_under_an_unchanged_producer_fingerprint_are_checked_again() {
     let mut universe = f.signatures.clone();
     let mut reads = vec![];
     assert!(
-        validate(&f.definition, interner(), &universe, &mut reads)
+        validate(&tabled(&f.definition), interner(), &universe, &mut reads)
             .violations
             .is_empty()
     );
     universe.insert(id("Data"), signatures.get(&path("Data")).unwrap().clone());
     assert!(!reads.iter().all(|read| read_holds(read, &universe)));
     assert_eq!(
-        validate(&f.definition, interner(), &universe, &mut vec![])
+        validate(&tabled(&f.definition), interner(), &universe, &mut vec![])
             .violations
             .iter()
             .map(|v| v.kind.clone())
@@ -1350,7 +1361,12 @@ fn a_change_in_heap_role_selection_invalidates() {
     let mut f = Fixture::unit();
     let mut reads = vec![];
     let _ = arena_slot(&mut f, Storage::Local);
-    let _ = validate(&f.definition, interner(), &f.signatures, &mut reads);
+    let _ = validate(
+        &tabled(&f.definition),
+        interner(),
+        &f.signatures,
+        &mut reads,
+    );
     assert!(reads.contains(&VRead::FirstHeap(Some(id("Arena")))));
     assert!(reads_view(
         &ViewVerdict {

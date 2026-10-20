@@ -788,7 +788,6 @@ impl Checker<'_> {
                 .filter(|local| local.storage == Storage::Capture)
                 .map(|local| local.ty)
                 .collect();
-            let child_types = self.t;
             let specialised = self.environment_specialised(ty, *body, captures);
             for (root, value) in receiving.into_iter().zip(captures) {
                 if specialised && self.current_content_source(value) {
