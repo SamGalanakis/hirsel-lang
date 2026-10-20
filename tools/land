@@ -46,6 +46,8 @@ ATTEMPTS = 10
 UNCHECKED_AFTER = 3
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 LANDINGS = 'hirsel-landings.jsonl'
+# This process's own code, read before any rebase rewrites the file it was started from.
+SELF = Path(__file__).read_bytes()
 
 
 def say(message):
@@ -124,7 +126,7 @@ def main():
             say('nothing to land; HEAD is on origin/main')
             return 0
         # Run the rebased tree's own land, so a landed fix to it holds at once.
-        if (ROOT / 'tools/land').read_bytes() != Path(__file__).read_bytes():
+        if (ROOT / 'tools/land').read_bytes() != SELF:
             say('the rebased tree has another tools/land; running it')
             os.environ.update(HIRSEL_LAND_ATTEMPT=str(attempt), HIRSEL_LAND_LINTED='1' if linted else '0')
             os.execv(PY, [PY, str(ROOT / 'tools/land')])
