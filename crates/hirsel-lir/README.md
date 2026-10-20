@@ -722,7 +722,8 @@ TIR/LIR instruction changes. The descriptor carries a live-count program
 for private Map entry Lists, derived once by `logical_storage::MapStorage` from
 the frozen layout table and reused by the descriptor registry and H. Charges
 count live key/value pairs and exclude tags, buckets and hash-cache storage.
-Codec program version 3 derives the same private entry offsets without changing
+Codec program version 5 extends the private entry offsets to Set, after version 4
+added checked opaque nodes, without changing
 `CodecNode::Map` or the wire format. Runtime ABI 21 adds the streaming hash entries.
 
 Runtime ABI 22 enables the existing hidden caller-site pair on blocking

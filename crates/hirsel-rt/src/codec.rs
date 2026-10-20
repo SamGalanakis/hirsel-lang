@@ -33,7 +33,7 @@ pub struct Codec {
 pub type CheckThunk =
     unsafe extern "C" fn(ctx: *mut TaskCtx, value: *const u8, verdict: *mut u8) -> u8;
 
-pub const CODEC_VERSION: u64 = 4;
+pub const CODEC_VERSION: u64 = 5;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;

@@ -18,7 +18,7 @@ The following deviations preserve Hirsel's ownership and API semantics:
   and lazy compaction policy. CPython's pointer/null layout and indexmap's
   swap removal cannot preserve Hirsel's owned values and insertion order as
   they stand. Set uses Map's optional `(key, unit)` entries and shared
-  maintenance. Native descriptor version 13 and codec program version 4
+  maintenance. Native descriptor version 13 and codec program version 5
   identify the layout change; encoded user values keep their existing wire
   format. The interpreter uses its existing host hash index over optional
   entries, with identical live-entry and insertion-order semantics.

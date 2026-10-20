@@ -474,9 +474,9 @@ uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
  *   MAP, SET  container payload index, size, align, entries and index field offsets, the entries
  *             sequence's index, element align, first element offset and stride, the index
  *             sequence's index, element align and stride, key node, key offset, value node (or
- *             CODEC_NO_NODE), value offset; MAP additionally carries hashes and live-count
+ *             CODEC_NO_NODE), value offset; both additionally carry hashes and live-count
  *             field offsets, entry tag offset, form (0 ordinal, 1 live bit, 2 non-null niche)
- *             and bit number. MAP encodes only live entries; decode initializes Some entries,
+ *             and bit number. Both encode only live entries; decode initializes Some entries,
  *             an empty hash cache/index and the live count. Wire bytes are unchanged.
  *   FLAT_TEXT utf8; native storage is a u64 byte extent then bytes
  *   FRAMED    content node; native storage adds a u64 content extent
@@ -499,7 +499,7 @@ uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
  * first, then writes Result[T, DecodeError] at `out`: Ok of fresh owned data, or Error of the
  * first malformation in reading order. Neither fails; operational budgets (the reference's
  * limits) terminate environmentally. */
-#define HIRSEL_RT_V2_CODEC_VERSION 4
+#define HIRSEL_RT_V2_CODEC_VERSION 5
 #define HIRSEL_RT_V2_CODEC_NODE_SCALAR 0
 #define HIRSEL_RT_V2_CODEC_NODE_TEXT 1
 #define HIRSEL_RT_V2_CODEC_NODE_FIELDS 2

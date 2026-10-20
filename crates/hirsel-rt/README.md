@@ -258,6 +258,8 @@ Invariants and boundary:
   whose checks are the codec's `hirsel_rt_v2_check_thunk`s: after materializing, decode
   re-walks the value as encoding does and calls each check after its value's inner
   occurrences; the first verdict 0 releases the value and writes `Error(Invalid)`.
+  Program version 5 applies the private tombstone entry metadata to Set too,
+  using the same optional key/unit pairs as Map.
   Flat reconstruction patches native byte extents separately from wire element
   counts; sequential blocks retain exact used bytes and SoA blocks retain rounded
   column capacity. Both walks are iterative. Past
