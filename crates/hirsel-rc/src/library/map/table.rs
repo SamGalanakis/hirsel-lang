@@ -224,7 +224,15 @@ fn append_map_inner(
 /// The borrowed loop uses this once per iteration, so holes are visited once.
 pub(super) fn advance(b: &mut Body<'_, '_>, entries: AddressId, first: ValueId) -> R<ValueId> {
     let count = len(b, entries)?;
-    let word = b.u64_layout()?;
+    // Borrowed cursors use a raw scalar layout for their position word.
+    // Preserve that layout through the scan and the final cursor write.
+    let word = b.layout_of(first);
+    let converted = b.fresh(word);
+    b.push(Inst::Recast {
+        result: converted,
+        value: count,
+    });
+    let count = converted;
     let i = b.fresh(word);
     let scan = b.block(BlockKind::Body, &[i]);
     let inspect = b.block(BlockKind::Body, &[]);
@@ -264,7 +272,7 @@ pub(super) fn advance(b: &mut Body<'_, '_>, entries: AddressId, first: ValueId) 
     b.jump(done, &[i]);
     b.at(absent);
     b.end_loan(loan);
-    let one = b.u64(1)?;
+    let one = b.constant(word, ConstantValue::Integer(1));
     let next = b.add(ArithMode::Wrapping, i, one);
     b.jump(scan, &[next]);
     b.at(done);

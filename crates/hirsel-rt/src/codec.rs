@@ -1579,11 +1579,12 @@ unsafe fn materialize(ctx: *mut TaskCtx, program: &Program, bytes: &[u8], out: *
                         at: at.wrapping_add(container.entries.stride as usize),
                         count: count - 1,
                     });
-                    let value = container.value.expect("a map entry has a value");
-                    work.push(Build::Visit(
-                        value,
-                        at.wrapping_add(container.value_at as usize),
-                    ));
+                    if let Some(value) = container.value {
+                        work.push(Build::Visit(
+                            value,
+                            at.wrapping_add(container.value_at as usize),
+                        ));
+                    }
                     work.push(Build::Visit(
                         container.key,
                         at.wrapping_add(container.key_at as usize),
@@ -1757,18 +1758,10 @@ unsafe fn materialize(ctx: *mut TaskCtx, program: &Program, bytes: &[u8], out: *
                     }
                     set_pointer(at, c);
                     let first = payload(entries).add(container.entries.offset as usize);
-                    work.push(match container.value {
-                        None => Build::Elements {
-                            node: container.key,
-                            at: first.add(container.key_at as usize),
-                            stride: container.entries.stride,
-                            count,
-                        },
-                        Some(_) => Build::Entries {
-                            container: *container,
-                            at: first,
-                            count,
-                        },
+                    work.push(Build::Entries {
+                        container: *container,
+                        at: first,
+                        count,
                     });
                 }
             }
