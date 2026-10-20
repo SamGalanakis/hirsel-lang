@@ -55,8 +55,8 @@ pub(crate) fn construct(
             }
             if types.get(definition).is_some_and(|n| n.resource) {
                 Value::ResourceVariant {
-                    sizes,
-                    definition: definition.clone(),
+                    sizes: sizes.into(),
+                    definition: definition.into(),
                     variant: *variant,
                     fields: values,
                 }
@@ -74,18 +74,18 @@ pub(crate) fn construct(
                 }
                 if n.resource {
                     Value::Resource {
-                        sizes,
-                        definition: definition.clone(),
+                        sizes: sizes.into(),
+                        definition: definition.into(),
                         fields: values,
                     }
                 } else if n.distinct {
                     Value::Distinct {
-                        definition: definition.clone(),
+                        definition: definition.into(),
                         fields: values,
                     }
                 } else {
                     Value::Record {
-                        definition: definition.clone(),
+                        definition: definition.into(),
                         fields: values,
                     }
                 }
@@ -96,7 +96,7 @@ pub(crate) fn construct(
                     ));
                 }
                 Value::Record {
-                    definition: definition.clone(),
+                    definition: definition.into(),
                     fields: values,
                 }
             }
@@ -132,7 +132,7 @@ pub(crate) fn construct(
                 ));
             }
             Value::Record {
-                definition: DefPath::core("SortedMap"),
+                definition: (&DefPath::core("SortedMap")).into(),
                 fields: vec![
                     values.into_iter().next().unwrap(),
                     Some(Value::Sequence {

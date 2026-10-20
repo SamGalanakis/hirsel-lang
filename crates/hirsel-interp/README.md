@@ -56,7 +56,9 @@ canonical floats. Equality of executions includes float bits and the selected tr
 ## Modules and extension points
 
 - `value.rs`: public observable values, sized integer bit vectors and NaN
-  normalization, aggregates, resources and closures.
+  normalization, aggregates, resources and closures. Values name definitions by
+  their interned `DefId` and box closure environments and function references, so
+  a Value is 56 bytes; observations and effects carry the `DefPath`.
 - `scalar.rs`: TIR literal, unary and binary operations, with typed scalar errors.
   Ownership unary operators and eager logical operators are invalid TIR here.
 - `conversion.rs`: representation adapters for the shared pure exact/representability and low-bit integer conversion kernels
@@ -65,6 +67,14 @@ canonical floats. Equality of executions includes float bits and the selected tr
   `truncate` once the signatures in #18 are pinned.
 - `frame.rs`: slots, operand extraction, projections, assignment and simple drop.
   L can extend projection and drop behavior here without changing CFG scheduling.
+- `code.rs`: each executed body lowered once per run into dispatch form (a flat op
+  array with block offsets, whole-local operands resolved to slots, scalar constants
+  decoded for their destination, scope ends and whole-local cleanup lists expanded
+  to slots) and each direct call site's resolved target (CT-5 instance, closed
+  generic arguments, entry body). The scheduler steps the top frame through these
+  ops while each completes without failure, a call or queued work; any other op
+  executes from the TIR as before, so steps, sites, failures and traces are
+  unchanged. The forms live in the run's scheduler, beside its frames.
 - `eval.rs`: the small scheduler, rvalue/instruction/terminator dispatch and ordered
   cleanup worklist. L adds its rvalues and cleanup handlers at these matches. Its
   finalizers must also schedule frames/work items, continue field release after a

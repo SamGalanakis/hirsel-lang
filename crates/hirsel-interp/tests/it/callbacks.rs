@@ -125,12 +125,14 @@ fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64)
     let mut operations = Repeat {
         callback: Value::Closure {
             invoked: Default::default(),
-            sizes: Default::default(),
-            type_arguments: Default::default(),
-            definition: path("main"),
+            definition: (&path("main")).into(),
             body: BodyId(1),
             captures: vec![],
-            owned_captures: vec![],
+            environment: Box::new(hirsel_interp::value::Environment {
+                owned_captures: vec![],
+                sizes: Default::default(),
+                type_arguments: Default::default(),
+            }),
         },
         resumes: 0,
         mutating,
@@ -260,7 +262,7 @@ fn handle_cleanup_hook_runs_high_to_low_with_the_parent_cleanup_anchor() {
         },
         vec![Value::Resource {
             sizes: Default::default(),
-            definition: path("Files"),
+            definition: (&path("Files")).into(),
             fields: vec![
                 Some(Value::Handle {
                     kind: "File".into(),
@@ -737,7 +739,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                 kind: hirsel_types::BuiltinType::Array,
                 elements: vec![Some(Value::Resource {
                     sizes: Default::default(),
-                    definition: path("Item"),
+                    definition: (&path("Item")).into(),
                     fields: vec![],
                 })]
                 .into(),
@@ -879,12 +881,12 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
         );
         let definition = b.finish("main", result);
         let mut operations = Native {
-            reference: Value::FunctionReference(hirsel_interp::value::NamedFunction {
+            reference: Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                 definition: path("middle"),
                 arguments: vec![],
                 types: std::sync::Arc::new(definition.types.clone()),
                 ty: reference,
-            }),
+            })),
             failing,
             calls: 0,
             resumed: vec![],
@@ -1007,7 +1009,7 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
         },
         vec![Value::Resource {
             sizes: Default::default(),
-            definition: path("Files"),
+            definition: (&path("Files")).into(),
             fields: vec![Some(Value::Handle {
                 kind: "Stream".into(),
                 id: 1,

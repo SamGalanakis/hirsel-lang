@@ -220,7 +220,7 @@ fn variant(tag: u32, values: Vec<Value>) -> Value {
 }
 fn record(name: &str, values: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: values.into_iter().map(Some).collect(),
     }
 }

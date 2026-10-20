@@ -40,7 +40,7 @@ pub(super) enum Pending {
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: fields.into_iter().map(Some).collect(),
     }
 }
@@ -60,7 +60,7 @@ fn unpack(value: Value, name: &str) -> Result<Vec<Value>, Error> {
     let Value::Record { definition, fields } = value else {
         return Err(invalid("invalid library state"));
     };
-    if definition != hirsel_syntax::DefPath::core(name) || fields.len() != 2 {
+    if !definition.is_core(name) || fields.len() != 2 {
         return Err(invalid("invalid library state tag"));
     }
     fields

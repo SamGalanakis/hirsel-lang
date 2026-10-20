@@ -259,6 +259,7 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                         bytes.extend_from_slice(&variant.to_le_bytes())
                     }
                     Value::Record { definition, .. } | Value::Distinct { definition, .. } => {
+                        let definition = definition.path();
                         framed(&mut bytes, definition.0.package.name.as_bytes());
                         framed(&mut bytes, definition.0.package.version.as_bytes());
                         bytes.extend_from_slice(&(definition.0.modules.len() as u64).to_le_bytes());

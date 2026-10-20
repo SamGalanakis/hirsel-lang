@@ -97,11 +97,11 @@ pub(crate) struct Frame {
     pub definition: DefinitionRef,
     pub body_id: BodyId,
     pub mut_parameters: Vec<LocalId>,
-    pub operation: Option<(crate::OperationResult, crate::resources::OperationState)>,
-    pub callback: Option<crate::resources::Callback>,
+    pub operation: Option<Box<(crate::OperationResult, crate::resources::OperationState)>>,
+    pub callback: Option<Box<crate::resources::Callback>>,
     pub work: std::collections::VecDeque<crate::resources::Work>,
     pub ending: Option<crate::resources::Ending>,
-    pub finalized: Option<(LocalId, crate::observation::Anchor, Option<CallerSite>)>,
+    pub finalized: Option<Box<(LocalId, crate::observation::Anchor, Option<CallerSite>)>>,
     pub loop_owned: Vec<(Value, crate::observation::Anchor)>,
     pub slots: Vec<Option<Value>>,
     pub sizes: crate::value::SizeBindings,
@@ -632,17 +632,17 @@ impl Frame {
                 }
                 if let Value::Closure {
                     captures,
-                    owned_captures,
+                    environment,
                     ..
                 } = v
                 {
-                    if captures.len() != owned_captures.len() {
+                    if captures.len() != environment.owned_captures.len() {
                         return Err(invalid("capture ownership count").into());
                     }
                     work.extend(
                         captures
                             .iter()
-                            .zip(owned_captures)
+                            .zip(&environment.owned_captures)
                             .filter_map(|(v, owned)| owned.then(|| v.as_ref()).flatten()),
                     );
                 } else if let Some(fields) = v.fields() {
@@ -957,7 +957,7 @@ impl Frame {
             .chain(self.loop_owned.iter().map(|(v, _)| v))
             .map(Value::logical_bytes)
             .fold(0u64, u64::saturating_add);
-        if let Some((result, state)) = &self.operation {
+        if let Some((result, state)) = self.operation.as_deref() {
             total = total
                 .saturating_add(crate::resources::result_bytes(result))
                 .saturating_add(state.logical_bytes());
@@ -995,7 +995,7 @@ impl Drop for Frame {
         if let Some(crate::resources::Ending::Return(value)) = self.ending.take() {
             value.discard();
         }
-        if let Some((result, _)) = self.operation.take() {
+        if let Some((result, _)) = self.operation.take().map(|operation| *operation) {
             crate::resources::discard_result(result);
         }
     }

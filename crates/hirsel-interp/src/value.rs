@@ -1,5 +1,5 @@
 //! Observable values contain bits and declaration ordinals, never host addresses.
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use hirsel_tir::BodyId;
 use hirsel_types::{BuiltinType, Primitive};
 
@@ -289,7 +289,7 @@ impl std::fmt::Debug for Block {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Value {
-    FunctionReference(NamedFunction),
+    FunctionReference(Box<NamedFunction>),
     Shared(SharedRoot),
     /// Opaque simulation identity. Tags come from the library registry, never addresses.
     Handle {
@@ -318,7 +318,7 @@ pub enum Value {
     },
     Tuple(Vec<Option<Value>>),
     Record {
-        definition: DefPath,
+        definition: DefId,
         fields: Vec<Option<Value>>,
     },
     Sequence {
@@ -329,38 +329,45 @@ pub enum Value {
     },
     Box(Vec<Option<Value>>),
     Distinct {
-        definition: DefPath,
+        definition: DefId,
         fields: Vec<Option<Value>>,
     },
     ResourceVariant {
-        sizes: Vec<Option<u64>>,
-        definition: DefPath,
+        sizes: Box<[Option<u64>]>,
+        definition: DefId,
         variant: u32,
         fields: Vec<Option<Value>>,
     },
     Resource {
         /// Concrete type-size bindings retained until the finalizer runs.
-        sizes: Vec<Option<u64>>,
-        definition: DefPath,
+        sizes: Box<[Option<u64>]>,
+        definition: DefId,
         fields: Vec<Option<Value>>,
     },
     Closure {
         /// Once-environment snapshots share the fact that invocation moved its
         /// owners into a frame. Many-use environments have no invocation state.
         invoked: Option<std::sync::Arc<std::sync::OnceLock<()>>>,
-        definition: DefPath,
+        definition: DefId,
         body: BodyId,
         captures: Vec<Option<Value>>,
-        /// Borrow/mut captures are snapshots owned by the enclosing frame.
-        owned_captures: Vec<bool>,
-        /// Lexical size bindings travel with the environment, including callbacks.
-        sizes: SizeBindings,
-        type_arguments: crate::type_arguments::Bindings,
+        /// Which captures the environment owns, and its lexical bindings.
+        environment: Box<Environment>,
     },
     Variant {
         variant: u32,
         fields: Vec<Option<Value>>,
     },
+}
+
+/// A closure environment's ownership and lexical bindings, apart from its captures.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Environment {
+    /// Borrow/mut captures are snapshots owned by the enclosing frame.
+    pub owned_captures: Vec<bool>,
+    /// Lexical size bindings travel with the environment, including callbacks.
+    pub sizes: SizeBindings,
+    pub type_arguments: crate::type_arguments::Bindings,
 }
 
 impl Value {
@@ -419,21 +426,31 @@ impl Value {
 }
 
 /// A sized two's-complement bit vector; construction rejects out-of-width bits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The bits are two 64-bit halves, so an Integer is word-aligned and a Value stays
+/// small.
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Integer {
     kind: Primitive,
-    bits: u128,
+    low: u64,
+    high: u64,
 }
 impl Integer {
     pub fn new(kind: Primitive, bits: u128) -> Option<Self> {
         let (width, _) = integer_layout(kind)?;
-        (bits & !mask(width) == 0).then_some(Self { kind, bits })
+        (bits & !mask(width) == 0).then(|| Self::of(kind, bits))
+    }
+    fn of(kind: Primitive, bits: u128) -> Self {
+        Self {
+            kind,
+            low: bits as u64,
+            high: (bits >> 64) as u64,
+        }
     }
     pub fn kind(self) -> Primitive {
         self.kind
     }
     pub fn bits(self) -> u128 {
-        self.bits
+        u128::from(self.high) << 64 | u128::from(self.low)
     }
     pub fn width(self) -> u32 {
         integer_layout(self.kind).unwrap().0
@@ -443,13 +460,18 @@ impl Integer {
     }
     pub fn signed(self) -> i128 {
         let shift = 128 - self.width();
-        ((self.bits << shift) as i128) >> shift
+        ((self.bits() << shift) as i128) >> shift
     }
     pub(crate) fn masked(self, bits: u128) -> Self {
-        Self {
-            bits: bits & mask(self.width()),
-            ..self
-        }
+        Self::of(self.kind, bits & mask(self.width()))
+    }
+}
+impl std::fmt::Debug for Integer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Integer")
+            .field("kind", &self.kind)
+            .field("bits", &self.bits())
+            .finish()
     }
 }
 pub fn integer_layout(kind: Primitive) -> Option<(u32, bool)> {
@@ -565,17 +587,13 @@ impl Clone for Value {
                     definition,
                     body,
                     captures,
-                    owned_captures,
-                    sizes,
-                    type_arguments,
+                    environment,
                 } => Value::Closure {
                     invoked: invoked.clone(),
-                    definition: definition.clone(),
+                    definition: *definition,
                     body: *body,
                     captures: vec![None; captures.len()],
-                    owned_captures: owned_captures.clone(),
-                    sizes: sizes.clone(),
-                    type_arguments: type_arguments.clone(),
+                    environment: environment.clone(),
                 },
             }
         }
@@ -623,12 +641,12 @@ impl Value {
                 Value::Shared(root) => root.acquire(),
                 Value::Closure {
                     captures,
-                    owned_captures,
+                    environment,
                     ..
                 } => work.extend(
                     captures
                         .iter()
-                        .zip(owned_captures)
+                        .zip(&environment.owned_captures)
                         .filter_map(|(v, owned)| owned.then(|| v.as_ref()).flatten()),
                 ),
                 _ => work.extend(value.fields().into_iter().flatten().flatten()),

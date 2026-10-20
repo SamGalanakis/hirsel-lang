@@ -1051,7 +1051,7 @@ pub(super) fn append_chain(primary: &mut Vec<FailureRecord>, mut chain: Vec<Fail
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: fields.into_iter().map(Some).collect(),
     }
 }
@@ -1177,13 +1177,15 @@ mod tests {
         library.tasks.scopes.insert(scope, Default::default());
         for ordinal in 0..4096 {
             let closure = Value::Closure {
-                definition: DefPath::core("child"),
+                definition: (&DefPath::core("child")).into(),
                 body: BodyId(0),
                 invoked: Some(Default::default()),
                 captures: vec![],
-                owned_captures: vec![],
-                sizes: Default::default(),
-                type_arguments: Default::default(),
+                environment: Box::new(crate::value::Environment {
+                    owned_captures: vec![],
+                    sizes: Default::default(),
+                    type_arguments: Default::default(),
+                }),
             };
             let OperationResult::Complete { value: child, .. } = call(
                 &mut library,
@@ -1234,13 +1236,15 @@ mod tests {
         let mut ids = vec![];
         for _ in 0..3 {
             let closure = Value::Closure {
-                definition: DefPath::core("child"),
+                definition: (&DefPath::core("child")).into(),
                 body: BodyId(0),
                 invoked: Some(Default::default()),
                 captures: vec![],
-                owned_captures: vec![],
-                sizes: Default::default(),
-                type_arguments: Default::default(),
+                environment: Box::new(crate::value::Environment {
+                    owned_captures: vec![],
+                    sizes: Default::default(),
+                    type_arguments: Default::default(),
+                }),
             };
             let OperationResult::Complete { value: child, .. } = call(
                 &mut library,

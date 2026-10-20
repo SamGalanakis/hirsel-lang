@@ -84,12 +84,14 @@ fn values_preserve_width_and_float_bits_and_name_function_disposition() {
     execution.outcome = Outcome::Returned {
         value: Value::Closure {
             invoked: Default::default(),
-            definition: hirsel_syntax::DefPath::core("f"),
+            definition: (&hirsel_syntax::DefPath::core("f")).into(),
             body: BodyId(2),
             captures: vec![],
-            owned_captures: vec![],
-            sizes: Default::default(),
-            type_arguments: Default::default(),
+            environment: Box::new(hirsel_interp::value::Environment {
+                owned_captures: vec![],
+                sizes: Default::default(),
+                type_arguments: Default::default(),
+            }),
         },
         exit_code: 0,
     };
@@ -175,7 +177,7 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
             types.push(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
         }
         let root = types.push(Type::with_kind(TypeKind::Primitive(primitive)));
-        Value::FunctionReference(NamedFunction {
+        Value::FunctionReference(Box::new(NamedFunction {
             definition: hirsel_syntax::DefPath::core("target"),
             arguments: vec![
                 GenericArgument::Type(root),
@@ -183,7 +185,7 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
             ],
             types: std::sync::Arc::new(types),
             ty: root,
-        })
+        }))
     };
     let a = reference(Primitive::U32, 7, 0);
     let b = reference(Primitive::U32, 7, 13);
@@ -207,7 +209,7 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
         TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(7)), TypeParamId(0)),
     )));
     let definition = hirsel_syntax::DefPath::core("target");
-    let value = Value::FunctionReference(hirsel_interp::value::NamedFunction {
+    let value = Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
         definition: definition.clone(),
         arguments: vec![
             GenericArgument::Type(root),
@@ -215,7 +217,7 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
         ],
         types: std::sync::Arc::new(types),
         ty: root,
-    });
+    }));
     let observed = ObservedValue::from_value(&value);
     assert!(!observed.comparable());
     let ObservedNode::FunctionReference {

@@ -118,7 +118,7 @@ fn unicode_view_protocols_keep_scalars_and_positions() {
             let Value::Record { definition, fields } = v else {
                 panic!()
             };
-            assert_eq!(*definition, hirsel_syntax::DefPath::core("StrPos"));
+            assert_eq!(*definition.path(), hirsel_syntax::DefPath::core("StrPos"));
             assert_eq!(fields[0], Some(Value::String(source.into())));
             fields[1].clone().unwrap()
         })

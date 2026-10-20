@@ -104,7 +104,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
 
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
-        definition: DefPath::core(name),
+        definition: (&DefPath::core(name)).into(),
         fields: fields.into_iter().map(Some).collect(),
     }
 }

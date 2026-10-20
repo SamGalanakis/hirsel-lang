@@ -263,7 +263,7 @@ fn variant_fields(v: &Value) -> Result<(u32, &[Option<Value>]), Error> {
 }
 fn fields<'a>(v: &'a Value, name: &str, len: usize) -> Result<Vec<&'a Value>, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == hirsel_syntax::DefPath::core(name)
+        && definition.is_core(name)
         && fields.len() == len
     {
         return fields
@@ -319,7 +319,7 @@ fn ip_value(ip: IpAddr) -> Value {
 }
 fn addr_value(ip: IpAddr, port: u16) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core("SocketAddr"),
+        definition: (&hirsel_syntax::DefPath::core("SocketAddr")).into(),
         fields: vec![
             Some(ip_value(ip)),
             Some(Value::Integer(
@@ -479,7 +479,7 @@ pub(super) fn rule_value(rule: &NetRule) -> Result<Value, Error> {
         .parse()
         .map_err(|_| invalid("NetRule service"))?;
     Ok(Value::Record {
-        definition: hirsel_syntax::DefPath::core("NetRule"),
+        definition: (&hirsel_syntax::DefPath::core("NetRule")).into(),
         fields: vec![
             Some(Value::String(rule.address.clone())),
             Some(Value::Integer(
@@ -894,7 +894,8 @@ impl Simulation {
                                 }));
                                 updates.push((2, buffer));
                                 let received = Value::Record {
-                                    definition: hirsel_syntax::DefPath::core("UdpReceived"),
+                                    definition: (&hirsel_syntax::DefPath::core("UdpReceived"))
+                                        .into(),
                                     fields: vec![
                                         Some(u64_value(count)),
                                         Some(addr_value(peer.ip(), peer.port())),

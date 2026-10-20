@@ -358,17 +358,17 @@ fn from_wire(
                                 vec![Some(child)]
                             };
                             Value::Distinct {
-                                definition: definition.clone(),
+                                definition: definition.into(),
                                 fields,
                             }
                         } else {
                             match child {
                                 Value::Tuple(fields) => Value::Record {
-                                    definition: definition.clone(),
+                                    definition: definition.into(),
                                     fields,
                                 },
                                 Value::Unit => Value::Record {
-                                    definition: definition.clone(),
+                                    definition: definition.into(),
                                     fields: vec![],
                                 },
                                 other => other,

@@ -240,7 +240,7 @@ pub fn decode_pipeline(bytes: &[u8]) -> Option<PipelineOutcome> {
 pub fn group_value(outcome: &Result<GroupOutput, ProcessFailure>) -> Value {
     match outcome {
         Ok(GroupOutput { statuses, stderr }) => ok(Value::Record {
-            definition: hirsel_syntax::DefPath::core("GroupOutput"),
+            definition: (&hirsel_syntax::DefPath::core("GroupOutput")).into(),
             fields: vec![
                 Some(collection::sequence(
                     BuiltinType::List,
@@ -264,7 +264,7 @@ pub fn pipeline_value(outcome: &PipelineOutcome) -> Value {
             stdout,
             stderr,
         } => ok(Value::Record {
-            definition: hirsel_syntax::DefPath::core("PipelineOutput"),
+            definition: (&hirsel_syntax::DefPath::core("PipelineOutput")).into(),
             fields: vec![
                 Some(collection::sequence(
                     BuiltinType::List,
@@ -291,7 +291,7 @@ pub fn outcome_value(outcome: &ProcessOutcome) -> Value {
                 ExitStatus::Signaled(signal) => variant(1, vec![i32_value(*signal)]),
             };
             ok(Value::Record {
-                definition: hirsel_syntax::DefPath::core("ProcessOutput"),
+                definition: (&hirsel_syntax::DefPath::core("ProcessOutput")).into(),
                 fields: vec![
                     Some(status),
                     Some(Value::Bytes(stdout.clone())),
@@ -305,7 +305,7 @@ pub fn outcome_value(outcome: &ProcessOutcome) -> Value {
 
 fn record_fields<'a>(v: &'a Value, name: &str, len: usize) -> Result<Vec<&'a Value>, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == hirsel_syntax::DefPath::core(name)
+        && definition.is_core(name)
         && fields.len() == len
     {
         return fields

@@ -112,7 +112,7 @@ impl Reference {
                 .unwrap(),
         );
         let deadline = Value::Record {
-            definition: hirsel_syntax::DefPath::core("Deadline"),
+            definition: (&hirsel_syntax::DefPath::core("Deadline")).into(),
             fields: vec![Some(clock), Some(handle("Instant", 0))],
         };
         // Enter an already expired scope through the public operation boundary;
@@ -1020,7 +1020,7 @@ fn list(values: Vec<Value>) -> Value {
 }
 fn record(name: &str, values: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: values.into_iter().map(Some).collect(),
     }
 }

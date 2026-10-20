@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: fields.into_iter().map(Some).collect(),
     }
 }

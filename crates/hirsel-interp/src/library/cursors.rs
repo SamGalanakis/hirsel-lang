@@ -82,12 +82,17 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
             }
             Ok(Some(OperationResult::returned(Value::Closure {
                 invoked: Default::default(),
-                definition: hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor")),
+                definition: (&hirsel_syntax::DefPath::core(&format!(
+                    "$intrinsic.{protocol}_cursor"
+                )))
+                    .into(),
                 body: BodyId(0),
                 captures: vec![Some(source.clone()), Some(u64_value(0))],
-                owned_captures: vec![false, true],
-                sizes: Default::default(),
-                type_arguments: Default::default(),
+                environment: Box::new(crate::value::Environment {
+                    owned_captures: vec![false, true],
+                    sizes: Default::default(),
+                    type_arguments: Default::default(),
+                }),
             })))
         }
         Step::Next => {
@@ -95,18 +100,16 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 definition,
                 body,
                 captures,
-                owned_captures,
-                sizes,
-                type_arguments,
+                environment,
                 ..
             } = source
             else {
                 return Err(invalid("expected intrinsic cursor"));
             };
-            if *definition != hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor"))
+            if !definition.is_core(&format!("$intrinsic.{protocol}_cursor"))
                 || *body != BodyId(0)
                 || captures.len() != 2
-                || owned_captures != &vec![false, true]
+                || environment.owned_captures != [false, true]
             {
                 return Err(invalid("cursor protocol mismatch"));
             }
@@ -132,12 +135,10 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
             };
             let cursor = Value::Closure {
                 invoked: Default::default(),
-                definition: definition.clone(),
+                definition: *definition,
                 body: *body,
                 captures: vec![Some(source.clone()), Some(u64_value(next as u64))],
-                owned_captures: owned_captures.clone(),
-                sizes: sizes.clone(),
-                type_arguments: type_arguments.clone(),
+                environment: environment.clone(),
             };
             Ok(Some(OperationResult::Complete {
                 consumed: vec![],
@@ -194,14 +195,17 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
             Ok(Some(
                 OperationResult::returned(Value::Closure {
                     invoked: Default::default(),
-                    definition: hirsel_syntax::DefPath::core(&format!(
+                    definition: (&hirsel_syntax::DefPath::core(&format!(
                         "$intrinsic.{protocol}_cursor"
-                    )),
+                    )))
+                        .into(),
                     body: BodyId(0),
                     captures: vec![Some(argument.clone()), Some(u64_value(0))],
-                    owned_captures: vec![true, true],
-                    sizes: Default::default(),
-                    type_arguments: Default::default(),
+                    environment: Box::new(crate::value::Environment {
+                        owned_captures: vec![true, true],
+                        sizes: Default::default(),
+                        type_arguments: Default::default(),
+                    }),
                 })
                 .transferring([0]),
             ))
@@ -211,18 +215,16 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                 definition,
                 body,
                 captures,
-                owned_captures,
-                sizes,
-                type_arguments,
+                environment,
                 ..
             } = argument
             else {
                 return Err(invalid("expected owning cursor"));
             };
-            if *definition != hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor"))
+            if !definition.is_core(&format!("$intrinsic.{protocol}_cursor"))
                 || *body != BodyId(0)
                 || captures.len() != 2
-                || owned_captures != &[true, true]
+                || environment.owned_captures != [true, true]
             {
                 return Err(invalid("owning cursor protocol"));
             }
@@ -261,12 +263,10 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                     0,
                     Value::Closure {
                         invoked: Default::default(),
-                        definition: definition.clone(),
+                        definition: *definition,
                         body: *body,
                         captures,
-                        owned_captures: owned_captures.clone(),
-                        sizes: sizes.clone(),
-                        type_arguments: type_arguments.clone(),
+                        environment: environment.clone(),
                     },
                 )],
             }))

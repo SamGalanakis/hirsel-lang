@@ -31,7 +31,7 @@ fn nominal_reification_uses_declared_generic_fields_and_preserves_identity() {
         .reify_value(
             &default_context().package,
             Value::Record {
-                definition: path.clone(),
+                definition: (&path).into(),
                 fields: vec![Some(Value::Integer(
                     hirsel_interp::Integer::new(Primitive::U32, 7).unwrap(),
                 ))],

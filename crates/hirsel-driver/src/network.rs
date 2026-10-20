@@ -100,7 +100,7 @@ fn address(a: SocketAddr) -> Value {
         std::net::IpAddr::V6(ip) => (1, ip.octets().to_vec()),
     };
     Value::Record {
-        definition: DefPath::core("SocketAddr"),
+        definition: (&DefPath::core("SocketAddr")).into(),
         fields: vec![
             Some(variant(
                 t,
@@ -1247,7 +1247,7 @@ impl HostLibrary {
             },
             C::Metadata(r) => match r {
                 Ok(meta) => ok(Value::Record {
-                    definition: DefPath::core("Metadata"),
+                    definition: (&DefPath::core("Metadata")).into(),
                     fields: vec![
                         Some(variant(meta.kind as u32, vec![])),
                         Some(u64_value(meta.size)),
@@ -1264,7 +1264,7 @@ impl HostLibrary {
                 Ok(entries) => ok(sequence(
                     BuiltinType::List,
                     entries.into_iter().map(|entry| Value::Record {
-                        definition: DefPath::core("DirEntry"),
+                        definition: (&DefPath::core("DirEntry")).into(),
                         fields: vec![
                             Some(hirsel_interp::library::path(&entry.path)),
                             Some(variant(entry.kind as u32, vec![])),
@@ -1605,7 +1605,7 @@ impl HostLibrary {
                         ),
                     ));
                     ok(Value::Record {
-                        definition: DefPath::core("UdpReceived"),
+                        definition: (&DefPath::core("UdpReceived")).into(),
                         fields: vec![
                             Some(u64_value(count)),
                             Some(address(peer)),
@@ -2093,10 +2093,10 @@ mod tests {
             panic!("test.dir must return a directory");
         };
         let command = Value::Record {
-            definition: DefPath::core("Command"),
+            definition: (&DefPath::core("Command")).into(),
             fields: vec![
                 Some(Value::Record {
-                    definition: DefPath::core("Path"),
+                    definition: (&DefPath::core("Path")).into(),
                     fields: vec![Some(Value::String("/bin/echo".into()))],
                 }),
                 Some(sequence(BuiltinType::List, [])),

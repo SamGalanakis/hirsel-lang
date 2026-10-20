@@ -121,7 +121,7 @@ impl QueryEngine {
                                 | Value::ResourceVariant {
                                     definition, fields, ..
                                 } if declaration.resource => {
-                                    require_identity(&root.kind, definition)?;
+                                    require_identity(&root.kind, definition.path())?;
                                     if fields.iter().any(Option::is_none) {
                                         return Err(invalid("materialized field was moved out"));
                                     }
@@ -211,9 +211,9 @@ impl QueryEngine {
                             },
                             TypeKind::Record(fields),
                         ) => {
-                            require_identity(&root.kind, &definition)?;
+                            require_identity(&root.kind, definition.path())?;
                             (
-                                Constructor::Record(definition),
+                                Constructor::Record(definition.path().clone()),
                                 values,
                                 fields.into_iter().map(|f| f.ty).collect(),
                             )
@@ -225,9 +225,9 @@ impl QueryEngine {
                             },
                             TypeKind::Record(fields),
                         ) => {
-                            require_identity(&root.kind, &definition)?;
+                            require_identity(&root.kind, definition.path())?;
                             (
-                                Constructor::Record(definition),
+                                Constructor::Record(definition.path().clone()),
                                 values,
                                 fields.into_iter().map(|f| f.ty).collect(),
                             )

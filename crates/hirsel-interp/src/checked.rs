@@ -581,7 +581,7 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
                 }
             }
             Value::Record { definition, .. }
-                if crate::library::simulation::plain_evidence(definition) => {}
+                if crate::library::simulation::plain_evidence(definition.path()) => {}
             Value::Tuple(f)
             | Value::Record { fields: f, .. }
             | Value::Distinct { fields: f, .. }
@@ -782,7 +782,7 @@ impl OperationCheck {
     pub fn returned_shadow(&self, value: &Value, arguments: &[Value]) -> Shadow {
         if let Value::Closure {
             captures,
-            owned_captures,
+            environment,
             ..
         } = value
         {
@@ -790,7 +790,7 @@ impl OperationCheck {
             Shadow::Parts(
                 captures
                     .iter()
-                    .zip(owned_captures)
+                    .zip(&environment.owned_captures)
                     .map(|(v, owned)| {
                         let Some(v) = v else {
                             return Shadow::default();
@@ -1271,7 +1271,7 @@ mod tests {
         // A core StrPos or Path keeps its evidence as a string; a record of
         // any other definition holding one owns that storage.
         let record = |definition: DefPath| Value::Record {
-            definition,
+            definition: (&definition).into(),
             fields: vec![Some(string.clone()), Some(Value::Unit)],
         };
         let core = hirsel_syntax::DefPath::core;

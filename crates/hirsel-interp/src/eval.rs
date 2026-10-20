@@ -281,16 +281,17 @@ pub(crate) fn execute_frames(
                     definition,
                     body,
                     captures,
-                    sizes,
-                    type_arguments,
+                    environment,
                     ..
                 } => {
-                    invocation_types = type_arguments.clone();
+                    invocation_types = environment.type_arguments.clone();
                     (
-                        provider.definition(definition).map_err(Error::Query)?,
+                        provider
+                            .definition(definition.path())
+                            .map_err(Error::Query)?,
                         *body,
                         captures.clone(),
-                        sizes.clone(),
+                        environment.sizes.clone(),
                     )
                 }
                 Value::FunctionReference(reference) => {
@@ -337,12 +338,12 @@ pub(crate) fn execute_frames(
                 let callee =
                     frames
                         .last()
-                        .and_then(|f| f.operation.as_ref())
+                        .and_then(|f| f.operation.as_deref())
                         .and_then(|(_, state)| {
                             let bounds = state.bounds.as_ref()?;
                             let Value::Closure {
                                 captures,
-                                owned_captures,
+                                environment,
                                 ..
                             } = &start.callee
                             else {
@@ -364,7 +365,7 @@ pub(crate) fn execute_frames(
                                             .unwrap_or_default()
                                     })
                                     .collect(),
-                                owned: owned_captures.clone(),
+                                owned: environment.owned_captures.clone(),
                                 lifetime: shadow.lifetime(),
                             })
                         });
@@ -401,7 +402,7 @@ pub(crate) fn execute_frames(
                 operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));
                 let frame: &mut Frame = stack.last_mut().unwrap();
                 let (OperationResult::Park { token, .. }, state) =
-                    frame.operation.as_ref().unwrap()
+                    frame.operation.as_deref().unwrap()
                 else {
                     return Err(invalid("parked task has no wait"));
                 };
@@ -485,12 +486,13 @@ pub(crate) fn execute_frames(
         let top = frames.last_mut().unwrap();
         if top.work.is_empty()
             && top.operation.is_some()
-            && let Some((result, mut state)) = top.operation.take()
+            && let Some((result, mut state)) = top.operation.take().map(|operation| *operation)
         {
             let frame = frames.last_mut().unwrap();
             match result {
                 OperationResult::Park { token, wait } => {
-                    frame.operation = Some((OperationResult::Park { token, wait }, state));
+                    frame.operation =
+                        Some(Box::new((OperationResult::Park { token, wait }, state)));
                     operations.parked(token);
                     parked.push((
                         task,
@@ -526,7 +528,7 @@ pub(crate) fn execute_frames(
                             state.caller.clone(),
                         ));
                     }
-                    frame.operation = Some((OperationResult::Failed(first), state));
+                    frame.operation = Some(Box::new((OperationResult::Failed(first), state)));
                 }
                 OperationResult::UndefinedBehavior(detected) => {
                     execution.outcome = Outcome::UndefinedBehavior(detected);
@@ -567,7 +569,7 @@ pub(crate) fn execute_frames(
                     let callback_callee = state.bounds.as_ref().and_then(|bounds| {
                         if let Value::Closure {
                             captures,
-                            owned_captures,
+                            environment,
                             ..
                         } = &callee
                         {
@@ -583,7 +585,7 @@ pub(crate) fn execute_frames(
                                             .unwrap_or_default()
                                     })
                                     .collect(),
-                                owned: owned_captures.clone(),
+                                owned: environment.owned_captures.clone(),
                                 lifetime: shadow.lifetime(),
                             })
                         } else {
@@ -601,17 +603,22 @@ pub(crate) fn execute_frames(
                             definition,
                             body,
                             captures,
-                            owned_captures,
-                            sizes,
-                            type_arguments,
+                            environment,
                             ..
                         } => {
-                            if captures.len() != owned_captures.len() {
+                            if captures.len() != environment.owned_captures.len() {
                                 return Err(invalid("capture ownership count"));
                             }
+                            let crate::value::Environment {
+                                sizes,
+                                type_arguments,
+                                ..
+                            } = *environment;
                             invocation_types = type_arguments;
                             (
-                                provider.definition(&definition).map_err(Error::Query)?,
+                                provider
+                                    .definition(definition.path())
+                                    .map_err(Error::Query)?,
                                 body,
                                 captures,
                                 sizes,
@@ -730,7 +737,7 @@ pub(crate) fn execute_frames(
                                         )
                                     }),
                                 };
-                                frame.operation = Some((result, native));
+                                frame.operation = Some(Box::new((result, native)));
                                 continue;
                             }
                             let definition = provider
@@ -788,13 +795,13 @@ pub(crate) fn execute_frames(
                             callback_callee,
                         ));
                     }
-                    callback.callback = Some(crate::resources::Callback {
+                    callback.callback = Some(Box::new(crate::resources::Callback {
                         failure_start: execution.failures.len(),
                         token: continuation,
                         state,
                         mut_parameters,
                         writebacks,
-                    });
+                    }));
                     callback.depth_failure = depth >= limits.call_depth;
                     frames.push(callback);
                     if runtime.trace_mode == TraceMode::Full {
@@ -822,7 +829,7 @@ pub(crate) fn execute_frames(
                             )?)
                         }
                     };
-                    frame.operation = Some((result, state));
+                    frame.operation = Some(Box::new((result, state)));
                 }
                 OperationResult::Complete {
                     value,
@@ -859,7 +866,7 @@ pub(crate) fn execute_frames(
                                     execution.failures[callback.failure_start].failure.clone();
                                 frame.work.push_back(crate::resources::Work::Resume(
                                     OperationResult::Failed(failure),
-                                    *callback,
+                                    callback,
                                 ));
                             } else {
                                 enqueue_cleanup(frame, state.on_failure, state.anchor.site)?;
@@ -896,7 +903,7 @@ pub(crate) fn execute_frames(
                                         consumed: vec![],
                                         released: vec![],
                                     },
-                                    *callback,
+                                    callback,
                                 ));
                             } else {
                                 let Some(CallReturn { destination, next }) = state.returns else {
@@ -938,7 +945,7 @@ pub(crate) fn execute_frames(
                                 state.caller.clone(),
                             ));
                         }
-                        frame.operation = Some((OperationResult::returned(value), state));
+                        frame.operation = Some(Box::new((OperationResult::returned(value), state)));
                     }
                 }
                 OperationResult::Failed(failure) => {
@@ -961,7 +968,7 @@ pub(crate) fn execute_frames(
                         let failure = execution.failures[callback.failure_start].failure.clone();
                         frame.work.push_back(crate::resources::Work::Resume(
                             OperationResult::Failed(failure),
-                            *callback,
+                            callback,
                         ));
                     } else {
                         enqueue_cleanup(frame, state.on_failure, state.anchor.site)?;
@@ -1019,7 +1026,7 @@ pub(crate) fn execute_frames(
                     } else {
                         resumed
                     };
-                    frame.operation = Some((resumed, callback.state));
+                    frame.operation = Some(Box::new((resumed, callback.state)));
                 }
                 crate::resources::Work::Chain(id, anchor) => {
                     let node = frame
@@ -1168,7 +1175,7 @@ pub(crate) fn execute_frames(
                                     .borrow()
                                     .config
                                     .noalloc_drop
-                                    .contains(definition)
+                                    .contains(definition.path())
                                 {
                                     return Err(check.state.borrow().trap(
                                         crate::checked::TrapRule::AllocatingCallInNoalloc,
@@ -1187,14 +1194,15 @@ pub(crate) fn execute_frames(
                         definition, sizes, ..
                     } = &value
                     {
-                        if let Some((path, body)) =
-                            runtime.get(definition).and_then(|n| n.finalizer.clone())
+                        if let Some((path, body)) = runtime
+                            .get(definition.path())
+                            .and_then(|n| n.finalizer.clone())
                         {
                             effect(
                                 &mut execution.trace,
                                 anchor.clone(),
                                 crate::observation::Effect::Finalizer {
-                                    definition: definition.clone(),
+                                    definition: definition.path().clone(),
                                 },
                             );
                             let definition = provider.definition(&path).map_err(Error::Query)?;
@@ -1216,7 +1224,7 @@ pub(crate) fn execute_frames(
                                 .parameters
                                 .first()
                                 .ok_or_else(|| invalid("finalizer needs self"))?;
-                            callee.finalized = Some((local, anchor, caller));
+                            callee.finalized = Some(Box::new((local, anchor, caller)));
                             callee.depth_failure = depth >= limits.call_depth;
                             frames.push(callee);
                             if runtime.trace_mode == TraceMode::Full {
@@ -1329,7 +1337,9 @@ pub(crate) fn execute_frames(
                     depth,
                 });
             }
-            if let Some((local, anchor, caller)) = finished.finalized.take() {
+            if let Some((local, anchor, caller)) =
+                finished.finalized.take().map(|finalized| *finalized)
+            {
                 if matches!(&ending,crate::resources::Ending::Return(value) if *value != Value::Unit)
                 {
                     return Err(invalid("finalizer must return unit"));
@@ -1825,7 +1835,9 @@ pub(crate) fn execute_frames(
                     } => {
                         invocation_types = type_arguments;
                         closure_check = check;
-                        let definition = provider.definition(&definition).map_err(Error::Query)?;
+                        let definition = provider
+                            .definition(definition.path())
+                            .map_err(Error::Query)?;
                         if !actuals.arguments.is_empty() {
                             crate::type_arguments::bind(
                                 &mut invocation_types,
@@ -1932,8 +1944,8 @@ pub(crate) fn execute_frames(
                             else {
                                 return Err(invalid("forget requires resource"));
                             };
-                            if definition.0.package != frame.definition.path.0.package
-                                || definition.0.modules != frame.definition.path.0.modules
+                            if definition.path().0.package != frame.definition.path.0.package
+                                || definition.path().0.modules != frame.definition.path.0.modules
                             {
                                 return Err(invalid("cross-module forget"));
                             }
@@ -1941,7 +1953,7 @@ pub(crate) fn execute_frames(
                                 &mut execution.trace,
                                 anchor(frame, site),
                                 crate::observation::Effect::Forgotten {
-                                    definition: definition.clone(),
+                                    definition: definition.path().clone(),
                                 },
                             );
                             if let Some(check) = &frame.check {
@@ -2038,7 +2050,7 @@ pub(crate) fn execute_frames(
                                     &taken,
                                 )
                             });
-                            frame.operation = Some((
+                            frame.operation = Some(Box::new((
                                 result,
                                 crate::resources::OperationState {
                                     caller: operation_caller,
@@ -2055,7 +2067,7 @@ pub(crate) fn execute_frames(
                                     callback_mut_arguments: vec![],
                                     bounds,
                                 },
-                            ));
+                            )));
                             continue;
                         }
                         // Generic TIR executes parametrically: scalar values retain
@@ -2487,15 +2499,15 @@ fn release_fields(
 ) -> Result<(), Error> {
     if let Value::Closure {
         captures,
-        owned_captures,
+        environment,
         invoked,
         ..
     } = value
     {
-        if captures.len() != owned_captures.len() {
+        if captures.len() != environment.owned_captures.len() {
             return Err(invalid("capture ownership count"));
         }
-        for (capture, owned) in captures.iter_mut().zip(owned_captures) {
+        for (capture, owned) in captures.iter_mut().zip(&environment.owned_captures) {
             if let Some(v) = capture.take() {
                 if *owned && !invoked.as_ref().is_some_and(|v| v.get().is_some()) {
                     frame.work.push_front(crate::resources::Work::Release(
@@ -2637,12 +2649,12 @@ fn rvalue(
                 &arguments,
                 &frame.type_arguments,
             )?;
-            Value::FunctionReference(crate::value::NamedFunction {
+            Value::FunctionReference(Box::new(crate::value::NamedFunction {
                 definition: definition.clone(),
                 arguments: concrete.arguments,
                 types: concrete.types,
                 ty: frame.place(destination)?.ty,
-            })
+            }))
         }
         Rvalue::ReadConstant {
             ref definition,
@@ -2930,12 +2942,14 @@ fn rvalue(
                     .get(frame.place(destination)?.ty)
                     .is_some_and(|t| t.modes.multiplicity == hirsel_types::Multiplicity::Once)
                     .then(|| std::sync::Arc::new(std::sync::OnceLock::new())),
-                definition: frame.definition.path.clone(),
+                definition: (&frame.definition.path).into(),
                 body,
                 captures,
-                owned_captures,
-                sizes: frame.sizes.clone(),
-                type_arguments: frame.type_arguments.clone(),
+                environment: Box::new(crate::value::Environment {
+                    owned_captures,
+                    sizes: frame.sizes.clone(),
+                    type_arguments: frame.type_arguments.clone(),
+                }),
             }
         }
     };
@@ -3434,7 +3448,7 @@ fn execute_instruction(
                         trace,
                         anchor(frame, site),
                         crate::observation::Effect::ResourceCreated {
-                            definition: definition.clone(),
+                            definition: definition.path().clone(),
                         },
                     );
                 }
@@ -3614,14 +3628,17 @@ fn execute_terminator(
                             definition,
                             body,
                             captures,
-                            owned_captures,
-                            sizes,
-                            type_arguments,
+                            environment,
                             ..
                         } => {
-                            if captures.len() != owned_captures.len() {
+                            if captures.len() != environment.owned_captures.len() {
                                 return Err(invalid("capture ownership count").into());
                             }
+                            let crate::value::Environment {
+                                sizes,
+                                type_arguments,
+                                ..
+                            } = *environment;
                             let generic_sizes = arguments
                                 .iter()
                                 .map(|argument| match argument {
@@ -3839,7 +3856,7 @@ enum RuntimeCallee {
         types: Option<std::sync::Arc<hirsel_types::TypeStore>>,
     },
     Closure {
-        definition: hirsel_syntax::DefPath,
+        definition: hirsel_syntax::DefId,
         body: BodyId,
         captures: Vec<Option<Value>>,
         sizes: crate::value::SizeBindings,
@@ -3944,7 +3961,7 @@ fn bounded_capacity(arguments: &mut Vec<Value>) -> Result<u64, Error> {
     }
 }
 type Callback = (
-    DefPath,
+    hirsel_syntax::DefId,
     hirsel_tir::BodyId,
     Vec<Option<Value>>,
     Vec<bool>,
@@ -3958,9 +3975,7 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
             definition,
             body,
             captures,
-            owned_captures,
-            sizes,
-            type_arguments,
+            environment,
             ..
         },
     ] = <[Value; 1]>::try_from(std::mem::take(arguments))
@@ -3968,6 +3983,11 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
     else {
         return Err(invalid("arena.with callback must be a closure"));
     };
+    let crate::value::Environment {
+        owned_captures,
+        sizes,
+        type_arguments,
+    } = *environment;
     Ok((
         definition,
         body,
@@ -3989,7 +4009,7 @@ fn callee_lifetime(
     }
     let Value::Closure {
         captures,
-        owned_captures,
+        environment,
         ..
     } = value
     else {
@@ -4001,7 +4021,7 @@ fn callee_lifetime(
     lifetime.dedup();
     Ok(Some(crate::checked::Callee {
         captures: (0..captures.len()).map(|i| shadow.capture(i)).collect(),
-        owned: owned_captures.clone(),
+        owned: environment.owned_captures.clone(),
         lifetime,
     }))
 }

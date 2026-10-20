@@ -153,12 +153,12 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                 (
                     TypeKind::Function(function),
                     ValueKind::FunctionReference(path("target")),
-                    Value::FunctionReference(hirsel_interp::value::NamedFunction {
+                    Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                         definition: path("target"),
                         arguments: vec![],
                         types: Arc::new(b.types.clone()),
                         ty: b.body.result,
-                    }),
+                    })),
                 )
             }
             _ => (

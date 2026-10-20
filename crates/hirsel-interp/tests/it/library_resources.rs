@@ -22,18 +22,20 @@ fn nominal(name: &str) -> TypeKind {
 fn closure(name: &str) -> Value {
     Value::Closure {
         invoked: Default::default(),
-        sizes: Default::default(),
-        type_arguments: Default::default(),
-        definition: support::path(name),
+        definition: (&support::path(name)).into(),
         body: BodyId(0),
         captures: vec![],
-        owned_captures: vec![],
+        environment: Box::new(hirsel_interp::value::Environment {
+            owned_captures: vec![],
+            sizes: Default::default(),
+            type_arguments: Default::default(),
+        }),
     }
 }
 fn resource() -> Value {
     Value::Resource {
         sizes: Default::default(),
-        definition: support::path("R"),
+        definition: (&support::path("R")).into(),
         fields: vec![],
     }
 }

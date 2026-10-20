@@ -230,17 +230,24 @@ impl ObservedValue {
                 Value::Set { entries: f, .. } => (A::Set, &**f),
                 Value::Tuple(f) => (A::Tuple, f),
                 Value::Box(f) => (A::Box, f),
-                Value::Record { definition, fields } => (A::Record(definition.clone()), fields),
-                Value::Distinct { definition, fields } => (A::Distinct(definition.clone()), fields),
+                Value::Record { definition, fields } => {
+                    (A::Record(definition.path().clone()), fields)
+                }
+                Value::Distinct { definition, fields } => {
+                    (A::Distinct(definition.path().clone()), fields)
+                }
                 Value::Resource {
                     definition, fields, ..
-                } => (A::Resource(definition.clone()), fields),
+                } => (A::Resource(definition.path().clone()), fields),
                 Value::ResourceVariant {
                     definition,
                     variant,
                     fields,
                     ..
-                } => (A::ResourceVariant(definition.clone(), *variant), fields),
+                } => (
+                    A::ResourceVariant(definition.path().clone(), *variant),
+                    fields,
+                ),
                 Value::Variant { variant, fields } => (A::Variant(*variant), fields),
                 Value::Sequence { kind, elements, .. } => (A::Sequence(*kind), &**elements),
             };

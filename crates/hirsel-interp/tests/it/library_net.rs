@@ -144,7 +144,7 @@ fn rule(operation: &str) -> NetRule {
 }
 fn rule_value(host: &str, port: u16, op: u32) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core("NetRule"),
+        definition: (&hirsel_syntax::DefPath::core("NetRule")).into(),
         fields: vec![
             Some(Value::String(host.into())),
             Some(p(port)),
@@ -753,7 +753,7 @@ fn return_cleanup_records_real_stream_closes_in_the_requested_reverse_order() {
 
 fn loopback(port: u16) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core("SocketAddr"),
+        definition: (&hirsel_syntax::DefPath::core("SocketAddr")).into(),
         fields: vec![
             Some(v(
                 0,

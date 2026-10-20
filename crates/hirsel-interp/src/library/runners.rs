@@ -615,7 +615,7 @@ fn boolean(value: bool) -> Value {
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core(name),
+        definition: (&hirsel_syntax::DefPath::core(name)).into(),
         fields: fields.into_iter().map(Some).collect(),
     }
 }
@@ -683,7 +683,7 @@ fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> 
     let Value::Record { definition, fields } = keep else {
         return Err(invalid("GrantSet representation"));
     };
-    if *definition != hirsel_syntax::DefPath::core("GrantSet") || fields.len() != 9 {
+    if !definition.is_core("GrantSet") || fields.len() != 9 {
         return Err(invalid("GrantSet representation"));
     }
     let field = |i: usize| {

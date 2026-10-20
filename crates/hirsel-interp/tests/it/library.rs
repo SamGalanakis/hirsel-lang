@@ -1183,12 +1183,14 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     assert!(h.library.take_yield());
     let body = Value::Closure {
         invoked: Default::default(),
-        definition: support::path("body"),
+        definition: (&support::path("body")).into(),
         body: BodyId(0),
         captures: vec![],
-        owned_captures: vec![],
-        sizes: Default::default(),
-        type_arguments: Default::default(),
+        environment: Box::new(hirsel_interp::value::Environment {
+            owned_captures: vec![],
+            sizes: Default::default(),
+            type_arguments: Default::default(),
+        }),
     };
     let OperationResult::Call { continuation, .. } = h.call(
         "mutex.with",
@@ -1453,7 +1455,7 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
             vec![
                 p,
                 Value::Record {
-                    definition: hirsel_syntax::DefPath::core("Command"),
+                    definition: (&hirsel_syntax::DefPath::core("Command")).into(),
                     fields: vec![
                         Some(path(program)),
                         Some(args),

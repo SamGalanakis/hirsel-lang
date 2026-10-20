@@ -267,21 +267,23 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
     };
     let mut ops = Writeback {
         callback: if native {
-            Value::FunctionReference(hirsel_interp::value::NamedFunction {
+            Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                 definition: path("step"),
                 arguments: vec![],
                 types: std::sync::Arc::new(main.types.clone()),
                 ty: callback_type,
-            })
+            }))
         } else {
             Value::Closure {
                 invoked: Default::default(),
-                definition: path("step"),
+                definition: (&path("step")).into(),
                 body: BodyId(0),
                 captures: vec![],
-                owned_captures: vec![],
-                sizes: Default::default(),
-                type_arguments: Default::default(),
+                environment: Box::new(hirsel_interp::value::Environment {
+                    owned_captures: vec![],
+                    sizes: Default::default(),
+                    type_arguments: Default::default(),
+                }),
             }
         },
         native,

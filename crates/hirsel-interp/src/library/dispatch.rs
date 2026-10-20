@@ -1721,7 +1721,7 @@ primary_operations! { self, call, context, name, a, value;
                 collection::sequence(
                     BuiltinType::Array,
                     string::positions(s).map(|i| Value::Record {
-                        definition: hirsel_syntax::DefPath::core("StrPos"),
+                        definition: (&hirsel_syntax::DefPath::core("StrPos")).into(),
                         fields: vec![Some(Value::String(s.into())), Some(u64_value(i as u64))],
                     }),
                 )
@@ -1824,7 +1824,7 @@ primary_operations! { self, call, context, name, a, value;
         let s = text(arg(a, 0)?)?;
         let offset = index(arg(a, 1)?)?;
         if s.is_char_boundary(offset) {
-            some(Value::Record { definition: hirsel_syntax::DefPath::core("StrPos"), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
+            some(Value::Record { definition: (&hirsel_syntax::DefPath::core("StrPos")).into(), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
         } else { none() }
     },
     Primitive: "string.byte_offset" => u64_value(position(arg(a, 1)?, text(arg(a, 0)?)?)? as u64),
@@ -2004,7 +2004,7 @@ pub(super) fn index(v: &Value) -> Result<usize, Error> {
 }
 pub fn path(s: &str) -> Value {
     Value::Record {
-        definition: hirsel_syntax::DefPath::core("Path"),
+        definition: (&hirsel_syntax::DefPath::core("Path")).into(),
         fields: vec![Some(Value::String(s.into()))],
     }
 }
@@ -2235,7 +2235,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 fields: items,
             } => {
                 out.push(7);
-                path(&mut out, definition);
+                path(&mut out, definition.path());
                 fields(&mut out, &mut work, items);
             }
             Value::Sequence { kind, elements, .. } => {
@@ -2258,7 +2258,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
             } => {
                 out.push(18);
                 size_bindings(&mut out, sizes);
-                path(&mut out, definition);
+                path(&mut out, definition.path());
                 out.extend_from_slice(&variant.to_le_bytes());
                 fields(&mut out, &mut work, items);
             }
@@ -2287,7 +2287,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 fields: items,
             } => {
                 out.push(13);
-                path(&mut out, definition);
+                path(&mut out, definition.path());
                 fields(&mut out, &mut work, items);
             }
             Value::Resource {
@@ -2297,7 +2297,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
             } => {
                 out.push(14);
                 size_bindings(&mut out, sizes);
-                path(&mut out, definition);
+                path(&mut out, definition.path());
                 fields(&mut out, &mut work, items);
             }
             Value::FunctionReference(reference) => {
@@ -2321,12 +2321,16 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 definition,
                 body,
                 captures,
-                owned_captures,
-                sizes,
+                environment,
                 ..
             } => {
+                let crate::value::Environment {
+                    owned_captures,
+                    sizes,
+                    ..
+                } = &**environment;
                 out.push(15);
-                path(&mut out, definition);
+                path(&mut out, definition.path());
                 out.extend_from_slice(&body.0.to_le_bytes());
                 out.extend_from_slice(&(sizes.len() as u64).to_le_bytes());
                 for ((scope, parameter), size) in sizes {

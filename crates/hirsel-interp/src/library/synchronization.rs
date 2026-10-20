@@ -228,12 +228,12 @@ fn needs_drop(value: &Value) -> bool {
             }
             Value::Closure {
                 captures,
-                owned_captures,
+                environment,
                 ..
             } => work.extend(
                 captures
                     .iter()
-                    .zip(owned_captures)
+                    .zip(&environment.owned_captures)
                     .filter_map(|(v, owns)| owns.then_some(v.as_ref()).flatten()),
             ),
             _ => {

@@ -6,7 +6,7 @@ pub(crate) enum Work {
     Action(CleanupAction, Anchor),
     Chain(hirsel_tir::CleanupNodeId, Anchor),
     Release(Value, Anchor, Option<crate::frame::CallerSite>),
-    Resume(crate::OperationResult, Callback),
+    Resume(crate::OperationResult, Box<Callback>),
 }
 pub(crate) enum Ending {
     Return(Value),

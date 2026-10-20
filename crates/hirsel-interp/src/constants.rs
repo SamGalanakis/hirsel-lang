@@ -81,16 +81,16 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                             .map_err(|_| invalid("materialized literal"))?,
                     );
                 }
-                ValueKind::FunctionReference(definition) => {
-                    values.push(Value::FunctionReference(crate::value::NamedFunction {
+                ValueKind::FunctionReference(definition) => values.push(Value::FunctionReference(
+                    Box::new(crate::value::NamedFunction {
                         definition: definition.clone(),
                         arguments: vec![],
                         types: reference_types
                             .get_or_insert_with(|| std::sync::Arc::new(data.types.clone()))
                             .clone(),
                         ty: node.ty,
-                    }))
-                }
+                    }),
+                )),
                 ValueKind::Construct { fields, .. } => {
                     pending.push(Work::Construct(node, fields.len()));
                     pending.extend(fields.iter().rev().map(Work::Visit));
