@@ -1,7 +1,7 @@
 pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError)
 
 fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
-  let mut (stream, _) = net.accept(n, mut listener) ? Network
+  let mut (stream, _) = net.accept(n, mut listener)?
   let mut config = http.default_config()
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
@@ -14,13 +14,13 @@ fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[(), Server
       [http.Header(name: "Content-Type", value: "text/plain")],
       b"Hello, world",
       true
-    ) ? Http
+    )?
   }
   Ok(())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
-  let tasks = io.tasks(rt) ? Grant
+  let tasks = io.tasks(rt)?
   let n = io.net(rt) ? Grant
   let mut listener = net.listen(
     n,

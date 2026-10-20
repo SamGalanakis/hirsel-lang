@@ -10,5 +10,6 @@ requests, and closes each connection after its response;
 [hello-web-concurrent](../hello-web-concurrent/README.md) keeps connections open.
 Stop it with Ctrl-C.
 
-Error propagation uses the one-argument sum constructors directly (`? Grant`,
-`? Network`, `? Http`), as specified by LANG-8. No mapper functions are needed.
+Error propagation wraps each library error in the one arm of `ServerError` that
+carries it (LANG-8). A plain `?` selects that arm itself, as in `net.accept(..)?`;
+writing the arm, as in `? Network`, means the same. No mapper functions are needed.
