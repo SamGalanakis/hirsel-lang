@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1484 exported definitions; 526 variants.
+1489 exported definitions; 526 variants.
 
 ## Types and roots
 
@@ -3722,6 +3722,16 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
+<a id="def-std_401_2fderive_2fjson_5finto"></a>
+
+- `pub fn derive.json_into[T](s: TypeShape[T]) -> Result[ Body[fn(T, mut List[u8], u64) -> Result[(), json.JsonError] uses {}], String ] uses {}`
+
+Write the same compact JSON as json_value followed by stringify_into,
+directly from a record or choice. Nested nominal types supply their own
+`<snake_name>_json_into` writer. Pass depth 0 at the root.
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
 <a id="def-std_401_2fderive_2fjson_5fnumber"></a>
 
 - `pub fn derive.json_number(value: json.Value) -> Result[unique String, String] uses {}`
@@ -7064,6 +7074,14 @@ Variant of json.Value.
 
 References: [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-std_401_2fjson_2fcheck_5fdepth"></a>
+
+- `@noalloc pub fn json.check_depth(depth: u64) -> Result[(), JsonError] uses {}`
+
+Check a writer's number of open containers, before writing its delimiter.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
 <a id="def-std_401_2fjson_2fparse"></a>
 
 - `pub fn json.parse(take text: String) -> Result[Value, JsonError] uses {}`
@@ -7081,6 +7099,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@preserves_unique(out) pub fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_2fwrite_5ftext_5finto"></a>
+
+- `@preserves_unique(builder) pub fn json.write_text_into(text: String, mut builder: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
 
 
 ## keys
@@ -9414,6 +9438,15 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
+<a id="def-std_401_2fstring_2fcontains_5fignore_5fcase"></a>
+
+- `pub fn string.contains_ignore_case(s: String, pattern: String) -> bool uses {}`
+
+Whether `pattern` occurs in the full default case fold of `s`. Like casefold,
+this does not normalize text. ASCII inputs need no intermediate strings.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fstring_2fends_5fwith"></a>
 
 - `@noalloc pub fn string.ends_with(s: String, pattern: String) -> bool uses {}`
@@ -9438,6 +9471,14 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/StrPos`](#def-co
 <a id="def-core_401_2fstring_2ffrom_5fbytes"></a>
 
 - `@preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]`
+
+<a id="def-std_401_2fstring_2fis_5fascii"></a>
+
+- `@noalloc pub fn string.is_ascii(s: String) -> bool uses {}`
+
+Whether every UTF-8 byte of this slice is ASCII.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2fstring_2fjoin"></a>
 
