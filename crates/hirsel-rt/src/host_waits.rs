@@ -256,6 +256,11 @@ pub(crate) unsafe fn issue_net(
     stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Stopped<Option<(Result<crate::io::NetResult, AdapterError>, bool)>> {
+    // Foreign callbacks may run off home once the blocking pool is present.
+    // The owned protocol supplies their bridge; never touch Binding here.
+    if crate::foreign::active() {
+        return Ok(None);
+    }
     // Use the ordinary cancellation path, including its preflight checks.
     if unsafe { crate::tasks::canceled(ctx) }.is_some() {
         return Ok(None);

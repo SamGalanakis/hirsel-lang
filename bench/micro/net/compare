@@ -2,6 +2,7 @@
 """Compare frozen before/after network loops with the minimal Rust TCP reference."""
 import argparse
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import sys
@@ -36,6 +37,14 @@ loader = importlib.machinery.SourceFileLoader('network_micro_run', str(ROOT / 'b
 spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
 loader.exec_module(runner)
+original_sample = runner.sample
+expected_output = hashlib.sha256(b'1024\n').hexdigest()
+def checked_sample(*args, **kwargs):
+    result = original_sample(*args, **kwargs)
+    if result['stdout_sha256'] != expected_output:
+        raise ValueError('network participant did not complete 1024 requests')
+    return result
+runner.sample = checked_sample
 with timing_lock(31), (args.output / 'client.log').open('w') as log:
     runner.timing_lock = lambda cpu: contextlib.nullcontext()
     client = subprocess.Popen([str(ROOT / 'tools/capped'), '--timeout', '900', 'taskset', '-c', '7',
