@@ -1106,6 +1106,13 @@
       "module": [
         "schema"
       ]
+    },
+    {
+      "path": "substring.hir",
+      "module": [
+        "internal",
+        "substring"
+      ]
     }
   ],
   "dependencies": []

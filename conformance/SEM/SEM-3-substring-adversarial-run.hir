@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Long-period near matches (the old nested scan is quadratic), exact-period
+// memory after a left mismatch, fingerprint collisions (0x01 / 0x41), and
+// nonoverlapping consumers sharing one prepared needle.
+pub fn main() -> Result[(), ()] {
+  let mut source: List[u8] = []
+  let mut needle: List[u8] = []
+  let mut i: u64 = 0
+  while i < 128 {
+    list.push(mut source, 97u8)
+    if i < 62 {
+      list.push(mut needle, 97u8)
+    }
+    i += 1
+  }
+  list.push(mut needle, 98u8)
+  let hay = text.finish_valid(take source)
+  let pat = text.finish_valid(take needle)
+  failure.check(!string.contains(hay, pat), TextInvariant())
+  failure.check(string.replace(hay, pat, "x") == hay, TextInvariant())
+  failure.check(
+    string.split(string.concat(hay, ""), pat) == [copy hay],
+    TextInvariant()
+  )
+  failure.check(
+    bytes.replace(core@1/string.as_bytes(hay), core@1/string.as_bytes(pat), b"x") == core@1/string.as_bytes(
+      hay
+    ),
+    TextInvariant()
+  )
+  let repeated = "bbababababababababab"
+  failure.check(string.contains(repeated, "abababab"), TextInvariant())
+  failure.check(string.replace(repeated, "abab", "x") == "bbxxxxab", TextInvariant())
+  failure.check(
+    string.split(unique repeated, "abab") == ["bb", "", "", "", "ab"],
+    TextInvariant()
+  )
+  failure.check(
+    bytes.replace(b"\x01\x41\x01\x41\x01", b"\x41\x01", b"x") == b"\x01xx",
+    TextInvariant()
+  )
+  let sliced = bytes.slice(b"!bbababababababababab?", 1, 21)
+  failure.check(bytes.replace(sliced, b"abab", b"x") == b"bbxxxxab", TextInvariant())
+  Ok(())
+}

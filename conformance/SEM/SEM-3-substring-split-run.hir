@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests/tests/str.rs:1566-1586: all 14 test_splitator rows.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    string.split("--1233345--", "12345") == ["--1233345--"],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("abc::hello::there", "::") == ["abc", "hello", "there"],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("::hello::there", "::") == ["", "hello", "there"],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("hello::there::", "::") == ["hello", "there", ""],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("::hello::there::", "::") == ["", "hello", "there", ""],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("ประเทศไทย中华Việt Nam", "中华") == ["ประเทศไทย", "Việt Nam"],
+    TextInvariant()
+  )
+  failure.check(
+    string.split("zzXXXzzYYYzz", "zz") == ["", "XXX", "YYY", ""],
+    TextInvariant()
+  )
+  failure.check(string.split("zzXXXzYYYz", "XXX") == ["zz", "zYYYz"], TextInvariant())
+  failure.check(
+    string.split(".XXX.YYY.", ".") == ["", "XXX", "YYY", ""],
+    TextInvariant()
+  )
+  failure.check(string.split("", ".") == [""], TextInvariant())
+  failure.check(string.split("zz", "zz") == ["", ""], TextInvariant())
+  failure.check(string.split("ok", "z") == ["ok"], TextInvariant())
+  failure.check(string.split("zzz", "zz") == ["", "z"], TextInvariant())
+  failure.check(string.split("zzzzz", "zz") == ["", "", "z"], TextInvariant())
+  Ok(())
+}

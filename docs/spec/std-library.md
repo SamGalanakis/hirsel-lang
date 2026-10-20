@@ -1243,6 +1243,14 @@ provides `split` (on a nonempty separator, nonoverlapping, keeping leading, trai
 empty fields; an empty separator fails SEM-3), `find` (the first match as a `StrPos`),
 `split_once(s, separator) -> Option[(String, String)] in s` (the text before and after the
 first match, `None()` without one; an empty separator matches at the start, as in Rust),
+`rfind` (the last match as a `StrPos`, including EOF for an empty pattern),
+`rsplit` (nonoverlapping matches from the right, with the same nonempty-separator
+requirement as `split`), `rsplitn(take s, separator, limit)` (at most `limit`
+fields from the right, leaving the remaining prefix as the last field; zero
+yields no fields), `rsplit_once(s, separator) -> Option[(String, String)] in s`
+(before and after the last match; an empty separator matches at EOF),
+`split_whitespace(take s: String) -> List[String]` (Unicode16 White_Space,
+omitting empty fields),
 `split_ascii_whitespace(take s: String) -> List[String]` (on ASCII tab, LF,
 form feed, CR and space; omitting empty fields and preserving vertical tab and
 non-ASCII whitespace), `starts_with`, `ends_with`, `trim` (ASCII space and `\t` to `\r`, a slice related to the

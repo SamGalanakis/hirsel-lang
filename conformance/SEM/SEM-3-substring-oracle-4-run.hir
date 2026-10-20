@@ -1,0 +1,127 @@
+// rule: SEM-3
+// expect: run
+// Two-Way differential oracle: all binary sources <= 3 and needles <= 3,
+// both directions and every start, including EOF / out-of-range offsets.
+@noalloc
+fn naive(source: Bytes, needle: Bytes, start: u64, reversed: bool) -> Option[u64] uses {} {
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(needle)
+  let mut at = start
+  while at <= len && width <= len - at {
+    let mut i: u64 = 0
+    while i < width {
+      let a = if reversed {
+        len - 1 - at - i
+      } else {
+        at + i
+      }
+      let b = if reversed {
+        width - 1 - i
+      } else {
+        i
+      }
+      if source[a] != needle[b] {
+        break
+      }
+      i += 1
+    }
+    if i == width {
+      return Some(at)
+    }
+    at += 1
+  }
+  None()
+}
+
+@noalloc
+fn actual(source: String, needle: String, start: u64, reversed: bool) -> Option[u64] uses {} {
+  let len = core@1/string.byte_len(source)
+  if start > len {
+    return None()
+  }
+  let begin: u64 = if reversed {
+    0
+  } else {
+    start
+  }
+  let end = if reversed {
+    len - start
+  } else {
+    len
+  }
+  let a = match core@1/string.position(source, begin) {
+    Some(at) => at,
+    None() => return None(),
+  }
+  let b = match core@1/string.position(source, end) {
+    Some(at) => at,
+    None() => return None(),
+  }
+  let view = core@1/string.slice(source, a, b)
+  let found = if reversed {
+    string.rfind(view, needle)
+  } else {
+    string.find(view, needle)
+  }
+  match found {
+    Some(at) => {
+      let offset = core@1/string.byte_offset(view, at)
+      Some(
+        if reversed {
+          len - core@1/string.byte_len(needle) - offset
+        } else {
+          start + offset
+        }
+      )
+    },
+    None() => None(),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let words: List[String] = [
+    "",
+    "a",
+    "b",
+    "aa",
+    "ab",
+    "ba",
+    "bb",
+    "aaa",
+    "aab",
+    "aba",
+    "abb",
+    "baa",
+    "bab",
+    "bba",
+    "bbb"
+  ]
+  let sources: List[String] = ["baa", "bab"]
+  for source in sources {
+    for needle in words {
+      let mut start: u64 = 0
+      while start <= core@1/string.byte_len(source) + 1 {
+        failure.check(
+          actual(source, needle, start, false) == naive(
+            core@1/string.as_bytes(source),
+            core@1/string.as_bytes(needle),
+            start,
+            false
+          ),
+          TextInvariant()
+        )
+        failure.check(
+          actual(source, needle, start, true) == naive(
+            core@1/string.as_bytes(source),
+            core@1/string.as_bytes(needle),
+            start,
+            true
+          ),
+          TextInvariant()
+        )
+        start += 1
+      }
+    }
+  }
+  Ok(())
+}

@@ -1,0 +1,133 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests/tests/str.rs:1484-1540: rsplit, rsplitn, rsplit_once,
+// split_whitespace. Char and predicate patterns are equivalent single-scalar
+// string patterns for these vectors.
+fn last_parts(s: String, sep: String) -> Option[(String, String)] {
+  match string.rsplit_once(s, sep) {
+    Some((a, b)) => Some((unique a, unique b)),
+    None() => None(),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let data = "\nMäry häd ä little lämb\nLittle lämb\n"
+  failure.check(
+    string.rsplit(string.concat(data, ""), " ") == [
+      "lämb\n",
+      "lämb\nLittle",
+      "little",
+      "ä",
+      "häd",
+      "\nMäry"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.rsplit(string.concat(data, ""), "lämb") == [
+      "\n",
+      "\nLittle ",
+      "\nMäry häd ä little "
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.rsplit(string.concat(data, ""), "ä") == [
+      "mb\n",
+      "mb\nLittle l",
+      " little l",
+      "d ",
+      "ry h",
+      "\nM"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.rsplitn(string.concat(data, ""), " ", 2) == [
+      "lämb\n",
+      "\nMäry häd ä little lämb\nLittle"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.rsplitn(string.concat(data, ""), "lämb", 2) == [
+      "\n",
+      "\nMäry häd ä little lämb\nLittle "
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.rsplitn(string.concat(data, ""), "ä", 2) == [
+      "mb\n",
+      "\nMäry häd ä little lämb\nLittle l"
+    ],
+    TextInvariant()
+  )
+  failure.check(last_parts("", "->") == None(), TextInvariant())
+  failure.check(last_parts("-", "->") == None(), TextInvariant())
+  failure.check(last_parts("->", "->") == Some(("", "")), TextInvariant())
+  failure.check(last_parts("a->", "->") == Some(("a", "")), TextInvariant())
+  failure.check(last_parts("->b", "->") == Some(("", "b")), TextInvariant())
+  failure.check(last_parts("a->b", "->") == Some(("a", "b")), TextInvariant())
+  failure.check(last_parts("a->b->c", "->") == Some(("a->b", "c")), TextInvariant())
+  failure.check(last_parts("---", "--") == Some(("-", "")), TextInvariant())
+  failure.check(last_parts("é→ü→", "→") == Some(("é→ü", "")), TextInvariant())
+  failure.check(last_parts("abc", "") == Some(("abc", "")), TextInvariant())
+  failure.check(
+    string.split_whitespace("\n \tMäry   häd\tä  little lämb\nLittle lämb\n") == [
+      "Märy",
+      "häd",
+      "ä",
+      "little",
+      "lämb",
+      "Little",
+      "lämb"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.split_whitespace("\u{a0}é\u{2003}λ\u{b}x\u{3000}") == ["é", "λ", "x"],
+    TextInvariant()
+  )
+  failure.check(list.len(string.split_whitespace("")) == 0, TextInvariant())
+  failure.check(list.len(string.rsplitn("aaa", "aa", 0)) == 0, TextInvariant())
+  failure.check(string.rsplitn("aaa", "aa", 1) == ["aaa"], TextInvariant())
+  failure.check(string.rsplit("aaa", "aa") == ["", "a"], TextInvariant())
+  failure.check(string.rsplit("", "aa") == [""], TextInvariant())
+  // Rust str.rs:1708-1730: rsplitn(4) char and equal-char predicate twins.
+  let mut spaces: unique List[String] = unique string.rsplitn(
+    string.concat(data, ""),
+    " ",
+    4
+  )
+  list.reverse(mut spaces)
+  failure.check(
+    spaces == ["\nMäry häd ä", "little", "lämb\nLittle", "lämb\n"],
+    TextInvariant()
+  )
+  let mut spaces_predicate: unique List[String] = unique string.rsplitn(
+    string.concat(data, ""),
+    " ",
+    4
+  )
+  list.reverse(mut spaces_predicate)
+  failure.check(spaces_predicate == spaces, TextInvariant())
+  let mut umlauts: unique List[String] = unique string.rsplitn(
+    string.concat(data, ""),
+    "ä",
+    4
+  )
+  list.reverse(mut umlauts)
+  failure.check(
+    umlauts == ["\nMäry häd ", " little l", "mb\nLittle l", "mb\n"],
+    TextInvariant()
+  )
+  let mut umlauts_predicate: unique List[String] = unique string.rsplitn(
+    string.concat(data, ""),
+    "ä",
+    4
+  )
+  list.reverse(mut umlauts_predicate)
+  failure.check(umlauts_predicate == umlauts, TextInvariant())
+  Ok(())
+}

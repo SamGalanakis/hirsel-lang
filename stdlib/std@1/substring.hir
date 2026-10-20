@@ -1,0 +1,177 @@
+// Rust f6c1107f8be13e48465e12c0fd26e6a39fe18e4f,
+// library/core/src/str/pattern.rs:1362-1633,1735-1770 (MIT).
+// Forward Two-Way search: critical factorization, short-period memory and
+// the 64-bit byte fingerprint. Reuse the plan across nonoverlapping matches.
+// Reverse search uses the same algorithm over virtual reversed bytes; neither
+// source nor needle is copied. Bounds checks replace unchecked indexing.
+pub opaque type Plan: plain + inert + noalloc_drop uses {} {
+  critical: u64,
+  period: u64,
+  byteset: u64,
+  short: bool,
+  reversed: bool,
+}
+
+@noalloc
+fn byte_at(data: Bytes, i: u64, reversed: bool) -> u8 uses {} {
+  data[if reversed {
+    core@1/bytes.len(data) - 1 - i
+  } else {
+    i
+  }]
+}
+
+@noalloc
+fn maximal_suffix(needle: Bytes, greater: bool, reversed: bool) -> (u64, u64) uses {} {
+  let len = core@1/bytes.len(needle)
+  let mut left: u64 = 0
+  let mut right: u64 = 1
+  let mut offset: u64 = 0
+  let mut period: u64 = 1
+  while right < len && offset < len - right {
+    let a = byte_at(needle, right + offset, reversed)
+    let b = byte_at(needle, left + offset, reversed)
+    if a < b && !greater || a > b && greater {
+      right += offset + 1
+      offset = 0
+      period = right - left
+    } else if a == b {
+      if offset + 1 == period {
+        right += offset + 1
+        offset = 0
+      } else {
+        offset += 1
+      }
+    } else {
+      left = right
+      right += 1
+      offset = 0
+      period = 1
+    }
+  }
+  (left, period)
+}
+
+@noalloc
+fn prepare_direction(needle: Bytes, reversed: bool) -> Plan uses {} {
+  let len = core@1/bytes.len(needle)
+  let (a, pa) = maximal_suffix(needle, false, reversed)
+  let (b, pb) = maximal_suffix(needle, true, reversed)
+  let critical = if a > b {
+    a
+  } else {
+    b
+  }
+  let mut period = if a > b {
+    pa
+  } else {
+    pb
+  }
+  let mut short = period <= len && critical <= len - period
+  let mut i: u64 = 0
+  while short && i < critical {
+    short = byte_at(needle, i, reversed) == byte_at(needle, period + i, reversed)
+    i += 1
+  }
+  if !short {
+    period = if critical > len - critical {
+      critical
+    } else {
+      len - critical
+    } + 1
+  }
+  let set_len = if short {
+    period
+  } else {
+    len
+  }
+  let mut byteset: u64 = 0
+  i = 0
+  while i < set_len {
+    let bit: u64 = core@1/int.widen(byte_at(needle, i, reversed) & 63u8)
+    byteset |= 1u64 << bit
+    i += 1
+  }
+  Plan(
+    critical: critical,
+    period: period,
+    byteset: byteset,
+    short: short,
+    reversed: reversed
+  )
+}
+
+@noalloc
+pub fn prepare(needle: Bytes) -> Plan uses {} {
+  prepare_direction(needle, false)
+}
+
+@noalloc
+pub fn prepare_reverse(needle: Bytes) -> Plan uses {} {
+  prepare_direction(needle, true)
+}
+
+// The plan must have been prepared for this needle. Empty needles match at
+// start, including EOF. A start beyond EOF has no match. Byte offsets are
+// relative to source (or its virtual reverse for prepare_reverse).
+@noalloc
+pub fn find_from(source: Bytes, needle: Bytes, plan: Plan, start: u64) -> Option[u64] uses {} {
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(needle)
+  if start > len || width > len - start {
+    return None()
+  }
+  if width == 0 {
+    return Some(start)
+  }
+  let mut position = start
+  let mut memory: u64 = 0
+  while position <= len && width <= len - position {
+    let tail: u64 = core@1/int.widen(
+      byte_at(source, position + width - 1, plan.reversed) & 63u8
+    )
+    if plan.byteset >> tail & 1u64 == 0 {
+      position += width
+      memory = 0
+      continue
+    }
+    let mut i = if plan.short && memory > plan.critical {
+      memory
+    } else {
+      plan.critical
+    }
+    while i < width && byte_at(needle, i, plan.reversed) == byte_at(
+      source,
+      position + i,
+      plan.reversed
+    ) {
+      i += 1
+    }
+    if i < width {
+      position += i - plan.critical + 1
+      memory = 0
+      continue
+    }
+    let stop = if plan.short {
+      memory
+    } else {
+      0
+    }
+    i = plan.critical
+    while i > stop && byte_at(needle, i - 1, plan.reversed) == byte_at(
+      source,
+      position + i - 1,
+      plan.reversed
+    ) {
+      i -= 1
+    }
+    if i <= stop {
+      return Some(position)
+    }
+    position += plan.period
+    if plan.short {
+      memory = width - plan.period
+    }
+  }
+  None()
+}

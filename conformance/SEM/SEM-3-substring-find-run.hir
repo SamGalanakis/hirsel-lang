@@ -1,0 +1,82 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests/tests/str.rs:54-100, test_find_str (fixed byte positions).
+@noalloc
+fn offset(s: String, pat: String, reverse: bool) -> Option[u64] uses {} {
+  let found = if reverse {
+    string.rfind(s, pat)
+  } else {
+    string.find(s, pat)
+  }
+  match found {
+    Some(at) => Some(core@1/string.byte_offset(s, at)),
+    None() => None(),
+  }
+}
+
+@noalloc
+fn slice(s: String, begin: u64, end: u64) -> String in s uses {} {
+  let a = match core@1/string.position(s, begin) {
+    Some(at) => at,
+    None() => {
+      failure.check(false, TextInvariant())
+      return s
+    },
+  }
+  let b = match core@1/string.position(s, end) {
+    Some(at) => at,
+    None() => {
+      failure.check(false, TextInvariant())
+      return s
+    },
+  }
+  core@1/string.slice(s, a, b)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(offset("", "", false) == Some(0u64), TextInvariant())
+  failure.check(offset("banana", "apple pie", false) == None(), TextInvariant())
+  let ascii = "abcabc"
+  failure.check(offset(slice(ascii, 0, 6), "ab", false) == Some(0u64), TextInvariant())
+  failure.check(offset(slice(ascii, 2, 6), "ab", false) == Some(1u64), TextInvariant())
+  failure.check(offset(slice(ascii, 2, 4), "ab", false) == None(), TextInvariant())
+  let data = "ประเทศไทย中华Việt Namประเทศไทย中华Việt Nam"
+  failure.check(offset(data, "ไท华", false) == None(), TextInvariant())
+  failure.check(offset(slice(data, 0, 43), "", false) == Some(0u64), TextInvariant())
+  failure.check(offset(slice(data, 6, 43), "", false) == Some(0u64), TextInvariant())
+  failure.check(offset(slice(data, 0, 43), "ประ", false) == Some(0u64), TextInvariant())
+  failure.check(
+    offset(slice(data, 0, 43), "ทศไ", false) == Some(12u64),
+    TextInvariant()
+  )
+  failure.check(offset(slice(data, 0, 43), "ย中", false) == Some(24u64), TextInvariant())
+  failure.check(
+    offset(slice(data, 0, 43), "iệt", false) == Some(34u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 0, 43), "Nam", false) == Some(40u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 43, 86), "ประ", false) == Some(0u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 43, 86), "ทศไ", false) == Some(12u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 43, 86), "ย中", false) == Some(24u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 43, 86), "iệt", false) == Some(34u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset(slice(data, 43, 86), "Nam", false) == Some(40u64),
+    TextInvariant()
+  )
+  Ok(())
+}

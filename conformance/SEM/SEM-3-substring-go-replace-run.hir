@@ -1,0 +1,271 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/bytes/bytes_test.go:1770-1790: all 19 ReplaceTests
+// (the audit called these 20). Preserve the original limit/output in comments.
+// Hirsel replace is replace-all: finite limits become -1. Empty byte patterns
+// fail SEM-3; their text counterpart exercises the insertion vectors.
+// The twentieth row adds arbitrary invalid UTF-8 bytes, which String cannot hold.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  // Go: ("hello", "l", "L", 0) -> "hello"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("hello"),
+      core@1/string.as_bytes("l"),
+      core@1/string.as_bytes("L")
+    ) == core@1/string.as_bytes("heLLo"),
+    TextInvariant()
+  )
+  // Go: ("hello", "l", "L", -1) -> "heLLo"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("hello"),
+      core@1/string.as_bytes("l"),
+      core@1/string.as_bytes("L")
+    ) == core@1/string.as_bytes("heLLo"),
+    TextInvariant()
+  )
+  // Go: ("hello", "x", "X", -1) -> "hello"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("hello"),
+      core@1/string.as_bytes("x"),
+      core@1/string.as_bytes("X")
+    ) == core@1/string.as_bytes("hello"),
+    TextInvariant()
+  )
+  // Go: ("", "x", "X", -1) -> ""
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes(""),
+      core@1/string.as_bytes("x"),
+      core@1/string.as_bytes("X")
+    ) == core@1/string.as_bytes(""),
+    TextInvariant()
+  )
+  // Go: ("radar", "r", "<r>", -1) -> "<r>ada<r>"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("radar"),
+      core@1/string.as_bytes("r"),
+      core@1/string.as_bytes("<r>")
+    ) == core@1/string.as_bytes("<r>ada<r>"),
+    TextInvariant()
+  )
+  // Go: ("", "", "<>", -1) -> "<>"
+  failure.check(string.replace("", "", "<>") == "<>", TextInvariant())
+  let caught1: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes(""),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught1 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "a", "<>", -1) -> "b<>n<>n<>"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("a"),
+      core@1/string.as_bytes("<>")
+    ) == core@1/string.as_bytes("b<>n<>n<>"),
+    TextInvariant()
+  )
+  // Go: ("banana", "a", "<>", 1) -> "b<>nana"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("a"),
+      core@1/string.as_bytes("<>")
+    ) == core@1/string.as_bytes("b<>n<>n<>"),
+    TextInvariant()
+  )
+  // Go: ("banana", "a", "<>", 1000) -> "b<>n<>n<>"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("a"),
+      core@1/string.as_bytes("<>")
+    ) == core@1/string.as_bytes("b<>n<>n<>"),
+    TextInvariant()
+  )
+  // Go: ("banana", "an", "<>", -1) -> "b<><>a"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("an"),
+      core@1/string.as_bytes("<>")
+    ) == core@1/string.as_bytes("b<><>a"),
+    TextInvariant()
+  )
+  // Go: ("banana", "ana", "<>", -1) -> "b<>na"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("ana"),
+      core@1/string.as_bytes("<>")
+    ) == core@1/string.as_bytes("b<>na"),
+    TextInvariant()
+  )
+  // Go: ("banana", "", "<>", -1) -> "<>b<>a<>n<>a<>n<>a<>"
+  failure.check(
+    string.replace("banana", "", "<>") == "<>b<>a<>n<>a<>n<>a<>",
+    TextInvariant()
+  )
+  let caught2: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("banana"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught2 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "", "<>", 10) -> "<>b<>a<>n<>a<>n<>a<>"
+  failure.check(
+    string.replace("banana", "", "<>") == "<>b<>a<>n<>a<>n<>a<>",
+    TextInvariant()
+  )
+  let caught3: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("banana"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught3 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "", "<>", 6) -> "<>b<>a<>n<>a<>n<>a"
+  failure.check(
+    string.replace("banana", "", "<>") == "<>b<>a<>n<>a<>n<>a<>",
+    TextInvariant()
+  )
+  let caught4: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("banana"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught4 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "", "<>", 5) -> "<>b<>a<>n<>a<>na"
+  failure.check(
+    string.replace("banana", "", "<>") == "<>b<>a<>n<>a<>n<>a<>",
+    TextInvariant()
+  )
+  let caught5: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("banana"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught5 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "", "<>", 1) -> "<>banana"
+  failure.check(
+    string.replace("banana", "", "<>") == "<>b<>a<>n<>a<>n<>a<>",
+    TextInvariant()
+  )
+  let caught6: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("banana"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught6 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  // Go: ("banana", "a", "a", -1) -> "banana"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("a"),
+      core@1/string.as_bytes("a")
+    ) == core@1/string.as_bytes("banana"),
+    TextInvariant()
+  )
+  // Go: ("banana", "a", "a", 1) -> "banana"
+  failure.check(
+    bytes.replace(
+      core@1/string.as_bytes("banana"),
+      core@1/string.as_bytes("a"),
+      core@1/string.as_bytes("a")
+    ) == core@1/string.as_bytes("banana"),
+    TextInvariant()
+  )
+  // Go: ("☺☻☹", "", "<>", -1) -> "<>☺<>☻<>☹<>"
+  failure.check(string.replace("☺☻☹", "", "<>") == "<>☺<>☻<>☹<>", TextInvariant())
+  let caught7: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = bytes.replace(
+        core@1/string.as_bytes("☺☻☹"),
+        b"",
+        core@1/string.as_bytes("<>")
+      )
+    }
+  )
+  failure.check(
+    match caught7 {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    bytes.replace(b"\xff\x00\xff\x00\xff", b"\xff\x00", b"\x80") == b"\x80\x80\xff",
+    TextInvariant()
+  )
+  Ok(())
+}

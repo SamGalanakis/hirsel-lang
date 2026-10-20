@@ -5,25 +5,30 @@ pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src {
   let len = core@1/bytes.len(src)
   let mut builder: List[u8] = []
   let mut i: u64 = 0
-  while i < len {
-    let mut matched = width <= len - i
-    let mut j: u64 = 0
-    while matched && j < width {
-      if src[i + j] != old[j] {
-        matched = false
-      }
-      j += 1
+  let plan = internal.substring.prepare(old)
+  let mut searching = true
+  while searching {
+    let found = internal.substring.find_from(src, old, plan, i)
+    let end = match found {
+      Some(at) => at,
+      None() => len,
     }
-    if matched {
-      let mut k: u64 = 0
-      while k < core@1/bytes.len(new) {
-        core@1/list.push(mut builder, new[k])
-        k += 1
-      }
-      i += width
-    } else {
+    while i < end {
       core@1/list.push(mut builder, src[i])
       i += 1
+    }
+    match found {
+      Some(at) => {
+        let mut k: u64 = 0
+        while k < core@1/bytes.len(new) {
+          core@1/list.push(mut builder, new[k])
+          k += 1
+        }
+        i = at + width
+      },
+      None() => {
+        searching = false
+      },
     }
   }
   core@1/bytes.from_list(take builder)

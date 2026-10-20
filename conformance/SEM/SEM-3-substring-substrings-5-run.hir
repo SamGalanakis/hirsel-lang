@@ -1,0 +1,212 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests/tests/str.rs:86-100: every scalar-aligned substring,
+// first occurrence <= i and last occurrence >= i; exact offsets from Rust semantics.
+@noalloc
+fn offset(s: String, pat: String, reverse: bool) -> Option[u64] uses {} {
+  let found = if reverse {
+    string.rfind(s, pat)
+  } else {
+    string.find(s, pat)
+  }
+  match found {
+    Some(at) => Some(core@1/string.byte_offset(s, at)),
+    None() => None(),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaaba", false) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaaba", true) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaa", false) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaa", true) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaab", false) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaab", true) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaaba", false) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", " Namacbaabcaabaaba", true) == Some(6u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "N", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "N", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Na", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Na", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Nam", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Nam", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Nama", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Nama", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namac", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namac", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacb", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacb", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacba", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacba", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaa", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaa", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaab", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaab", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabc", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabc", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabca", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabca", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaa", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaa", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaab", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaab", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaaba", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaaba", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaa", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaa", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaab", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaab", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaaba", false) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "Namacbaabcaabaaba", true) == Some(7u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "a", false) == Some(8u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "a", true) == Some(23u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "am", false) == Some(8u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "am", true) == Some(8u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "ama", false) == Some(8u64),
+    TextInvariant()
+  )
+  failure.check(
+    offset("Việt Namacbaabcaabaaba", "ama", true) == Some(8u64),
+    TextInvariant()
+  )
+  Ok(())
+}

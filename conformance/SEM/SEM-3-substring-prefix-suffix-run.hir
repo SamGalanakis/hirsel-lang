@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests/tests/str.rs:245-264: all starts_with / ends_with vectors.
+pub fn main() -> Result[(), ()] {
+  failure.check(string.starts_with("", ""), TextInvariant())
+  failure.check(string.starts_with("abc", ""), TextInvariant())
+  failure.check(string.starts_with("abc", "a"), TextInvariant())
+  failure.check(!string.starts_with("a", "abc"), TextInvariant())
+  failure.check(!string.starts_with("", "abc"), TextInvariant())
+  failure.check(!string.starts_with("ödd", "-"), TextInvariant())
+  failure.check(string.starts_with("ödd", "öd"), TextInvariant())
+  failure.check(string.ends_with("", ""), TextInvariant())
+  failure.check(string.ends_with("abc", ""), TextInvariant())
+  failure.check(string.ends_with("abc", "c"), TextInvariant())
+  failure.check(!string.ends_with("a", "abc"), TextInvariant())
+  failure.check(!string.ends_with("", "abc"), TextInvariant())
+  failure.check(!string.ends_with("ddö", "-"), TextInvariant())
+  failure.check(string.ends_with("ddö", "dö"), TextInvariant())
+  Ok(())
+}

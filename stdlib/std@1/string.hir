@@ -24,18 +24,17 @@ pub fn split(take s: String, separator: String) -> List[String] uses {} {
   core@1/failure.check(width != 0, TextInvariant())
   let mut parts: List[String] = []
   let mut begin: u64 = 0
-  let mut i: u64 = 0
-  while i <= len && width <= len - i {
-    let mut j: u64 = 0
-    while j < width && source[i + j] == delimiter[j] {
-      j += 1
-    }
-    if j == width {
-      core@1/list.push(mut parts, piece(s, begin, i))
-      i += width
-      begin = i
-    } else {
-      i += 1
+  let plan = internal.substring.prepare(delimiter)
+  let mut searching = true
+  while searching {
+    match internal.substring.find_from(source, delimiter, plan, begin) {
+      Some(at) => {
+        core@1/list.push(mut parts, piece(s, begin, at))
+        begin = at + width
+      },
+      None() => {
+        searching = false
+      },
     }
   }
   core@1/list.push(mut parts, piece(s, begin, len))
@@ -93,16 +92,11 @@ fn matches_at(source: Bytes, pattern: Bytes, offset: u64) -> bool uses {} {
 pub fn find(s: String, pattern: String) -> Option[StrPos of s] uses {} {
   let source = core@1/string.as_bytes(s)
   let needle = core@1/string.as_bytes(pattern)
-  let len = core@1/bytes.len(source)
-  let width = core@1/bytes.len(needle)
-  let mut i: u64 = 0
-  while i <= len && width <= len - i {
-    if matches_at(source, needle, i) {
-      return core@1/string.position(s, i)
-    }
-    i += 1
+  let plan = internal.substring.prepare(needle)
+  match internal.substring.find_from(source, needle, plan, 0) {
+    Some(at) => core@1/string.position(s, at),
+    None() => None(),
   }
-  None()
 }
 
 // Rust str::split_once: the text before and after the first separator match.
@@ -251,18 +245,125 @@ pub fn replace(s: String, old: String, new: String) -> unique String uses {} {
   let mut i: u64 = 0
   if width == 0 {
     text.append(mut out, new)
-  }
-  while i < len {
-    if width > 0 && matches_at(source, needle, i) {
-      text.append(mut out, new)
-      i += width
-    } else {
+    while i < len {
       core@1/list.push(mut out, source[i])
       i += 1
-      if width == 0 && (i == len || source[i] < 128 || source[i] >= 192) {
+      if i == len || source[i] < 128 || source[i] >= 192 {
         text.append(mut out, new)
+      }
+    }
+  } else {
+    let plan = internal.substring.prepare(needle)
+    let mut searching = true
+    while searching {
+      match internal.substring.find_from(source, needle, plan, i) {
+        Some(at) => {
+          text.append(mut out, piece(s, i, at))
+          text.append(mut out, new)
+          i = at + width
+        },
+        None() => {
+          text.append(mut out, piece(s, i, len))
+          searching = false
+        },
       }
     }
   }
   text.finish_valid(take out)
+}
+
+// Rust str::rfind, pattern.rs:1635-1718. Mirroring bytes retains UTF-8 match
+// boundaries, since only complete valid string patterns are accepted here.
+@noalloc
+pub fn rfind(s: String, pattern: String) -> Option[StrPos of s] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let needle = core@1/string.as_bytes(pattern)
+  let plan = internal.substring.prepare_reverse(needle)
+  match internal.substring.find_from(source, needle, plan, 0) {
+    Some(at) => core@1/string.position(
+      s,
+      core@1/bytes.len(source) - at - core@1/bytes.len(needle)
+    ),
+    None() => None(),
+  }
+}
+
+// Rust str::rsplitn, alloctests/tests/str.rs:1498-1510. As with split,
+// Hirsel requires a nonempty delimiter. A zero limit yields no fields.
+// Rust core/src/str/iter.rs:937-967 uses the same remaining-count state.
+pub fn rsplitn(take s: String, separator: String, limit: u64) -> List[String] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let needle = core@1/string.as_bytes(separator)
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(needle)
+  core@1/failure.check(width != 0, TextInvariant())
+  let mut parts: List[String] = []
+  if limit != 0 {
+    let plan = internal.substring.prepare_reverse(needle)
+    let mut begin: u64 = 0
+    let mut remaining = limit
+    while remaining > 1 {
+      match internal.substring.find_from(source, needle, plan, begin) {
+        Some(at) => {
+          core@1/list.push(mut parts, piece(s, len - at, len - begin))
+          begin = at + width
+          remaining -= 1
+        },
+        None() => break,
+      }
+    }
+    core@1/list.push(mut parts, piece(s, 0, len - begin))
+  }
+  take parts
+}
+
+pub fn rsplit(take s: String, separator: String) -> List[String] uses {} {
+  rsplitn(take s, separator, 18446744073709551615u64)
+}
+
+@noalloc
+pub fn rsplit_once(s: String, separator: String) -> Option[(String, String)] in s uses {} {
+  match rfind(s, separator) {
+    Some(at) => {
+      let start = core@1/string.byte_offset(s, at)
+      Some(
+        (
+          piece(s, 0, start),
+          piece(s, start + core@1/string.byte_len(separator), core@1/string.byte_len(s))
+        )
+      )
+    },
+    None() => None(),
+  }
+}
+
+// Rust str::split_whitespace, alloctests/tests/str.rs:1536-1540.
+// Unicode White_Space is tested per scalar; returned slices borrow the source.
+pub fn split_whitespace(take s: String) -> List[String] uses {} {
+  let mut parts: List[String] = []
+  let mut begin: u64 = 0
+  let mut offset: u64 = 0
+  for c in core@1/string.scalars(s) {
+    let cp = core@1/char.to_u32(c)
+    let width: u64 = if cp < 128 {
+      1
+    } else if cp < 2048 {
+      2
+    } else if cp < 65536 {
+      3
+    } else {
+      4
+    }
+    if unicode.is_whitespace(c) {
+      if begin < offset {
+        core@1/list.push(mut parts, piece(s, begin, offset))
+      }
+      begin = offset + width
+    }
+    offset += width
+  }
+  if begin < offset {
+    core@1/list.push(mut parts, piece(s, begin, offset))
+  }
+  take parts
 }
