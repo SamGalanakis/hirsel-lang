@@ -15,7 +15,7 @@ use hirsel_syntax::PackageId;
 use hirsel_tir::Definition;
 use hirsel_types::{DecodedTypes, EncodedTypes};
 use serde::{Deserialize, Serialize};
-use std::{ops::Range, path::Path, sync::Mutex};
+use std::{io::Write, ops::Range, path::Path, sync::Mutex};
 
 const MAGIC: &[u8; 8] = b"HIRPCHK2";
 
@@ -273,121 +273,205 @@ impl QueryEngine {
         }))
     }
 
-    /// Precheck `package`, whose sources are `files` in manifest order, after a
-    /// complete check of this program found no diagnostics. Each definition
-    /// whose node or lowering fails is left out: a program reaching it
-    /// computes it from source, with the same result.
-    pub(crate) fn precheck(
+    /// The precheck record of `path`, or None for a definition whose node or
+    /// lowering fails: a program reaching it computes it from source, with
+    /// the same result.
+    fn precheck_record(
         &mut self,
-        key: ContentHash,
-        package: &PackageId,
-        closure: &BTreeSet<PackageId>,
-        files: &[FileId],
-    ) -> Result<Vec<u8>, QueryError> {
-        let ordinal: BTreeMap<FileId, u32> = files
-            .iter()
-            .enumerate()
-            .map(|(index, file)| (*file, index as u32 + 1))
+        path: &DefPath,
+        ordinal: &BTreeMap<FileId, u32>,
+    ) -> Result<Option<PrecheckedDefinition>, QueryError> {
+        let Ok((content, dependencies)) = self.semantic_node(path) else {
+            return Ok(None);
+        };
+        let executable = self.items[path]
+            .first()
+            .is_some_and(|item| generation::executable(&item.file, item.item));
+        let audit = if executable {
+            Some(self.source_audit_products(path)?)
+        } else {
+            None
+        };
+        let constant = if matches!(
+            self.item_signature(path)?.value.kind,
+            hirsel_types::SignatureKind::Const { ty: _, .. }
+        ) {
+            Some(self.evaluate_constant(path)?)
+        } else {
+            None
+        };
+        let lowering = if executable {
+            self.execution_stack.push(ExecutionReads::default());
+            let lowered = self.lower_to_tir(path);
+            let execution = self
+                .execution_stack
+                .pop()
+                .expect("precheck execution frame");
+            let Ok(lowered) = lowered else {
+                return Ok(None);
+            };
+            if !lowered.diagnostics.is_empty() {
+                return Ok(None);
+            }
+            let mut definition = (*lowered.value).clone();
+            let mut foreign = false;
+            tir_spans(&mut definition, |span| {
+                if *span != Span::default() {
+                    match ordinal.get(&span.file) {
+                        Some(index) => span.file = FileId(*index),
+                        None => foreign = true,
+                    }
+                }
+            });
+            if foreign {
+                return Ok(None);
+            }
+            Some(PrecheckedLowering {
+                definition,
+                dependencies: lowered.dependencies,
+                execution,
+            })
+        } else {
+            None
+        };
+        Ok(Some(PrecheckedDefinition {
+            node: PrecheckedNode {
+                content,
+                dependencies,
+            },
+            lowering,
+            audit,
+            constant,
+        }))
+    }
+
+    /// Write the records of `paths` that belong to the writer's package and
+    /// have none yet, then release their checked, mode and lowered bodies.
+    pub(crate) fn precheck_definitions<W: Write>(
+        &mut self,
+        writer: &mut PrecheckWriter<W>,
+        paths: Vec<DefPath>,
+    ) -> Result<(), QueryError> {
+        let paths: Vec<_> = paths
+            .into_iter()
+            .filter(|path| path.0.package == writer.package && writer.seen.insert(path.clone()))
             .collect();
+        for path in &paths {
+            if let Some(record) = self.precheck_record(path, &writer.ordinal)? {
+                writer.write(path, &record)?;
+            }
+        }
+        writer.closed &= self.release_bodies(&paths, &writer.closure);
+        Ok(())
+    }
+
+    /// Release the bodies of the package's definitions that have no record yet;
+    /// each is computed again when its source checks.
+    pub(crate) fn release_unwritten<W>(&mut self, writer: &mut PrecheckWriter<W>) {
         let paths: Vec<_> = self
             .items
             .keys()
-            .filter(|p| &p.0.package == package)
+            .filter(|p| p.0.package == writer.package && !writer.seen.contains(*p))
             .cloned()
             .collect();
-        let mut records = vec![];
-        for path in paths {
-            let Ok((content, dependencies)) = self.semantic_node(&path) else {
-                continue;
-            };
-            let executable = self.items[&path]
-                .first()
-                .is_some_and(|item| generation::executable(&item.file, item.item));
-            let audit = if executable {
-                Some(self.source_audit_products(&path)?)
-            } else {
-                None
-            };
-            let constant = if matches!(
-                self.item_signature(&path)?.value.kind,
-                hirsel_types::SignatureKind::Const { ty: _, .. }
-            ) {
-                Some(self.evaluate_constant(&path)?)
-            } else {
-                None
-            };
-            let lowering = if executable {
-                self.execution_stack.push(ExecutionReads::default());
-                let lowered = self.lower_to_tir(&path);
-                let execution = self
-                    .execution_stack
-                    .pop()
-                    .expect("precheck execution frame");
-                let Ok(lowered) = lowered else { continue };
-                if !lowered.diagnostics.is_empty() {
-                    continue;
-                }
-                let mut definition = (*lowered.value).clone();
-                let mut foreign = false;
-                tir_spans(&mut definition, |span| {
-                    if *span != Span::default() {
-                        match ordinal.get(&span.file) {
-                            Some(index) => span.file = FileId(*index),
-                            None => foreign = true,
-                        }
-                    }
-                });
-                if foreign {
-                    continue;
-                }
-                Some(PrecheckedLowering {
-                    definition,
-                    dependencies: lowered.dependencies,
-                    execution,
-                })
-            } else {
-                None
-            };
-            records.push((
-                path,
-                PrecheckedDefinition {
-                    node: PrecheckedNode {
-                        content,
-                        dependencies,
-                    },
-                    lowering,
-                    audit,
-                    constant,
-                },
-            ));
-        }
-        if !self.package_closed(package, closure) {
+        writer.closed &= self.release_bodies(&paths, &writer.closure);
+    }
+
+    /// Write the records of the package's remaining definitions and return
+    /// the precheck's head, its magic and header, after a complete check of
+    /// this program found no diagnostics. Its body is what `writer` wrote.
+    pub(crate) fn finish_precheck<W: Write>(
+        &mut self,
+        mut writer: PrecheckWriter<W>,
+        key: ContentHash,
+    ) -> Result<Vec<u8>, QueryError> {
+        let rest = self
+            .items
+            .keys()
+            .filter(|p| p.0.package == writer.package)
+            .cloned()
+            .collect();
+        self.precheck_definitions(&mut writer, rest)?;
+        if !(writer.closed && self.package_closed(&writer.package, &writer.closure)) {
             return Err(corrupt(format!(
                 "{}@{} reads outside its dependency closure",
-                package.name, package.version
+                writer.package.name, writer.package.version
             )));
         }
-        let mut body = vec![];
-        let mut definitions = vec![];
-        let mut types = EncodedTypes::default();
-        for (path, record) in records {
-            let start = body.len() as u64;
-            hirsel_types::encode_types(&mut types, || bincode::serialize_into(&mut body, &record))
-                .map_err(corrupt)?;
-            definitions.push((path, start, body.len() as u64 - start));
-        }
-        let mut bytes = MAGIC.to_vec();
+        writer.body.flush().map_err(corrupt)?;
+        let mut head = MAGIC.to_vec();
         bincode::serialize_into(
-            &mut bytes,
+            &mut head,
             &Header {
                 key,
-                package: package.clone(),
-                definitions,
+                package: writer.package,
+                definitions: writer.definitions,
             },
         )
         .map_err(corrupt)?;
-        bytes.extend(body);
-        Ok(bytes)
+        Ok(head)
+    }
+}
+
+/// A precheck being written (`QueryEngine::precheck_definitions`). Each
+/// definition's record goes to the body as soon as it is computed, so the
+/// precheck never holds more than one record or the encoded package.
+pub(crate) struct PrecheckWriter<W> {
+    package: PackageId,
+    closure: BTreeSet<PackageId>,
+    /// Each package source's manifest ordinal plus one; spans name sources by it.
+    ordinal: BTreeMap<FileId, u32>,
+    body: W,
+    len: u64,
+    types: EncodedTypes,
+    /// Each written record's byte range in the body.
+    definitions: Vec<(DefPath, u64, u64)>,
+    /// The definitions written or left out.
+    seen: BTreeSet<DefPath>,
+    /// Every released query read only inside the closure.
+    closed: bool,
+}
+
+impl<W: Write> PrecheckWriter<W> {
+    /// A precheck of `package`, whose sources are `files` in manifest order,
+    /// writing its body to `body`.
+    pub(crate) fn new(
+        package: PackageId,
+        closure: BTreeSet<PackageId>,
+        files: &[FileId],
+        body: W,
+    ) -> Self {
+        Self {
+            package,
+            closure,
+            ordinal: files
+                .iter()
+                .enumerate()
+                .map(|(index, file)| (*file, index as u32 + 1))
+                .collect(),
+            body,
+            len: 0,
+            types: EncodedTypes::default(),
+            definitions: vec![],
+            seen: BTreeSet::new(),
+            closed: true,
+        }
+    }
+    /// Whether `file` is one of the package's sources.
+    pub(crate) fn has_file(&self, file: FileId) -> bool {
+        self.ordinal.contains_key(&file)
+    }
+    fn write(&mut self, path: &DefPath, record: &PrecheckedDefinition) -> Result<(), QueryError> {
+        let mut bytes = vec![];
+        hirsel_types::encode_types(&mut self.types, || {
+            bincode::serialize_into(&mut bytes, record)
+        })
+        .map_err(corrupt)?;
+        self.body.write_all(&bytes).map_err(corrupt)?;
+        self.definitions
+            .push((path.clone(), self.len, bytes.len() as u64));
+        self.len += bytes.len() as u64;
+        Ok(())
     }
 }
 

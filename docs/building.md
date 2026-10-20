@@ -464,6 +464,14 @@ test targets that run std programs get `HIRSEL_PRECHECK` from
 Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
 debug assertions and integer overflow checks enabled.
 
+`hirsel precheck` writes each source's records as soon as that source checks,
+streaming them through a scratch file, and then releases the source's checked
+bodies, so its peak memory follows the largest definition rather than the size
+of std. `//:hirsel-std-precheck` runs under `HIRSEL_MEMORY_LIMIT=2G`
+(`PRECHECK_MEMORY_LIMIT` in `tools/buck2/defs.bzl`); std needed 1850 to 1950
+MiB of it on 2026-10-20. A precheck that reaches the bound is a memory
+regression to find, not a bound to raise.
+
 ## Compile timings
 
 `check`, `build`, `run` and `test` take `--timings`, `--timings=json` and

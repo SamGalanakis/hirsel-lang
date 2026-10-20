@@ -137,6 +137,15 @@ impl LoadedProgram {
     /// `lowering`, each dependency only what compile-time evaluation executes,
     /// and `Reachable` then lowers the dependency bodies the root reaches.
     pub fn check(&mut self, lowering: LoweringPolicy) -> Result<CheckOutput, QueryError> {
+        self.check_with(lowering, |_, _| Ok(()))
+    }
+    /// `check`, calling `checked` with each file that checked from source
+    /// complete and with no diagnostics, as soon as it has.
+    fn check_with(
+        &mut self,
+        lowering: LoweringPolicy,
+        mut checked: impl FnMut(&mut QueryEngine, FileId) -> Result<(), QueryError>,
+    ) -> Result<CheckOutput, QueryError> {
         // The program check's own steps; per-definition checking and
         // lowering, GEN-5 and publication below are their own intervals.
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
@@ -232,11 +241,14 @@ impl LoadedProgram {
                 policy(&context.package),
             )?;
             drop(parallel);
-            outputs.insert(*file, output.clone());
-            diagnostics.extend(output.diagnostics);
             if output.completion != CheckCompletion::Complete {
                 completion = output.completion;
+            } else if output.diagnostics.is_empty() {
+                checked(&mut self.engine, *file)?;
             }
+            diagnostics.extend(output.diagnostics.iter().cloned());
+            // Publication needs each file's verdict, not its copy of the sources.
+            outputs.insert(*file, (output.completion, output.diagnostics));
         }
         // GEN-5 crosses package boundaries. Its program verdict is always
         // selected for this program, including when every dependency body is
@@ -295,15 +307,15 @@ impl LoadedProgram {
             };
             if file_outputs
                 .iter()
-                .any(|o| o.completion != CheckCompletion::Complete)
+                .any(|(completion, _)| *completion != CheckCompletion::Complete)
             {
                 continue;
             }
             let local: Vec<Vec<_>> = file_outputs
                 .iter()
                 .zip(&package.files)
-                .map(|(o, (f, _))| {
-                    o.diagnostics
+                .map(|((_, diagnostics), (f, _))| {
+                    diagnostics
                         .iter()
                         .filter(|d| d.primary.file == *f && d.rule.as_str() != "GEN-5")
                         .cloned()
@@ -384,12 +396,47 @@ impl LoadedProgram {
         let entry = self.entry.clone();
         self.engine.unsafe_reach(&entry).map_err(|e| self.error(e))
     }
-    /// The precheck of `package`, a dependency of this program, which must check
-    /// complete with no diagnostics at all (`Precheck`).
-    pub fn precheck(&mut self, package: &PackageId) -> Result<Vec<u8>, ToolError> {
+    /// Write the precheck of `package`, a dependency of this program, which must
+    /// check complete with no diagnostics at all (`Precheck`), to `out`. Each
+    /// definition's record is computed as soon as its source checks and goes
+    /// straight to `spill`, and the source's checked bodies are then released,
+    /// so a precheck holds one source's products at a time, not the package's.
+    pub fn precheck(
+        &mut self,
+        package: &PackageId,
+        out: &mut impl std::io::Write,
+        spill: &mut (impl std::io::Read + std::io::Write + std::io::Seek),
+    ) -> Result<(), ToolError> {
         let name = format!("{}@{}", package.name, package.version);
+        let revision = self.packages.iter().find(|p| &p.package == package);
+        let key = revision
+            .map(|r| crate::Precheck::key(self.identity, r.key, self.engine.comptime_limits));
+        let mut writer = revision.map(|revision| {
+            let files: Vec<_> = revision.files.iter().map(|(f, _)| *f).collect();
+            crate::queries::PrecheckWriter::new(
+                package.clone(),
+                revision.closure.clone(),
+                &files,
+                std::io::BufWriter::new(&mut *spill),
+            )
+        });
+        let mut released = false;
         let output = self
-            .check(LoweringPolicy::Comptime)
+            .check_with(LoweringPolicy::Comptime, |engine, file| match &mut writer {
+                Some(writer) if writer.has_file(file) => {
+                    let paths = engine.file_definitions(file);
+                    engine.precheck_definitions(writer, paths)?;
+                    // The first source's GEN-5 verdict checked every body of the
+                    // program. The package's other bodies are checked again with
+                    // their own sources rather than all held until then.
+                    if !released {
+                        released = true;
+                        engine.release_unwritten(writer);
+                    }
+                    Ok(())
+                }
+                _ => Ok(()),
+            })
             .map_err(|error| self.error(error))?;
         if !output.diagnostics.is_empty() {
             return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
@@ -404,17 +451,19 @@ impl LoadedProgram {
                 "precheck: {name} is an unsafe ffi package"
             )));
         }
-        let Some(revision) = self.packages.iter().find(|p| &p.package == package) else {
+        let (Some(writer), Some(key)) = (writer, key) else {
             return Err(ToolError::Runtime(format!(
                 "precheck: {name} is not a dependency"
             )));
         };
-        let key = crate::Precheck::key(self.identity, revision.key, self.engine.comptime_limits);
-        let closure = revision.closure.clone();
-        let files: Vec<_> = revision.files.iter().map(|(f, _)| *f).collect();
-        self.engine
-            .precheck(key, package, &closure, &files)
-            .map_err(|error| self.error(error))
+        let head = self
+            .engine
+            .finish_precheck(writer, key)
+            .map_err(|error| self.error(error))?;
+        out.write_all(&head)?;
+        spill.rewind()?;
+        std::io::copy(spill, out)?;
+        Ok(())
     }
     /// The reference interpreter calls no C: a program whose entry reaches an
     /// extern refuses before entry (PROG-4).

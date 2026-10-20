@@ -123,8 +123,19 @@ const CLIENT: &str = "pub fn main() -> Result[(), ()] {
 fn library_precheck(f: &Fixture, source: &str) -> Result<Arc<Precheck>, ToolError> {
     let manifest = f.library(source);
     let program = f.program("prechecker", CLIENT, &manifest, "lib");
-    let bytes = load(&program, &PackageCache::disabled()).precheck(&package("lib"))?;
+    let bytes = precheck(&mut load(&program, &PackageCache::disabled()), "lib")?;
     Ok(Arc::new(Precheck::decode(bytes).unwrap()))
+}
+
+/// `program`'s precheck of the dependency `name`, written to memory.
+fn precheck(program: &mut LoadedProgram, name: &str) -> Result<Vec<u8>, ToolError> {
+    let mut bytes = vec![];
+    program.precheck(
+        &package(name),
+        &mut bytes,
+        &mut std::io::Cursor::new(vec![]),
+    )?;
+    Ok(bytes)
 }
 
 #[test]
@@ -288,9 +299,7 @@ fn prechecked_generic_comptime_materializes_selected_client_sizes() {
         let client = "pub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];failure.check(lib.value(a)==4u64,Arithmetic());failure.check(lib.value(b)==9u64,Arithmetic());Ok(())}\n";
         let library = f.library(source);
         let prechecker = f.program("prechecker", client, &library, "lib");
-        let bytes = load(&prechecker, &PackageCache::disabled())
-            .precheck(&package("lib"))
-            .unwrap();
+        let bytes = precheck(&mut load(&prechecker, &PackageCache::disabled()), "lib").unwrap();
         let precheck = Arc::new(Precheck::decode(bytes).unwrap());
         let client = f.program("client", client, &library, "lib");
         let mut cached = load(&client, &PackageCache::prechecked(vec![precheck]));

@@ -419,19 +419,13 @@ impl QueryEngine {
         package: &PackageId,
         closure: &BTreeSet<PackageId>,
     ) -> bool {
-        let core = hirsel_syntax::DefPath::core("Result").0.package;
-        let inside = |p: &PackageId| closure.contains(p) || *p == core;
+        let inside = inside(closure);
         macro_rules! closed {
             ($field:ident) => {
                 self.$field
                     .values()
                     .filter(|c| &c.key.definition.0.package == package)
-                    .all(|c| {
-                        c.reads.closed(&inside)
-                            && c.lookups.closed(&inside)
-                            && c.executed.closed(&inside)
-                            && c.representations.keys().all(|p| inside(&p.0.package))
-                    })
+                    .all(|c| c.closed(&inside))
             };
         }
         let state = self.adapters.compiler_state.as_ref().unwrap().borrow();
@@ -450,5 +444,43 @@ impl QueryEngine {
                 .iter()
                 .filter(|(p, _)| &p.0.package == package)
                 .all(|(_, value)| value.executed.closed(&inside))
+    }
+    /// Release the checked, mode and lowered bodies of `paths` and the TIR V
+    /// remembers passing for them; a later read computes them again. Whether
+    /// each released query read only inside `closure` (or core), as
+    /// `package_closed` would have found it.
+    pub(super) fn release_bodies(
+        &mut self,
+        paths: &[DefPath],
+        closure: &BTreeSet<PackageId>,
+    ) -> bool {
+        let inside = inside(closure);
+        let mut closed = true;
+        for path in paths {
+            closed &= self.checked.get(path).is_none_or(|c| c.closed(&inside))
+                && self.modes.get(path).is_none_or(|c| c.closed(&inside))
+                && self.lowered.get(path).is_none_or(|c| c.closed(&inside));
+            self.checked.remove(path);
+            self.modes.remove(path);
+            self.lowered.remove(path);
+        }
+        self.forget_passed(paths);
+        closed
+    }
+}
+
+/// Membership in a package's closure, where core is always inside.
+fn inside(closure: &BTreeSet<PackageId>) -> impl Fn(&PackageId) -> bool {
+    let core = hirsel_syntax::DefPath::core("Result").0.package;
+    move |p: &PackageId| closure.contains(p) || *p == core
+}
+
+impl<T> Cached<T> {
+    /// The query read nothing outside `inside`.
+    fn closed(&self, inside: &impl Fn(&PackageId) -> bool) -> bool {
+        self.reads.closed(inside)
+            && self.lookups.closed(inside)
+            && self.executed.closed(inside)
+            && self.representations.keys().all(|p| inside(&p.0.package))
     }
 }

@@ -15,6 +15,7 @@ pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
 mod precheck;
 pub use precheck::Precheck;
+pub(crate) use precheck::PrecheckWriter;
 mod safety;
 pub use safety::{Escape, UnsafeReach};
 mod signature_input;

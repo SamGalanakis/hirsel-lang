@@ -46,6 +46,13 @@ impl SignatureInput {
         }
         report
     }
+    /// Forget what passed V at `paths`, so their released TIR is not kept here.
+    fn forget(&self, paths: &[DefPath]) {
+        let mut passed = self.passed.lock().unwrap();
+        for path in paths {
+            passed.remove(path);
+        }
+    }
 }
 const PASSED_PER_DEFINITION: usize = 4;
 const SHARED_INPUTS: usize = 8;
@@ -108,6 +115,12 @@ impl QueryEngine {
     }
     pub(crate) fn invalidate_signature_input(&mut self) {
         self.signature_input.clear();
+    }
+    /// Forget the TIR each of this engine's inputs saw pass V at `paths`.
+    pub(super) fn forget_passed(&self, paths: &[DefPath]) {
+        for input in self.signature_input.values() {
+            input.validated.forget(paths);
+        }
     }
     /// The package's independently checked signature input; owner bodies of
     /// `package` see their private representations through it.

@@ -523,6 +523,15 @@ def hirsel_link_hosts_test(name, listing, data):
         visibility = ["PUBLIC"],
     )
 
+# The std precheck's memory bound, a regression guard (docs/building.md, "The
+# std precheck"). The precheck writes each source's records as soon as it
+# checks and then releases its bodies, so its peak follows the largest
+# definition rather than std's size. Measured as this data limit on 2026-10-20:
+# 1850-1950 MiB for std's 142 sources and 1900-1950 MiB with 16 more crypto
+# sources, about 700 MiB of it one definition's V flow state. A precheck that
+# reaches it is a regression to find, not a bound to raise.
+PRECHECK_MEMORY_LIMIT = "2G"
+
 def _precheck_impl(ctx):
     # The package's sources at their repository paths, as its manifest names them.
     tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
@@ -545,6 +554,7 @@ def _precheck_impl(ctx):
             precheck.as_output(),
             hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs,
         ),
+        env = {"HIRSEL_MEMORY_LIMIT": PRECHECK_MEMORY_LIMIT},
         category = "precheck",
     )
     return [DefaultInfo(default_output = precheck)]

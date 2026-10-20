@@ -871,17 +871,11 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             return 0;
         }
         Command::Precheck { manifest, output } => {
-            let bytes = match hirsel_driver::COMPILER.precheck_package(Path::new(&manifest)) {
-                Ok(bytes) => bytes,
-                Err(error) => return tool_error(error, false),
-            };
-            // Readers never see a partial precheck.
-            let temporary = Path::new(&output).with_extension("precheck.partial");
-            return match std::fs::write(&temporary, bytes)
-                .and_then(|()| std::fs::rename(&temporary, &output))
+            return match hirsel_driver::COMPILER
+                .precheck_package(Path::new(&manifest), Path::new(&output))
             {
                 Ok(()) => 0,
-                Err(error) => tool_error(ToolError::Io(error), false),
+                Err(error) => tool_error(error, false),
             };
         }
         Command::Build {

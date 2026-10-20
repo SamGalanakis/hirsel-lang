@@ -99,9 +99,10 @@ impl Compiler {
             true,
         )
     }
-    /// The precheck of the package `manifest` describes, checked freshly as the only
-    /// dependency of an empty program (docs/building.md, "The std precheck").
-    pub fn precheck_package(&self, manifest: &Path) -> Result<Vec<u8>, ToolError> {
+    /// Write to `output` the precheck of the package `manifest` describes, checked
+    /// freshly as the only dependency of an empty program (docs/building.md, "The
+    /// std precheck"). Readers never see a partial precheck.
+    pub fn precheck_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
         // Programs trust a precheck's TIR as validated.
         if self.verify == Verify::Off {
             return Err(ToolError::Runtime("precheck always runs V".into()));
@@ -142,11 +143,32 @@ impl Compiler {
                 "entry": {"module": [], "name": "main"},
             });
             std::fs::write(dir.join("precheck.hir.json"), sidecar.to_string())?;
-            with_compiler_stack(|| {
-                let mut loaded =
-                    self.load_program_source_with_cache(&program, None, &PackageCache::disabled())?;
-                loaded.precheck(&package)
-            })
+            // Records stream through a scratch file beside the program, so the
+            // encoded package is never held in memory.
+            let mut spill = std::fs::File::options()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(dir.join("precheck.body"))?;
+            let partial = output.with_extension("precheck.partial");
+            let written = (|| -> Result<(), ToolError> {
+                let mut out = std::io::BufWriter::new(std::fs::File::create(&partial)?);
+                with_compiler_stack(|| {
+                    let mut loaded = self.load_program_source_with_cache(
+                        &program,
+                        None,
+                        &PackageCache::disabled(),
+                    )?;
+                    loaded.precheck(&package, &mut out, &mut spill)
+                })?;
+                out.into_inner().map_err(|e| e.into_error())?;
+                std::fs::rename(&partial, output)?;
+                Ok(())
+            })();
+            if written.is_err() {
+                let _ = std::fs::remove_file(&partial);
+            }
+            written
         })();
         let _ = std::fs::remove_dir_all(&dir);
         result
