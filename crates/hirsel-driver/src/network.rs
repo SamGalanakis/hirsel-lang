@@ -196,6 +196,13 @@ impl HostIo {
             Self::Replay(io) => io.call(request),
         }
     }
+    fn tls(&mut self) {
+        let engine = hirsel_rt::net_tls::engine();
+        match self {
+            Self::Live(io) => io.tls(engine),
+            Self::Replay(io) => io.tls(engine),
+        }
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         match self {
             Self::Live(io) => io.tls_roots(stream, pem),
@@ -1507,6 +1514,7 @@ impl HostLibrary {
             },
             "tls.connect" | "tls.connect_as" => {
                 let stream = self.id(&a[1])?;
+                self.io.tls();
                 let roots = match tag(&a[3])? {
                     0 => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     1 => {
@@ -1558,6 +1566,7 @@ impl HostLibrary {
                     _ => return Err(invalid()),
                 };
                 let stream = self.id(&a[1])?;
+                self.io.tls();
                 self.io.tls_server(stream, &identities, clients);
                 R::TlsAccept {
                     net: self.id(&a[0])?,

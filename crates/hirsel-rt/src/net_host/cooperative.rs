@@ -5,6 +5,7 @@
 //! after a short timer wait, since Linux signals no room in a listener's backlog.
 use super::*;
 use crate::io::AdapterError;
+use crate::net_tls::Stall;
 use crate::readiness::Readiness;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -172,11 +173,7 @@ impl CooperativeNet {
         if let Some(conn) = self.host.tls.get_mut(&stream) {
             // rustls accepts plaintext into its bounded buffer; flushing below
             // retains the connection's encrypted output across readiness waits.
-            return Ok(conn
-                .writer()
-                .write(bytes)
-                .map(|n| n as u64)
-                .map_err(crate::net_tls::error));
+            return Ok(conn.write_plaintext(bytes).map(|n| n as u64));
         }
         loop {
             // SAFETY: bytes is readable and fd is a live nonblocking socket.
@@ -196,7 +193,7 @@ impl CooperativeNet {
     fn handshake(
         &mut self,
         stream: u64,
-        start: impl FnOnce() -> Result<rustls::Connection, NetError>,
+        start: impl FnOnce() -> Result<Box<dyn crate::net_tls::TlsSession>, NetError>,
     ) -> Provided<()> {
         let fd = match self.host.socket(stream) {
             Ok(fd) => fd,
@@ -217,20 +214,20 @@ impl CooperativeNet {
             if !conn.is_handshaking() {
                 return Ok(Ok(()));
             }
-            match conn.read_tls(&mut crate::net_tls::Transport(fd)) {
+            match conn.read_tls(fd) {
                 Ok(0) => return Ok(Err(NetError::Tls(crate::net::TlsFailure::Truncated))),
                 Ok(_) => {
-                    if let Err(e) = conn.process_new_packets() {
+                    if let Err(failure) = conn.process_new_packets() {
                         // Best effort, as rustls complete_io does: tell the peer why, so a
                         // refused client certificate reaches the client as its alert.
-                        let _ = conn.write_tls(&mut crate::net_tls::Transport(fd));
-                        return Ok(Err(NetError::Tls(crate::net_tls::failure(&e))));
+                        let _ = conn.write_tls(fd);
+                        return Ok(Err(NetError::Tls(failure)));
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(Stall::WouldBlock) => {
                     return self.blocked(fd, libc::POLLIN, self.timeout(stream, false));
                 }
-                Err(e) => return Ok(Err(crate::net_tls::error(e))),
+                Err(Stall::Failed(e)) => return Ok(Err(e)),
             }
         }
     }
@@ -241,13 +238,13 @@ impl CooperativeNet {
         };
         if let Some(conn) = self.host.tls.get_mut(&stream) {
             while conn.wants_write() {
-                match conn.write_tls(&mut crate::net_tls::Transport(fd)) {
+                match conn.write_tls(fd) {
                     Ok(0) => return Ok(Err(NetError::BrokenPipe)),
                     Ok(_) => self.readiness.pending().committed = true,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(Stall::WouldBlock) => {
                         return self.blocked(fd, libc::POLLOUT, self.timeout(stream, true));
                     }
-                    Err(e) => return Ok(Err(crate::net_tls::error(e))),
+                    Err(Stall::Failed(e)) => return Ok(Err(e)),
                 }
             }
         }
@@ -338,24 +335,24 @@ impl NetProvider for CooperativeNet {
             }
             loop {
                 let conn = self.host.tls.get_mut(&stream).unwrap();
-                match conn.reader().read(&mut buffer) {
+                match conn.read_plaintext(&mut buffer) {
                     Ok(n) => {
                         buffer.truncate(n);
                         return Ok(Ok(buffer));
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(e) => return Ok(Err(crate::net_tls::error(e))),
+                    Err(Stall::WouldBlock) => {}
+                    Err(Stall::Failed(e)) => return Ok(Err(e)),
                 }
-                match conn.read_tls(&mut crate::net_tls::Transport(fd)) {
+                match conn.read_tls(fd) {
                     Ok(_) => {
-                        if let Err(e) = conn.process_new_packets() {
-                            return Ok(Err(NetError::Tls(crate::net_tls::failure(&e))));
+                        if let Err(failure) = conn.process_new_packets() {
+                            return Ok(Err(NetError::Tls(failure)));
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(Stall::WouldBlock) => {
                         return self.blocked(fd, libc::POLLIN, self.timeout(stream, false));
                     }
-                    Err(e) => return Ok(Err(crate::net_tls::error(e))),
+                    Err(Stall::Failed(e)) => return Ok(Err(e)),
                 }
             }
         }
@@ -442,20 +439,22 @@ impl NetProvider for CooperativeNet {
     }
     fn tls_connect(
         &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
         stream: u64,
         name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> Provided<()> {
         let pem = self.host.pem.take();
-        self.handshake(stream, || {
-            crate::net_tls::client(name, roots, pem, identity).map(rustls::Connection::from)
-        })
+        self.handshake(stream, || tls.connect(name, roots, pem, identity))
     }
-    fn tls_accept(&mut self, stream: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
-        self.handshake(stream, || {
-            crate::net_tls::server(server).map(rustls::Connection::from)
-        })
+    fn tls_accept(
+        &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
+        stream: u64,
+        server: &hirsel_run_config::tls::Server,
+    ) -> Provided<()> {
+        self.handshake(stream, || tls.accept(server))
     }
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {
         self.host.tls_peer(stream)

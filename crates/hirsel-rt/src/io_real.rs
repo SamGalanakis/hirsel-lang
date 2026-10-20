@@ -463,6 +463,9 @@ impl Adapter for RealIo {
         self.state.preflight(request)
     }
 
+    fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.state.tls = crate::net_tls::Engine(Some(engine));
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
         self.net.tls_roots(pem);

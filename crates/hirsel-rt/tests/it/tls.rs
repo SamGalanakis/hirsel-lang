@@ -164,6 +164,7 @@ fn pem_success_and_truncated_stream_record_plaintext_and_replay_without_a_server
     for (truncated, tls12) in [(false, false), (true, false), (false, true), (true, true)] {
         let (port, thread) = server(truncated, tls12);
         let mut real = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        real.tls(hirsel_rt::net_tls::engine());
         real.set_net_rules(rules(port));
         exchange(&mut real, port, truncated);
         thread.join().unwrap();
@@ -177,6 +178,7 @@ fn pem_success_and_truncated_stream_record_plaintext_and_replay_without_a_server
         let tape = hirsel_rt::launch::parse_tape(&text).unwrap();
         let tree = Tree::new(Default::default()).unwrap();
         let mut sim = SimIo::new(tree, tape);
+        sim.tls(hirsel_rt::net_tls::engine());
         sim.set_net_rules(rules(port));
         exchange(&mut sim, port, truncated);
         assert_eq!(sim.finish(), Ok(()));
@@ -195,6 +197,7 @@ fn webpki_unknown_issuer_and_pem_name_mismatch_consume_the_stream() {
     ] {
         let (port, thread) = server(false, false);
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.tls(hirsel_rt::net_tls::engine());
         io.set_net_rules(rules(port));
         let (net, stream, done) = connect(&mut io, port, name, roots);
         assert_eq!(done, Completion::NetUnit(Err(NetError::Tls(failure))));
@@ -237,6 +240,7 @@ fn refuses(tape: &[Event], fixture: &RealIo) -> bool {
 fn a_host_unknown_issuer_tape_replays_independently_in_the_interpreter() {
     let (port, thread) = server(false, false);
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    io.tls(hirsel_rt::net_tls::engine());
     io.set_net_rules(rules(port));
     let Ok(Completion::Handle(Ok(net))) = io.call(Request::Net { io: 1 }) else {
         panic!("net")
@@ -283,6 +287,7 @@ fn host_success_and_truncated_tapes_replay_independently_in_the_interpreter() {
     for (truncated, tls12) in [(false, false), (true, false), (false, true), (true, true)] {
         let (port, thread) = server(truncated, tls12);
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.tls(hirsel_rt::net_tls::engine());
         io.set_net_rules(rules(port));
         exchange(&mut io, port, truncated);
         thread.join().unwrap();
@@ -379,7 +384,7 @@ fn pem_is_bound_to_its_digest_and_invalid_bundles_never_start_tls() {
         let (mut socket, _) = listener.accept().unwrap();
         host.tls_roots(material);
         assert_eq!(
-            host.tls_connect(1, "localhost", &digest, None),
+            host.tls_connect(hirsel_rt::net_tls::engine(), 1, "localhost", &digest, None),
             Ok(Err(NetError::InvalidInput))
         );
         host.close(1);
@@ -393,6 +398,7 @@ fn tls_close_on_a_plain_host_stream_succeeds_without_sending_bytes() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    io.tls(hirsel_rt::net_tls::engine());
     io.set_net_rules(rules(port));
     let Ok(Completion::Handle(Ok(net))) = io.call(Request::Net { io: 1 }) else {
         panic!()
@@ -467,6 +473,7 @@ fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
     for (truncated, tls12) in [(false, false), (true, false), (false, true), (true, true)] {
         let (port, server) = server(truncated, tls12);
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.tls(hirsel_rt::net_tls::engine());
         io.set_net_rules(rules(port));
         let ready = Readiness::default();
         io.set_net_provider(CooperativeNet::new(ready.clone()));

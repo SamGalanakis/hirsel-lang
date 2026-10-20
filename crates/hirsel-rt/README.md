@@ -476,20 +476,28 @@ MSG_NOSIGNAL writes. Network outcomes are provider inputs recorded as completion
 from its bound rules (`set_net_rules`; launch reads the root Net's `io.net` grant JSON from
 `HIRSEL_RT_NET` and binds `net.script@2` peers through `set_net_script`). TLS upgrades the granted
 socket through rustls in `net_tls.rs`; subsequent network reads and writes carry
-plaintext. `tls.close` sends close_notify before closing on every outcome; implicit
+plaintext. Every TLS operation reaches rustls only through a `net_tls::TlsEngine` (material
+checks, handshake starts, scripted accepts) and the `TlsSession` each handshake returns,
+which the host providers hold per stream. Only the TLS entries (`tls_abi.rs`, and the
+interpreter's TLS operations) name the engine, handing it to the adapter
+(`Adapter::tls`) before their material and request, and the policy layer and every world
+take it from there; a TLS request without it is an invariant fault. With one function per
+section in the archive and `--gc-sections`, an executable whose program calls no TLS entry
+links none of rustls, ring, webpki or the root set
+(`link_kit::an_executable_links_the_tls_provider_only_when_its_program_calls_tls`). `tls.close` sends close_notify before closing on every outcome; implicit
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
 and scripted providers ignore the bundle and use only the digest. `tls.accept` is the
-server handshake (`net_tls::server`: ALPN `http/1.1` only, no session cache or tickets,
+server handshake (`TlsEngine::accept`: ALPN `http/1.1` only, no session cache or tickets,
 the identity `tls::select` picks for the client's SNI, and the rustls client verifier of
 a `Request` or `Require` trust set; the host holds either side as a
-`rustls::Connection`). Its `TlsServer` passes through `Adapter::tls_server`; every world
-loads it into State with the shared `hirsel_run_config::tls::server`, the tape request
+`TlsSession`). Its `TlsServer` passes through `Adapter::tls_server`; every world
+loads it into State with the engine (the shared `hirsel_run_config::tls::server`), the tape request
 records only the chain and trust-set PEM SHA-256s, and the provider receives the loaded
 server (`tests/it/tls_server.rs`). `tls.connect_as` passes its client identity through
 `Adapter::tls_identity` the same way and the tape names its chain digest. `tls.peer` is a
 recorded request whose completion is the DER chain the handshake verified, the server's on a
-client and a client's on a server (`net_tls::peer`).
+client and a client's on a server (`TlsSession::peer`).
 Scripted worlds
 attach independently at the same provider seam. UDP uses `UdpBind` and `UdpPeer`
 rules and an originating-Net socket grant. `State::net_error` validates arguments

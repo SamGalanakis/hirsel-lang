@@ -96,6 +96,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.0.borrow().preflight(request)
     }
+    fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.0.borrow_mut().tls(engine);
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.0.borrow_mut().tls_roots(stream, pem);
     }

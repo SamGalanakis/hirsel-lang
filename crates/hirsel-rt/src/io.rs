@@ -830,6 +830,8 @@ pub(crate) struct State {
     /// The identity material supplied for each stream's pending `tls.accept`.
     pub(crate) tls_identities: BTreeMap<u64, crate::net::TlsIdentity>,
     pub(crate) tls_servers: BTreeMap<u64, crate::net::TlsServer>,
+    /// The TLS engine, once a TLS entry handed it over (`Adapter::tls`).
+    pub(crate) tls: crate::net_tls::Engine,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_config::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
@@ -867,6 +869,7 @@ impl Default for State {
             pem_validity: BTreeMap::new(),
             tls_identities: BTreeMap::new(),
             tls_servers: BTreeMap::new(),
+            tls: Default::default(),
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
@@ -1877,6 +1880,9 @@ impl State {
 pub trait Adapter {
     /// Check argument validity and authority without an effect or tape event.
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
+    /// The TLS engine, which every TLS entry hands over before its material and its request:
+    /// only programs that reach TLS link it (`net_tls`).
+    fn tls(&mut self, _engine: &'static dyn crate::net_tls::TlsEngine) {}
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
     fn tls_roots(&mut self, _stream: u64, _pem: &[u8]) {}
@@ -1982,6 +1988,9 @@ pub struct Binding {
     pub(crate) waits: crate::host_waits::Waits,
 }
 impl Binding {
+    pub(crate) fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.adapter.tls(engine);
+    }
     pub(crate) fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.adapter.tls_roots(stream, pem);
     }

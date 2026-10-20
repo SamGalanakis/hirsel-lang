@@ -161,13 +161,16 @@ fn net_script_tls_checks_names_and_ignores_roots() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        net.tls_connect(1, "other.com", &roots, None),
+        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "other.com", &roots, None),
         Ok(Err(NetError::Tls(TlsFailure::NameMismatch)))
     );
-    assert_eq!(net.tls_connect(1, "example.com", &roots, None), Ok(Ok(())));
+    assert_eq!(
+        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "example.com", &roots, None),
+        Ok(Ok(()))
+    );
     let mut net = stream(vec![]);
     assert_eq!(
-        net.tls_connect(1, "example.com", &roots, None),
+        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "example.com", &roots, None),
         Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)))
     );
 }
@@ -202,7 +205,9 @@ fn net_script_literal_addresses_write_all_close_and_an_unscripted_listener() {
 }
 
 fn script_adapter() -> hirsel_rt::io_real::RealIo {
-    hirsel_rt::io_real::RealIo::from_pinned_mounts(vec![], std::io::sink()).unwrap()
+    let mut io = hirsel_rt::io_real::RealIo::from_pinned_mounts(vec![], std::io::sink()).unwrap();
+    hirsel_rt::io::Adapter::tls(&mut io, hirsel_rt::net_tls::engine());
+    io
 }
 
 #[test]
@@ -366,6 +371,7 @@ fn net_script_test_worlds_are_isolated_and_recordings_rederive_script_outcomes()
     let tape = real.tape().to_vec();
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let mut sim = SimIo::new(Tree::default(), tape.clone());
+    sim.tls(hirsel_rt::net_tls::engine());
     sim.test_context(7);
     for event in &tape {
         assert_eq!(
@@ -382,6 +388,7 @@ fn net_script_test_worlds_are_isolated_and_recordings_rederive_script_outcomes()
     let mut forged = tape.clone();
     forged[read_at].completion = C::NetBytes(Ok(b"forged".to_vec()));
     let mut sim = SimIo::new(Tree::default(), forged);
+    sim.tls(hirsel_rt::net_tls::engine());
     sim.test_context(7);
     for event in &tape[..read_at] {
         sim.call(event.request.clone()).unwrap();
@@ -494,6 +501,7 @@ fn net_script_configured_root_executes_and_replays_with_explicit_policy() {
     );
     let tape = real.tape().to_vec();
     let mut sim = SimIo::new(Tree::default(), tape.clone());
+    sim.tls(hirsel_rt::net_tls::engine());
     sim.set_net_script(peers, vec![]).unwrap();
     sim.set_net_rules(
         [NetRule {
@@ -604,6 +612,7 @@ fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay(
             input[1].completion = C::Listened(Ok((3, address(49155))));
         }
         let mut sim = SimIo::new(Tree::default(), input);
+        sim.tls(hirsel_rt::net_tls::engine());
         sim.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),

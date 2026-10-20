@@ -4,6 +4,7 @@
 //! reaches a provider, so it issues no syscall, DNS query or TLS byte. Providers implement
 //! only host (or scripted, or recorded) effects; they never decide authority.
 use crate::io::AdapterError;
+use crate::net_tls::TlsEngine;
 pub mod tape;
 use std::collections::BTreeSet;
 
@@ -202,13 +203,13 @@ pub enum RootsDigest {
 #[derive(Clone)]
 pub struct TlsIdentity {
     pub chain: [u8; 32],
-    pub key: Option<std::sync::Arc<rustls::sign::CertifiedKey>>,
+    pub key: Option<std::sync::Arc<hirsel_run_config::tls::Identity>>,
 }
 impl TlsIdentity {
-    pub fn load(chain: &[u8], key: &[u8]) -> Self {
+    pub fn load(tls: &dyn TlsEngine, chain: &[u8], key: &[u8]) -> Self {
         Self {
             chain: crate::net_tls::chain_digest(chain),
-            key: hirsel_run_config::tls::identity(chain, key).map(std::sync::Arc::new),
+            key: tls.identity(chain, key),
         }
     }
 }
@@ -264,9 +265,13 @@ impl PartialEq for TlsServer {
 }
 impl Eq for TlsServer {}
 impl TlsServer {
-    pub fn load(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Self {
+    pub fn load(
+        tls: &dyn TlsEngine,
+        identities: &[(&[u8], &[u8])],
+        clients: ClientAuth<&[u8]>,
+    ) -> Self {
         let digest = TlsServerDigest::of(identities, clients);
-        let loaded = hirsel_run_config::tls::server(identities, clients);
+        let loaded = tls.server(identities, clients);
         Self { digest, loaded }
     }
 }
@@ -303,18 +308,25 @@ pub trait NetProvider {
     fn set_timeout(&mut self, stream: u64, which: TimeoutKind, timeout: NetTimeout)
     -> Provided<()>;
     fn peer_addr(&mut self, stream: u64) -> Provided<SocketAddr>;
-    /// A client handshake, presenting `identity` when the server asks for a certificate.
+    /// A client handshake through `tls`, presenting `identity` when the server asks for a
+    /// certificate.
     fn tls_connect(
         &mut self,
+        tls: &dyn TlsEngine,
         stream: u64,
         server_name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> Provided<()>;
     /// A server handshake with a valid server: the identity selected by the client's SNI,
     /// and its client-certificate policy. The policy layer closes the stream after a
     /// failure, as for `tls_connect`.
-    fn tls_accept(&mut self, stream: u64, server: &hirsel_run_config::tls::Server) -> Provided<()>;
+    fn tls_accept(
+        &mut self,
+        tls: &dyn TlsEngine,
+        stream: u64,
+        server: &hirsel_run_config::tls::Server,
+    ) -> Provided<()>;
     /// The DER chain (leaf first, concatenated) a `tls_accept` stream's client presented and
     /// the handshake verified; `None` for any other stream.
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>>;
@@ -376,14 +388,20 @@ impl NetProvider for NoNet {
     }
     fn tls_connect(
         &mut self,
+        _: &dyn TlsEngine,
         _: u64,
         _: &str,
         _: &RootsDigest,
-        _: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        _: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
-    fn tls_accept(&mut self, _: u64, _: &hirsel_run_config::tls::Server) -> Provided<()> {
+    fn tls_accept(
+        &mut self,
+        _: &dyn TlsEngine,
+        _: u64,
+        _: &hirsel_run_config::tls::Server,
+    ) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
     fn tls_peer(&mut self, _: u64) -> Provided<Option<Vec<u8>>> {
@@ -517,9 +535,16 @@ struct StreamGrant {
 }
 
 impl crate::io::State {
+    /// The TLS engine the program's TLS entries handed the adapter (`Adapter::tls`).
+    pub(crate) fn tls(&self) -> &'static dyn TlsEngine {
+        self.tls
+            .0
+            .unwrap_or_else(|| crate::fault("a TLS request before the TLS engine"))
+    }
+
     pub(crate) fn remember_tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.tls_identities
-            .insert(stream, TlsIdentity::load(chain, key));
+            .insert(stream, TlsIdentity::load(self.tls(), chain, key));
     }
 
     pub(crate) fn remember_tls_server(
@@ -529,17 +554,15 @@ impl crate::io::State {
         clients: ClientAuth<&[u8]>,
     ) {
         self.tls_servers
-            .insert(stream, TlsServer::load(identities, clients));
+            .insert(stream, TlsServer::load(self.tls(), identities, clients));
     }
 
     pub(crate) fn remember_tls_roots(&mut self, stream: u64, pem: &[u8]) {
         let RootsDigest::Pem(digest) = crate::net_tls::pem_digest(pem) else {
             unreachable!()
         };
-        self.pem_validity.insert(
-            stream,
-            (digest, hirsel_run_config::tls::pem_roots(pem).is_some()),
-        );
+        self.pem_validity
+            .insert(stream, (digest, self.tls().valid_roots(pem)));
     }
 
     pub(crate) fn set_net_script(
@@ -746,7 +769,7 @@ impl crate::io::State {
                             self.tls_identities
                                 .get(stream)
                                 .is_none_or(|known| known.chain != digest || known.key.is_none())
-                        }) || hirsel_run_config::tls::server_name(server_name).is_none()
+                        }) || !self.tls().valid_name(server_name)
                             || match roots {
                                 RootsDigest::WebPki(version) => {
                                     version != crate::net_tls::WEBPKI_VERSION
@@ -1101,7 +1124,9 @@ impl crate::io::State {
                     None => None,
                 };
                 // The stream is taken: it is closed on every failure.
+                let tls = self.tls();
                 let value = provided(self.world(grant.world, host)?.tls_connect(
+                    tls,
                     *stream,
                     server_name,
                     roots,
@@ -1128,7 +1153,11 @@ impl crate::io::State {
                     .ok_or(AdapterError::InvalidCompletion)?;
                 // The stream is taken: it is closed on every failure. A parked handshake
                 // keeps its server for the re-issued request.
-                let value = provided(self.world(grant.world, host)?.tls_accept(*stream, &server))?;
+                let tls = self.tls();
+                let value = provided(
+                    self.world(grant.world, host)?
+                        .tls_accept(tls, *stream, &server),
+                )?;
                 self.tls_servers.remove(stream);
                 if value.is_ok() {
                     self.mark_tls(*stream);

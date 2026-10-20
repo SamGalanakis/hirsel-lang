@@ -100,3 +100,35 @@ fn shipped_links_are_identical_on_repeat_and_under_concurrent_builds_on_both_tar
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// A program that reaches TLS: only its TLS entry names the runtime's TLS engine.
+const TLS_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), NetError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let plain = net.connect(n, \"localhost\", 443u16, Unbounded())?
+  let _secure = tls.connect(n, take plain, \"localhost\", WebPki())?
+  Ok(())
+}
+";
+
+#[test]
+fn an_executable_links_the_tls_provider_only_when_its_program_calls_tls() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("link-kit-providers");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    // ring's primitives and rustls's client handshake, by symbol name.
+    let tls = |bytes: &[u8]| {
+        [&b"ring_core_"[..], b"ClientConnection"]
+            .map(|name| bytes.windows(name.len()).any(|w| w == name))
+    };
+    for (name, program, expected) in [("plain", PROGRAM, false), ("tls", TLS_PROGRAM, true)] {
+        let source = root.join(format!("{name}.hir"));
+        std::fs::write(&source, program).unwrap();
+        let (bytes, _) = build(&source, &root.join(name), &target, BuildProfile::Default);
+        assert_eq!(tls(&bytes), [expected; 2], "{name}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

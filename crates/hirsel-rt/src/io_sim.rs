@@ -138,6 +138,9 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.state.tls = crate::net_tls::Engine(Some(engine));
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
     }
@@ -1349,15 +1352,17 @@ impl NetProvider for Recorded<'_> {
     }
     fn tls_connect(
         &mut self,
+        _: &dyn crate::net_tls::TlsEngine,
         _: u64,
         _: &str,
         _: &RootsDigest,
-        _: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        _: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> crate::net::Provided<()> {
         self.unit()
     }
     fn tls_accept(
         &mut self,
+        _: &dyn crate::net_tls::TlsEngine,
         _: u64,
         _: &hirsel_run_config::tls::Server,
     ) -> crate::net::Provided<()> {

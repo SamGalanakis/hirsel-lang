@@ -464,10 +464,11 @@ impl NetProvider for ScriptNet {
     /// Only a `Serves` peer asks for `identity`; `roots` is never consulted.
     fn tls_connect(
         &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
         id: u64,
         server_name: &str,
         _roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> Provided<()> {
         let s = self.connection(id)?;
         // Owner 385145: upgrading an already secured Stream consumes it with
@@ -489,7 +490,7 @@ impl NetProvider for ScriptNet {
         let Remote::Peer(peer_index) = s.remote else {
             return Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)));
         };
-        let verdict = hirsel_run_config::tls::scripted_connect(
+        let verdict = tls.scripted_connect(
             &self.peers[peer_index].tls,
             server_name,
             identity.map(|identity| &**identity),
@@ -504,7 +505,12 @@ impl NetProvider for ScriptNet {
             Err(failure) => Err(NetError::Tls(failure.into())),
         })
     }
-    fn tls_accept(&mut self, id: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
+    fn tls_accept(
+        &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
+        id: u64,
+        server: &hirsel_run_config::tls::Server,
+    ) -> Provided<()> {
         let s = self.connection(id)?;
         if s.tls {
             return Ok(Err(NetError::InvalidInput));
@@ -532,7 +538,7 @@ impl NetProvider for ScriptNet {
             .find(|l| l.address == listener.0 && l.port == listener.1)
             .and_then(|l| l.clients.get(index))
             .ok_or(AdapterError::InvalidCompletion)?;
-        let verdict = hirsel_run_config::tls::scripted_accept(&client.tls, server);
+        let verdict = tls.scripted_accept(&client.tls, server);
         Ok(match verdict {
             Ok(peer) => {
                 let s = self.connection(id)?;
@@ -731,6 +737,9 @@ impl ScriptIo {
 }
 
 impl crate::io::Adapter for ScriptIo {
+    fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.state.tls = crate::net_tls::Engine(Some(engine));
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
     }

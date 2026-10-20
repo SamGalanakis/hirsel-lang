@@ -30,7 +30,7 @@ const BACKLOG: libc::c_int = 128;
 #[derive(Debug, Default)]
 pub struct HostNet {
     sockets: IdMap<OwnedFd>,
-    tls: IdMap<rustls::Connection>,
+    tls: IdMap<Box<dyn crate::net_tls::TlsSession>>,
     pem: Option<Vec<u8>>,
     /// Each Unix listener's socket path and the identity of the file it bound.
     unix_files: IdMap<(std::ffi::CString, libc::dev_t, libc::ino_t)>,
@@ -38,6 +38,21 @@ pub struct HostNet {
 impl HostNet {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// A blocking handshake on a stream that has no TLS yet.
+    fn handshake(
+        &mut self,
+        stream: u64,
+        start: impl FnOnce() -> Result<Box<dyn crate::net_tls::TlsSession>, NetError>,
+    ) -> Result<(), NetError> {
+        let fd = self.socket(stream)?;
+        if self.tls.contains_key(&stream) {
+            return Err(NetError::InvalidInput);
+        }
+        let mut conn = start()?;
+        conn.complete_io(fd)?;
+        self.tls.insert(stream, conn);
+        Ok(())
     }
     fn socket(&self, id: u64) -> Result<libc::c_int, NetError> {
         self.sockets
@@ -505,7 +520,7 @@ impl HostNet {
     fn send(&mut self, stream: u64, bytes: &[u8]) -> Result<u64, NetError> {
         let fd = self.socket(stream)?;
         if let Some(conn) = self.tls.get_mut(&stream) {
-            return crate::net_tls::write(conn, fd, bytes);
+            return conn.write(fd, bytes);
         }
         if bytes.is_empty() {
             return Ok(0);
@@ -619,7 +634,7 @@ impl NetProvider for HostNet {
     fn read(&mut self, stream: u64, max: u64) -> Provided<Vec<u8>> {
         if let Some(conn) = self.tls.get_mut(&stream) {
             let fd = self.sockets[&stream].as_raw_fd();
-            return Ok(crate::net_tls::read(conn, fd, max));
+            return Ok(conn.read(fd, max));
         }
         Ok(self.socket(stream).and_then(|fd| {
             let mut buffer = vec![0u8; max.min(READ_CHUNK) as usize];
@@ -656,7 +671,7 @@ impl NetProvider for HostNet {
             Err(e) => return Ok(Err(e)),
         };
         Ok(match self.tls.get_mut(&stream) {
-            Some(conn) => crate::net_tls::flush(conn, fd),
+            Some(conn) => conn.flush(fd),
             None => Ok(()),
         })
     }
@@ -694,48 +709,34 @@ impl NetProvider for HostNet {
     }
     fn tls_connect(
         &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
         stream: u64,
         name: &str,
         roots: &RootsDigest,
-        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        identity: Option<&std::sync::Arc<hirsel_run_config::tls::Identity>>,
     ) -> Provided<()> {
         let pem = self.pem.take();
-        Ok((|| {
-            let fd = self.socket(stream)?;
-            if self.tls.contains_key(&stream) {
-                return Err(NetError::InvalidInput);
-            }
-            let mut conn = crate::net_tls::client(name, roots, pem, identity)?;
-            conn.complete_io(&mut crate::net_tls::Transport(fd))
-                .map_err(crate::net_tls::error)?;
-            self.tls.insert(stream, conn.into());
-            Ok(())
-        })())
+        Ok(self.handshake(stream, || tls.connect(name, roots, pem, identity)))
     }
-    fn tls_accept(&mut self, stream: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
-        Ok((|| {
-            let fd = self.socket(stream)?;
-            if self.tls.contains_key(&stream) {
-                return Err(NetError::InvalidInput);
-            }
-            let mut conn = crate::net_tls::server(server)?;
-            conn.complete_io(&mut crate::net_tls::Transport(fd))
-                .map_err(crate::net_tls::error)?;
-            self.tls.insert(stream, conn.into());
-            Ok(())
-        })())
+    fn tls_accept(
+        &mut self,
+        tls: &dyn crate::net_tls::TlsEngine,
+        stream: u64,
+        server: &hirsel_run_config::tls::Server,
+    ) -> Provided<()> {
+        Ok(self.handshake(stream, || tls.accept(server)))
     }
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {
         Ok(self
             .socket(stream)
-            .map(|_| self.tls.get(&stream).and_then(crate::net_tls::peer)))
+            .map(|_| self.tls.get(&stream).and_then(|conn| conn.peer())))
     }
     fn tls_close(&mut self, stream: u64) -> Provided<()> {
         Ok((|| {
             let fd = self.socket(stream)?;
             if let Some(conn) = self.tls.get_mut(&stream) {
                 conn.send_close_notify();
-                crate::net_tls::flush(conn, fd)?;
+                conn.flush(fd)?;
             }
             Ok(())
         })())

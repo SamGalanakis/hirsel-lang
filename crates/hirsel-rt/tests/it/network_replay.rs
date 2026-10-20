@@ -13,6 +13,7 @@ fn tls_record(peer_tls: PeerTls) -> RealIo {
 }
 fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest, pem: Option<&[u8]>) -> RealIo {
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    io.tls(hirsel_rt::net_tls::engine());
     io.set_net_rules(
         [NetRule {
             address: "127.0.0.1".into(),
@@ -157,6 +158,7 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
     let tree = Tree::new(BTreeMap::new()).unwrap();
     for tls in [true, false] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.tls(hirsel_rt::net_tls::engine());
         io.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),
@@ -277,6 +279,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
         ["other.example", "localhost"],
     ] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.tls(hirsel_rt::net_tls::engine());
         io.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),
@@ -377,6 +380,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
         },
     ];
     let mut native = SimIo::new(tree.clone(), tape.clone());
+    native.tls(hirsel_rt::net_tls::engine());
     native.set_net_rules(
         [NetRule {
             address: "127.0.0.1".into(),

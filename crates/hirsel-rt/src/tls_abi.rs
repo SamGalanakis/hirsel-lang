@@ -35,6 +35,7 @@ unsafe fn connect(
     roots: *const TlsRootsAbi,
     identity: Option<*const TlsIdentityAbi>,
 ) -> u8 {
+    unsafe { Binding::get(ctx) }.tls(crate::net_tls::engine());
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let name = unsafe { crate::io::slice_bytes(name.0, name.1, name.2) };
@@ -205,6 +206,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
     unsafe { s.write(0) };
     let (identities, clients) = unsafe { (*server).parts() };
     let binding = unsafe { Binding::get(ctx) };
+    binding.tls(crate::net_tls::engine());
     binding.tls_server(stream, &identities, clients);
     let server = crate::net::TlsServerDigest::of(&identities, clients);
     let request = Request::TlsAccept {

@@ -298,6 +298,7 @@ fn confinement(seeds: u64, draws: usize) {
             std::os::unix::fs::symlink(target, scratch.0.join(name)).unwrap();
         }
         let mut real = RealIo::grant(&scratch.0).unwrap();
+        real.tls(hirsel_rt::net_tls::engine());
         let mut reference = Reference::new(&tree);
         let mut tape = vec![];
         for (request, name, arguments, expected) in [
@@ -402,6 +403,7 @@ fn confinement(seeds: u64, draws: usize) {
         // No injected host error: the replay walker must independently derive
         // every expected refusal and every successful byte sequence.
         let mut sim = SimIo::new(tree, tape.clone());
+        sim.tls(hirsel_rt::net_tls::engine());
         for event in tape {
             assert_eq!(
                 sim.call(event.request.clone()),
@@ -552,6 +554,7 @@ fn precedence_file_matrix(rounds: usize) {
                 std::fs::write(scratch.0.join("f"), b"A").unwrap();
                 let tree = Tree::new(BTreeMap::from([("f".into(), b"A".to_vec())])).unwrap();
                 let mut real = RealIo::grant(&scratch.0).unwrap();
+                real.tls(hirsel_rt::net_tls::engine());
                 let mut reference = Reference::new(&tree);
                 let mut directory = granted_id(setup_call(
                     &mut real,
@@ -813,6 +816,7 @@ fn precedence_net_matrix() {
             };
             let mut native = hirsel_rt::io_net_script::ScriptIo::default();
             native.set_net_grant(&grant).unwrap();
+            native.tls(hirsel_rt::net_tls::engine());
             let mut reference = Reference::configured(
                 &Tree::default(),
                 reference::SimulationConfig {
@@ -1397,6 +1401,7 @@ fn precedence_stream_matrix() {
     for kind in 0..4 {
         for conditions in 0..4 {
             let mut native = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+            native.tls(hirsel_rt::net_tls::engine());
             native.clock_grants(true, false);
             let mut reference = Reference::new(&Tree::default());
             reference

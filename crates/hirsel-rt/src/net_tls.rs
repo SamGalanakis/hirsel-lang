@@ -4,14 +4,226 @@
 //! src/webpki/client_verifier.rs.
 //! Socket ownership and grants stay in HostNet/State; this module never records
 //! TLS records, keys, random bytes or time.
+//!
+//! The implementation is reached only through [`TlsEngine`] and [`TlsSession`] objects, and
+//! only the TLS entries (`tls_abi.rs`, and the interpreter's TLS operations) name the engine:
+//! they hand it to the adapter before their request. The runtime archive keeps one function
+//! per section and the link collects unreferenced sections, so a program that calls no TLS
+//! entry links none of rustls, ring, webpki or the root set.
 use crate::net::{NetError, RootsDigest, TlsFailure};
-use hirsel_run_config::tls::Server;
+use hirsel_run_config::tls::{ClientAuth, Identity, Server};
 use rustls::{
     ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
 };
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
+
+/// TLS material checks and handshake starts: everything of TLS that does not belong to one
+/// connection. The policy layer and every world (host, scripted, replay) reach TLS only
+/// through the engine their adapter was handed.
+pub trait TlsEngine {
+    /// Whether `name` is a valid verification/SNI name (no resolver or clock).
+    fn valid_name(&self, name: &str) -> bool;
+    /// Whether `pem` is a nonempty bundle of well-formed trust anchors.
+    fn valid_roots(&self, pem: &[u8]) -> bool;
+    /// A client or server identity: its PEM chain and key, when valid and matching.
+    fn identity(&self, chain: &[u8], key: &[u8]) -> Option<Arc<Identity>>;
+    /// A `TlsServer`: its identities and client policy, when the whole server is valid.
+    fn server(&self, identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server>;
+    /// A client connection verifying `name` against `roots` (the Pem material in `pem`),
+    /// presenting `identity` when the server asks for a certificate.
+    fn connect(
+        &self,
+        name: &str,
+        roots: &RootsDigest,
+        pem: Option<Vec<u8>>,
+        identity: Option<&Arc<Identity>>,
+    ) -> Result<Box<dyn TlsSession>, NetError>;
+    /// A server connection presenting the identity the client's SNI selects.
+    fn accept(&self, server: &Server) -> Result<Box<dyn TlsSession>, NetError>;
+    /// A scripted client's answer to a server handshake
+    /// (`hirsel_run_config::tls::scripted_accept`).
+    fn scripted_accept(
+        &self,
+        client: &hirsel_run_config::PeerTls,
+        server: &Server,
+    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure>;
+    /// A scripted peer's answer to a client handshake, and the chain it presented
+    /// (`hirsel_run_config::tls::scripted_connect`).
+    fn scripted_connect(
+        &self,
+        peer: &hirsel_run_config::PeerTls,
+        server_name: &str,
+        identity: Option<&Identity>,
+    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure>;
+}
+
+/// An adapter's TLS engine, once a TLS entry handed it over. An engine holds no state, so
+/// any two compare equal.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Engine(pub(crate) Option<&'static dyn TlsEngine>);
+impl PartialEq for Engine {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for Engine {}
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "TlsEngine"
+        } else {
+            "NoTls"
+        })
+    }
+}
+
+/// Why a nonblocking TLS step stopped short.
+pub enum Stall {
+    /// The socket would block; readiness resumes the step.
+    WouldBlock,
+    Failed(NetError),
+}
+
+/// One TLS connection over a socket its host provider owns, in rustls's terms. Blocking
+/// providers use the `Stream` operations; the cooperative provider drives the record layer
+/// itself across readiness waits.
+pub trait TlsSession {
+    fn is_handshaking(&self) -> bool;
+    fn wants_write(&self) -> bool;
+    /// Encrypted bytes from the socket; 0 at its end.
+    fn read_tls(&mut self, fd: libc::c_int) -> Result<usize, Stall>;
+    fn write_tls(&mut self, fd: libc::c_int) -> Result<usize, Stall>;
+    fn process_new_packets(&mut self) -> Result<(), TlsFailure>;
+    /// Buffered plaintext; `WouldBlock` when none is buffered.
+    fn read_plaintext(&mut self, bytes: &mut [u8]) -> Result<usize, Stall>;
+    /// Plaintext into the bounded send buffer.
+    fn write_plaintext(&mut self, bytes: &[u8]) -> Result<usize, NetError>;
+    fn send_close_notify(&mut self);
+    /// Finish the handshake over a blocking socket.
+    fn complete_io(&mut self, fd: libc::c_int) -> Result<(), NetError>;
+    fn read(&mut self, fd: libc::c_int, max: u64) -> Result<Vec<u8>, NetError>;
+    fn write(&mut self, fd: libc::c_int, bytes: &[u8]) -> Result<u64, NetError>;
+    fn flush(&mut self, fd: libc::c_int) -> Result<(), NetError>;
+    /// What `tls.peer` returns: the chain its peer presented and the handshake verified,
+    /// the server's on a client and a client's, if any, on a server.
+    fn peer(&self) -> Option<Vec<u8>>;
+}
+impl std::fmt::Debug for dyn TlsSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TlsSession")
+    }
+}
+
+/// The runtime's TLS engine: rustls with the ring provider and the compiled root set.
+pub fn engine() -> &'static dyn TlsEngine {
+    &Rustls
+}
+
+struct Rustls;
+impl TlsEngine for Rustls {
+    fn valid_name(&self, name: &str) -> bool {
+        hirsel_run_config::tls::server_name(name).is_some()
+    }
+    fn valid_roots(&self, pem: &[u8]) -> bool {
+        hirsel_run_config::tls::pem_roots(pem).is_some()
+    }
+    fn identity(&self, chain: &[u8], key: &[u8]) -> Option<Arc<Identity>> {
+        hirsel_run_config::tls::identity(chain, key).map(Arc::new)
+    }
+    fn server(&self, identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server> {
+        hirsel_run_config::tls::server(identities, clients)
+    }
+    fn connect(
+        &self,
+        name: &str,
+        roots: &RootsDigest,
+        pem: Option<Vec<u8>>,
+        identity: Option<&Arc<Identity>>,
+    ) -> Result<Box<dyn TlsSession>, NetError> {
+        client(name, roots, pem, identity).map(|c| Box::new(Connection::from(c)) as _)
+    }
+    fn accept(&self, server: &Server) -> Result<Box<dyn TlsSession>, NetError> {
+        self::server(server).map(|c| Box::new(Connection::from(c)) as _)
+    }
+    fn scripted_accept(
+        &self,
+        client: &hirsel_run_config::PeerTls,
+        server: &Server,
+    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure> {
+        hirsel_run_config::tls::scripted_accept(client, server)
+    }
+    fn scripted_connect(
+        &self,
+        peer: &hirsel_run_config::PeerTls,
+        server_name: &str,
+        identity: Option<&Identity>,
+    ) -> Result<Option<Vec<u8>>, hirsel_run_config::TlsFailure> {
+        hirsel_run_config::tls::scripted_connect(peer, server_name, identity)
+    }
+}
+
+fn stall(error: io::Error) -> Stall {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        Stall::WouldBlock
+    } else {
+        Stall::Failed(self::error(error))
+    }
+}
+
+impl TlsSession for Connection {
+    // The connection's common state (`Deref`) holds these three.
+    fn is_handshaking(&self) -> bool {
+        (**self).is_handshaking()
+    }
+    fn wants_write(&self) -> bool {
+        (**self).wants_write()
+    }
+    fn read_tls(&mut self, fd: libc::c_int) -> Result<usize, Stall> {
+        Connection::read_tls(self, &mut Transport(fd)).map_err(stall)
+    }
+    fn write_tls(&mut self, fd: libc::c_int) -> Result<usize, Stall> {
+        Connection::write_tls(self, &mut Transport(fd)).map_err(stall)
+    }
+    fn process_new_packets(&mut self) -> Result<(), TlsFailure> {
+        Connection::process_new_packets(self)
+            .map(|_| ())
+            .map_err(|e| failure(&e))
+    }
+    fn read_plaintext(&mut self, bytes: &mut [u8]) -> Result<usize, Stall> {
+        self.reader().read(bytes).map_err(stall)
+    }
+    fn write_plaintext(&mut self, bytes: &[u8]) -> Result<usize, NetError> {
+        self.writer().write(bytes).map_err(error)
+    }
+    fn send_close_notify(&mut self) {
+        (**self).send_close_notify();
+    }
+    fn complete_io(&mut self, fd: libc::c_int) -> Result<(), NetError> {
+        Connection::complete_io(self, &mut Transport(fd))
+            .map(|_| ())
+            .map_err(error)
+    }
+    fn read(&mut self, fd: libc::c_int, max: u64) -> Result<Vec<u8>, NetError> {
+        let mut bytes = vec![0; max.min(crate::net_host::READ_CHUNK) as usize];
+        let n = plaintext(self, fd, |s| s.read(&mut bytes)).map_err(error)?;
+        bytes.truncate(n);
+        Ok(bytes)
+    }
+    fn write(&mut self, fd: libc::c_int, bytes: &[u8]) -> Result<u64, NetError> {
+        plaintext(self, fd, |s| s.write(bytes))
+            .map(|n| n as u64)
+            .map_err(error)
+    }
+    fn flush(&mut self, fd: libc::c_int) -> Result<(), NetError> {
+        plaintext(self, fd, |s| s.flush()).map_err(error)
+    }
+    fn peer(&self) -> Option<Vec<u8>> {
+        self.peer_certificates()
+            .map(hirsel_run_config::tls::chain_der)
+    }
+}
 
 /// Tape identity of the compiled Mozilla root set; update with Cargo.toml.
 pub const WEBPKI_VERSION: &str = "webpki-roots@1.0.9";
@@ -30,12 +242,9 @@ pub const SERVER_ALPN: &[&[u8]] = &[b"http/1.1"];
 
 /// Presents the identity `tls::select` picks for the client's SNI.
 #[derive(Debug)]
-struct BySni(Vec<Arc<rustls::sign::CertifiedKey>>);
+struct BySni(Vec<Arc<Identity>>);
 impl rustls::server::ResolvesServerCert for BySni {
-    fn resolve(
-        &self,
-        hello: rustls::server::ClientHello<'_>,
-    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+    fn resolve(&self, hello: rustls::server::ClientHello<'_>) -> Option<Arc<Identity>> {
         Some(hirsel_run_config::tls::select(&self.0, hello.server_name()).clone())
     }
 }
@@ -43,7 +252,7 @@ impl rustls::server::ResolvesServerCert for BySni {
 /// A server handshake with a server the shared argument checks loaded: the identity the
 /// client's SNI selects, and the client verifier of its trust set. No session cache or
 /// tickets.
-pub(crate) fn server(server: &Server) -> Result<ServerConnection, NetError> {
+fn server(server: &Server) -> Result<ServerConnection, NetError> {
     let builder =
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -59,21 +268,14 @@ pub(crate) fn server(server: &Server) -> Result<ServerConnection, NetError> {
     ServerConnection::new(Arc::new(config)).map_err(|e| NetError::Tls(failure(&e)))
 }
 
-/// What `tls.peer` returns for a connection: the chain its peer presented and the
-/// handshake verified, the server's on a client and a client's, if any, on a server.
-pub(crate) fn peer(conn: &Connection) -> Option<Vec<u8>> {
-    conn.peer_certificates()
-        .map(hirsel_run_config::tls::chain_der)
-}
-
 /// The host provider verifies with the trust anchors parsed by the shared argument checks,
 /// and presents `identity` when the server asks for a client certificate. No cached config
 /// enables resumption or ALPN.
-pub(crate) fn client(
+fn client(
     name: &str,
     roots: &RootsDigest,
     pem: Option<Vec<u8>>,
-    identity: Option<&Arc<rustls::sign::CertifiedKey>>,
+    identity: Option<&Arc<Identity>>,
 ) -> Result<ClientConnection, NetError> {
     let roots = match roots {
         RootsDigest::WebPki(version) if version == WEBPKI_VERSION => RootCertStore {
@@ -111,7 +313,7 @@ pub fn failure(error: &rustls::Error) -> TlsFailure {
     hirsel_run_config::tls::failure(error).into()
 }
 
-pub(crate) fn error(error: io::Error) -> NetError {
+fn error(error: io::Error) -> NetError {
     if let Some(tls) = error
         .get_ref()
         .and_then(|e| e.downcast_ref::<rustls::Error>())
@@ -129,7 +331,7 @@ pub(crate) fn error(error: io::Error) -> NetError {
 
 /// Borrow an already granted socket. Rust std's Unix socket conventions:
 /// retry EINTR and suppress SIGPIPE for writes. Nothing owns or duplicates fd.
-pub(crate) struct Transport(pub libc::c_int);
+struct Transport(libc::c_int);
 impl Read for Transport {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
@@ -184,18 +386,4 @@ fn plaintext<R>(
         Connection::Client(conn) => f(&mut rustls::Stream::new(conn, &mut transport)),
         Connection::Server(conn) => f(&mut rustls::Stream::new(conn, &mut transport)),
     }
-}
-pub(crate) fn read(conn: &mut Connection, fd: libc::c_int, max: u64) -> Result<Vec<u8>, NetError> {
-    let mut bytes = vec![0; max.min(crate::net_host::READ_CHUNK) as usize];
-    let n = plaintext(conn, fd, |s| s.read(&mut bytes)).map_err(error)?;
-    bytes.truncate(n);
-    Ok(bytes)
-}
-pub(crate) fn write(conn: &mut Connection, fd: libc::c_int, bytes: &[u8]) -> Result<u64, NetError> {
-    plaintext(conn, fd, |s| s.write(bytes))
-        .map(|n| n as u64)
-        .map_err(error)
-}
-pub(crate) fn flush(conn: &mut Connection, fd: libc::c_int) -> Result<(), NetError> {
-    plaintext(conn, fd, |s| s.flush()).map_err(error)
 }

@@ -464,6 +464,7 @@ impl Io {
             },
             (Some("tls"), "connect" | "connect_as", [n, s, host, roots, identity @ ..]) => {
                 let stream = self.network_id(s)?;
+                hirsel_rt::io::Adapter::tls(&mut self.network, hirsel_rt::net_tls::engine());
                 let roots = match variant(roots)? {
                     (0, _) => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     (1, b) => {
@@ -508,6 +509,7 @@ impl Io {
                     .collect();
                 let clients = server.clients.as_ref().map(Vec::as_slice);
                 let stream = self.network_id(s)?;
+                hirsel_rt::io::Adapter::tls(&mut self.network, hirsel_rt::net_tls::engine());
                 hirsel_rt::io::Adapter::tls_server(&mut self.network, stream, &identities, clients);
                 R::TlsAccept {
                     net: self.network_id(n)?,
