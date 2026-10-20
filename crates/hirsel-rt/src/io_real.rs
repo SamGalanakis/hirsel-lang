@@ -540,6 +540,15 @@ impl Adapter for RealIo {
         })())
     }
 
+    fn wait_current_net(&mut self) -> Result<bool, AdapterError> {
+        if self.retain_history || self.journal.records() {
+            return Ok(false);
+        }
+        match &self.cooperative {
+            Some((readiness, _)) => readiness.wait_current(),
+            None => Ok(false),
+        }
+    }
     fn print(
         &mut self,
         handle: u64,

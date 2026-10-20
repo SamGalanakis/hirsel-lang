@@ -259,19 +259,27 @@ pub(crate) unsafe fn issue_net(
     if unsafe { crate::tasks::canceled(ctx) }.is_some() {
         return Ok(None);
     }
+    let inline = unsafe { crate::tasks::sole_root(ctx) && idle(ctx) };
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;
     binding.waits.next += 1;
     binding.adapter.enter(token);
-    match binding.adapter.net_io(&request, buffer) {
-        None => {
-            binding.adapter.finish(token);
-            return Ok(None);
-        }
-        Some(Err(AdapterError::Blocked)) => {}
-        Some(result) => {
-            binding.adapter.finish(token);
-            return Ok(Some((result, false)));
+    loop {
+        match binding.adapter.net_io(&request, buffer) {
+            None => {
+                binding.adapter.finish(token);
+                return Ok(None);
+            }
+            Some(Err(AdapterError::Blocked)) => {
+                if inline && binding.adapter.wait_current_net().map_err(Stop::refusal)? {
+                    continue;
+                }
+                break;
+            }
+            Some(result) => {
+                binding.adapter.finish(token);
+                return Ok(Some((result, false)));
+            }
         }
     }
     binding.waits.parked.insert(

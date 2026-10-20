@@ -289,6 +289,7 @@ impl HostGrants {
     /// Interpreter admission of a callee run (RUN-12): cooperative providers that park on
     /// `readiness`, its caller's, under the callee's own tag.
     pub fn sharing(output: impl std::io::Write + 'static, readiness: Readiness) -> Self {
+        readiness.mark_shared();
         Self {
             readiness: Some(readiness),
             ..Self::cooperative(output)

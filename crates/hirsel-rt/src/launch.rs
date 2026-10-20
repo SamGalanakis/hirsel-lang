@@ -138,6 +138,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     ) -> Option<Result<Completion, AdapterError>> {
         self.0.borrow_mut().net_io(request, buffer)
     }
+    fn wait_current_net(&mut self) -> Result<bool, AdapterError> {
+        self.0.borrow_mut().wait_current_net()
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
     }

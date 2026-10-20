@@ -1249,6 +1249,23 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
     waits
 }
 
+/// Whether the running root is the run's only possible runnable task. The
+/// caller separately checks host waits and scope deadlines before waiting inline.
+/// # Safety
+/// The context is live and reached on its home thread.
+pub(crate) unsafe fn sole_root(ctx: *mut TaskCtx) -> bool {
+    if crate::foreign::active() {
+        return false;
+    }
+    let run = unsafe { (*ctx).run() };
+    if run.free.is_some() {
+        return false;
+    }
+    run.tasks
+        .as_ref()
+        .is_none_or(|s| s.tasks.len() == 1 && s.runnable.is_empty() && s.woken.is_empty())
+}
+
 /// The yield after a capability operation: the parked tasks are polled and, when another task
 /// is runnable, the running task joins the back of the queue and the policy picks the task to
 /// run, which may be the running task again.

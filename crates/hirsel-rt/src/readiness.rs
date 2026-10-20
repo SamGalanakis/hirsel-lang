@@ -58,6 +58,8 @@ impl std::fmt::Debug for Readiness {
 #[derive(Default)]
 struct ReadyState {
     current: u64,
+    /// Tagged execution runs share a driver: one run must never wait by itself.
+    shared: bool,
     virtual_time: Option<u64>,
     pending: IdMap<Pending>,
     /// Tokens whose Pending a provider borrowed since the last scheduling point: their
@@ -118,6 +120,7 @@ pub(crate) struct Pending {
 impl Readiness {
     /// The handle of run `tag` of this execution (the root is 0) on the same readiness.
     pub fn tagged(&self, tag: u64) -> Self {
+        self.mark_shared();
         assert!(
             tag << TAG_SHIFT & !TAG_MASK == 0,
             "a run tag within 14 bits"
@@ -134,6 +137,50 @@ impl Readiness {
     }
     fn own(&self, token: u64) -> bool {
         token & TAG_MASK == self.1
+    }
+    pub(crate) fn mark_shared(&self) {
+        self.0.borrow_mut().shared = true;
+    }
+
+    /// A sole native root may wait on its entered socket without parking a fiber.
+    /// Shared execution drivers always decline: another run may need to progress.
+    /// Rust a7c37f9f socket/unix.rs:180-229 supplies the poll/deadline/EINTR loop.
+    pub(crate) fn wait_current(&self) -> Result<bool, AdapterError> {
+        let state = self.0.borrow();
+        if state.shared || state.virtual_time.is_some() || state.pending.len() != 1 {
+            return Ok(false);
+        }
+        let Some(pending) = state.pending.get(&state.current) else {
+            return Ok(false);
+        };
+        let Some((fd, events)) = pending.interest else {
+            return Ok(false);
+        };
+        if pending.resolver.is_some() || pending.process.is_some() {
+            return Ok(false);
+        }
+        let deadline = pending.deadline;
+        let mut row = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        loop {
+            let timeout = deadline.map_or(-1, |end| {
+                let left = end.saturating_duration_since(Instant::now());
+                left.as_millis()
+                    .saturating_add(u128::from(left.subsec_nanos() % 1_000_000 != 0))
+                    .min(i32::MAX as u128) as i32
+            });
+            // SAFETY: the live provider owns fd; row is writable through this call.
+            let n = unsafe { libc::poll(&mut row, 1, timeout) };
+            if n >= 0 {
+                return Ok(true);
+            }
+            if errno() != libc::EINTR {
+                return Err(AdapterError::Unsupported("host socket wait".into()));
+            }
+        }
     }
     /// The entered request waits for a delivery ([`deliver`](Self::deliver)).
     pub(crate) fn await_delivery(&self) {
@@ -786,6 +833,36 @@ mod tests {
         provider.write_all(&[1]).unwrap();
         assert!(readiness.wait().unwrap());
         assert_eq!(readiness.ready().unwrap(), [1]);
+    }
+
+    #[test]
+    fn sole_socket_wait_needs_no_epoll_or_parked_row_and_shared_drivers_decline() {
+        let (watched, mut peer) = pair();
+        let readiness = Readiness::default();
+        readiness.enter(7);
+        readiness.pending().interest = Some((watched.as_raw_fd(), libc::POLLIN));
+        peer.write_all(b"ready").unwrap();
+        assert_eq!(readiness.wait_current(), Ok(true));
+        assert!(readiness.0.borrow().epoll.is_none());
+        readiness.tagged(0);
+        assert_eq!(readiness.wait_current(), Ok(false));
+        readiness.finish(7);
+    }
+
+    #[test]
+    fn sole_socket_wait_honors_its_timeout_and_declines_with_another_pending_wait() {
+        let (watched, _peer) = pair();
+        let readiness = Readiness::default();
+        readiness.enter(7);
+        readiness.pending().interest = Some((watched.as_raw_fd(), libc::POLLIN));
+        readiness.pending().deadline = Some(Instant::now());
+        assert_eq!(readiness.wait_current(), Ok(true));
+        readiness.enter(8);
+        readiness.pending().interest = Some((watched.as_raw_fd(), libc::POLLIN));
+        assert_eq!(readiness.wait_current(), Ok(false));
+        readiness.finish(8);
+        readiness.finish(7);
+
     }
 
     /// mio tests/poll.rs:120 readiness_is_reregistered_after_would_block.
