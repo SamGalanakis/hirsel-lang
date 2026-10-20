@@ -1,0 +1,537 @@
+// Runtime support for strict source-generated schema traversals. All nested
+// work borrows the operation's original CheckState.
+pub type Missing = Required | NoneValue | Default(std@1/json.Value)
+
+pub type Nulls = Accept | Reject
+
+pub type FieldPolicy {
+  name: String,
+  wire_name: String,
+  aliases: List[String],
+  missing: Missing,
+  nulls: Nulls,
+}
+
+pub type TagPolicy {
+  name: String,
+  wire_name: String,
+  aliases: List[String],
+}
+
+pub type Leaf {
+  ty: String,
+  decode: String,
+  encode: String,
+}
+
+pub type Policy {
+  fields: List[FieldPolicy],
+  tags: List[TagPolicy],
+  leaves: List[Leaf],
+}
+
+pub fn strict_policy() -> Policy uses {} {
+  Policy(fields: [], tags: [], leaves: [])
+}
+
+pub fn field_policy(p: Policy, name: String) -> FieldPolicy uses {} {
+  for field in p.fields {
+    if field.name == name {
+      return unique field
+    }
+  }
+  FieldPolicy(
+    name: unique name,
+    wire_name: unique name,
+    aliases: [],
+    missing: Required,
+    nulls: Accept
+  )
+}
+
+pub fn tag_policy(p: Policy, name: String) -> TagPolicy uses {} {
+  for tag in p.tags {
+    if tag.name == name {
+      return unique tag
+    }
+  }
+  TagPolicy(name: unique name, wire_name: unique name, aliases: [])
+}
+
+pub fn accepted_name(name: String, canonical: String, aliases: List[String]) -> bool uses {} {
+  if name == canonical {
+    return true
+  }
+  for alias in aliases {
+    if name == alias {
+      return true
+    }
+  }
+  false
+}
+
+pub fn check_null(
+  wire: std@1/json.Value,
+  p: FieldPolicy,
+  site: String,
+  mut check: CheckState
+) -> Result[(), SchemaError] uses {} {
+  if let Null = wire {
+    if let Reject = p.nulls {
+      return Error(invalid(mut check, "Null", Wire, site, None))
+    }
+  }
+  Ok(())
+}
+
+pub fn member(
+  fields: Map[String, std@1/json.Value],
+  p: FieldPolicy,
+  site: String,
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  charge_check(mut check)?
+  let mut found: Option[std@1/json.Value] = None
+  for (key, value) in fields {
+    if accepted_name(key, p.wire_name, p.aliases) {
+      if let Some(_) = found {
+        return Error(invalid(mut check, "AliasCollision", Wire, site, None))
+      }
+      found = Some(unique value)
+    }
+  }
+  match take found {
+    Some(value) => {
+      check_null(value, p, site, mut check)?
+      Ok(take value)
+    },
+    None => match p.missing {
+      Required => Error(invalid(mut check, "Missing", Wire, site, None)),
+      NoneValue => Ok(Null),
+      Default(value) => {
+        check_null(value, p, site, mut check)?
+        Ok(unique value)
+      },
+    },
+  }
+}
+
+pub fn collect[T: inert](
+  take outcome: Result[T, SchemaError],
+  segment: Segment,
+  mut issues: Issues
+) -> Result[Option[T], SchemaError] uses {} {
+  match take outcome {
+    Ok(value) => Ok(Some(take value)),
+    Error(error) => match take error {
+      Limit(cause) => Error(Limit(take cause)),
+      Invalid(more) => {
+        append_issues(mut issues, prefix(segment, take more))
+        Ok(None)
+      },
+    },
+  }
+}
+
+pub fn scalar_error(mut check: CheckState, site: String) -> SchemaError uses {} {
+  invalid(mut check, "Type", Wire, site, None)
+}
+
+pub fn unknown_field(mut check: CheckState, name: String, site: String) -> SchemaError uses {} {
+  if core@1/string.byte_len(name) > MAX_LABEL_BYTES {
+    return Limit(LimitError(kind: DiagnosticBytes, limit: MAX_LABEL_BYTES))
+  }
+  invalid(mut check, "UnknownField", Wire, site, None)
+}
+
+pub fn option_decode[T: inert](
+  wire: std@1/json.Value,
+  item_decode: fn(std@1/json.Value, mut CheckState) -> Result[T, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[Option[T], SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome: Result[Option[T], SchemaError] = match wire {
+    Null => Ok(None),
+    _ => match item_decode(wire, mut check) {
+      Ok(value) => Ok(Some(take value)),
+      Error(error) => Error(take error),
+    },
+  }
+  leave_node(mut check)
+  outcome
+}
+
+pub fn option_encode[T: inert](
+  value: Option[T],
+  item_encode: fn(T, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome: Result[std@1/json.Value, SchemaError] = match value {
+    None => Ok(Null),
+    Some(item) => item_encode(item, mut check),
+  }
+  leave_node(mut check)
+  outcome
+}
+
+pub fn sequence_decode[T: inert](
+  wire: std@1/json.Value,
+  item_decode: fn(std@1/json.Value, mut CheckState) -> Result[T, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[List[T], SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = sequence_decode_inner(wire, item_decode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+fn sequence_decode_inner[T: inert](
+  wire: std@1/json.Value,
+  item_decode: fn(std@1/json.Value, mut CheckState) -> Result[T, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[List[T], SchemaError] uses {} {
+  let Array(items) = wire else {
+    return Error(scalar_error(mut check, "List"))
+  }
+  let mut out: List[T] = []
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for item in items {
+    match collect(item_decode(item, mut check), Index(index), mut issues)? {
+      Some(value) => core@1/list.push(mut out, take value),
+      None => {
+        failed = true
+      },
+    }
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(take out)
+  }
+}
+
+pub fn sequence_encode[T: inert](
+  values: List[T],
+  item_encode: fn(T, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = sequence_encode_inner(values, item_encode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+fn sequence_encode_inner[T: inert](
+  values: List[T],
+  item_encode: fn(T, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  let mut out: List[std@1/json.Value] = []
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for item in values {
+    match collect(item_encode(item, mut check), Index(index), mut issues)? {
+      Some(value) => core@1/list.push(mut out, take value),
+      None => {
+        failed = true
+      },
+    }
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(Array(take out))
+  }
+}
+
+fn map_decode_inner[K: key + inert, V: inert](
+  wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[K, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[Map[K, V], SchemaError] uses {} {
+  let Array(entries) = wire else {
+    return Error(scalar_error(mut check, "Map"))
+  }
+  let mut out: Map[K, V] = core@1/map.empty()
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for entry in entries {
+    charge_check(mut check)?
+    let outcome = map_entry_decode(entry, key_decode, value_decode, mut check)
+    match collect(take outcome, MapEntry(index), mut issues)? {
+      Some((key, value)) => {
+        if core@1/map.contains(out, key) {
+          failed = true
+          let error = invalid(mut check, "DuplicateKey", Wire, "Map", None)
+          let prefixed = prefix_error(Key, take error)
+          let _: Option[()] = collect(Error(take prefixed), MapEntry(index), mut issues)?
+        } else {
+          core@1/map.insert(mut out, take key, take value)
+        }
+      },
+      None => {
+        failed = true
+      },
+    }
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(take out)
+  }
+}
+
+fn map_entry_decode[K: key + inert, V: inert](
+  wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[K, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[(K, V), SchemaError] uses {} {
+  let Array(pair) = wire else {
+    return Error(scalar_error(mut check, "MapEntry"))
+  }
+  if core@1/list.len(pair) != 2 {
+    return Error(scalar_error(mut check, "MapEntry"))
+  }
+  map_pair_decode(pair[0], pair[1], key_decode, value_decode, mut check)
+}
+
+fn map_pair_decode[K: key + inert, V: inert](
+  key_wire: std@1/json.Value,
+  value_wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[K, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[(K, V), SchemaError] uses {} {
+  let mut issues = empty_issues()
+  let key_slot = collect(key_decode(key_wire, mut check), Key, mut issues)?
+  if should_stop(check) {
+    return Error(Invalid(take issues))
+  }
+  let value_slot = collect(value_decode(value_wire, mut check), Value, mut issues)?
+  let Some(key) = take key_slot else {
+    return Error(Invalid(take issues))
+  }
+  let Some(value) = take value_slot else {
+    return Error(Invalid(take issues))
+  }
+  Ok((take key, take value))
+}
+
+pub fn map_decode[K: key + inert, V: inert](
+  wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[K, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[Map[K, V], SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = map_decode_inner(wire, key_decode, value_decode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+// String keys follow serde_json/src/ser.rs:620,795 (8c535a260ce561eaab4111aafc29038eb9f77ff3).
+// Paths still use entry
+// indices, so diagnostics do not retain or render rejected keys.
+pub fn object_map_decode[V: inert](
+  wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[String, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[Map[String, V], SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = object_map_decode_inner(wire, key_decode, value_decode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+fn object_map_decode_inner[V: inert](
+  wire: std@1/json.Value,
+  key_decode: fn(std@1/json.Value, mut CheckState) -> Result[String, SchemaError] uses {},
+  value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[Map[String, V], SchemaError] uses {} {
+  let Object(entries) = wire else {
+    return Error(scalar_error(mut check, "Map"))
+  }
+  let mut out: Map[String, V] = core@1/map.empty()
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for (member_name, member_value) in entries {
+    charge_check(mut check)?
+    let outcome = map_pair_decode(
+      Text(unique member_name),
+      member_value,
+      key_decode,
+      value_decode,
+      mut check
+    )
+    match collect(take outcome, MapEntry(index), mut issues)? {
+      Some((key, value)) => {
+        if core@1/map.contains(out, key) {
+          failed = true
+          let error = invalid(mut check, "DuplicateKey", Wire, "Map", None)
+          let prefixed = prefix_error(Key, take error)
+          let _: Option[()] = collect(Error(take prefixed), MapEntry(index), mut issues)?
+        } else {
+          core@1/map.insert(mut out, take key, take value)
+        }
+      },
+      None => {
+        failed = true
+      },
+    }
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(take out)
+  }
+}
+
+pub fn object_map_encode[V: inert](
+  values: Map[String, V],
+  key_encode: fn(String, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = object_map_encode_inner(values, key_encode, value_encode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+fn object_key_encode(
+  key: String,
+  key_encode: fn(String, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[String, SchemaError] uses {} {
+  match key_encode(key, mut check)? {
+    Text(name) => Ok(unique name),
+    _ => Error(scalar_error(mut check, "MapKey")),
+  }
+}
+
+fn object_map_encode_inner[V: inert](
+  values: Map[String, V],
+  key_encode: fn(String, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  let mut out: Map[String, std@1/json.Value] = core@1/map.empty()
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for (key, value) in values {
+    charge_check(mut check)?
+    let mut entry_issues = empty_issues()
+    let k = collect(
+      object_key_encode(key, key_encode, mut check),
+      Key,
+      mut entry_issues
+    )?
+    let mut v: Option[std@1/json.Value] = None
+    if !should_stop(check) {
+      v = collect(value_encode(value, mut check), Value, mut entry_issues)?
+    }
+    match (take k, take v) {
+      (Some(encoded_key), Some(encoded_value)) => {
+        if core@1/map.contains(out, encoded_key) {
+          failed = true
+          let error = invalid(mut check, "DuplicateKey", Wire, "Map", None)
+          let _: Option[()] = collect(Error(take error), Key, mut entry_issues)?
+        } else {
+          core@1/map.insert(mut out, take encoded_key, take encoded_value)
+        }
+      },
+      _ => {
+        failed = true
+      },
+    }
+    append_issues(mut issues, prefix(MapEntry(index), take entry_issues))
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(Object(take out))
+  }
+}
+
+pub fn map_encode[K: key + inert, V: inert](
+  values: Map[K, V],
+  key_encode: fn(K, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  enter_node(mut check)?
+  let outcome = map_encode_inner(values, key_encode, value_encode, mut check)
+  leave_node(mut check)
+  outcome
+}
+
+fn map_encode_inner[K: key + inert, V: inert](
+  values: Map[K, V],
+  key_encode: fn(K, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {},
+  mut check: CheckState
+) -> Result[std@1/json.Value, SchemaError] uses {} {
+  let mut out: List[std@1/json.Value] = []
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for (key, value) in values {
+    charge_check(mut check)?
+    let mut entry_issues = empty_issues()
+    let k = collect(key_encode(key, mut check), Key, mut entry_issues)?
+    let mut v: Option[std@1/json.Value] = None
+    if !should_stop(check) {
+      v = collect(value_encode(value, mut check), Value, mut entry_issues)?
+    }
+    match (take k, take v) {
+      (Some(encoded_key), Some(encoded_value)) => core@1/list.push(
+        mut out,
+        Array([take encoded_key, take encoded_value])
+      ),
+      _ => {
+        failed = true
+      },
+    }
+    append_issues(mut issues, prefix(MapEntry(index), take entry_issues))
+    if should_stop(check) {
+      break
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(Array(take out))
+  }
+}

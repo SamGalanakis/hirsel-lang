@@ -1,0 +1,150 @@
+// rule: CT-5
+// expect: run
+// stdout: schema null: true
+// Missing, explicit null and ordinary values are separate policy inputs.
+type Note {
+  value: Option[String],
+}
+
+fn note_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Note,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Note), schema.strict_policy())
+
+fn note_schema_encode(v: Note, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Note), schema.strict_policy())
+
+fn reject_policy() -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [
+      schema.FieldPolicy(
+        name: "value",
+        wire_name: "value",
+        aliases: [],
+        missing: Required,
+        nulls: Reject
+      )
+    ],
+    tags: [],
+    leaves: []
+  )
+}
+
+fn reject_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Note,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Note), reject_policy())
+
+fn reject_encode(v: Note, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Note), reject_policy())
+
+fn vectors() -> bool uses {} {
+  let b = schema.Boundary(
+    decode: note_schema_decode_callback,
+    encode: note_schema_encode_callback
+  )
+  let empty: json.Value = Object(map.empty())
+  let Error(Invalid(issues1)) = schema.decode(b, empty, schema.default_options()) else {
+    return false
+  }
+  if issues1.items[0].code != "Missing" {
+    return false
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "value", Null)
+  let wire: json.Value = Object(take fields)
+  let Ok(Note(value: None)) = schema.decode(b, wire, schema.default_options()) else {
+    return false
+  }
+  let Ok(encoded1) = schema.encode(b, Note(value: None), schema.default_options()) else {
+    return false
+  }
+  if encoded1 != wire {
+    return false
+  }
+  let reject = schema.Boundary(
+    decode: reject_decode_callback,
+    encode: reject_encode_callback
+  )
+  let Error(Invalid(issues2)) = schema.decode(reject, wire, schema.default_options()) else {
+    return false
+  }
+  if issues2.items[0].code != "Null" {
+    return false
+  }
+  let Error(Invalid(issues3)) = schema.encode(
+    reject,
+    Note(value: None),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  if issues3.items[0].code != "Null" || issues3.items[0].path != [Field("value")] {
+    return false
+  }
+  let Ok(encoded2) = schema.encode(
+    reject,
+    Note(value: Some("hi")),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  let Ok(Note(value: Some("hi"))) = schema.decode(
+    reject,
+    encoded2,
+    schema.default_options()
+  ) else {
+    return false
+  }
+  true
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, f"schema null: {vectors()}\n")
+  Ok(())
+}
+
+fn note_schema_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Note,
+  schema.SchemaError
+] uses {} {
+  match note_schema_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn note_schema_encode_callback(value: Note, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match note_schema_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn reject_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Note,
+  schema.SchemaError
+] uses {} {
+  match reject_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn reject_encode_callback(value: Note, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match reject_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}

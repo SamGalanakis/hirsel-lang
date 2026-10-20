@@ -1,0 +1,721 @@
+// Paired strict schema bodies under written CT-5 headers. Reuse derive.hir's
+// canonical type spelling, writer and nested-function convention; legacy
+// generators deliberately keep their historical acceptance and error types.
+// Names/defaults: serde_derive/src/de.rs:435 and internals/attr.rs:277,345,454.
+// Paths: serde_path_to_error/src/path.rs:100; Effect SchemaIssue.ts:394.
+
+fn schema_quote(value: String) -> String uses {} {
+  let mut out: List[u8] = [34u8]
+  let hex = core@1/string.as_bytes("0123456789abcdef")
+  for c in core@1/string.as_bytes(value) {
+    if c == 34 || c == 92 {
+      list.push(mut out, 92u8)
+      list.push(mut out, c)
+    } else if c < 32 || c == 127 {
+      text.append(mut out, "\\x")
+      list.push(mut out, hex[core@1/int.widen(c / 16u8)])
+      list.push(mut out, hex[core@1/int.widen(c % 16u8)])
+    } else {
+      list.push(mut out, c)
+    }
+  }
+  list.push(mut out, 34u8)
+  text.finish_valid(take out)
+}
+
+fn schema_aliases(aliases: List[String]) -> String uses {} {
+  let mut names: List[String] = []
+  for alias in aliases {
+    list.push(mut names, schema_quote(alias))
+  }
+  f"[{string.join(names, ", ")}]"
+}
+
+fn schema_wire(value: json.Value) -> String uses {} {
+  schema_wire_at(value, 0)
+}
+
+fn schema_wire_at(value: json.Value, depth: u64) -> String uses {} {
+  match value {
+    Null => "Null",
+    Bool(b) => if b {
+      "Bool(true)"
+    } else {
+      "Bool(false)"
+    },
+    Number(n) => f"Number({schema_quote(n)})",
+    Text(s) => f"Text({schema_quote(s)})",
+    Array(items) => {
+      let mut parts: List[String] = []
+      for item in items {
+        list.push(mut parts, schema_wire_at(item, depth + 1))
+      }
+      f"Array([{string.join(parts, ", ")}])"
+    },
+    Object(items) => {
+      let mut parts: List[String] = []
+      for (key, item) in items {
+        list.push(
+          mut parts,
+          f"core@1/map.insert(mut defaults{depth}, {schema_quote(key)}, {schema_wire_at(
+            item,
+            depth + 1
+          )})\n"
+        )
+      }
+      f"{{ let mut defaults{depth}: Map[String, std@1/json.Value] = core@1/map.empty()\n{string.join(
+        parts,
+        ""
+      )} Object(take defaults{depth}) }}"
+    },
+  }
+}
+
+fn schema_field(p: schema.FieldPolicy) -> String uses {} {
+  let missing = match p.missing {
+    Required => "Required",
+    NoneValue => "NoneValue",
+    Default(value) => f"Default({schema_wire(value)})",
+  }
+  let nulls = match p.nulls {
+    Accept => "Accept",
+    Reject => "Reject",
+  }
+  f"std@1/schema.FieldPolicy(name: {schema_quote(p.name)}, wire_name: {schema_quote(
+    p.wire_name
+  )}, aliases: {schema_aliases(p.aliases)}, missing: {missing}, nulls: {nulls})"
+}
+
+fn schema_policy_check(info: ShapeInfo, p: schema.Policy) -> Result[(), String] uses {} {
+  let mut names: List[String] = []
+  let mut declared: List[String] = []
+  match info.body {
+    Record(fields) => {
+      if list.len(p.tags) > 0 {
+        return Error("tag policy on a record")
+      }
+      for field in fields {
+        list.push(mut declared, unique field.name)
+        let fp = schema.field_policy(p, field.name)
+        if let NoneValue = fp.missing {
+          if !string.starts_with(field.ty, "core@1/Option[") {
+            return Error(f"NoneValue requires Option: {field.name}")
+          }
+        }
+        list.push(mut names, unique fp.wire_name)
+        for alias in fp.aliases {
+          list.push(mut names, unique alias)
+        }
+      }
+      let mut seen: List[String] = []
+      for fp in p.fields {
+        if !schema_contains(declared, fp.name) {
+          return Error(f"unknown policy field: {fp.name}")
+        }
+        if schema_contains(seen, fp.name) {
+          return Error(f"duplicate policy field: {fp.name}")
+        }
+        list.push(mut seen, unique fp.name)
+      }
+    },
+    Choice(variants) => {
+      if list.len(p.fields) > 0 {
+        return Error("field policy on a variant")
+      }
+      for variant in variants {
+        list.push(mut declared, unique variant.name)
+        let tp = schema.tag_policy(p, variant.name)
+        list.push(mut names, unique tp.wire_name)
+        for alias in tp.aliases {
+          list.push(mut names, unique alias)
+        }
+      }
+      let mut seen: List[String] = []
+      for tp in p.tags {
+        if !schema_contains(declared, tp.name) {
+          return Error(f"unknown policy tag: {tp.name}")
+        }
+        if schema_contains(seen, tp.name) {
+          return Error(f"duplicate policy tag: {tp.name}")
+        }
+        list.push(mut seen, unique tp.name)
+      }
+    },
+  }
+  let mut seen: List[String] = []
+  for name in names {
+    if core@1/string.byte_len(name) > schema.MAX_LABEL_BYTES {
+      return Error("schema name exceeds diagnostic byte limit")
+    }
+    if schema_contains(seen, name) {
+      return Error(f"colliding wire name or alias: {name}")
+    }
+    list.push(mut seen, unique name)
+  }
+  let mut leaves: List[String] = []
+  for leaf in p.leaves {
+    if schema_contains(leaves, leaf.ty) {
+      return Error(f"duplicate leaf: {leaf.ty}")
+    }
+    if !schema_callable(leaf.decode) || !schema_callable(leaf.encode) {
+      return Error("leaf conversions must be named functions")
+    }
+    list.push(mut leaves, unique leaf.ty)
+  }
+  Ok(())
+}
+
+fn schema_contains(items: List[String], name: String) -> bool uses {} {
+  for item in items {
+    if item == name {
+      return true
+    }
+  }
+  false
+}
+
+fn schema_callable(name: String) -> bool uses {} {
+  if core@1/string.byte_len(name) == 0 {
+    return false
+  }
+  for c in core@1/string.as_bytes(name) {
+    if !ascii.is_alnum(c) && c != 95 && c != 64 && c != 47 && c != 46 {
+      return false
+    }
+  }
+  true
+}
+
+// Emit a complete local converter. Structural child converters are ordinary
+// pure source functions, passing the same mutable state, with owned results.
+fn schema_converter(mut w: Writer, ty: String, p: schema.Policy, encode: bool) -> Result[
+  String,
+  String
+] uses {} {
+  let mut named: Option[String] = None
+  for leaf in p.leaves {
+    if leaf.ty == ty {
+      named = Some(
+        if encode {
+          unique leaf.encode
+        } else {
+          unique leaf.decode
+        }
+      )
+    }
+  }
+  if named == None && nominal(ty) && !string.starts_with(ty, "core@1/Option[") {
+    named = Some(
+      deriver(
+        ty,
+        if encode {
+          "schema_encode"
+        } else {
+          "schema_decode"
+        }
+      )
+    )
+  }
+  let name = fresh(mut w, "convert")
+  let input = if encode {
+    unique ty
+  } else {
+    "std@1/json.Value"
+  }
+  let output = if encode {
+    "std@1/json.Value"
+  } else {
+    unique ty
+  }
+  let argument_name = fresh(mut w, "input")
+  let state_name = fresh(mut w, "state")
+  if let Some(callee) = named {
+    put(
+      mut w,
+      f"let {name} = fn({argument_name}: {input}, mut {state_name}: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{ match {callee}({argument_name}, mut {state_name}) {{ Ok(converted) => Ok(take converted), Error(rejected) => Error(take rejected) }} }}\n"
+    )
+    return Ok(take name)
+  }
+  // Nested definitions are emitted before their caller, outside its frame.
+  let mut children: List[String] = []
+  if let Some(inner) = argument(ty, "core@1/Option") {
+    nested_option(ty, inner)?
+    list.push(mut children, schema_converter(mut w, inner, p, encode)?)
+  } else if let Some(inner) = argument(ty, "List") {
+    list.push(mut children, schema_converter(mut w, inner, p, encode)?)
+  } else if let Some(pair) = parameters(ty, "Map") {
+    list.push(mut children, schema_converter(mut w, pair[0], p, encode)?)
+    list.push(mut children, schema_converter(mut w, pair[1], p, encode)?)
+  } else if let Some(parts) = tuple(ty) {
+    for component in parts {
+      list.push(mut children, schema_converter(mut w, component, p, encode)?)
+    }
+  }
+  put(
+    mut w,
+    f"let {name} = fn({argument_name}: {input}, mut {state_name}: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{\n"
+  )
+  if integer(ty) || float(ty) || ty == "bool" || ty == "String" {
+    put(mut w, f"std@1/schema.charge_check(mut {state_name})?\n")
+    if encode {
+      put(mut w, "Ok(")
+      json_of(mut w, ty, argument_name)?
+      put(mut w, ")\n")
+    } else {
+      let read = if ty == "bool" {
+        f"std@1/derive.json_bool({argument_name})"
+      } else if ty == "String" {
+        f"std@1/derive.json_text({argument_name})"
+      } else if float(ty) {
+        f"std@1/derive.json_float_text({argument_name})"
+      } else {
+        f"std@1/derive.json_number({argument_name})"
+      }
+      put(
+        mut w,
+        f"let decoded = match {read} {{ Ok(v) => v, Error(_) => return Error(std@1/schema.scalar_error(mut {state_name}, {schema_quote(
+          ty
+        )})) }}\n"
+      )
+      if integer(ty) || float(ty) {
+        put(
+          mut w,
+          f"match std@1/{ty}.parse(decoded) {{ Ok(v) => Ok(v), Error(_) => Error(std@1/schema.invalid(mut {state_name}, \"Range\", Wire, {schema_quote(
+            ty
+          )}, None)) }}\n"
+        )
+      } else {
+        put(mut w, "Ok(take decoded)\n")
+      }
+    }
+  } else if let Some(_) = argument(ty, "core@1/Option") {
+    let direction = if encode {
+      "encode"
+    } else {
+      "decode"
+    }
+    put(
+      mut w,
+      f"std@1/schema.option_{direction}({argument_name}, {children[0]}, mut {state_name})\n"
+    )
+  } else if let Some(_) = argument(ty, "List") {
+    let direction = if encode {
+      "encode"
+    } else {
+      "decode"
+    }
+    put(
+      mut w,
+      f"std@1/schema.sequence_{direction}({argument_name}, {children[0]}, mut {state_name})\n"
+    )
+  } else if let Some(pair) = parameters(ty, "Map") {
+    let direction = if encode {
+      "encode"
+    } else {
+      "decode"
+    }
+    let representation = if pair[0] == "String" {
+      "object_map"
+    } else {
+      "map"
+    }
+    put(
+      mut w,
+      f"std@1/schema.{representation}_{direction}({argument_name}, {children[0]}, {children[1]}, mut {state_name})\n"
+    )
+  } else if let Some(parts) = tuple(ty) {
+    schema_tuple(mut w, parts, children, encode, argument_name, state_name)?
+  } else {
+    return Error(f"no schema form for {ty}; supply a named leaf pair")
+  }
+  put(mut w, "}\n")
+  Ok(take name)
+}
+
+fn schema_collect(
+  mut w: Writer,
+  outcome: String,
+  segment: String,
+  name: String,
+  state: String,
+  ty: String
+) -> () uses {} {
+  put(
+    mut w,
+    f"let attempted_{name}: core@1/Result[{ty}, std@1/schema.SchemaError] = {outcome}\nlet {name}: core@1/Option[{ty}] = std@1/schema.collect(take attempted_{name}, {segment}, mut issues)?\nif std@1/schema.should_stop({state}) {{ return Error(Invalid(take issues)) }}\n"
+  )
+}
+
+fn schema_unwrap(mut w: Writer, names: List[String]) -> () uses {} {
+  for name in names {
+    put(
+      mut w,
+      f"let Some(ready_{name}) = take {name} else {{ return Error(Invalid(take issues)) }}\n"
+    )
+  }
+}
+
+fn schema_tuple(
+  mut w: Writer,
+  parts: List[String],
+  children: List[String],
+  encode: bool,
+  argument_name: String,
+  state_name: String
+) -> Result[(), String] uses {} {
+  let count = list.len(parts)
+  put(
+    mut w,
+    f"std@1/schema.enter_node(mut {state_name})?\nlet inner = fn(tuple_value: "
+  )
+  let ty = tuple_form(parts)
+  let input = if encode {
+    take ty
+  } else {
+    "std@1/json.Value"
+  }
+  let output = if encode {
+    "std@1/json.Value"
+  } else {
+    tuple_form(parts)
+  }
+  put(
+    mut w,
+    f"{input}, mut tuple_check: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{\n"
+  )
+  if encode {
+    put(mut w, f"let {tuple_form(binders("p", count))} = tuple_value\n")
+  } else {
+    put(
+      mut w,
+      f"let Array(items) = tuple_value else {{ return Error(std@1/schema.scalar_error(mut tuple_check, \"Tuple\")) }}\nif core@1/list.len(items) != {count} {{ return Error(std@1/schema.scalar_error(mut tuple_check, \"Tuple\")) }}\n"
+    )
+  }
+  put(mut w, "let mut issues = std@1/schema.empty_issues()\n")
+  let names = binders("decoded", count)
+  let mut i: u64 = 0
+  for child in children {
+    let read = if encode {
+      f"p{i}"
+    } else {
+      f"items[{i}]"
+    }
+    schema_collect(
+      mut w,
+      f"{child}({read}, mut tuple_check)",
+      f"Index({i})",
+      names[i],
+      "tuple_check",
+      if encode {
+        "std@1/json.Value"
+      } else {
+        unique parts[i]
+      }
+    )
+    i += 1
+  }
+  schema_unwrap(mut w, names)
+  if encode {
+    put(
+      mut w,
+      f"Ok(Array([{string.join(binders("take ready_decoded", count), ", ")}]))\n"
+    )
+  } else {
+    put(mut w, f"Ok({tuple_form(binders("take ready_decoded", count))})\n")
+  }
+  put(
+    mut w,
+    f"}}\nlet outcome = inner({argument_name}, mut {state_name})\nstd@1/schema.leave_node(mut {state_name})\noutcome\n"
+  )
+  Ok(())
+}
+
+fn schema_record(
+  mut w: Writer,
+  info: ShapeInfo,
+  fields: List[FieldShape],
+  p: schema.Policy,
+  encode: bool
+) -> Result[(), String] uses {} {
+  let mut children: List[String] = []
+  for field in fields {
+    list.push(mut children, schema_converter(mut w, field.ty, p, encode)?)
+  }
+  if encode {
+    put(mut w, "let mut fields: Map[String, std@1/json.Value] = core@1/map.empty()\n")
+  } else {
+    put(
+      mut w,
+      f"let Object(fields) = value else {{ return Error(std@1/schema.scalar_error(mut check, {schema_quote(
+        info.name
+      )})) }}\n"
+    )
+  }
+  put(mut w, "let mut issues = std@1/schema.empty_issues()\n")
+  let mut names: List[String] = []
+  let mut members: List[String] = []
+  let mut known: List[String] = []
+  let mut i: u64 = 0
+  for field in fields {
+    let fp = schema.field_policy(p, field.name)
+    list.push(
+      mut known,
+      f"std@1/schema.accepted_name(key, {schema_quote(fp.wire_name)}, {schema_aliases(
+        fp.aliases
+      )})"
+    )
+    let site = schema_quote(f"{info.name}.{field.name}")
+    if encode {
+      let mut conversion = f"{children[i]}(value.{field.name}, mut check)"
+      if let Reject = fp.nulls {
+        let allow_missing = match fp.missing {
+          NoneValue => true,
+          _ => false,
+        }
+        if !allow_missing {
+          conversion = f"match {conversion} {{ Ok(wire) => match std@1/schema.check_null(wire, {schema_field(
+            fp
+          )}, {site}, mut check) {{ Ok(()) => Ok(take wire), Error(e) => Error(take e) }}, Error(e) => Error(take e) }}"
+        }
+      }
+      schema_collect(
+        mut w,
+        conversion,
+        f"Field({schema_quote(field.name)})",
+        f"decoded{i}",
+        "check",
+        if encode {
+          "std@1/json.Value"
+        } else {
+          unique field.ty
+        }
+      )
+    } else {
+      put(
+        mut w,
+        f"let member{i} = match std@1/schema.member(fields, {schema_field(fp)}, {site}, mut check) {{ Ok(wire) => {children[i]}(wire, mut check), Error(error) => Error(take error) }}\n"
+      )
+      schema_collect(
+        mut w,
+        f"take member{i}",
+        f"Field({schema_quote(field.name)})",
+        f"decoded{i}",
+        "check",
+        if encode {
+          "std@1/json.Value"
+        } else {
+          unique field.ty
+        }
+      )
+    }
+    list.push(mut names, f"decoded{i}")
+    if encode {
+      let insert = f"core@1/map.insert(mut fields, {schema_quote(fp.wire_name)}, take ready_decoded{i})\n"
+      if let NoneValue = fp.missing {
+        list.push(
+          mut members,
+          f"if let Null = ready_decoded{i} {{ () }} else {{ {insert} }}\n"
+        )
+      } else {
+        list.push(mut members, take insert)
+      }
+    } else {
+      list.push(mut members, f"{field.name}: take ready_decoded{i}")
+    }
+    i += 1
+  }
+  if !encode {
+    let test = if list.len(known) == 0 {
+      "false"
+    } else {
+      string.join(known, " || ")
+    }
+    // Unknown paths must be bounded too; invalid() checks the label first.
+    put(
+      mut w,
+      f"for (key, _) in fields {{\nstd@1/schema.charge_check(mut check)?\nif !({test}) {{\nlet error = std@1/schema.unknown_field(mut check, key, {schema_quote(
+        info.name
+      )})\nlet _: core@1/Option[()] = std@1/schema.collect(Error(take error), Field(unique key), mut issues)?\nif std@1/schema.should_stop(check) {{ return Error(Invalid(take issues)) }}\n}}\n}}\n"
+    )
+  }
+  schema_unwrap(mut w, names)
+  put(
+    mut w,
+    "if core@1/list.len(issues.items) > 0 { return Error(Invalid(take issues)) }\n"
+  )
+  if encode {
+    put(mut w, f"{string.join(members, "")}Ok(Object(take fields))\n")
+  } else {
+    put(mut w, f"Ok({constructor(info.name)}({string.join(members, ", ")}))\n")
+  }
+  Ok(())
+}
+
+fn schema_choice(
+  mut w: Writer,
+  info: ShapeInfo,
+  variants: List[VariantShape],
+  p: schema.Policy,
+  encode: bool
+) -> Result[(), String] uses {} {
+  let mut children: List[List[String]] = []
+  for variant in variants {
+    let mut row: List[String] = []
+    for payload in variant.payload {
+      list.push(mut row, schema_converter(mut w, payload.ty, p, encode)?)
+    }
+    list.push(mut children, take row)
+  }
+  if encode {
+    put(mut w, "match value {\n")
+  } else {
+    put(mut w, "match value {\nText(tag) => {\n")
+  }
+  let mut i: u64 = 0
+  for variant in variants {
+    let tp = schema.tag_policy(p, variant.name)
+    if list.len(variant.payload) == 0 {
+      if encode {
+        put(mut w, f"{variant.name} => Ok(Text({schema_quote(tp.wire_name)})),\n")
+      } else {
+        put(
+          mut w,
+          f"if std@1/schema.accepted_name(tag, {schema_quote(tp.wire_name)}, {schema_aliases(
+            tp.aliases
+          )}) {{ return Ok({variant.name}) }}\n"
+        )
+      }
+    }
+    i += 1
+  }
+  if !encode {
+    put(
+      mut w,
+      f"Error(std@1/schema.invalid(mut check, \"Tag\", Wire, {schema_quote(info.name)}, None))\n}},\nObject(tagged) => {{\nif core@1/map.len(tagged) != 1 {{ return Error(std@1/schema.invalid(mut check, \"Tag\", Wire, {schema_quote(
+        info.name
+      )}, None)) }}\nfor (tag, wire) in tagged {{\n"
+    )
+  }
+  i = 0
+  for variant in variants {
+    let count = list.len(variant.payload)
+    if count > 0 {
+      let tp = schema.tag_policy(p, variant.name)
+      if encode {
+        put(mut w, f"{variant_form(variant, binders("p", count))} => {{\n")
+      } else {
+        put(
+          mut w,
+          f"if std@1/schema.accepted_name(tag, {schema_quote(tp.wire_name)}, {schema_aliases(
+            tp.aliases
+          )}) {{\nlet Array(payload) = wire else {{ return Error(std@1/schema.prefix_error(Variant({schema_quote(
+            variant.name
+          )}), std@1/schema.scalar_error(mut check, {schema_quote(info.name)}))) }}\nif core@1/list.len(payload) != {count} {{ return Error(std@1/schema.prefix_error(Variant({schema_quote(
+            variant.name
+          )}), std@1/schema.scalar_error(mut check, {schema_quote(info.name)}))) }}\n"
+        )
+      }
+      put(mut w, "let mut issues = std@1/schema.empty_issues()\n")
+      let names = binders("decoded", count)
+      let mut j: u64 = 0
+      for child in children[i] {
+        let read = if encode {
+          f"p{j}"
+        } else {
+          f"payload[{j}]"
+        }
+        schema_collect(
+          mut w,
+          f"match {child}({read}, mut check) {{ Ok(v) => Ok(take v), Error(e) => Error(std@1/schema.prefix_error(Index({j}), take e)) }}",
+          f"Variant({schema_quote(variant.name)})",
+          names[j],
+          "check",
+          if encode {
+            "std@1/json.Value"
+          } else {
+            unique variant.payload[j].ty
+          }
+        )
+        j += 1
+      }
+      schema_unwrap(mut w, names)
+      if encode {
+        put(
+          mut w,
+          f"let mut tagged: Map[String, std@1/json.Value] = core@1/map.empty()\ncore@1/map.insert(mut tagged, {schema_quote(
+            tp.wire_name
+          )}, Array([{string.join(binders("take ready_decoded", count), ", ")}]))\nOk(Object(take tagged))\n}},\n"
+        )
+      } else {
+        put(
+          mut w,
+          f"return Ok({variant_form(variant, binders("take ready_decoded", count))})\n}}\n"
+        )
+      }
+    }
+    i += 1
+  }
+  if encode {
+    put(mut w, "}\n")
+  } else {
+    put(
+      mut w,
+      f"}}\nError(std@1/schema.invalid(mut check, \"Tag\", Wire, {schema_quote(
+        info.name
+      )}, None))\n}},\n_ => Error(std@1/schema.scalar_error(mut check, {schema_quote(
+        info.name
+      )})),\n}}\n"
+    )
+  }
+  Ok(())
+}
+
+fn schema_body[T](s: TypeShape[T], p: schema.Policy, encode: bool) -> Result[
+  String,
+  String
+] uses {} {
+  let info = type_shape.info(s)
+  schema_policy_check(info, p)?
+  if core@1/string.byte_len(info.name) > schema.MAX_LABEL_BYTES {
+    return Error("schema site exceeds diagnostic byte limit")
+  }
+  let mut w = writer()
+  let input = if encode {
+    unique info.name
+  } else {
+    "std@1/json.Value"
+  }
+  let output = if encode {
+    "std@1/json.Value"
+  } else {
+    unique info.name
+  }
+  put(
+    mut w,
+    f"fn(source: {input}, mut operation: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{\nstd@1/schema.enter_node(mut operation)?\nlet schema_traverse = fn(value: {input}, mut check: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{\n"
+  )
+  match info.body {
+    Record(fields) => schema_record(mut w, info, fields, p, encode)?,
+    Choice(variants) => schema_choice(mut w, info, variants, p, encode)?,
+  }
+  put(
+    mut w,
+    "}\nlet outcome = schema_traverse(source, mut operation)\nstd@1/schema.leave_node(mut operation)\nmatch take outcome { Ok(converted) => Ok(unique converted), Error(rejected) => Error(take rejected) }\n}"
+  )
+  let Writer(out: out, next: _) = take w
+  Ok(text.finish_valid(take out))
+}
+
+pub fn schema_decode[T](s: TypeShape[T], p: schema.Policy) -> Result[
+  Body[fn(json.Value, mut schema.CheckState) -> Result[T, schema.SchemaError] uses {}],
+  String
+] uses {} {
+  Ok(codegen.body(schema_body(s, p, false)?))
+}
+
+pub fn schema_encode[T](s: TypeShape[T], p: schema.Policy) -> Result[
+  Body[fn(T, mut schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {}],
+  String
+] uses {} {
+  Ok(codegen.body(schema_body(s, p, true)?))
+}

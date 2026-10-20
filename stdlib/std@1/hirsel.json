@@ -1094,6 +1094,18 @@
       "module": [
         "metrics"
       ]
+    },
+    {
+      "path": "schema_derive.hir",
+      "module": [
+        "derive"
+      ]
+    },
+    {
+      "path": "schema_structural.hir",
+      "module": [
+        "schema"
+      ]
     }
   ],
   "dependencies": []

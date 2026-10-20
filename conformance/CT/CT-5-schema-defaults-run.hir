@@ -1,0 +1,139 @@
+// rule: CT-5
+// expect: run
+// stdout: schema defaults: true
+// Defaults are wire inputs: the same owner conversion validates default/present.
+type Reading {
+  value: u8,
+}
+
+fn checked_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  u8,
+  schema.SchemaError
+] uses {} {
+  let b = schema.u8_json()
+  let v = b.decode(w, mut c)?
+  if v > 100 {
+    return Error(schema.invalid(mut c, "FactViolation", Fact, "Reading.value", None))
+  }
+  Ok(v)
+}
+
+fn checked_encode(v: u8, mut c: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut c)?
+  if v > 100 {
+    return Error(schema.invalid(mut c, "FactViolation", Fact, "Reading.value", None))
+  }
+  Ok(Number(u8.to_string(v)))
+}
+
+fn policy() -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [
+      schema.FieldPolicy(
+        name: "value",
+        wire_name: "a\"\\\n",
+        aliases: ["old"],
+        missing: Default(Number("200")),
+        nulls: Reject
+      )
+    ],
+    tags: [],
+    leaves: [
+      schema.Leaf(
+        ty: "u8",
+        decode: "application@1/checked_decode",
+        encode: "application@1/checked_encode"
+      )
+    ]
+  )
+}
+
+fn reading_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Reading,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Reading), policy())
+
+fn reading_schema_encode(v: Reading, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Reading), policy())
+
+fn vectors() -> bool uses {} {
+  let b = schema.Boundary(
+    decode: reading_schema_decode_callback,
+    encode: reading_schema_encode_callback
+  )
+  let empty: json.Value = Object(map.empty())
+  let Error(Invalid(issues1)) = schema.decode(b, empty, schema.default_options()) else {
+    return false
+  }
+  if issues1.items[0].code != "FactViolation" || issues1.items[0].path != [
+    Field("value")
+  ] {
+    return false
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "old", Number("200"))
+  let Error(Invalid(issues2)) = schema.decode(
+    b,
+    Object(take fields),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  if issues2.items[0].code != "FactViolation" {
+    return false
+  }
+  let Error(Invalid(issues3)) = schema.encode(
+    b,
+    Reading(value: 200),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  if issues3.items[0].path != [Field("value")] {
+    return false
+  }
+  let Ok(wire1) = schema.encode(b, Reading(value: 42), schema.default_options()) else {
+    return false
+  }
+  let Object(canonical_fields) = wire1 else {
+    return false
+  }
+  if !map.contains(canonical_fields, "a\"\\\n") {
+    return false
+  }
+  let Ok(back1) = schema.decode(b, wire1, schema.default_options()) else {
+    return false
+  }
+  back1.value == 42
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, f"schema defaults: {vectors()}\n")
+  Ok(())
+}
+
+fn reading_schema_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Reading,
+  schema.SchemaError
+] uses {} {
+  match reading_schema_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn reading_schema_encode_callback(value: Reading, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match reading_schema_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}

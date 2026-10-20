@@ -1,0 +1,11 @@
+// rule: CT-5
+// expect: accept
+// Nested Option must never collapse through null in either direction.
+type Nested {
+  value: Option[u8],
+}
+
+fn convert(v: Nested, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Nested), schema.strict_policy())

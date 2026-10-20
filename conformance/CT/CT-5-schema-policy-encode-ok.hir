@@ -1,0 +1,27 @@
+// rule: CT-5
+// expect: accept
+// One policy validates names in both directions, including self aliases.
+type Named {
+  value: u8,
+}
+
+fn policy() -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [
+      schema.FieldPolicy(
+        name: "value",
+        wire_name: "wire",
+        aliases: ["old"],
+        missing: Required,
+        nulls: Accept
+      )
+    ],
+    tags: [],
+    leaves: []
+  )
+}
+
+fn convert(v: Named, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Named), policy())

@@ -1,0 +1,399 @@
+// rule: CT-5
+// expect: run
+// stdout: schema derive: true
+// Vectors adapted from serde test_annotations alias/deny_unknown_fields and
+// serde_path_to_error tests/deserialize.rs::test_vec/test_tuple_variant.
+type Item {
+  count: u8,
+  note: Option[String],
+}
+
+type Packet {
+  dependencies: List[Item],
+  pairs: Map[u8, String],
+  position: (u8, String),
+}
+
+type Choice = Empty | Pair(u8, String)
+
+type StringMap {
+  entries: Map[String, u8],
+}
+
+fn string_map_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique StringMap,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(StringMap), schema.strict_policy())
+
+fn string_map_encode(v: StringMap, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(StringMap), schema.strict_policy())
+
+fn string_map_vectors() -> bool uses {} {
+  let mut c = match schema.check_state(schema.default_options()) {
+    Ok(state) => state,
+    Error(_) => return false,
+  }
+  let Ok(domain) = string_map_decode(parse("{\"entries\":{\"z\":1,\"a\":2}}"), mut c) else {
+    return false
+  }
+  let Ok(wire) = string_map_encode(domain, mut c) else {
+    return false
+  }
+  let Ok(text) = json.stringify(wire) else {
+    return false
+  }
+  if text != "{\"entries\":{\"z\":1,\"a\":2}}" {
+    return false
+  }
+  let Error(Invalid(issues)) = string_map_decode(
+    parse("{\"entries\":{\"z\":1,\"a\":999}}"),
+    mut c
+  ) else {
+    return false
+  }
+  if issues.items[0].path != [Field("entries"), MapEntry(1), Value] {
+    return false
+  }
+  let mut c2 = match schema.check_state(schema.default_options()) {
+    Ok(state) => state,
+    Error(_) => return false,
+  }
+  if let Ok(_) = string_map_decode(parse("{\"entries\":[[\"z\",1]]}"), mut c2) {
+    return false
+  }
+  match json.parse("{\"entries\":{\"z\":1,\"z\":2}}") {
+    Error(DuplicateKey(_)) => true,
+    _ => false,
+  }
+}
+
+fn item_policy() -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [
+      schema.FieldPolicy(
+        name: "count",
+        wire_name: "amount",
+        aliases: ["old"],
+        missing: Default(Number("7")),
+        nulls: Reject
+      ),
+      schema.FieldPolicy(
+        name: "note",
+        wire_name: "note",
+        aliases: [],
+        missing: NoneValue,
+        nulls: Reject
+      )
+    ],
+    tags: [],
+    leaves: []
+  )
+}
+
+fn item_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Item,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Item), item_policy())
+
+fn item_schema_encode(v: Item, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Item), item_policy())
+
+fn packet_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Packet,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Packet), schema.strict_policy())
+
+fn packet_schema_encode(v: Packet, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Packet), schema.strict_policy())
+
+fn choice_policy() -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [],
+    tags: [schema.TagPolicy(name: "Pair", wire_name: "pair", aliases: ["old-pair"])],
+    leaves: []
+  )
+}
+
+fn choice_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Choice,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Choice), choice_policy())
+
+fn choice_schema_encode(v: Choice, mut c: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Choice), choice_policy())
+
+fn item_boundary() -> schema.Boundary[Item, json.Value] uses {} {
+  schema.Boundary(
+    decode: item_schema_decode_callback,
+    encode: item_schema_encode_callback
+  )
+}
+
+fn packet_boundary() -> schema.Boundary[Packet, json.Value] uses {} {
+  schema.Boundary(
+    decode: packet_schema_decode_callback,
+    encode: packet_schema_encode_callback
+  )
+}
+
+fn choice_boundary() -> schema.Boundary[Choice, json.Value] uses {} {
+  schema.Boundary(
+    decode: choice_schema_decode_callback,
+    encode: choice_schema_encode_callback
+  )
+}
+
+fn parse(s: String) -> json.Value uses {} {
+  let Ok(v) = json.parse(unique s) else {
+    return Null
+  }
+  take v
+}
+
+fn rejects(b: schema.Boundary[Item, json.Value], input: String, code: String) -> bool uses {} {
+  match schema.decode(b, parse(input), schema.default_options()) {
+    Error(Invalid(issues)) => list.len(issues.items) == 1 && issues.items[0].code == code,
+    _ => false,
+  }
+}
+
+fn vectors() -> bool uses {} {
+  let b = item_boundary()
+  let Ok(item) = schema.decode(b, parse("{\"old\":8}"), schema.default_options()) else {
+    return false
+  }
+  if item.count != 8 || item.note != None {
+    return false
+  }
+  let Ok(defaulted) = schema.decode(b, parse("{}"), schema.default_options()) else {
+    return false
+  }
+  if defaulted.count != 7 {
+    return false
+  }
+  if !rejects(b, "{\"amount\":1,\"old\":2}", "AliasCollision") || !rejects(
+    b,
+    "{\"extra\":1}",
+    "UnknownField"
+  ) || !rejects(b, "{\"note\":null}", "Null") {
+    return false
+  }
+  let Ok(wire1) = schema.encode(
+    b,
+    Item(count: 9, note: Some("yes")),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  let Ok(back1) = schema.decode(b, wire1, schema.default_options()) else {
+    return false
+  }
+  if back1.count != 9 || back1.note != Some("yes") {
+    return false
+  }
+  let cb = choice_boundary()
+  let Ok(Pair(3, "ok")) = schema.decode(
+    cb,
+    parse("{\"old-pair\":[3,\"ok\"]}"),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  let invalid_tags: List[String] = [
+    "{\"pair\":[3,\"ok\"],\"extra\":0}",
+    "{\"pair\":[3,\"ok\"],\"old-pair\":[3,\"ok\"]}",
+    "{\"Empty\":[]}",
+    "{\"pair\":[3]}",
+    "{\"pair\":0}"
+  ]
+  for input in invalid_tags {
+    if let Ok(_) = schema.decode(cb, parse(input), schema.default_options()) {
+      return false
+    }
+  }
+  let Ok(tagged) = schema.encode(cb, Pair(3, "ok"), schema.default_options()) else {
+    return false
+  }
+  let Ok(Pair(3, "ok")) = schema.decode(cb, tagged, schema.default_options()) else {
+    return false
+  }
+  let Ok(Empty) = schema.decode(cb, Text("Empty"), schema.default_options()) else {
+    return false
+  }
+  let Error(Invalid(issues1)) = schema.decode(
+    cb,
+    parse("{\"pair\":[999,0]}"),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  if issues1.items[0].path != [Variant("Pair"), Index(0)] {
+    return false
+  }
+  let pb = packet_boundary()
+  let Ok(packet) = schema.decode(
+    pb,
+    parse(
+      "{\"dependencies\":[{\"amount\":2}],\"pairs\":[[1,\"one\"]],\"position\":[4,\"here\"]}"
+    ),
+    schema.default_options()
+  ) else {
+    return false
+  }
+  let Ok(wire2) = schema.encode(pb, packet, schema.default_options()) else {
+    return false
+  }
+  let Ok(_) = schema.decode(pb, wire2, schema.default_options()) else {
+    return false
+  }
+  let mut options = schema.default_options()
+  options.mode = All
+  options.limits.max_issues = 3
+  let Error(Invalid(issues2)) = schema.decode(
+    pb,
+    parse(
+      "{\"dependencies\":[{\"amount\":1},{\"amount\":999}],\"pairs\":[[999,7]],\"position\":[999,0],\"last\":0}"
+    ),
+    options
+  ) else {
+    return false
+  }
+  if list.len(issues2.items) != 3 || !issues2.truncated {
+    return false
+  }
+  if issues2.items[0].path != [Field("dependencies"), Index(1), Field("count")] {
+    return false
+  }
+  if issues2.items[1].path != [Field("pairs"), MapEntry(0), Key] {
+    return false
+  }
+  if issues2.items[2].path != [Field("pairs"), MapEntry(0), Value] {
+    return false
+  }
+  options.limits.max_issues = 10
+  let Error(Invalid(issues3)) = schema.decode(
+    b,
+    parse("{\"z\":0,\"amount\":999,\"a\":0}"),
+    options
+  ) else {
+    return false
+  }
+  if list.len(issues3.items) != 3 || issues3.truncated {
+    return false
+  }
+  if issues3.items[0].path != [Field("count")] || issues3.items[1].path != [Field("z")] || issues3.items[2].path != [
+    Field("a")
+  ] {
+    return false
+  }
+  let Error(Invalid(issues4)) = schema.decode(
+    pb,
+    parse(
+      "{\"dependencies\":[],\"pairs\":[[1,\"a\"],[1,\"b\"]],\"position\":[1,\"p\"]}"
+    ),
+    options
+  ) else {
+    return false
+  }
+  if issues4.items[0].code != "DuplicateKey" || issues4.items[0].path != [
+    Field("pairs"),
+    MapEntry(1),
+    Key
+  ] {
+    return false
+  }
+  options.limits.max_depth = 1
+  let mut check = match schema.check_state(options) {
+    Ok(c) => c,
+    Error(_) => return false,
+  }
+  let Error(Limit(cause)) = packet_schema_decode(
+    parse("{\"dependencies\":[],\"pairs\":[],\"position\":[1,\"p\"]}"),
+    mut check
+  ) else {
+    return false
+  }
+  if cause.kind != Depth {
+    return false
+  }
+  // A returned child limit must unwind the successfully entered parent node.
+  if let Error(_) = schema.enter_node(mut check) {
+    return false
+  }
+  schema.leave_node(mut check)
+  true
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, f"schema derive: {vectors() && string_map_vectors()}\n")
+  Ok(())
+}
+
+fn item_schema_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Item,
+  schema.SchemaError
+] uses {} {
+  match item_schema_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn item_schema_encode_callback(value: Item, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match item_schema_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn packet_schema_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Packet,
+  schema.SchemaError
+] uses {} {
+  match packet_schema_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn packet_schema_encode_callback(value: Packet, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match packet_schema_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn choice_schema_decode_callback(wire: json.Value, mut check: schema.CheckState) -> Result[
+  Choice,
+  schema.SchemaError
+] uses {} {
+  match choice_schema_decode(wire, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}
+
+fn choice_schema_encode_callback(value: Choice, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  match choice_schema_encode(value, mut check) {
+    Ok(v) => Ok(take v),
+    Error(e) => Error(take e),
+  }
+}

@@ -45,10 +45,106 @@ Arbitrary paired callbacks provide typed endpoints, normal domain invariants
 and the checks they actually perform. They do not establish inverse,
 preservation or normalization laws. `write_json` formats the declared encoder's
 output. A custom mapping may produce output its decoder rejects. Stronger
-checked writes, explicit projection law helpers, structural generation and
-evolution APIs build on this seam separately. Existing `derive.from_json`
+checked writes, explicit projection law helpers and evolution APIs build on
+this seam separately. Existing `derive.from_json`
 acceptance is unchanged. New structural schema generation must reject unknown
 fields, alias collisions and non-exact variant tags by default.
+
+## Paired structural generation
+
+`derive.schema_decode(shape(T), policy)` and
+`derive.schema_encode(shape(T), policy)` generate monomorphic CT-5 bodies.
+Both declarations and their complete headers remain written in source. Pass
+the same explicit `schema.Policy` to both directions. The generator checks
+the policy in both directions, including unknown/duplicate member policies,
+colliding canonical names/aliases and paired named leaf conversions. Separate
+declarations with different policies are a caller error, checked by round-trip
+and golden tests rather than a type-system theorem.
+
+```hirsel
+fn item_schema_decode(wire: json.Value, mut check: schema.CheckState)
+  -> Result[unique Item, schema.SchemaError] uses {}
+  = comptime derive.schema_decode(shape(Item), schema.strict_policy())
+fn item_schema_encode(value: Item, mut check: schema.CheckState)
+  -> Result[unique json.Value, schema.SchemaError] uses {}
+  = comptime derive.schema_encode(shape(Item), schema.strict_policy())
+```
+
+The generated decoder constructs owned values and checks under the written
+`unique` header. Inputs are borrowed. Structural results are fresh, including
+when a custom leaf callback returns shared inert data. A caller can also write
+headers without `unique`; this does not change the generated representation.
+Function-value uniqueness qualifiers must match exactly. To store a generated
+`Result[unique T, SchemaError]` function in Boundary's ordinary-result callback
+field, write a pure adapter that calls it and moves the successful value into
+`Ok`; alternatively generate an additional declaration with an ordinary result
+header. Generated nested converters include this adapter themselves.
+
+`Policy` contains `fields: List[FieldPolicy]`, `tags: List[TagPolicy]` and
+`leaves: List[Leaf]`. Empty `strict_policy()` keeps declaration names, requires
+every field (including Option fields), accepts null only where the field's
+converter does, and always rejects unknown record fields and non-exact tags.
+`FieldPolicy` names a declared field with `name`, chooses its canonical
+`wire_name`, supplies accepted `aliases`, `missing` and `nulls`. `Missing` is
+`Required`, `NoneValue` (only for Option fields), or `Default(json.Value)`.
+Defaults are wire values passed through the same field converter and null
+check as a present value; they cannot bypass facts or owner constructors.
+`NoneValue` synthesizes None for absence, while `Nulls.Reject` rejects explicit
+null. Its encoder omits None fields. Other Option fields encode None as null;
+rejecting null without an absence policy makes that encode fallible.
+Nulls never triggers a default. A default equal to null still undergoes the
+field's null check. The writer otherwise emits every field in declaration
+order under its canonical name, including fields equal to defaults.
+
+Aliases are accepted only on read. Simultaneous alias/canonical or two alias
+members produce `AliasCollision`, even with equal values. Record traversal
+decodes declared fields first, then rejects unknowns in incoming insertion
+order. Error field paths use declaration names even when an alias was read;
+unknown paths use the bounded unknown member name. Neither error retains the
+rejected value. A field converter never runs after its member lookup fails.
+No partially initialized record escapes an error.
+
+`TagPolicy` has `name`, `wire_name` and `aliases`. Nullary variants use JSON
+strings. Payload variants use an object containing exactly one recognized
+member, whose value is an array of exactly the declared payload count.
+The encoder uses the canonical tag; the decoder dispatches only that tag,
+without trying alternative arms. Payload errors prefix `Variant` then `Index`.
+Unknown tags, extra members and multiple recognized members produce `Tag`.
+All field/tag wire names and aliases must be disjoint in their containing
+record/variant; malformed policies fail generation in either direction.
+
+Built-in leaves are bool, String, integer scalars and floats, following the
+existing derive numeric domain and nonfinite string spellings. Lists use
+arrays; tuples use exact-length arrays. Option uses null/element, and a nested
+Option is refused during generation in either direction because this wire
+form cannot distinguish its Nones. String-keyed maps use JSON objects; every
+other key type uses arrays of `[key, value]` entries. Both preserve insertion
+order, reject duplicate decoded keys and report `MapEntry(index), Key` or
+`Value` without retaining/rendering the key. JSON parsing rejects duplicate
+object members before schema traversal. Custom String key encoders must return
+Text and may not produce duplicate object names. Unsupported builtins
+(including Set and box) require an explicit leaf
+pair rather than receiving an inferred representation.
+
+`Leaf` supplies canonical type spelling `ty` and named pure `decode`/`encode`
+functions. These receive the shared mutable CheckState and return Result with
+SchemaError. Their signatures and visibility are checked in the generated
+body. There is no source-expression injection in the function-name seam.
+Distinct/opaque leaves use their owners' explicit conversions. Other nominal
+record/variant leaves call `type_name_schema_decode` and
+`type_name_schema_encode` in the type's declaring module, using the existing
+derive snake-case naming rule. Those declarations can themselves be generated
+or written, including recursive functions; no runtime recursive closure graph
+is created. Custom leaf pairs carry the ordinary weaker mapping guarantee.
+
+Each generated record, variant and tuple enters/leaves one node, including on
+returned errors. Scalars charge one check; Option enters one node. List
+conversion enters one node around its elements. Maps enter one node
+and charge one check per entry in addition to leaf visits. Record member lookup
+and each unknown-member scan charge one check. Independent siblings collect
+under the operation's First/All policy; dependent conversion stops on error.
+All nested calls borrow the original CheckState. A limit outcome takes
+precedence over already collected invalidity and never becomes partial success.
 
 ## Structured rejection
 
@@ -135,3 +231,12 @@ the nested record/fact fixture preserves its containing field/index/leaf
 structure. JSON escaping/preflight follows the existing std JSON writer,
 which is adapted from serde_json. No dynamic schema registry, unchecked
 constructor, implicit policy or callback inverse theorem is introduced.
+
+Strict generated policy follows Serde's renamed/aliased fields and unknown-field
+rejection (`0db9b3b504bcb0a7fa9cf001429869519afd3e9a`,
+`serde_derive/src/internals/attr.rs:277,345,454` and `src/de.rs:435`).
+The alias collision/unknown vectors adapt `test_suite/tests/test_annotations.rs:494`
+and its alias vectors; nested list and variant paths adapt
+serde_path_to_error `tests/deserialize.rs:43,119`. Differences are explicit
+shared directional policy, bounded deterministic issue accumulation, entry/key/
+value paths for all maps, and defaults validated through the field boundary.

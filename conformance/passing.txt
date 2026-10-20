@@ -840,6 +840,17 @@ conformance/CT/CT-5-literal-type-bad.hir
 conformance/CT/CT-5-literal-type-ok.hir
 conformance/CT/CT-5-not-literal-bad.hir
 conformance/CT/CT-5-not-literal-ok.hir
+conformance/CT/CT-5-schema-defaults-run.hir
+conformance/CT/CT-5-schema-derive-run.hir
+conformance/CT/CT-5-schema-null-run.hir
+conformance/CT/CT-5-schema-option-decode-bad.hir
+conformance/CT/CT-5-schema-option-decode-ok.hir
+conformance/CT/CT-5-schema-option-encode-bad.hir
+conformance/CT/CT-5-schema-option-encode-ok.hir
+conformance/CT/CT-5-schema-policy-decode-bad.hir
+conformance/CT/CT-5-schema-policy-decode-ok.hir
+conformance/CT/CT-5-schema-policy-encode-bad.hir
+conformance/CT/CT-5-schema-policy-encode-ok.hir
 conformance/CT/CT-5-std-derive-box-bad.hir
 conformance/CT/CT-5-std-derive-box-ok.hir
 conformance/CT/CT-5-std-derive-float-hash-bad.hir

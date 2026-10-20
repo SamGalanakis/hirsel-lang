@@ -2321,6 +2321,8 @@ shape and returns the body for the header written in source:
 ```text
 fn derive.json_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String] uses {}
 fn derive.from_json[T](s: TypeShape[T]) -> Result[Body[fn(json.Value) -> Result[T, String] uses {}], String] uses {}
+fn derive.schema_decode[T](s: TypeShape[T], p: schema.Policy) -> Result[Body[fn(json.Value, mut schema.CheckState) -> Result[T, schema.SchemaError] uses {}], String] uses {}
+fn derive.schema_encode[T](s: TypeShape[T], p: schema.Policy) -> Result[Body[fn(T, mut schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {}], String] uses {}
 fn derive.equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], String] uses {}
 fn derive.format[T](s: TypeShape[T]) -> Result[Body[fn(T, mut List[u8]) -> () uses {}], String] uses {}
 fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T, mut siphash.State) -> () uses {}], String] uses {}
@@ -2329,6 +2331,13 @@ fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T, mut siphash.State) -> ()
 ```text
 fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
 ```
+
+The `schema_decode`/`schema_encode` pair uses one explicit strict
+`schema.Policy`, structured issues and the operation's shared mutable
+CheckState. See [paired structural generation](schema.md#paired-structural-generation)
+for aliases, validated wire defaults, missing/null behavior, exact tags,
+map entry paths, custom leaf pairs and uniqueness contracts. Existing
+`json_value`/`from_json` acceptance and String errors remain unchanged.
 
 Field and payload types may be `bool`, `String`, the sized integers, `f32`,
 `f64`, another record or variant type, and `Option`, `List`, `Set`, `Map` and
