@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""B1 server cells reuse the landed tasks-rust app and its open-loop load client."""
+import argparse
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import subprocess
+import sys
+from suite import HERE, ROOT, digest
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--output',type=Path,default=HERE/'out/server.json')
+    p.add_argument('--baseline-root',type=Path,default=ROOT)
+    p.add_argument('--skip-build',action='store_true')
+    p.add_argument('--rounds',type=int,default=10)
+    p.add_argument('--seed',type=int,default=20261019)
+    p.add_argument('--seconds',type=float,default=3)
+    p.add_argument('--rates',default='16,64,256')
+    p.add_argument('--cpus',default='31,30,29,28,27,26,25,24')
+    p.add_argument('--hirsel',type=Path,help='optional free-mode server compiled from examples/tasks')
+    a=p.parse_args()
+    app=a.baseline_root.resolve()/'bench/apps/tasks'
+    data={'schema':1,'seed':a.seed,'rounds':a.rounds,'samples':[],'status':'dependency-owned'}
+    a.output.parent.mkdir(parents=True,exist_ok=True)
+    if not (app/'bench').exists() or 'TASKS_WORKERS' not in (app/'rust/src/main.rs').read_text():
+        data['reason']='tasks-rust landed baseline with TASKS_WORKERS is required'
+        a.output.write_text(json.dumps(data,indent=2)+'\n')
+        print(data['reason']); return 2
+    if a.rounds<10 or a.seconds<=0: p.error('ten rounds and positive duration required')
+    sys.path.insert(0,str(app)); sys.path.insert(0,str(a.baseline_root/'bench/micro'))
+    loader=importlib.machinery.SourceFileLoader('tasks_b1_reference',str(app/'bench'))
+    spec=importlib.util.spec_from_loader(loader.name,loader); reference=importlib.util.module_from_spec(spec);loader.exec_module(reference)
+    from support import free_port, grants, line
+    binary=app/'rust/target/release/tasks-rust'; load=app/'rust/target/release/load'; launch=app/'rust/target/release/launch'
+    if not a.skip_build:
+        subprocess.run([str(ROOT/'tools/capped'),'cargo','build','--release','--locked','--manifest-path',str(app/'rust/Cargo.toml'),
+            '--target-dir',str(app/'rust/target')],check=True)
+    cpus=list(map(int,a.cpus.split(',')))
+    if len(cpus)<8 or cpus[0]!=31 or 7 in cpus: p.error('server grant starts at CPU31 and excludes client CPU7')
+    data.update(cpus=cpus,client_cpu=7,seconds=a.seconds,sha256={str(path):digest(path) for path in [binary,load,launch]+([a.hirsel] if a.hirsel else [])})
+    cells=[(kind,width,op,int(rate)) for kind in (['tokio','free'] if a.hirsel else ['tokio'])
+        for width in [1,2,4,8] for op in ['list','search','update'] for rate in a.rates.split(',')]
+    rng=random.Random(a.seed)
+    import tempfile
+    with Path('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        for r in range(a.rounds):
+            rng.shuffle(cells)
+            for kind,width,op,rate in cells:
+                with tempfile.TemporaryDirectory(prefix='b1-server-') as temporary:
+                    out=Path(temporary); files=out/'data';reference.fixture(files,10000)
+                    port=free_port();marker=out/'marker.json'
+                    env=dict(os.environ,TASKS_DATA=str(files),TASKS_STATIC=str(a.baseline_root/'examples/tasks/static'),
+                        TASKS_WALL_CLOCK='off',TASKS_LOG_LEVEL='error',TASKS_RUNTIME='multi_thread',TASKS_WORKERS=str(width),
+                        TASKS_STORE='files',TASKS_DURABILITY='volatile',TASKS_HOST='127.0.0.1',HIRSEL_JOBS=str(width))
+                    if kind=='tokio': command=[str(binary),'--port',str(port)]
+                    else:
+                        config=grants(files,port);config['io']['tasks']='tasks.free@1';config['placement']={'cores':width}
+                        grant=out/'grants.json';grant.write_text(json.dumps(config))
+                        command=[str(a.hirsel),'--hirsel-grants',str(grant),'--port',str(port),'--log-level','error']
+                    server=None;client=None;perf=None
+                    with (out/'server.log').open('wb') as log:
+                        try:
+                            server=subprocess.Popen([str(ROOT/'tools/capped'),'--timeout','300','taskset','-c',','.join(map(str,cpus[:width])),
+                                str(launch),str(marker),*command],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log)
+                            if line(server,60)!=f'listening on http://127.0.0.1:{port}/': raise ValueError('server readiness mismatch')
+                            pid=json.loads(marker.read_text())['pid'];reference.request(port)
+                            rss=reference.rss(pid)
+                            client=subprocess.Popen([str(ROOT/'tools/capped'),'--timeout','120','taskset','-c','7',str(load),str(port),op,str(rate),str(a.seconds)],
+                                env=dict(os.environ,HIRSEL_JOBS='1'),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                            if line(client,60)!='ready': raise ValueError('client readiness mismatch')
+                            perf=reference.AttachedPerf(pid,out)
+                            sibling_before=reference.sibling();perf.send('enable')
+                            client.stdin.write(b'go\n');client.stdin.flush()
+                            # communicate cannot follow a closed stdin object.
+                            raw,error=client.communicate(timeout=120)
+                            if client.returncode: raise ValueError(error.decode())
+                            perf.send('disable');counts=perf.stop();perf=None
+                            measured=json.loads(raw);measured.update(kind=kind,width=width,operation=op,rate=rate,round=r,
+                                counts=counts,rss_before=rss,rss_after=reference.rss(pid),sibling_before=sibling_before,sibling_after=reference.sibling())
+                            if measured['errors']: raise ValueError(f'HTTP errors: {measured}')
+                            data['samples'].append(measured)
+                        finally:
+                            if perf: perf.stop()
+                            if client and client.poll() is None: client.terminate();client.communicate(timeout=15)
+                            if server:
+                                server.stdin.close();server.wait(timeout=30)
+                                if server.returncode: raise ValueError((out/'server.log').read_text())
+            a.output.write_text(json.dumps(data,indent=2)+'\n')
+            print(f'B1 servers: round {r+1}/{a.rounds}',flush=True)
+    data['status']='dependency-owned'
+    data['reason']='server recording modes and operation metrics are dependency-owned by C1/W1/F1/K1; these are live baseline cells'
+    a.output.write_text(json.dumps(data,indent=2)+'\n')
+    # The reference client reports corrected latency including offered-load queueing.
+    lines=['# B1 tasks-rust server session','','Server CPU31 plus width-1 cores; open-loop client CPU7. Instruction counts cover the measured requests and all existing server threads.','',
+        '| Kind | Width | Operation | Rate | Round | Completed/s | p99 µs | Instructions | RSS after |','|---|---:|---|---:|---:|---:|---:|---:|---:|']
+    for s in data['samples']:
+        lines.append(f"| {s['kind']} | {s['width']} | {s['operation']} | {s['rate']} | {s['round']} | {s['requests_per_s']:.4g} | {s['p99_us']} | {s['counts']['instructions']} | {s['rss_after']} |")
+    a.output.with_suffix('.md').write_text('\n'.join(lines)+'\n')
+    return 2
+
+if __name__=='__main__': sys.exit(main())

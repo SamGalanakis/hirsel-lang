@@ -1,0 +1,42 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) { Ok(v) => v, Error(_) => 1000u64, },
+    Error(_) => 1000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let sum = task.scope(tasks, fn(s: Scope) -> u64 {
+    let mut sum = 0u64
+    for _ in 0u64..n {
+      let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let a = task.async(s, fn() -> u64 {
+        let mut sender = take tx
+        let _ = channel.send(tasks, mut sender, 1u64)
+        1
+      })
+      let b = task.async(s, fn() -> u64 {
+        task.scope(tasks, fn(inner: Scope) -> u64 {
+          let _ = task.check_canceled(inner)
+          2
+        })
+      })
+      let mut receiver = take rx
+      let _ = channel.receive(tasks, mut receiver)
+      let mut set: TaskSet[u64] of s = task.set(s)
+      task.add(s, mut set, take a)
+      task.add(s, mut set, take b)
+      let first = match task.await_any(s, set) { Some(i) => i, None => 99u64, }
+      sum = sum + task.await_at(s, mut set, first)
+      task.add(s, mut set, task.async(s, fn() -> u64 { 3 }))
+      for _ in 0u64..2u64 {
+        let next = match task.await_any(s, set) { Some(i) => i, None => 99u64, }
+        sum = sum + task.await_at(s, mut set, next)
+      }
+      task.detach_all(s, take set)
+    }
+    sum
+  })
+  let stdout = io.stdout(rt) ? Grant
+  out.print(stdout, f"{sum}\n") ? Output
+  Ok(())
+}

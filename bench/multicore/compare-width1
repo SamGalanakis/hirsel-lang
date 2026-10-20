@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""R1 gate: compare two participants measured in the SAME B1 session."""
+import argparse
+import json
+from pathlib import Path
+import statistics
+import sys
+from suite import bootstrap_ratio
+p=argparse.ArgumentParser(description=__doc__)
+p.add_argument('session',type=Path)
+p.add_argument('--before',required=True)
+p.add_argument('--after',required=True)
+a=p.parse_args();data=json.loads(a.session.read_text())
+rows=[]
+for case in data['manifest']['workloads']:
+    pair=[]
+    for name in (a.after,a.before):
+        samples=sorted([s for s in data['samples'] if s['participant']==name and s['case']==case and s['width']==1 and s['mode']=='off'],key=lambda s:s['round'])
+        if [s['round'] for s in samples] != list(range(data['rounds'])) or data['rounds']<10:
+            p.error(f'{name}/{case}: ten complete paired rounds required')
+        pair.append(samples)
+    after,before=pair
+    time_ratio=statistics.median(s['elapsed_ns'] for s in after)/statistics.median(s['elapsed_ns'] for s in before)
+    ci=bootstrap_ratio([s['elapsed_ns'] for s in after],[s['elapsed_ns'] for s in before],data['seed'])
+    instructions=statistics.median(s['counts']['instructions'] for s in after)/statistics.median(s['counts']['instructions'] for s in before)
+    bound=1+data['manifest']['thresholds']['width1_noise_fraction']
+    rows.append({'case':case,'time_after_before':time_ratio,'time_ci95':ci,'instructions_after_before':instructions,
+        'status':'pass' if time_ratio<=bound and instructions<=bound else 'fail'})
+print(json.dumps(rows,indent=2))
+sys.exit(0 if all(r['status']=='pass' for r in rows) else 1)

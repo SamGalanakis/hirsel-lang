@@ -1,0 +1,31 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) { Ok(v) => v, Error(_) => 1000u64, },
+    Error(_) => 1000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let mut data: unique List[u64] = unique []
+  for _ in 0u64..64u64 { list.push(mut data, 1u64) }
+  let root = shared.freeze(take data)
+  let sum = task.scope(tasks, fn(s: Scope) -> Result[u64, AppError] {
+    let mut set: TaskSet[Result[u64, AppError]] of s = task.set(s)
+    for lane in 0u64..8u64 {
+      task.add(s, mut set, task.async(s, fn() -> Result[u64, AppError] {
+        let mut sum = 0u64
+        for _ in 0u64..n {
+          let owned = copy root
+          sum = sum + shared.with(owned, fn(xs: List[u64]) -> u64 { xs[0] })
+        }
+        Ok(sum)
+      }))
+    }
+    let mut sum = 0u64
+    for i in 0u64..8u64 { sum = sum + task.await_at(s, mut set, i)? }
+    task.detach_all(s, take set)
+    Ok(sum)
+  })?
+  let stdout = io.stdout(rt) ? Grant
+  out.print(stdout, f"{sum}\n") ? Output
+  Ok(())
+}

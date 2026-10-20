@@ -1,0 +1,19 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) { Ok(v) => v, Error(_) => 1000u64, },
+    Error(_) => 1000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let sum = task.scope(tasks, fn(s: Scope) -> u64 {
+    let mut sum = 0u64
+    for i in 0u64..n {
+      let child = task.async(s, fn() -> u64 { i + 1 })
+      sum = sum + task.await(s, take child)
+    }
+    sum
+  })
+  let stdout = io.stdout(rt) ? Grant
+  out.print(stdout, f"{sum}\n") ? Output
+  Ok(())
+}

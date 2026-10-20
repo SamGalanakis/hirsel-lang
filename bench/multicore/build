@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Build locked tokio and current cooperative executables; seal the inventory."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT/'bench/native'))
+from suite import buck2_build, native_environment  # noqa: E402
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--output', type=Path, default=HERE/'out/build')
+    p.add_argument('--tokio-only', action='store_true')
+    args = p.parse_args()
+    out = args.output.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(ROOT/'tools/capped'), 'cargo', 'build', '--release', '--locked',
+                    '--manifest-path', str(HERE/'rust/Cargo.toml'), '--target-dir', str(out/'rust')], check=True)
+    programs = json.loads((HERE/'manifest.json').read_text())['workloads']
+    participants = [{'name': 'tokio', 'provider': 'tokio', 'widths': [1,2,4,8], 'modes': ['off'],
+        'commands': {case: [str(out/'rust/release/multicore-tokio'), case, '{width}', '{iterations}', '{root}'] for case in programs}}]
+    if not args.tokio_only:
+        subprocess.run([sys.executable, str(ROOT/'tools/buck2/prepare.py')], check=True)
+        cli = Path(buck2_build('--target-platforms','//tools/buck2:release','//:hirsel-toolchain')['hirsel-toolchain'])/'hirsel'
+        env = native_environment()
+        commands = {}
+        for case in programs:
+            if case == 'extern': continue  # R8 owns the Hirsel threaded foreign wrapper.
+            source = out/f'{case}.hir'
+            source.write_text((HERE/'programs'/source.name).read_text())
+            source.with_suffix('.hir.json').write_text(json.dumps({'schema':1,'package':{'name':'multicore','version':'1'},
+                'entry':{'module':[],'name':'main'},'sources':[{'path':source.name,'module':[]}],
+                'dependencies':[{'manifest':str(ROOT/'stdlib/std@1/hirsel.json'),'package':{'name':'std','version':'1'},'expose':[]}]}))
+            binary = out/case
+            subprocess.run([str(ROOT/'tools/capped'),'--timeout','900',str(cli),'build','--release',str(source),'-o',str(binary)], env=env, check=True)
+            commands[case] = [str(binary),'--hirsel-grants','{grants}','{iterations}']
+        participants.append({'name':'cooperative','provider':'tasks.cooperative@1','widths':[1],
+            'modes':['off','record','durable'],'commands':commands})
+    inventory = {'schema':1,'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+                 'participants':participants}
+    files = sorted({Path(c[0]) for p in participants for c in p['commands'].values()})
+    sources = sorted((HERE/'programs').glob('*.hir')) + sorted((HERE/'rust/src').glob('*.rs')) + [HERE/'manifest.json',HERE/'rust/Cargo.lock',HERE/'rust/extern.c',HERE/'rust/build.rs']
+    inventory['sha256'] = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in files+sources}
+    (out/'inventory.json').write_text(json.dumps(inventory,indent=2)+'\n')
+    print(out/'inventory.json')
+
+if __name__ == '__main__': main()

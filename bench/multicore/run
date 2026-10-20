@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Run B1 in one seeded interleaved 1/2/4/8-core session; missing gates exit 2."""
+import argparse
+import fcntl
+import gzip
+import json
+import os
+from pathlib import Path
+import random
+import subprocess
+import sys
+from suite import HERE, ROOT, MODES, analyze, digest, report, sample
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--inventory', type=Path, default=HERE/'out/build/inventory.json')
+    p.add_argument('--output', type=Path, default=HERE/'out/session.json')
+    p.add_argument('--report', type=Path)
+    p.add_argument('--report-only', action='store_true')
+    p.add_argument('--skip-build', action='store_true')
+    p.add_argument('--tokio-only', action='store_true')
+    p.add_argument('--skip-servers', action='store_true', help='partial micro-only run')
+    p.add_argument('--case', action='append')
+    p.add_argument('--iterations', type=int)
+    p.add_argument('--rounds', type=int, default=10)
+    p.add_argument('--seed', type=int, default=20261019)
+    p.add_argument('--cpus', default='31,30,29,28,27,26,25,24')
+    p.add_argument('--timeout', type=int, default=300)
+    p.add_argument('--participants', type=Path, help='additional sealed participant inventory (free executor adapters)')
+    args = p.parse_args()
+    if args.report_only:
+        data = json.loads(gzip.decompress(args.output.read_bytes()) if args.output.suffix == '.gz' else args.output.read_text())
+    else:
+        if args.rounds < 10 or args.iterations is not None and args.iterations < 1:
+            p.error('at least ten rounds and positive iterations required')
+        cpus = list(map(int,args.cpus.split(',')))
+        if len(cpus)<8 or len(set(cpus)) != len(cpus) or not set(cpus).issubset(os.sched_getaffinity(0)):
+            p.error('eight distinct CPUs in the admission affinity required')
+        # Reject SMT siblings in the worker grant: widths mean physical core parity.
+        from suite import siblings
+        if any(set(siblings(cpu)) & set(cpus) for cpu in cpus): p.error('worker CPUs must be distinct physical cores')
+        if not args.skip_build:
+            subprocess.run([str(HERE/'build'), '--output',str(args.inventory.parent), *(['--tokio-only'] if args.tokio_only else [])],check=True)
+        inventory = json.loads(args.inventory.read_text())
+        if args.participants:
+            extra = json.loads(args.participants.read_text())
+            inventory['participants'] += extra['participants']
+            inventory['sha256'].update(extra['sha256'])
+        for participant in inventory['participants']:
+            for command in participant['commands'].values():
+                if command[0] not in inventory['sha256']: p.error(f'unsealed executable: {command[0]}')
+        for path,expected in inventory['sha256'].items():
+            if digest(path) != expected: p.error(f'sealed input changed: {path}; rebuild')
+        manifest = json.loads((HERE/'manifest.json').read_text())
+        if args.case:
+            unknown = set(args.case)-manifest['workloads'].keys()
+            if unknown: p.error(f'unknown workloads {unknown}')
+            manifest['workloads'] = {k:v for k,v in manifest['workloads'].items() if k in args.case}
+        if args.iterations:
+            for spec in manifest['workloads'].values(): spec['iterations'] = args.iterations
+        data = {'schema':1,'seed':args.seed,'rounds':args.rounds,'cpus':cpus,'manifest':manifest,
+            'harness_sha256':{str(path.relative_to(ROOT)):digest(path) for path in [HERE/'run',HERE/'suite.py',HERE/'snapshot']},
+            'inventory':inventory,'samples':[],'errors':[],'partial':bool(args.case or args.tokio_only or args.skip_servers)}
+        rng = random.Random(args.seed)
+        cells = [(participant,case,width,mode)
+            for participant in inventory['participants']
+            if not args.tokio_only or participant['provider']=='tokio'
+            for case in manifest['workloads'] if case in participant['commands']
+            for width in manifest['widths'] if width in participant['widths']
+            for mode in MODES if mode in participant['modes']]
+        # This is the existing host timing lease, shared with the tasks baseline.
+        lock = Path('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock')
+        lock.parent.mkdir(parents=True,exist_ok=True)
+        args.output.parent.mkdir(parents=True,exist_ok=True)
+        with lock.open('a') as stream:
+            print('B1: waiting for CPU31 timing lease',flush=True)
+            fcntl.flock(stream,fcntl.LOCK_EX)
+            for round_number in range(args.rounds):
+                rng.shuffle(cells)
+                for participant,case,width,mode in cells:
+                    try:
+                        measured = sample(participant,case,manifest['workloads'][case],width,mode,cpus,args.timeout,
+                            placement=participant.get('placement',False),budget=participant.get('budget'))
+                        measured['round'] = round_number
+                        data['samples'].append(measured)
+                    except (ValueError, OSError, subprocess.SubprocessError) as error:
+                        data['errors'].append(str(error))
+                        args.output.write_text(json.dumps(data,indent=2)+'\n')
+                        (args.report or args.output.with_suffix('.md')).write_text(report(data))
+                        print(str(error),file=sys.stderr)
+                        return 1
+                args.output.write_text(json.dumps(data,indent=2)+'\n')
+                print(f'B1: round {round_number+1}/{args.rounds}, {len(data["samples"])} samples',flush=True)
+    if not args.report_only and not args.skip_servers and not args.tokio_only:
+        server_result = subprocess.run([str(HERE/'server'),'--output',str(args.output.with_suffix('.server.json')),'--rounds',str(args.rounds),'--seed',str(args.seed),'--cpus',args.cpus])
+        if server_result.returncode not in (0,2): return server_result.returncode
+    rendered = args.report or (args.output.with_suffix('') if args.output.suffix == '.gz' else args.output).with_suffix('.md')
+    rendered.write_text(report(data))
+    analysis = analyze(data)
+    rendered.with_suffix('.analysis.json').write_text(json.dumps(analysis,indent=2)+'\n')
+    print(f'{rendered}: {analysis["status"]}')
+    return 0 if analysis['status']=='pass' and not data.get('partial') else 2
+
+if __name__ == '__main__': sys.exit(main())

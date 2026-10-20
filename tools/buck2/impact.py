@@ -173,6 +173,7 @@ TOOL_PATHS = (
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',
     'bench/native/**',
+    'bench/multicore/**',
 )
 
 # Inputs of every action or of the toolchains: the Cargo workspace and lock,

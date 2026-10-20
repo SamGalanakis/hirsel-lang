@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""perf's pre/post hook: read the actual capped scope, outside counted work."""
+import json
+from pathlib import Path
+import sys
+cgroup = Path('/proc/self/cgroup').read_text().split('0::', 1)[1].strip()
+stat = Path('/sys/fs/cgroup') / cgroup.lstrip('/') / 'cpu.stat'
+try:
+    cpu = dict(line.split() for line in stat.read_text().splitlines())
+except OSError:
+    cpu = {}
+Path(sys.argv[1]).write_text(json.dumps({'proc_stat':Path('/proc/stat').read_text(),
+    'cgroup':cgroup,'throttled_usec':int(cpu['throttled_usec']) if 'throttled_usec' in cpu else None}))
