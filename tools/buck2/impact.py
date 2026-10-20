@@ -274,15 +274,16 @@ def classify(paths, members, buck_text: str) -> Classified:
         elif path.startswith('crates/'):
             parts = path.split('/')
             crate = parts[1]
-            # A crate this copy of the table does not know yet (tools/land runs
-            # main's copy on a lane's tree that adds a crate) selects broadly.
-            if crate not in members or crate not in CRATE_CAMPAIGNS:
+            if crate not in members:
                 result.unknown_crates.add(crate)
                 continue
             result.owned.append(path)
             if len(parts) > 2 and parts[2] not in CRATE_TEST_DIRS and parts[2] != 'README.md':
                 result.crates.add(crate)
-                result.campaigns |= SOURCE_CAMPAIGNS.get(path, CRATE_CAMPAIGNS[crate])
+                # A member this copy of the table does not know yet (tools/land runs
+                # main's copy on a lane's tree that adds a crate) runs every campaign,
+                # and is still the change's crate, so gate and land agree on it.
+                result.campaigns |= SOURCE_CAMPAIGNS.get(path, CRATE_CAMPAIGNS.get(crate, ALL))
         else:
             result.owned.append(path)
     return result
