@@ -1,5 +1,5 @@
 //! An indexed snapshot: clones share the tree, writes copy only their path.
-//! IDs are u32, so eight four-bit levels bound lookup, copying and drop work.
+//! Root height follows populated indexes; the u32/u64 width caps lookup and copying.
 //! Empty subtrees are absent; the same tree also holds sparse audit candidates.
 use std::fmt;
 use std::ops::{Index, IndexMut};
@@ -17,12 +17,17 @@ enum Node<T> {
 #[derive(Clone)]
 pub struct Snapshot<T, const LEVEL: u32 = 7> {
     root: Option<Arc<Node<T>>>,
+    height: u32,
     len: usize,
 }
 
 impl<T, const LEVEL: u32> Default for Snapshot<T, LEVEL> {
     fn default() -> Self {
-        Self { root: None, len: 0 }
+        Self {
+            root: None,
+            height: 0,
+            len: 0,
+        }
     }
 }
 
@@ -37,8 +42,11 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
         if LEVEL == 7 && u32::try_from(index).is_err() {
             return None;
         }
+        if self.height < 15 && index >> (4 * (self.height + 1)) != 0 {
+            return None;
+        }
         let mut node = self.root.as_deref()?;
-        for level in (1..=LEVEL).rev() {
+        for level in (1..=self.height).rev() {
             let Node::Branch(children) = node else {
                 unreachable!()
             };
@@ -53,7 +61,7 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
     pub fn indexed(&self) -> Entries<'_, T> {
         let mut stack = Vec::new();
         if let Some(root) = self.root.as_deref() {
-            stack.push((root, LEVEL, 0, 0));
+            stack.push((root, self.height, 0, 0));
         }
         Entries { stack }
     }
@@ -68,15 +76,33 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
         old: &Self,
         mut visit: impl FnMut(usize, Option<&T>, Option<&T>),
     ) {
+        // A shorter root is a virtual chain of leading zero branches. No
+        // nodes or values are copied just to align two retained revisions.
+        fn child<T>(
+            node: Option<&Arc<Node<T>>>,
+            height: u32,
+            level: u32,
+            i: usize,
+        ) -> Option<&Arc<Node<T>>> {
+            let node = node?;
+            if height < level {
+                return (i == 0).then_some(node);
+            }
+            let Node::Branch(children) = node.as_ref() else {
+                unreachable!()
+            };
+            children[i].as_ref()
+        }
         fn walk<T>(
-            old: Option<&Arc<Node<T>>>,
-            new: Option<&Arc<Node<T>>>,
+            (old, old_height): (Option<&Arc<Node<T>>>, u32),
+            (new, new_height): (Option<&Arc<Node<T>>>, u32),
             level: u32,
             base: usize,
             visit: &mut impl FnMut(usize, Option<&T>, Option<&T>),
         ) {
             if matches!((old, new), (None, None))
-                || matches!((old,new), (Some(a),Some(b)) if Arc::ptr_eq(a,b))
+                || old_height == new_height
+                    && matches!((old,new), (Some(a),Some(b)) if Arc::ptr_eq(a,b))
             {
                 return;
             }
@@ -98,21 +124,10 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
                     }
                 }
             } else {
-                fn children<T>(
-                    node: Option<&Arc<Node<T>>>,
-                ) -> Option<&[Option<Arc<Node<T>>>; WIDTH]> {
-                    match node.map(Arc::as_ref) {
-                        Some(Node::Branch(v)) => Some(v),
-                        None => None,
-                        _ => unreachable!(),
-                    }
-                }
-                let before = children(old);
-                let after = children(new);
                 for i in 0..WIDTH {
                     walk(
-                        before.and_then(|v| v[i].as_ref()),
-                        after.and_then(|v| v[i].as_ref()),
+                        (child(old, old_height, level, i), old_height.min(level - 1)),
+                        (child(new, new_height, level, i), new_height.min(level - 1)),
                         level - 1,
                         base + (i << (4 * level)),
                         visit,
@@ -120,7 +135,13 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
                 }
             }
         }
-        walk(old.root.as_ref(), self.root.as_ref(), LEVEL, 0, &mut visit);
+        walk(
+            (old.root.as_ref(), old.height),
+            (self.root.as_ref(), self.height),
+            old.height.max(self.height),
+            0,
+            &mut visit,
+        );
     }
 }
 
@@ -152,14 +173,24 @@ impl<T: Clone, const LEVEL: u32> Snapshot<T, LEVEL> {
                 }
             }
         }
-        *slot(&mut self.root, LEVEL, index) = Some(value);
+        let needed = (usize::BITS - index.leading_zeros()).saturating_sub(1) / 4;
+        if self.root.is_none() {
+            self.height = needed;
+        }
+        while self.height < needed {
+            let mut children = std::array::from_fn(|_| None);
+            children[0] = self.root.take();
+            self.root = Some(Arc::new(Node::Branch(children)));
+            self.height += 1;
+        }
+        *slot(&mut self.root, self.height, index) = Some(value);
         self.len = self.len.max(index.saturating_add(1));
     }
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         // An absent lookup must not copy or grow the snapshot.
         self.get(index)?;
         let mut node = Arc::make_mut(self.root.as_mut().unwrap());
-        for level in (1..=LEVEL).rev() {
+        for level in (1..=self.height).rev() {
             let Node::Branch(children) = node else {
                 unreachable!()
             };
@@ -190,7 +221,21 @@ impl<T: Clone, const LEVEL: u32> Snapshot<T, LEVEL> {
                 *root = None;
             }
         }
-        remove(&mut self.root, LEVEL, index);
+        remove(&mut self.root, self.height, index);
+        while self.height > 0 {
+            let Some(root) = self.root.as_ref() else {
+                self.height = 0;
+                break;
+            };
+            let Node::Branch(children) = root.as_ref() else {
+                unreachable!()
+            };
+            if children[1..].iter().any(Option::is_some) {
+                break;
+            }
+            self.root = children[0].clone();
+            self.height -= 1;
+        }
     }
 }
 
@@ -254,6 +299,84 @@ impl<'a, T> Iterator for Entries<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dense_roots_and_sparse_forks_preserve_values_at_every_height() {
+        let mut current = Snapshot::<u64, 15>::default();
+        let mut model = std::collections::BTreeMap::new();
+        for i in 0..16 {
+            current.push(i as u64);
+            model.insert(i, i as u64);
+        }
+        // Dense register tables have no redundant high radix chain.
+        assert_eq!(current.height, 0);
+        for index in [16, 255, 256, 4096, u32::MAX as usize, usize::MAX] {
+            let before = current.clone();
+            let expected_before = model.clone();
+            current.set(index, 99);
+            model.insert(index, 99);
+            assert_eq!(current.get(index), Some(&99));
+            assert_eq!(before.get(index), expected_before.get(&index));
+            let mut actual = std::collections::BTreeMap::new();
+            current.differences(&before, |i, a, b| {
+                if a != b {
+                    actual.insert(i, (a.copied(), b.copied()));
+                }
+            });
+            assert_eq!(
+                actual,
+                std::collections::BTreeMap::from([(index, (None, Some(99)))])
+            );
+            current.remove(index);
+            model.remove(&index);
+            assert_eq!(current.height, 0);
+            assert_eq!(
+                current.indexed().map(|(i, v)| (i, *v)).collect::<Vec<_>>(),
+                model.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
+            );
+            let mut removed = Vec::new();
+            before.differences(&current, |i, a, b| {
+                if a != b {
+                    removed.push(i);
+                }
+            });
+            assert!(removed.is_empty());
+        }
+        let mut original = Snapshot::<u64>::default();
+        let mut expected = std::collections::BTreeMap::new();
+        let mut seed = 19u64;
+        for step in 0..1000 {
+            let before = original.clone();
+            let old = expected.clone();
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let index = (seed as usize) & 8191;
+            if step % 3 == 0 {
+                original.remove(index);
+                expected.remove(&index);
+            } else {
+                original.set(index, seed);
+                expected.insert(index, seed);
+            }
+            let mut actual = std::collections::BTreeMap::new();
+            original.differences(&before, |i, a, b| {
+                if a != b {
+                    actual.insert(i, (a.copied(), b.copied()));
+                }
+            });
+            let expected_diff = if old.get(&index) == expected.get(&index) {
+                std::collections::BTreeMap::new()
+            } else {
+                std::collections::BTreeMap::from([(
+                    index,
+                    (old.get(&index).copied(), expected.get(&index).copied()),
+                )])
+            };
+            assert_eq!(actual, expected_diff);
+            assert_eq!(
+                original.indexed().map(|(i, v)| (i, *v)).collect::<Vec<_>>(),
+                expected.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
+            );
+        }
+    }
     #[test]
     fn fork_isolation_across_radix_boundaries_and_sparse_removal() {
         let mut original = Snapshot::<_>::default();

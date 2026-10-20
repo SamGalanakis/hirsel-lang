@@ -140,8 +140,11 @@ Invariants:
   flags, terminal obligations and event and
   exemption histories use shared immutable snapshots. A fork copies only the
   branches its suffix changes; it neither clones nor drops the historical
-  allocation table. Indexed snapshots use radix trees, and path interning uses
-  an ordered AVL tree; updates take logarithmic work and never rely on hashes
+  allocation table. Indexed snapshots use radix trees whose roots grow only
+  with populated indexes and collapse after sparse removals; small register
+  tables stay in a single leaf. Differences align unequal root heights without
+  copying either revision. Path interning uses an ordered AVL tree;
+  updates take logarithmic work and never rely on hashes
   for audit equality. Campaign bookkeeping scales with the base and executed
   failure suffixes, rather than their product with dead allocation history.
   Required failure cleanup and observation still execute in full.
