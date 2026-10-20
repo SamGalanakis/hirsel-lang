@@ -7,10 +7,10 @@ Requires the repository Buck2 setup, `perf`, Linux `/proc`, Python 3 and Cargo.
 No system packages or load tools are installed. The load generator is the
 `load` binary in the same pinned Cargo project (reqwest + HdrHistogram).
 
-Defaults: ten rounds, three-second open-loop cells at 1, 4 and 16 requests/s,
+Defaults: ten rounds, three-second open-loop cells at 1, 4, 16, 64, 256 and 1024 requests/s,
 10,000 persisted tasks, three participants (Hirsel, Rust current_thread, Rust
-multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Rates can be
-extended with `--rates 1,4,16,64`; cells that cannot keep up retain their corrected
+multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Each participant’s sweep stops at its first capacity knee. Rates can be
+selected with `--rates 1,4,16,64`; cells that cannot keep up retain their corrected
 latency and completion rate. The knee is the first rate whose achieved rate is
 below 90% of offered rate. If no knee is reached the report says so; extend the
 sweep before drawing a capacity conclusion. `--rounds` cannot be below ten.

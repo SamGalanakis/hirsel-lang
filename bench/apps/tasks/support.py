@@ -6,7 +6,6 @@ import selectors
 import socket
 import subprocess
 import time
-import sys
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / 'bench/apps/tasks'
@@ -42,7 +41,7 @@ def grants(directory, port):
 
 
 class Server:
-    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None):
+    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None):
         environment = dict(os.environ, TASKS_DATA=str(directory),
                            TASKS_STATIC=str(ROOT / 'examples/tasks/static'),
                            TASKS_WALL_CLOCK='off', TASKS_LOG_LEVEL='error',
@@ -53,11 +52,14 @@ class Server:
         else:
             command = [str(RUST), '--port', str(port)]
         self.marker = directory.parent / (directory.name + '-launch.json')
-        command = ['taskset', '-c', '31', *command]
+        command = ['taskset', '-c', '31', str(APP / 'rust/target/release/launch'), str(self.marker), *command]
+        if record:
+            command = ['perf', 'record', '-e', 'instructions', '-c', '10000', '-g',
+                       '-o', str(record), *command]
         if perf:
+            environment['TASKS_PERF_WRAPPER'] = '1'
             command = ['perf', 'stat', '-x', ';', '-o', str(perf), '-e',
                        'task-clock,cycles,instructions,cycles:u,instructions:u', *command]
-        command = [sys.executable, str(APP / 'support.py'), str(self.marker), *command]
         self.log = open(log, 'wb')
         self.started = time.monotonic()
         self.process = subprocess.Popen([str(CAPPED), *(['--long'] if timeout > 900 else []),
@@ -85,7 +87,3 @@ class Server:
         if check and self.process.returncode:
             raise RuntimeError(f'server failed: exit {self.process.returncode}')
 
-
-if __name__ == "__main__":
-    Path(sys.argv[1]).write_text(json.dumps({"pid": os.getpid(), "started_ns": time.monotonic_ns()}))
-    os.execvp(sys.argv[2], sys.argv[2:])

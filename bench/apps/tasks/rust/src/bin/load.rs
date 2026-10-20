@@ -80,13 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     let mut hist = Histogram::<u64>::new(3)?;
     if op == "sse" {
-        let response = client
-            .post(format!("{base}/tasks/1/advance"))
-            .send()
-            .await?;
-        if response.status().as_u16() != 204 {
-            return Err(format!("mutation: {}", response.status()).into());
-        }
         let mut receiving = FuturesUnordered::new();
         for (mut stream, mut pending) in streams {
             receiving.push(async move {
@@ -96,9 +89,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok::<_, String>(start.elapsed().as_micros() as u64)
             });
         }
-        while let Some(latency) = receiving.next().await {
-            hist.record(latency?.max(1))?;
-        }
+        let mutation = async {
+            let response = client
+                .post(format!("{base}/tasks/1/advance"))
+                .send()
+                .await?;
+            if response.status().as_u16() != 204 {
+                return Err(format!("mutation: {}", response.status()).into());
+            }
+            Ok::<_, Box<dyn std::error::Error>>(())
+        };
+        let patches = async {
+            while let Some(latency) = receiving.next().await {
+                hist.record(latency?.max(1))?;
+            }
+            Ok::<_, Box<dyn std::error::Error>>(())
+        };
+        let (mutation, patches) = tokio::join!(mutation, patches);
+        mutation?;
+        patches?;
         report(&hist, start.elapsed().as_secs_f64(), rate, 0);
         return Ok(());
     }

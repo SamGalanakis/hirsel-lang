@@ -96,7 +96,6 @@ impl Default for Query {
     }
 }
 #[derive(Deserialize, Default, Clone)]
-#[serde(default)]
 pub struct Screen {
     pub filter: Query,
     pub selected: u64,
