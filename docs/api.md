@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1654 exported definitions; 640 variants.
+1723 exported definitions; 669 variants.
 
 ## Types and roots
 
@@ -1042,7 +1042,7 @@ Variant of OutputError.
 
 <a id="def-core_401_2fPeerTls"></a>
 
-- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure) | Presents(List[String], Bytes) | Serves(TlsServer)`
+- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure) | Presents(List[String], Bytes) | Serves(TlsServer) | Offers(List[String], List[String])`
 
 <a id="def-core_401_2fPeerTls_23Certificate"></a>
 
@@ -1053,6 +1053,12 @@ Variant of PeerTls.
 <a id="def-core_401_2fPeerTls_23Fails"></a>
 
 - `Fails(TlsFailure) -> PeerTls`
+
+Variant of PeerTls.
+
+<a id="def-core_401_2fPeerTls_23Offers"></a>
+
+- `Offers(List[String], List[String]) -> PeerTls`
 
 Variant of PeerTls.
 
@@ -1173,6 +1179,10 @@ Variant of ProcessError.
 - `Unavailable() -> RandomError`
 
 Variant of RandomError.
+
+<a id="def-core_401_2fReadHalf"></a>
+
+- `opaque resource type ReadHalf: sendable + noalloc_drop uses {Net}`
 
 <a id="def-core_401_2fReceiver"></a>
 
@@ -1406,6 +1416,10 @@ Variant of Signal.
 
 - `@capability(local) opaque type Test: noalloc_drop uses {Test}`
 
+<a id="def-core_401_2fTlsClient"></a>
+
+- `type TlsClient uses {} = { roots: TlsRoots, identity: Option[TlsIdentity], alpn: List[String] }`
+
 <a id="def-core_401_2fTlsClientAuth"></a>
 
 - `type TlsClientAuth uses {} = Anonymous() | Request(Bytes) | Require(Bytes)`
@@ -1520,7 +1534,7 @@ Variant of TlsRoots.
 
 <a id="def-core_401_2fTlsServer"></a>
 
-- `type TlsServer uses {} = { identities: List[TlsIdentity], clients: TlsClientAuth }`
+- `type TlsServer uses {} = { identities: List[TlsIdentity], clients: TlsClientAuth, alpn: List[String] }`
 
 <a id="def-core_401_2fUdpReceived"></a>
 
@@ -1595,6 +1609,10 @@ Variant of WatchEvent.
 <a id="def-core_401_2fWatcher"></a>
 
 - `opaque resource type Watcher: noalloc_drop uses {Dir}`
+
+<a id="def-core_401_2fWriteHalf"></a>
+
+- `opaque resource type WriteHalf: sendable + noalloc_drop uses {Net}`
 
 <a id="def-core_401_2fbool"></a>
 
@@ -2593,7 +2611,7 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std
 
 <a id="def-std_401_2fbufio_2fconsume"></a>
 
-- `pub fn bufio.consume(mut r: Reader, count: u64) -> () uses {}`
+- `@preserves_captures(r) pub fn bufio.consume(mut r: Reader, count: u64) -> () uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
@@ -2719,7 +2737,7 @@ References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_4
 
 <a id="def-std_401_2fbufio_2fstream_5fread_5fmore"></a>
 
-- `pub fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[ u64, ReadError[NetError] ]`
+- `@preserves_captures(s, r) pub fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[ u64, ReadError[NetError] ]`
 
 References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
@@ -4595,7 +4613,7 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 
 <a id="def-core_401_2ffile_2fread"></a>
 
-- `fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]`
+- `@preserves_captures(f, buffer) fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]`
 
 <a id="def-core_401_2ffile_2fread_5fbytes"></a>
 
@@ -5715,7 +5733,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 <a id="def-std_401_2fhttp_2fread_5fbody"></a>
 
-- `@preserves_unique(out) pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]`
+- `@preserves_unique(out) @preserves_captures(r) pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
 
@@ -7448,8 +7466,8 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_
 
 - `@noalloc pub fn list.sort_stable[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
 
-Stable merge sort. Equal elements retain their input order. Elements are
-rearranged only by swaps, including move-only elements; no allocation.
+Stable, allocation-free WikiSort. Equal elements retain their input order.
+O(n log n) time and O(1) auxiliary space, including move-only elements.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
 
@@ -7669,7 +7687,7 @@ References: [`core@1/Map`](#def-core_401_2fMap)
 
 <a id="def-std_401_2fmarkdown_2fKind"></a>
 
-- `pub type markdown.Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock( bool, u64, bool ) | Item(Option[bool]) | CodeBlock(String, String) | HtmlBlock(String) | ThematicBreak | Text( String ) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link( String, String ) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8)`
+- `pub type markdown.Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock( bool, u64, bool ) | Item(Option[bool]) | CodeBlock(String, String) | HtmlBlock(String) | ThematicBreak | Text( String ) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link( String, String ) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8) | FootnoteDefinition( String ) | FootnoteReference(String, u64, u64) | FootnoteBackrefs(String, u64, u64)`
 
 Block and inline payloads. Table alignment: 0 none, 1 left, 2 center, 3 right.
 
@@ -7708,6 +7726,30 @@ Variant of markdown.Kind.
 - `Emphasis -> markdown.Kind`
 
 Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23FootnoteBackrefs"></a>
+
+- `FootnoteBackrefs(String, u64, u64) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fKind_23FootnoteDefinition"></a>
+
+- `FootnoteDefinition( String ) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23FootnoteReference"></a>
+
+- `FootnoteReference(String, u64, u64) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fmarkdown_2fKind_23HardBreak"></a>
 
@@ -7841,9 +7883,9 @@ References: [`core@1/List`](#def-core_401_2fList), [`std@1/markdown/Kind`](#def-
 
 <a id="def-std_401_2fmarkdown_2fOptions"></a>
 
-- `pub type markdown.Options { tables: bool, strikethrough: bool, autolinks: bool, task_lists: bool, }`
+- `pub type markdown.Options { tables: bool, strikethrough: bool, autolinks: bool, task_lists: bool, footnotes: bool, allow_unsafe: bool, tagfilter: bool, }`
 
-Extensions are opt-in; default_options implements CommonMark 0.31.2.
+Extensions are opt-in. Rendering omits raw HTML and unsafe destinations by default.
 
 References: [`core@1/bool`](#def-core_401_2fbool)
 
@@ -7872,9 +7914,17 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#
 
 - `pub fn markdown.render_html(document: Node) -> String uses {}`
 
-CommonMark HTML. Raw HTML nodes are emitted verbatim.
+Render an editable AST safely with CommonMark defaults.
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode)
+
+<a id="def-std_401_2fmarkdown_2frender_5fhtml_5fwith_5foptions"></a>
+
+- `pub fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}`
+
+Render an AST with explicit safety and GFM tag filter options.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
 
 <a id="def-std_401_2fmarkdown_2fto_5fhtml"></a>
 
@@ -8015,6 +8065,10 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core
 
 References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-core_401_2fnet_2fjoin"></a>
+
+- `fn net.join(n: Net, take r: ReadHalf of n, take w: WriteHalf of n) -> Result[Stream of n, NetError]`
+
 <a id="def-core_401_2fnet_2flisten"></a>
 
 - `fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]`
@@ -8059,11 +8113,11 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/SocketAddr`](#de
 
 <a id="def-core_401_2fnet_2fread"></a>
 
-- `fn net.read(n: Net, mut s: Stream of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]`
+- `@preserves_captures(s, buffer) fn net.read(n: Net, mut s: Stream of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]`
 
 <a id="def-core_401_2fnet_2fread_5finto"></a>
 
-- `@noalloc fn net.read_into[k: size](n: Net, mut s: Stream of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]`
+- `@preserves_captures(s) @noalloc fn net.read_into[k: size](n: Net, mut s: Stream of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]`
 
 <a id="def-core_401_2fnet_2fresolve"></a>
 
@@ -8073,21 +8127,27 @@ a rule naming `(host, port)`, any operation
 
 <a id="def-core_401_2fnet_2fset_5fread_5ftimeout"></a>
 
-- `@noalloc fn net.set_read_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]`
+- `@preserves_captures(s) @noalloc fn net.set_read_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]`
 
 <a id="def-core_401_2fnet_2fset_5fwrite_5ftimeout"></a>
 
-- `@noalloc fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]`
+- `@preserves_captures(s) @noalloc fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]`
 
 <a id="def-core_401_2fnet_2fshutdown"></a>
 
-- `@noalloc fn net.shutdown(n: Net, mut s: Stream of n, how: Shutdown) -> Result[(), NetError]`
+- `@preserves_captures(s) @noalloc fn net.shutdown(n: Net, mut s: Stream of n, how: Shutdown) -> Result[(), NetError]`
 
 <a id="def-std_401_2fnet_2fsocket_5faddr_5fto_5fstring"></a>
 
 - `pub fn net.socket_addr_to_string(addr: SocketAddr) -> unique String uses {}`
 
 References: [`core@1/SocketAddr`](#def-core_401_2fSocketAddr), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-core_401_2fnet_2fsplit"></a>
+
+- `fn net.split(n: Net, take s: Stream of n) -> (ReadHalf of n, WriteHalf of n)`
+
+the stream's own grant
 
 <a id="def-core_401_2fnet_2fudp_5fbind"></a>
 
@@ -8115,11 +8175,11 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 <a id="def-core_401_2fnet_2fwrite"></a>
 
-- `@noalloc fn net.write(n: Net, mut s: Stream of n, data: Bytes) -> Result[u64, NetError]`
+- `@preserves_captures(s) @noalloc fn net.write(n: Net, mut s: Stream of n, data: Bytes) -> Result[u64, NetError]`
 
 <a id="def-core_401_2fnet_2fwrite_5fall"></a>
 
-- `@noalloc fn net.write_all(n: Net, mut s: Stream of n, data: Bytes) -> Result[(), NetError]`
+- `@preserves_captures(s) @noalloc fn net.write_all(n: Net, mut s: Stream of n, data: Bytes) -> Result[(), NetError]`
 
 
 ## option
@@ -8565,6 +8625,25 @@ References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-co
 - `pub fn random.u64(r: Random) -> Result[u64, RandomError]`
 
 References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/RandomError`](#def-core_401_2fRandomError), [`core@1/Result`](#def-core_401_2fResult)
+
+
+## read_half
+
+<a id="def-core_401_2fread_5fhalf_2fclose"></a>
+
+- `@noalloc fn read_half.close(n: Net, take r: ReadHalf of n) -> ()`
+
+<a id="def-core_401_2fread_5fhalf_2fread"></a>
+
+- `fn read_half.read(n: Net, mut r: ReadHalf of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]`
+
+<a id="def-core_401_2fread_5fhalf_2fread_5finto"></a>
+
+- `@noalloc fn read_half.read_into[k: size](n: Net, mut r: ReadHalf of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]`
+
+<a id="def-core_401_2fread_5fhalf_2fset_5ftimeout"></a>
+
+- `@noalloc fn read_half.set_timeout(n: Net, mut r: ReadHalf of n, timeout: NetTimeout) -> Result[(), NetError]`
 
 
 ## regex
@@ -10332,6 +10411,17 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/siphash/State`](#def-std_
 
 ## store
 
+<a id="def-std_401_2fstore_2fBackend"></a>
+
+- `pub type store.Backend[S] { read: fn(mut state: S, String) -> Result[Bytes, FileError] uses {state}, put_new: fn(mut state: S, String, Bytes, Durability) -> Result[(), FileError] uses {state}, list: fn(mut state: S, String) -> Result[List[String], FileError] uses {state}, remove: fn(mut state: S, String) -> Result[(), FileError] uses {state}, mkdir: fn(mut state: S, String) -> Result[(), FileError] uses {state}, }`
+
+The storage seam: immutable whole-object reads, conditional creation,
+ordered prefix discovery, deletion and directory setup. A successful durable
+create acknowledges the exact bytes; an uncertain create must be read back.
+Implementations may issue range GETs and cache immutable data behind `read`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Durability`](#def-core_401_2fDurability), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
 <a id="def-std_401_2fstore_2fCallFailure"></a>
 
 - `@serializable pub type store.CallFailure[E] = Tx(TxFailure[E]) | Denied | Rejected`
@@ -10373,6 +10463,28 @@ durable, which the store may then forget.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fstore_2fIsolation"></a>
+
+- `pub type store.Isolation = SnapshotIsolation | SerializableSnapshot`
+
+How a transaction's commit detects conflicts, after SlateDB's
+IsolationLevel (transaction_manager.rs:13). `SnapshotIsolation` conflicts
+with a later commit that wrote a key it writes or marked read;
+`SerializableSnapshot` also with one that wrote a key it read with
+`txn.get` or inside a range it read with `txn.range`.
+
+<a id="def-std_401_2fstore_2fIsolation_23SerializableSnapshot"></a>
+
+- `SerializableSnapshot -> store.Isolation`
+
+Variant of store.Isolation.
+
+<a id="def-std_401_2fstore_2fIsolation_23SnapshotIsolation"></a>
+
+- `SnapshotIsolation -> store.Isolation`
+
+Variant of store.Isolation.
+
 <a id="def-std_401_2fstore_2fSnapshot"></a>
 
 - `pub opaque type store.Snapshot: copyable uses {}`
@@ -10381,11 +10493,9 @@ A stable view of the store as of one commit: later commits never change it.
 
 <a id="def-std_401_2fstore_2fStore"></a>
 
-- `pub opaque resource type store.Store: () uses {Dir}`
+- `@captures(backend) pub opaque type store.Store[S]: () uses {S}`
 
 The writer of one store directory.
-
-References: [`core@1/Dir`](#def-core_401_2fDir)
 
 <a id="def-std_401_2fstore_2fStoreConfig"></a>
 
@@ -10408,7 +10518,7 @@ References: [`core@1/Durability`](#def-core_401_2fDurability), [`core@1/u64`](#d
 Why a store operation failed. `Storage` is the Dir's own error; `Corrupt`
 names an object that fails its checksum or the layout's rules before the
 log's tail; `Fenced` means another writer claimed the store; `Conflict` means
-another commit landed after the transaction began; `Injected` is a
+a commit after the transaction began wrote a key it conflicts on; `Injected` is a
 `StopAfterWrites` stop. After `Storage`, `Corrupt`, `Fenced` or `Injected`
 the store is closed and every later call returns `Closed`.
 
@@ -10480,7 +10590,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fstore_2fStoreLimits"></a>
 
-- `pub type store.StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64, }`
+- `pub type store.StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64, range_rows: u64, }`
 
 The most a `transact` commit may write: any key over `key_bytes`, any value
 over `value_bytes`, or keys and values together over `transaction_bytes`
@@ -10587,19 +10697,28 @@ Variant of store.TxLimit.
 - `pub opaque type store.Txn: copyable uses {}`
 
 A transaction: reads see the snapshot it began at plus its own writes.
-Dropping it aborts it.
+Dropping it aborts it; `rollback` also frees its conflict tracking at once.
 
 <a id="def-std_401_2fstore_2fbegin"></a>
 
-- `pub fn store.begin(mut s: Store) -> Txn uses {}`
+- `pub fn store.begin[S](mut s: Store[S]) -> Txn uses {}`
 
-Starts a transaction at the latest commit.
+Starts a serializable transaction at the latest commit.
 
 References: [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
 
+<a id="def-std_401_2fstore_2fbegin_5fwith"></a>
+
+- `pub fn store.begin_with[S](mut s: Store[S], isolation: Isolation) -> Txn uses {}`
+
+Starts a transaction at the latest commit under `isolation`, registered
+with the store's transaction manager (DbTransaction::begin).
+
+References: [`std@1/store/Isolation`](#def-std_401_2fstore_2fIsolation), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
 <a id="def-std_401_2fstore_2fcall"></a>
 
-- `pub fn store.call[R: inert + serializable, E: inert + serializable]( mut s: Store, req: CallRequest, body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, CallFailure[E]]`
+- `pub fn store.call[S, R: inert + serializable, E: inert + serializable]( mut s: Store[S], req: CallRequest, body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, CallFailure[E]] uses {s}`
 
 `transact` as one call on an ordered call stream, exactly once per
 position. The stream's row decides the request in the transaction that
@@ -10615,7 +10734,7 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/CallFailure
 
 <a id="def-std_401_2fstore_2fclose"></a>
 
-- `pub fn store.close(take store: Store) -> Result[(), StoreError]`
+- `pub fn store.close[S](take store: Store[S]) -> Result[(), StoreError] uses {store}`
 
 Writes any pending commits and closes the store.
 
@@ -10623,18 +10742,20 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#de
 
 <a id="def-std_401_2fstore_2fcommit"></a>
 
-- `pub fn store.commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError]`
+- `pub fn store.commit[S](mut s: Store[S], take t: Txn) -> Result[Ticket, StoreError] uses {s}`
 
 Commits `t`'s writes as the next commit, visible at once to later
-snapshots and transactions, and returns its ticket. `Conflict()` when another
-commit landed since `t` began. A commit that fills its group writes the
+snapshots and transactions, and returns its ticket. `Conflict()` when a
+commit after `t` began wrote a key `t` conflicts on (see `Isolation`); a
+transaction older than the store's conflict retention conflicts whenever
+it writes or read anything. A commit that fills its group writes the
 group's log object; await its durability with `durable`.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError), [`std@1/store/Ticket`](#def-std_401_2fstore_2fTicket), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
 
 <a id="def-std_401_2fstore_2fcompact"></a>
 
-- `pub fn store.compact(mut s: Store) -> Result[(), StoreError]`
+- `pub fn store.compact[S](mut s: Store[S]) -> Result[(), StoreError] uses {s}`
 
 Writes every commit into a new snapshot object, publishes it with a new
 manifest and removes the objects it supersedes. A crash at any point
@@ -10662,7 +10783,7 @@ References: [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig)
 
 <a id="def-std_401_2fstore_2fdurable"></a>
 
-- `pub fn store.durable(mut s: Store, t: Ticket) -> Result[(), StoreError]`
+- `pub fn store.durable[S](mut s: Store[S], t: Ticket) -> Result[(), StoreError] uses {s}`
 
 The output gate: returns once the commit `t` names is in a written log
 object, synced when the store is `Durable()`, together with every earlier
@@ -10678,14 +10799,40 @@ The value stored under `key` in the snapshot.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
 
+<a id="def-std_401_2fstore_2finto_5fstate"></a>
+
+- `pub fn store.into_state[S](take store: Store[S]) -> Result[S, StoreError] uses {store}`
+
+Flushes the pending group and returns the backend state, for explicit
+lifecycle management, simulation observations or reopening the same medium.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2flocal_5fbackend"></a>
+
+- `pub fn store.local_backend() -> Backend[Dir] uses {}`
+
+The default backend: an explicitly granted local or simulated Dir.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`std@1/store/Backend`](#def-std_401_2fstore_2fBackend)
+
 <a id="def-std_401_2fstore_2fopen"></a>
 
-- `pub fn store.open(d: Dir, config: StoreConfig) -> Result[Store, StoreError]`
+- `pub fn store.open(d: Dir, config: StoreConfig) -> Result[Store[Dir], StoreError] uses {d}`
 
 Opens the store in `d`, creating its layout when `d` is empty, recovers the
 newest valid state and claims the store as its writer at the next epoch.
 
 References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fopen_5fbackend"></a>
+
+- `pub fn store.open_backend[S](take state: S, take backend: Backend[S], config: StoreConfig) -> Result[ Store[S], StoreError ] uses {state, backend}`
+
+Opens the same engine over a host-selected storage implementation. The state
+is owned by the store; all effects go through this explicit function dictionary.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Backend`](#def-std_401_2fstore_2fBackend), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
 
 <a id="def-std_401_2fstore_2fprefix_5fbounds"></a>
 
@@ -10714,6 +10861,15 @@ rows; a transaction body writes no key there.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
 
+<a id="def-std_401_2fstore_2frollback"></a>
+
+- `pub fn store.rollback[S](mut s: Store[S], take t: Txn) -> () uses {}`
+
+Ends `t` without committing it, as dropping it does, and frees what the
+store tracks for its conflicts (DbTransaction::rollback).
+
+References: [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
 <a id="def-std_401_2fstore_2fsequence"></a>
 
 - `@noalloc pub fn store.sequence(t: Ticket) -> u64 uses {}`
@@ -10725,7 +10881,7 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Ticket`](#def-std
 
 <a id="def-std_401_2fstore_2fsnapshot"></a>
 
-- `pub fn store.snapshot(mut s: Store) -> Snapshot uses {}`
+- `pub fn store.snapshot[S](mut s: Store[S]) -> Snapshot uses {}`
 
 A stable view of every commit so far, durable or not. Later commits never
 change it, and holding it never holds up the writer.
@@ -10742,7 +10898,7 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Snapshot`](#def-s
 
 <a id="def-std_401_2fstore_2ftransact"></a>
 
-- `pub fn store.transact[R: inert, E: inert]( mut s: Store, body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, TxFailure[E]]`
+- `pub fn store.transact[S, R: inert, E: inert]( mut s: Store[S], body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, TxFailure[E]] uses {s}`
 
 Runs `body` once with a fresh `Tx` at the latest commit and commits its
 writes as one commit when it returns `Ok`. The outcome, of any kind, is
@@ -10788,11 +10944,73 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 
 ## stream
 
+<a id="def-std_401_2fstream_2fChunkLimit"></a>
+
+- `pub opaque type stream.ChunkLimit: plain + sendable + inert + noalloc_drop uses {}`
+
+A positive chunk ceiling, at most 65536 bytes. Construction performs no I/O.
+
 <a id="def-std_401_2fstream_2fFlow"></a>
 
 - `@captures(inner) pub opaque type stream.Flow[T, E]: () uses {}`
 
 An owned fallible cursor. Its source and callbacks stay owned until destruction.
+
+<a id="def-std_401_2fstream_2fStreamConfigError"></a>
+
+- `pub type stream.StreamConfigError = InvalidChunkLimit()`
+
+<a id="def-std_401_2fstream_2fStreamConfigError_23InvalidChunkLimit"></a>
+
+- `InvalidChunkLimit() -> stream.StreamConfigError`
+
+Variant of stream.StreamConfigError.
+
+<a id="def-std_401_2fstream_2fWriteError"></a>
+
+- `pub type stream.WriteError[E, W] = Source(E) | Write(W) | InvalidWrite`
+
+Source and writer errors remain distinct; invalid progress is never EOF.
+
+<a id="def-std_401_2fstream_2fWriteError_23InvalidWrite"></a>
+
+- `InvalidWrite -> stream.WriteError[E, W]`
+
+Variant of stream.WriteError.
+
+<a id="def-std_401_2fstream_2fWriteError_23Source"></a>
+
+- `Source(E) -> stream.WriteError[E, W]`
+
+Variant of stream.WriteError.
+
+<a id="def-std_401_2fstream_2fWriteError_23Write"></a>
+
+- `Write(W) -> stream.WriteError[E, W]`
+
+Variant of stream.WriteError.
+
+<a id="def-std_401_2fstream_2fchunk_5flimit"></a>
+
+- `pub fn stream.chunk_limit(bytes: u64) -> Result[ChunkLimit, StreamConfigError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/stream/ChunkLimit`](#def-std_401_2fstream_2fChunkLimit), [`std@1/stream/StreamConfigError`](#def-std_401_2fstream_2fStreamConfigError)
+
+<a id="def-std_401_2fstream_2ffile_5fchunks"></a>
+
+- `@captures(dir, file) pub fn stream.file_chunks(dir: Dir, take file: File of dir, limit: ChunkLimit) -> Flow[ Bytes, FileError ] uses {dir, file}`
+
+Own the exact branded file; read only on demand, with no path reopening.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`std@1/stream/ChunkLimit`](#def-std_401_2fstream_2fChunkLimit), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ffile_5fsink"></a>
+
+- `pub fn stream.file_sink[E]( dir: Dir, take destination: AtomicFile of dir, take input: Flow[Bytes, E] ) -> Result[(), WriteError[E, FileError]] uses {dir, destination, input}`
+
+Commit an owned atomic file only after clean upstream EOF; drop aborts.
+
+References: [`core@1/AtomicFile`](#def-core_401_2fAtomicFile), [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow), [`std@1/stream/WriteError`](#def-std_401_2fstream_2fWriteError)
 
 <a id="def-std_401_2fstream_2ffrom"></a>
 
@@ -10809,6 +11027,39 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-co
 Normalize a raw result iterator, ending at its first error or EOF.
 
 References: [`core@1/Iter`](#def-core_401_2fIter), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fhttp_5fchunks"></a>
+
+- `@captures(request) pub fn stream.http_chunks(take request: http.Request, limit: ChunkLimit) -> Flow[ Bytes, http.HttpError ] uses {request}`
+
+Consume an already prepared response body as raw bytes; discard trailers.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/stream/ChunkLimit`](#def-std_401_2fstream_2fChunkLimit), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fhttp_5fupload"></a>
+
+- `pub fn stream.http_upload[E]( take request: http.Request, take input: Flow[Bytes, E], trailers: List[http.Header] ) -> Result[http.Request, WriteError[E, http.HttpError]] uses {request, input}`
+
+Finish a streaming upload only on clean EOF. On success return the Request
+for receive_head; errors drop/abort it without a successful terminator.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow), [`std@1/stream/WriteError`](#def-std_401_2fstream_2fWriteError)
+
+<a id="def-std_401_2fstream_2fnet_5fchunks"></a>
+
+- `@captures(net, socket) pub fn stream.net_chunks(net: Net, take socket: Stream of net, limit: ChunkLimit) -> Flow[ Bytes, NetError ] uses {net, socket}`
+
+Own a byte-stream socket, yielding short reads unchanged. This is not UDP.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Stream`](#def-core_401_2fStream), [`std@1/stream/ChunkLimit`](#def-std_401_2fstream_2fChunkLimit), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fnet_5fsink"></a>
+
+- `pub fn stream.net_sink[E](net: Net, take socket: Stream of net, take input: Flow[Bytes, E]) -> Result[ (), WriteError[E, NetError] ] uses {net, socket, input}`
+
+Consume a socket and all partial writes; drop closes it on every exit.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow), [`std@1/stream/WriteError`](#def-std_401_2fstream_2fWriteError)
 
 <a id="def-std_401_2fstream_2fnext"></a>
 
@@ -10865,6 +11116,15 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#de
 Transform successful items in order; source and callback errors end the flow.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fwrite_5fto"></a>
+
+- `pub fn stream.write_to[S, E, W]( take input: Flow[Bytes, E], take destination: S, write: fn(mut S, Bytes) -> Result[u64, W] ) -> Result[S, WriteError[E, W]] uses {input, destination, write}`
+
+Consume each chunk fully before pulling again. Return the owned destination
+only on clean EOF, so callers can explicitly commit/finish it.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow), [`std@1/stream/WriteError`](#def-std_401_2fstream_2fWriteError)
 
 
 ## string
@@ -11042,6 +11302,237 @@ References: [`core@1/String`](#def-core_401_2fString)
 - `@noalloc pub fn string.trim(s: String) -> String in s uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString)
+
+
+## table
+
+<a id="def-std_401_2ftable_2fRangeBound"></a>
+
+- `pub type table.RangeBound[K] = Unbounded | Included(K) | Excluded(K)`
+
+<a id="def-std_401_2ftable_2fRangeBound_23Excluded"></a>
+
+- `Excluded(K) -> table.RangeBound[K]`
+
+Variant of table.RangeBound.
+
+<a id="def-std_401_2ftable_2fRangeBound_23Included"></a>
+
+- `Included(K) -> table.RangeBound[K]`
+
+Variant of table.RangeBound.
+
+<a id="def-std_401_2ftable_2fRangeBound_23Unbounded"></a>
+
+- `Unbounded -> table.RangeBound[K]`
+
+Variant of table.RangeBound.
+
+<a id="def-std_401_2ftable_2fScanOrder"></a>
+
+- `pub type table.ScanOrder = Ascending | Descending`
+
+<a id="def-std_401_2ftable_2fScanOrder_23Ascending"></a>
+
+- `Ascending -> table.ScanOrder`
+
+Variant of table.ScanOrder.
+
+<a id="def-std_401_2ftable_2fScanOrder_23Descending"></a>
+
+- `Descending -> table.ScanOrder`
+
+Variant of table.ScanOrder.
+
+<a id="def-std_401_2ftable_2fSchemaChange"></a>
+
+- `@serializable pub type table.SchemaChange = Created | Renamed(String, String) | Migrated(String, String)`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftable_2fSchemaChange_23Created"></a>
+
+- `Created -> table.SchemaChange`
+
+Variant of table.SchemaChange.
+
+<a id="def-std_401_2ftable_2fSchemaChange_23Migrated"></a>
+
+- `Migrated(String, String) -> table.SchemaChange`
+
+Variant of table.SchemaChange.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftable_2fSchemaChange_23Renamed"></a>
+
+- `Renamed(String, String) -> table.SchemaChange`
+
+Variant of table.SchemaChange.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftable_2fSchemaEntry"></a>
+
+- `@serializable pub type table.SchemaEntry { epoch: u32, key_schema: String, value_schema: String, change: SchemaChange, }`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u32`](#def-core_401_2fu32), [`std@1/table/SchemaChange`](#def-std_401_2ftable_2fSchemaChange)
+
+<a id="def-std_401_2ftable_2fSchemaError"></a>
+
+- `@serializable pub type table.SchemaError = Renamed(String, String) | KeyMismatch | ValueMismatch`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftable_2fSchemaError_23KeyMismatch"></a>
+
+- `KeyMismatch -> table.SchemaError`
+
+Variant of table.SchemaError.
+
+<a id="def-std_401_2ftable_2fSchemaError_23Renamed"></a>
+
+- `Renamed(String, String) -> table.SchemaError`
+
+Variant of table.SchemaError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftable_2fSchemaError_23ValueMismatch"></a>
+
+- `ValueMismatch -> table.SchemaError`
+
+Variant of table.SchemaError.
+
+<a id="def-std_401_2ftable_2fTable"></a>
+
+- `pub opaque type table.Table[K: key + serializable, V: serializable]: copyable + data + key + inert + sendable uses {}`
+
+An inert name and expected schema; authority comes from each operation's Tx.
+
+<a id="def-std_401_2ftable_2fTxError"></a>
+
+- `@serializable pub type table.TxError = InvalidInput | ReadOnly | NoTable | TableExists | Schema(SchemaError) | Migrating | Limit( store.TxLimit ) | Storage(store.StoreError)`
+
+References: [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError), [`std@1/store/TxLimit`](#def-std_401_2fstore_2fTxLimit), [`std@1/table/SchemaError`](#def-std_401_2ftable_2fSchemaError)
+
+<a id="def-std_401_2ftable_2fTxError_23InvalidInput"></a>
+
+- `InvalidInput -> table.TxError`
+
+Variant of table.TxError.
+
+<a id="def-std_401_2ftable_2fTxError_23Limit"></a>
+
+- `Limit( store.TxLimit ) -> table.TxError`
+
+Variant of table.TxError.
+
+References: [`std@1/store/TxLimit`](#def-std_401_2fstore_2fTxLimit)
+
+<a id="def-std_401_2ftable_2fTxError_23Migrating"></a>
+
+- `Migrating -> table.TxError`
+
+Variant of table.TxError.
+
+<a id="def-std_401_2ftable_2fTxError_23NoTable"></a>
+
+- `NoTable -> table.TxError`
+
+Variant of table.TxError.
+
+<a id="def-std_401_2ftable_2fTxError_23ReadOnly"></a>
+
+- `ReadOnly -> table.TxError`
+
+Variant of table.TxError.
+
+<a id="def-std_401_2ftable_2fTxError_23Schema"></a>
+
+- `Schema(SchemaError) -> table.TxError`
+
+Variant of table.TxError.
+
+References: [`std@1/table/SchemaError`](#def-std_401_2ftable_2fSchemaError)
+
+<a id="def-std_401_2ftable_2fTxError_23Storage"></a>
+
+- `Storage(store.StoreError) -> table.TxError`
+
+Variant of table.TxError.
+
+References: [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2ftable_2fTxError_23TableExists"></a>
+
+- `TableExists -> table.TxError`
+
+Variant of table.TxError.
+
+<a id="def-std_401_2ftable_2fcreate"></a>
+
+- `pub fn table.create[K: key + serializable, V: serializable](mut tx: store.Tx, t: Table[K, V]) -> Result[ (), TxError ]`
+
+Creates an empty table with one schema entry; creation is explicit.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/Table`](#def-std_401_2ftable_2fTable), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2fdelete"></a>
+
+- `pub fn table.delete[K: key + serializable, V: serializable]( mut tx: store.Tx, t: Table[K, V], key: K ) -> Result[bool, TxError]`
+
+Deletes one row and reports whether it existed in this transaction.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/Table`](#def-std_401_2ftable_2fTable), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2fget"></a>
+
+- `pub fn table.get[K: key + serializable, V: serializable](tx: store.Tx, t: Table[K, V], key: K) -> Result[ Option[V], TxError ]`
+
+Returns a fresh value, or None when this transaction sees no row.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/Table`](#def-std_401_2ftable_2fTable), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2fhistory"></a>
+
+- `pub fn table.history(tx: store.Tx, name: String) -> Result[List[SchemaEntry], TxError]`
+
+Returns the immutable schema history; hashes exclude package version text.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/SchemaEntry`](#def-std_401_2ftable_2fSchemaEntry), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2fnamed"></a>
+
+- `pub fn table.named[K: key + serializable, V: serializable](name: String) -> Table[K, V] uses {}`
+
+Names a table without opening or creating it. Operations validate its name.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/table/Table`](#def-std_401_2ftable_2fTable)
+
+<a id="def-std_401_2ftable_2fput"></a>
+
+- `pub fn table.put[K: key + serializable, V: serializable]( mut tx: store.Tx, t: Table[K, V], key: K, value: V ) -> Result[(), TxError]`
+
+Inserts or replaces one row in the transaction's write set.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/Table`](#def-std_401_2ftable_2fTable), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2frange"></a>
+
+- `pub fn table.range[K: key + serializable, V: serializable]( tx: store.Tx, t: Table[K, V], from: RangeBound[K], to: RangeBound[K], limit: u64, order: ScanOrder ) -> Result[List[(K, V)], TxError]`
+
+Scans in key value order with inclusive/exclusive bounds and a positive limit.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/RangeBound`](#def-std_401_2ftable_2fRangeBound), [`std@1/table/ScanOrder`](#def-std_401_2ftable_2fScanOrder), [`std@1/table/Table`](#def-std_401_2ftable_2fTable), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
+
+<a id="def-std_401_2ftable_2frename"></a>
+
+- `pub fn table.rename(mut tx: store.Tx, name: String, from: String, to: String) -> Result[ (), TxError ]`
+
+Declares a spelling change once, appending metadata without rewriting rows.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/table/TxError`](#def-std_401_2ftable_2fTxError)
 
 
 ## tar
@@ -11947,7 +12438,7 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 - `@noalloc pub fn text.display_width(s: String) -> u64 uses {}`
 
 Estimated display cells over Unicode16 extended grapheme clusters.
-Each cluster's first scalar counts 2 for EAW W/F or a P1868R2 wide range,
+Each cluster's first scalar counts 2 for EAW W/F or one of the three C++23 wide blocks,
 otherwise 1, including isolated combining marks and controls. Empty is 0.
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
@@ -12400,6 +12891,14 @@ on a `ConnectTls` stream, `server_name` equal to the rule's address
 
 - `fn tls.connect_as(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots, identity: TlsIdentity) -> Result[Stream of n, NetError]`
 
+<a id="def-core_401_2ftls_2fconnect_5fwith"></a>
+
+- `fn tls.connect_with(n: Net, take s: Stream of n, server_name: String, client: TlsClient) -> Result[Stream of n, NetError]`
+
+<a id="def-core_401_2ftls_2fnegotiated_5fprotocol"></a>
+
+- `fn tls.negotiated_protocol(n: Net, s: Stream of n) -> Result[Option[String], NetError]`
+
 <a id="def-core_401_2ftls_2fpeer"></a>
 
 - `fn tls.peer(n: Net, s: Stream of n) -> Result[Option[Bytes], NetError]`
@@ -12668,11 +13167,22 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Txn`](#def-st
 
 <a id="def-std_401_2ftxn_2fget"></a>
 
-- `pub fn txn.get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}`
+- `pub fn txn.get(mut t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}`
 
-The value under `key` as this transaction sees it.
+The value under `key` as this transaction sees it; a serializable
+transaction records the read.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2ftxn_2fmark_5fread"></a>
+
+- `pub fn txn.mark_read(mut t: store.Txn, take key: Bytes) -> () uses {}`
+
+Records `key` as read, under either isolation, without reading it
+(DbTransaction::mark_read, db_transaction.rs:410): a commit after the
+transaction began that writes `key` makes its commit conflict.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
 
 <a id="def-std_401_2ftxn_2fput"></a>
 
@@ -12684,12 +13194,176 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Txn`](#def-st
 
 <a id="def-std_401_2ftxn_2frange"></a>
 
-- `pub fn txn.range( t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64 ) -> List[(Bytes, Bytes)] uses {}`
+- `pub fn txn.range( mut t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64 ) -> List[(Bytes, Bytes)] uses {}`
 
 At most `limit` entries with keys between `from` and `to` as this
-transaction sees them, in `direction` order, as fresh copies.
+transaction sees them, in `direction` order, as fresh copies. A
+serializable transaction records the whole range it asked for, entries
+it did not return included.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+
+## txn_manager
+
+<a id="def-std_401_2ftxn_5fmanager_2fLimits"></a>
+
+- `pub type txn_manager.Limits { commits: u64, key_bytes: u64, }`
+
+The most a manager retains: `commits` committed write sets or `key_bytes`
+bytes of their keys, whichever is reached first.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftxn_5fmanager_2fManager"></a>
+
+- `pub opaque type txn_manager.Manager: () uses {}`
+
+Conflict state for one store's transactions.
+
+<a id="def-std_401_2ftxn_5fmanager_2fReadRange"></a>
+
+- `pub type txn_manager.ReadRange { from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], }`
+
+A key range read: both ends, as `ordered_map.fold_range` takes them.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound)
+
+<a id="def-std_401_2ftxn_5fmanager_2factive"></a>
+
+- `pub fn txn_manager.active(m: Manager) -> u64 uses {}`
+
+How many transactions are active.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fbegin"></a>
+
+- `pub fn txn_manager.begin(mut m: Manager) -> (u64, u64) uses {}`
+
+Registers a transaction at the last committed sequence and returns its id
+and that sequence (new_transaction, transaction_manager.rs:112).
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fbegin_5fat"></a>
+
+- `pub fn txn_manager.begin_at(mut m: Manager, seq: u64) -> u64 uses {}`
+
+Registers a transaction that began at `seq` and returns its id (SlateDB's
+new_txn_with_id, transaction_manager.rs:130).
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fcontains"></a>
+
+- `pub fn txn_manager.contains(r: ReadRange, key: Bytes) -> bool uses {}`
+
+Whether `key` lies in `r`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`std@1/txn_manager/ReadRange`](#def-std_401_2ftxn_5fmanager_2fReadRange)
+
+<a id="def-std_401_2ftxn_5fmanager_2fdefault_5flimits"></a>
+
+- `pub fn txn_manager.default_limits() -> Limits uses {}`
+
+4096 write sets or 1 MiB of keys.
+
+References: [`std@1/txn_manager/Limits`](#def-std_401_2ftxn_5fmanager_2fLimits)
+
+<a id="def-std_401_2ftxn_5fmanager_2fend"></a>
+
+- `pub fn txn_manager.end(mut m: Manager, id: u64) -> () uses {}`
+
+Ends transaction `id` without a commit and recycles what no active
+transaction needs (drop_txn, transaction_manager.rs:151). An unknown id
+changes nothing but the recycling.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fhas_5fconflict"></a>
+
+- `pub fn txn_manager.has_conflict( m: Manager, started: u64, writes: List[Bytes], reads: List[Bytes], ranges: List[ReadRange] ) -> bool uses {}`
+
+Whether a transaction that began at `started` conflicts with a commit
+after it: one that wrote a key in `writes` or `reads`, or a key inside one
+of `ranges` (check_has_conflict, has_write_write_conflict and
+has_read_write_conflict, transaction_manager.rs:190, 324 and 350). Pass
+empty `reads` and `ranges` for snapshot isolation.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager), [`std@1/txn_manager/ReadRange`](#def-std_401_2ftxn_5fmanager_2fReadRange)
+
+<a id="def-std_401_2ftxn_5fmanager_2fhorizon"></a>
+
+- `pub fn txn_manager.horizon(m: Manager) -> u64 uses {}`
+
+The commit at and before which nothing can be checked any more: a
+transaction that began before it conflicts when it has anything to check.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2flast_5fcommitted"></a>
+
+- `pub fn txn_manager.last_committed(m: Manager) -> u64 uses {}`
+
+The last committed sequence the manager has seen.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fmin_5factive"></a>
+
+- `pub fn txn_manager.min_active(m: Manager) -> Option[u64] uses {}`
+
+The oldest sequence an active transaction began at (min_active_seq,
+transaction_manager.rs:259).
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fnew"></a>
+
+- `pub fn txn_manager.new(seq: u64, limits: Limits) -> Manager uses {}`
+
+A manager whose last committed sequence is `seq`, with nothing active.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Limits`](#def-std_401_2ftxn_5fmanager_2fLimits), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2frecycle"></a>
+
+- `pub fn txn_manager.recycle(mut m: Manager) -> () uses {}`
+
+Drops every retained write set older than the oldest active transaction,
+keeping one committed at its very sequence, or all of them when nothing is
+active (recycle_recent_committed_txns, transaction_manager.rs:296).
+
+References: [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2fretained"></a>
+
+- `pub fn txn_manager.retained(m: Manager) -> List[u64] uses {}`
+
+The sequences of the retained write sets, oldest first.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2ftrack_5fbatch"></a>
+
+- `pub fn txn_manager.track_batch(mut m: Manager, seq: u64, take writes: List[Bytes]) -> () uses {}`
+
+Records a commit made outside any registered transaction
+(track_recent_committed_write_batch, transaction_manager.rs:241).
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
+
+<a id="def-std_401_2ftxn_5fmanager_2ftrack_5fcommitted"></a>
+
+- `pub fn txn_manager.track_committed(mut m: Manager, id: u64, seq: u64, take writes: List[Bytes]) -> () uses {}`
+
+Ends transaction `id` as committed at `seq` with write keys `writes`,
+retained while an active transaction may conflict with them
+(track_recent_committed_txn, transaction_manager.rs:219). An unknown id
+records nothing but the sequence.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/txn_manager/Manager`](#def-std_401_2ftxn_5fmanager_2fManager)
 
 
 ## type_shape
@@ -13736,6 +14410,29 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_
 <a id="def-core_401_2fwatcher_2fnext"></a>
 
 - `fn watcher.next(d: Dir, mut w: Watcher of d) -> Result[WatchEvent, FileError]`
+
+
+## write_half
+
+<a id="def-core_401_2fwrite_5fhalf_2fclose"></a>
+
+- `@noalloc fn write_half.close(n: Net, take w: WriteHalf of n) -> ()`
+
+<a id="def-core_401_2fwrite_5fhalf_2fset_5ftimeout"></a>
+
+- `@noalloc fn write_half.set_timeout(n: Net, mut w: WriteHalf of n, timeout: NetTimeout) -> Result[(), NetError]`
+
+<a id="def-core_401_2fwrite_5fhalf_2fshutdown"></a>
+
+- `@noalloc fn write_half.shutdown(n: Net, mut w: WriteHalf of n) -> Result[(), NetError]`
+
+<a id="def-core_401_2fwrite_5fhalf_2fwrite"></a>
+
+- `@noalloc fn write_half.write(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[u64, NetError]`
+
+<a id="def-core_401_2fwrite_5fhalf_2fwrite_5fall"></a>
+
+- `@noalloc fn write_half.write_all(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[(), NetError]`
 
 
 ## x509
