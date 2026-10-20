@@ -16,14 +16,16 @@
 //! hirsel-rt's `descriptors` test checks the runtime source against these tables: an
 //! unclassified entry or registry operation fails, and so does an entry marked
 //! [`Locality::Local`], [`Locality::Immutable`] or [`Locality::Concurrent`] whose call graph
-//! reaches the scheduler, the Io binding or an entry of another locality.
+//! reaches the scheduler, the Io binding or an entry of an incompatible locality.
+//! Task-local work may call an unobservable concurrent service, checked independently.
 
 /// Where an entry's work may run (§4.1 Locality).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Locality {
     /// Task-local: the task's own blocks, text, copy and codec work, the regions it owns, its
     /// failure chain and isolate scratch, its freeze/thaw stack, its fuel. Runs on any worker
-    /// in parallel with every other task.
+    /// in parallel with every other task; may use unobservable concurrent services
+    /// (for example, copying a value adds a `Shared` root).
     Local,
     /// Reads only immutable run data: layouts, the failure table, program tables, seeds,
     /// launch arguments.
@@ -364,6 +366,16 @@ pub const OPS: &[OpDescriptor] = &[
     // Drops.
     note(
         op(
+            "root.release",
+            &[Keep],
+            Outcome::None,
+            &[Write(Object(Root)), Write(StorageCredits)],
+            Phases::Single,
+        ),
+        "roots::consume defers non-last releases to retirement or the next entered phase; a sole holder frees its frozen graph without finalizers or host handles",
+    ),
+    note(
+        op(
             "drop.trivial",
             &[Keep],
             Outcome::None,
@@ -697,6 +709,11 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_callback_failed", &["stop"]),
     // io.rs
     ops("hirsel_rt_v2_io_close", HOST),
+    ops("hirsel_rt_v2_capture_begin", HOST),
+    ops("hirsel_rt_v2_capture_context", HOST),
+    ops("hirsel_rt_v2_capture_event", HOST),
+    ops("hirsel_rt_v2_capture_finish", HOST),
+    ops("hirsel_rt_v2_signal_wait", HOST),
     ops("hirsel_rt_v2_out_print", HOST),
     ops("hirsel_rt_v2_err_print", HOST),
     ops("hirsel_rt_v2_dir_read_only", HOST),
@@ -799,6 +816,9 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_net_write", HOST),
     ops("hirsel_rt_v2_net_write_all", HOST),
     ops("hirsel_rt_v2_net_shutdown", HOST),
+    ops("hirsel_rt_v2_net_split", HOST),
+    ops("hirsel_rt_v2_net_join", HOST),
+    ops("hirsel_rt_v2_write_half_shutdown", HOST),
     ops("hirsel_rt_v2_net_peer_addr", HOST),
     ops("hirsel_rt_v2_net_close", HOST),
     ops("hirsel_rt_v2_net_listen", HOST),
@@ -842,6 +862,9 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_builder_begin", Local),
     entry("hirsel_rt_v2_builder_grow", Local),
     entry("hirsel_rt_v2_builder_publish", Local),
+    // roots.rs: increments commute; releases can free counted frozen storage.
+    entry("hirsel_rt_v2_root_dup", Concurrent),
+    ops("hirsel_rt_v2_root_release", &["root.release"]),
     // release.rs
     ops("hirsel_rt_v2_free", DROPS),
     ops("hirsel_rt_v2_release", DROPS),
@@ -893,6 +916,8 @@ pub const ENTRIES: &[Entry] = &[
     // tls_abi.rs
     ops("hirsel_rt_v2_tls_connect", HOST),
     ops("hirsel_rt_v2_tls_connect_as", HOST),
+    ops("hirsel_rt_v2_tls_connect_with", HOST),
+    ops("hirsel_rt_v2_tls_negotiated_protocol", HOST),
     ops("hirsel_rt_v2_tls_accept", HOST),
     ops("hirsel_rt_v2_tls_peer", HOST),
     ops("hirsel_rt_v2_tls_close", HOST),
@@ -1013,6 +1038,7 @@ pub const REGISTRY: &[(&str, &[&str])] = &[
     ("$intrinsic.TaskSetHas", &["task.set_has"]),
     ("$intrinsic.TaskSetTake", &["task.set_take"]),
     ("$intrinsic.TaskCanceled", &["task.check_canceled"]),
+    ("$intrinsic.ChannelOpen", &["channel.open"]),
     ("$intrinsic.ChannelSend", &["channel.send"]),
     ("$intrinsic.ChannelReceive", &["channel.receive"]),
     ("$intrinsic.MutexCreate", &["mutex.create"]),

@@ -222,12 +222,10 @@ fn every_inline_effect_is_classified() {
     }
 }
 
-/// The call-graph check (§4.1): an entry marked task-local, immutable or concurrent never
-/// reaches `scheduler()`, the Io binding, or an entry of another locality. A stop is the
-/// executor's terminal boundary and is not followed.
-#[test]
-fn local_immutable_and_concurrent_entries_stay_in_their_locality() {
-    let graph = source();
+/// Task-local code can invoke an unobservable concurrent service: copying a value
+/// adds a Shared root. Each service is checked independently, so this does not permit
+/// a path to the scheduler, Io binding or an observable op.
+fn locality_violations(graph: &graph::Graph) -> Vec<String> {
     let mut violations = Vec::new();
     for (symbol, start) in graph.entries() {
         let Some(entry) = entry_descriptor(symbol) else {
@@ -246,7 +244,14 @@ fn local_immutable_and_concurrent_entries_stay_in_their_locality() {
             graph
                 .entry_symbol(key)
                 .and_then(entry_descriptor)
-                .is_some_and(|other| other.symbol != symbol && other.locality != entry.locality)
+                .is_some_and(|other| {
+                    other.symbol != symbol
+                        && other.locality != entry.locality
+                        && !matches!(
+                            (entry.locality, other.locality),
+                            (Locality::Local, Locality::Concurrent)
+                        )
+                })
         }) {
             violations.push(format!(
                 "{symbol} ({:?}): {}",
@@ -255,9 +260,53 @@ fn local_immutable_and_concurrent_entries_stay_in_their_locality() {
             ));
         }
     }
+    violations
+}
+
+/// The call-graph check (§4.1): every non-op entry stays in compatible localities.
+#[test]
+fn local_immutable_and_concurrent_entries_stay_in_their_locality() {
+    let violations = locality_violations(source());
     assert!(
         violations.is_empty(),
         "locality violations:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn concurrent_services_remain_checked_when_called_from_local_entries() {
+    let root =
+        std::env::temp_dir().join(format!("hirsel-descriptor-locality-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (body, forbidden) in [
+        ("", None),
+        ("tasks::scheduler();", Some("tasks::scheduler")),
+        ("Binding::get();", Some("Binding::get")),
+        ("hirsel_rt_v2_net_read();", Some("hirsel_rt_v2_net_read")),
+    ] {
+        std::fs::write(
+            root.join("lib.rs"),
+            format!(
+                "#[no_mangle] pub fn hirsel_rt_v2_unique_copy() {{ hirsel_rt_v2_root_dup(); }}
+                 #[no_mangle] pub fn hirsel_rt_v2_root_dup() {{ {body} }}
+                 #[no_mangle] pub fn hirsel_rt_v2_net_read() {{}}
+                 mod tasks {{ pub fn scheduler() {{}} }}
+                 struct Binding; impl Binding {{ fn get() {{}} }}"
+            ),
+        )
+        .unwrap();
+        let violations = locality_violations(&graph::Graph::parse(&root));
+        if let Some(forbidden) = forbidden {
+            assert_eq!(violations.len(), 1, "{violations:?}");
+            assert!(
+                violations[0].starts_with("hirsel_rt_v2_root_dup (Concurrent)"),
+                "{violations:?}"
+            );
+            assert!(violations[0].contains(forbidden), "{violations:?}");
+        } else {
+            assert!(violations.is_empty(), "{violations:?}");
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
