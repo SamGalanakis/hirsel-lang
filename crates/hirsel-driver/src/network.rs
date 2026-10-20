@@ -276,6 +276,8 @@ pub(crate) struct HostLibrary {
     armed: Vec<(u64, u64, R)>,
     /// The host requests the current scheduling point found ready.
     ready: Ready,
+    /// The library's cancellation count at the last scheduling point.
+    cancellations: u64,
     yield_now: bool,
 }
 struct HostWait {
@@ -324,6 +326,7 @@ impl HostLibrary {
             waits: BTreeMap::new(),
             armed: Vec::new(),
             ready: Ready::Tokens(Vec::new()),
+            cancellations: 0,
             yield_now: false,
             library,
             io,
@@ -1732,6 +1735,23 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     }
     fn operations_mut(&mut self) -> &mut dyn Operations {
         &mut self.library
+    }
+    /// A host wait completes only once ready or cancelled. One parked by a task already
+    /// cancelled is polled at every poll: no later cancellation reports it.
+    fn watched(&self, token: u64) -> bool {
+        self.waits.contains_key(&token) && self.library.cancellation().is_none()
+    }
+    /// The host requests this point found ready; every wait after a cancellation, which
+    /// completes a cancellable wait whether or not it is ready.
+    fn woken(&mut self) -> hirsel_interp::Woken {
+        let cancellations = self.library.cancellations();
+        if std::mem::replace(&mut self.cancellations, cancellations) != cancellations {
+            return hirsel_interp::Woken::Every;
+        }
+        match &self.ready {
+            Ready::Every => hirsel_interp::Woken::Every,
+            Ready::Tokens(tokens) => hirsel_interp::Woken::Tokens(tokens.clone()),
+        }
     }
     fn wait_deadline(&self, token: u64) -> Option<u64> {
         match self.waits.get(&token) {

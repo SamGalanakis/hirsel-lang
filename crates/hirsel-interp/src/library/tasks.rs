@@ -34,6 +34,9 @@ pub(super) struct Tasks {
     pub root_priority: u64,
     /// A callee run's root scope, cancelled by its caller (RUN-9): the cause.
     root_canceled: Option<u32>,
+    /// Cancellations so far, of a task, a scope or the root scope: a parked task's
+    /// cancellation can change only when this does.
+    pub cancellations: u64,
 }
 struct TaskSet {
     scope: u64,
@@ -146,6 +149,7 @@ impl Tasks {
     }
     /// Cancel the run's root scope with `cause`: its root task and every task under it.
     pub fn cancel_root(&mut self, cause: u32) {
+        self.cancellations += 1;
         self.root_canceled.get_or_insert(cause);
         for child in self.tasks.values_mut() {
             child.canceled.get_or_insert(1);
@@ -188,6 +192,7 @@ impl Tasks {
             .unwrap_or_default()
     }
     fn cancel(&mut self, task: u64, cause: u32) {
+        self.cancellations += 1;
         let path = self.tasks[&task].path.clone();
         for child in self.tasks.values_mut() {
             if child.path.starts_with(&path) {
@@ -277,6 +282,7 @@ impl Tasks {
                 }
             }
             let scope = child.scope;
+            self.cancellations += 1;
             self.scope_canceled.entry(scope).or_insert(2);
             let siblings = self.scopes[&scope].children.clone();
             for sibling in siblings {
@@ -927,6 +933,7 @@ impl Library {
         deadline.expired = true;
         let (at, anchor, owner) = (deadline.at, deadline.anchor.clone(), state.owner);
         let children = state.children.clone();
+        self.tasks.cancellations += 1;
         self.tasks
             .scope_canceled
             .entry(scope)

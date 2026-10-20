@@ -205,7 +205,7 @@ pub(crate) struct Scheduler {
     budgets: crate::bounded::Budgets,
     task: u64,
     runnable: std::collections::VecDeque<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)>,
-    parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)>,
+    parked: crate::parked::Parked,
     frames: Vec<Frame>,
     constants: crate::constants::Constants,
     /// The dispatch forms of the bodies its frames run.
@@ -223,7 +223,7 @@ impl Scheduler {
             budgets: crate::bounded::Budgets::new(budgets),
             task: 0,
             runnable: Default::default(),
-            parked: vec![],
+            parked: Default::default(),
             frames: vec![frame],
             constants,
             codes: Default::default(),
@@ -388,18 +388,16 @@ pub(crate) fn execute_frames(
                 trace_mode: runtime.trace_mode,
                 anchor: None,
             })?;
-            // Stable sorting keeps non-timer waits and equal-deadline timers in
-            // suspension order. Poll timers by their original absolute ticks,
-            // including when several deadlines passed during a blocking step.
-            parked.sort_by_cached_key(|(_, stack, _)| {
-                match &stack.last().unwrap().operation.as_ref().unwrap().0 {
-                    OperationResult::Park { token, .. } => operations.wait_deadline(*token),
-                    _ => None,
-                }
-            });
-            let mut waiting = vec![];
-            for (id, mut stack, failures) in parked.drain(..) {
-                operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));
+            // Parked tasks are kept in poll order: non-timer waits and equal-deadline
+            // timers in suspension order, timers by their original absolute ticks,
+            // including when several deadlines passed during a blocking step. A
+            // watched wait that is not woken would poll None, so it is not asked.
+            let woken = operations.woken();
+            for key in parked.due(&woken) {
+                let (id, stack, _) = parked
+                    .get_mut(key)
+                    .ok_or_else(|| invalid("parked task left early"))?;
+                operations.enter_task(*id, stack.iter().any(|f| f.finalized.is_some()));
                 let frame: &mut Frame = stack.last_mut().unwrap();
                 let (OperationResult::Park { token, .. }, state) =
                     frame.operation.as_deref().unwrap()
@@ -418,13 +416,11 @@ pub(crate) fn execute_frames(
                     },
                 )?;
                 if let Some(result) = result {
-                    frame.operation.as_mut().unwrap().0 = result;
+                    let (id, mut stack, failures) = parked.remove(key).unwrap();
+                    stack.last_mut().unwrap().operation.as_mut().unwrap().0 = result;
                     runnable.push_back((id, stack, failures));
-                } else {
-                    waiting.push((id, stack, failures));
                 }
             }
-            parked = waiting;
         }
         operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
         if frames.is_empty() || (yield_now && !runnable.is_empty()) {
@@ -494,11 +490,16 @@ pub(crate) fn execute_frames(
                     frame.operation =
                         Some(Box::new((OperationResult::Park { token, wait }, state)));
                     operations.parked(token);
-                    parked.push((
-                        task,
-                        std::mem::take(&mut frames),
-                        std::mem::take(&mut execution.failures),
-                    ));
+                    parked.push(
+                        (
+                            task,
+                            std::mem::take(&mut frames),
+                            std::mem::take(&mut execution.failures),
+                        ),
+                        token,
+                        operations.wait_deadline(token),
+                        operations.watched(token),
+                    );
                 }
                 OperationResult::FailureChain {
                     mut failures,

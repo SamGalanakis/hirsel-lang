@@ -185,3 +185,146 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     );
     assert_eq!(execution.stdout, b"park\nadvance\nearly\ntied\nlate\n");
 }
+
+// A layer that watches its waits is asked about a parked wait only once it reports the
+// wait woken, whatever the number of scheduling points while it parks, and woken waits
+// still resume in deadline order with ties in suspension order. Output alone cannot
+// tell a scheduler that polls every parked wait from one that polls the woken ones.
+#[test]
+fn watched_waits_are_polled_only_when_woken_and_resume_in_poll_order() {
+    use hirsel_interp::{
+        Error, OperationCall, OperationContext, OperationResult, Operations, OperationsAdapter,
+        Value, Woken, library::Library,
+    };
+    use std::collections::BTreeSet;
+    struct WatchedTimers {
+        library: Library,
+        timers: BTreeSet<u64>,
+        polls: usize,
+        points: usize,
+    }
+    impl OperationsAdapter for WatchedTimers {
+        fn operations(&self) -> &dyn Operations {
+            &self.library
+        }
+        fn operations_mut(&mut self) -> &mut dyn Operations {
+            &mut self.library
+        }
+        fn call(
+            &mut self,
+            call: OperationCall<'_>,
+            cx: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            if call.path == &hirsel_syntax::DefPath::core("out.print")
+                && call.arguments.get(1) == Some(&Value::String("advance\n".into()))
+            {
+                self.library.simulation.config.monotonic = 100;
+            }
+            self.library.call(call, cx)
+        }
+        fn watched(&self, token: u64) -> bool {
+            self.library.wait_deadline(token).is_some()
+        }
+        fn parked(&mut self, token: u64) {
+            if self.library.wait_deadline(token).is_some() {
+                self.timers.insert(token);
+            }
+            self.library.parked(token);
+        }
+        // Due timers, latest token first: the scheduler, not this list, orders the polls.
+        fn woken(&mut self) -> Woken {
+            self.points += 1;
+            let now = self.library.simulation.config.monotonic;
+            Woken::Tokens(
+                self.timers
+                    .iter()
+                    .rev()
+                    .copied()
+                    .filter(|token| self.library.wait_deadline(*token).is_some_and(|d| d <= now))
+                    .collect(),
+            )
+        }
+        fn poll(
+            &mut self,
+            token: u64,
+            cx: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            if self.timers.contains(&token) {
+                self.polls += 1;
+            }
+            let result = self.library.poll(token, cx)?;
+            if result.is_some() {
+                self.timers.remove(&token);
+            }
+            Ok(result)
+        }
+    }
+    let source = r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) { Ok(t) => t, Error(_) => return Ok(()) }
+  let late = match instant.checked_add(c, start, 30u64) { Some(t) => t, None() => return Ok(()) }
+  let early = match instant.checked_add(c, start, 10u64) { Some(t) => t, None() => return Ok(()) }
+  task.scope(tasks, fn(s: Scope) {
+    let a = task.async(s, fn() { let _ = clock.sleep_until(c, late); let _ = out.print(output, "late\n") })
+    let b = task.async(s, fn() { let _ = clock.sleep_until(c, early); let _ = out.print(output, "early\n") })
+    let d = task.async(s, fn() { let _ = clock.sleep_until(c, early); let _ = out.print(output, "tied\n") })
+    let _ = out.print(output, "park\n")
+    let mut i = 0u32
+    while i < 100u32 {
+      let _ = clock.monotonic(c)
+      i = i + 1u32
+    }
+    let _ = out.print(output, "advance\n")
+    task.await(s, take a)
+    task.await(s, take b)
+    task.await(s, take d)
+  })
+  Ok(())
+}
+"#;
+    let mut engine = source_std::engine();
+    let file = engine.sources.add("woken.hir", source.into()).unwrap();
+    let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let runtime = engine.runtime_types().unwrap();
+    let sources = engine.sources.clone();
+    let run = RunConfiguration {
+        entry: entry_path(&default_context()),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let mut config = SimulationConfig::default();
+    config.grants.insert("Io".into());
+    config.grants.insert("MonotonicClock".into());
+    let mut host = WatchedTimers {
+        library: Library::new(&run, config).unwrap(),
+        timers: BTreeSet::new(),
+        polls: 0,
+        points: 0,
+    };
+    let root = host.library.simulation.grant_root("Io").unwrap();
+    let execution = hirsel_interp::run_with_runtime(
+        &mut engine,
+        &sources,
+        &run,
+        vec![root],
+        Default::default(),
+        &mut host,
+        &runtime,
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            execution.outcome,
+            hirsel_interp::Outcome::Returned { exit_code: 0, .. }
+        ),
+        "{:?}",
+        execution.outcome
+    );
+    assert_eq!(execution.stdout, b"park\nadvance\nearly\ntied\nlate\n");
+    assert!(host.points > 100, "{} scheduling points", host.points);
+    assert_eq!(host.polls, 3, "each timer is polled once, when woken");
+}

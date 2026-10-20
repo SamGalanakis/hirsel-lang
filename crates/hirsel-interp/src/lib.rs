@@ -15,6 +15,7 @@ pub mod exit_report;
 mod frame;
 pub mod library;
 pub mod observation;
+mod parked;
 mod resources;
 mod runs;
 pub mod scalar;
@@ -225,6 +226,15 @@ pub enum CalleeEnd {
     Abandoned,
 }
 
+/// The watched waits a poll may complete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Woken {
+    /// Every parked wait, watched or not.
+    Every,
+    /// These tokens, in any order; any other watched wait stays parked unpolled.
+    Tokens(Vec<u64>),
+}
+
 /// A transferred task environment, entered on its own evaluator stack.
 pub struct TaskStart {
     /// Actual spawn invocation, independent of inherited failure attribution.
@@ -285,6 +295,10 @@ operation_boundary! {
     fn handles_failure(&self, _token: u64) -> bool {
         false
     }
+    /// This layer reports the parked wait `token` through [`woken`](Operations::woken):
+    /// until a poll's `woken` names it, its poll returns None without effect. Asked once,
+    /// when the wait parks. An unwatched wait is polled at every poll.
+    fn watched(&self, _token: u64) -> bool { false }
     /// The logical bytes of the values this layer holds for the run (channel buffers,
     /// task results), measured with the evaluator's own (`budgets.limits@1`).
     fn retained_bytes(&self) -> u64 { 0 }
@@ -300,6 +314,10 @@ operation_boundary! {
     fn expire_deadlines(&mut self, _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Ok(())
     }
+    /// At every poll, after `expire_deadlines`: the watched waits whose poll may complete
+    /// now, so the scheduler polls those and the unwatched ones, as the native scheduler
+    /// re-issues only ready requests.
+    fn woken(&mut self) -> Woken { Woken::Every }
     /// Publish the host's entry report before consuming its returned owner.
     /// False retains the raw evaluator's returned-value ownership policy.
     fn entry_returned(&mut self, _value: &Value, _runtime: &aggregate::RuntimeTypes,

@@ -79,6 +79,12 @@ canonical floats. Equality of executions includes float bits and the selected tr
   cleanup worklist. L adds its rvalues and cleanup handlers at these matches. Its
   finalizers must also schedule frames/work items, continue field release after a
   failed finalizer, and preserve the original failure; do not recurse per call.
+- `parked.rs`: the run's parked tasks in poll order (waits without a deadline, then
+  timers by deadline, ties in suspension order). A layer marks a wait `watched` when
+  its poll returns None without effect until the layer's `woken` names it; a poll
+  then asks the woken and unwatched waits only, as the native scheduler re-issues
+  only ready requests. The host library watches its host waits, except those parked
+  by a task already cancelled, and reports every wait after a cancellation.
 - `run_with_operations`/`Operations`: M implements registry-backed named calls in
   a separate module. Calls receive values in parameter order, the caller's owning
   TypeStore/result TypeId, generic arguments and source site. Context holds only

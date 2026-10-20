@@ -1155,6 +1155,11 @@ impl Library {
     pub fn cancellation(&self) -> Option<u32> {
         self.tasks.canceled()
     }
+    /// Counts the run's cancellations: a parked task's [`cancellation`](Self::cancellation)
+    /// changes only when this does.
+    pub fn cancellations(&self) -> u64 {
+        self.tasks.cancellations
+    }
     /// Stable spawn path for diagnostics of host-owned waits.
     pub fn task_path(&self) -> Vec<u32> {
         self.tasks.path()
