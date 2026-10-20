@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1723 exported definitions; 669 variants.
+1807 exported definitions; 702 variants.
 
 ## Types and roots
 
@@ -1376,6 +1376,10 @@ Variant of Signal.
 
 - `type SourceSite: serializable uses {} = { definition: String, line: u64, column: u64 }`
 
+<a id="def-core_401_2fSpan"></a>
+
+- `opaque resource type Span: noalloc_drop uses {Telemetry}`
+
 <a id="def-core_401_2fStderr"></a>
 
 - `@capability(global) opaque type Stderr: plain + copyable + sendable + noalloc_drop uses {Stderr}`
@@ -1411,6 +1415,26 @@ Variant of Signal.
 <a id="def-core_401_2fTasks"></a>
 
 - `@capability(global) opaque type Tasks: plain + copyable + sendable + noalloc_drop uses {Tasks}`
+
+<a id="def-core_401_2fTelemetry"></a>
+
+- `@capability(global) opaque type Telemetry: plain + copyable + sendable + noalloc_drop uses {Telemetry}`
+
+<a id="def-core_401_2fTelemetryError"></a>
+
+- `type TelemetryError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = TooLarge() | InvalidParent()`
+
+<a id="def-core_401_2fTelemetryError_23InvalidParent"></a>
+
+- `InvalidParent() -> TelemetryError`
+
+Variant of TelemetryError.
+
+<a id="def-core_401_2fTelemetryError_23TooLarge"></a>
+
+- `TooLarge() -> TelemetryError`
+
+Variant of TelemetryError.
 
 <a id="def-core_401_2fTest"></a>
 
@@ -2779,6 +2803,33 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 - `@noalloc fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src`
 
 
+## capture
+
+<a id="def-core_401_2fcapture_2fbegin"></a>
+
+- `fn capture.begin(t: Telemetry, parent: Bytes, spec: Bytes) -> Result[Span of t, TelemetryError]`
+
+<a id="def-core_401_2fcapture_2fcontext"></a>
+
+- `fn capture.context(t: Telemetry, s: Span of t) -> Bytes`
+
+<a id="def-core_401_2fcapture_2fevent"></a>
+
+- `fn capture.event(t: Telemetry, s: Span of t, payload: Bytes) -> Result[(), TelemetryError]`
+
+<a id="def-core_401_2fcapture_2ffinish"></a>
+
+- `fn capture.finish(t: Telemetry, take s: Span of t, status: Bytes) -> Result[(), TelemetryError]`
+
+<a id="def-core_401_2fcapture_2flog"></a>
+
+- `fn capture.log(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]`
+
+<a id="def-core_401_2fcapture_2fmeasure"></a>
+
+- `fn capture.measure(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]`
+
+
 ## cbor
 
 <a id="def-std_401_2fcbor_2fdecode"></a>
@@ -3263,6 +3314,58 @@ Variant of csv.CsvError.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fcsv_2fDriverError"></a>
+
+- `pub type csv.DriverError[E] = Source(E) | Callback(E) | Csv(CsvError) | Canceled( CancelCause ) | Limit | InvalidRead | InvalidConfig`
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
+
+<a id="def-std_401_2fcsv_2fDriverError_23Callback"></a>
+
+- `Callback(E) -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+<a id="def-std_401_2fcsv_2fDriverError_23Canceled"></a>
+
+- `Canceled( CancelCause ) -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause)
+
+<a id="def-std_401_2fcsv_2fDriverError_23Csv"></a>
+
+- `Csv(CsvError) -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+References: [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
+
+<a id="def-std_401_2fcsv_2fDriverError_23InvalidConfig"></a>
+
+- `InvalidConfig -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+<a id="def-std_401_2fcsv_2fDriverError_23InvalidRead"></a>
+
+- `InvalidRead -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+<a id="def-std_401_2fcsv_2fDriverError_23Limit"></a>
+
+- `Limit -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
+<a id="def-std_401_2fcsv_2fDriverError_23Source"></a>
+
+- `Source(E) -> csv.DriverError[E]`
+
+Variant of csv.DriverError.
+
 <a id="def-std_401_2fcsv_2fReadError"></a>
 
 - `@serializable pub type csv.ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead`
@@ -3293,6 +3396,15 @@ Variant of csv.ReadError.
 
 - `pub opaque type csv.Reader: copyable + inert + noalloc_drop uses {}`
 
+<a id="def-std_401_2fcsv_2fStreamConfig"></a>
+
+- `pub type csv.StreamConfig { csv: Config, refill_bytes: u64, max_input_bytes: u64, max_records: u64, max_outputs: u64, }`
+
+Limits for an owning scoped fold. Zero raw/input budgets forbid further work;
+zero output budget succeeds without pulling. Refill and record sizes are positive.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig)
+
 <a id="def-std_401_2fcsv_2fdefault_5fconfig"></a>
 
 - `pub fn csv.default_config() -> Config uses {}`
@@ -3304,6 +3416,14 @@ References: [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig)
 - `pub fn csv.feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[ List[List[String]], CsvError ] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/Reader`](#def-std_401_2fcsv_2fReader)
+
+<a id="def-std_401_2fcsv_2ffold_5fscoped"></a>
+
+- `pub fn csv.fold_scoped[S, A, E]( scope: Scope, take source: S, config: StreamConfig, take initial: A, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], accept: fn(List[String]) -> Result[bool, E], step: fn(take A, take List[String]) -> Result[A, E] ) -> Result[A, DriverError[E]] uses {scope, source, initial, refill, accept, step}`
+
+Consume an owned source with bounded parsing and explicit cooperative checks.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Scope`](#def-core_401_2fScope), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/DriverError`](#def-std_401_2fcsv_2fDriverError), [`std@1/csv/StreamConfig`](#def-std_401_2fcsv_2fStreamConfig)
 
 <a id="def-std_401_2fcsv_2fparse"></a>
 
@@ -3826,6 +3946,18 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-std_401_2fderive_2fschema_5fdecode"></a>
+
+- `pub fn derive.schema_decode[T](s: TypeShape[T], p: schema.Policy) -> Result[ Body[fn(json.Value, mut schema.CheckState) -> Result[T, schema.SchemaError] uses {}], String ] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/Policy`](#def-std_401_2fschema_2fPolicy), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fderive_2fschema_5fencode"></a>
+
+- `pub fn derive.schema_encode[T](s: TypeShape[T], p: schema.Policy) -> Result[ Body[fn(T, mut schema.CheckState) -> Result[json.Value, schema.SchemaError] uses {}], String ] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/Policy`](#def-std_401_2fschema_2fPolicy), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
 <a id="def-std_401_2fderive_2funknown_5fvariant"></a>
 
 - `pub fn derive.unknown_variant(tag: String, expected: String) -> unique String uses {}`
@@ -3837,11 +3969,26 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fdiff_2fAlgorithm"></a>
 
-- `pub type diff.Algorithm = Myers | Patience`
+- `pub type diff.Algorithm = Myers | MyersMinimal | Histogram | Patience`
+
+`Myers()` stops minimizing a costly search the way git does; `MyersMinimal()`
+always finds a minimal script.
+
+<a id="def-std_401_2fdiff_2fAlgorithm_23Histogram"></a>
+
+- `Histogram -> diff.Algorithm`
+
+Variant of diff.Algorithm.
 
 <a id="def-std_401_2fdiff_2fAlgorithm_23Myers"></a>
 
 - `Myers -> diff.Algorithm`
+
+Variant of diff.Algorithm.
+
+<a id="def-std_401_2fdiff_2fAlgorithm_23MyersMinimal"></a>
+
+- `MyersMinimal -> diff.Algorithm`
 
 Variant of diff.Algorithm.
 
@@ -3935,15 +4082,19 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `pub fn diff.edits(old: List[String], new: List[String], algorithm: Algorithm) -> unique List[ Edit ] uses {}`
 
 The edit script turning `old` into `new`, as runs of kept, deleted and
-inserted lines (`Edit`). `Myers()` finds a minimal script by Myers'
-algorithm, after git: lines with no counterpart are changed outright, a line
-matching many others inside such changes is changed with them, and each
-change is slid down past equal lines, then back up to line up with a change
-on the other side. `Patience()` anchors the diff on lines that occur once
-on each side, as git's patience diff, falling back to Myers between anchors
-with none. Lines compare whole, terminators included. Unlike git, Myers
-never trades minimality for speed on costly inputs: time is O((N + M) D) and
-memory O(N + M) for N and M lines and D changed lines.
+inserted lines (`Edit`). Lines compare whole, terminators included; the
+common head and tail are kept first. `MyersMinimal()` finds a minimal script
+by Myers' algorithm after dropping lines the other side lacks (and lines
+matching many others among them), in O((N + M) D) time and O(N + M) memory
+for N and M lines and D changed lines. `Myers()` does the same but, as git
+does, gives up minimality to bound the search: past a cost of 256 a split
+may stop at a run of 20 equal lines, and past the square root of N + M (at
+least 256) it stops at the furthest point reached. `Histogram()` splits on the longest
+common run of the rarest lines, falling back to `Myers()` where every shared
+line occurs more than 63 times. `Patience()` anchors on lines that occur
+once on each side, falling back to `Myers()` between anchors with none.
+Then each change is slid down past equal lines, and back up to line up with
+a change on the other side, the new side first.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/diff/Algorithm`](#def-std_401_2fdiff_2fAlgorithm), [`std@1/diff/Edit`](#def-std_401_2fdiff_2fEdit)
 
@@ -7144,6 +7295,10 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 
 - `@noalloc fn io.tasks(rt: Io) -> Result[Tasks, GrantError]`
 
+<a id="def-core_401_2fio_2ftelemetry"></a>
+
+- `@noalloc fn io.telemetry(rt: Io) -> Result[Telemetry, GrantError]`
+
 <a id="def-core_401_2fio_2fwall_5fclock"></a>
 
 - `@noalloc fn io.wall_clock(rt: Io) -> Result[WallClock, GrantError]`
@@ -7968,6 +8123,283 @@ References: [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
 - `@noalloc pub fn md5.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
+
+
+## metrics
+
+<a id="def-std_401_2fmetrics_2fAggregate"></a>
+
+- `@serializable pub type metrics.Aggregate { count: u64, unsigned: u64, signed: i64, buckets: List[u64], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmetrics_2fCheckedMeasurement"></a>
+
+- `pub opaque type metrics.CheckedMeasurement: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fmetrics_2fCheckpoint"></a>
+
+- `pub opaque type metrics.Checkpoint: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fmetrics_2fCheckpointData"></a>
+
+- `@serializable pub type metrics.CheckpointData { reducer_version: u64, evidence: EvidenceId, next_ordinal: u64, config: MetricConfig, state: Snapshot, }`
+
+A versioned plain projection, never an encoding of an opaque Registry.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/metrics/EvidenceId`](#def-std_401_2fmetrics_2fEvidenceId), [`std@1/metrics/MetricConfig`](#def-std_401_2fmetrics_2fMetricConfig), [`std@1/metrics/Snapshot`](#def-std_401_2fmetrics_2fSnapshot)
+
+<a id="def-std_401_2fmetrics_2fDescriptor"></a>
+
+- `@serializable pub type metrics.Descriptor { scope: String, version: String, name: String, kind: Kind, unit: String, labels: List[String], bounds: List[u64], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/metrics/Kind`](#def-std_401_2fmetrics_2fKind)
+
+<a id="def-std_401_2fmetrics_2fEvidenceId"></a>
+
+- `@serializable pub type metrics.EvidenceId { capture: String, sha256: String, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmetrics_2fInstrument"></a>
+
+- `@serializable pub type metrics.Instrument { descriptor: Descriptor, series: List[Series], overflow: Aggregate, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/metrics/Aggregate`](#def-std_401_2fmetrics_2fAggregate), [`std@1/metrics/Descriptor`](#def-std_401_2fmetrics_2fDescriptor), [`std@1/metrics/Series`](#def-std_401_2fmetrics_2fSeries)
+
+<a id="def-std_401_2fmetrics_2fKind"></a>
+
+- `@serializable pub type metrics.Kind = Counter | UpDownCounter | Gauge | Histogram`
+
+<a id="def-std_401_2fmetrics_2fKind_23Counter"></a>
+
+- `Counter -> metrics.Kind`
+
+Variant of metrics.Kind.
+
+<a id="def-std_401_2fmetrics_2fKind_23Gauge"></a>
+
+- `Gauge -> metrics.Kind`
+
+Variant of metrics.Kind.
+
+<a id="def-std_401_2fmetrics_2fKind_23Histogram"></a>
+
+- `Histogram -> metrics.Kind`
+
+Variant of metrics.Kind.
+
+<a id="def-std_401_2fmetrics_2fKind_23UpDownCounter"></a>
+
+- `UpDownCounter -> metrics.Kind`
+
+Variant of metrics.Kind.
+
+<a id="def-std_401_2fmetrics_2fMeasurement"></a>
+
+- `@serializable pub type metrics.Measurement { descriptor: Descriptor, labels: List[telemetry.Attribute], value: Number, exemplar: Option[telemetry.TraceContext], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/metrics/Descriptor`](#def-std_401_2fmetrics_2fDescriptor), [`std@1/metrics/Number`](#def-std_401_2fmetrics_2fNumber), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2fmetrics_2fMetricConfig"></a>
+
+- `@serializable pub type metrics.MetricConfig { descriptors: List[Descriptor], max_series: u64, max_buckets: u64, max_labels: u64, max_label_bytes: u64, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/metrics/Descriptor`](#def-std_401_2fmetrics_2fDescriptor)
+
+<a id="def-std_401_2fmetrics_2fMetricError"></a>
+
+- `pub type metrics.MetricError = Config | DescriptorConflict | InvalidDescriptor | InvalidLabels | InvalidValue | Arithmetic | UnknownInstrument | EvidenceMismatch | OrdinalGap | Complete | InvalidCheckpoint`
+
+<a id="def-std_401_2fmetrics_2fMetricError_23Arithmetic"></a>
+
+- `Arithmetic -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23Complete"></a>
+
+- `Complete -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23Config"></a>
+
+- `Config -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23DescriptorConflict"></a>
+
+- `DescriptorConflict -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23EvidenceMismatch"></a>
+
+- `EvidenceMismatch -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23InvalidCheckpoint"></a>
+
+- `InvalidCheckpoint -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23InvalidDescriptor"></a>
+
+- `InvalidDescriptor -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23InvalidLabels"></a>
+
+- `InvalidLabels -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23InvalidValue"></a>
+
+- `InvalidValue -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23OrdinalGap"></a>
+
+- `OrdinalGap -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fMetricError_23UnknownInstrument"></a>
+
+- `UnknownInstrument -> metrics.MetricError`
+
+Variant of metrics.MetricError.
+
+<a id="def-std_401_2fmetrics_2fNumber"></a>
+
+- `@serializable pub type metrics.Number = Unsigned(u64) | Signed(i64)`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmetrics_2fNumber_23Signed"></a>
+
+- `Signed(i64) -> metrics.Number`
+
+Variant of metrics.Number.
+
+References: [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2fmetrics_2fNumber_23Unsigned"></a>
+
+- `Unsigned(u64) -> metrics.Number`
+
+Variant of metrics.Number.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmetrics_2fObservation"></a>
+
+- `pub type metrics.Observation { evidence: EvidenceId, ordinal: u64, measurement: Option[CheckedMeasurement], }`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/metrics/CheckedMeasurement`](#def-std_401_2fmetrics_2fCheckedMeasurement), [`std@1/metrics/EvidenceId`](#def-std_401_2fmetrics_2fEvidenceId)
+
+<a id="def-std_401_2fmetrics_2fRegistry"></a>
+
+- `pub opaque type metrics.Registry: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fmetrics_2fSeries"></a>
+
+- `@serializable pub type metrics.Series { labels: List[telemetry.Attribute], aggregate: Aggregate, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/metrics/Aggregate`](#def-std_401_2fmetrics_2fAggregate), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute)
+
+<a id="def-std_401_2fmetrics_2fSnapshot"></a>
+
+- `@serializable pub type metrics.Snapshot { instruments: List[Instrument], complete: bool, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`std@1/metrics/Instrument`](#def-std_401_2fmetrics_2fInstrument)
+
+<a id="def-std_401_2fmetrics_2fcheck_5fmeasurement"></a>
+
+- `pub fn metrics.check_measurement(m: Measurement) -> Result[CheckedMeasurement, MetricError] uses {}`
+
+Filters disallowed dimensions before validation. Exemplars never form keys.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/CheckedMeasurement`](#def-std_401_2fmetrics_2fCheckedMeasurement), [`std@1/metrics/Measurement`](#def-std_401_2fmetrics_2fMeasurement), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError)
+
+<a id="def-std_401_2fmetrics_2fcheckpoint"></a>
+
+- `pub fn metrics.checkpoint(r: Registry) -> Checkpoint uses {}`
+
+References: [`std@1/metrics/Checkpoint`](#def-std_401_2fmetrics_2fCheckpoint), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2fcheckpoint_5fdata"></a>
+
+- `pub fn metrics.checkpoint_data(c: Checkpoint) -> Result[CheckpointData, MetricError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/Checkpoint`](#def-std_401_2fmetrics_2fCheckpoint), [`std@1/metrics/CheckpointData`](#def-std_401_2fmetrics_2fCheckpointData), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError)
+
+<a id="def-std_401_2fmetrics_2fcomplete"></a>
+
+- `pub fn metrics.complete(mut r: Registry, evidence: EvidenceId, next_ordinal: u64) -> Result[ (), MetricError ] uses {}`
+
+Call only after the evidence parser confirms its complete final boundary.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/metrics/EvidenceId`](#def-std_401_2fmetrics_2fEvidenceId), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2ffold"></a>
+
+- `pub fn metrics.fold(mut r: Registry, event: Observation) -> Result[(), MetricError] uses {}`
+
+Contiguous zero-based ordinals include nonmetric observations. Repeated
+ordinals in the same immutable evidence are no-ops; gaps never silently skip.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Observation`](#def-std_401_2fmetrics_2fObservation), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2fmeasurement_5fdata"></a>
+
+- `pub fn metrics.measurement_data(m: CheckedMeasurement) -> Measurement uses {}`
+
+References: [`std@1/metrics/CheckedMeasurement`](#def-std_401_2fmetrics_2fCheckedMeasurement), [`std@1/metrics/Measurement`](#def-std_401_2fmetrics_2fMeasurement)
+
+<a id="def-std_401_2fmetrics_2frecord"></a>
+
+- `pub fn metrics.record(mut r: Registry, m: CheckedMeasurement) -> Result[(), MetricError] uses {}`
+
+Local state only. Bound offline registries cannot mix unnumbered updates.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/CheckedMeasurement`](#def-std_401_2fmetrics_2fCheckedMeasurement), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2fregistry"></a>
+
+- `pub fn metrics.registry(config: MetricConfig) -> Result[Registry, MetricError] uses {}`
+
+Registration is part of construction, so offline folds cannot grow descriptors.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/MetricConfig`](#def-std_401_2fmetrics_2fMetricConfig), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2frestore"></a>
+
+- `pub fn metrics.restore(c: Checkpoint, evidence: EvidenceId) -> Result[Registry, MetricError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/Checkpoint`](#def-std_401_2fmetrics_2fCheckpoint), [`std@1/metrics/EvidenceId`](#def-std_401_2fmetrics_2fEvidenceId), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2frestore_5fdata"></a>
+
+- `pub fn metrics.restore_data(data: CheckpointData, evidence: EvidenceId) -> Result[ Registry, MetricError ] uses {}`
+
+Revalidate decoded plain state before it can become a live reducer. Restarts
+bind the caller's evidence and all limits atomically with the consumed prefix.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/metrics/CheckpointData`](#def-std_401_2fmetrics_2fCheckpointData), [`std@1/metrics/EvidenceId`](#def-std_401_2fmetrics_2fEvidenceId), [`std@1/metrics/MetricError`](#def-std_401_2fmetrics_2fMetricError), [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry)
+
+<a id="def-std_401_2fmetrics_2fsnapshot"></a>
+
+- `pub fn metrics.snapshot(r: Registry) -> Snapshot uses {}`
+
+References: [`std@1/metrics/Registry`](#def-std_401_2fmetrics_2fRegistry), [`std@1/metrics/Snapshot`](#def-std_401_2fmetrics_2fSnapshot)
 
 
 ## msgpack
@@ -9050,6 +9482,12 @@ References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
+<a id="def-std_401_2fschema_2fFieldPolicy"></a>
+
+- `pub type schema.FieldPolicy { name: String, wire_name: String, aliases: List[String], missing: Missing, nulls: Nulls, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/schema/Missing`](#def-std_401_2fschema_2fMissing), [`std@1/schema/Nulls`](#def-std_401_2fschema_2fNulls)
+
 <a id="def-std_401_2fschema_2fFormatLimit"></a>
 
 - `pub type schema.FormatLimit = InputBytes(u64) | OutputBytes(u64)`
@@ -9083,6 +9521,12 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 - `pub type schema.Issues { items: List[Issue], truncated: bool, }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`std@1/schema/Issue`](#def-std_401_2fschema_2fIssue)
+
+<a id="def-std_401_2fschema_2fLeaf"></a>
+
+- `pub type schema.Leaf { ty: String, decode: String, encode: String, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fschema_2fLimitError"></a>
 
@@ -9130,6 +9574,32 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fschema_2fMissing"></a>
+
+- `pub type schema.Missing = Required | NoneValue | Default(std@1/json.Value)`
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fschema_2fMissing_23Default"></a>
+
+- `Default(std@1/json.Value) -> schema.Missing`
+
+Variant of schema.Missing.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fschema_2fMissing_23NoneValue"></a>
+
+- `NoneValue -> schema.Missing`
+
+Variant of schema.Missing.
+
+<a id="def-std_401_2fschema_2fMissing_23Required"></a>
+
+- `Required -> schema.Missing`
+
+Variant of schema.Missing.
+
 <a id="def-std_401_2fschema_2fMode"></a>
 
 - `pub type schema.Mode = First | All`
@@ -9146,11 +9616,33 @@ Variant of schema.Mode.
 
 Variant of schema.Mode.
 
+<a id="def-std_401_2fschema_2fNulls"></a>
+
+- `pub type schema.Nulls = Accept | Reject`
+
+<a id="def-std_401_2fschema_2fNulls_23Accept"></a>
+
+- `Accept -> schema.Nulls`
+
+Variant of schema.Nulls.
+
+<a id="def-std_401_2fschema_2fNulls_23Reject"></a>
+
+- `Reject -> schema.Nulls`
+
+Variant of schema.Nulls.
+
 <a id="def-std_401_2fschema_2fOptions"></a>
 
 - `pub type schema.Options { limits: Limits, mode: Mode, }`
 
 References: [`std@1/schema/Limits`](#def-std_401_2fschema_2fLimits), [`std@1/schema/Mode`](#def-std_401_2fschema_2fMode)
+
+<a id="def-std_401_2fschema_2fPolicy"></a>
+
+- `pub type schema.Policy { fields: List[FieldPolicy], tags: List[TagPolicy], leaves: List[Leaf], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/schema/FieldPolicy`](#def-std_401_2fschema_2fFieldPolicy), [`std@1/schema/Leaf`](#def-std_401_2fschema_2fLeaf), [`std@1/schema/TagPolicy`](#def-std_401_2fschema_2fTagPolicy)
 
 <a id="def-std_401_2fschema_2fSchemaError"></a>
 
@@ -9258,6 +9750,18 @@ Variant of schema.Stage.
 
 Variant of schema.Stage.
 
+<a id="def-std_401_2fschema_2fTagPolicy"></a>
+
+- `pub type schema.TagPolicy { name: String, wire_name: String, aliases: List[String], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fschema_2faccepted_5fname"></a>
+
+- `pub fn schema.accepted_name(name: String, canonical: String, aliases: List[String]) -> bool uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fschema_2fappend_5fissues"></a>
 
 - `pub fn schema.append_issues(mut into: Issues, take more: Issues) -> () uses {}`
@@ -9276,11 +9780,23 @@ References: [`core@1/List`](#def-core_401_2fList), [`std@1/json/Value`](#def-std
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
+<a id="def-std_401_2fschema_2fcheck_5fnull"></a>
+
+- `pub fn schema.check_null( wire: std@1/json.Value, p: FieldPolicy, site: String, mut check: CheckState ) -> Result[(), SchemaError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/FieldPolicy`](#def-std_401_2fschema_2fFieldPolicy), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
 <a id="def-std_401_2fschema_2fcheck_5fstate"></a>
 
 - `pub fn schema.check_state(o: Options) -> Result[CheckState, SchemaError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fcollect"></a>
+
+- `pub fn schema.collect[T: inert]( take outcome: Result[T, SchemaError], segment: Segment, mut issues: Issues ) -> Result[Option[T], SchemaError] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError), [`std@1/schema/Segment`](#def-std_401_2fschema_2fSegment)
 
 <a id="def-std_401_2fschema_2fdecode"></a>
 
@@ -9318,6 +9834,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Boundary`]
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
+<a id="def-std_401_2fschema_2ffield_5fpolicy"></a>
+
+- `pub fn schema.field_policy(p: Policy, name: String) -> FieldPolicy uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/FieldPolicy`](#def-std_401_2fschema_2fFieldPolicy), [`std@1/schema/Policy`](#def-std_401_2fschema_2fPolicy)
+
 <a id="def-std_401_2fschema_2fformat"></a>
 
 - `pub fn schema.format(issues: Issues) -> String uses {}`
@@ -9354,6 +9876,48 @@ References: [`core@1/List`](#def-core_401_2fList), [`std@1/schema/Boundary`](#de
 
 References: [`core@1/List`](#def-core_401_2fList), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
 
+<a id="def-std_401_2fschema_2fmap_5fdecode"></a>
+
+- `pub fn schema.map_decode[K: key + inert, V: inert]( wire: std@1/json.Value, key_decode: fn(std@1/json.Value, mut CheckState) -> Result[K, SchemaError] uses {}, value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {}, mut check: CheckState ) -> Result[Map[K, V], SchemaError] uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fmap_5fencode"></a>
+
+- `pub fn schema.map_encode[K: key + inert, V: inert]( values: Map[K, V], key_encode: fn(K, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, mut check: CheckState ) -> Result[std@1/json.Value, SchemaError] uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fmember"></a>
+
+- `pub fn schema.member( fields: Map[String, std@1/json.Value], p: FieldPolicy, site: String, mut check: CheckState ) -> Result[std@1/json.Value, SchemaError] uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/FieldPolicy`](#def-std_401_2fschema_2fFieldPolicy), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fobject_5fmap_5fdecode"></a>
+
+- `pub fn schema.object_map_decode[V: inert]( wire: std@1/json.Value, key_decode: fn(std@1/json.Value, mut CheckState) -> Result[String, SchemaError] uses {}, value_decode: fn(std@1/json.Value, mut CheckState) -> Result[V, SchemaError] uses {}, mut check: CheckState ) -> Result[Map[String, V], SchemaError] uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fobject_5fmap_5fencode"></a>
+
+- `pub fn schema.object_map_encode[V: inert]( values: Map[String, V], key_encode: fn(String, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, value_encode: fn(V, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, mut check: CheckState ) -> Result[std@1/json.Value, SchemaError] uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2foption_5fdecode"></a>
+
+- `pub fn schema.option_decode[T: inert]( wire: std@1/json.Value, item_decode: fn(std@1/json.Value, mut CheckState) -> Result[T, SchemaError] uses {}, mut check: CheckState ) -> Result[Option[T], SchemaError] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2foption_5fencode"></a>
+
+- `pub fn schema.option_encode[T: inert]( value: Option[T], item_encode: fn(T, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, mut check: CheckState ) -> Result[std@1/json.Value, SchemaError] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
 <a id="def-std_401_2fschema_2fparse_5fjson"></a>
 
 - `pub fn schema.parse_json[D: inert](b: Boundary[D, std@1/json.Value], input: String, o: Options) -> Result[ D, BoundaryError ] uses {}`
@@ -9372,11 +9936,41 @@ References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues), [`std@1/sch
 
 References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError), [`std@1/schema/Segment`](#def-std_401_2fschema_2fSegment)
 
+<a id="def-std_401_2fschema_2fscalar_5ferror"></a>
+
+- `pub fn schema.scalar_error(mut check: CheckState, site: String) -> SchemaError uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fsequence_5fdecode"></a>
+
+- `pub fn schema.sequence_decode[T: inert]( wire: std@1/json.Value, item_decode: fn(std@1/json.Value, mut CheckState) -> Result[T, SchemaError] uses {}, mut check: CheckState ) -> Result[List[T], SchemaError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fsequence_5fencode"></a>
+
+- `pub fn schema.sequence_encode[T: inert]( values: List[T], item_encode: fn(T, mut CheckState) -> Result[std@1/json.Value, SchemaError] uses {}, mut check: CheckState ) -> Result[std@1/json.Value, SchemaError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
 <a id="def-std_401_2fschema_2fshould_5fstop"></a>
 
 - `pub fn schema.should_stop(check: CheckState) -> bool uses {}`
 
 References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState)
+
+<a id="def-std_401_2fschema_2fstrict_5fpolicy"></a>
+
+- `pub fn schema.strict_policy() -> Policy uses {}`
+
+References: [`std@1/schema/Policy`](#def-std_401_2fschema_2fPolicy)
+
+<a id="def-std_401_2fschema_2ftag_5fpolicy"></a>
+
+- `pub fn schema.tag_policy(p: Policy, name: String) -> TagPolicy uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/Policy`](#def-std_401_2fschema_2fPolicy), [`std@1/schema/TagPolicy`](#def-std_401_2fschema_2fTagPolicy)
 
 <a id="def-std_401_2fschema_2ftext_5fjson"></a>
 
@@ -9395,6 +9989,12 @@ References: [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
 - `pub fn schema.u8_json() -> Boundary[u8, std@1/json.Value] uses {}`
 
 References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2funknown_5ffield"></a>
+
+- `pub fn schema.unknown_field(mut check: CheckState, name: String, site: String) -> SchemaError uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
 <a id="def-std_401_2fschema_2fwrite_5fjson"></a>
 
@@ -10996,6 +11596,15 @@ Variant of stream.WriteError.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/stream/ChunkLimit`](#def-std_401_2fstream_2fChunkLimit), [`std@1/stream/StreamConfigError`](#def-std_401_2fstream_2fStreamConfigError)
 
+<a id="def-std_401_2fstream_2fcsv_5ffold_5fscoped"></a>
+
+- `pub fn stream.csv_fold_scoped[S, A, E]( scope: Scope, take source: S, config: csv.StreamConfig, take initial: A, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], accept: fn(List[String]) -> Result[bool, E], step: fn(take A, take List[String]) -> Result[A, E] ) -> Result[A, csv.DriverError[E]] uses {scope, source, initial, refill, accept, step}`
+
+Own and consume a CSV source; checks include rejected rows and every refill.
+Callbacks are scoped and never stored in the returned value or an iterator.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Scope`](#def-core_401_2fScope), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/DriverError`](#def-std_401_2fcsv_2fDriverError), [`std@1/csv/StreamConfig`](#def-std_401_2fcsv_2fStreamConfig)
+
 <a id="def-std_401_2fstream_2ffile_5fchunks"></a>
 
 - `@captures(dir, file) pub fn stream.file_chunks(dir: Dir, take file: File of dir, limit: ChunkLimit) -> Flow[ Bytes, FileError ] uses {dir, file}`
@@ -11248,6 +11857,30 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 
 References: [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-std_401_2fstring_2frfind"></a>
+
+- `@noalloc pub fn string.rfind(s: String, pattern: String) -> Option[StrPos of s] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/StrPos`](#def-core_401_2fStrPos), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2frsplit"></a>
+
+- `pub fn string.rsplit(take s: String, separator: String) -> List[String] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2frsplit_5fonce"></a>
+
+- `@noalloc pub fn string.rsplit_once(s: String, separator: String) -> Option[(String, String)] in s uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2frsplitn"></a>
+
+- `pub fn string.rsplitn(take s: String, separator: String, limit: u64) -> List[String] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-core_401_2fstring_2fscalars"></a>
 
 - `@noalloc fn string.scalars(s: String) -> ScalarView in s`
@@ -11273,6 +11906,12 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 - `@noalloc pub fn string.split_once(s: String, separator: String) -> Option[(String, String)] in s uses {}`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2fsplit_5fwhitespace"></a>
+
+- `pub fn string.split_whitespace(take s: String) -> List[String] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fstring_2fstarts_5fwith"></a>
 
@@ -11974,6 +12613,10 @@ References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-cor
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Value`](#def-std_401_2ftelemetry_2fValue)
 
+<a id="def-std_401_2ftelemetry_2fCheckedEvent"></a>
+
+- `pub opaque type telemetry.CheckedEvent: copyable + inert + noalloc_drop uses {}`
+
 <a id="def-std_401_2ftelemetry_2fCheckedLog"></a>
 
 - `pub opaque type telemetry.CheckedLog: copyable + inert + noalloc_drop uses {}`
@@ -12011,6 +12654,14 @@ Variant of telemetry.ContextError.
 - `MissingParent -> telemetry.ContextError`
 
 Variant of telemetry.ContextError.
+
+<a id="def-std_401_2ftelemetry_2fEventData"></a>
+
+- `@serializable pub type telemetry.EventData { name: String, fields: List[Attribute], }`
+
+A span event's plain description.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute)
 
 <a id="def-std_401_2ftelemetry_2fEventError"></a>
 
@@ -12064,6 +12715,15 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/log/Level`](#def-
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
 
+<a id="def-std_401_2ftelemetry_2fSpanData"></a>
+
+- `@serializable pub type telemetry.SpanData { name: String, kind: SpanKind, fields: List[Attribute], links: List[TraceContext], sampled: bool, }`
+
+A span's plain description. `sampled` is a root's sampling decision; a child keeps its
+explicit parent's.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/SpanKind`](#def-std_401_2ftelemetry_2fSpanKind), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
 <a id="def-std_401_2ftelemetry_2fSpanKind"></a>
 
 - `@serializable pub type telemetry.SpanKind = Internal | Server | Client | Producer | Consumer`
@@ -12097,6 +12757,10 @@ Variant of telemetry.SpanKind.
 - `Server -> telemetry.SpanKind`
 
 Variant of telemetry.SpanKind.
+
+<a id="def-std_401_2ftelemetry_2fSpanSpec"></a>
+
+- `pub opaque type telemetry.SpanSpec: copyable + inert + noalloc_drop uses {}`
 
 <a id="def-std_401_2ftelemetry_2fStatus"></a>
 
@@ -12193,6 +12857,24 @@ propagation and free-form name/message redaction remain explicit caller policy.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute)
 
+<a id="def-std_401_2ftelemetry_2fbegin"></a>
+
+- `pub fn telemetry.begin(t: Telemetry, parent: Option[TraceContext], spec: SpanSpec) -> Result[ Span of t, ContextError ]`
+
+Begins a span under an explicit parent (None for a new root, with the spec's sampling
+decision). An invalid raw parent is refused before any effect. The span's identities
+come from the Telemetry provider: fresh for a root, the parent's trace for a child.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Span`](#def-core_401_2fSpan), [`core@1/Telemetry`](#def-core_401_2fTelemetry), [`std@1/telemetry/ContextError`](#def-std_401_2ftelemetry_2fContextError), [`std@1/telemetry/SpanSpec`](#def-std_401_2ftelemetry_2fSpanSpec), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2fcheck_5fevent"></a>
+
+- `pub fn telemetry.check_event(name: String, fields: List[Attribute]) -> Result[ CheckedEvent, EventError ] uses {}`
+
+Checks the name, fields (as `check_metadata`) and 16384 encoded bytes.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/CheckedEvent`](#def-std_401_2ftelemetry_2fCheckedEvent), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError)
+
 <a id="def-std_401_2ftelemetry_2fcheck_5flog"></a>
 
 - `pub fn telemetry.check_log(record: LogRecord) -> Result[CheckedLog, EventError] uses {}`
@@ -12209,6 +12891,23 @@ Rejects duplicate keys, validates fixed limits, then sorts by UTF-8 bytes.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/Metadata`](#def-std_401_2ftelemetry_2fMetadata)
 
+<a id="def-std_401_2ftelemetry_2fcontext"></a>
+
+- `pub fn telemetry.context(t: Telemetry, span: Span of t) -> TraceContext`
+
+The span's identities and its parent's sampling and tracestate, as data: it stays
+usable after the span ends, grants nothing and emits nothing. Its `remote` is false.
+
+References: [`core@1/Span`](#def-core_401_2fSpan), [`core@1/Telemetry`](#def-core_401_2fTelemetry), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2femit_5flog"></a>
+
+- `pub fn telemetry.emit_log(t: Telemetry, record: CheckedLog) -> ()`
+
+Captures a checked log record: its validated v1 JSON line (`render`).
+
+References: [`core@1/Telemetry`](#def-core_401_2fTelemetry), [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog)
+
 <a id="def-std_401_2ftelemetry_2fenrich"></a>
 
 - `pub fn telemetry.enrich(base: Metadata, fields: List[Attribute]) -> Result[Metadata, EventError] uses {}`
@@ -12216,6 +12915,14 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/EventEr
 Explicit enrichment replaces base keys; duplicates within either set fail.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/Metadata`](#def-std_401_2ftelemetry_2fMetadata)
+
+<a id="def-std_401_2ftelemetry_2fevent_5fdata"></a>
+
+- `pub fn telemetry.event_data(event: CheckedEvent) -> EventData uses {}`
+
+Explicit plain-data projection; CheckedEvent itself is opaque.
+
+References: [`std@1/telemetry/CheckedEvent`](#def-std_401_2ftelemetry_2fCheckedEvent), [`std@1/telemetry/EventData`](#def-std_401_2ftelemetry_2fEventData)
 
 <a id="def-std_401_2ftelemetry_2fextract_5ftrace"></a>
 
@@ -12225,6 +12932,16 @@ Extracts exactly one v00 traceparent and at most one tracestate header.
 Header names are ASCII case insensitive; baggage is never forwarded.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/ContextError`](#def-std_401_2ftelemetry_2fContextError), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
+
+<a id="def-std_401_2ftelemetry_2ffinish"></a>
+
+- `pub fn telemetry.finish(t: Telemetry, take span: Span of t, status: Status) -> Result[ (), EventError ]`
+
+Ends the span with an explicit status; its context remains usable. A status whose
+Error message exceeds 4096 bytes is refused and the span is abandoned, as its drop
+would. No outcome is inferred from a drop.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Span`](#def-core_401_2fSpan), [`core@1/Telemetry`](#def-core_401_2fTelemetry), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/Status`](#def-std_401_2ftelemetry_2fStatus)
 
 <a id="def-std_401_2ftelemetry_2finject_5ftrace"></a>
 
@@ -12248,6 +12965,31 @@ References: [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog
 - `pub fn telemetry.render(record: CheckedLog) -> String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/telemetry/CheckedLog`](#def-std_401_2ftelemetry_2fCheckedLog)
+
+<a id="def-std_401_2ftelemetry_2fspan_5fdata"></a>
+
+- `pub fn telemetry.span_data(spec: SpanSpec) -> SpanData uses {}`
+
+Explicit plain-data projection; SpanSpec itself is opaque.
+
+References: [`std@1/telemetry/SpanData`](#def-std_401_2ftelemetry_2fSpanData), [`std@1/telemetry/SpanSpec`](#def-std_401_2ftelemetry_2fSpanSpec)
+
+<a id="def-std_401_2ftelemetry_2fspan_5fevent"></a>
+
+- `pub fn telemetry.span_event(t: Telemetry, span: Span of t, event: CheckedEvent) -> ()`
+
+Captures a checked event on the span. Accepted whatever the exporter does.
+
+References: [`core@1/Span`](#def-core_401_2fSpan), [`core@1/Telemetry`](#def-core_401_2fTelemetry), [`std@1/telemetry/CheckedEvent`](#def-std_401_2ftelemetry_2fCheckedEvent)
+
+<a id="def-std_401_2ftelemetry_2fspan_5fspec"></a>
+
+- `pub fn telemetry.span_spec( name: String, kind: SpanKind, fields: List[Attribute], links: List[TraceContext], sampled: bool ) -> Result[SpanSpec, EventError] uses {}`
+
+Checks the name, fields (as `check_metadata`), at most 32 valid links and 16384
+encoded bytes.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/telemetry/Attribute`](#def-std_401_2ftelemetry_2fAttribute), [`std@1/telemetry/EventError`](#def-std_401_2ftelemetry_2fEventError), [`std@1/telemetry/SpanKind`](#def-std_401_2ftelemetry_2fSpanKind), [`std@1/telemetry/SpanSpec`](#def-std_401_2ftelemetry_2fSpanSpec), [`std@1/telemetry/TraceContext`](#def-std_401_2ftelemetry_2fTraceContext)
 
 <a id="def-std_401_2ftelemetry_2fvalidate_5ftrace"></a>
 
