@@ -307,6 +307,23 @@ pub trait NetProvider {
     fn connect(&mut self, id: u64, host: &str, port: u16, timeout: NetTimeout) -> Provided<()>;
     fn connect_addr(&mut self, id: u64, addr: SocketAddr, timeout: NetTimeout) -> Provided<()>;
     fn read(&mut self, stream: u64, max: u64) -> Provided<Vec<u8>>;
+    /// Fill spare capacity, initializing only the returned prefix. Like Rust's
+    /// BorrowedBuf, the unwritten suffix need not be initialized or zeroed.
+    fn read_uninit(
+        &mut self,
+        stream: u64,
+        buffer: &mut [std::mem::MaybeUninit<u8>],
+    ) -> Provided<usize> {
+        self.read(stream, buffer.len() as u64).map(|value| {
+            value.map(|bytes| {
+                assert!(bytes.len() <= buffer.len());
+                for (slot, byte) in buffer.iter_mut().zip(&bytes) {
+                    slot.write(*byte);
+                }
+                bytes.len()
+            })
+        })
+    }
     fn write(&mut self, stream: u64, bytes: &[u8]) -> Provided<u64>;
     fn write_all(&mut self, stream: u64, bytes: &[u8]) -> Provided<()>;
     fn shutdown(&mut self, stream: u64, how: ShutdownHow) -> Provided<()>;
@@ -539,11 +556,11 @@ fn provided<T>(value: Provided<T>) -> Provided<T> {
     }
 }
 
-struct StreamGrant {
+struct StreamGrant<'a> {
     /// The connection providers know: the stream itself, or a half's stream.
     id: u64,
     world: NetWorld,
-    address: String,
+    address: &'a str,
     operation: NetOperation,
     tls: bool,
 }
@@ -600,7 +617,7 @@ impl crate::io::State {
     }
     /// The stream's own grant, reached only through the Net that brands it (PROV-1). A
     /// half reaches its connection's grant.
-    fn stream_grant(&self, net: u64, stream: u64) -> Result<StreamGrant, AdapterError> {
+    fn stream_grant(&self, net: u64, stream: u64) -> Result<StreamGrant<'_>, AdapterError> {
         let (_, world) = self.net_grant(net)?;
         let (id, grant) = match self.handles.rows.get(&stream) {
             Some(crate::handles::Grant::Half {
@@ -623,7 +640,7 @@ impl crate::io::State {
             }) if *owner == net => Ok(StreamGrant {
                 id,
                 world,
-                address: address.clone(),
+                address,
                 operation: *operation,
                 tls: *tls,
             }),
@@ -719,6 +736,10 @@ impl crate::io::State {
             }) if *owner == net => Ok((world, *operation)),
             _ => Err(AdapterError::InvalidHandle(listener)),
         }
+    }
+    pub(crate) fn host_stream(&self, net: u64, stream: u64) -> Result<Option<u64>, AdapterError> {
+        let grant = self.stream_grant(net, stream)?;
+        Ok(matches!(grant.world, NetWorld::Host).then_some(grant.id))
     }
     /// Select the provider serving a world. Scripted worlds (`test.net`, `net.script@2`)
     /// attach here.
@@ -1213,8 +1234,9 @@ impl crate::io::State {
             | R::PeerAddr { net, stream }
             | R::TlsPeer { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
-                let stream = &grant.id;
-                let provider = self.world(grant.world, host)?;
+                let (id, world) = (grant.id, grant.world);
+                let stream = &id;
+                let provider = self.world(world, host)?;
                 let completion = match request {
                     R::NetRead { max, .. } => {
                         C::NetBytes(provided(provider.read(*stream, *max))?.and_then(|bytes| {
@@ -1243,7 +1265,7 @@ impl crate::io::State {
                 };
                 // A write that contradicts a scripted client's Expect fails LANG-9 after
                 // its Test report (docs/spec/core-library.md, scripted peers).
-                if let NetWorld::Script(world) = grant.world
+                if let NetWorld::Script(world) = world
                     && let Some(report) = self
                         .net_scripts
                         .get_mut(&world)

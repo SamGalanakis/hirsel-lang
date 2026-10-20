@@ -1,0 +1,22 @@
+pub type Error = Grant(GrantError) | Net(NetError) | Output(OutputError)
+pub fn main(rt: Io, args: Args) -> Result[(), Error] {
+  let n = io.net(rt) ? Grant
+  let mut listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 18475u16)) ? Net
+  let (stream, _) = net.accept(n, mut listener) ? Net
+  let mut socket = take stream
+  let mut received: u64 = 0
+  let mut completed: u64 = 0
+  while completed < 1024 {
+    let mut buffer: Inline[u8, 4096] = [0u8; 4096]
+    let count = net.read_into(n, mut socket, mut buffer) ? Net
+    if count == 0 { return Ok(()) }
+    received += count
+    while received >= 35 {
+      received -= 35
+      net.write_all(n, mut socket, b"HTTP/1.1 200 \r\nContent-Length: 12\r\nConnection: keep-alive\r\n\r\nHello, world") ? Net
+      completed += 1
+    }
+  }
+  out.print(io.stdout(rt) ? Grant, "1024\n") ? Output
+  Ok(())
+}

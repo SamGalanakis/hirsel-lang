@@ -13,7 +13,7 @@
 //! lists the entries. `tests/it/model.rs` runs the model's `rc-trace v1` vectors on the runtime.
 
 #[cfg(test)]
-hirsel_guard::install!();
+hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
 pub mod handles;
 mod host_child;

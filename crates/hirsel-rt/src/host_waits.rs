@@ -1,7 +1,7 @@
 //! Cooperative host waits of a compiled run (`tasks.cooperative@1`), with the interpreter's
 //! schedule (`hirsel-driver`'s HostLibrary).
 //!
-//! Every capability request goes through [`issue`]. Under a cancellation (CONC-3) a blocking
+//! Capability requests go through [`issue`] or the borrowed live network entry [`issue_net`]. Under a cancellation (CONC-3) a blocking
 //! request first checks program validity and authority through `io_checks`, then completes
 //! `Canceled` without the requested effect. Consumed-resource cleanup may issue Close and
 //! report a scripted failure. Otherwise it runs under a fresh token
@@ -35,6 +35,7 @@ pub(crate) struct Waits {
 }
 struct Parked {
     request: Request,
+    borrowed: Option<*mut crate::io::NetBuffer<'static>>,
     /// The task that issued it, once it parked.
     task: Option<u32>,
     /// The re-issued request's outcome, from the poll that ended the wait.
@@ -155,6 +156,7 @@ pub(crate) unsafe fn issue(
         token,
         Parked {
             request: retry,
+            borrowed: None,
             task: None,
             completion: None,
         },
@@ -203,6 +205,7 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
         token,
         Parked {
             request: retry,
+            borrowed: None,
             task: None,
             completion: None,
         },
@@ -241,6 +244,56 @@ pub(crate) unsafe fn is_runner_call(ctx: *mut TaskCtx, token: u64) -> bool {
         binding.waits.parked.get(&token).map(|p| &p.request),
         Some(Request::RunnerCall(_))
     )
+}
+
+/// Execute borrowed live network storage, or decline before any effect. The buffer
+/// stays exclusively borrowed on this fiber until its parked row is removed.
+/// # Safety
+/// Same context/binding contract as issue; buffer's storage lives through the call.
+pub(crate) unsafe fn issue_net(
+    ctx: *mut TaskCtx,
+    request: Request,
+    buffer: &mut crate::io::NetBuffer<'_>,
+) -> Stopped<Option<(Result<Completion, AdapterError>, bool)>> {
+    // Use the ordinary cancellation path, including its preflight checks.
+    if unsafe { crate::tasks::canceled(ctx) }.is_some() {
+        return Ok(None);
+    }
+    let binding = unsafe { Binding::get(ctx) };
+    let token = binding.waits.next;
+    binding.waits.next += 1;
+    binding.adapter.enter(token);
+    match binding.adapter.net_io(&request, buffer) {
+        None => {
+            binding.adapter.finish(token);
+            return Ok(None);
+        }
+        Some(Err(AdapterError::Blocked)) => {}
+        Some(result) => {
+            binding.adapter.finish(token);
+            return Ok(Some((result, false)));
+        }
+    }
+    binding.waits.parked.insert(
+        token,
+        Parked {
+            request,
+            // SAFETY: issue_net cannot return until the row is removed. A stop abandons
+            // the run, including its wait table; no pointer escapes the run.
+            borrowed: Some((buffer as *mut crate::io::NetBuffer<'_>).cast()),
+            task: None,
+            completion: None,
+        },
+    );
+    unsafe { crate::tasks::park_host(&mut *ctx, token, true) }?;
+    let binding = unsafe { Binding::get(ctx) };
+    let completion = binding
+        .waits
+        .parked
+        .remove(&token)
+        .and_then(|p| p.completion)
+        .unwrap_or_else(|| crate::fault("a borrowed host wait resumed without completion"));
+    Ok(Some((completion, true)))
 }
 
 /// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
@@ -454,7 +507,16 @@ pub(crate) unsafe fn poll(
         }
         None => {
             binding.adapter.enter(token);
-            match binding.adapter.call(request) {
+            let borrowed = binding.waits.parked.get(&token).and_then(|p| p.borrowed);
+            let result = match borrowed {
+                // SAFETY: issue_net holds this stack buffer exclusively until removal.
+                Some(buffer) => binding
+                    .adapter
+                    .net_io(&request, unsafe { &mut *buffer })
+                    .unwrap_or_else(|| crate::fault("borrowed network adapter changed")),
+                None => binding.adapter.call(request),
+            };
+            match result {
                 Err(AdapterError::Blocked) => return Ok(false),
                 result => {
                     binding.adapter.finish(token);

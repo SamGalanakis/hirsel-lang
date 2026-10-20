@@ -202,6 +202,13 @@ impl Readiness {
         })
     }
 
+    /// Progress already committed by the current operation, without constructing
+    /// a Pending row for the usual single successful send.
+    pub(crate) fn offset(&self) -> usize {
+        let state = self.0.borrow();
+        state.pending.get(&state.current).map_or(0, |p| p.offset)
+    }
+
     /// Select the opaque operation token before asking RealIo to execute a request.
     pub fn enter(&self, token: u64) {
         self.0.borrow_mut().current = self.tag(token);

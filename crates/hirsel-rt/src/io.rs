@@ -2306,6 +2306,14 @@ impl State {
     }
 }
 /// Explicit API: wrappers carry concrete operands and results, not boxed values.
+/// Storage borrowed by a native network call. It remains on the issuing fiber's
+/// stack until that call completes, including across readiness waits.
+pub enum NetBuffer<'a> {
+    Read(&'a mut [std::mem::MaybeUninit<u8>]),
+    Write(&'a [u8]),
+    WriteAll(&'a [u8]),
+}
+
 pub trait Adapter {
     /// Check argument validity and authority without an effect or tape event.
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
@@ -2361,6 +2369,15 @@ pub trait Adapter {
                 bytes: bytes.to_vec(),
             }
         })
+    }
+    /// Live adapters may execute a borrowed network operation. None declines before
+    /// any effect; record/replay and scripted adapters use ordinary owned requests.
+    fn net_io(
+        &mut self,
+        _request: &Request,
+        _buffer: &mut NetBuffer<'_>,
+    ) -> Option<Result<Completion, AdapterError>> {
+        None
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
     /// Whether the adapter records who issues each request (a durable journal).

@@ -493,6 +493,57 @@ impl RealIo {
     }
 }
 impl Adapter for RealIo {
+    fn net_io(
+        &mut self,
+        request: &Request,
+        buffer: &mut NetBuffer<'_>,
+    ) -> Option<Result<Completion, AdapterError>> {
+        if self.retain_history || self.journal.records() || self.fault.is_some() {
+            return None;
+        }
+        let (net, stream) = match request {
+            Request::NetRead { net, stream, .. }
+            | Request::NetWrite { net, stream, .. }
+            | Request::NetWriteAll { net, stream, .. } => (*net, *stream),
+            _ => return None,
+        };
+        let id = match self.state.host_stream(net, stream) {
+            Ok(Some(id)) => id,
+            Ok(None) => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        Some((|| {
+            if let Some(completion) = self.state.preflight(request)? {
+                return Ok(completion);
+            }
+            let provider = self
+                .net
+                .as_mut()
+                .ok_or_else(|| AdapterError::Unsupported("network provider missing".into()))?;
+            let result = match buffer {
+                NetBuffer::Read(bytes) => provider
+                    .read_uninit(id, bytes)
+                    .map(|value| Completion::Count(value.map(|n| n as u64))),
+                NetBuffer::Write(bytes) => provider.write(id, bytes).map(Completion::Count),
+                NetBuffer::WriteAll(bytes) => {
+                    provider.write_all(id, bytes).map(Completion::NetUnit)
+                }
+            };
+            if let Some((readiness, log)) = &mut self.cooperative {
+                if matches!(result, Err(AdapterError::Blocked)) {
+                    let token = log.current();
+                    if log.rows_of(token).is_some_and(|row| row.parked) {
+                        readiness.parked(token);
+                    }
+                    log.park(!readiness.cancellable(token));
+                } else {
+                    readiness.progressed();
+                }
+            }
+            result
+        })())
+    }
+
     fn print(
         &mut self,
         handle: u64,
@@ -2317,5 +2368,215 @@ mod output_tests {
                 assert_eq!(observations[0], observations[1]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod borrowed_net_tests {
+    use super::*;
+    use crate::net::{NetOperation, NetWorld};
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::mem::MaybeUninit;
+    use std::net::TcpListener;
+
+    pub(crate) struct Count;
+    thread_local! { static CALLS: Cell<u64> = const { Cell::new(0) }; }
+    unsafe impl GlobalAlloc for Count {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = CALLS.try_with(|n| n.set(n.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+    }
+
+    fn connection() -> (RealIo, u64, u64, std::net::TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.net(crate::net_host::provider);
+        let net = io.state.handles.insert(crate::handles::Grant::Net {
+            rules: Default::default(),
+            world: NetWorld::Host,
+        });
+        let stream = io.state.handles.insert(crate::handles::Grant::Stream {
+            net,
+            address: "127.0.0.1".into(),
+            port: address.port(),
+            operation: NetOperation::Connect,
+            tls: false,
+            protocol: None,
+        });
+        assert_eq!(
+            io.net.as_mut().unwrap().connect_addr(
+                stream,
+                SocketAddr {
+                    ip: address.ip(),
+                    port: address.port()
+                },
+                NetTimeout::Unbounded
+            ),
+            Ok(Ok(()))
+        );
+        let (peer, _) = listener.accept().unwrap();
+        (io, net, stream, peer)
+    }
+
+    #[test]
+    fn ready_native_read_write_allocates_zero_after_warmup() {
+        let (mut io, net, stream, mut peer) = connection();
+        io.discard_history();
+        let mut binding = Box::new(Binding::new(io));
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx) },
+            0
+        );
+        unsafe { binding.bind(&mut *ctx) };
+        let output = unsafe { crate::text::allocate_bytes(ctx, b"x") };
+        let input = [42u8; 1024];
+        peer.write_all(&input).unwrap();
+        let mut read = [0u8; 1];
+        let mut result = crate::net_abi::NetWordResult::default();
+        let mut stream = stream;
+        let before = CALLS.with(Cell::get);
+        for _ in 0..1024 {
+            assert_eq!(
+                unsafe {
+                    crate::net_abi::hirsel_rt_v2_net_read_into(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut result,
+                        &net,
+                        &mut stream,
+                        read.as_mut_ptr(),
+                        1,
+                    )
+                },
+                0
+            );
+            assert_eq!((result.tag, result.value, read[0]), (0, 1, 42));
+            let mut written = crate::net_abi::NetUnitResult::default();
+            assert_eq!(
+                unsafe {
+                    crate::net_abi::hirsel_rt_v2_net_write_all(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut written,
+                        &net,
+                        &mut stream,
+                        output.owner,
+                        output.start,
+                        output.length,
+                    )
+                },
+                0
+            );
+            assert_eq!(written.tag, 0);
+        }
+        let allocations = CALLS.with(Cell::get) - before;
+        assert_eq!(
+            allocations, 0,
+            "allocations over 1024 ready read/write pairs"
+        );
+        let mut received = [0; 1024];
+        peer.read_exact(&mut received).unwrap();
+        assert_eq!(received, [b'x'; 1024]);
+        unsafe {
+            (*ctx).bind_io_data(std::ptr::null_mut());
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn borrowed_network_preserves_tail_and_checks_brands_and_half_direction() {
+        let (mut io, net, stream, mut peer) = connection();
+        let request = Request::NetRead {
+            net,
+            stream,
+            max: 16,
+        };
+        let mut bytes = [MaybeUninit::new(0xa5); 16];
+        assert!(
+            io.net_io(&request, &mut NetBuffer::Read(&mut bytes))
+                .is_none()
+        );
+        io.discard_history();
+        peer.write_all(b"abc").unwrap();
+        assert_eq!(
+            io.net_io(&request, &mut NetBuffer::Read(&mut bytes)),
+            Some(Ok(Completion::Count(Ok(3))))
+        );
+        let initialized = bytes.map(|b| unsafe { b.assume_init() });
+        assert_eq!(&initialized[..3], b"abc");
+        assert_eq!(&initialized[3..], &[0xa5; 13]);
+        let foreign = Request::NetRead {
+            net: 999,
+            stream,
+            max: 16,
+        };
+        assert!(matches!(
+            io.net_io(&foreign, &mut NetBuffer::Read(&mut bytes)),
+            Some(Err(AdapterError::InvalidHandle(999)))
+        ));
+        let half = io.state.handles.insert(crate::handles::Grant::Half {
+            net,
+            stream,
+            write: true,
+        });
+        let wrong_direction = Request::NetRead {
+            net,
+            stream: half,
+            max: 16,
+        };
+        assert!(matches!(
+            io.net_io(&wrong_direction, &mut NetBuffer::Read(&mut bytes)),
+            Some(Err(AdapterError::InvalidHandle(_)))
+        ));
+        assert!(io.tape.is_empty());
+        let write = Request::NetWriteAll {
+            net,
+            stream,
+            bytes: vec![],
+        };
+        assert_eq!(
+            io.net_io(&write, &mut NetBuffer::WriteAll(b"response")),
+            Some(Ok(Completion::NetUnit(Ok(()))))
+        );
+        let mut response = [0; 8];
+        peer.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"response");
+    }
+
+    #[test]
+    fn borrowed_network_observes_tls_only_rules_and_invalid_capacity() {
+        let (mut io, net, stream, _peer) = connection();
+        io.discard_history();
+        if let Some(crate::handles::Grant::Stream { operation, .. }) =
+            io.state.handles.rows.get_mut(&stream)
+        {
+            *operation = NetOperation::ConnectTls;
+        }
+        let request = Request::NetRead {
+            net,
+            stream,
+            max: 8,
+        };
+        let mut bytes = [MaybeUninit::uninit(); 8];
+        assert_eq!(
+            io.net_io(&request, &mut NetBuffer::Read(&mut bytes)),
+            Some(Ok(Completion::NetBytes(Err(NetError::NotGranted))))
+        );
+        let request = Request::NetRead {
+            net,
+            stream,
+            max: 0,
+        };
+        assert_eq!(
+            io.net_io(&request, &mut NetBuffer::Read(&mut [])),
+            Some(Ok(Completion::NetBytes(Err(NetError::InvalidInput))))
+        );
     }
 }

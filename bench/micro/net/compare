@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Compare frozen before/after network loops with the minimal Rust TCP reference."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[3]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--rust', type=Path, required=True)
+parser.add_argument('--binary', action='append', required=True, help='name=/absolute/binary (repeat for each change)')
+parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--record', action='store_true', help='include a recorded participant for each binary')
+args = parser.parse_args()
+args.output.mkdir(parents=True, exist_ok=True)
+participants = [dict(name='rust', command=[str(args.rust.resolve())])]
+for binary in args.binary:
+    name, path = binary.split('=', 1)
+    command = [str(Path(path).resolve()), '--hirsel-grants', str(ROOT / 'bench/micro/net/grants.json')]
+    participants.append(dict(name=name, command=command))
+    if args.record:
+        participants.append(dict(name=name + '-record', command=[command[0], '--hirsel-record', str((args.output / (name + '.tape')).resolve()), *command[1:]]))
+manifest = args.output / 'participants.json'
+manifest.write_text(json.dumps(participants, indent=2) + '\n')
+env = dict(os.environ, HIRSEL_JOBS='1')
+with (args.output / 'client.log').open('w') as log:
+    client = subprocess.Popen([str(ROOT / 'tools/capped'), '--timeout', '900', 'taskset', '-c', '7',
+        'python3', str(ROOT / 'bench/micro/http/load.py'), '--sessions', str(10 * len(participants)),
+        '--output', str(args.output / 'latencies.json')], env=env, stdout=log, stderr=log)
+    try:
+        subprocess.run([str(ROOT / 'bench/micro/run'), str(manifest), '--rounds', '10', '--seed', '20261020',
+            '--output', str(args.output / 'counts.json')], env=env, cwd=ROOT, check=True)
+        client.wait(timeout=30)
+        if client.returncode:
+            raise RuntimeError('client failed: ' + (args.output / 'client.log').read_text())
+    finally:
+        if client.poll() is None:
+            client.terminate()
+            client.wait(30)

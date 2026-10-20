@@ -16,7 +16,11 @@ parser.add_argument('--before', type=Path, required=True)
 parser.add_argument('--after', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--seed', type=int, default=20261020)
+parser.add_argument('--operations', default='cold,restart,search,create,update', help='comma-separated workload cells')
 args = parser.parse_args()
+operations = args.operations.split(',')
+if not operations or set(operations) - {'cold','restart','list','search','create','update','sse'}:
+    parser.error('unknown operations')
 sys.path.insert(0, str(args.harness.resolve()))
 loader = importlib.machinery.SourceFileLoader('tasks_bench', str(args.harness / 'bench'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -30,7 +34,7 @@ document = dict(seed=args.seed, rounds=10, seconds=1, server_cpu=31, client_cpu=
 try:
     with bench.timing_lock(31):
         for r in range(10):
-            for _, operation in bench.schedule(['cold','restart','search','create','update'], 1, args.seed + r):
+            for _, operation in bench.schedule(operations, 1, args.seed + r):
                 for _, name in bench.schedule(list(participants), 1, args.seed + r * 10007):
                     sample = bench.sample('rust' if name == 'rust' else 'hirsel', operation,
                         0 if operation in ('cold','restart') else 1,
@@ -40,7 +44,7 @@ try:
                     document['samples'].append(sample)
                     (args.output / 'samples.json').write_text(json.dumps(document, indent=2)+'\n')
                     print(r, name, operation, round(sample['instructions_per_request']), flush=True)
-    for operation in ['cold','restart','search','create','update']:
+    for operation in operations:
         counts = {name:[s['instructions_per_request'] for s in document['samples']
                         if s['operation']==operation and s['participant']==name]
                   for name in participants}
@@ -49,6 +53,11 @@ try:
             row[name+'_rust_ratio'] = bench.ratio(counts[name], counts['rust'])
             row[name+'_rust_ci'] = bench.bootstrap_ratio(counts[name], counts['rust'], args.seed)
         row['after_before_ratio'] = bench.ratio(counts['after'], counts['before'])
+        row['user_medians'] = {name:statistics.median(s['perf']['instructions:u'] / s.get('completed', 1)
+            for s in document['samples'] if s['operation'] == operation and s['participant'] == name)
+            for name in participants}
+        for name in ['before', 'after']:
+            row[name + '_rust_user_ratio'] = row['user_medians'][name] / row['user_medians']['rust']
         document['ratios'].append(row)
     document['status']='passed'
 except BaseException as error:

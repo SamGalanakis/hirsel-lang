@@ -231,6 +231,24 @@ pub(crate) unsafe fn call_recording(ctx: *mut TaskCtx, request: Request) -> Opti
         }
     }
 }
+unsafe fn borrowed_call(
+    ctx: *mut TaskCtx,
+    request: Request,
+    buffer: &mut crate::io::NetBuffer<'_>,
+) -> Option<Result<Completion, ()>> {
+    let result =
+        unsafe { crate::stop::check(ctx, crate::host_waits::issue_net(ctx, request, buffer)) }?;
+    let (result, parked) = result;
+    let completion = match result {
+        Ok(value) => Ok(value),
+        Err(crate::io::AdapterError::InvalidHandle(_)) => Err(()),
+        Err(error) => unsafe { crate::stop::check(ctx, Err(crate::stop::Stop::refusal(error))) },
+    };
+    if !parked {
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+    }
+    Some(completion)
+}
 pub(crate) fn mismatch() -> ! {
     crate::fault("network completion type mismatch")
 }
@@ -414,6 +432,43 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
         stream: unsafe { s.read() },
         max,
     };
+    // An exclusive ordinary list can lend its spare capacity directly. Tracked
+    // arena lists retain append_byte_list's MEM-6 growth/charging semantics.
+    let block = unsafe { buffer.read() };
+    if !unsafe { crate::region::is_tracked(block) } && max != 0 {
+        let count = unsafe { crate::alloc::payload(block).cast::<u64>().read() };
+        let room = max.min(crate::net_host::READ_CHUNK);
+        let total = count
+            .checked_add(room)
+            .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
+        let block = unsafe { crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total) };
+        unsafe { buffer.write(block) };
+        let payload = crate::alloc::payload(block);
+        let at = unsafe {
+            payload.add(crate::alloc::sequence_elements_offset(1) as usize + count as usize)
+        };
+        let storage = unsafe { std::slice::from_raw_parts_mut(at.cast(), room as usize) };
+        if let Some(result) = unsafe {
+            borrowed_call(
+                ctx,
+                request.clone(),
+                &mut crate::io::NetBuffer::Read(storage),
+            )
+        } {
+            let value = match result {
+                Ok(Completion::Count(value)) => value,
+                Ok(Completion::NetBytes(Err(error))) => Err(error),
+                Ok(_) => mismatch(),
+                Err(()) => return STATUS_FAILURE,
+            };
+            if let Ok(n) = value {
+                assert!(n <= room);
+                unsafe { payload.cast::<u64>().write(count + n) };
+            }
+            unsafe { out.write(NetWordResult::of(value)) };
+            return STATUS_OK;
+        }
+    }
     let Some(Completion::NetBytes(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -445,6 +500,25 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
         stream: unsafe { s.read() },
         max: capacity,
     };
+    // SAFETY: the caller grants capacity writable bytes; MaybeUninit preserves
+    // the suffix and permits the same helper to fill a List's spare capacity.
+    let storage = unsafe { std::slice::from_raw_parts_mut(buffer.cast(), capacity as usize) };
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            request.clone(),
+            &mut crate::io::NetBuffer::Read(storage),
+        )
+    } {
+        let value = match result {
+            Ok(Completion::Count(value)) => value,
+            Ok(Completion::NetBytes(Err(error))) => Err(error),
+            Ok(_) => mismatch(),
+            Err(()) => return STATUS_FAILURE,
+        };
+        unsafe { out.write(NetWordResult::of(value)) };
+        return STATUS_OK;
+    }
     let Some(Completion::NetBytes(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -471,11 +545,34 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
     start: u64,
     len: u64,
 ) -> u8 {
-    let request = Request::NetWrite {
+    let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
+    let mut request = Request::NetWrite {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
-        bytes: unsafe { crate::io::slice_bytes(owner, start, len) }.to_vec(),
+        bytes: Vec::new(),
     };
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            request.clone(),
+            &mut crate::io::NetBuffer::Write(bytes),
+        )
+    } {
+        match result {
+            Ok(Completion::Count(value)) => {
+                unsafe { out.write(NetWordResult::of(value)) };
+                return STATUS_OK;
+            }
+            Ok(_) => mismatch(),
+            Err(()) => {
+                crate::failure::record_runtime(ctx, "CAP-2", 0, 0);
+                return STATUS_FAILURE;
+            }
+        }
+    }
+    if let Request::NetWrite { bytes: payload, .. } = &mut request {
+        *payload = bytes.to_vec();
+    }
     let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -500,11 +597,34 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
     start: u64,
     len: u64,
 ) -> u8 {
-    let request = Request::NetWriteAll {
+    let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
+    let mut request = Request::NetWriteAll {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
-        bytes: unsafe { crate::io::slice_bytes(owner, start, len) }.to_vec(),
+        bytes: Vec::new(),
     };
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            request.clone(),
+            &mut crate::io::NetBuffer::WriteAll(bytes),
+        )
+    } {
+        match result {
+            Ok(Completion::NetUnit(value)) => {
+                unsafe { out.write(NetUnitResult::of(value)) };
+                return STATUS_OK;
+            }
+            Ok(_) => mismatch(),
+            Err(()) => {
+                crate::failure::record_runtime(ctx, "CAP-2", 0, 0);
+                return STATUS_FAILURE;
+            }
+        }
+    }
+    if let Request::NetWriteAll { bytes: payload, .. } = &mut request {
+        *payload = bytes.to_vec();
+    }
     let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -961,4 +1081,78 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_close(
     s: *mut u64,
 ) -> u8 {
     unsafe { hirsel_rt_v2_net_close(ctx, n, s) }
+}
+
+#[cfg(test)]
+mod borrowed_wait_tests {
+    use super::*;
+    use crate::io::{Adapter, AdapterError, Binding, NetBuffer};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Delayed(Rc<Cell<u32>>);
+    impl Adapter for Delayed {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            panic!("a borrowed retry must retain the original storage");
+        }
+        fn net_io(
+            &mut self,
+            _: &Request,
+            buffer: &mut NetBuffer<'_>,
+        ) -> Option<Result<Completion, AdapterError>> {
+            let issued = self.0.get();
+            self.0.set(issued + 1);
+            if issued == 0 {
+                return Some(Err(AdapterError::Blocked));
+            }
+            let NetBuffer::Read(bytes) = buffer else {
+                panic!("read buffer")
+            };
+            for (slot, byte) in bytes.iter_mut().zip(b"ready") {
+                slot.write(*byte);
+            }
+            Some(Ok(Completion::Count(Ok(5))))
+        }
+    }
+
+    #[test]
+    fn parked_read_reuses_the_issuing_frame_and_preserves_the_unwritten_tail() {
+        let issued = Rc::new(Cell::new(0));
+        let mut binding = Box::new(Binding::new(Delayed(issued.clone())));
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx) },
+            0
+        );
+        unsafe { binding.bind(&mut *ctx) };
+        let mut bytes = [0xa5; 16];
+        let mut stream = 3;
+        let mut result = NetWordResult::default();
+        assert_eq!(
+            unsafe {
+                hirsel_rt_v2_net_read_into(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut result,
+                    &2,
+                    &mut stream,
+                    bytes.as_mut_ptr(),
+                    bytes.len() as u64,
+                )
+            },
+            STATUS_OK
+        );
+        assert_eq!(result.tag, 0);
+        assert_eq!(result.value, 5);
+        assert_eq!(&bytes[..5], b"ready");
+        assert_eq!(&bytes[5..], &[0xa5; 11]);
+        assert_eq!(issued.get(), 2);
+        unsafe {
+            (*ctx).bind_io_data(std::ptr::null_mut());
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
 }

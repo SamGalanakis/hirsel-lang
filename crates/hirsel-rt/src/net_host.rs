@@ -667,6 +667,38 @@ impl NetProvider for HostNet {
             }
         }))
     }
+    fn read_uninit(
+        &mut self,
+        stream: u64,
+        buffer: &mut [std::mem::MaybeUninit<u8>],
+    ) -> Provided<usize> {
+        if self.tls.contains_key(&stream) {
+            return self.read(stream, buffer.len() as u64).map(|result| {
+                result.map(|bytes| {
+                    for (slot, byte) in buffer.iter_mut().zip(&bytes) {
+                        slot.write(*byte);
+                    }
+                    bytes.len()
+                })
+            });
+        }
+        let fd = match self.socket(stream) {
+            Ok(fd) => fd,
+            Err(e) => return Ok(Err(e)),
+        };
+        let capacity = buffer.len().min(READ_CHUNK as usize);
+        loop {
+            // SAFETY: recv initializes only its returned prefix in writable spare capacity.
+            match checked(unsafe { libc::recv(fd, buffer.as_mut_ptr().cast(), capacity, 0) }) {
+                Ok(n) => return Ok(Ok(n)),
+                Err(libc::EINTR) => {}
+                Err(libc::EAGAIN) => {
+                    return Ok(Err(error(libc::EAGAIN)));
+                }
+                Err(code) => return Ok(Err(error(code))),
+            }
+        }
+    }
     fn write(&mut self, stream: u64, bytes: &[u8]) -> Provided<u64> {
         Ok(self.send(stream, bytes))
     }

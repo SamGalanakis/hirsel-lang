@@ -3,6 +3,13 @@
 //! Unlike the blocking provider, EAGAIN retains readiness instead of becoming a timeout.
 //! A Unix connect facing a full backlog keeps its nonblocking socket and connects again
 //! after a short timer wait, since Linux signals no room in a listener's backlog.
+//!
+//! Borrowed reads follow Rust a7c37f9f library/std/src/sys/net/connection/socket/
+//! unix.rs:285-303,320-322 (recv into BorrowedCursor, advance only its written
+//! prefix). The syscall-first path keeps Tokio ce685ee6 tokio/src/runtime/io/
+//! registration.rs:225-247's retry-on-WouldBlock structure, using Hirsel's
+//! stackful parked call in place of an async future. Recording retains owned
+//! buffers because its tape must retain the delivered bytes.
 use super::*;
 use crate::io::AdapterError;
 use crate::net_tls::Stall;
@@ -237,11 +244,11 @@ impl CooperativeNet {
         }
     }
     fn flush_tls(&mut self, stream: u64) -> Provided<()> {
-        let fd = match self.host.socket(stream) {
-            Ok(fd) => fd,
-            Err(e) => return Ok(Err(e)),
-        };
         if let Some(conn) = self.host.tls.get_mut(&stream) {
+            let fd = match self.host.sockets.get(&stream) {
+                Some(fd) => fd.as_raw_fd(),
+                None => return Ok(Err(NetError::NotConnected)),
+            };
             while conn.wants_write() {
                 match conn.write_tls(fd) {
                     Ok(0) => return Ok(Err(NetError::BrokenPipe)),
@@ -376,6 +383,38 @@ impl NetProvider for CooperativeNet {
             }
         }
     }
+    fn read_uninit(
+        &mut self,
+        stream: u64,
+        buffer: &mut [std::mem::MaybeUninit<u8>],
+    ) -> Provided<usize> {
+        if self.host.tls.contains_key(&stream) {
+            return self.read(stream, buffer.len() as u64).map(|result| {
+                result.map(|bytes| {
+                    for (slot, byte) in buffer.iter_mut().zip(&bytes) {
+                        slot.write(*byte);
+                    }
+                    bytes.len()
+                })
+            });
+        }
+        let fd = match self.host.socket(stream) {
+            Ok(fd) => fd,
+            Err(e) => return Ok(Err(e)),
+        };
+        let capacity = buffer.len().min(READ_CHUNK as usize);
+        loop {
+            // SAFETY: recv initializes only its returned prefix in writable spare capacity.
+            match checked(unsafe { libc::recv(fd, buffer.as_mut_ptr().cast(), capacity, 0) }) {
+                Ok(n) => return Ok(Ok(n)),
+                Err(libc::EINTR) => {}
+                Err(libc::EAGAIN) => {
+                    return self.blocked(fd, libc::POLLIN, self.timeout(stream, false));
+                }
+                Err(code) => return Ok(Err(error(code))),
+            }
+        }
+    }
     fn write(&mut self, stream: u64, bytes: &[u8]) -> Provided<u64> {
         if !self.host.tls.contains_key(&stream) {
             return self.send(stream, bytes);
@@ -400,23 +439,29 @@ impl NetProvider for CooperativeNet {
         }
     }
     fn write_all(&mut self, stream: u64, bytes: &[u8]) -> Provided<()> {
+        let mut offset = self.readiness.offset();
         loop {
-            let offset = self.readiness.pending().offset;
-            if offset == bytes.len() {
-                return self.flush_tls(stream);
-            }
-            match self.flush_tls(stream)? {
-                Ok(()) => {}
-                Err(e) => return Ok(Err(e)),
-            }
-            match self.send(stream, &bytes[offset..])? {
-                Ok(0) => return Ok(Err(NetError::BrokenPipe)),
-                Ok(n) => {
+            match self.flush_tls(stream) {
+                Ok(Ok(())) => {}
+                result => {
                     let mut pending = self.readiness.pending();
-                    pending.offset += n as usize;
-                    pending.committed = true;
+                    pending.offset = offset;
+                    pending.committed |= offset != 0;
+                    return result;
                 }
-                Err(e) => return Ok(Err(e)),
+            }
+            if offset == bytes.len() {
+                return Ok(Ok(()));
+            }
+            match self.send(stream, &bytes[offset..]) {
+                Ok(Ok(0)) => return Ok(Err(NetError::BrokenPipe)),
+                Ok(Ok(n)) => offset += n as usize,
+                result => {
+                    let mut pending = self.readiness.pending();
+                    pending.offset = offset;
+                    pending.committed |= offset != 0;
+                    return result.map(|value| value.map(|_| ()));
+                }
             }
         }
     }
@@ -552,5 +597,89 @@ impl NetProvider for CooperativeNet {
     fn close(&mut self, handle: u64) {
         self.timeouts.remove(&handle);
         self.host.close(handle);
+    }
+}
+
+#[cfg(test)]
+mod borrowed_buffer_tests {
+    use super::*;
+    use std::mem::MaybeUninit;
+
+    fn pair() -> (CooperativeNet, UnixStream, Readiness) {
+        let (socket, peer) = UnixStream::pair().unwrap();
+        socket.set_nonblocking(true).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let size: libc::c_int = 4096;
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    (&raw const size).cast(),
+                    size_of_val(&size) as _,
+                )
+            },
+            0
+        );
+        let readiness = Readiness::default();
+        let mut provider = CooperativeNet::new(readiness.clone());
+        provider.host.sockets.insert(1, socket.into());
+        (provider, peer, readiness)
+    }
+
+    #[test]
+    fn uninitialized_read_survives_would_block_without_zeroing_the_tail() {
+        let (mut provider, mut peer, readiness) = pair();
+        readiness.enter(7);
+        let mut bytes = [MaybeUninit::new(0xa5); 32];
+        assert_eq!(
+            provider.read_uninit(1, &mut bytes),
+            Err(AdapterError::Blocked)
+        );
+        peer.write_all(b"abc").unwrap();
+        readiness.parked(7);
+        assert_eq!(readiness.ready().unwrap(), [7]);
+        assert_eq!(provider.read_uninit(1, &mut bytes), Ok(Ok(3)));
+        readiness.finish(7);
+        let bytes = bytes.map(|v| unsafe { v.assume_init() });
+        assert_eq!(&bytes[..3], b"abc");
+        assert_eq!(&bytes[3..], &[0xa5; 29]);
+    }
+
+    #[test]
+    fn partial_borrowed_write_retries_only_the_unwritten_suffix() {
+        let (mut provider, mut peer, readiness) = pair();
+        readiness.enter(8);
+        let bytes: Vec<u8> = (0..1024 * 1024).map(|n| (n % 251) as u8).collect();
+        assert_eq!(provider.write_all(1, &bytes), Err(AdapterError::Blocked));
+        assert!(
+            !readiness.cancellable(8),
+            "a partial send committed an effect"
+        );
+        let mut received = Vec::new();
+        let mut buffer = [0; 16384];
+        loop {
+            loop {
+                match peer.read(&mut buffer) {
+                    Ok(0) => panic!("early EOF"),
+                    Ok(n) => received.extend_from_slice(&buffer[..n]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("{error}"),
+                }
+            }
+            match provider.write_all(1, &bytes) {
+                Err(AdapterError::Blocked) => continue,
+                Ok(Ok(())) => break,
+                result => panic!("{result:?}"),
+            }
+        }
+        while received.len() < bytes.len() {
+            let n = peer.read(&mut buffer).unwrap();
+            assert_ne!(n, 0);
+            received.extend_from_slice(&buffer[..n]);
+        }
+        assert_eq!(received, bytes);
+        readiness.finish(8);
     }
 }

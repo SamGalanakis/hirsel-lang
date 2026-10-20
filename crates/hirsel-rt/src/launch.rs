@@ -131,6 +131,13 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn replay_stdout(&self) -> Vec<u8> {
         self.0.borrow().replay_stdout()
     }
+    fn net_io(
+        &mut self,
+        request: &Request,
+        buffer: &mut crate::io::NetBuffer<'_>,
+    ) -> Option<Result<Completion, AdapterError>> {
+        self.0.borrow_mut().net_io(request, buffer)
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
     }
