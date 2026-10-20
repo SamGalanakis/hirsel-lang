@@ -520,3 +520,671 @@ fn case_insensitive_search_and_equality_match_full_casefold_composition() {
         );
     });
 }
+
+// Independent dense oracle: expand UnicodeData ranges and read its simple-case
+// columns directly. No generated Hirsel tables or host Unicode predicates.
+// Go src/unicode/letter_test.go:346 (TestLetterOptimizations) compares the public
+// predicates with properties; here the pinned UCD is the independent reference.
+#[derive(Clone, Copy)]
+struct ScalarProperties {
+    flags: u8,
+    lower: u32,
+    upper: u32,
+}
+fn property_oracle() -> &'static [ScalarProperties] {
+    static ORACLE: std::sync::OnceLock<Vec<ScalarProperties>> = std::sync::OnceLock::new();
+    ORACLE.get_or_init(|| {
+        let mut values: Vec<_> = (0..=0x10ffff)
+            .map(|cp| ScalarProperties {
+                flags: 0,
+                lower: cp,
+                upper: cp,
+            })
+            .collect();
+        let mut pending = None;
+        for line in include_str!("../../../../stdlib/unicode16/UnicodeData.txt").lines() {
+            let f: Vec<_> = line.split(';').collect();
+            let cp = u32::from_str_radix(f[0], 16).unwrap();
+            if f[1].ends_with(", First>") {
+                assert!(pending.replace((cp, f[2])).is_none());
+                continue;
+            }
+            let start = if f[1].ends_with(", Last>") {
+                let (start, category) = pending.take().unwrap();
+                assert_eq!(category, f[2]);
+                start
+            } else {
+                assert!(pending.is_none());
+                cp
+            };
+            for scalar in start..=cp {
+                let v = &mut values[scalar as usize];
+                v.flags = if f[2].starts_with('L') {
+                    2
+                } else if f[2] == "Nd" {
+                    4
+                } else {
+                    0
+                };
+                if !f[13].is_empty() {
+                    v.lower = u32::from_str_radix(f[13], 16).unwrap();
+                }
+                if !f[12].is_empty() {
+                    v.upper = u32::from_str_radix(f[12], 16).unwrap();
+                }
+            }
+        }
+        assert!(pending.is_none());
+        for line in include_str!("../../../../stdlib/unicode16/PropList.txt").lines() {
+            let data = line.split('#').next().unwrap().trim();
+            let Some((range, property)) = data.split_once(';') else {
+                continue;
+            };
+            if property.trim() != "White_Space" {
+                continue;
+            }
+            let mut ends = range.trim().split("..");
+            let first = u32::from_str_radix(ends.next().unwrap(), 16).unwrap();
+            let last = ends
+                .next()
+                .map(|v| u32::from_str_radix(v, 16).unwrap())
+                .unwrap_or(first);
+            for cp in first..=last {
+                values[cp as usize].flags |= 1;
+            }
+        }
+        assert_eq!(values.iter().filter(|v| v.flags & 1 != 0).count(), 25);
+        assert_eq!(values.iter().filter(|v| v.flags & 2 != 0).count(), 141028);
+        assert_eq!(values.iter().filter(|v| v.flags & 4 != 0).count(), 760);
+        values
+    })
+}
+
+const PROPERTY_SHARDS: u32 = 64;
+fn check_properties(first: u32, last: u32) -> usize {
+    let oracle = property_oracle();
+    let mut loaded = load_program(&fixture()).unwrap();
+    loaded
+        .check_for_execution()
+        .unwrap_or_else(|error| panic!("{error}"));
+    let runtime = loaded.engine.runtime_types().unwrap();
+    let sources = loaded.engine.sources.clone();
+    let mut entry = loaded.entry;
+    entry.0.name = "batch_properties".into();
+    let configuration = RunConfiguration {
+        entry,
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let mut provider = CorpusProvider {
+        engine: loaded.engine,
+        definitions: BTreeMap::new(),
+        constants: BTreeMap::new(),
+    };
+    let scalars: Vec<_> = (first..last).filter_map(char::from_u32).collect();
+    for batch in scalars.chunks(128) {
+        let mut library = Library::new(&configuration, Default::default()).unwrap();
+        let execution = hirsel_interp::run_with_runtime(
+            &mut provider,
+            &sources,
+            &configuration,
+            vec![Value::String(batch.iter().collect())],
+            Limits {
+                steps: Some(10_000_000),
+                call_depth: 256,
+            },
+            &mut library,
+            &runtime,
+        )
+        .unwrap();
+        let Outcome::Returned {
+            value: Value::Bytes(bytes),
+            ..
+        } = execution.outcome
+        else {
+            panic!(
+                "properties U+{:04X}: {:?}",
+                u32::from(batch[0]),
+                execution.outcome
+            );
+        };
+        assert_eq!(bytes.len(), batch.len() * 7, "silently dropped a scalar");
+        for (actual, c) in bytes.chunks_exact(7).zip(batch) {
+            let v = oracle[u32::from(*c) as usize];
+            let mut expected = vec![v.flags];
+            expected.extend_from_slice(&v.lower.to_be_bytes()[1..]);
+            expected.extend_from_slice(&v.upper.to_be_bytes()[1..]);
+            assert_eq!(actual, expected, "properties U+{:04X}", u32::from(*c));
+        }
+    }
+    scalars.len()
+}
+
+#[test]
+fn unicode16_properties_oracle_controls_execute_std_source() {
+    with_compiler_stack(|| {
+        for (first, last) in [
+            (0, 256),
+            (0x12f, 0x132),
+            (0xd7ff, 0xe001),
+            (0x10d3f, 0x10d4b),
+            (0x1137f, 0x11384),
+            (0x10fffe, 0x110000),
+        ] {
+            check_properties(first, last);
+        }
+    });
+}
+
+fn check_properties_shard(shard: u32) {
+    with_compiler_stack(|| {
+        let width = 0x110000 / PROPERTY_SHARDS;
+        let first = shard * width;
+        let last = first + width;
+        let checked = check_properties(first, last);
+        let invalid = (first..last)
+            .filter(|v| (0xd800..=0xdfff).contains(v))
+            .count();
+        assert_eq!(checked, width as usize - invalid);
+        eprintln!(
+            "Unicode16 properties shard {shard}: {checked} scalars, {} comparisons",
+            checked * 5
+        );
+    });
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_0() {
+    check_properties_shard(0);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_1() {
+    check_properties_shard(1);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_2() {
+    check_properties_shard(2);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_3() {
+    check_properties_shard(3);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_4() {
+    check_properties_shard(4);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_5() {
+    check_properties_shard(5);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_6() {
+    check_properties_shard(6);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_7() {
+    check_properties_shard(7);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_8() {
+    check_properties_shard(8);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_9() {
+    check_properties_shard(9);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_10() {
+    check_properties_shard(10);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_11() {
+    check_properties_shard(11);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_12() {
+    check_properties_shard(12);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_13() {
+    check_properties_shard(13);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_14() {
+    check_properties_shard(14);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_15() {
+    check_properties_shard(15);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_16() {
+    check_properties_shard(16);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_17() {
+    check_properties_shard(17);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_18() {
+    check_properties_shard(18);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_19() {
+    check_properties_shard(19);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_20() {
+    check_properties_shard(20);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_21() {
+    check_properties_shard(21);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_22() {
+    check_properties_shard(22);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_23() {
+    check_properties_shard(23);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_24() {
+    check_properties_shard(24);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_25() {
+    check_properties_shard(25);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_26() {
+    check_properties_shard(26);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_27() {
+    check_properties_shard(27);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_28() {
+    check_properties_shard(28);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_29() {
+    check_properties_shard(29);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_30() {
+    check_properties_shard(30);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_31() {
+    check_properties_shard(31);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_32() {
+    check_properties_shard(32);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_33() {
+    check_properties_shard(33);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_34() {
+    check_properties_shard(34);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_35() {
+    check_properties_shard(35);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_36() {
+    check_properties_shard(36);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_37() {
+    check_properties_shard(37);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_38() {
+    check_properties_shard(38);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_39() {
+    check_properties_shard(39);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_40() {
+    check_properties_shard(40);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_41() {
+    check_properties_shard(41);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_42() {
+    check_properties_shard(42);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_43() {
+    check_properties_shard(43);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_44() {
+    check_properties_shard(44);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_45() {
+    check_properties_shard(45);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_46() {
+    check_properties_shard(46);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_47() {
+    check_properties_shard(47);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_48() {
+    check_properties_shard(48);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_49() {
+    check_properties_shard(49);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_50() {
+    check_properties_shard(50);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_51() {
+    check_properties_shard(51);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_52() {
+    check_properties_shard(52);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_53() {
+    check_properties_shard(53);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_54() {
+    check_properties_shard(54);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_55() {
+    check_properties_shard(55);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_56() {
+    check_properties_shard(56);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_57() {
+    check_properties_shard(57);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_58() {
+    check_properties_shard(58);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_59() {
+    check_properties_shard(59);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_60() {
+    check_properties_shard(60);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_61() {
+    check_properties_shard(61);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_62() {
+    check_properties_shard(62);
+}
+
+#[test]
+#[ignore = "full gate: every scalar's UCD properties and simple case"]
+fn full_gate_unicode16_properties_shard_63() {
+    check_properties_shard(63);
+}
+
+// Port check_exact's varying significant cutoffs and zero extension, together
+// with check_exact_one's hard rounding requests. Expected digits are Rust's
+// vectors, never formatted by the host. Corpus cases also exercise fstrings.
+#[test]
+fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
+    with_compiler_stack(|| {
+        let rows: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/flt2dec-exact.json")).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(rows.len(), 97);
+        let corpus =
+            include_str!("../../../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir");
+        let helper = corpus.split("pub fn main").next().unwrap();
+        let mut checks = 0;
+        for batch in rows.chunks(14) {
+            let mut source = String::from(helper);
+            source.push_str("pub fn main(t: Test) -> Result[(), ()] {\nlet rows: List[(u64, i32, String, i32)] = [\n");
+            for row in batch {
+                let digits = row["digits"].as_str().unwrap().as_bytes();
+                let exponent = row["k"].as_i64().unwrap();
+                let cut = digits.iter().position(|&c| c == b' ');
+                let end = cut.unwrap_or(digits.len() - 1);
+                let precisions: Vec<_> = if row["kind"] == "one" {
+                    vec![digits.len()]
+                } else {
+                    (1..end)
+                        .chain(if cut.is_some() {
+                            end..digits.len() - 1
+                        } else {
+                            0..0
+                        })
+                        .collect()
+                };
+                for precision in precisions {
+                    let mut expected = if row["kind"] == "one" {
+                        digits.to_vec()
+                    } else {
+                        digits[..precision.min(end)].to_vec()
+                    };
+                    expected.resize(precision, b'0');
+                    if precision < end && digits[precision] >= b'5' {
+                        let tie_even = precision + 1 < digits.len()
+                            && digits[precision - 1] & 1 == 0
+                            && digits[precision] == b'5'
+                            && digits[precision + 1] == b' ';
+                        if !tie_even {
+                            let mut carry = true;
+                            for digit in expected.iter_mut().rev() {
+                                if *digit != b'9' {
+                                    *digit += 1;
+                                    carry = false;
+                                    break;
+                                }
+                                *digit = b'0';
+                            }
+                            if carry {
+                                expected.insert(0, b'1');
+                            }
+                        }
+                    }
+                    source += &format!(
+                        "({}u64, {}i32, \"{}\", {}i32),\n",
+                        row["m"].as_u64().unwrap(),
+                        row["e"].as_i64().unwrap(),
+                        String::from_utf8(expected).unwrap(),
+                        exponent - precision as i64
+                    );
+                    checks += 1;
+                }
+            }
+            source.push_str("]\nfor row in rows {\nlet (mantissa, exponent, expected, cutoff) = row\nexact(t, mantissa, exponent, expected, cutoff)\n}\nOk(())\n}\n");
+            let mut loaded = load_program_source(
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir"),
+                Some(&source),
+            )
+            .unwrap();
+            loaded
+                .check_for_execution()
+                .unwrap_or_else(|error| panic!("{error}"));
+            loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+                limits: Limits {
+                    steps: Some(500_000_000),
+                    call_depth: 256,
+                },
+                ..Default::default()
+            }));
+            let run = run_observed_snapshot(
+                &mut loaded.engine,
+                &RunConfiguration {
+                    entry: loaded.entry,
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    run.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                ),
+                "flt2dec rows starting at source line {}: {:?}",
+                batch[0]["line"],
+                run.outcome
+            );
+        }
+        eprintln!("Rust flt2dec: 97 rows, {checks} exact rounding comparisons");
+        assert_eq!(checks, 1706);
+    });
+}

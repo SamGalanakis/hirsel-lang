@@ -1,0 +1,129 @@
+// rule: SEM-3
+// expect: run
+// Rust coretests/tests/num/flt2dec/mod.rs, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
+// MIT; third-party/NOTICES.md. Original check_exact/check_exact_one row lines below.
+fn exact(t: Test, mantissa: u64, exponent: i32, expected: String, cutoff: i32) -> () {
+  let mut actual = std@1/internal.big.big_from_word(mantissa)
+  let scale: u64 = if exponent < 0 {
+    core@1/int.narrow(-exponent)
+  } else {
+    0u64
+  }
+  std@1/internal.big.big_power(
+    mut actual,
+    if exponent < 0 {
+      5u64
+    } else {
+      2u64
+    },
+    if exponent < 0 {
+      scale
+    } else {
+      core@1/int.narrow(exponent)
+    }
+  )
+  let decimal_scale: i32 = core@1/int.narrow(scale)
+  let places = decimal_scale + cutoff
+  if places >= 0 {
+    std@1/internal.format.round_decimal(mut actual, core@1/int.narrow(places))
+  } else {
+    std@1/internal.big.big_power(mut actual, 10, core@1/int.narrow(-places))
+  }
+  let mut wanted = std@1/internal.big.big_from_word(0)
+  let mut chunk: u64 = 0
+  let mut power: u64 = 1
+  for digit in core@1/string.as_bytes(expected) {
+    chunk = chunk * 10 + core@1/int.widen(digit - 48u8)
+    power *= 10
+    if power == 1000000000 {
+      std@1/internal.big.big_mul_word(mut wanted, power)
+      std@1/internal.big.big_add_small(mut wanted, chunk)
+      chunk = 0
+      power = 1
+    }
+  }
+  std@1/internal.big.big_mul_word(mut wanted, power)
+  std@1/internal.big.big_add_small(mut wanted, chunk)
+  test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // mod.rs:356: f32::MIN_POSITIVE; digits=38, decimal exponent=-37.
+  exact(t, 1u64, -126i32, "11754943508222875079687365372222456778", -75i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(8388608u32):.75}" == "0.000000000000000000000000000000000000011754943508222875079687365372222456778"
+  )
+  // mod.rs:357: minf32; digits=38, decimal exponent=-44.
+  exact(t, 1u64, -149i32, "14012984643248170709237295832899161313", -82i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(1u32):.82}" == "0.0000000000000000000000000000000000000000000014012984643248170709237295832899161313"
+  )
+  // mod.rs:360: 12676506p-102f32; digits=1, decimal exponent=-23.
+  exact(t, 12676506u64, -102i32, "2", -24i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(406941082u32):.24}" == "0.000000000000000000000002"
+  )
+  // mod.rs:361: 12676506p-103f32; digits=2, decimal exponent=-23.
+  exact(t, 12676506u64, -103i32, "12", -25i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(398552474u32):.25}" == "0.0000000000000000000000012"
+  )
+  // mod.rs:362: 15445013p86f32; digits=3, decimal exponent=34.
+  exact(t, 15445013u64, 86i32, "119", 31i32)
+  // mod.rs:363: 13734123p-138f32; digits=4, decimal exponent=-34.
+  exact(t, 13734123u64, -138i32, "3941", -38i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(106008811u32):.38}" == "0.00000000000000000000000000000000003941"
+  )
+  // mod.rs:364: 12428269p-130f32; digits=5, decimal exponent=-32.
+  exact(t, 12428269u64, -130i32, "91308", -37i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(171811821u32):.37}" == "0.0000000000000000000000000000000091308"
+  )
+  // mod.rs:365: 15334037p-146f32; digits=6, decimal exponent=-36.
+  exact(t, 15334037u64, -146i32, "171900", -42i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(40499861u32):.42}" == "0.000000000000000000000000000000000000171900"
+  )
+  // mod.rs:366: 11518287p-41f32; digits=7, decimal exponent=-5.
+  exact(t, 11518287u64, -41i32, "5237910", -12i32)
+  test.check(t, f"{core@1/f32.from_bits(917487951u32):.12}" == "0.000005237910")
+  // mod.rs:367: 12584953p-145f32; digits=8, decimal exponent=-36.
+  exact(t, 12584953u64, -145i32, "28216440", -44i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(46139385u32):.44}" == "0.00000000000000000000000000000000000028216440"
+  )
+  // mod.rs:368: 15961084p-125f32; digits=9, decimal exponent=-30.
+  exact(t, 15961084u64, -125i32, "375243281", -39i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(217287676u32):.39}" == "0.000000000000000000000000000000375243281"
+  )
+  // mod.rs:369: 14915817p-146f32; digits=10, decimal exponent=-36.
+  exact(t, 14915817u64, -146i32, "1672120916", -46i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(40081641u32):.46}" == "0.0000000000000000000000000000000000001672120916"
+  )
+  // mod.rs:370: 10845484p-102f32; digits=11, decimal exponent=-23.
+  exact(t, 10845484u64, -102i32, "21388945814", -34i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(405110060u32):.34}" == "0.0000000000000000000000021388945814"
+  )
+  // mod.rs:371: 16431059p-61f32; digits=12, decimal exponent=-11.
+  exact(t, 16431059u64, -61i32, "712583594561", -23i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(754628563u32):.23}" == "0.00000000000712583594561"
+  )
+  Ok(())
+}

@@ -1,0 +1,116 @@
+// rule: SEM-3
+// expect: run
+// Rust coretests/tests/num/flt2dec/mod.rs, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
+// MIT; third-party/NOTICES.md. Original check_exact/check_exact_one row lines below.
+fn exact(t: Test, mantissa: u64, exponent: i32, expected: String, cutoff: i32) -> () {
+  let mut actual = std@1/internal.big.big_from_word(mantissa)
+  let scale: u64 = if exponent < 0 {
+    core@1/int.narrow(-exponent)
+  } else {
+    0u64
+  }
+  std@1/internal.big.big_power(
+    mut actual,
+    if exponent < 0 {
+      5u64
+    } else {
+      2u64
+    },
+    if exponent < 0 {
+      scale
+    } else {
+      core@1/int.narrow(exponent)
+    }
+  )
+  let decimal_scale: i32 = core@1/int.narrow(scale)
+  let places = decimal_scale + cutoff
+  if places >= 0 {
+    std@1/internal.format.round_decimal(mut actual, core@1/int.narrow(places))
+  } else {
+    std@1/internal.big.big_power(mut actual, 10, core@1/int.narrow(-places))
+  }
+  let mut wanted = std@1/internal.big.big_from_word(0)
+  let mut chunk: u64 = 0
+  let mut power: u64 = 1
+  for digit in core@1/string.as_bytes(expected) {
+    chunk = chunk * 10 + core@1/int.widen(digit - 48u8)
+    power *= 10
+    if power == 1000000000 {
+      std@1/internal.big.big_mul_word(mut wanted, power)
+      std@1/internal.big.big_add_small(mut wanted, chunk)
+      chunk = 0
+      power = 1
+    }
+  }
+  std@1/internal.big.big_mul_word(mut wanted, power)
+  std@1/internal.big.big_add_small(mut wanted, chunk)
+  test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // mod.rs:374: 16093626p69f32; digits=1, decimal exponent=29.
+  exact(t, 16093626u64, 69i32, "1", 28i32)
+  // mod.rs:375: 9983778p25f32; digits=2, decimal exponent=15.
+  exact(t, 9983778u64, 25i32, "34", 13i32)
+  // mod.rs:376: 12745034p104f32; digits=3, decimal exponent=39.
+  exact(t, 12745034u64, 104i32, "259", 36i32)
+  // mod.rs:377: 12706553p72f32; digits=4, decimal exponent=29.
+  exact(t, 12706553u64, 72i32, "6001", 25i32)
+  // mod.rs:378: 11005028p45f32; digits=5, decimal exponent=21.
+  exact(t, 11005028u64, 45i32, "38721", 16i32)
+  // mod.rs:379: 15059547p71f32; digits=6, decimal exponent=29.
+  exact(t, 15059547u64, 71i32, "355584", 23i32)
+  // mod.rs:380: 16015691p-99f32; digits=7, decimal exponent=-22.
+  exact(t, 16015691u64, -99i32, "2526831", -29i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(435446091u32):.29}" == "0.00000000000000000000002526831"
+  )
+  // mod.rs:381: 8667859p56f32; digits=8, decimal exponent=24.
+  exact(t, 8667859u64, 56i32, "62458507", 16i32)
+  // mod.rs:382: 14855922p-82f32; digits=9, decimal exponent=-17.
+  exact(t, 14855922u64, -82i32, "307213267", -26i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(576892658u32):.26}" == "0.00000000000000000307213267"
+  )
+  // mod.rs:383: 14855922p-83f32; digits=10, decimal exponent=-17.
+  exact(t, 14855922u64, -83i32, "1536066333", -27i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(568504050u32):.27}" == "0.000000000000000001536066333"
+  )
+  // mod.rs:384: 10144164p-110f32; digits=11, decimal exponent=-26.
+  exact(t, 10144164u64, -110i32, "78147796834", -37i32)
+  test.check(
+    t,
+    f"{core@1/f32.from_bits(337299876u32):.37}" == "0.0000000000000000000000000078147796834"
+  )
+  // mod.rs:385: 13248074p95f32; digits=12, decimal exponent=36.
+  exact(t, 13248074u64, 95i32, "524810279937", 24i32)
+  // mod.rs:460: 0.1f64; digits=38, decimal exponent=0.
+  exact(
+    t,
+    3602879701896397u64,
+    -55i32,
+    "10000000000000000555111512312578270212",
+    -38i32
+  )
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4591870180066957722u64):.38}" == "0.10000000000000000555111512312578270212"
+  )
+  // mod.rs:461: 0.45f64; digits=38, decimal exponent=0.
+  exact(
+    t,
+    8106479329266893u64,
+    -54i32,
+    "45000000000000001110223024625156540424",
+    -38i32
+  )
+  test.check(
+    t,
+    f"{core@1/f64.from_bits(4601778099247172813u64):.38}" == "0.45000000000000001110223024625156540424"
+  )
+  Ok(())
+}

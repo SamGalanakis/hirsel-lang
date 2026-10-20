@@ -106,9 +106,12 @@ regeneration checks are preserved. Invalid scalars match no property or case row
 
 `../std@1/display_width.hir` implements `text.display_width` and the formatting
 cluster-width estimate using the existing Unicode16 segmentation. The first
-scalar of each cluster counts 2 for East_Asian_Width W/F or P1868R2 section 15's
-listed wide ranges, otherwise 1. The union preserves P1868's deliberately broad
-ranges while including newer Unicode16 wide emoji. Isolated marks and controls
+scalar of each cluster counts 2 for East_Asian_Width W/F or C++23
+[format.string.std] (LWG 3780/P2675) blocks 4DC0–4DFF, 1F300–1F5FF and
+1F900–1F9FF, otherwise 1. This follows libc++
+`libcxx/utils/generate_width_estimation_table.py:42–61` at
+`89e3afe2b38064b136cfb37a9d07f8c28709a6c4`. The Unicode16 union narrows
+exactly 86 scalars compared with the earlier P1868 table. Isolated marks and controls
 count 1. Fill scalars are measured independently; each side uses whole fills
 followed by spaces for leftover cells.
 
@@ -119,3 +122,34 @@ six-byte sorted range table and pins the input SHA-256 in its generated header.
 The table shares the `text` module with its algorithm. Conformance covers the
 P1868 multilingual column examples, CJK, combining accents, ZWJ families, emoji
 modifiers, independent fills, dynamic counts and custom text padding.
+
+The independent property oracle in `stdlib_nfc.rs` expands UnicodeData First/Last
+ranges and reads category and simple-case columns plus PropList White_Space.
+Its 64 scheduled `full_gate_unicode16_properties_shard_*` tests execute all five
+public functions from ordinary std source for every one of 1,112,064 valid
+scalars (5,560,320 comparisons), including unassigned scalars and noncharacters.
+A small always-on control covers Latin-1, simple dotted-I case, range/surrogate
+edges and Unicode16 additions. No generated property table or host Unicode
+version supplies expected values.
+
+Rust flt2dec's 97 exact rows are pinned in
+`crates/hirsel-driver/tests/fixtures/flt2dec-exact.json`, with source line numbers,
+and carried in seven `SEM-3-fstring-flt2dec-exact-*` corpus cases. A Rust test
+also ports `check_exact`'s varying precision and zero-extension loops (1,706
+rounding comparisons). A shared internal rounding helper is extracted unchanged
+from `fixed`. The corpus fixtures select the std source package itself, keeping
+`internal` modules private while testing decimal cutoffs above the radix point,
+which Hirsel fstrings do not expose. The eight binary16 rows retain their exact dyadic
+values, widened to binary32 for fstrings because Hirsel has no binary16 scalar.
+The bigint coefficient at each requested decimal cutoff replaces Rust's
+coefficient/exponent buffer pair; this is the same numeric result and checks
+carry, sticky bits and ties to even without adding a public format mode.
+
+The width generator retains the existing six-byte inclusive range layout and
+Unicode16 input rather than libc++'s packed C++ entries/latest Unicode, keeping
+ordinary Hirsel lookup and the language's pinned Unicode semantics. NFC
+quick-check remains an optional performance follow-up; normalization is unchanged.
+
+The corpus keeps up to 38 significant digits per sanity row to stay within its
+1M-step budget; the Rust test retains every original varying-precision and
+zero-extension request, including the complete smallest-subnormal digit string.

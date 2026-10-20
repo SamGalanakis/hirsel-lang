@@ -844,11 +844,9 @@ Ordinary callers must supply these same valid option encodings.
 
 `@noalloc text.display_width(s: String) -> u64 uses {}` returns the sum of the
 estimated widths of the first scalar in each Unicode16 default extended grapheme
-cluster (`unicode.graphemes`). Following P1868R2's estimate, a first scalar counts
-2 when its pinned Unicode 16.0.0 East_Asian_Width is W or F, or it is in one of
-these inclusive ranges: U+1100–115F, U+2329–232A, U+2E80–303E, U+3040–A4CF,
-U+AC00–D7A3, U+F900–FAFF, U+FE10–FE19, U+FE30–FE6F, U+FF00–FF60,
-U+FFE0–FFE6, U+1F300–1F64F, U+1F900–1F9FF, U+20000–2FFFD or U+30000–3FFFD.
+cluster (`unicode.graphemes`). Following C++23 [format.string.std] (LWG 3780),
+a first scalar counts 2 when its pinned Unicode 16.0.0 East_Asian_Width is W or F,
+or it is in U+4DC0–4DFF, U+1F300–1F5FF or U+1F900–1F9FF (inclusive).
 Every other first scalar counts 1, including isolated combining marks and controls;
 the empty string counts 0. The estimate is locale-independent and does not expand
 tabs, interpret terminal escapes or promise a particular font's rendering.

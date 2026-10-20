@@ -46,3 +46,28 @@ pub fn batch_fold(xs: List[String]) -> List[String] uses {} {
   }
   take ys
 }
+
+// Compact observations, not an oracle: all five operations execute std source.
+pub fn batch_properties(s: String) -> Bytes uses {} {
+  let mut out: List[u8] = []
+  for c in core@1/string.scalars(s) {
+    let mut flags: u8 = 0
+    if std@1/unicode.is_whitespace(c) {
+      flags |= 1u8
+    }
+    if std@1/unicode.is_letter(c) {
+      flags |= 2u8
+    }
+    if std@1/unicode.is_digit(c) {
+      flags |= 4u8
+    }
+    core@1/list.push(mut out, flags)
+    for mapped in [std@1/unicode.simple_lower(c), std@1/unicode.simple_upper(c)] {
+      let cp = core@1/char.to_u32(mapped)
+      core@1/list.push(mut out, core@1/int.narrow(cp >> 16))
+      core@1/list.push(mut out, core@1/int.narrow(cp >> 8 & 255u32))
+      core@1/list.push(mut out, core@1/int.narrow(cp & 255u32))
+    }
+  }
+  core@1/bytes.from_list(take out)
+}

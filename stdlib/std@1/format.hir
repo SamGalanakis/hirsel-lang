@@ -327,6 +327,34 @@ pub fn integer(
   repeat(mut out, fill, right)
 }
 
+// Decimal cutoff rounding shared by fixed formatting and the Rust flt2dec
+// significant-digit vectors. The sticky bit distinguishes an exact half tie.
+@noalloc
+pub fn round_decimal(mut digits: internal.big.Big, discarded_places: u64) -> () uses {} {
+  let mut discarded = discarded_places
+  let mut sticky = false
+  let mut last: u64 = 0
+  while discarded > 0 {
+    sticky = sticky || last != 0
+    let places: u64 = if discarded >= 9 {
+      9
+    } else {
+      1
+    }
+    let remainder = internal.big.big_divide(mut digits, places)
+    if places == 9 {
+      last = remainder / 100000000
+      sticky = sticky || remainder % 100000000 != 0
+    } else {
+      last = remainder
+    }
+    discarded -= places
+  }
+  if last > 5 || last == 5 && (sticky || internal.big.big_digit(digits, 0) % 2 != 0) {
+    internal.big.big_add_small(mut digits, 1)
+  }
+}
+
 // Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest.
 // Divide discarded decimal digits with a sticky bit; ties select an even digit.
 @preserves_unique(out)
@@ -371,32 +399,14 @@ pub fn fixed(
       core@1/int.narrow(binary_power)
     }
   )
-  let mut discarded = if scale > precision {
-    scale - precision
-  } else {
-    0u64
-  }
-  let mut sticky = false
-  let mut last: u64 = 0
-  while discarded > 0 {
-    sticky = sticky || last != 0
-    let places: u64 = if discarded >= 9 {
-      9
+  round_decimal(
+    mut digits,
+    if scale > precision {
+      scale - precision
     } else {
-      1
+      0u64
     }
-    let remainder = internal.big.big_divide(mut digits, places)
-    if places == 9 {
-      last = remainder / 100000000
-      sticky = sticky || remainder % 100000000 != 0
-    } else {
-      last = remainder
-    }
-    discarded -= places
-  }
-  if last > 5 || last == 5 && (sticky || internal.big.big_digit(digits, 0) % 2 != 0) {
-    internal.big.big_add_small(mut digits, 1)
-  }
+  )
   let trailing = if precision > scale {
     precision - scale
   } else {

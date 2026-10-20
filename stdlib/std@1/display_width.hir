@@ -1,5 +1,5 @@
 // Range search adapted from the Go unicode search used by unicode_properties.hir.
-// Width follows P1868R2: only the first scalar of each extended cluster counts.
+// Width follows C++23 [format.string.std]: only the first scalar of each extended cluster counts.
 @noalloc
 fn width_scalar_at(at: u64) -> u32 uses {} {
   let a: u32 = core@1/int.widen(DISPLAY_WIDE[at])
@@ -30,7 +30,7 @@ fn cluster_width(cluster: String) -> u64 uses {} {
 }
 
 /// Estimated display cells over Unicode16 extended grapheme clusters.
-/// Each cluster's first scalar counts 2 for EAW W/F or a P1868R2 wide range,
+/// Each cluster's first scalar counts 2 for EAW W/F or one of the three C++23 wide blocks,
 /// otherwise 1, including isolated combining marks and controls. Empty is 0.
 @noalloc
 pub fn display_width(s: String) -> u64 uses {} {
