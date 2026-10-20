@@ -5,6 +5,7 @@ hirsel_guard::install!();
 
 pub mod core_roles;
 pub mod encoding;
+pub use encoding::signature_types;
 pub mod rows;
 pub mod serialization;
 pub mod wire;
