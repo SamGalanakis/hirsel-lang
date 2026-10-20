@@ -12,11 +12,7 @@ pub(super) struct ParameterParts {
 }
 
 impl ParameterParts {
-    pub fn new(
-        body: &CheckedBody,
-        graph: &Graph,
-        rows: &crate::ownership::source_rows::SourceRows,
-    ) -> Self {
+    pub fn new(body: &CheckedBody, graph: &Graph, rows: &crate::source_rows::SourceRows) -> Self {
         let mut parts = Self {
             roots: BTreeMap::new(),
             next: vec![BTreeMap::new(), BTreeMap::new()],

@@ -1,8 +1,8 @@
 # hirsel-driver
 
 The compiler's wiring. `FrontPhases` implements hirsel-engine's `Phases` over
-hirsel-signature, hirsel-check, hirsel-modes and hirsel-lower (`pipeline.rs`), and
-`COMPILER` is the engine's `Compiler` over them; `compiler_adapters()` and the
+hirsel-signature, hirsel-check, hirsel-authority, hirsel-ownership and hirsel-lower
+(`pipeline.rs`), and `COMPILER` is the engine's `Compiler` over them; `compiler_adapters()` and the
 path entry points (`check_path`, `run_path`, `format_path`, `load_program*`)
 start sessions from it. `native/` compiles the engine's `ValidatedNativeInput`
 through hirsel-lir, hirsel-rc, hirsel-heapcheck, hirsel-llvm and hirsel-rt.

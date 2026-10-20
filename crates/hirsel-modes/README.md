@@ -1,8 +1,14 @@
 # hirsel-modes
 
-Check ownership, locality, uniqueness, sendability, authority and brands.
+The mode checks: ownership, locality, uniqueness, sendability, authority and brands. Two
+passes check them, each in its own crate: the authority, provenance and capture check
+([hirsel-authority](../hirsel-authority/README.md)) and the flow-sensitive ownership check
+([hirsel-ownership](../hirsel-ownership/README.md)). This crate holds what both share: the causal
+explanation vocabulary (`src/explain.rs`) and the expression walk. This README documents
+all three.
 
-Allowed dependencies: hirsel-span, hirsel-syntax, hirsel-types, hirsel-diag, hirsel-intern.
+Allowed dependencies: hirsel-span, hirsel-syntax, hirsel-types, hirsel-diag, hirsel-intern;
+the two pass crates also depend on hirsel-modes.
 
 Invariants and boundary:
 
@@ -20,13 +26,13 @@ Invariants and boundary:
   verified repair table. The ownership pass records pending explanations while it
   emits. A temporary cause is the issue site of the loan the value holds on that
   scope; only when a graph failed does it rerun its solve with a trace transfer that
-  logs moves and field writes (`ownership/flow/causes.rs`). The authority walk
-  renders at each site (`authority/walk/causes.rs`). Explanations never change a
+  logs moves and field writes (`hirsel-ownership/src/flow/causes.rs`). The authority walk
+  renders at each site (`hirsel-authority/src/walk/causes.rs`). Explanations never change a
   verdict, a rule or a primary span.
 
 ## Ownership and locality
 
-`ownership::check_ownership_with_clauses(tree, item, signature, &mut checked_body,
+`hirsel_ownership::check_ownership_with_clauses(tree, item, signature, &mut checked_body,
 captures, clauses, &mut results, provider)`
 returns `Result<QueryOutput<OwnershipFacts>, QueryError>`. Call argument requirements
 and declaration ordinals come exclusively from `CheckedBody.calls`, in source order.
@@ -180,8 +186,8 @@ authority output's capture rows to `CaptureMode`; they never reconstruct free
 uses, contexts or library callback types. Authority's enriched body feeds
 ownership, while its independent diagnostics remain outside this I-only oracle.
 Production ownership still has no authority or driver dependency. The independent
-never-shrinking baseline is [passing.txt](src/ownership/tests/passing.txt), and
-[pending.txt](src/ownership/tests/pending.txt) gives every remaining file and its
+never-shrinking baseline is [passing.txt](../hirsel-ownership/src/tests/passing.txt), and
+[pending.txt](../hirsel-ownership/src/tests/pending.txt) gives every remaining file and its
 reason. `tools/bless.sh ownership-passing` verifies the existing baseline before
 adding new passing files. Each operative ownership reject checks both rule and
 source line. Accepted/run/fail files check for absence of ownership diagnostics;
@@ -238,7 +244,7 @@ tuple, sequence, box) is sendable when every part currently is
 (`parts_sendable`), as V proves it field by field, so a part unique only by flow
 evidence keeps its proof beside a handle part that leaves the aggregate aliased.
 
-`authority::check_file_with_clauses(file, item, signature, body, provider,
+`hirsel_authority::check_file_with_clauses(file, item, signature, body, provider,
 intrinsics, loops, clauses)` consumes the checked body and returns `AuthorityOutput`.
 Argument labels are their `Symbol` spellings. Tests
 supply the same syntax and producer tables as production callers.
@@ -331,8 +337,8 @@ Task-handle obligations survive branch joins and are checked on each reachable
 exit; cancel does not consume a handle, while await and detach do. Runtime task
 execution, cancellation and joining are M2.
 
-Tests begin with `authority/test_support.rs` manufactured CheckedBody fixtures.
-The real corpus in `authority/corpus` runs lexer, parser, resolver, signature
+Tests begin with `hirsel-authority/src/test_support.rs` manufactured CheckedBody fixtures.
+The real corpus in `hirsel-authority/src/corpus` runs lexer, parser, resolver, signature
 normalization and H body checking as dev-dependencies, followed by J. Its
 signature-only library fixture contains the core library declarations and nominal
 roles. `passing.txt` is a never-shrinking list; `pending.txt` gives an owner and
@@ -367,7 +373,7 @@ origin, lifetime, authority and erased-capture evidence from the actual argument
 A concrete callable's access modes therefore cannot overwrite the arena placement
 required by `copy_to`.
 
-`authority::check_file_with_clauses` receives H-authored implicit open/next
+`hirsel_authority::check_file_with_clauses` receives H-authored implicit open/next
 calls as shared `CursorPlan` rows forwarded by the driver. One refinement sequence
 substitutes library parameter origins before caller generic graphs, derives both
 call results, projects the item and updates the next instantiation. J supplies
@@ -402,7 +408,7 @@ one approximation. After flow refines locality/uniqueness, all published checked
 roots receive shared derived summaries; provider reads remain recorded even on
 failure. Function/Iter capture summaries retain J's explicit capture evidence.
 
-Ownership flow state is one private loan set per value (`ownership/flow/loans.rs`,
+Ownership flow state is one private loan set per value (`hirsel-ownership/src/flow/loans.rs`,
 docs/spec/ownership.md, places and loans): a kind (identity, bound, read) on a place (a binding, a
 lexical scope, the value's own environment or a placement a join lost), each with
 its issue site. A value holds its alias, sources, captures and environment loans
@@ -872,7 +878,7 @@ Variant argument brands follow the selected supplied payloads. Payload-free vari
 
 Revision 6 publishes nominal borrowed-loop associations and scoped callable state
 promises. Core Unicode views use their nominal declarations rather than collection
-selector labels. `ownership/flow/state.rs` proves every promise of the graph's own
+selector labels. `hirsel-ownership/src/flow/state.rs` proves every promise of the graph's own
 callable (item, closure literal or local function) on its binder-exact, field-
 sensitive selection: readonly use, Plain or stable copies, invocation of many-use
 callables, closed-content bookkeeping and `mut` calls whose declaration preserves a

@@ -1,16 +1,14 @@
-//! Modes, ownership, brands and closure checks.
+//! What the authority and ownership checks share: the causal explanation vocabulary and the
+//! expression walk.
 
 #[cfg(test)]
 hirsel_guard::install!();
 
-mod arenas;
-pub mod authority;
-mod explain;
-pub mod ownership;
+pub mod explain;
 
 use hirsel_syntax::{ExprId, ExprKind, StmtKind, SyntaxTree};
 /// The direct subexpressions of `e`, statements' expressions included.
-pub(crate) fn expression_children(tree: &SyntaxTree, e: ExprId) -> Vec<ExprId> {
+pub fn expression_children(tree: &SyntaxTree, e: ExprId) -> Vec<ExprId> {
     match &tree.expressions[e.0 as usize].kind {
         ExprKind::Tuple(es) | ExprKind::Sequence(es) => es.clone(),
         ExprKind::Call { callee, arguments } => std::iter::once(*callee)

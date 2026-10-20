@@ -2,7 +2,7 @@
 //! headers. Both sides come from the types and syntax in hand when a judgment
 //! fails; nothing is recorded for an accepted body.
 use super::*;
-use crate::explain::{
+use hirsel_modes::explain::{
     Cause, Explanation, Fact, Qualifier, Repair, Requirement, Sites, placement_repairs,
 };
 
@@ -11,7 +11,7 @@ impl Checker<'_> {
         Sites { tree: self.tree }
     }
     pub(super) fn spelled(&self, e: ExprId) -> Option<String> {
-        crate::explain::spell(self.tree, e)
+        hirsel_modes::explain::spell(self.tree, e)
     }
     /// A function type's source spelling for a quoted type or a suggested
     /// annotation: its header with scalar and tuple parts. None where a part
@@ -104,7 +104,7 @@ impl Checker<'_> {
                     .trim_start_matches("copy ")
                     .to_owned()
             })
-            .unwrap_or_else(|| crate::explain::prose("the value"))
+            .unwrap_or_else(|| hirsel_modes::explain::prose("the value"))
     }
     /// Where a value's type was declared: its binding's site, else the value.
     /// An element is declared by its sequence's binding.
@@ -144,7 +144,7 @@ impl Checker<'_> {
         let (name, span) = match &origin.root {
             OriginRoot::Parameter(r) | OriginRoot::ArgumentBrand(r) => match parameter(r) {
                 Some((name, span)) => (name, Some(span)),
-                None => (crate::explain::prose("a parameter"), None),
+                None => (hirsel_modes::explain::prose("a parameter"), None),
             },
             OriginRoot::Local(local) => match self
                 .out
@@ -157,7 +157,7 @@ impl Checker<'_> {
                     let (name, span) = sites.binding(binding);
                     (name, Some(span))
                 }
-                None => (crate::explain::prose("a local"), None),
+                None => (hirsel_modes::explain::prose("a local"), None),
             },
             OriginRoot::Expression(e) => {
                 // Fresh value identities are rooted at their initializer, even
@@ -179,13 +179,13 @@ impl Checker<'_> {
                     }
                     None => (
                         self.spelled(*e)
-                            .unwrap_or_else(|| crate::explain::prose("a temporary")),
+                            .unwrap_or_else(|| hirsel_modes::explain::prose("a temporary")),
                         Some(self.span(*e)),
                     ),
                 }
             }
             OriginRoot::Definition(path) => (path.0.name.clone(), None),
-            OriginRoot::Sibling(_) => (crate::explain::prose("a sibling field"), None),
+            OriginRoot::Sibling(_) => (hirsel_modes::explain::prose("a sibling field"), None),
         };
         let mut name = name;
         for field in origin.fields.iter() {
@@ -336,14 +336,14 @@ impl Checker<'_> {
                 &[
                     &x,
                     &owner,
-                    &crate::explain::qualifier(Qualifier::Brand(&owner)),
+                    &hirsel_modes::explain::qualifier(Qualifier::Brand(&owner)),
                 ],
             ))
             .required(self.receiving_fact(
                 Requirement::Brand,
                 [
                     &wanted,
-                    &crate::explain::qualifier(Qualifier::Brand(&wanted)),
+                    &hirsel_modes::explain::qualifier(Qualifier::Brand(&wanted)),
                 ],
                 span,
             ));
@@ -375,7 +375,7 @@ impl Checker<'_> {
                 Requirement::Brand,
                 [
                     &wanted,
-                    &crate::explain::qualifier(Qualifier::Brand(&wanted)),
+                    &hirsel_modes::explain::qualifier(Qualifier::Brand(&wanted)),
                 ],
                 span,
             ));
@@ -447,7 +447,10 @@ impl Checker<'_> {
         };
         explanation.required = Some(self.receiving_fact(
             Requirement::Within,
-            [&spelled, &crate::explain::qualifier(Qualifier::In(&names))],
+            [
+                &spelled,
+                &hirsel_modes::explain::qualifier(Qualifier::In(&names)),
+            ],
             span,
         ));
         (format!("the value is not within `{spelled}`"), explanation)
@@ -476,7 +479,7 @@ impl Checker<'_> {
                     &[
                         &x,
                         &arena,
-                        &crate::explain::qualifier(Qualifier::In(&[&arena])),
+                        &hirsel_modes::explain::qualifier(Qualifier::In(&[&arena])),
                     ],
                 )
             }
@@ -487,14 +490,17 @@ impl Checker<'_> {
                 let (arena, _) = self.origin_site(origin);
                 self.receiving_fact(
                     Requirement::Placement,
-                    [&arena, &crate::explain::qualifier(Qualifier::In(&[&arena]))],
+                    [
+                        &arena,
+                        &hirsel_modes::explain::qualifier(Qualifier::In(&[&arena])),
+                    ],
                     span,
                 )
             }
             // `in heap` is the empty relation.
             None if expected.is_global() => self.receiving_fact(
                 Requirement::Heap,
-                ["", &crate::explain::qualifier(Qualifier::Heap)],
+                ["", &hirsel_modes::explain::qualifier(Qualifier::Heap)],
                 span,
             ),
             None => self.receiving_fact(Requirement::NoPlacement, ["", ""], span),

@@ -12,7 +12,7 @@ mod creation;
 mod loans;
 mod parameter_parts;
 mod state;
-use crate::explain::{Cause, Explanation, Fact, Requirement};
+use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 use loans::{Kind, Loan, LoanSet, On, Site};
 
 const LIVE: u8 = 1;
@@ -3823,7 +3823,7 @@ impl Checker<'_> {
                     causes::Pending {
                         explanation: Explanation {
                             required: Some(required),
-                            root: Some(crate::explain::root_key(
+                            root: Some(hirsel_modes::explain::root_key(
                                 &c.own.definition,
                                 ("locality", (2u8, first)),
                             )),
@@ -3863,7 +3863,7 @@ impl Checker<'_> {
                 let (name, _) = c.binding_site(binding);
                 let part = c.spelled(tail).unwrap_or_else(|| name.clone());
                 Explanation {
-                    repairs: vec![crate::explain::Repair::CopyPart(part.clone())],
+                    repairs: vec![hirsel_modes::explain::Repair::CopyPart(part.clone())],
                     fix: Some(hirsel_diag::Fix {
                         span: Span {
                             end: c.span_of(tail).start,
@@ -3872,7 +3872,7 @@ impl Checker<'_> {
                         replacement: "copy ".into(),
                         message: "share the counted part before its owner's block ends".into(),
                     }),
-                    root: Some(crate::explain::root_key(
+                    root: Some(hirsel_modes::explain::root_key(
                         &c.own.definition,
                         ("block part", tail.0),
                     )),
@@ -6064,7 +6064,7 @@ impl Checker<'_> {
                                         });
                                         explanation
                                             .repairs
-                                            .push(crate::explain::Repair::TakeAtLastUse(name));
+                                            .push(hirsel_modes::explain::Repair::TakeAtLastUse(name));
                                     }
                                     explanation.into()
                                 },
@@ -7144,7 +7144,9 @@ impl Checker<'_> {
                             result_site,
                             &[
                                 "",
-                                &crate::explain::qualifier(crate::explain::Qualifier::In(&[&name])),
+                                &hirsel_modes::explain::qualifier(
+                                    hirsel_modes::explain::Qualifier::In(&[&name]),
+                                ),
                             ],
                         ))
                         .into()

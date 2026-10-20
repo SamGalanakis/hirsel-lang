@@ -12,14 +12,14 @@ use hirsel_types::{BindingDecision, NameSite, ParamId, ResolvedName};
 use std::hash::{Hash, Hasher};
 
 /// A written qualifier.
-pub(crate) enum Qualifier<'a> {
+pub enum Qualifier<'a> {
     /// `in x` or `in {x, ..}`; no places is the closure form, `in env`.
     In(&'a [&'a str]),
     Heap,
     Brand(&'a str),
 }
 /// The one spelling of every qualifier in diagnostic text.
-pub(crate) fn qualifier(q: Qualifier<'_>) -> String {
+pub fn qualifier(q: Qualifier<'_>) -> String {
     match q {
         Qualifier::In([]) => "in env".into(),
         Qualifier::In([place]) => qualified_name("in", place),
@@ -49,7 +49,7 @@ fn qualified_name(prefix: &str, name: &str) -> String {
 /// Why a value has the property that fails: local, placed, branded, moved,
 /// lent and so on. Each kind is a pair of templates over its names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Cause {
+pub enum Cause {
     BorrowedParameter,
     MutParameter,
     TakenParameter,
@@ -110,7 +110,7 @@ impl Cause {
     /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
     #[cfg(test)]
-    pub(crate) fn spec_kind(self) -> &'static str {
+    pub fn spec_kind(self) -> &'static str {
         use Cause::*;
         match self {
             BorrowedParameter | ReadOnlyParameter => "borrowed parameter",
@@ -357,7 +357,7 @@ impl Cause {
 
 /// Why the receiver needs the property that fails.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Requirement {
+pub enum Requirement {
     ResultGlobal,
     ResultSources,
     ResultNoTemporary,
@@ -420,7 +420,7 @@ impl Requirement {
     /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
     #[cfg(test)]
-    pub(crate) fn spec_kind(self) -> &'static str {
+    pub fn spec_kind(self) -> &'static str {
         use Requirement::*;
         match self {
             ResultGlobal => "result without a relation",
@@ -668,7 +668,7 @@ impl Requirement {
 
 /// One side of an explanation, at its own site.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Fact<K> {
+pub struct Fact<K> {
     pub kind: K,
     pub span: Span,
     pub names: Vec<String>,
@@ -687,7 +687,7 @@ impl<K> Fact<K> {
 /// signature edit, a deep copy, and last a change of meaning. Only repairs
 /// the checker accepts for that cause and requirement are listed.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub(crate) enum Repair {
+pub enum Repair {
     /// A Shared root's copy is a counted, global handle (MEM-11).
     CopyShared(String),
     UseOwner {
@@ -768,7 +768,7 @@ impl Repair {
 }
 /// Repairs that look plausible and that the checker rejects.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Caution {
+pub enum Caution {
     /// A copy of local content shares its blocks, which stay local (P2).
     CopyStaysLocal(String),
     /// A deep copy is made where its source lives and keeps its placement.
@@ -789,7 +789,7 @@ impl Caution {
 
 /// Both sides of one failed judgment, with its repairs and root cause.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Explanation {
+pub struct Explanation {
     /// The provided side, from the observed value back to its root cause.
     pub provided: Vec<Fact<Cause>>,
     pub required: Option<Fact<Requirement>>,
@@ -800,7 +800,7 @@ pub(crate) struct Explanation {
     pub fix: Option<hirsel_diag::Fix>,
 }
 /// A name that is a description, not source text: it is not quoted.
-pub(crate) fn prose(text: &str) -> String {
+pub fn prose(text: &str) -> String {
     format!("{PROSE}{text}")
 }
 const PROSE: char = '\u{1}';
@@ -943,7 +943,7 @@ impl Repair {
 /// declared `in x` for itself (1e), so neither is ever suggested.
 /// `tests/it/repair_probes.rs` additionally verifies all eight formerly unprobed
 /// global-receiver pairs, including a borrowed parameter's global result.
-pub(crate) fn locality_repairs(
+pub fn locality_repairs(
     cause: Cause,
     required: Requirement,
     x: &str,
@@ -1001,7 +1001,7 @@ fn global(required: Requirement) -> bool {
 /// The repair table for a parameter placed in the wrong arena (probes 6a,
 /// 6b, 6g); a deep copy keeps its placement (6c, 6d, 6f), so `unique` is never
 /// suggested for placement.
-pub(crate) fn placement_repairs(
+pub fn placement_repairs(
     parameter: &str,
     from: &str,
     to: &str,
@@ -1024,7 +1024,7 @@ pub(crate) fn placement_repairs(
 }
 
 /// A definition-local root-cause key: equal roots in one definition fold.
-pub(crate) fn root_key(definition: &DefPath, root: impl Hash) -> u64 {
+pub fn root_key(definition: &DefPath, root: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     definition.hash(&mut hasher);
     root.hash(&mut hasher);
@@ -1034,7 +1034,7 @@ pub(crate) fn root_key(definition: &DefPath, root: impl Hash) -> u64 {
 /// Names and declaration sites from the syntax tree. An IR built without
 /// syntax (a hand-built checker fixture) has no sites; its labels fall back to
 /// an empty span instead of failing the check.
-pub(crate) struct Sites<'a> {
+pub struct Sites<'a> {
     pub tree: &'a SyntaxTree,
 }
 impl Sites<'_> {
@@ -1142,7 +1142,7 @@ impl Sites<'_> {
 }
 
 /// Short source spellings for headlines; None where a label shows the site.
-pub(crate) fn spell(tree: &SyntaxTree, expression: ExprId) -> Option<String> {
+pub fn spell(tree: &SyntaxTree, expression: ExprId) -> Option<String> {
     let name = |s: hirsel_intern::Symbol| Some(s.as_str().to_owned());
     let mut depth = 0;
     fn go(

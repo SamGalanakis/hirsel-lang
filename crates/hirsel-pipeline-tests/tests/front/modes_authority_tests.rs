@@ -1,4 +1,4 @@
-//! Authority checking of real source, from hirsel-modes's `authority` unit tests.
+//! Authority checking of real source, from hirsel-authority's unit tests.
 use hirsel_types::*;
 
 #[test]

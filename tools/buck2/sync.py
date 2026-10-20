@@ -146,7 +146,8 @@ RUNTIME_DATA = {
     "hirsel-lir": ["crates/hirsel-rt/include/**", "native-tests/**"],
     # tools/native-toolchain/check reads Cargo.lock's llvm-sys pin.
     "hirsel-llvm": ["Cargo.lock", "crates/hirsel-rt/include/**", "stdlib/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**"],
-    "hirsel-modes": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**"],
+    "hirsel-authority": [*CORPUS_DATA],
+    "hirsel-ownership": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-parser": ["docs/spec/**"],
     "hirsel-pipeline-tests": [
         *CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/harness/**",
@@ -174,7 +175,7 @@ TEST_DATA = {
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-llvm-test-it": ["crates/hirsel-llvm/tests/native/**"],
-    "hirsel-modes-unittest": ["crates/hirsel-modes/proptest-regressions/**"],
+    "hirsel-ownership-unittest": ["crates/hirsel-ownership/proptest-regressions/**"],
     "hirsel-pipeline-tests-test-front": ["crates/hirsel-llvm/tests/native/fixture.h"],
     "hirsel-rt-test-it": ["crates/hirsel-rt/include/**"],
     "hirsel-types-test-wire": ["crates/hirsel-types/tests/wire/**"],

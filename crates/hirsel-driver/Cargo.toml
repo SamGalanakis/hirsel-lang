@@ -12,7 +12,8 @@ hirsel-check-protocol = { path = "../hirsel-check-protocol" }
 hirsel-signature = { path = "../hirsel-signature" }
 hirsel-check = { path = "../hirsel-check" }
 hirsel-lower = { path = "../hirsel-lower" }
-hirsel-modes = { path = "../hirsel-modes" }
+hirsel-authority = { path = "../hirsel-authority" }
+hirsel-ownership = { path = "../hirsel-ownership" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-span = { path = "../hirsel-span" }

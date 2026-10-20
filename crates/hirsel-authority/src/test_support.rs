@@ -461,7 +461,7 @@ pub fn rejected(out: &AuthorityOutput, rule: &str) {
 }
 
 /// Manufacture the checked storage rows specified by these typed test fixtures.
-pub(crate) fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody) {
+pub fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody) {
     let specified = body.places.clone();
     body.places.clear();
     for row in &body.expressions.clone() {

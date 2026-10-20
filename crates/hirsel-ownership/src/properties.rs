@@ -759,7 +759,7 @@ pub(super) fn field_loan_places(
 #[cfg(test)]
 mod limit_tests {
     use super::*;
-    use crate::authority::test_support::Fixture;
+    use hirsel_authority::test_support::Fixture;
 
     #[test]
     fn physical_layout_resolves_finite_nominal_chains_past_128() {

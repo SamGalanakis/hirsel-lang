@@ -4,7 +4,6 @@ use hirsel_check::body;
 use hirsel_check_protocol::header::{Input, NormalizedDeclaration};
 use hirsel_engine::*;
 use hirsel_lower as lower;
-use hirsel_modes::{authority, ownership};
 use hirsel_syntax::{ItemId, SyntaxFile};
 use hirsel_types::{NameSite, Resolution, Signature, TypeId, TypeKind};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -150,7 +149,7 @@ impl ModesPhase for ModeAdapter {
             .iter()
             .map(|c| (c.expression, c.function))
             .collect();
-        let mut output = authority::check_file_with_clauses(
+        let mut output = hirsel_authority::check_file_with_clauses(
             &file,
             item,
             signature,
@@ -180,7 +179,7 @@ impl ModesPhase for ModeAdapter {
             );
         }
         // Run I even when J reports source errors: availability can own the obligation.
-        let owned = ownership::check_ownership_with_clauses(
+        let owned = hirsel_ownership::check_ownership_with_clauses(
             &file.tree,
             item,
             signature,
@@ -210,8 +209,8 @@ impl ModesPhase for ModeAdapter {
             }
             Err(error) => return Err(error),
         };
-        let clause_types =
-            ownership::checked_clause_types(&mut output.body, &clauses).map_err(|error| {
+        let clause_types = hirsel_ownership::checked_clause_types(&mut output.body, &clauses)
+            .map_err(|error| {
                 invariant(&format!("checked clause parameter transport: {error:?}"))
             })?;
         for (clause, function) in typed.plans.contracts.iter_mut().zip(clause_types) {
@@ -234,13 +233,15 @@ impl ModesPhase for ModeAdapter {
                     .cursor_identities
                     .get(&cursor.source)
                     .ok_or_else(|| invariant("missing cursor source identity"))?;
-                output.dependencies.extend(authority::refine_cursor_plan(
-                    &mut output.body,
-                    signature,
-                    cursor,
-                    identity,
-                    provider,
-                )?);
+                output
+                    .dependencies
+                    .extend(hirsel_authority::refine_cursor_plan(
+                        &mut output.body,
+                        signature,
+                        cursor,
+                        identity,
+                        provider,
+                    )?);
             }
         }
         self.state.borrow_mut().mode_diagnostics.extend(

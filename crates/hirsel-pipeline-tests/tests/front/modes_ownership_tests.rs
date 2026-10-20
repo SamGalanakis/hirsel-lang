@@ -1,4 +1,4 @@
-//! Ownership checking of real source, from hirsel-modes's `ownership` unit tests.
+//! Ownership checking of real source, from hirsel-ownership's unit tests.
 use hirsel_syntax::*;
 use hirsel_types::*;
 

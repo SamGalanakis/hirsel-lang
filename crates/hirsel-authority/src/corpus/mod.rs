@@ -281,7 +281,7 @@ fn real_phase_corpus_ratchet() {
             }
         }
     }
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/authority/corpus");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/corpus");
     let baseline = std::fs::read_to_string(dir.join("passing.txt")).unwrap();
     for path in baseline
         .lines()
@@ -529,7 +529,7 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         .map(|binding| (binding.owner.clone(), binding.binding.clone(), binding.ty))
         .collect();
     assert!(!parameters.is_empty());
-    let owned = crate::ownership::check_ownership_with_clauses(
+    let owned = hirsel_ownership::check_ownership_with_clauses(
         &file.tree,
         item,
         &signature,

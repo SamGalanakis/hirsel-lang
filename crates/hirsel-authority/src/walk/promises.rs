@@ -100,7 +100,7 @@ impl Checker<'_> {
                     .map(|o| self.origin_site(o).0)
                     .unwrap_or_default();
                 Explanation {
-                    root: Some(crate::explain::root_key(
+                    root: Some(hirsel_modes::explain::root_key(
                         &self.signature.definition,
                         ("ended", invalidation.start, invalidation.end),
                     )),
@@ -112,7 +112,9 @@ impl Checker<'_> {
                     self.receiving.as_ref().map_or(span, |r| r.span),
                     &[
                         &wanted,
-                        &crate::explain::qualifier(crate::explain::Qualifier::Brand(&wanted)),
+                        &hirsel_modes::explain::qualifier(hirsel_modes::explain::Qualifier::Brand(
+                            &wanted,
+                        )),
                         &self
                             .receiving
                             .as_ref()

@@ -1,4 +1,4 @@
-//! Authority checking of corpus programs, from hirsel-modes's `authority::corpus` unit tests.
+//! Authority checking of corpus programs, from hirsel-authority's `corpus` unit tests.
 use hirsel_syntax as ast;
 use hirsel_types::*;
 

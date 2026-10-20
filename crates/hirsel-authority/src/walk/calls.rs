@@ -2636,7 +2636,7 @@ impl Checker<'_> {
         })
     }
     pub(super) fn expression_children(&self, e: ExprId) -> Vec<ExprId> {
-        crate::expression_children(self.tree, e)
+        hirsel_modes::expression_children(self.tree, e)
     }
     /// A static lexical name with no environment can be reconstructed wherever
     /// it is referenced; it is not a borrowed value of the enclosing frame.

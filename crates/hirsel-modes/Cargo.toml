@@ -10,17 +10,7 @@ hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }
 hirsel-diag = { path = "../hirsel-diag" }
-
 hirsel-intern = { path = "../hirsel-intern" }
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
-hirsel-signature = { path = "../hirsel-signature" }
-hirsel-check-protocol = { path = "../hirsel-check-protocol" }
-hirsel-lexer = { path = "../hirsel-lexer" }
-hirsel-parser = { path = "../hirsel-parser" }
-hirsel-resolve = { path = "../hirsel-resolve" }
-hirsel-check = { path = "../hirsel-check" }
-proptest = "1"
-hirsel-driver = { path = "../hirsel-driver" }
-hirsel-engine = { path = "../hirsel-engine" }

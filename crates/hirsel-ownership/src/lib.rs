@@ -1,4 +1,9 @@
 //! Flow-sensitive ownership judgments. Only declared signatures are queried.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
+mod arenas;
 mod cfg;
 mod flow;
 mod liveness;

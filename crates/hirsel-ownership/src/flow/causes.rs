@@ -5,7 +5,7 @@
 //! in trace mode to recover the sites the lattice does not keep (moves and
 //! field writes).
 use super::*;
-use crate::explain::{
+use hirsel_modes::explain::{
     Cause, Explanation, Fact, Qualifier, Repair, Requirement, Sites, locality_repairs, qualifier,
     root_key, spell,
 };
@@ -599,7 +599,7 @@ impl Checker<'_> {
         let (name, _) = self.binding_site(binding);
         let callee_name = self
             .spelled(callee)
-            .unwrap_or_else(|| crate::explain::prose("the callee"));
+            .unwrap_or_else(|| hirsel_modes::explain::prose("the callee"));
         let span = self.span_of(argument);
         let mut diagnostic = Diagnostic::error(
             const { RuleId::of("OWN-4") },
@@ -684,7 +684,7 @@ impl Checker<'_> {
             if names.contains(&e) {
                 return true;
             }
-            pending.extend(crate::expression_children(self.tree, e));
+            pending.extend(hirsel_modes::expression_children(self.tree, e));
         }
         false
     }

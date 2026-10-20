@@ -428,6 +428,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-authority"
+version = "0.1.0"
+dependencies = [
+ "hirsel-check",
+ "hirsel-check-protocol",
+ "hirsel-diag",
+ "hirsel-engine",
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-lexer",
+ "hirsel-modes",
+ "hirsel-ownership",
+ "hirsel-parser",
+ "hirsel-resolve",
+ "hirsel-signature",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-types",
+ "proptest",
+]
+
+[[package]]
 name = "hirsel-check"
 version = "0.1.0"
 dependencies = [
@@ -558,6 +580,7 @@ dependencies = [
 name = "hirsel-driver"
 version = "0.1.0"
 dependencies = [
+ "hirsel-authority",
  "hirsel-check",
  "hirsel-check-protocol",
  "hirsel-codec",
@@ -574,7 +597,7 @@ dependencies = [
  "hirsel-lir",
  "hirsel-llvm",
  "hirsel-lower",
- "hirsel-modes",
+ "hirsel-ownership",
  "hirsel-parser",
  "hirsel-proof-export",
  "hirsel-rc",
@@ -777,21 +800,12 @@ dependencies = [
 name = "hirsel-modes"
 version = "0.1.0"
 dependencies = [
- "hirsel-check",
- "hirsel-check-protocol",
  "hirsel-diag",
- "hirsel-driver",
- "hirsel-engine",
  "hirsel-guard",
  "hirsel-intern",
- "hirsel-lexer",
- "hirsel-parser",
- "hirsel-resolve",
- "hirsel-signature",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
- "proptest",
 ]
 
 [[package]]
@@ -811,6 +825,29 @@ dependencies = [
  "hirsel-guard",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "hirsel-ownership"
+version = "0.1.0"
+dependencies = [
+ "hirsel-authority",
+ "hirsel-check",
+ "hirsel-check-protocol",
+ "hirsel-diag",
+ "hirsel-driver",
+ "hirsel-engine",
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-lexer",
+ "hirsel-modes",
+ "hirsel-parser",
+ "hirsel-resolve",
+ "hirsel-signature",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-types",
+ "proptest",
 ]
 
 [[package]]

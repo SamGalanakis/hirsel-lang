@@ -11,7 +11,7 @@ mod causes;
 mod crossing;
 mod patterns;
 mod promises;
-use crate::explain::{Cause, Explanation, Fact, Requirement};
+use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 
 /// A labelled block being walked: its consumer's context and each break
 /// that leaves it, with that path's state (LANG-11).
@@ -993,7 +993,7 @@ impl<'a> Checker<'a> {
     /// A brand whose owner's identity ended; uses of one ended identity fold.
     fn ended_explanation(&self, ended: Span, used: Span) -> Explanation {
         Explanation {
-            root: Some(crate::explain::root_key(
+            root: Some(hirsel_modes::explain::root_key(
                 &self.signature.definition,
                 ("ended", ended.start, ended.end),
             )),
@@ -2625,9 +2625,9 @@ impl<'a> Checker<'a> {
                                 &[
                                     &x,
                                     &arena,
-                                    &crate::explain::qualifier(crate::explain::Qualifier::In(&[
-                                        &arena,
-                                    ])),
+                                    &hirsel_modes::explain::qualifier(
+                                        hirsel_modes::explain::Qualifier::In(&[&arena]),
+                                    ),
                                 ],
                             ))
                             .required(Fact::new(Requirement::Arena, callback, &[])),
@@ -2677,7 +2677,7 @@ impl super::cursors::CursorRefinement for Checker<'_> {
 #[cfg(test)]
 mod limit_tests {
     use super::*;
-    use crate::authority::test_support::Fixture;
+    use crate::test_support::Fixture;
 
     #[test]
     fn resource_free_siblings_do_not_spend_depth_and_a_real_resource_still_rejects() {

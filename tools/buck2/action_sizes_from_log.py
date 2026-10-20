@@ -131,6 +131,8 @@ MAX_CPUS = 4
 # ones, which matters only for these. A row routes every action of its target.
 CPU_CLASSES = {
     "dev": {
+        "hirsel-authority": "fast",
+        "hirsel-authority-unittest-harness": "fast",
         "hirsel-check": "fast",
         "hirsel-check-unittest-harness": "fast",
         "hirsel-driver": "fast",
@@ -139,8 +141,8 @@ CPU_CLASSES = {
         "hirsel-lir": "fast",
         "hirsel-lir-test-it-harness": "fast",
         "hirsel-lir-unittest-harness": "fast",
-        "hirsel-modes": "fast",
-        "hirsel-modes-unittest-harness": "fast",
+        "hirsel-ownership": "fast",
+        "hirsel-ownership-unittest-harness": "fast",
         "hirsel-pipeline-tests-test-front-harness": "fast",
         "hirsel-pipeline-tests-test-rc-harness": "fast",
         "hirsel-rc": "fast",
@@ -152,10 +154,11 @@ CPU_CLASSES = {
         "hirsel-validate-unittest-harness": "fast",
     },
     "release": {
+        "hirsel-authority": "fast",
         "hirsel-check": "fast",
         "hirsel-driver": "fast",
         "hirsel-engine": "fast",
-        "hirsel-modes": "fast",
+        "hirsel-ownership": "fast",
         "hirsel-rc": "fast",
     },
 }

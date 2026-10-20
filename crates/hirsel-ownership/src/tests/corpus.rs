@@ -116,8 +116,8 @@ fn run_with_authority(
             .collect();
         let intrinsics = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
-            .collect::<crate::authority::Intrinsics>();
-        let mut authority = crate::authority::check_file_with_clauses(
+            .collect::<hirsel_authority::Intrinsics>();
+        let mut authority = hirsel_authority::check_file_with_clauses(
             &file,
             *item,
             &signature,
@@ -298,7 +298,7 @@ fn source_corpus_ratchets_rule_and_primary_line() {
         }
         counts.insert(prefix, count);
     }
-    let ratchet = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ownership/tests/passing.txt");
+    let ratchet = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tests/passing.txt");
     eprintln!(
         "ownership corpus (passing, eligible, other operative rules): {counts:?}; {} passing, {} pending",
         passing.len(),

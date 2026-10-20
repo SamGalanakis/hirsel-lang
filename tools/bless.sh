@@ -16,8 +16,8 @@
 #   package-docs       packages/doc_api@1/api.md
 #   core-review        crates/hirsel-engine/src/registry/review-table.txt
 #   native-inventory   native-tests/library/operations.tsv
-#   ownership-passing  crates/hirsel-modes/src/ownership/tests/{passing,pending}.txt
-#   authority-corpus   crates/hirsel-modes/src/authority/corpus/{passing,pending}.txt
+#   ownership-passing  crates/hirsel-ownership/src/tests/{passing,pending}.txt
+#   authority-corpus   crates/hirsel-authority/src/corpus/{passing,pending}.txt
 #   snapshots          insta snapshots: lowering, grammar examples, mode explanations
 #   all                every in-test bless above
 # Corpus-wide blesses:
@@ -51,8 +51,8 @@ cases() {
     package-docs) echo "//:hirsel-driver-test-it-shard-1 api_index::package_public_api_matches_readable_golden" ;;
     core-review) echo "//:hirsel-engine-unittest registry::tests::every_declared_signature_matches_the_review_table_and_canonical_hash" ;;
     native-inventory) echo "//:hirsel-pipeline-tests-test-front rt_operations::declaration_digests_match_the_reviewed_native_inventory" ;;
-    ownership-passing) echo "//:hirsel-modes-unittest ownership::tests::corpus::source_corpus_ratchets_rule_and_primary_line" ;;
-    authority-corpus) echo "//:hirsel-modes-unittest authority::corpus::real_phase_corpus_ratchet" ;;
+    ownership-passing) echo "//:hirsel-ownership-unittest tests::corpus::source_corpus_ratchets_rule_and_primary_line" ;;
+    authority-corpus) echo "//:hirsel-authority-unittest corpus::real_phase_corpus_ratchet" ;;
     snapshots)
       echo "//:hirsel-lower-unittest tests::"
       echo "//:hirsel-parser-test-it grammar_examples::"

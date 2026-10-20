@@ -1,5 +1,9 @@
 //! Signature-only provenance, authority and capture checking (docs/spec/ownership.md,
 //! brands.md, closures.md, capabilities.md and diagnostics.md).
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod closure_rows;
 mod cursors;
 pub use cursors::refine_cursor_plan;
@@ -102,8 +106,8 @@ pub fn check_file_with_clauses(
         .run()
 }
 
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "testing"))]
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 

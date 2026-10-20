@@ -39,6 +39,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-tir", Class::Data),
     ("hirsel-validate", Class::Data),
     ("hirsel-proof-export", Class::Data),
+    ("hirsel-modes", Class::Data),
     ("hirsel-lir", Class::Data),
     ("hirsel-layout", Class::Data),
     ("hirsel-core-contract", Class::Data),
@@ -53,7 +54,8 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-signature", Class::Implementation),
     ("hirsel-check", Class::Implementation),
     ("hirsel-lower", Class::Implementation),
-    ("hirsel-modes", Class::Implementation),
+    ("hirsel-authority", Class::Implementation),
+    ("hirsel-ownership", Class::Implementation),
     ("hirsel-interp", Class::Implementation),
     ("hirsel-rc", Class::Implementation),
     ("hirsel-llvm", Class::Implementation),
@@ -270,7 +272,8 @@ fn implementation_to_implementation_production_and_build_edges_are_rejected() {
         ("hirsel-llvm", "hirsel-rt"),
         ("hirsel-heapcheck", "hirsel-rt"),
         ("hirsel-rc", "hirsel-interp"),
-        ("hirsel-check", "hirsel-modes"),
+        ("hirsel-check", "hirsel-authority"),
+        ("hirsel-authority", "hirsel-ownership"),
     ] {
         assert!(
             check_edge(from, to, Kind::Production).is_err(),

@@ -399,7 +399,7 @@ impl Fixture {
         if let ItemKind::Function { body, .. } = &mut self.tree.items[0].kind {
             *body = Some(root);
         }
-        crate::authority::test_support::publish_places(&self.tree, &mut self.body);
+        hirsel_authority::test_support::publish_places(&self.tree, &mut self.body);
         check_ownership_with_clauses(
             &self.tree,
             ItemId(0),
