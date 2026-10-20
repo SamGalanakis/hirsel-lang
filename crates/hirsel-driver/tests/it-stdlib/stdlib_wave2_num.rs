@@ -368,7 +368,7 @@ fn short_decimal_writer_matches_the_independent_inline_writer_for_every_quad() {
         execute(
             r#"
 pub fn main(t: Test) -> Result[(), ()] {
-  let mut buffer: Inline[u8, 5] = [0u8, 0u8, 0u8, 0u8, 0u8]
+  let mut buffer: Inline[u8, 6] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
   for n in 0u64..10001 {
     let Ok(count) = u64.format_inline(n, mut buffer) else { return Error(()) }
     let text = u64.to_string(n)
