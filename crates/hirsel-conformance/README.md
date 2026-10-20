@@ -298,6 +298,20 @@ AArch64 executables under qemu against `cranelift-parity-aarch64.tsv`
 prints the emission wall time of each case's one-object build under Cranelift, LLVM
 O0 and LLVM O2, and their totals.
 
+For intermittent YAML launch hangs, `.buck2/bin/buck2 build //:native-timeout-repro
+--show-full-simple-output` runs eight copies each of the CRLF and explicit-key
+cases on the pool with two workers. The declared output retains `campaign.log`,
+`result.json`, source fixtures and native scratch even when the campaign fails.
+This is a diagnostic build: inspect `result.json`'s `exit_code`; a successful
+build only means the evidence was published. Set
+`-c hirsel.native_timeout_repetitions=N` or `-c hirsel.native_timeout_shard=N`
+for more repetitions or independent action keys. A launch timeout keeps its
+executable, run record, link inputs and command under `timeouts/` before the
+next configuration reuses that job directory, and records the child's status
+and kernel wait state before killing its process group. Ordinary native launches
+retain the same evidence under their job directory's `timeouts/`, or under
+`HIRSEL_NATIVE_TIMEOUT_DIR` when supplied.
+
 A native configuration names the runtime archive it links: `diagnostic`
 (poisoning, header checks and the exit leak audit; its compiled fast paths stay
 off, so every allocation, free and dup reaches a checked entry), `default` (the

@@ -687,6 +687,7 @@ def first_party(meta: dict) -> str:
         HEADER,
         'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
+        'load("//tools/buck2:native_timeouts.bzl", "hirsel_native_timeouts")\n',
     ]
 
     def label(package_id: str) -> str:
@@ -792,6 +793,7 @@ def first_party(meta: dict) -> str:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
     out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
+    out.append("\n" + call("hirsel_native_timeouts", name="native-timeout-repro", data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(CORPUS, 4)})")))
     out.append("\n" + call("hirsel_test", name="hirsel-test-tool-profile", crate="test_tool_profile",

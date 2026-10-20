@@ -20,6 +20,7 @@ mod runtime_cache;
 pub use runtime_cache::RuntimeInputs;
 mod stages;
 mod testing;
+mod timeout;
 mod tool;
 pub use testing::{bench_path, test_path};
 

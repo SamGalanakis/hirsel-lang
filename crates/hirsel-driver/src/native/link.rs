@@ -148,7 +148,16 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .is_err()
     });
+    let mut timeout_state = String::new();
     if timed_out {
+        // Distinguish an executing child from an exited child whose pipes
+        // are still held open, and retain the kernel wait state before killing.
+        timeout_state = format!(
+            "child {:?}; stat {:?}; wchan {:?}",
+            child.try_wait(),
+            std::fs::read_to_string(format!("/proc/{}/stat", child.id())),
+            std::fs::read_to_string(format!("/proc/{}/wchan", child.id())),
+        );
         // SAFETY: kill(2) on the child's own process group.
         unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
     }
@@ -161,7 +170,7 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
         return Err(NativeError::new(
             StageName::Launch,
             format!(
-                "the process ran past the {} s launch timeout and was killed (stderr {:?})",
+                "the process ran past the {} s launch timeout and was killed (stderr {:?}); {timeout_state}",
                 timeout.as_secs_f64(),
                 String::from_utf8_lossy(&stderr)
             ),
@@ -1906,7 +1915,16 @@ fn launch_impl(
                 .is_some_and(|io| io.stdin.is_some());
         run_live(&mut command, stdin, live.inherit, live.stdout, live.stderr)?
     } else {
-        bounded(&mut command, toolchain.launch_timeout)?
+        bounded(&mut command, toolchain.launch_timeout).inspect_err(|error| {
+            if error.message.contains("launch timeout") {
+                match super::timeout::retain(dir, &command, &error.message) {
+                    Ok(path) => {
+                        eprintln!("native: timed-out launch retained at {}", path.display())
+                    }
+                    Err(error) => eprintln!("native: could not retain timed-out launch: {error}"),
+                }
+            }
+        })?
     };
     Ok(Launched {
         audit_required: toolchain.runtime_build.diagnostic || toolchain.runtime_build.measurement,
@@ -2381,6 +2399,26 @@ impl Toolchain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_bounded_launches_close_their_pipes() {
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    for _ in 0..128 {
+                        let output = bounded(
+                            Command::new("/bin/sh").args(["-c", "printf out; printf err >&2"]),
+                            Duration::from_secs(30),
+                        )
+                        .unwrap();
+                        assert!(output.status.success());
+                        assert_eq!(output.stdout, b"out");
+                        assert_eq!(output.stderr, b"err");
+                    }
+                });
+            }
+        });
+    }
 
     #[test]
     fn a_launch_past_its_timeout_is_killed_with_its_whole_process_group() {

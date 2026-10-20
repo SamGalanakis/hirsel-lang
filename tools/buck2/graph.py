@@ -164,6 +164,8 @@ def targets(text: str) -> dict[str, Target]:
             add(Target(name, deps=labels(a['hirsel'], a['precheck'])))
         elif macro == 'hirsel_native_selection':
             add(Target(name, inputs=sources(a.get('data', [])), deps=labels(a['collector'])))
+        elif macro == 'hirsel_native_timeouts':
+            continue  # An on-demand diagnostic build, not a per-push test.
         elif macro == 'hirsel_script_test':
             if not a.get('full', True):
                 add(Target(name, test=True, inputs=sources(a['script'], a.get('data', [])),
