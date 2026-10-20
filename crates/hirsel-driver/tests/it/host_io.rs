@@ -123,3 +123,91 @@ fn invalid_utf8_line_is_consumed_without_replacement_text() {
         );
     });
 }
+
+// Extra simulator points must suspend once without duplicating a store, root
+// release or charge; neither these points nor race hints enter observations.
+#[test]
+fn optional_simulator_points_fire_once_and_diagnostics_preserve_observations() {
+    use hirsel_interp::library::simulation::{SchedulePoint, SimulationDebug};
+    with_compiler_stack(|| {
+        let source = r#"
+fn release(take root: Shared[String]) {}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let counter: Atomic[u64] = atomic.create(tasks, 0u64)
+  atomic.store(tasks, counter, 1u64)
+  let built: String = "root"
+  let root = shared.freeze(take built)
+  release(take root)
+  Ok(())
+}
+"#;
+        let mut engine = source_std::engine();
+        let file = engine.sources.add("sim-points.hir", source.into()).unwrap();
+        let context = default_context();
+        let checked = check_progress(&mut engine, file, &context).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let entry = entry_path(&context);
+        let signature = engine.item_signature(&entry).unwrap().value;
+        let runtime = engine.runtime_types().unwrap();
+        let sources = engine.sources.clone();
+        let config = RunConfiguration {
+            entry,
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut run = |debug| {
+            hirsel_interp::library::launch_with_runtime(
+                &mut engine,
+                &sources,
+                &signature,
+                &config,
+                SimulationConfig {
+                    debug,
+                    ..Default::default()
+                },
+                hirsel_interp::Limits::default(),
+                &runtime,
+            )
+            .unwrap()
+        };
+        let ordinary = run(SimulationDebug::default());
+        let debug = SimulationDebug {
+            races: true,
+            root_releases: true,
+            atomic_stores: true,
+        };
+        let explored = run(debug);
+        let points: Vec<_> = explored
+            .execution
+            .trace
+            .iter()
+            .filter_map(|event| match event {
+                hirsel_interp::TraceEvent::SimulationPoint(point) => Some(*point),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            points,
+            [SchedulePoint::AtomicStore, SchedulePoint::RootRelease]
+        );
+        assert!(!ordinary.execution.trace.iter().any(|e| matches!(
+            e,
+            hirsel_interp::TraceEvent::SimulationPoint(_)
+                | hirsel_interp::TraceEvent::RaceCandidate(_)
+        )));
+        assert_eq!(ordinary.execution.steps, explored.execution.steps);
+        assert_eq!(
+            ordinary.observation(&sources),
+            explored.observation(&sources)
+        );
+        assert_eq!(
+            explored
+                .events
+                .iter()
+                .filter(|event| event.operation == "atomic.store")
+                .count(),
+            1
+        );
+    });
+}

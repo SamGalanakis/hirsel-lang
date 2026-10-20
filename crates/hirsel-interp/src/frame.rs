@@ -108,6 +108,8 @@ pub(crate) struct Frame {
     pub type_arguments: crate::type_arguments::Bindings,
     pub block: BlockId,
     pub instruction: usize,
+    /// A simulator pre-store point must fire once, before extracting call operands.
+    pub store_point_passed: bool,
     pub continuation: Option<Continuation>,
     pub depth_failure: bool,
     /// The site of an origin binding whose place is out of bounds or names an
@@ -233,6 +235,7 @@ impl Frame {
             slots,
             block,
             instruction: 0,
+            store_point_passed: false,
             continuation: None,
             depth_failure: false,
             place_failure_site: None,

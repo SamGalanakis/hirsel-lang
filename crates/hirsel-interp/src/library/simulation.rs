@@ -40,8 +40,53 @@ pub struct FileMetadata {
     pub modified_unix_ns: Option<i128>,
     pub permissions: u32,
 }
+/// Extra suspension points for simulator exploration, never production scheduling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SchedulePoint {
+    RootRelease,
+    AtomicStore,
+}
+
+/// Opt-in tooling; excluded from run identity, semantic observations and Io tapes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SimulationDebug {
+    pub races: bool,
+    pub root_releases: bool,
+    pub atomic_stores: bool,
+}
+impl SimulationDebug {
+    /// Comma-separated point names used by the test CLI and simulation JSON.
+    pub fn parse_points(text: &str) -> Option<Self> {
+        let mut debug = Self::default();
+        for name in text.split(',') {
+            match name {
+                "root-release" if !debug.root_releases => debug.root_releases = true,
+                "atomic-store" if !debug.atomic_stores => debug.atomic_stores = true,
+                _ => return None,
+            }
+        }
+        Some(debug)
+    }
+    pub fn points(self) -> String {
+        [
+            self.root_releases.then_some("root-release"),
+            self.atomic_stores.then_some("atomic-store"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+    pub fn enabled(self, point: SchedulePoint) -> bool {
+        match point {
+            SchedulePoint::RootRelease => self.root_releases,
+            SchedulePoint::AtomicStore => self.atomic_stores,
+        }
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationConfig {
+    pub debug: SimulationDebug,
     /// Explicit script provider and exact rules; peer data never widens authority.
     pub net: Option<hirsel_run_config::NetGrant>,
     /// Exact process rules; scripted runs never widen them.
@@ -79,6 +124,7 @@ pub struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
+            debug: SimulationDebug::default(),
             net: None,
             process: None,
             random_seed: 0,

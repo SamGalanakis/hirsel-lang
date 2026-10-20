@@ -1,6 +1,7 @@
 //! Package test discovery and isolated launches over ordinary checked functions.
 //! Substring/OR filters adapt Rust libtest filter_tests (third-party/NOTICES.md).
 use hirsel_engine::{DefinitionQueries, LoadedProgram, RunOutcome, SimulationConfig, ToolError};
+pub use hirsel_interp::library::simulation::SimulationDebug;
 pub use hirsel_run_config::Scheduler;
 use hirsel_syntax::{DefPath, FileContext};
 use hirsel_types::{SignatureKind, TypeKind};
@@ -26,6 +27,7 @@ pub struct Test {
     pub loops: Vec<(u64, DefPath)>,
     /// The launch's scheduler (`inputs.scheduler`); `None` is the default `fifo@1`.
     pub scheduler: Option<Scheduler>,
+    pub simulation_debug: SimulationDebug,
 }
 
 /// The schedules each selected test runs under.
@@ -476,6 +478,7 @@ pub fn discover(
             entry,
             loops,
             scheduler: None,
+            simulation_debug: Default::default(),
         });
     }
     Ok(tests)
@@ -492,7 +495,7 @@ pub fn run_interpreted(
         .iter()
         .map(|test| {
             explore(test, schedules, |test| {
-                let (failure, stdout) = match execute(program, test, checked, 0) {
+                let (failure, stdout, races) = match execute(program, test, checked, 0) {
                     Ok(execution) => {
                         let stdout = match &execution.observation {
                             Some(observation) => observation.output.clone(),
@@ -502,11 +505,17 @@ pub fn run_interpreted(
                             Ok(outcome) => outcome_failure(&outcome),
                             Err(error) => Some(format!("runtime error: {error:?}")),
                         };
-                        (failure, stdout)
+                        (failure, stdout, execution.race_candidates)
                     }
-                    Err(error) => (Some(format!("runtime error: {error}")), vec![]),
+                    Err(error) => (Some(format!("runtime error: {error}")), vec![], vec![]),
                 };
-                test.result(failure, &stdout, bless)
+                let mut result = test.result(failure, &stdout, bless);
+                if result.failure.is_some() {
+                    for candidate in races {
+                        result.report.push_str(&candidate.to_string());
+                    }
+                }
+                result
             })
         })
         .collect()
@@ -528,6 +537,7 @@ pub fn execute(
         grants: Default::default(),
         test_seed: test.seed,
         scheduler: test.scheduler.clone(),
+        debug: test.simulation_debug,
         ..Default::default()
     };
     let run = if checked {
@@ -572,10 +582,42 @@ pub fn run_path(
     schedules: &Schedules,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
+    run_path_with_simulation_debug(
+        path,
+        filters,
+        override_seed,
+        bless,
+        max_steps,
+        schedules,
+        SimulationTestOptions {
+            verify,
+            debug: SimulationDebug::default(),
+        },
+    )
+}
+
+/// Verification and simulator diagnostics for one interpreted test launch.
+pub struct SimulationTestOptions {
+    pub verify: hirsel_engine::Verify,
+    pub debug: SimulationDebug,
+}
+
+pub fn run_path_with_simulation_debug(
+    path: &Path,
+    filters: &[String],
+    override_seed: Option<u64>,
+    bless: bool,
+    max_steps: Option<u64>,
+    schedules: &Schedules,
+    options: SimulationTestOptions,
+) -> Result<Vec<TestResult>, ToolError> {
     let mut program = crate::COMPILER
-        .with_verify(verify)
+        .with_verify(options.verify)
         .load_test_package(path)?;
-    let tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
+    let mut tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
+    for test in &mut tests {
+        test.simulation_debug = options.debug;
+    }
     program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
         limits: hirsel_interp::Limits {
             steps: max_steps,
@@ -664,6 +706,7 @@ mod tests {
             source: Default::default(),
             loops: vec![],
             scheduler: None,
+            simulation_debug: Default::default(),
         };
         let schedules = Schedules::Explore {
             policy: Scheduler::parse("pct@1:0").unwrap(),

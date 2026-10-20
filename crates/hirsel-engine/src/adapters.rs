@@ -162,6 +162,7 @@ impl InterpreterPhase for InterpreterAdapter {
             Ok(execution) => execution,
             Err((error, Some(stdout))) => {
                 return Ok(ObservedExecution {
+                    race_candidates: vec![],
                     exit_report: None,
                     tooling_stderr: vec![],
                     outcome: Err(error),
@@ -183,6 +184,7 @@ impl InterpreterPhase for InterpreterAdapter {
                         Ok(encoded) => observation.returned_type = Some(encoded),
                         Err(error) => {
                             return Ok(ObservedExecution {
+                                race_candidates: vec![],
                                 exit_report: None,
                                 tooling_stderr: vec![],
                                 outcome: Err(RuntimeError::Tool(format!(
@@ -197,7 +199,16 @@ impl InterpreterPhase for InterpreterAdapter {
             }
         }
         let outcome = project_outcome(&execution, sources)?;
+        let race_candidates = execution
+            .trace
+            .iter()
+            .filter_map(|event| match event {
+                hirsel_interp::TraceEvent::RaceCandidate(candidate) => Some(candidate.clone()),
+                _ => None,
+            })
+            .collect();
         Ok(ObservedExecution {
+            race_candidates,
             exit_report,
             tooling_stderr: final_state.map(|s| s.stderr).unwrap_or_default(),
             tooling_output: if observation.is_none() {

@@ -307,6 +307,35 @@ exactly that schedule, in the same engine. A passing test prints how many schedu
 explored. With `--json` each test also carries `scheduler`, `schedules` and `replay`.
 The same seed selects the same schedule interpreted and native.
 
+For application-level races, add `--race` to an interpreted test or exploration:
+
+```sh
+hirsel test app/manifest.json --explore 100 --race
+hirsel test app/manifest.json --explore 100 --scheduler pct@1 --race --sim-points root-release,atomic-store
+```
+
+On failure its report names both operations in each race candidate: task spawn
+path, access occurrence, operation, source file, line and column, and the shared
+object. It watches atomic loads/stores and `shared.thaw` versus root releases.
+These are cross-task accesses to the same object with at least one write, not a
+happens-before proof or a causal diagnosis of the assertion. Synchronised and
+intentional accesses can appear too. The report keeps at most 16 distinct source
+pairs; a passing test emits no candidates. Hirsel remains data-race-free (CONC-4).
+
+`--sim-points` optionally adds a suspension before each `atomic.store`
+call and after each root release, including aggregate cleanup. Choose either name
+or both, comma-separated. Atomic operations already suspend after the operation;
+the extra store point explores its entry too. These simulator-only points can
+explore interleavings outside ordinary cooperative suspension points. Both flags
+are off by default, require interpreted tests, and are included in the printed
+replay command. The same seed **and point settings** reproduce the run. Diagnostics
+and point markers stay outside semantic observations and Io tapes.
+
+The simulation JSON also accepts `scheduler` (for example `"pct@1:7"`), `race`
+(a boolean) and `sim_points` (the same comma-separated names). The interpreter API
+exports candidates separately from its semantic observation; test reports display
+them on failure. These settings do not change production or native scheduling.
+
 ### Snapshots
 
 `test.expect_snapshot(t, name, text)` compares `text` with the committed file

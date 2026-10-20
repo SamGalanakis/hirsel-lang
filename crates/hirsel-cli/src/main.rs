@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file>";
 
 mod allocator;
 mod execution_policy;
@@ -34,6 +34,7 @@ enum Command {
         bench: Option<std::time::Duration>,
         backend: hirsel_driver::native::Backend,
         schedules: hirsel_driver::testing::Schedules,
+        simulation_debug: hirsel_driver::testing::SimulationDebug,
     },
     Precheck {
         manifest: OsString,
@@ -231,9 +232,20 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
                 (None, Vec::new(), None, false, false, None);
             let (mut bless, mut max_steps, mut bench, mut bench_time) = (false, None, false, None);
+            let mut simulation_debug = hirsel_driver::testing::SimulationDebug::default();
+            let mut points_seen = false;
             let (mut scheduler, mut explore) = (None::<String>, None);
             while let Some(arg) = args.next()? {
                 match arg {
+                    Long("race") if !simulation_debug.races => simulation_debug.races = true,
+                    Long("sim-points") if !points_seen => {
+                        points_seen = true;
+                        let points = args.value()?;
+                        let points = points.to_str().and_then(hirsel_driver::testing::SimulationDebug::parse_points)
+                            .ok_or("--sim-points requires root-release, atomic-store, or both comma-separated")?;
+                        simulation_debug.root_releases = points.root_releases;
+                        simulation_debug.atomic_stores = points.atomic_stores;
+                    }
                     Long("scheduler") if scheduler.is_none() => {
                         scheduler = Some(
                             args.value()?
@@ -286,6 +298,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     arg => return Err(arg.unexpected()),
                 }
             }
+            if (native || bench) && simulation_debug != Default::default() {
+                return Err("--race and --sim-points apply only to interpreted tests".into());
+            }
             if selected.is_some() && !native {
                 return Err("--backend requires --native".into());
             }
@@ -321,6 +336,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 },
             };
             Command::Test {
+                simulation_debug,
                 schedules,
                 max_steps: max_steps.unwrap_or(Some(DEFAULT_RUN_MAX_STEPS)),
                 bench: bench.then(|| {
@@ -704,6 +720,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             bench: Some(target),
             backend,
             schedules: _,
+            simulation_debug: _,
         } => {
             let results = if native {
                 hirsel_driver::native::bench_path(
@@ -780,6 +797,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             bench: None,
             backend,
             schedules,
+            simulation_debug,
         } => {
             let results = if native {
                 hirsel_driver::native::test_path(
@@ -792,14 +810,17 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     verify,
                 )
             } else {
-                hirsel_driver::testing::run_path(
+                hirsel_driver::testing::run_path_with_simulation_debug(
                     Path::new(&manifest),
                     &filters,
                     seed,
                     bless,
                     max_steps,
                     &schedules,
-                    verify,
+                    hirsel_driver::testing::SimulationTestOptions {
+                        verify,
+                        debug: simulation_debug,
+                    },
                 )
             };
             // The command that reruns one test under the schedule it failed in.
@@ -810,6 +831,19 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     Path::new(&manifest).display(),
                     result.name
                 );
+                if simulation_debug.races {
+                    command.push_str(" --race");
+                }
+                let points = simulation_debug.points();
+                if !points.is_empty() {
+                    command.push_str(&format!(" --sim-points {points}"));
+                }
+                if max_steps != Some(DEFAULT_RUN_MAX_STEPS) {
+                    command.push_str(&format!(
+                        " --max-steps {}",
+                        max_steps.map_or("unbounded".into(), |n| n.to_string())
+                    ));
+                }
                 if let Some(seed) = seed {
                     command.push_str(&format!(" --seed {seed}"));
                 }
@@ -1365,6 +1399,25 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                     }
                     _ => config.directories = values.into_iter().collect(),
                 }
+            }
+            "race" => config.debug.races = value.as_bool().ok_or("race: expected a boolean")?,
+            "sim_points" => {
+                let points = value
+                    .as_str()
+                    .and_then(hirsel_driver::testing::SimulationDebug::parse_points)
+                    .ok_or(
+                        "sim_points: expected root-release, atomic-store, or both comma-separated",
+                    )?;
+                config.debug.root_releases = points.root_releases;
+                config.debug.atomic_stores = points.atomic_stores;
+            }
+            "scheduler" => {
+                config.scheduler = Some(
+                    value
+                        .as_str()
+                        .and_then(hirsel_driver::testing::Scheduler::parse)
+                        .ok_or("scheduler: expected name@1:seed")?,
+                )
             }
             "stdin" => {
                 config.stdin = if let Some(text) = value.as_str() {

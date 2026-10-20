@@ -15,6 +15,7 @@ use hirsel_types::{BuiltinType, GenericArgument, Primitive, TypeKind};
 
 pub struct Library {
     pub simulation: Simulation,
+    pub(super) races: super::race::RaceTracker,
     pub entry_signature: Option<hirsel_types::SignatureRef>,
     pub exit_report: Option<crate::exit_report::Report>,
     pub(super) tasks: super::tasks::Tasks,
@@ -42,6 +43,7 @@ impl Library {
         tasks.root_priority = tasks.schedule.admit();
         Ok(Self {
             simulation: Simulation::new(run, config)?,
+            races: Default::default(),
             entry_signature: None,
             exit_report: None,
             tasks,
@@ -1280,6 +1282,19 @@ impl Operations for Library {
     fn wait_deadline(&self, token: u64) -> Option<u64> {
         self.timers.deadline(token)
     }
+    fn simulation_point(&mut self, point: super::simulation::SchedulePoint) -> bool {
+        let enabled = self.simulation.config.debug.enabled(point);
+        self.tasks.yield_now |= enabled;
+        enabled
+    }
+    fn shared_released(&mut self, root: u64, context: &mut OperationContext<'_>) {
+        self.race_access("Shared", root, "shared.release", true, context);
+        if self.simulation_point(super::simulation::SchedulePoint::RootRelease) {
+            context.trace.push(crate::TraceEvent::SimulationPoint(
+                super::simulation::SchedulePoint::RootRelease,
+            ));
+        }
+    }
     fn take_yield(&mut self) -> bool {
         std::mem::take(&mut self.tasks.yield_now)
     }
@@ -1498,7 +1513,26 @@ impl Operations for Library {
         if let Some(result) = super::cursors::call(&name, call.arguments)? {
             return Ok(Some(result));
         }
-        self.dispatch_primary(call, context, &name)
+        let access = match name.as_str() {
+            "atomic.load" | "atomic.store" => match call.arguments.get(1) {
+                Some(Value::Handle { kind, id }) if kind == "Atomic" => {
+                    Some(("Atomic", *id, name == "atomic.store"))
+                }
+                _ => None,
+            },
+            "shared.thaw" => match call.arguments.first() {
+                Some(Value::Shared(root)) => Some(("Shared", root.id(), false)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let result = self.dispatch_primary(call, context, &name)?;
+        if result.is_some()
+            && let Some((kind, id, write)) = access
+        {
+            self.race_access(kind, id, &name, write, context);
+        }
+        Ok(result)
     }
 }
 // The dispatch arms and exported path set are emitted from one declaration.

@@ -120,6 +120,9 @@ pub enum TraceMode {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TraceEvent {
+    /// Simulator diagnostics, outside semantic observations and the Io tape.
+    RaceCandidate(crate::library::race::RaceCandidate),
+    SimulationPoint(crate::library::simulation::SchedulePoint),
     /// Reference-engine accounting probe, excluded from semantic observations.
     LoopOwnership {
         released: usize,
@@ -329,6 +332,10 @@ operation_boundary! {
         _abandoned: bool) -> Result<Vec<Value>, Error> {
         Ok(vec![])
     }
+    /// Simulator-only extra suspension; production providers leave it disabled.
+    fn simulation_point(&mut self, _point: library::simulation::SchedulePoint) -> bool { false }
+    /// A root release has taken effect at its cleanup anchor.
+    fn shared_released(&mut self, _root: u64, _context: &mut OperationContext<'_>) {}
     /// Owners displaced by runtime cleanup, in creation order.
     fn take_releases(&mut self) -> Vec<Value> {
         vec![]

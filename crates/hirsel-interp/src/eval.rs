@@ -1115,7 +1115,19 @@ pub(crate) fn execute_frames(
                     }
                     if let Value::Shared(root) = &value {
                         // The last root releases the frozen graph it held.
-                        if let Some(graph) = root.release()? {
+                        let graph = root.release()?;
+                        operations.shared_released(
+                            root.id(),
+                            &mut OperationContext {
+                                configuration,
+                                sources,
+                                stdout: &mut execution.stdout,
+                                trace: &mut execution.trace,
+                                trace_mode: runtime.trace_mode,
+                                anchor: Some(&anchor),
+                            },
+                        );
+                        if let Some(graph) = graph {
                             frame.work.push_front(crate::resources::Work::Release(
                                 graph,
                                 anchor,
@@ -1648,6 +1660,35 @@ pub(crate) fn execute_frames(
                 enqueue_cleanup(frame, id, site)?;
             }
             continue;
+        }
+        // An opt-in simulator point precedes the store, before any taken call
+        // arguments leave their slots. Resuming executes this same call once.
+        let atomic_store = instruction.is_none()
+            && match terminator {
+                Terminator::Call {
+                    callee: Callee::Definition { path, .. },
+                    ..
+                } => path.is_core("atomic.store"),
+                Terminator::Call {
+                    callee: Callee::Indirect { value, .. },
+                    ..
+                } => matches!(
+                frame.observe(value.place), Ok(Value::FunctionReference(reference))
+                    if reference.definition.is_core("atomic.store")),
+                _ => false,
+            };
+        if atomic_store {
+            if !frame.store_point_passed
+                && operations
+                    .simulation_point(crate::library::simulation::SchedulePoint::AtomicStore)
+            {
+                frame.store_point_passed = true;
+                execution.trace.push(TraceEvent::SimulationPoint(
+                    crate::library::simulation::SchedulePoint::AtomicStore,
+                ));
+                continue;
+            }
+            frame.store_point_passed = false;
         }
         execution.steps = execution.steps.saturating_add(1);
         if let Some(check) = &frame.check {

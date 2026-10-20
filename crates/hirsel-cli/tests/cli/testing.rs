@@ -520,3 +520,103 @@ fn simulated_tasks_and_clock_replay_in_isolated_tests() {
         );
     }
 }
+
+#[test]
+fn seeded_race_reports_name_both_operations_and_replay_the_same_candidates() {
+    let manifest = std_suite(
+        "race-names",
+        include_str!("../../../../examples/race/main.hir"),
+    );
+    for scheduler in ["random@1:1", "pct@1:7"] {
+        let args = ["--json", "--race", "--scheduler", scheduler];
+        let output = hirsel_test(&manifest, &args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let test = &json["tests"][0];
+        let report = test["report"].as_str().unwrap();
+        for name in [
+            "race candidate on Atomic #",
+            "task [0]",
+            "task [1]",
+            "atomic.load",
+            "atomic.store",
+            ":7:",
+            ":8:",
+        ] {
+            assert!(report.contains(name), "{scheduler}: {report}");
+        }
+        let replay = test["replay"].as_str().unwrap();
+        assert!(replay.contains("--race"), "{replay}");
+        let replayed = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(replay.split(' ').skip(1))
+            .arg("--json")
+            .output()
+            .unwrap();
+        let replayed: serde_json::Value = serde_json::from_slice(&replayed.stdout).unwrap();
+        assert_eq!(replayed["tests"][0]["report"], test["report"]);
+        let plain = hirsel_test(&manifest, &["--json", "--scheduler", scheduler]);
+        let plain: serde_json::Value = serde_json::from_slice(&plain.stdout).unwrap();
+        assert_eq!(plain["tests"][0]["failure"], test["failure"]);
+        assert!(
+            !plain["tests"][0]["report"]
+                .as_str()
+                .unwrap()
+                .contains("race candidate")
+        );
+    }
+}
+
+#[test]
+fn extra_simulator_points_are_reproducible_and_replay_preserves_the_options() {
+    let manifest = std_suite(
+        "race-points",
+        include_str!("../../../../examples/race/main.hir"),
+    );
+    for policy in ["random@1", "pct@1"] {
+        let args = [
+            "--json",
+            "--race",
+            "--sim-points",
+            "root-release,atomic-store",
+            "--explore",
+            "20",
+            "--scheduler",
+            policy,
+        ];
+        let output = hirsel_test(&manifest, &args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let test = &json["tests"][0];
+        let replay = test["replay"].as_str().unwrap();
+        assert!(
+            replay.contains("--sim-points root-release,atomic-store"),
+            "{replay}"
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(replay.split(' ').skip(1))
+            .arg("--json")
+            .output()
+            .unwrap();
+        let replayed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        for field in ["status", "failure", "report", "scheduler"] {
+            assert_eq!(
+                replayed["tests"][0][field], test[field],
+                "{replay}: {field}"
+            );
+        }
+    }
+    for flags in [
+        &["--race", "--native"][..],
+        &["--race", "--bench"],
+        &["--sim-points", "atomic-store", "--native"],
+        &["--sim-points", "bogus"],
+        &["--sim-points", "root-release,root-release"],
+    ] {
+        let output = hirsel_test(&manifest, flags);
+        assert!(!output.status.success(), "{flags:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--sim-points"),
+            "{output:?}"
+        );
+    }
+}

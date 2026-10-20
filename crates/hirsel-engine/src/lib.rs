@@ -67,6 +67,8 @@ pub use hirsel_run_config::RunOutcome;
 /// Rich execution export. Execution API errors retain output beside their cause.
 #[derive(Debug)]
 pub struct ObservedExecution {
+    /// Simulator tooling, outside semantic observations.
+    pub race_candidates: Vec<hirsel_interp::library::race::RaceCandidate>,
     pub outcome: Result<RunOutcome, RuntimeError>,
     pub observation: Option<hirsel_interp::observation::Observable>,
     /// Output remains available without a semantic observation, including API errors.
