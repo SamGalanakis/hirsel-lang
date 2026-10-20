@@ -1,0 +1,7 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let mut out: List[u8] = [97u8]
+  bytes.append_from_history(mut out, 1, 0)
+  Ok(())
+}

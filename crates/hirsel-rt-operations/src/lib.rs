@@ -135,8 +135,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         row.dispositions.native = Disposition::Body;
         return Ok(row);
     }
-    row.failure = matches!(name.as_str(), "string.slice" | "bytes.slice")
-        .then(|| hirsel_core_contract::RuleCode("SEM-3".into()));
+    row.failure = matches!(
+        name.as_str(),
+        "string.slice" | "bytes.slice" | "bytes.append_from_history"
+    )
+    .then(|| hirsel_core_contract::RuleCode("SEM-3".into()));
     let symbol = match name.as_str() {
         // Fixed declaration signatures: every entry has its exact physical ABI
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
@@ -144,6 +147,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "string.slice"
         | "io.stdout"
         | "bytes.append"
+        | "bytes.append_from_history"
         | "string.position"
         | "string.byte_offset"
         | "bytes.slice"
@@ -1231,6 +1235,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_append_from_history",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_bytes_append",
         destination: false,
         result: None,
@@ -2178,6 +2189,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "bytes.len",
     "bytes.from_list",
     "bytes.append",
+    "bytes.append_from_history",
     "bytes.slice",
     "string.as_bytes",
     "string.position",

@@ -1,0 +1,34 @@
+// rule: MEM-6
+// expect: run
+fn grow(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut out: List[u8] in a = [97u8, 98u8]
+      let shared = copy out
+      bytes.append_from_history(mut out, 2, 5)
+      failure.check(shared == [97u8, 98u8], TextInvariant())
+      list.len(out)
+    }
+  )
+}
+
+fn unchanged() -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    2,
+    fn(a: Arena) -> u64 {
+      let mut out: List[u8] in a = [97u8, 98u8]
+      let shared = copy out
+      bytes.append_from_history(mut out, 2, 0)
+      failure.check(shared == out, TextInvariant())
+      list.len(out)
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, unchanged() == Ok(2u64))
+  test.check(t, grow(9) == Ok(7u64))
+  test.check(t, grow(8) == Error(OutOfSpace()))
+  Ok(())
+}

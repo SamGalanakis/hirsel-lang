@@ -4663,49 +4663,63 @@ pub(crate) unsafe fn append_byte_list(
 ) {
     if !bytes.is_empty() {
         unsafe {
-            let block = buffer.read();
-            let count = crate::alloc::payload(block).cast::<u64>().read();
-            let total = count
-                .checked_add(bytes.len() as u64)
-                .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
-            let block = if crate::region::is_tracked(block) {
-                let capacity = crate::alloc::payload(block)
-                    .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
-                    .cast::<u64>()
-                    .read();
-                let shared = (*block).count == crate::COUNT_ARENA_SHARED;
-                if shared || capacity < total {
-                    let slots = total.max(count.saturating_mul(2)).max(4);
-                    let count = (*block).count;
-                    crate::region::tracked_move(ctx, buffer, slots, 1, 1, count)
-                } else {
-                    block
-                }
-            } else {
-                let capacity = crate::alloc::payload(block)
-                    .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
-                    .cast::<u64>()
-                    .read();
-                if (*block).count == 1 && capacity >= total {
-                    block
-                } else {
-                    let slots = if capacity < total {
-                        total.max(count.saturating_mul(2)).max(4)
-                    } else {
-                        total
-                    };
-                    crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, slots)
-                }
-            };
+            let (block, count) = reserve_byte_list(ctx, buffer, bytes.len() as u64);
             let payload = crate::alloc::payload(block);
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
                 payload.add(crate::alloc::sequence_elements_offset(1) as usize + count as usize),
                 bytes.len(),
             );
-            payload.cast::<u64>().write(total);
-            buffer.write(block);
+            payload.cast::<u64>().write(count + bytes.len() as u64);
         }
+    }
+}
+
+/// Shared byte-list growth policy for borrowed appends and LZ history copies.
+/// # Safety
+/// As `append_byte_list`; additional is nonzero and the total fits the extent.
+pub(crate) unsafe fn reserve_byte_list(
+    ctx: *mut crate::RunCtx,
+    buffer: *mut *mut crate::Header,
+    additional: u64,
+) -> (*mut crate::Header, u64) {
+    unsafe {
+        let block = buffer.read();
+        let count = crate::alloc::payload(block).cast::<u64>().read();
+        let total = count
+            .checked_add(additional)
+            .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
+        let block = if crate::region::is_tracked(block) {
+            let capacity = crate::alloc::payload(block)
+                .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+                .cast::<u64>()
+                .read();
+            let shared = (*block).count == crate::COUNT_ARENA_SHARED;
+            if shared || capacity < total {
+                let slots = total.max(count.saturating_mul(2)).max(4);
+                let count = (*block).count;
+                crate::region::tracked_move(ctx, buffer, slots, 1, 1, count)
+            } else {
+                block
+            }
+        } else {
+            let capacity = crate::alloc::payload(block)
+                .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+                .cast::<u64>()
+                .read();
+            if (*block).count == 1 && capacity >= total {
+                block
+            } else {
+                let slots = if capacity < total {
+                    total.max(count.saturating_mul(2)).max(4)
+                } else {
+                    total
+                };
+                crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, slots)
+            }
+        };
+        buffer.write(block);
+        (block, count)
     }
 }
 

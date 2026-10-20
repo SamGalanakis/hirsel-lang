@@ -3267,7 +3267,30 @@ fn read_write(
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let (buffer, max) = if path.is_core("bytes.append") {
+    let (buffer, max) = if path.is_core("bytes.append_from_history") {
+        let Some(Value::Sequence { elements, .. }) = arguments.first() else {
+            return None;
+        };
+        let Some(Value::Integer(distance)) = arguments.get(1) else {
+            return None;
+        };
+        let Some(Value::Integer(count)) = arguments.get(2) else {
+            return None;
+        };
+        let (distance, count) = (
+            u64::try_from(distance.bits()).ok()?,
+            u64::try_from(count.bits()).ok()?,
+        );
+        // Bad arguments fail before arena charging; empty valid appends do no work.
+        if distance == 0
+            || distance > elements.len() as u64
+            || count == 0
+            || count > ((1u64 << 62) - 17).saturating_sub(elements.len() as u64)
+        {
+            return None;
+        }
+        (0, count)
+    } else if path.is_core("bytes.append") {
         let Some(Value::Bytes(data)) = arguments.get(1) else {
             return None;
         };

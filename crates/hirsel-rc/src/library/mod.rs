@@ -76,6 +76,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &shared::THAW,
     &shared::WITH,
     &failure::CHECK,
+    &bytes::APPEND_FROM_HISTORY,
     &collection::POP,
     &collection::REMOVE,
     &collection::SWAP,

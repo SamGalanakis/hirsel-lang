@@ -243,6 +243,57 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
     STATUS_OK
 }
 
+/// Append a forward LZ match without exposing a mutable alias to source code.
+/// The compiled wrapper validates and charges arena room before this leaf.
+/// Validation is repeated at the ABI boundary. Zero count never detaches.
+/// # Safety
+/// Context and exclusive byte-list slot are live; tracked arena room has been
+/// prepared and charged by the wrapper.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_append_from_history(
+    ctx: *mut RunCtx,
+    out: *mut *mut Header,
+    distance: u64,
+    count: u64,
+) -> u8 {
+    unsafe {
+        let len = payload(out.read()).cast::<u64>().read();
+        if distance == 0
+            || distance > len
+            || count > (crate::alloc::EXTENT_MAX - 16).saturating_sub(len)
+        {
+            return STATUS_FAILURE;
+        }
+        if count == 0 {
+            return STATUS_OK;
+        }
+        let (block, len) = crate::io::reserve_byte_list(ctx, out, count);
+        // Reacquire all addresses after COW/reallocation. Each copy is disjoint:
+        // the first covers at most distance bytes; subsequent copies double
+        // the initialized prefix, including the short-distance pattern case.
+        let data = payload(block).add(sequence_elements_offset(1) as usize);
+        let source = data.add((len - distance) as usize);
+        if distance == 1 {
+            std::ptr::write_bytes(data.add(len as usize), source.read(), count as usize);
+            payload(block).cast::<u64>().write(len + count);
+            return STATUS_OK;
+        }
+        let mut copied = distance.min(count);
+        std::ptr::copy_nonoverlapping(source, data.add(len as usize), copied as usize);
+        while copied < count {
+            let chunk = copied.min(count - copied);
+            std::ptr::copy_nonoverlapping(
+                data.add(len as usize),
+                data.add((len + copied) as usize),
+                chunk as usize,
+            );
+            copied += chunk;
+        }
+        payload(block).cast::<u64>().write(len + count);
+    }
+    STATUS_OK
+}
+
 /// A byte subinterval is checked completely before publication or sharing.
 /// # Safety
 /// The borrowed source is live and out names writable Slice storage.

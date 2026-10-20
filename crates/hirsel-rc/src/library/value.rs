@@ -41,7 +41,7 @@ pub fn forwards(path: &DefPath) -> bool {
     super::inline_lowering(path).is_none() || length(path) || path.is_core("string.as_bytes")
 }
 
-fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+pub(super) fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let path = cx.path.clone();
     if path.is_core("string.as_bytes") {
         let mut b = Body::new(cx)?;
@@ -90,6 +90,9 @@ fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     };
     let sources: Vec<u32> = cx.fn_abi().parameters.iter().map(|p| p.source).collect();
     let mut b = Body::new(cx)?;
+    if path.is_core("bytes.append_from_history") {
+        super::bytes::prepare_history(&mut b)?;
+    }
     if path.is_core("bytes.append") {
         let list = b.parameters[0];
         let data = b.parameters[1];

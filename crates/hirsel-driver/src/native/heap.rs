@@ -1752,6 +1752,50 @@ fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome>
         }
         (
             Some("bytes"),
+            "append_from_history",
+            [
+                OpValue::Elements {
+                    scalar: ScalarKind::U8,
+                    bits,
+                },
+                OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits: distance,
+                },
+                OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits: count,
+                },
+            ],
+        ) => {
+            if *distance == 0
+                || *distance > bits.len() as u128
+                || *count > ((1u128 << 62) - 17).saturating_sub(bits.len() as u128)
+            {
+                return Some(OpOutcome::Fail("SEM-3".into()));
+            }
+            if *count == 0 {
+                return Some(OpOutcome::Value(OpValue::Unit));
+            }
+            // Independent forward LZ model; H owns growth, COW and arena storage.
+            let mut bits = bits.clone();
+            for _ in 0..*count {
+                let byte = bits[bits.len() - *distance as usize];
+                bits.push(byte);
+            }
+            return Some(OpOutcome::Updated {
+                value: OpValue::Unit,
+                arguments: vec![(
+                    0,
+                    OpValue::Elements {
+                        scalar: ScalarKind::U8,
+                        bits,
+                    },
+                )],
+            });
+        }
+        (
+            Some("bytes"),
             "from_list",
             [
                 OpValue::Elements {

@@ -2612,6 +2612,9 @@ conformance/MEM/MEM-5-wave2-u64-to-string-ok.hir
 conformance/MEM/MEM-5-wave2-u8-format-ok.hir
 conformance/MEM/MEM-5-wave2-u8-to-string-bad.hir
 conformance/MEM/MEM-5-wave2-u8-to-string-ok.hir
+conformance/MEM/MEM-6-byte-history-invalid-first-bad.hir
+conformance/MEM/MEM-6-byte-history-invalid-first-ok.hir
+conformance/MEM/MEM-6-byte-history-run.hir
 conformance/MEM/MEM-6-cleanup-failure-propagates-run.hir
 conformance/MEM/MEM-6-copy-charge-run.hir
 conformance/MEM/MEM-6-empty-positive-cap.hir
@@ -5003,6 +5006,17 @@ conformance/SEM/SEM-3-blake2s-long-key-fail.hir
 conformance/SEM/SEM-3-blake2s-long-key-run.hir
 conformance/SEM/SEM-3-blake2s-unkeyed-0-run.hir
 conformance/SEM/SEM-3-blake2s-unkeyed-1-run.hir
+conformance/SEM/SEM-3-byte-history-empty-buffer-bad.hir
+conformance/SEM/SEM-3-byte-history-empty-buffer-ok.hir
+conformance/SEM/SEM-3-byte-history-empty-zero-bad.hir
+conformance/SEM/SEM-3-byte-history-empty-zero-ok.hir
+conformance/SEM/SEM-3-byte-history-overflow-bad.hir
+conformance/SEM/SEM-3-byte-history-overflow-ok.hir
+conformance/SEM/SEM-3-byte-history-past-bad.hir
+conformance/SEM/SEM-3-byte-history-past-ok.hir
+conformance/SEM/SEM-3-byte-history-run.hir
+conformance/SEM/SEM-3-byte-history-zero-bad.hir
+conformance/SEM/SEM-3-byte-history-zero-ok.hir
 conformance/SEM/SEM-3-byte-len-ascii.hir
 conformance/SEM/SEM-3-byte-len-empty.hir
 conformance/SEM/SEM-3-byte-len-unicode.hir

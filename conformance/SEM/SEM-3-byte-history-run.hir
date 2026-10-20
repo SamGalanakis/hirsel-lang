@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut a: List[u8] = [97u8]
+  bytes.append_from_history(mut a, 1, 31)
+  test.check(t, list.len(a) == 32u64)
+  for byte in a {
+    test.check(t, byte == 97u8)
+  }
+  let mut b: List[u8] = [97u8, 98u8, 99u8, 100u8]
+  let old = copy b
+  bytes.append_from_history(mut b, 4, 4)
+  test.check(t, b == [97u8, 98u8, 99u8, 100u8, 97u8, 98u8, 99u8, 100u8])
+  test.check(t, old == [97u8, 98u8, 99u8, 100u8])
+  bytes.append_from_history(mut b, 8, 2)
+  test.check(t, b[8] == 97u8)
+  test.check(t, b[9] == 98u8)
+  let f = bytes.append_from_history
+  f(mut b, 3, 7)
+  test.check(t, b[16] == 100u8)
+  bytes.append_from_history(mut b, 1, 0)
+  list.push(mut b, 120u8)
+  test.check(t, b[17] == 120u8)
+  for distance in 1u64..10u64 {
+    for count in 0u64..20u64 {
+      let mut actual: List[u8] = []
+      let mut expected: List[u8] = []
+      for i in 0u64..distance {
+        list.push(mut actual, int.narrow(i))
+        list.push(mut expected, int.narrow(i))
+      }
+      bytes.append_from_history(mut actual, distance, count)
+      for i in 0u64..count {
+        list.push(mut expected, int.narrow(i % distance))
+      }
+      test.check(t, actual == expected)
+    }
+  }
+  Ok(())
+}

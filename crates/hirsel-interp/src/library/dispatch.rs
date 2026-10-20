@@ -2076,6 +2076,23 @@ primary_operations! { self, call, context, name, a, value;
         }
         Value::Unit
     },
+    Primitive: "bytes.append_from_history" => {
+        let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing history arguments"))?;
+        let distance = index(arg(rest, 0)?)?;
+        let count = index(arg(rest, 1)?)?;
+        let Value::Sequence { kind: BuiltinType::List, elements, .. } = list else {
+            return Err(invalid("history destination"));
+        };
+        if distance == 0 || distance > elements.len()
+            || (count as u64) > ((1u64 << 62) - 17).saturating_sub(elements.len() as u64) {
+            return Ok(Some(OperationResult::Failed(fail(&call, context, "SEM-3", "invalid byte history interval"))));
+        }
+        for _ in 0..count {
+            let byte = elements[elements.len() - distance].clone();
+            elements.push(byte);
+        }
+        Value::Unit
+    },
     Primitive: "bytes.from_list" => {
         let values = collection::elements(arg(a, 0)?, BuiltinType::List)?;
         let mut result = Vec::with_capacity(values.len());

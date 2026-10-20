@@ -275,6 +275,7 @@ N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in 
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
+@preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()
 @preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes
 N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
 N fn string.as_bytes(s: String) -> Bytes in s
@@ -1470,6 +1471,20 @@ The destination follows ordinary copy-on-write; other holders keep their content
 It preserves destination uniqueness and introduces no source ownership. Growth is
 amortized and the copy is bulk. Tracked arena destinations charge the appended
 bytes under MEM-6 before mutation, including detachment of shared storage.
+
+**History byte append.** `bytes.append_from_history(mut out, distance, count)`
+appends `count` bytes using forward LZ copying: each appended byte is the byte
+`distance` positions before the current end, including bytes appended by this
+call. This permits overlapping repetitions without a mutable source alias.
+Before mutation it checks `1 <= distance <= list.len(out)` and that the resulting
+byte count is at most `2^62 - 17` (the native extent bound minus its 16-byte
+metadata prefix);
+invalid arguments fail SEM-3, including an invalid distance with zero count.
+A valid zero count does not detach or charge storage. Otherwise a bounded arena
+charges the appended bytes and any shared-history copy before mutation (MEM-6),
+as for `bytes.append`. Existing shared values retain their original contents.
+The native implementation reserves once and copies disjoint initialized chunks,
+doubling an initialized prefix for an overlapping match.
 
 **Owner-sharing slices.** `string.slice(s, start, end)` takes positions relative to this
 exact source slice, a slice with a nonzero origin included; both brands are checked
