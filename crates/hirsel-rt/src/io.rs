@@ -4679,7 +4679,7 @@ pub(crate) unsafe fn append_byte_list(
 /// # Safety
 /// As `append_byte_list`; additional is nonzero and the total fits the extent.
 pub(crate) unsafe fn reserve_byte_list(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     buffer: *mut *mut crate::Header,
     additional: u64,
 ) -> (*mut crate::Header, u64) {

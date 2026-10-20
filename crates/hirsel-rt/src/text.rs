@@ -251,7 +251,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
 /// prepared and charged by the wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_bytes_append_from_history(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut *mut Header,
     distance: u64,
     count: u64,
