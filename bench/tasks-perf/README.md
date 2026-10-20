@@ -42,3 +42,29 @@ all hardware counters and binary hashes. Every cell has a fresh server. Search,
 create and update use 1 req/s for one second; cold uses an empty board and
 restart uses 10k tasks. The instruction ratio is the verdict; cross-session
 wall times are never compared. Missing samples fail the run.
+
+The st-app follow-up adds `contains` (short-tag containment misses), `html`
+(mixed UTF-8 and HTML replacements), and `html_plain` (ordinary application
+text). Both HTML workloads go through the real formatting wrapper.
+`hirsel-rt`'s `idle_pool` example exercises repeated 12k-block bursts separated
+by worker collection; it makes idle retention and reclamation costs visible.
+Its instruction count includes kernel page fault and deallocation work.
+
+Ten-round st-app comparisons (total instructions per invocation; 20k items for
+std workloads, ten 12k-block bursts for idle reclamation). Raw counters, binary
+hashes, paired ratios and output checksums are in `results/st-app-*.json`.
+Each row compares identical input/output within its own interleaved session.
+
+| Workload | Before | After | After/before |
+|---|---:|---:|---:|
+| contains | 42,728,834 | 23,936,551 | 0.560 |
+| derived JSON keys | 68,726,484 | 57,457,062 | 0.836 |
+| HTML mixed | 100,520,120 | 90,402,199 | 0.899 |
+| HTML plain | 96,005,890 | 73,948,754 | 0.770 |
+| idle slab reclamation | 49,179,322 | 280,852,754 | 5.711 |
+
+Idle reclamation deliberately trades repeated allocation throughput for bounded
+retention. User instructions rise 1.137x; most extra instructions are kernel
+page reclamation/fault work. The separate ten-round seeded app comparison
+reduces idle RSS from 29.17 to 15.94 MiB; restart instructions fall from 376.83M
+to 360.05M. This still misses the 2x RSS target against 7.25 MiB Rust.
