@@ -1,7 +1,7 @@
 //! Checkpoints precede executor steps, so suspended frames and drains are intact.
 //! The classifier only avoids needless clones; executed site deltas verify it.
 use super::*;
-use crate::{Audit, Campaign, Run};
+use crate::{Audit, Run};
 thread_local! { static SCANNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
 pub(super) fn scanned(n: usize) {
     SCANNED.with(|v| v.set(v.get() + n as u64));
@@ -118,7 +118,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
-    fn campaign_steps(&mut self, injected: &mut Vec<(u64, Run)>) -> Checked<()> {
+    fn campaign_steps(&mut self, injected: &mut dyn FnMut(u64, Run)) -> Checked<()> {
         while !self.stack.is_empty() || self.in_child() {
             let site = self.sites;
             let checkpoint = self.checkpoint_site();
@@ -153,7 +153,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let first = fork.step();
                 if fork.sites == site + 1 {
                     let result = first.and_then(|_| fork.run()).and_then(|_| fork.finish());
-                    injected.push((site, fork.report(result)));
+                    injected(site, fork.report(result));
                 } else if fork.sites != site {
                     return fail(
                         V::InternalAudit,
@@ -179,17 +179,17 @@ pub(crate) fn campaign<S: Stage>(
     args: &[Arg],
     ops: &mut dyn Operations,
     config: &Config,
-) -> Campaign {
+    injected: &mut dyn FnMut(u64, Run),
+) -> Run {
     SCANNED.with(|v| v.set(0));
     let started = std::time::Instant::now();
     let mut machine = Machine::new(program, config, ops);
-    let mut injected = Vec::new();
     let result = (|| {
         program.check()?;
         machine.start(program.entry(entry)?, args)?;
-        machine.campaign_steps(&mut injected)?;
+        machine.campaign_steps(injected)?;
         machine.prepare_finish()?;
-        machine.campaign_steps(&mut injected)?;
+        machine.campaign_steps(injected)?;
         machine.finish()
     })();
     if std::env::var_os("HIRSEL_HEAPCHECK_PROFILE_CAMPAIGN").is_some() {
@@ -201,11 +201,7 @@ pub(crate) fn campaign<S: Stage>(
             started.elapsed().as_secs_f64()
         );
     }
-    Campaign {
-        clean: machine.report(result),
-        injected,
-        fired: Vec::new(),
-    }
+    machine.report(result)
 }
 
 #[cfg(test)]

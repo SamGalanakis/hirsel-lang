@@ -281,6 +281,49 @@ fn a_failure_cleanup_that_skips_a_release_is_found_at_its_site() {
     assert_eq!(violation.kind, ViolationKind::LeakedCredit);
 }
 
+/// Large native consumers need every audit, but not every successful report's
+/// retained trace. Broken cleanup must keep the same first witness and still
+/// visit later sites; terminal finalizers belong to the same domain.
+#[test]
+fn streaming_campaign_keeps_clean_and_first_failure_without_dropping_sites() {
+    for leaky in [false, true] {
+        for returned in [false, true] {
+            let p = campaign_program_with_return(leaky, returned);
+            for full_recount_every_step in [false, true] {
+                for reexecute_campaign in [false, true] {
+                    let config = Config {
+                        full_recount_every_step,
+                        reexecute_campaign,
+                        compare_campaigns: true,
+                        ..Config::default()
+                    };
+                    let collected = fault_campaign(&p, &path("main"), &[], &mut printer, &config);
+                    let streamed = hirsel_heapcheck::audit_campaign(
+                        &p,
+                        &path("main"),
+                        &[],
+                        &mut printer,
+                        &config,
+                    );
+                    assert_eq!(streamed.clean, collected.clean);
+                    assert_eq!(streamed.injected, collected.injected.len() as u64);
+                    assert_eq!(streamed.injected, collected.clean.sites);
+                    assert_eq!(streamed.fired, collected.fired.len() as u64);
+                    assert_eq!(streamed.first_violation(), collected.first_violation());
+                    let expected = collected
+                        .injected
+                        .iter()
+                        .find(|(_, run)| run.result.is_err())
+                        .map(|(site, run)| {
+                            (hirsel_heapcheck::Perturbation::Injected(*site), run.clone())
+                        });
+                    assert_eq!(streamed.first_failure, expected);
+                }
+            }
+        }
+    }
+}
+
 /// `let x = Box(1); check(false)` with x released on the failure path or not.
 fn failing_check(release: bool) -> Program<Rc> {
     let (l, c) = layouts();

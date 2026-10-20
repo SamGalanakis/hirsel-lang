@@ -2190,7 +2190,7 @@ pub fn heap_campaign_in(
         world,
     )?;
     io.positions = positions(program, sites);
-    let campaign = hirsel_heapcheck::fault_campaign_ready(
+    let campaign = hirsel_heapcheck::audit_campaign_ready(
         &heap,
         entry,
         &args,

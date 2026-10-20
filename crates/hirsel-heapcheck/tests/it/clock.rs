@@ -250,6 +250,29 @@ fn check(kind: Race) {
     assert!(fixed.first_violation().is_none(), "{fixed:?}");
     assert_eq!(fixed.fired.len() as u64, fixed.clean.choices);
     assert_eq!(fixed.fired[0].1.output, b"");
+    // The bounded consumer runs every timer alternative too, retaining the
+    // same complete first violation rather than only injected-failure evidence.
+    for (is_fixed, collected) in [(false, &broken), (true, &fixed)] {
+        let program = race(kind, is_fixed);
+        let streamed = hirsel_heapcheck::audit_campaign(
+            &program,
+            &path("main"),
+            &[],
+            &mut || Box::new(Clocked { now: 0 }),
+            &Config::default(),
+        );
+        assert_eq!(streamed.clean, collected.clean);
+        assert_eq!(streamed.injected, collected.injected.len() as u64);
+        assert_eq!(streamed.fired, collected.fired.len() as u64);
+        assert_eq!(streamed.fired, collected.clean.choices);
+        assert_eq!(streamed.first_violation(), collected.first_violation());
+        if !is_fixed {
+            assert_eq!(
+                streamed.first_failure.as_ref().unwrap().1,
+                collected.fired[0].1
+            );
+        }
+    }
 }
 
 #[test]

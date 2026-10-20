@@ -172,26 +172,6 @@ impl Campaign {
     }
 }
 
-/// One run per timer choice point of `clean`, each firing the earliest pending deadline there.
-fn fire_campaign<S: Stage>(
-    program: &Program<S>,
-    entry: &DefPath,
-    args: &[Arg],
-    ops: &mut dyn FnMut() -> Box<dyn Operations>,
-    config: &Config,
-    clean: &Run,
-) -> Vec<(u64, Run)> {
-    (0..clean.choices)
-        .map(|choice| {
-            let config = Config {
-                fire: Some(choice),
-                ..config.clone()
-            };
-            (choice, run(program, entry, args, &mut *ops(), &config))
-        })
-        .collect()
-}
-
 /// `run` at Ready, the stage the driver executes, instantiated here once
 /// rather than in every caller.
 pub fn run_ready(
@@ -216,65 +196,169 @@ pub fn fault_campaign<S: Stage>(
     ops: &mut dyn FnMut() -> Box<dyn Operations>,
     config: &Config,
 ) -> Campaign {
-    let mut campaign = injection_campaign(program, entry, args, ops, config);
-    campaign.fired = fire_campaign(program, entry, args, ops, config, &campaign.clean);
-    campaign
+    let mut injected = Vec::new();
+    let mut fired = Vec::new();
+    let clean = visit_campaign(program, entry, args, ops, config, &mut |at, run| match at {
+        Perturbation::Injected(site) => injected.push((site, run)),
+        Perturbation::Fired(choice) => fired.push((choice, run)),
+        Perturbation::Clean => unreachable!("the clean run is returned separately"),
+    });
+    Campaign {
+        clean,
+        injected,
+        fired,
+    }
 }
 
-fn injection_campaign<S: Stage>(
+/// Campaign evidence with bounded report retention. Every site and timer choice
+/// is still executed and audited; successful perturbations are discarded immediately.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CampaignAudit {
+    pub clean: Run,
+    pub injected: u64,
+    pub fired: u64,
+    /// The first failed perturbation's complete evidence, in campaign order.
+    pub first_failure: Option<(Perturbation, Run)>,
+}
+
+impl CampaignAudit {
+    pub fn first_violation(&self) -> Option<(Perturbation, &Violation)> {
+        if let Err(v) = &self.clean.result {
+            return Some((Perturbation::Clean, v));
+        }
+        self.first_failure
+            .as_ref()
+            .and_then(|(at, run)| run.result.as_ref().err().map(|v| (*at, v)))
+    }
+}
+
+/// Execute the same campaign as [`fault_campaign`], retaining only clean evidence
+/// and the first failed perturbation. Collecting fixtures use the same executor.
+pub fn audit_campaign<S: Stage>(
     program: &Program<S>,
     entry: &DefPath,
     args: &[Arg],
     ops: &mut dyn FnMut() -> Box<dyn Operations>,
     config: &Config,
-) -> Campaign {
+) -> CampaignAudit {
+    let mut injected = 0;
+    let mut fired = 0;
+    let mut first_failure = None;
+    let clean = visit_campaign(program, entry, args, ops, config, &mut |at, run| {
+        match at {
+            Perturbation::Injected(_) => injected += 1,
+            Perturbation::Fired(_) => fired += 1,
+            Perturbation::Clean => unreachable!("the clean run is returned separately"),
+        }
+        if first_failure.is_none() && run.result.is_err() {
+            first_failure = Some((at, run));
+        }
+    });
+    CampaignAudit {
+        clean,
+        injected,
+        fired,
+        first_failure,
+    }
+}
+
+fn visit_campaign<S: Stage>(
+    program: &Program<S>,
+    entry: &DefPath,
+    args: &[Arg],
+    ops: &mut dyn FnMut() -> Box<dyn Operations>,
+    config: &Config,
+    visit: &mut dyn FnMut(Perturbation, Run),
+) -> Run {
     let mut model = ops();
-    if !config.reexecute_campaign
+    let clean = if !config.reexecute_campaign
         && config.inject.is_none()
         && model.domain() == OperationDomain::Simulation
         && model.fork_simulation().is_some()
     {
-        let campaign = exec::fork_campaign(program, entry, args, &mut *model, config);
+        let clean = exec::fork_campaign(
+            program,
+            entry,
+            args,
+            &mut *model,
+            config,
+            &mut |site, report| {
+                if config.compare_campaigns {
+                    let reference = run(
+                        program,
+                        entry,
+                        args,
+                        &mut *ops(),
+                        &Config {
+                            inject: Some(site),
+                            reexecute_campaign: true,
+                            compare_campaigns: false,
+                            ..config.clone()
+                        },
+                    );
+                    assert_eq!(
+                        report, reference,
+                        "fork and replay campaign site {site} disagree"
+                    );
+                }
+                visit(Perturbation::Injected(site), report);
+            },
+        );
         if config.compare_campaigns {
-            let reference = injection_campaign(
+            let reference = run(
                 program,
                 entry,
                 args,
-                ops,
+                &mut *ops(),
                 &Config {
                     reexecute_campaign: true,
                     compare_campaigns: false,
                     ..config.clone()
                 },
             );
-            assert_eq!(campaign, reference, "fork and replay campaigns disagree");
+            assert_eq!(clean, reference, "fork and replay clean runs disagree");
         }
-        return campaign;
-    }
-    let clean = run(program, entry, args, &mut *model, config);
-    let injected = (0..clean.sites)
-        .map(|site| {
-            let config = Config {
-                inject: Some(site),
+        clean
+    } else {
+        let clean = run(program, entry, args, &mut *model, config);
+        for site in 0..clean.sites {
+            let report = run(
+                program,
+                entry,
+                args,
+                &mut *ops(),
+                &Config {
+                    inject: Some(site),
+                    ..config.clone()
+                },
+            );
+            visit(Perturbation::Injected(site), report);
+        }
+        clean
+    };
+    for choice in 0..clean.choices {
+        let report = run(
+            program,
+            entry,
+            args,
+            &mut *ops(),
+            &Config {
+                fire: Some(choice),
                 ..config.clone()
-            };
-            (site, run(program, entry, args, &mut *ops(), &config))
-        })
-        .collect();
-    Campaign {
-        clean,
-        injected,
-        fired: Vec::new(),
+            },
+        );
+        visit(Perturbation::Fired(choice), report);
     }
+    clean
 }
 
-/// `fault_campaign` at Ready, instantiated here once.
-pub fn fault_campaign_ready(
+/// Streaming campaign at Ready, instantiated once for native driver clients.
+pub fn audit_campaign_ready(
     program: &Program<hirsel_lir::stage::Ready>,
     entry: &DefPath,
     args: &[Arg],
     ops: &mut dyn FnMut() -> Box<dyn Operations>,
     config: &Config,
-) -> Campaign {
-    fault_campaign(program, entry, args, ops, config)
+) -> CampaignAudit {
+    audit_campaign(program, entry, args, ops, config)
 }

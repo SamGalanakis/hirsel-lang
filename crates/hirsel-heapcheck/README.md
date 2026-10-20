@@ -145,6 +145,12 @@ Invariants:
   for audit equality. Campaign bookkeeping scales with the base and executed
   failure suffixes, rather than their product with dead allocation history.
   Required failure cleanup and observation still execute in full.
+  Native driver consumers use `audit_campaign_ready`: each completed injected
+  or timer report is audited and immediately discarded if successful, retaining
+  the clean run and only the first failed perturbation's full evidence. Every
+  site and choice still runs, including those after a violation. Fixture
+  `fault_campaign` collects the same stream where tests compare each report's
+  output, failure trace and terminal audit, including fork/replay controls.
   `History::iter` streams shared report prefixes; `History::as_slice` explicitly
   materializes one lazily for consumers that need contiguous storage. Large
   iterator, token and explicit-forget payloads share their immutable contents
