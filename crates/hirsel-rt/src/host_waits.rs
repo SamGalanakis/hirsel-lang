@@ -256,9 +256,9 @@ pub(crate) unsafe fn issue_net(
     stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Stopped<Option<(Result<crate::io::NetResult, AdapterError>, bool)>> {
-    // Foreign callbacks may run off home once the blocking pool is present.
-    // The owned protocol supplies their bridge; never touch Binding here.
-    if crate::foreign::active() {
+    // Pool callbacks use the owned protocol's bridge. Never touch the home
+    // Binding on a blocking-pool thread; home-thread callbacks may borrow.
+    if crate::pool::on_pool() {
         return Ok(None);
     }
     // Use the ordinary cancellation path, including its preflight checks.

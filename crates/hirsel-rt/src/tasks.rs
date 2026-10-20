@@ -1249,18 +1249,23 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
     waits
 }
 
+/// The single-compute-worker shortcut seam. The scheduler currently has one
+/// compute worker; the blocking pool is a separate home-Io bridge. A scheduler
+/// with multiple compute workers or forced migration must disable this helper.
+/// Free-mode points must always reach their recording policy.
+unsafe fn single_worker_fast_path(ctx: *mut TaskCtx) -> bool {
+    !crate::pool::on_pool() && unsafe { (*ctx).run().free.is_none() }
+}
+
 /// Whether the running root is the run's only possible runnable task. The
 /// caller separately checks host waits and scope deadlines before waiting inline.
 /// # Safety
 /// The context is live and reached on its home thread.
 pub(crate) unsafe fn sole_root(ctx: *mut TaskCtx) -> bool {
-    if crate::foreign::active() {
+    if !unsafe { single_worker_fast_path(ctx) } {
         return false;
     }
     let run = unsafe { (*ctx).run() };
-    if run.free.is_some() {
-        return false;
-    }
     run.tasks
         .as_ref()
         .is_none_or(|s| s.tasks.len() == 1 && s.runnable.is_empty() && s.woken.is_empty())
@@ -1293,7 +1298,7 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
-    if ctx.run().free.is_none() {
+    if unsafe { single_worker_fast_path(ctx) } {
         let s = scheduler(ctx);
         if s.tasks.len() == 1
             && s.runnable.is_empty()
