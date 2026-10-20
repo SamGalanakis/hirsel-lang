@@ -19,14 +19,17 @@ impl Checker<'_, '_> {
         actual: TypeId,
         expected: TypeId,
     ) {
+        let [expected, actual] = hirsel_types::type_spellings_apart(
+            &self.body.types,
+            [expected, actual],
+            &self.body.resolution.generic_declarations,
+            &self.input.signature.definition.0.package,
+            false,
+        );
         self.report(
             rule,
             span,
-            &format!(
-                "{message}: expected `{}`, found `{}`",
-                self.type_spelling(expected),
-                self.type_spelling(actual)
-            ),
+            &format!("{message}: expected `{expected}`, found `{actual}`"),
         );
     }
 }

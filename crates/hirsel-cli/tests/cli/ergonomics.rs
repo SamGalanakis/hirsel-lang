@@ -18,6 +18,11 @@ fn authoring_diagnostics_name_the_relevant_type_field_and_namespace() {
             "LANG-7",
             "type `TypeShape` conflicts with a builtin type name",
         ),
+        (
+            "type Map[V] = Entries(List[V])\nfn size(m: Map[u64]) -> u64 { map.len(m) }",
+            "LANG-7",
+            "expected `core@1/Map[T0, T1]`, found `standalone@0/Map[u64]`",
+        ),
     ] {
         let path = file(source);
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))

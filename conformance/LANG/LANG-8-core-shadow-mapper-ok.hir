@@ -1,0 +1,9 @@
+// rule: LANG-8
+// expect: accept
+// The same mapper is accepted once the expected error declares a `Net` variant.
+pub type AppError = Net(NetError) | Other
+
+fn connect(r: Result[u64, NetError]) -> Result[u64, AppError] {
+  let n = r ? Net
+  Ok(n)
+}

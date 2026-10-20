@@ -1606,10 +1606,27 @@ impl Normalizer<'_, '_> {
                         .iter()
                         .map(|a| self.argument(a))
                         .collect::<Result<Vec<_>, _>>()?;
-                    if let Some(b) = name.as_deref().and_then(builtin) {
-                        let declaration = if let Some((_, ResolvedName::Definition(d))) =
-                            self.input.resolution.types.iter().find(|(t, _)| *t == id)
+                    // Builtin identity is the core@1 declaration's, never the
+                    // spelling's: a user `Map` stays nominal and `core@1/Map` is
+                    // builtin. Only an unresolved name falls back to its spelling.
+                    let resolved = self
+                        .input
+                        .resolution
+                        .types
+                        .iter()
+                        .find(|(t, _)| *t == id)
+                        .map(|(_, r)| r);
+                    let b = match resolved {
+                        Some(ResolvedName::Definition(d))
+                            if d.package_is("core", "1") && d.0.modules.is_empty() =>
                         {
+                            builtin(&d.0.name)
+                        }
+                        Some(_) => None,
+                        None => name.as_deref().and_then(builtin),
+                    };
+                    if let Some(b) = b {
+                        let declaration = if let Some(ResolvedName::Definition(d)) = resolved {
                             let declaration = self.snapshot(d)?;
                             matches!(declaration.kind, SignatureKind::Type(_))
                                 .then_some(declaration)

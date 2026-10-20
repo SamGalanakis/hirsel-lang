@@ -1,0 +1,10 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 8
+// With no `Net` variant in the expected error, `? Net` names core's Net type,
+// which is not a mapper.
+pub type AppError = Network(NetError) | Other
+
+fn connect(r: Result[u64, NetError]) -> Result[u64, AppError] {
+  let n = r ? Net
+  Ok(n)
+}

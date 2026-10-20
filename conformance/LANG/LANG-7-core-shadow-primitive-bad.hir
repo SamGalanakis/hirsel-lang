@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// Primitive names stay reserved: literals and operators produce these types,
+// so a user `String` could never stand where core's is meant (LANG-4).
+type String = Text(u8)

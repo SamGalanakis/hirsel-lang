@@ -1,0 +1,38 @@
+// rule: LANG-8
+// expect: run
+// A type is never an error mapper, so `? Net` and `? Random` name the variants
+// of the expected error, not core's Net and Random capability types (LANG-4).
+// `? Net` into std's HttpError selects that imported type's variant the same way.
+pub type AppError = Net(NetError) | Random(RandomError) | Other
+
+fn connect(r: Result[u64, NetError]) -> Result[u64, AppError] {
+  let n = r ? Net
+  Ok(n)
+}
+
+fn draw(r: Result[u64, RandomError]) -> Result[u64, AppError] {
+  let n = r ? Random
+  Ok(n + 1)
+}
+
+fn upstream(r: Result[u8, NetError]) -> Result[u8, http.HttpError] {
+  let n = r ? Net
+  Ok(n)
+}
+
+fn failed(r: Result[u8, http.HttpError]) -> bool {
+  match r {
+    Error(Net(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, connect(Ok(7)) == Ok(7))
+  test.check(t, connect(Error(ConnectionReset())) == Error(Net(ConnectionReset())))
+  test.check(t, draw(Ok(1)) == Ok(2))
+  test.check(t, draw(Error(Unavailable())) == Error(Random(Unavailable())))
+  test.check(t, failed(upstream(Error(ConnectionReset()))))
+  test.check(t, !failed(upstream(Ok(3u8))))
+  Ok(())
+}

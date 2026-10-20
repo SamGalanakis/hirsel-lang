@@ -2,7 +2,7 @@
 //! CT-3 shapes and CT-5 instances. This never queries a body.
 use crate::*;
 use hirsel_syntax::PackageId;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Source-shaped spelling of `root` for diagnostics. Core definitions and
 /// those of `package` print by module path, others by versioned path. With
@@ -16,6 +16,104 @@ pub fn type_spelling(
     names: &GenericDeclarations,
     package: &PackageId,
     modes: bool,
+) -> String {
+    spelling(store, root, names, package, modes, &BTreeSet::new())
+}
+
+/// The spellings of two types a diagnostic sets side by side. A short name
+/// that stands for two definitions across them, such as a user `Map` and
+/// core's, prints as each one's full path (`app@1/Map`, `core@1/Map`), so the
+/// two never read alike.
+pub fn type_spellings_apart(
+    store: &TypeStore,
+    [left, right]: [TypeId; 2],
+    names: &GenericDeclarations,
+    package: &PackageId,
+    modes: bool,
+) -> [String; 2] {
+    let mut heads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![left, right];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(row) = store.get(id) else { continue };
+        let arguments = |args: &[GenericArgument]| {
+            args.iter()
+                .filter_map(|a| match a {
+                    GenericArgument::Type(t) => Some(*t),
+                    GenericArgument::Size(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        match &row.kind {
+            TypeKind::Named {
+                definition,
+                arguments: args,
+            } => {
+                heads
+                    .entry(short_name(definition, package))
+                    .or_default()
+                    .insert(definition.to_string());
+                pending.extend(arguments(args));
+            }
+            TypeKind::Builtin {
+                kind,
+                arguments: args,
+            } => {
+                heads
+                    .entry(format!("{kind:?}"))
+                    .or_default()
+                    .insert(format!("core@1/{kind:?}"));
+                pending.extend(arguments(args));
+            }
+            TypeKind::Tuple(items) => pending.extend(items.iter().copied()),
+            TypeKind::Box(inner) => pending.push(*inner),
+            TypeKind::Record(fields) => pending.extend(fields.iter().map(|f| f.ty)),
+            TypeKind::Variant(variants) => pending.extend(
+                variants
+                    .iter()
+                    .flat_map(|v| v.fields.iter().map(|(_, t)| *t)),
+            ),
+            TypeKind::Function(f) => {
+                pending.extend(f.parameters.iter().map(|p| p.ty).chain([f.result]))
+            }
+            TypeKind::Primitive(_) | TypeKind::Parameter(_) | TypeKind::Error => {}
+        }
+    }
+    let qualify = heads
+        .into_iter()
+        .filter(|(_, identities)| identities.len() > 1)
+        .map(|(name, _)| name)
+        .collect();
+    [left, right].map(|root| spelling(store, root, names, package, modes, &qualify))
+}
+
+/// A definition's diagnostic name: its module path for core and `package`,
+/// its full path otherwise.
+fn short_name(definition: &DefPath, package: &PackageId) -> String {
+    if definition.package_is("core", "1") || definition.0.package == *package {
+        definition
+            .0
+            .modules
+            .iter()
+            .chain(std::iter::once(&definition.0.name))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(".")
+    } else {
+        definition.to_string()
+    }
+}
+
+fn spelling(
+    store: &TypeStore,
+    root: TypeId,
+    names: &GenericDeclarations,
+    package: &PackageId,
+    modes: bool,
+    qualify: &BTreeSet<String>,
 ) -> String {
     enum Part {
         Type(TypeId),
@@ -126,27 +224,24 @@ pub fn type_spelling(
                 definition,
                 arguments: args,
             } => {
-                let name = if definition.package_is("core", "1") || definition.0.package == *package
-                {
-                    definition
-                        .0
-                        .modules
-                        .iter()
-                        .chain(std::iter::once(&definition.0.name))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(".")
-                } else {
+                let name = short_name(definition, package);
+                parts.push(Part::Text(if qualify.contains(&name) {
                     definition.to_string()
-                };
-                parts.push(Part::Text(name));
+                } else {
+                    name
+                }));
                 arguments(&mut parts, args, names);
             }
             TypeKind::Builtin {
                 kind,
                 arguments: args,
             } => {
-                parts.push(Part::Text(format!("{kind:?}")));
+                let name = format!("{kind:?}");
+                parts.push(Part::Text(if qualify.contains(&name) {
+                    format!("core@1/{name}")
+                } else {
+                    name
+                }));
                 arguments(&mut parts, args, names);
             }
             TypeKind::Box(inner) => {

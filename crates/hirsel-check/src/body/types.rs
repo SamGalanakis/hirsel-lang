@@ -1619,7 +1619,11 @@ impl Checker<'_, '_> {
                                     } else {
                                         self.error()
                                     }
-                                } else if let Some(b) = builtin(&p.0.name) {
+                                } else if let Some(b) = builtin(&p.0.name)
+                                    .filter(|_| p.package_is("core", "1") && p.0.modules.is_empty())
+                                {
+                                    // Builtin identity is the core@1 declaration's, never
+                                    // the spelling's: a user `Map` stays nominal (LANG-4).
                                     // A builtin's bound holds wherever its type is
                                     // written, as in signatures (GEN-1).
                                     let unmet = match (

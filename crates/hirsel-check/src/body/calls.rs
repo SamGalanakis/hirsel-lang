@@ -1350,11 +1350,14 @@ impl Checker<'_, '_> {
                 })
                 .map(|(_, r)| r.clone());
             let candidate = match r {
-                Some(ResolvedName::Definition(p)) => Some(p),
+                Some(ResolvedName::Definition(p)) => Some((self.snapshot(&p)?, p)),
                 _ => None,
             };
-            if let Some(p) = candidate {
-                let s = self.snapshot(&p)?;
+            // A type is never a mapper: a name that resolved to one, such as a
+            // core type a user variant shadows, is the expected error's variant
+            // (LANG-4, LANG-8).
+            let candidate = candidate.filter(|(s, _)| !matches!(s.kind, SignatureKind::Type(_)));
+            if let Some((s, p)) = candidate {
                 let SignatureKind::Function(f) = &s.kind else {
                     self.report(
                         const { RuleId::of("LANG-8") },

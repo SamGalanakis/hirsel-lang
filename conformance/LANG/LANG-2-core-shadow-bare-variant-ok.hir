@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: accept
+// The expected type selects the same-package variant `Net`.
+type Event = Net(u8) | Quiet
+
+fn probe() {
+  let e: Event = Net(3u8)
+}

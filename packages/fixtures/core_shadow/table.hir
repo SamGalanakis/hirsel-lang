@@ -1,0 +1,24 @@
+// A user `Map` shadows core's Map in this module (LANG-4). It is an ordinary
+// nominal type with none of core Map's roles; core's Map stays reachable by
+// its full path.
+pub type Map[V] = Entries(List[(u64, V)])
+
+pub fn single(key: u64, value: u64) -> Map[u64] {
+  let mut entries: List[(u64, u64)] = []
+  list.push(mut entries, (key, value))
+  Entries(entries)
+}
+
+pub fn count(m: Map[u64]) -> u64 {
+  let Entries(entries) = m
+  list.len(entries)
+}
+
+pub fn index(m: Map[u64]) -> core@1/Map[u64, u64] {
+  let Entries(entries) = m
+  let mut out: core@1/Map[u64, u64] = map.empty()
+  for (key, value) in entries {
+    map.insert(mut out, key, value)
+  }
+  out
+}

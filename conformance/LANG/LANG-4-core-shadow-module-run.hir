@@ -1,0 +1,21 @@
+// rule: LANG-4
+// expect: run
+// Module `table` declares its own `Map[V]` beside core's Map. Here, in the root
+// module, a bare `Map` is still core's, and `table.Map` is the user type.
+fn sum(m: Map[u64, u64]) -> u64 {
+  let mut total = 0u64
+  for (_, value) in m {
+    total = total + value
+  }
+  total
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let user: table.Map[u64] = table.single(1, 4)
+  test.check(t, table.count(user) == 1)
+  let core: Map[u64, u64] = table.index(table.single(2, 5))
+  test.check(t, map.len(core) == 1)
+  test.check(t, map.get(core, 2) == Some(5))
+  test.check(t, sum(core) == 5)
+  Ok(())
+}

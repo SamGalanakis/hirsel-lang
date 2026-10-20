@@ -1416,7 +1416,18 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
 #[test]
 fn native_authority_proofs_apply_only_to_the_resolved_type_occurrence() {
     let mut f = Fixture::new();
-    let native = f.dependency("Sender", None, true);
+    // Builtin identity comes from the core@1 declaration, not the spelling.
+    let local = f.dependency("Sender", None, true);
+    let mut native = local.clone();
+    native.0.package = ast::PackageId {
+        name: "core".into(),
+        version: "1".into(),
+    };
+    let mut signature = f.provider.signatures.remove(&local).unwrap();
+    signature.definition = native.clone();
+    f.provider.signatures.insert(native.clone(), signature);
+    let metadata = f.metadata.definitions.remove(&local).unwrap();
+    f.metadata.definitions.insert(native.clone(), metadata);
     let payload = f.named("u32");
     let registered = f.application("Sender", vec![ast::TypeArgument::Type(payload)]);
     let fallback = f.application("Sender", vec![ast::TypeArgument::Type(payload)]);

@@ -112,13 +112,27 @@ Core library roles such as `Unsafe`, `Result` and the capability types are ident
 fully qualified definition paths, never by spelling alone; a user type with the same name
 is a distinct type and cannot fill that role.
 
+Core names are defaults. A bare name means a core definition only when nothing else
+answers it in that position: a local, a same-package definition, or a contextual variant
+selected by the expected type, including a dependency type's variant. This holds in every
+position: type declarations and annotations, constructors and other values, patterns,
+`?` mappers ([LANG-8](#lang-8-errors)) and attribute arguments. The shadowed core
+definition stays reachable by its full path, as in `core@1/Map[K, V]`. Builtin semantics
+attach to the core path, never to the spelling, so a user `Map` is an ordinary nominal
+type that core's `map` operations do not accept. Where a diagnostic shows two types with
+the same name, it spells both by their full paths, as in `app@1/Map[u64]` and
+`core@1/Map[K, V]`. Primitive names and the constructors with no core declaration
+(`FnPtr`, `TypeShape`) are reserved instead ([LANG-7](#lang-7-types)).
+
 A contextual variant selected by the expected type wins over a same-named function
 or type. This applies through nested constructor arguments and patterns, whose
 expected type is the payload's declared type with the enclosing type's arguments
 substituted: with expected `Option[V]`, `Some(Array(xs))` selects `V`'s `Array`
 variant when `V` declares it, and matching a `Result[T, http.HttpError]` against
 `Error(Net(_))` selects `HttpError`'s `Net`, not core's `Net` capability type.
-Without an expected variant type, `Net` names the type. A
+Without an expected variant type, `Net` names core's type only when no same-package or
+dependency type in view declares a `Net` variant; otherwise it is a bare variant without
+an expected type (LANG-2). A
 versioned path consumes name and slash separators greedily up to its first dot,
 independently of whitespace; a member or numeric right operand ends the path for division.
 To divide a versioned path by a name, group the path: `(pkg@1/a) / b`. Parsing never
@@ -230,8 +244,12 @@ signatures obey the same rule.
 
 ### LANG-7: Types
 
-A user type name cannot be a primitive type name or a compiler-native
-type constructor name; choose a domain name.
+A user type name cannot be a primitive type name (`bool`, `char`, the sized integers and
+floats, `String`, `Bytes`, `Never`) or `FnPtr`, `TypeShape` or `any`; choose a domain
+name. Literals and operators produce the primitives, and `FnPtr` and `TypeShape` have no
+core declaration a full path could reach. Every other core type name, including
+`Array`, `List` and `Map`, may be declared and shadows the core one
+([LANG-4](#lang-4-names)).
 
 Types are algebraic data types with exhaustive `match`, generics with structural bounds
 and explicit dictionaries ([generics](generics.md)), size parameters `[n: size]` (equality
@@ -319,7 +337,8 @@ fn repeated_values() {
 
 Expected failures use `Result` and `?`. `e ? C` maps the error through `C`, a path naming
 a one-argument variant or function, before propagating; a plain `e?` requires identical
-error types. An error mapper may borrow or take its owned error; a mapper that requires
+error types. A type is never a mapper: when a bare `C` also names a type, such as core's
+`Net`, `C` is the enclosing error type's variant ([LANG-4](#lang-4-names)). An error mapper may borrow or take its owned error; a mapper that requires
 `mut` access is LANG-8.
 
 When `e?` has expected type `T` in a Result-returning function, `e` is checked with

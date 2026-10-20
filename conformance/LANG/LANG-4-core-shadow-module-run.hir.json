@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "core_shadow",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-core-shadow-module-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/core_shadow/table.hir",
+      "module": [
+        "table"
+      ]
+    }
+  ],
+  "dependencies": []
+}

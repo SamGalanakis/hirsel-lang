@@ -1,0 +1,48 @@
+// rule: LANG-4
+// expect: run
+// Same-package names shadow core type names in constructor and pattern positions:
+// `Net`, `Signal` and `Order` are this package's variants, not core's types,
+// and `Instant` is this package's single-variant type. A bare variant resolves
+// through its expected type, here the left operand of `==`.
+type Event = Net(u8) | Signal | Quiet
+
+type Instant = Instant(u64)
+
+type Rank = Order(u8) | Unranked
+
+fn make(n: u8) -> Event {
+  if n == 0u8 {
+    return Signal
+  }
+  Net(n)
+}
+
+fn code(e: Event) -> u8 {
+  match e {
+    Net(n) => n,
+    Signal => 100u8,
+    Quiet => 0u8,
+  }
+}
+
+fn stamp(i: Instant) -> u64 {
+  let Instant(v) = i
+  v
+}
+
+fn rank(r: Option[Rank]) -> u8 {
+  match r {
+    Some(Order(n)) => n,
+    _ => 0u8,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, code(make(3u8)) == 3u8)
+  test.check(t, code(make(0u8)) == 100u8)
+  test.check(t, make(4u8) == Net(4u8))
+  test.check(t, make(0u8) == Signal)
+  test.check(t, stamp(Instant(5)) == 5)
+  test.check(t, rank(Some(Order(2u8))) == 2u8)
+  Ok(())
+}

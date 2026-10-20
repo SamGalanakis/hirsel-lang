@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 8
+// A bare `Net` that a same-package variant spells no longer falls back to core's
+// Net type; with no expected type it names no variant.
+type Event = Net(u8) | Quiet
+
+fn probe() {
+  let e = Net(3u8)
+}

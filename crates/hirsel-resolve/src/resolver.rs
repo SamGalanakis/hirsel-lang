@@ -621,13 +621,13 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 drop,
                 ..
             } => {
-                let path = Path {
-                    package: None,
-                    segments: vec![item.name],
-                };
+                // Core library type names are defaults a user type shadows
+                // (LANG-4). Primitives and the constructors with no core@1
+                // declaration have no full path left to reach them by.
                 let spelling = self.spelling(item.name);
                 if !item.definition.package_is("core", "1")
-                    && (native_type(&path) || primitive(&spelling).is_some())
+                    && (matches!(spelling.as_str(), "FnPtr" | "TypeShape")
+                        || primitive(&spelling).is_some())
                 {
                     self.diagnostic(const { RuleId::of("LANG-7") }, item.name_span,
                         &format!("type `{spelling}` conflicts with a builtin type name; choose a domain name for the type"));
@@ -1510,6 +1510,19 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         true
     }
     fn known_variant(&mut self, name: Symbol) -> bool {
+        self.declared_variant(name, true)
+    }
+    /// A bare name that a non-core variant spells shadows a core type of that
+    /// name: it resolves through the expected type, as an unresolved name does,
+    /// and the core type stays reachable by its full path (LANG-4).
+    fn shadows_core_type(&mut self, path: &Path, definition: &DefPath) -> bool {
+        path.package.is_none()
+            && path.segments.len() == 1
+            && definition.package_is("core", "1")
+            && self.namespace(definition) == Some(Namespace::Type)
+            && self.declared_variant(path.segments[0], false)
+    }
+    fn declared_variant(&mut self, name: Symbol, core: bool) -> bool {
         let headers = self
             .file
             .tree
@@ -1530,10 +1543,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 }
             })
             .collect::<Vec<_>>();
-        let mut found = self
-            .expected
-            .available_variants
-            .contains(&self.spelling(name));
+        let mut found = core
+            && self
+                .expected
+                .available_variants
+                .contains(&self.spelling(name));
         for (owner, contains) in headers {
             self.signature(&owner);
             found |= contains;
@@ -1563,7 +1577,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
         }
         found |= self.signatures.values().flatten().any(|signature| {
-            if let ty::SignatureKind::Type(definition) = &signature.kind {
+            if !core && signature.definition.package_is("core", "1") {
+                false
+            } else if let ty::SignatureKind::Type(definition) = &signature.kind {
                 definition.representation.is_some_and(|id| {
                     shape_from_type(&signature.types, id, &[])
                         .variants
@@ -1914,6 +1930,10 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
         }
         match self.lookup(path, span) {
+            Ok(definition) if self.shadows_core_type(path, &definition) => {
+                self.defer(NameSite::Expression(id), path.segments[0], span);
+                ExpectedType::Unknown
+            }
             Ok(definition) => {
                 let namespace = self.namespace(&definition);
                 // Qualified variants are never synthesized from nominal owners.
@@ -2412,6 +2432,12 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     identity = Some((owner, Some(variant)));
                 } else {
                     match self.lookup(&path, node.origin.span) {
+                        Ok(owner)
+                            if expected == ExpectedType::Unknown
+                                && self.shadows_core_type(&path, &owner) =>
+                        {
+                            self.defer(NameSite::Pattern(id), path.segments[0], node.origin.span);
+                        }
                         Ok(owner) => {
                             if self.namespace(&owner) != Some(Namespace::Type) {
                                 self.diagnostic(
