@@ -99,15 +99,13 @@ impl Finalizers {
         Self(out)
     }
 
-    /// The finalizer facts cleanup lowering of `unit` can read, by content, for the object
-    /// stage's key: each layout the unit reaches through the table that has a finalizer,
-    /// as its `LayoutKey`, the finalizer's instance and its FnAbi key, in key order.
-    pub fn facts<S: Clone>(
+    /// The finalizers cleanup lowering of `unit` can call: those of the layouts it
+    /// reaches through the table, by layout.
+    pub fn reached<S: Clone>(
         &self,
         unit: &LirUnit<S>,
         table: &LayoutTable,
-        keys: &hirsel_lir::LayoutKeys,
-    ) -> Vec<u8> {
+    ) -> Vec<(LayoutId, &Finalizer)> {
         let (_, roots, _) = hirsel_lir::objects::erased(unit);
         let mut seen = BTreeSet::new();
         let mut pending = roots;
@@ -119,13 +117,27 @@ impl Finalizers {
                 pending.extend(record.references());
             }
         }
-        let mut facts: Vec<[u8; 96]> = seen
-            .iter()
-            .filter_map(|id| {
-                let finalizer = self.0.get(id)?;
+        seen.into_iter()
+            .filter_map(|id| self.0.get(&id).map(|f| (id, f)))
+            .collect()
+    }
+
+    /// The finalizer facts cleanup lowering of `unit` can read, by content, for the object
+    /// stage's key: per finalizer it `reached`, the layout's `LayoutKey`, the finalizer's
+    /// instance and its FnAbi key, in key order.
+    pub fn facts<S: Clone>(
+        &self,
+        unit: &LirUnit<S>,
+        table: &LayoutTable,
+        keys: &hirsel_lir::LayoutKeys,
+    ) -> Vec<u8> {
+        let mut facts: Vec<[u8; 96]> = self
+            .reached(unit, table)
+            .into_iter()
+            .filter_map(|(id, finalizer)| {
                 let abi = keys.fn_abi_of(table, finalizer.abi)?;
                 let mut fact = [0; 96];
-                fact[..32].copy_from_slice(&keys.key(*id).0.0);
+                fact[..32].copy_from_slice(&keys.key(id).0.0);
                 fact[32..64].copy_from_slice(&finalizer.instance.0);
                 fact[64..].copy_from_slice(&abi.0);
                 Some(fact)

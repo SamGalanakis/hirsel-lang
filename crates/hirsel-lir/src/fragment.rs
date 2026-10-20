@@ -122,10 +122,12 @@ impl UnitSummary {
     }
 }
 
-/// A unit's object and summary.
+/// A unit's object and summary, with the summaries of the library and known callable
+/// bodies its object copies (`linkonce_odr`), which program assembly reads as their own.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnitFragment {
     pub summary: UnitSummary,
+    pub templates: Vec<UnitSummary>,
     pub object: ObjectArtifact,
 }
 
@@ -136,40 +138,45 @@ impl UnitFragment {
     /// The fragment as the object store keeps it: the summary and the object's metadata as
     /// `hirsel_codec` text with their ids named by key, then the object's bytes.
     pub fn encode(&self, table: &LayoutTable, keys: &LayoutKeys) -> Result<Vec<u8>, String> {
-        let mut summary = self.summary.clone();
+        let mut summaries: Vec<UnitSummary> = std::iter::once(&self.summary)
+            .chain(&self.templates)
+            .cloned()
+            .collect();
         let (mut layouts, mut abis) = (Vec::new(), Vec::new());
         let (mut layout_index, mut abi_index) = (BTreeMap::new(), BTreeMap::new());
         let (mut missing, mut missing_abi) = (None, None);
-        summary.for_each_id(
-            &mut |id| {
-                if table.layout(*id).is_none() {
-                    missing.get_or_insert_with(|| format!("layout {}", id.0));
-                    return;
-                }
-                let next = layout_index.len() as u32;
-                *id = LayoutId(*layout_index.entry(id.0).or_insert_with(|| {
-                    layouts.push(keys.key(*id));
-                    next
-                }));
-            },
-            &mut |id| match keys.fn_abi_of(table, *id) {
-                Some(key) => {
-                    let next = abi_index.len() as u32;
-                    *id = FnAbiId(*abi_index.entry(id.0).or_insert_with(|| {
-                        abis.push(key);
+        for summary in &mut summaries {
+            summary.for_each_id(
+                &mut |id| {
+                    if table.layout(*id).is_none() {
+                        missing.get_or_insert_with(|| format!("layout {}", id.0));
+                        return;
+                    }
+                    let next = layout_index.len() as u32;
+                    *id = LayoutId(*layout_index.entry(id.0).or_insert_with(|| {
+                        layouts.push(keys.key(*id));
                         next
                     }));
-                }
-                None => {
-                    missing_abi.get_or_insert_with(|| format!("FnAbi {}", id.0));
-                }
-            },
-        );
+                },
+                &mut |id| match keys.fn_abi_of(table, *id) {
+                    Some(key) => {
+                        let next = abi_index.len() as u32;
+                        *id = FnAbiId(*abi_index.entry(id.0).or_insert_with(|| {
+                            abis.push(key);
+                            next
+                        }));
+                    }
+                    None => {
+                        missing_abi.get_or_insert_with(|| format!("FnAbi {}", id.0));
+                    }
+                },
+            );
+        }
         if let Some(missing) = missing.or(missing_abi) {
             return Err(format!("the summary names {missing}, outside the table"));
         }
         let wire = Wire {
-            summary: WireSummary::from(&summary),
+            summaries: summaries.iter().map(WireSummary::from).collect(),
             layouts,
             abis,
             object: ObjectArtifact {
@@ -213,23 +220,32 @@ impl UnitFragment {
             .iter()
             .map(|k| abi(k).ok_or_else(|| format!("no FnAbi has key {k:?}")))
             .collect::<Result<Vec<_>, _>>()?;
-        let mut summary = UnitSummary::from(wire.summary);
-        let (mut missing, mut missing_abi) = (None, None);
-        summary.for_each_id(
-            &mut |id| match layouts.get(id.0 as usize) {
-                Some(bound) => *id = *bound,
-                None => missing = Some(format!("erased layout {}", id.0)),
-            },
-            &mut |id| match abis.get(id.0 as usize) {
-                Some(bound) => *id = *bound,
-                None => missing_abi = Some(format!("erased FnAbi {}", id.0)),
-            },
-        );
-        if let Some(missing) = missing.or(missing_abi) {
-            return Err(format!("{missing} has no binding"));
+        let mut summaries = Vec::with_capacity(wire.summaries.len());
+        for summary in wire.summaries {
+            let mut summary = UnitSummary::from(summary);
+            let (mut missing, mut missing_abi) = (None, None);
+            summary.for_each_id(
+                &mut |id| match layouts.get(id.0 as usize) {
+                    Some(bound) => *id = *bound,
+                    None => missing = Some(format!("erased layout {}", id.0)),
+                },
+                &mut |id| match abis.get(id.0 as usize) {
+                    Some(bound) => *id = *bound,
+                    None => missing_abi = Some(format!("erased FnAbi {}", id.0)),
+                },
+            );
+            if let Some(missing) = missing.or(missing_abi) {
+                return Err(format!("{missing} has no binding"));
+            }
+            summaries.push(summary);
         }
+        let mut summaries = summaries.into_iter();
+        let summary = summaries
+            .next()
+            .ok_or("a fragment without its unit's summary")?;
         Ok(Self {
             summary,
+            templates: summaries.collect(),
             object: ObjectArtifact {
                 bytes: object.to_vec(),
                 ..wire.object
@@ -238,10 +254,10 @@ impl UnitFragment {
     }
 }
 
-/// The encoded form of a fragment: its summary with erased ids, the keys they name, and
-/// the object without its bytes.
+/// The encoded form of a fragment: its unit's summary and then its templates', with
+/// erased ids, the keys they name, and the object without its bytes.
 struct Wire {
-    summary: WireSummary,
+    summaries: Vec<WireSummary>,
     layouts: Vec<LayoutKey>,
     abis: Vec<ContentHash>,
     object: ObjectArtifact,
@@ -313,7 +329,7 @@ impl From<WireSummary> for UnitSummary {
 }
 
 snapshot_struct!(Wire {
-    summary,
+    summaries,
     layouts,
     abis,
     object

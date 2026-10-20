@@ -226,13 +226,25 @@ fn a_fragment_binds_into_a_program_that_numbers_its_layouts_apart() {
                     ua.unit().header.definition,
                     target.triple
                 );
-                let fragment =
-                    |unit: &hirsel_lir::stage::ValidatedUnit<_>, i: &EmitInputs<'_>| UnitFragment {
-                        summary: UnitSummary::of(unit.unit(), i.layouts, i.keys, i.manifest)
-                            .unwrap(),
-                        object: emit_object(&[unit], i).unwrap(),
+                // Every other unit of the program stands in for the templates it copies.
+                let fragment = |unit: &hirsel_lir::stage::ValidatedUnit<_>,
+                                program: &Program,
+                                i: &EmitInputs<'_>| {
+                    let summary = |u: &hirsel_lir::stage::ValidatedUnit<_>| {
+                        UnitSummary::of(u.unit(), i.layouts, i.keys, i.manifest).unwrap()
                     };
-                let (fa, fb) = (fragment(ua, &ia), fragment(ub, &ib));
+                    UnitFragment {
+                        summary: summary(unit),
+                        templates: program
+                            .units
+                            .iter()
+                            .filter(|u| u.unit().header != unit.unit().header)
+                            .map(summary)
+                            .collect(),
+                        object: emit_object(&[unit], i).unwrap(),
+                    }
+                };
+                let (fa, fb) = (fragment(ua, a, &ia), fragment(ub, b, &ib));
                 let bytes = fa.encode(ia.layouts, ia.keys).unwrap();
                 assert_eq!(bytes, fb.encode(ib.layouts, ib.keys).unwrap(), "{what}");
                 let decoded = UnitFragment::decode(&bytes, &|k| layouts.get(k).copied(), &|k| {
