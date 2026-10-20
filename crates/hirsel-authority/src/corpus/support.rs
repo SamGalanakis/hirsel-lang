@@ -137,9 +137,10 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         index,
         reads: vec![],
     };
-    for signature in hirsel_engine::registry::BuiltinRegistry::new()
-        .signatures()
-        .filter(|s| s.definition.0.modules == ["$intrinsic"])
+    for signature in
+        hirsel_engine::registry::BuiltinRegistry::build(crate::test_support::session_arc())
+            .signatures()
+            .filter(|s| s.definition.path().0.modules == ["$intrinsic"])
     {
         registry
             .signatures
@@ -205,7 +206,8 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             }
         }
         if matches!(name, "ScalarView" | "PositionView") {
-            let core = hirsel_engine::registry::BuiltinRegistry::new();
+            let core =
+                hirsel_engine::registry::BuiltinRegistry::build(crate::test_support::session_arc());
             let SignatureKind::Type(published) = &core.get(&path(name)).unwrap().kind else {
                 unreachable!()
             };

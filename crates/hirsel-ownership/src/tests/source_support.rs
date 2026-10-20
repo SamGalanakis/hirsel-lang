@@ -96,7 +96,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         ast::ContentHash::default(),
     ));
     assert!(ds.is_empty(), "{ds:?}");
-    let builtins = BuiltinRegistry::new(session());
+    let builtins = BuiltinRegistry::new();
     let mut signatures: BTreeMap<_, _> = builtins
         .signatures()
         .map(|s| (s.definition.path().clone(), s.clone()))
