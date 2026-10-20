@@ -1,0 +1,27 @@
+// rule: SEM-3
+// expect: run
+// Version 4 UUIDs from the granted Random. The default run's Random is
+// random.splitmix64@1 with seed 0: the first two SplitMix64 words make the first
+// UUID and the next two the second.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let r = io.random(rt)?
+  let expected: List[String] = [
+    "afcd1d7b-39a8-40e2-b465-b9a16a9e786e",
+    "4f450980-185d-4406-ac81-4c72a8b88bf8"
+  ]
+  for spelling in expected {
+    match uuid.v4(r) {
+      Ok(id) => {
+        failure.check(uuid.to_string(id) == spelling, Arithmetic())
+        failure.check(uuid.version(id) == 4, Arithmetic())
+        let rfc = match uuid.variant(id) {
+          Rfc9562() => true,
+          _ => false,
+        }
+        failure.check(rfc, Arithmetic())
+      },
+      Error(_) => failure.check(false, Arithmetic()),
+    }
+  }
+  Ok(())
+}

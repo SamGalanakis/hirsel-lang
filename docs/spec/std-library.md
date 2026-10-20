@@ -3340,3 +3340,46 @@ words. `quote` leaves a nonempty word of ASCII letters, digits and `%+,-./:=@_`
 alone and otherwise single-quotes it, writing each `'` as `'"'"'`; `join` quotes
 each word and separates them with one space, and `split` of the result gives the
 words back.
+
+## UUIDs
+
+`std@1/uuid` parses, formats and generates RFC 9562 UUIDs:
+
+```text
+Uuid      = { bits: u128 }
+Variant   = Ncs | Rfc9562 | Microsoft | Future
+UuidError = Length(u64) | Char(u64)
+V7Error   = Clock(ClockError) | Random(RandomError) | BeforeEpoch
+fn uuid.parse(spelling: String) -> Result[Uuid, UuidError] uses {}
+fn uuid.to_string(id: Uuid) -> unique String uses {}
+fn uuid.from_bytes(data: Bytes) -> Option[Uuid] uses {}
+fn uuid.to_bytes(id: Uuid) -> unique Bytes uses {}
+fn uuid.version(id: Uuid) -> u8 uses {}
+fn uuid.variant(id: Uuid) -> Variant uses {}
+fn uuid.unix_ms(id: Uuid) -> Option[u64] uses {}
+fn uuid.v4_from(random: Bytes) -> Option[Uuid] uses {}
+fn uuid.v7_from(millis: u64, random: Bytes) -> Option[Uuid] uses {}
+fn uuid.v4(r: Random) -> Result[Uuid, RandomError]
+fn uuid.v7(clock: WallClock, r: Random) -> Result[Uuid, V7Error]
+```
+
+`bits` holds the 16 bytes most significant first, so comparing `bits` orders
+version 7 UUIDs by time. `parse` accepts, as Go google/uuid and uuid-rs, the
+hyphenated form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, the same in braces or
+after `urn:uuid:` in any case, and 32 bare hex digits, in either case; the byte
+length selects the form, so any other length is `Length(n)` and the first
+character that does not fit is `Char(offset)`. `to_string` and `@format` write
+the lowercase hyphenated form. `version` is the top four bits of byte 6 and
+`variant` the top bits of byte 8, whatever their values; `unix_ms` is the
+48-bit timestamp of a version 7 UUID of the RFC 9562 variant.
+
+`v4_from` stamps the version 4 and variant bits onto 16 bytes, keeping the other
+122. `v7_from` puts a millisecond Unix timestamp below 2^48 in the top 48 bits
+and 10 bytes below it, the version replacing the first byte's top four bits and
+the variant the third byte's top two, as uuid-rs
+`Builder::from_unix_timestamp_millis`; other lengths or a larger timestamp are
+`None()`. `v4` draws 16 bytes from `Random` and `v7` reads the wall clock,
+rounding its nanoseconds down to milliseconds, then draws 10 bytes; a reading
+before 1970 is `BeforeEpoch()`. No state is kept between calls, so two version 7
+UUIDs of one millisecond are unordered (RFC 9562 section 6.2 makes the counter
+optional).

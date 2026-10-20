@@ -1,0 +1,248 @@
+// UUIDs as RFC 9562. Parsing accepts the four spellings of Go google/uuid
+// Parse (uuid.go) and uuid-rs parser.rs, google/uuid
+// 2d3c2a9cc518326daf99a383f07c4d3c44317e4d (BSD-3-Clause) and uuid-rs/uuid
+// 276c23628a669ca9fca637f3326c21b114e88049 (MIT); the version 7 layout of
+// random bytes follows uuid-rs Builder::from_unix_timestamp_millis
+// (third-party/NOTICES.md).
+/// A UUID's 128 bits, most significant first: byte 0 of the RFC 9562 layout is
+/// the top byte of `bits`, so comparing `bits` orders version 7 UUIDs by time.
+@format(format_into)
+pub type Uuid {
+  bits: u128,
+}
+
+/// The RFC 9562 variant field: `Ncs` (0xxx), `Rfc9562` (10xx, the variant of
+/// versions 1 through 8), `Microsoft` (110x) and `Future` (111x).
+pub type Variant = Ncs | Rfc9562 | Microsoft | Future
+
+/// `Length` carries the byte length of text that is none of the four spellings;
+/// `Char` the byte offset of the first character that does not fit the
+/// spelling its length selects.
+pub type UuidError = Length(u64) | Char(u64)
+
+/// Version 7 generation fails when the clock or the random source fails, or
+/// when the wall clock reads before the Unix epoch.
+pub type V7Error = Clock(ClockError) | Random(RandomError) | BeforeEpoch
+
+const HEX: Bytes = b"0123456789abcdef"
+
+@noalloc
+fn nibble(byte: u8) -> Option[u128] uses {} {
+  if byte >= b'0' && byte <= b'9' {
+    return Some(core@1/int.widen(byte - b'0'))
+  }
+  if byte >= b'a' && byte <= b'f' {
+    return Some(core@1/int.widen(byte - b'a' + 10))
+  }
+  if byte >= b'A' && byte <= b'F' {
+    return Some(core@1/int.widen(byte - b'A' + 10))
+  }
+  None()
+}
+
+// Reads 32 hex digits from data[start..], with hyphens after the 8th, 12th,
+// 16th and 20th when hyphenated.
+fn digits(data: Bytes, start: u64, hyphenated: bool) -> Result[Uuid, UuidError] uses {} {
+  let mut bits: u128 = 0
+  let end = if hyphenated {
+    start + 36
+  } else {
+    start + 32
+  }
+  let mut i = start
+  while i < end {
+    let at = i - start
+    if hyphenated && (at == 8 || at == 13 || at == 18 || at == 23) {
+      if data[i] != b'-' {
+        return Error(Char(i))
+      }
+    } else {
+      let Some(value) = nibble(data[i]) else {
+        return Error(Char(i))
+      }
+      bits = bits << 4 | value
+    }
+    i += 1
+  }
+  Ok(Uuid(bits: bits))
+}
+
+/// Parses `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, the same in braces, the same
+/// after `urn:uuid:` (in any case), or 32 hex digits, with hex digits in either
+/// case.
+pub fn parse(spelling: String) -> Result[Uuid, UuidError] uses {} {
+  let data = core@1/string.as_bytes(spelling)
+  let size = core@1/bytes.len(data)
+  if size == 32 {
+    return digits(data, 0, false)
+  }
+  if size == 36 {
+    return digits(data, 0, true)
+  }
+  if size == 38 {
+    if data[0] != b'{' {
+      return Error(Char(0))
+    }
+    let id = digits(data, 1, true)?
+    if data[37] != b'}' {
+      return Error(Char(37))
+    }
+    return Ok(id)
+  }
+  if size == 45 {
+    let prefix = b"urn:uuid:"
+    let mut i: u64 = 0
+    while i < 9 {
+      if std@1/ascii.to_lower(data[i]) != prefix[i] {
+        return Error(Char(i))
+      }
+      i += 1
+    }
+    return digits(data, 9, true)
+  }
+  Error(Length(size))
+}
+
+/// Appends the lowercase hyphenated spelling.
+@preserves_unique(out)
+pub fn format_into(id: Uuid, mut out: List[u8]) -> () uses {} {
+  let mut i: u64 = 0
+  while i < 32 {
+    if i == 8 || i == 12 || i == 16 || i == 20 {
+      core@1/list.push(mut out, b'-')
+    }
+    let place: u64 = 124 - 4 * i
+    let shift: u128 = core@1/int.widen(place)
+    let digit: u64 = core@1/int.truncate(id.bits >> shift & 15)
+    core@1/list.push(mut out, HEX[digit])
+    i += 1
+  }
+}
+
+/// The lowercase hyphenated spelling, `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+pub fn to_string(id: Uuid) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(id, mut out)
+  text.finish_valid(take out)
+}
+
+// The big-endian value of at most 16 bytes.
+fn fold(data: Bytes) -> u128 uses {} {
+  let mut bits: u128 = 0
+  for byte in data {
+    let wide: u128 = core@1/int.widen(byte)
+    bits = bits << 8 | wide
+  }
+  bits
+}
+
+/// The UUID of 16 bytes in RFC 9562 order, or `None()` for any other length.
+pub fn from_bytes(data: Bytes) -> Option[Uuid] uses {} {
+  if core@1/bytes.len(data) != 16 {
+    return None()
+  }
+  Some(Uuid(bits: fold(data)))
+}
+
+/// The 16 bytes in RFC 9562 order.
+pub fn to_bytes(id: Uuid) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < 16 {
+    let place: u64 = 120 - 8 * i
+    let shift: u128 = core@1/int.widen(place)
+    core@1/list.push(mut out, core@1/int.truncate(id.bits >> shift & 255))
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+/// The version field, the top four bits of byte 6, whatever the variant.
+@noalloc
+pub fn version(id: Uuid) -> u8 uses {} {
+  core@1/int.truncate(id.bits >> 76 & 15)
+}
+
+/// The variant field, the top bits of byte 8.
+@noalloc
+pub fn variant(id: Uuid) -> Variant uses {} {
+  let top: u8 = core@1/int.truncate(id.bits >> 61 & 7)
+  if top < 4 {
+    Ncs()
+  } else if top < 6 {
+    Rfc9562()
+  } else if top < 7 {
+    Microsoft()
+  } else {
+    Future()
+  }
+}
+
+/// A version 7 UUID's Unix timestamp in milliseconds, its top 48 bits;
+/// `None()` for any other version or variant.
+@noalloc
+pub fn unix_ms(id: Uuid) -> Option[u64] uses {} {
+  if version(id) != 7 || variant(id) != Rfc9562() {
+    return None()
+  }
+  Some(core@1/int.truncate(id.bits >> 80))
+}
+
+const VERSION_MASK: u128 = 0xffffffffffff0fff3fffffffffffffff
+
+fn stamp(bits: u128, number: u128) -> Uuid uses {} {
+  Uuid(bits: bits & VERSION_MASK | number << 76 | 0x8000000000000000)
+}
+
+/// The version 4 UUID of 16 random bytes: the version and variant fields
+/// replace six of their bits, as RFC 9562 section 5.4. Other lengths are
+/// `None()`.
+pub fn v4_from(random: Bytes) -> Option[Uuid] uses {} {
+  if core@1/bytes.len(random) != 16 {
+    return None()
+  }
+  Some(stamp(fold(random), 4))
+}
+
+/// The version 7 UUID of a Unix millisecond timestamp below 2^48 and 10
+/// random bytes, as RFC 9562 section 5.7: the timestamp fills the top 48
+/// bits and the bytes the remaining 80, the version and variant fields
+/// replacing the top four bits of the first byte and the top two of the third.
+/// A larger timestamp or another length is `None()`.
+pub fn v7_from(millis: u64, random: Bytes) -> Option[Uuid] uses {} {
+  if millis >> 48 != 0 || core@1/bytes.len(random) != 10 {
+    return None()
+  }
+  Some(time_ordered(millis, random))
+}
+
+fn time_ordered(millis: u64, random: Bytes) -> Uuid uses {} {
+  let ms: u128 = core@1/int.widen(millis)
+  stamp(ms << 80 | fold(random), 7)
+}
+
+/// A version 4 UUID of 122 bits drawn from `r`.
+pub fn v4(r: Random) -> Result[Uuid, RandomError] {
+  let drawn = core@1/random.bytes(r, 16)?
+  Ok(stamp(fold(drawn), 4))
+}
+
+/// A version 7 UUID of the wall clock's Unix millisecond, rounded down, and 74
+/// bits drawn from `r`. Two UUIDs of the same millisecond are unordered: no
+/// counter is kept between calls.
+pub fn v7(clock: WallClock, r: Random) -> Result[Uuid, V7Error] {
+  let nanoseconds = match core@1/clock.wall(clock) {
+    Ok(value) => value,
+    Error(e) => return Error(Clock(e)),
+  }
+  if nanoseconds < 0 {
+    return Error(BeforeEpoch())
+  }
+  // An i64 of nanoseconds reaches only 2^43 milliseconds, below the 48-bit field.
+  let millis: u64 = core@1/int.narrow(nanoseconds / 1000000)
+  let drawn = match core@1/random.bytes(r, 10) {
+    Ok(value) => value,
+    Error(e) => return Error(Random(e)),
+  }
+  Ok(time_ordered(millis, drawn))
+}

@@ -5686,6 +5686,11 @@ conformance/SEM/SEM-3-unicode-scalars.hir
 conformance/SEM/SEM-3-unicode-text-slices-run.hir
 conformance/SEM/SEM-3-uri-query-pairs-run.hir
 conformance/SEM/SEM-3-utf8-run.hir
+conformance/SEM/SEM-3-uuid-go-1-run.hir
+conformance/SEM/SEM-3-uuid-go-2-run.hir
+conformance/SEM/SEM-3-uuid-layout-run.hir
+conformance/SEM/SEM-3-uuid-random-run.hir
+conformance/SEM/SEM-3-uuid-rejected-run.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-fail.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-run.hir

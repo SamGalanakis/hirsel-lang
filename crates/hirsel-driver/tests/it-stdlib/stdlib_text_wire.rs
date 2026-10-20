@@ -209,6 +209,40 @@ fn shlex_is_ordinary_source() {
 }
 
 #[test]
+fn uuid_is_ordinary_source() {
+    source_codec("uuid-layout", "uuid", &["parse", "format_into", "v7_from"]);
+    source_codec("uuid-random", "uuid", &["v4"]);
+}
+
+// The wall clock is not grantable to a corpus program; version 7 UUIDs take
+// their timestamp from it. Random is random.splitmix64@1 with seed 0.
+#[test]
+fn uuid_v7_reads_the_wall_clock() {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/uuid-v7-clock.hir");
+        for (wall, expected) in [
+            (
+                1_645_557_742_123_456_789i64,
+                "017f22e2-7a2b-7fcd-9d7b-39a820e2f465\n",
+            ),
+            (999_999, "00000000-0000-7fcd-9d7b-39a820e2f465\n"),
+            (-1, "before epoch\n"),
+        ] {
+            let mut simulation = SimulationConfig::default();
+            simulation.grants.insert("WallClock".into());
+            simulation.wall = wall;
+            let mut stdout = Vec::new();
+            let outcome =
+                run_path_with_step_budget(&path, simulation, None, &mut stdout, &mut Vec::new())
+                    .unwrap();
+            assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+            assert_eq!(String::from_utf8(stdout).unwrap(), expected, "wall {wall}");
+        }
+    });
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

@@ -975,6 +975,12 @@
       "module": [
         "shlex"
       ]
+    },
+    {
+      "path": "uuid.hir",
+      "module": [
+        "uuid"
+      ]
     }
   ],
   "dependencies": []

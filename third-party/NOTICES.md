@@ -181,6 +181,8 @@ the license named in its row; the license texts follow once each.
 | tonic | `interop/proto/grpc/testing/{test,messages,empty}.proto` (gRPC authors) | `packages/grpc@1/interop/proto/`, generated `packages/grpc@1/interop/testing.hir` | hyperium/tonic `cfe80f9d1e5e8e660cd2c1cd3b0a7579df37ba25` | Apache-2.0 (protos, text below); MIT (tonic) |
 | gRPC | `examples/protos/helloworld.proto`, with a streaming method added | `examples/grpc-greeter/` | grpc/grpc examples | Apache-2.0 (text below, without the LLVM exception) |
 | CPython | `Lib/shlex.py` shlex.read_token in POSIX mode with whitespace_split, quote and join; `Lib/test/test_shlex.py` posix_data and data rows, testQuote, testForceQuote (without force), testJoin and testJoinRoundtrip. Changes from shlex.py: rewritten as a byte scanner of POSIX mode with whitespace_split only (no punctuation_chars, non-POSIX mode or stream input), and an open quote or final backslash is an error value carrying its byte offset where Python raises ValueError | `stdlib/std@1/shlex.hir`, `conformance/SEM/SEM-3-shlex-*` | python/cpython `036d309cf542986a39eeba5ca805b2ec7619731d` | PSF-2.0 |
+| google/uuid | `uuid.go` Parse's four spellings, Version and Variant; `uuid_test.go` tests table and TestFromBytes | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | google/uuid `2d3c2a9cc518326daf99a383f07c4d3c44317e4d` | BSD-3-Clause (google/uuid) |
+| uuid | `src/builder.rs` from_random_bytes and from_unix_timestamp_millis layouts; `src/parser.rs` test_parse_valid and test_parse_invalid inputs; `src/v7.rs` test_new and test_sorting | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | uuid-rs/uuid `276c23628a669ca9fca637f3326c21b114e88049` | MIT |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -233,6 +235,9 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - grpc-go, tonic interop protos and helloworld.proto: Copyright 2014-2019 gRPC authors
 - tonic: Copyright 2019 gRPC authors (MIT)
 - CPython: Copyright (c) 2001 Python Software Foundation; All Rights Reserved
+- google/uuid: Copyright (c) 2009,2014 Google Inc. All rights reserved.
+- uuid: Copyright (c) 2014 The Rust Project Developers; Copyright (c) 2018 Ashley
+  Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
 
 ## Zlib License (zlib)
 
@@ -535,6 +540,38 @@ products or services of Licensee, or any third party.
 8. By copying, installing or otherwise using Python, Licensee
 agrees to be bound by the terms and conditions of this License
 Agreement.
+```
+
+## BSD-3-Clause License (google/uuid)
+
+```text
+Copyright (c) 2009,2014 Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ## Apache License 2.0 with LLVM Exception (Cranelift, LLVM)

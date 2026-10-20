@@ -1,0 +1,101 @@
+// rule: SEM-3
+// expect: run
+// google/uuid uuid_test.go tests (TestUUID, in both cases) and TestFromBytes
+// (google/uuid 2d3c2a9c), uuid-rs parser.rs test_parse_valid and the inputs of
+// test_parse_invalid (uuid-rs/uuid 276c2362; offsets are this module's), and the
+// RFC 9562 appendix A.3 and A.6 examples. The default run's Random is
+// random.splitmix64@1 with seed 0; expected draws come from SplitMix64.
+fn hyphenated(spelling: String) -> String uses {} {
+  match uuid.parse(spelling) {
+    Ok(id) => uuid.to_string(id),
+    Error(_) => "error",
+  }
+}
+
+pub fn main(t: Test) -> Result[(), uuid.UuidError] {
+  // test_parse_valid: the four spellings name one UUID.
+  let id = uuid.parse("67e55044-10b1-426f-9247-bb680e5fe0c8")?
+  test.equal(t, uuid.parse("67e5504410b1426f9247bb680e5fe0c8")?, id)
+  test.equal(t, uuid.parse("urn:uuid:67e55044-10b1-426f-9247-bb680e5fe0c8")?, id)
+  test.equal(t, uuid.parse("URN:UUID:67e55044-10b1-426f-9247-bb680e5fe0c8")?, id)
+  test.equal(t, uuid.parse("Urn:Uuid:67e55044-10b1-426f-9247-bb680e5fe0c8")?, id)
+  test.equal(t, uuid.parse("{67e55044-10b1-426f-9247-bb680e5fe0c8}")?, id)
+  test.equal(t, id.bits, 0x67e5504410b1426f9247bb680e5fe0c8u128)
+  test.equal(t, uuid.parse("00000000-0000-0000-0000-000000000000")?, uuid.Uuid(bits: 0))
+  test.equal(
+    t,
+    hyphenated("F9168C5E-CEB2-4faa-B6BF-329BF39FA1E4"),
+    "f9168c5e-ceb2-4faa-b6bf-329bf39fa1e4"
+  )
+  test.equal(
+    t,
+    hyphenated("01020304-1112-2122-3132-414243444546"),
+    "01020304-1112-2122-3132-414243444546"
+  )
+  test.equal(t, f"{id}", "67e55044-10b1-426f-9247-bb680e5fe0c8")
+  test.equal(
+    t,
+    uuid.parse("urn:uuix:67e55044-10b1-426f-9247-bb680e5fe0c8"),
+    Error(Char(7))
+  )
+  test.equal(t, uuid.parse("{67e55044-10b1-426f-9247-bb680e5fe0c8)"), Error(Char(37)))
+  // TestFromBytes, and bytes round-trip.
+  let raw: Bytes = b"\x7d\x44\x48\x40\x9d\xc0\x11\xd1\xb2\x45\x5f\xfd\xce\x74\xfa\xd2"
+  let Some(from) = uuid.from_bytes(raw) else {
+    return Error(Length(0))
+  }
+  test.equal(t, uuid.to_string(from), "7d444840-9dc0-11d1-b245-5ffdce74fad2")
+  test.equal(t, uuid.to_bytes(from), raw)
+  test.equal(t, uuid.version(from), 1u8)
+  test.equal(t, uuid.from_bytes(b"\x7d\x44"), None())
+  test.equal(t, uuid.unix_ms(from), None())
+  // RFC 9562 appendix A.3: version 4 of random_a 0x919108f752d1, random_b
+  // 0x320 and random_c 0x1bacf847db4148a8.
+  let Some(four) = uuid.v4_from(
+    b"\x91\x91\x08\xf7\x52\xd1\x03\x20\x1b\xac\xf8\x47\xdb\x41\x48\xa8"
+  ) else {
+    return Error(Length(0))
+  }
+  test.equal(t, uuid.to_string(four), "919108f7-52d1-4320-9bac-f847db4148a8")
+  test.equal(t, uuid.variant(four), Rfc9562())
+  test.equal(t, uuid.v4_from(b"\x91"), None())
+  // Appendix A.6: version 7 at 0x017F22E279B0 ms with rand_a 0xCC3 and rand_b
+  // 0x18C4DC0C0C07398F.
+  let random_bytes = b"\x0c\xc3\x18\xc4\xdc\x0c\x0c\x07\x39\x8f"
+  let Some(seven) = uuid.v7_from(0x017f22e279b0, random_bytes) else {
+    return Error(Length(0))
+  }
+  test.equal(t, uuid.to_string(seven), "017f22e2-79b0-7cc3-98c4-dc0c0c07398f")
+  test.equal(t, uuid.parse("017F22E2-79B0-7CC3-98C4-DC0C0C07398F")?, seven)
+  test.equal(t, uuid.unix_ms(seven), Some(1645557742000u64))
+  // The top four bits of the first byte and two of the third are replaced.
+  test.equal(
+    t,
+    uuid.v7_from(0x017f22e279b0, b"\xfc\xc3\xd8\xc4\xdc\x0c\x0c\x07\x39\x8f"),
+    Some(seven)
+  )
+  test.equal(t, uuid.v7_from(0x1000000000000, random_bytes), None())
+  test.equal(t, uuid.v7_from(0xffffffffffff, random_bytes) == None(), false)
+  test.equal(t, uuid.v7_from(1, b"\x00"), None())
+  // test_sorting: a later millisecond orders after an earlier one.
+  let Some(early) = uuid.v7_from(
+    1496854535812,
+    b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+  ) else {
+    return Error(Length(0))
+  }
+  let Some(late) = uuid.v7_from(
+    1496854539812,
+    b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  ) else {
+    return Error(Length(0))
+  }
+  test.check(
+    t,
+    early.bits < late.bits && string.compare(
+      uuid.to_string(early),
+      uuid.to_string(late)
+    ) < 0
+  )
+  Ok(())
+}

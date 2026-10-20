@@ -1,0 +1,22 @@
+// uuid.v7 reads the granted wall clock and draws from the granted Random; the
+// test grants a simulated wall clock, which no corpus fixture can.
+pub fn main(rt: Io) -> Result[(), String] {
+  let Ok(clock) = io.wall_clock(rt) else {
+    return Error("no wall clock")
+  }
+  let Ok(r) = io.random(rt) else {
+    return Error("no random")
+  }
+  let Ok(output) = io.stdout(rt) else {
+    return Error("no stdout")
+  }
+  let line = match uuid.v7(clock, r) {
+    Ok(id) => f"{id}\n",
+    Error(BeforeEpoch()) => "before epoch\n",
+    Error(_) => "error\n",
+  }
+  let Ok(()) = out.print(output, line) else {
+    return Error("no output")
+  }
+  Ok(())
+}
