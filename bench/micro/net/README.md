@@ -18,3 +18,6 @@ retain total instructions and cycles to expose kernel work as well.
 
 `--record` adds a participant using the native `--hirsel-record` flag for each
 binary. Plain mode is the performance target; report recorded mode separately.
+
+See [RESULTS.md](RESULTS.md) for per-change instruction ratios, allocations,
+application comparisons, validation, and remaining costs.
