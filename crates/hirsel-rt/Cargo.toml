@@ -30,6 +30,8 @@ webpki-roots = "=1.0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+hirsel-rt-operations = { path = "../hirsel-rt-operations" }
+syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "clone-impls"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-rt = { path = ".", features = ["diagnostic"] }

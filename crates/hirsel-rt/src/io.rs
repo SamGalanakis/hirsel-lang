@@ -2272,8 +2272,7 @@ impl Ready {
 /// The binding outlives every release and cannot be accessed while a thunk runs.
 pub struct Binding {
     pub(crate) adapter: Box<dyn Adapter>,
-    paths: Vec<String>,
-    arguments: Vec<String>,
+    names: std::sync::Arc<crate::paths::Names>,
     /// The requests parked because their adapter answered `Blocked`.
     pub(crate) waits: crate::host_waits::Waits,
 }
@@ -2304,36 +2303,29 @@ impl Binding {
     pub fn new(adapter: impl Adapter + 'static) -> Self {
         Self {
             adapter: Box::new(adapter),
-            paths: Vec::new(),
-            arguments: Vec::new(),
+            names: Default::default(),
             waits: Default::default(),
         }
     }
     pub(crate) fn from_box(adapter: Box<dyn Adapter>) -> Self {
         Self {
             adapter,
-            paths: Vec::new(),
-            arguments: Vec::new(),
+            names: Default::default(),
             waits: Default::default(),
         }
     }
     /// Explicit launch argument table; Path identities belong to this binding only.
     pub fn with_arguments(mut self, arguments: Vec<String>) -> Self {
-        self.arguments = arguments;
+        std::sync::Arc::get_mut(&mut self.names)
+            .unwrap_or_else(|| crate::fault("launch arguments set after the binding was bound"))
+            .arguments = arguments;
         self
     }
-    pub fn intern_path(&mut self, path: &str) -> u64 {
-        if let Some(index) = self.paths.iter().position(|p| p == path) {
-            return index as u64 + 1;
-        }
-        self.paths.push(path.into());
-        self.paths.len() as u64
+    pub fn intern_path(&self, path: &str) -> u64 {
+        self.names.paths.intern(path)
     }
     fn path_text(&self, id: u64) -> &str {
-        id.checked_sub(1)
-            .and_then(|i| self.paths.get(i as usize))
-            .map(String::as_str)
-            .unwrap_or_else(|| crate::fault("unknown run-context Path identity"))
+        self.names.path_text(id)
     }
     pub(crate) fn path(&self, id: u64) -> String {
         self.path_text(id).to_owned()
@@ -2343,6 +2335,7 @@ impl Binding {
     /// every release on ctx. Close may run only while bound; access is exclusive.
     pub unsafe fn bind(&mut self, ctx: &mut crate::TaskCtx) {
         unsafe { ctx.bind_io_data((self as *mut Self).cast()) };
+        ctx.run().names = Some(std::sync::Arc::clone(&self.names));
     }
     /// # Safety
     /// ctx is live and holds this adapter's Binding with exclusive access.
@@ -3222,7 +3215,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_of(
 ) -> u8 {
     let text = std::str::from_utf8(unsafe { slice_bytes(owner, start, len) })
         .unwrap_or_else(|_| crate::fault("String operand is not UTF-8"));
-    let id = unsafe { Binding::get(ctx) }.intern_path(text);
+    let id = crate::paths::names(ctx).paths.intern(text);
     unsafe { out.write(id) };
     crate::STATUS_OK
 }
@@ -3236,7 +3229,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_text(
     out: *mut crate::views::Slice,
     path: *const u64,
 ) -> u8 {
-    let text = unsafe { Binding::get(ctx) }.path_text(unsafe { path.read() });
+    let text = crate::paths::names(ctx).path_text(unsafe { path.read() });
     let value = unsafe { crate::text::allocate_bytes(ctx, text.as_bytes()) };
     unsafe {
         out.write(value);
@@ -3258,13 +3251,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }
-    let binding = unsafe { Binding::get(ctx) };
+    let names = crate::paths::names(ctx);
     let text = usize::try_from(index)
         .ok()
-        .and_then(|i| binding.arguments.get(i))
-        .cloned();
+        .and_then(|i| names.arguments.get(i));
     let value = match text {
-        Some(text) => HandleResult::of(Ok(binding.intern_path(&text))),
+        Some(text) => HandleResult::of(Ok(names.paths.intern(text))),
         None => HandleResult {
             tag: 1,
             padding: 0,
@@ -3289,7 +3281,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }
-    unsafe { out.write(Binding::get(ctx).arguments.len() as u64) };
+    unsafe { out.write(crate::paths::names(ctx).arguments.len() as u64) };
     unsafe { crate::tasks::yield_now(&mut *ctx) };
     crate::STATUS_OK
 }
@@ -3311,7 +3303,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
     }
     let text = usize::try_from(index)
         .ok()
-        .and_then(|i| unsafe { Binding::get(ctx) }.arguments.get(i))
+        .and_then(|i| crate::paths::names(ctx).arguments.get(i))
         .cloned();
     // Zero initializes the MissingArgument tag and all padding on the error arm.
     let mut result: crate::text::StringResult = unsafe { std::mem::zeroed() };
@@ -4082,11 +4074,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_compare(
     b: u64,
 ) -> i32 {
     use std::cmp::Ordering;
-    let binding = unsafe { Binding::get(ctx) };
-    match binding
+    let names = crate::paths::names(ctx);
+    match names
         .path_text(a)
         .as_bytes()
-        .cmp(binding.path_text(b).as_bytes())
+        .cmp(names.path_text(b).as_bytes())
     {
         Ordering::Less => -1,
         Ordering::Equal => 0,

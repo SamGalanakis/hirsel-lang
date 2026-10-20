@@ -586,8 +586,8 @@ dependencies = [
  "hirsel-authority",
  "hirsel-check",
  "hirsel-check-protocol",
- "hirsel-codec",
  "hirsel-code-store",
+ "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-cranelift",
  "hirsel-diag",
@@ -970,6 +970,7 @@ dependencies = [
  "hirsel-layout",
  "hirsel-lir",
  "hirsel-rt",
+ "hirsel-rt-operations",
  "hirsel-run-config",
  "hirsel-run-schema",
  "hirsel-syntax",
@@ -979,6 +980,7 @@ dependencies = [
  "rustls",
  "serde_json",
  "sha2",
+ "syn 2.0.119",
  "webpki-roots",
 ]
 

@@ -166,6 +166,8 @@ pub(crate) struct RunShared {
     pub(crate) close_handle: Option<CloseThunk>,
     pub(crate) hash_seed: u64,
     io_data: *mut std::ffi::c_void,
+    /// The bound Io binding's Path identities and launch arguments (`crate::paths`).
+    pub(crate) names: Option<std::sync::Arc<crate::paths::Names>>,
     pub(crate) region_owners: Option<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
     pub(crate) entry_result: Option<crate::exit_report::Returned>,
     /// The run's tasks, from its first scope (CONC-2).
@@ -553,6 +555,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,
         io_data: ptr::null_mut(),
+        names: None,
         region_owners: None,
         entry_result: None,
         tasks: None,

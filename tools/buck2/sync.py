@@ -178,6 +178,8 @@ TEST_DATA = {
     "hirsel-ownership-unittest": ["crates/hirsel-ownership/proptest-regressions/**"],
     "hirsel-pipeline-tests-test-front": ["crates/hirsel-llvm/tests/native/fixture.h"],
     "hirsel-rt-test-it": ["crates/hirsel-rt/include/**"],
+    # The operation descriptor checks read the runtime's source.
+    "hirsel-rt-test-descriptors": ["crates/hirsel-rt/src/**", "crates/hirsel-lir/src/runtime_abi.rs"],
     "hirsel-types-test-wire": ["crates/hirsel-types/tests/wire/**"],
 }
 

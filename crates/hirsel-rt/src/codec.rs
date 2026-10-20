@@ -1042,7 +1042,7 @@ unsafe fn encode_node(
                 out.extend_from_slice(bytes);
             }
             Node::Path => {
-                let text = crate::io::Binding::get(ctx).path(word(at));
+                let text = crate::paths::names(ctx).path_text(word(at));
                 out.extend_from_slice(&(text.len() as u64).to_le_bytes());
                 out.extend_from_slice(text.as_bytes());
             }
@@ -1617,7 +1617,7 @@ unsafe fn materialize(ctx: *mut TaskCtx, program: &Program, bytes: &[u8], out: *
                     let n = checked(input.number(8)) as u64;
                     let bytes = input.take(n).unwrap_or_else(|_| fault("codec reread"));
                     let text = std::str::from_utf8(bytes).unwrap_or_else(|_| fault("codec reread"));
-                    let id = crate::io::Binding::get(ctx).intern_path(text);
+                    let id = crate::paths::names(ctx).paths.intern(text);
                     write(at, &id.to_le_bytes());
                 }
                 Node::Fields(fields) => {

@@ -1,4 +1,6 @@
 //! Native operation inventory and typed adapters. Unknown identity never selects a fallback.
+pub mod descriptors;
+
 use hirsel_core_contract::{
     CallOwnership, CleanupEffect, Disposition, M2Feature, Manifest, ManifestError, OperationRow,
     Passing, Unavailable,

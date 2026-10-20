@@ -620,7 +620,11 @@ The context splits three ways:
   through `TaskCtx::worker` and `TaskCtx::heap`, which borrow the context; the suspending
   scheduler entries take `&mut TaskCtx`, so no worker borrow lives across a suspension.
 - **`RunShared`:** the scheduler, channels and synchronizers, the Io binding, the launcher's
-  driver, the failure table, the count bound, the hash seed and the scheduler policy.
+  driver, the failure table, the count bound, the hash seed and the scheduler policy. The
+  binding's Path identities and launch arguments (`paths::Names`) are shared with it when the
+  binding is bound, so interning a Path, ordering two and reading an argument never reach the
+  binding: the intern table is a concurrent service behind one mutex, after lasso's
+  `ThreadedRodeo`.
 
 A switch moves the worker from one task to the next: switch-out folds the view's idle-slab and
 fuel counters back into the worker and saves the thread's foreign scope; switch-in copies the
