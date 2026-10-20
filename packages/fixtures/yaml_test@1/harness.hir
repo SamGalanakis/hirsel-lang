@@ -1,6 +1,6 @@
 // yaml-test-suite checks: a valid case parses to the suite's JSON documents, each
-// of which survives a stringify/parse round trip; one without JSON parses to its
-// number of documents; an error case is rejected; and a case outside the Value
+// of which survives a stringify/parse round trip; one without JSON matches its
+// resolved event values; an error case is rejected; and a case outside the Value
 // model fails with the error the generator names.
 fn report(s: Stdout, kind: String, name: String) -> u64 {
   let line = string.concat(string.concat(kind, name), "\n")

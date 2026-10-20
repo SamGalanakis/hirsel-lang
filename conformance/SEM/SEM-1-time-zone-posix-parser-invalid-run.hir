@@ -1,0 +1,310 @@
+// rule: SEM-1
+// expect: run
+// jiff fff640d4 crates/jiff-core/src/tz/posix.rs:2573-3140; parser fragments embedded in complete TZif footer rules.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("+090")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("a0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("ab0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("ab10")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("<a>0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("<ab>0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("<ABC0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("<ABC!>0")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("ESTa")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST-")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST+")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST-a")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST+a")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST-25")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST+25")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,,M9.5.0,M4.1.0/3")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.5.0/")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.5.0,M4.1.0/")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,1/,365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,a,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,j,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,m,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,n,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.5,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.5.,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M0.5.0,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,M9.0.0,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/12:2,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/12:,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/12:23:5,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/12:23:,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/-168,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/+168,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/5:45:129,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  test.equal(
+    t,
+    match time_zone.from_tzif(check.footer_only("EST0EDT,J1/5:45:12:,J365")) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    false
+  )
+  Ok(())
+}

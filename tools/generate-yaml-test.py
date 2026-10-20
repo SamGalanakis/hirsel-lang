@@ -11,8 +11,8 @@ one call in conformance/SEM/SEM-3-yaml-test-<n>-run.hir
 - non-core tags are retained as Tagged values, checked against the event tree
   (including resolved handles and aliases), then round-tripped;
 - any other case with in.json must parse to its JSON documents, each of which
-  must survive a stringify/parse round trip, and one without must parse to its
-  number of documents.
+  must survive a stringify/parse round trip, and one without must match the
+  exact values of its resolved event tree.
 
 Cases are split into programs of at most 19 times the estimated cost that one
 program of the default 1M-step budget may spend; each program's `// steps:`
@@ -199,8 +199,6 @@ def event_values(events):
         else:
             style, text = rest[0], rest[1:]
             text = re.sub(r'\\([nrt\\])', lambda m: {'n': '\n', 'r': '\r', 't': '\t', '\\': '\\'}[m[1]], text)
-            if key:
-                return string_literal(text), text
             if tag not in (None, *CORE) or style != ':' or tag in ('!', 'tag:yaml.org,2002:str'):
                 value = 'Text(' + string_literal(text) + ')'
             elif text in ('', '~', 'null', 'Null', 'NULL'):
@@ -218,7 +216,7 @@ def event_values(events):
             value = f'Tagged(tag: {string_literal(tag)}, value: box {value})'
         if anchor is not None:
             anchors[anchor] = value, text
-        return value, text
+        return (string_literal(text) if key else value), text
 
     documents = []
     for line in lines:
@@ -267,8 +265,8 @@ def checks(case):
         return [(decode, f'  failed += harness.decodes(s, {label}, {text}, [{expected}])')] + [
             (parse + trip, f'  failed += harness.round_trips(s, {label}, {text}, {i})')
             for i, trip in enumerate(trips)]
-    count = sum(1 for line in events.splitlines() if line.startswith('+DOC'))
-    return [(steps, f'  failed += harness.parses(s, {label}, {text}, {count})')]
+    expected = ', '.join(event_values(events))
+    return [(steps, f'  failed += harness.values(s, {label}, {text}, [{expected}])')]
 
 
 def programs(cases):

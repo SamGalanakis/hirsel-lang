@@ -158,11 +158,19 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "escaped slash: \"a\\/b\"\n",
     ["{\"escaped slash\":\"a/b\"}"]
   )
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "4ABK",
     "{\nunquoted : \"separate\",\nhttp://foo.com,\nomitted value:,\n}\n",
-    1
+    [
+      harness.object(
+        [
+          ("unquoted", Text("separate")),
+          ("http://foo.com", Null()),
+          ("omitted value", Null())
+        ]
+      )
+    ]
   )
   failed += harness.valid(
     s,
@@ -464,7 +472,12 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "%FOO  bar baz # Should be ignored\n              # with a warning.\n--- \"foo\"\n",
     ["\"foo\""]
   )
-  failed += harness.parses(s, "6M2F", "? &a a\n: &b b\n: *a\n", 1)
+  failed += harness.values(
+    s,
+    "6M2F",
+    "? &a a\n: &b b\n: *a\n",
+    [harness.object([("a", Text("b")), ("", Text("a"))])]
+  )
   failed += harness.complex_key(s, "6PBE", "---\n?\n- a\n- b\n:\n- c\n- d\n")
   failed += harness.invalid(s, "6S55", "key:\n - bar\n - baz\n invalid\n")
   failed += harness.valid(

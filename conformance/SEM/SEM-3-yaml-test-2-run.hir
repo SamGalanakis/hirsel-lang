@@ -412,7 +412,19 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "CC74",
     Tagged(tag: "tag:example.com,2000:app/foo", value: box Text("bar"))
   )
-  failed += harness.parses(s, "CFD4", "- [ : empty key ]\n- [: another empty key]\n", 1)
+  failed += harness.values(
+    s,
+    "CFD4",
+    "- [ : empty key ]\n- [: another empty key]\n",
+    [
+      Array(
+        [
+          Array([harness.object([("", Text("empty key"))])]),
+          Array([harness.object([("", Text("another empty key"))])])
+        ]
+      )
+    ]
+  )
   failed += harness.invalid(s, "CML9", "key: [ word1\n#  xxx\n  word2 ]\n")
   failed += harness.valid(
     s,
@@ -518,11 +530,15 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "\"6 trailing\t  \n    tab\"\n",
     ["\"6 trailing tab\""]
   )
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "DFF7",
     "{\n? explicit: entry,\nimplicit: entry,\n?\n}\n",
-    1
+    [
+      harness.object(
+        [("explicit", Text("entry")), ("implicit", Text("entry")), ("", Null())]
+      )
+    ]
   )
   failed += harness.valid(s, "DHP8", "[foo, bar, 42]\n", ["[\"foo\",\"bar\",42]"])
   failed += harness.valid(

@@ -73,7 +73,7 @@ pub fn main() -> Result[(), ()] {
   )
   failure.check(toml.moment("noon") == Error(InvalidValue()), TextInvariant())
   failure.check(
-    toml.moment("1979-05-27T07:32") == Error(InvalidValue()),
+    toml.moment("1979-05-27T07:32") == Ok(LocalDateTime(at(day, morning))),
     TextInvariant()
   )
   // Writing uses T, the shortest fraction and Z for a zero offset.

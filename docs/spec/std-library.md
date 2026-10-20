@@ -694,7 +694,7 @@ Moment    = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime)
           | LocalDate(time.Date) | LocalTime(time.TimeOfDay)
 ```
 
-`toml.parse` takes a UTF-8 `String` holding a TOML 1.0.0 document and returns its root
+`toml.parse` takes a UTF-8 `String` holding a TOML 1.1.0 document and returns its root
 `Table`, keys in order of first definition. It accepts every table form (headers,
 implicit parents, dotted keys, inline tables, arrays of tables), the four string forms,
 integers in decimal, hexadecimal, octal and binary with single underscores between
@@ -706,6 +706,8 @@ verbatim: an offset date-time, local date-time, local date or local time, told a
 by shape (a date has `-` at its fifth byte; a date-time adds a time after `T`, `t` or
 a space; an offset date-time ends in `Z`, `z` or `±HH:MM`). Months, days (leap years
 included), hours, minutes, seconds (up to 60) and offsets are range-checked.
+Seconds may be omitted (defaulting to zero); basic strings accept `\e` and
+`\xHH` Unicode escapes. Inline tables accept newlines, comments and a trailing comma.
 
 A header defines a table once; a header naming a table first created as another
 header's prefix defines it then. Dotted keys extend only tables created by dotted keys

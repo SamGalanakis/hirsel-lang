@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-1-time-zone-jiff-remaining-2-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/tzif@1/zones.hir",
+      "module": [
+        "zones"
+      ]
+    },
+    {
+      "path": "../../packages/fixtures/tzif@1/check.hir",
+      "module": [
+        "check"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

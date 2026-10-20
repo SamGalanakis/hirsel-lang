@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// TOML 1.1 extensions to toml_edit edit.rs insert/remove source-preserving checks
+// (ceac6e44 crates/toml_edit/tests/testsuite/edit.rs); toml-test valid/datetime/no-seconds.toml:2-5.
+pub fn main(t: Test) -> Result[(), ()] {
+  let text = "point = {\n  x = 1, # keep x\n  y = 2, # keep y\n}\n"
+  let mut doc = test.expect_ok(t, toml.document(unique text))
+  test.equal(t, toml.set(mut doc, [Key("point"), Key("z")], Integer(3)), Ok(()))
+  test.equal(
+    t,
+    toml.source(doc),
+    "point = {\n  x = 1, # keep x\n  y = 2, # keep y\n  z = 3,\n}\n"
+  )
+  test.equal(t, toml.remove(mut doc, [Key("point"), Key("y")]), Ok(()))
+  test.equal(t, toml.source(doc), "point = {\n  x = 1, # keep x\n  z = 3,\n}\n")
+  test.equal(t, toml.set(mut doc, [Key("point"), Key("x")], Integer(4)), Ok(()))
+  test.equal(t, toml.get(doc, [Key("point"), Key("x")]), Some(Integer(4)))
+  let clock = test.expect_ok(t, toml.moment("13:37"))
+  test.equal(t, test.expect_ok(t, toml.datetime(clock)), Datetime("13:37:00"))
+  let utc = test.expect_ok(t, toml.moment("1979-05-27T07:32Z"))
+  test.equal(t, test.expect_ok(t, toml.datetime(utc)), Datetime("1979-05-27T07:32:00Z"))
+  let offset = test.expect_ok(t, toml.moment("1979-05-27T07:32-07:00"))
+  test.equal(
+    t,
+    test.expect_ok(t, toml.datetime(offset)),
+    Datetime("1979-05-27T07:32:00-07:00")
+  )
+  let local_moment = test.expect_ok(t, toml.moment("1979-05-27T07:32"))
+  test.equal(
+    t,
+    test.expect_ok(t, toml.datetime(local_moment)),
+    Datetime("1979-05-27T07:32:00")
+  )
+  Ok(())
+}

@@ -16,6 +16,11 @@ fn normal_datetime(text: String) -> String {
   let mut output: List[u8] = []
   let mut fraction: u64 = 18446744073709551615
   let mut i: u64 = 0
+  let time_start: u64 = if bytes.len(data) > 4 && data[4] == b'-' {
+    11
+  } else {
+    0
+  }
   while i < bytes.len(data) {
     let mut c = data[i]
     if c == b't' || c == b' ' && i == 10 {
@@ -35,8 +40,15 @@ fn normal_datetime(text: String) -> String {
       }
       fraction = 18446744073709551615
     }
+    // toml-test normalizes optional seconds to :00 in its JSON oracle.
+    if i == time_start + 5 && data[i] != b':' {
+      text.append(mut output, ":00")
+    }
     list.push(mut output, c)
     i += 1
+  }
+  if bytes.len(data) == time_start + 5 {
+    text.append(mut output, ":00")
   }
   if fraction != 18446744073709551615 {
     while list.len(output) > fraction + 1 && output[list.len(output) - 1] == b'0' {

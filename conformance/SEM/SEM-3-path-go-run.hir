@@ -1,0 +1,91 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/path/path_test.go:18-211; policy mappings are in reports/pa-codec-small.md.
+pub fn main(t: Test) -> Result[(), ()] {
+  // cleantests: Go path_test.go:18
+  test.equal(t, path.normalize(path.of("")), Ok(path.of(".")))
+  test.equal(t, path.normalize(path.of("abc")), Ok(path.of("abc")))
+  test.equal(t, path.normalize(path.of("abc/def")), Ok(path.of("abc/def")))
+  test.equal(t, path.normalize(path.of("a/b/c")), Ok(path.of("a/b/c")))
+  test.equal(t, path.normalize(path.of(".")), Ok(path.of(".")))
+  test.equal(t, path.normalize(path.of("..")), Ok(path.of("..")))
+  test.equal(t, path.normalize(path.of("../..")), Ok(path.of("../..")))
+  test.equal(t, path.normalize(path.of("../../abc")), Ok(path.of("../../abc")))
+  test.equal(t, path.normalize(path.of("/abc")), Ok(path.of("/abc")))
+  test.equal(t, path.normalize(path.of("/")), Ok(path.of("/")))
+  test.equal(t, path.normalize(path.of("abc/")), Ok(path.of("abc")))
+  test.equal(t, path.normalize(path.of("abc/def/")), Ok(path.of("abc/def")))
+  test.equal(t, path.normalize(path.of("a/b/c/")), Ok(path.of("a/b/c")))
+  test.equal(t, path.normalize(path.of("./")), Ok(path.of(".")))
+  test.equal(t, path.normalize(path.of("../")), Ok(path.of("..")))
+  test.equal(t, path.normalize(path.of("../../")), Ok(path.of("../..")))
+  test.equal(t, path.normalize(path.of("/abc/")), Ok(path.of("/abc")))
+  test.equal(t, path.normalize(path.of("abc//def//ghi")), Ok(path.of("abc/def/ghi")))
+  test.equal(t, path.normalize(path.of("//abc")), Ok(path.of("/abc")))
+  test.equal(t, path.normalize(path.of("///abc")), Ok(path.of("/abc")))
+  test.equal(t, path.normalize(path.of("//abc//")), Ok(path.of("/abc")))
+  test.equal(t, path.normalize(path.of("abc//")), Ok(path.of("abc")))
+  test.equal(t, path.normalize(path.of("abc/./def")), Ok(path.of("abc/def")))
+  test.equal(t, path.normalize(path.of("/./abc/def")), Ok(path.of("/abc/def")))
+  test.equal(t, path.normalize(path.of("abc/.")), Ok(path.of("abc")))
+  test.equal(
+    t,
+    path.normalize(path.of("abc/def/ghi/../jkl")),
+    Ok(path.of("abc/def/jkl"))
+  )
+  test.equal(
+    t,
+    path.normalize(path.of("abc/def/../ghi/../jkl")),
+    Ok(path.of("abc/jkl"))
+  )
+  test.equal(t, path.normalize(path.of("abc/def/..")), Ok(path.of("abc")))
+  test.equal(t, path.normalize(path.of("abc/def/../..")), Ok(path.of(".")))
+  test.equal(t, path.normalize(path.of("/abc/def/../..")), Ok(path.of("/")))
+  test.equal(t, path.normalize(path.of("abc/def/../../..")), Ok(path.of("..")))
+  test.equal(t, path.normalize(path.of("/abc/def/../../..")), Error(Invalid(15)))
+  test.equal(
+    t,
+    path.normalize(path.of("abc/def/../../../ghi/jkl/../../../mno")),
+    Ok(path.of("../../mno"))
+  )
+  test.equal(t, path.normalize(path.of("abc/./../def")), Ok(path.of("def")))
+  test.equal(t, path.normalize(path.of("abc//./../def")), Ok(path.of("def")))
+  test.equal(
+    t,
+    path.normalize(path.of("abc/../../././../def")),
+    Ok(path.of("../../def"))
+  )
+  // dirtests: Go path_test.go:191
+  test.equal(t, path.parent(path.of("")), None())
+  test.equal(t, path.parent(path.of(".")), Some(path.of(".")))
+  test.equal(t, path.parent(path.of("/.")), Some(path.of("/")))
+  test.equal(t, path.parent(path.of("/")), None())
+  test.equal(t, path.parent(path.of("////")), None())
+  test.equal(t, path.parent(path.of("/foo")), Some(path.of("/")))
+  test.equal(t, path.parent(path.of("x/")), Some(path.of(".")))
+  test.equal(t, path.parent(path.of("abc")), Some(path.of(".")))
+  test.equal(t, path.parent(path.of("abc/def")), Some(path.of("abc")))
+  test.equal(t, path.parent(path.of("abc////def")), Some(path.of("abc")))
+  test.equal(t, path.parent(path.of("a/b/.x")), Some(path.of("a/b")))
+  test.equal(t, path.parent(path.of("a/b/c.")), Some(path.of("a/b")))
+  test.equal(t, path.parent(path.of("a/b/c.x")), Some(path.of("a/b")))
+  // basetests: Go path_test.go:168
+  test.equal(t, path.filename(path.of("")), None())
+  test.equal(t, path.filename(path.of(".")), Some("."))
+  test.equal(t, path.filename(path.of("/.")), Some("."))
+  test.equal(t, path.filename(path.of("/")), None())
+  test.equal(t, path.filename(path.of("////")), None())
+  test.equal(t, path.filename(path.of("x/")), Some("x"))
+  test.equal(t, path.filename(path.of("abc")), Some("abc"))
+  test.equal(t, path.filename(path.of("abc/def")), Some("def"))
+  test.equal(t, path.filename(path.of("a/b/.x")), Some(".x"))
+  test.equal(t, path.filename(path.of("a/b/c.")), Some("c."))
+  test.equal(t, path.filename(path.of("a/b/c.x")), Some("c.x"))
+  // exttests: Go path_test.go:152
+  test.equal(t, path.extension(path.of("path.go")), Some("go"))
+  test.equal(t, path.extension(path.of("path.pb.go")), Some("go"))
+  test.equal(t, path.extension(path.of("a.dir/b")), None())
+  test.equal(t, path.extension(path.of("a.dir/b.go")), Some("go"))
+  test.equal(t, path.extension(path.of("a.dir/")), Some("dir"))
+  Ok(())
+}

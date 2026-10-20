@@ -9,11 +9,22 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
   failed += harness.valid(s, "PUW8", "---\na: b\n---\n", ["{\"a\":\"b\"}", "null"])
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "PW8X",
     "- &a\n- a\n-\n  &a : a\n  b: &b\n-\n  &c : &a\n-\n  ? &d\n-\n  ? &e\n  : &a\n",
-    1
+    [
+      Array(
+        [
+          Null(),
+          Text("a"),
+          harness.object([("", Text("a")), ("b", Null())]),
+          harness.object([("", Null())]),
+          harness.object([("", Null())]),
+          harness.object([("", Null())])
+        ]
+      )
+    ]
   )
   failed += harness.invalid(
     s,
@@ -88,11 +99,19 @@ pub fn main(rt: Io) -> Result[(), ()] {
       "{\"Date\":\"2001-11-23 15:03:17 -5\",\"User\":\"ed\",\"Fatal\":\"Unknown variable \\\"bar\\\"\",\"Stack\":[{\"file\":\"TopClass.py\",\"line\":23,\"code\":\"x = MoreObject(\\\"345\\\\n\\\")\\n\"},{\"file\":\"MoreClass.py\",\"line\":58,\"code\":\"foo = bar\"}]}"
     ]
   )
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "S3PD",
     "plain key: in-line value\n: # Both empty\n\"quoted key\":\n- entry\n",
-    1
+    [
+      harness.object(
+        [
+          ("plain key", Text("in-line value")),
+          ("", Null()),
+          ("quoted key", Array([Text("entry")]))
+        ]
+      )
+    ]
   )
   failed += harness.invalid(s, "S4GJ", "---\nfolded: > first line\n  second line\n")
   failed += harness.valid(
@@ -125,7 +144,7 @@ pub fn main(rt: Io) -> Result[(), ()] {
     ["{\"seq\":[\"a\",\"b\"]}"]
   )
   failed += harness.valid(s, "SM9W/00", "-", ["[null]"])
-  failed += harness.parses(s, "SM9W/01", ":", 1)
+  failed += harness.values(s, "SM9W/01", ":", [harness.object([("", Null())])])
   failed += harness.invalid(s, "SR86", "key1: &a value\nkey2: &b *a\n")
   failed += harness.valid(
     s,
@@ -310,9 +329,14 @@ pub fn main(rt: Io) -> Result[(), ()] {
       )
     ]
   )
-  failed += harness.parses(s, "UKK6/00", "- :\n", 1)
+  failed += harness.values(
+    s,
+    "UKK6/00",
+    "- :\n",
+    [Array([harness.object([("", Null())])])]
+  )
   failed += harness.valid(s, "UKK6/01", "::\n", ["{\":\":null}"])
-  failed += harness.parses(s, "UKK6/02", "!\n", 1)
+  failed += harness.values(s, "UKK6/02", "!\n", [Text("")])
   failed += harness.valid(
     s,
     "UT92",

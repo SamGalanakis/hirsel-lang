@@ -1,0 +1,203 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/path/match_test.go:20-77: all 56 matchTests rows; compile errors precede matching.
+pub fn main(t: Test) -> Result[(), ()] {
+  let p1 = test.expect_ok(t, glob.compile("abc"))
+  test.equal(t, glob.is_match(p1, "abc"), true)
+  let p2 = test.expect_ok(t, glob.compile("*"))
+  test.equal(t, glob.is_match(p2, "abc"), true)
+  let p3 = test.expect_ok(t, glob.compile("*c"))
+  test.equal(t, glob.is_match(p3, "abc"), true)
+  let p4 = test.expect_ok(t, glob.compile("a*"))
+  test.equal(t, glob.is_match(p4, "a"), true)
+  let p5 = test.expect_ok(t, glob.compile("a*"))
+  test.equal(t, glob.is_match(p5, "abc"), true)
+  let p6 = test.expect_ok(t, glob.compile("a*"))
+  test.equal(t, glob.is_match(p6, "ab/c"), false)
+  let p7 = test.expect_ok(t, glob.compile("a*/b"))
+  test.equal(t, glob.is_match(p7, "abc/b"), true)
+  let p8 = test.expect_ok(t, glob.compile("a*/b"))
+  test.equal(t, glob.is_match(p8, "a/c/b"), false)
+  let p9 = test.expect_ok(t, glob.compile("a*b*c*d*e*/f"))
+  test.equal(t, glob.is_match(p9, "axbxcxdxe/f"), true)
+  let p10 = test.expect_ok(t, glob.compile("a*b*c*d*e*/f"))
+  test.equal(t, glob.is_match(p10, "axbxcxdxexxx/f"), true)
+  let p11 = test.expect_ok(t, glob.compile("a*b*c*d*e*/f"))
+  test.equal(t, glob.is_match(p11, "axbxcxdxe/xxx/f"), false)
+  let p12 = test.expect_ok(t, glob.compile("a*b*c*d*e*/f"))
+  test.equal(t, glob.is_match(p12, "axbxcxdxexxx/fff"), false)
+  let p13 = test.expect_ok(t, glob.compile("a*b?c*x"))
+  test.equal(t, glob.is_match(p13, "abxbbxdbxebxczzx"), true)
+  let p14 = test.expect_ok(t, glob.compile("a*b?c*x"))
+  test.equal(t, glob.is_match(p14, "abxbbxdbxebxczzy"), false)
+  let p15 = test.expect_ok(t, glob.compile("ab[c]"))
+  test.equal(t, glob.is_match(p15, "abc"), true)
+  let p16 = test.expect_ok(t, glob.compile("ab[b-d]"))
+  test.equal(t, glob.is_match(p16, "abc"), true)
+  let p17 = test.expect_ok(t, glob.compile("ab[e-g]"))
+  test.equal(t, glob.is_match(p17, "abc"), false)
+  let p18 = test.expect_ok(t, glob.compile("ab[^c]"))
+  test.equal(t, glob.is_match(p18, "abc"), false)
+  let p19 = test.expect_ok(t, glob.compile("ab[^b-d]"))
+  test.equal(t, glob.is_match(p19, "abc"), false)
+  let p20 = test.expect_ok(t, glob.compile("ab[^e-g]"))
+  test.equal(t, glob.is_match(p20, "abc"), true)
+  let p21 = test.expect_ok(t, glob.compile("a\\*b"))
+  test.equal(t, glob.is_match(p21, "a*b"), true)
+  let p22 = test.expect_ok(t, glob.compile("a\\*b"))
+  test.equal(t, glob.is_match(p22, "ab"), false)
+  let p23 = test.expect_ok(t, glob.compile("a?b"))
+  test.equal(t, glob.is_match(p23, "a☺b"), true)
+  let p24 = test.expect_ok(t, glob.compile("a[^a]b"))
+  test.equal(t, glob.is_match(p24, "a☺b"), true)
+  let p25 = test.expect_ok(t, glob.compile("a???b"))
+  test.equal(t, glob.is_match(p25, "a☺b"), false)
+  let p26 = test.expect_ok(t, glob.compile("a[^a][^a][^a]b"))
+  test.equal(t, glob.is_match(p26, "a☺b"), false)
+  let p27 = test.expect_ok(t, glob.compile("[a-ζ]*"))
+  test.equal(t, glob.is_match(p27, "α"), true)
+  let p28 = test.expect_ok(t, glob.compile("*[a-ζ]"))
+  test.equal(t, glob.is_match(p28, "A"), false)
+  let p29 = test.expect_ok(t, glob.compile("a?b"))
+  test.equal(t, glob.is_match(p29, "a/b"), false)
+  let p30 = test.expect_ok(t, glob.compile("a*b"))
+  test.equal(t, glob.is_match(p30, "a/b"), false)
+  let p31 = test.expect_ok(t, glob.compile("[\\]a]"))
+  test.equal(t, glob.is_match(p31, "]"), true)
+  let p32 = test.expect_ok(t, glob.compile("[\\-]"))
+  test.equal(t, glob.is_match(p32, "-"), true)
+  let p33 = test.expect_ok(t, glob.compile("[x\\-]"))
+  test.equal(t, glob.is_match(p33, "x"), true)
+  let p34 = test.expect_ok(t, glob.compile("[x\\-]"))
+  test.equal(t, glob.is_match(p34, "-"), true)
+  let p35 = test.expect_ok(t, glob.compile("[x\\-]"))
+  test.equal(t, glob.is_match(p35, "z"), false)
+  let p36 = test.expect_ok(t, glob.compile("[\\-x]"))
+  test.equal(t, glob.is_match(p36, "x"), true)
+  let p37 = test.expect_ok(t, glob.compile("[\\-x]"))
+  test.equal(t, glob.is_match(p37, "-"), true)
+  let p38 = test.expect_ok(t, glob.compile("[\\-x]"))
+  test.equal(t, glob.is_match(p38, "a"), false)
+  test.check(
+    t,
+    match glob.compile("[]a]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "]"
+  test.check(
+    t,
+    match glob.compile("[-]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "-"
+  test.check(
+    t,
+    match glob.compile("[x-]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "x"
+  test.check(
+    t,
+    match glob.compile("[x-]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "-"
+  test.check(
+    t,
+    match glob.compile("[x-]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "z"
+  test.check(
+    t,
+    match glob.compile("[-x]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "x"
+  test.check(
+    t,
+    match glob.compile("[-x]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "-"
+  test.check(
+    t,
+    match glob.compile("[-x]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("\\") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("[a-b-c]") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("[") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("[^") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("[^bc") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("a[") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "a"
+  test.check(
+    t,
+    match glob.compile("a[") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "ab"
+  test.check(
+    t,
+    match glob.compile("a[") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "x"
+  test.check(
+    t,
+    match glob.compile("a/b[") {
+      Error(Syntax(_)) => true,
+      _ => false,
+    }
+  ) // name: "x"
+  let p39 = test.expect_ok(t, glob.compile("*x"))
+  test.equal(t, glob.is_match(p39, "xxx"), true)
+  Ok(())
+}

@@ -30,11 +30,19 @@ pub fn main(rt: Io) -> Result[(), ()] {
       "{\"safe\":\"a!\\\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az{|}~ !\\\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az{|}~\",\"safe question mark\":\"?foo\",\"safe colon\":\":foo\",\"safe dash\":\"-foo\"}"
     ]
   )
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "FH7J",
     "- !!str\n-\n  !!null : a\n  b: !!str\n- !!str : !!null\n",
-    1
+    [
+      Array(
+        [
+          Text(""),
+          harness.object([("", Text("a")), ("b", Text(""))]),
+          harness.object([("", Null())])
+        ]
+      )
+    ]
   )
   failed += harness.valid(
     s,
@@ -48,7 +56,12 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "- Mark McGwire\n- Sammy Sosa\n- Ken Griffey\n",
     ["[\"Mark McGwire\",\"Sammy Sosa\",\"Ken Griffey\"]"]
   )
-  failed += harness.parses(s, "FRK4", "{\n  ? foo :,\n  : bar,\n}\n", 1)
+  failed += harness.values(
+    s,
+    "FRK4",
+    "{\n  ? foo :,\n  : bar,\n}\n",
+    [harness.object([("foo", Null()), ("", Text("bar"))])]
+  )
   failed += harness.valid(s, "FTA2", "--- &sequence\n- a\n", ["[\"a\"]"])
   failed += harness.valid(s, "FUP4", "[a, [b, c]]\n", ["[\"a\",[\"b\",\"c\"]]"])
   failed += harness.valid(
@@ -400,18 +413,23 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "key:\n  value\n  with\n  \t\n  tabs\n",
     ["{\"key\":\"value with\\ntabs\"}"]
   )
-  failed += harness.parses(s, "NHX8", ":\n\n\n", 1)
+  failed += harness.values(s, "NHX8", ":\n\n\n", [harness.object([("", Null())])])
   failed += harness.valid(
     s,
     "NJ66",
     "---\n- { single line: value}\n- { multi\n  line: value}\n",
     ["[{\"single line\":\"value\"},{\"multi line\":\"value\"}]"]
   )
-  failed += harness.parses(
+  failed += harness.values(
     s,
     "NKF9",
     "---\nkey: value\n: empty key\n---\n{\n key: value, : empty key\n}\n---\n# empty key and value\n:\n---\n# empty key and value\n{ : }\n",
-    4
+    [
+      harness.object([("key", Text("value")), ("", Text("empty key"))]),
+      harness.object([("key", Text("value")), ("", Text("empty key"))]),
+      harness.object([("", Null())]),
+      harness.object([("", Null())])
+    ]
   )
   failed += harness.valid(
     s,

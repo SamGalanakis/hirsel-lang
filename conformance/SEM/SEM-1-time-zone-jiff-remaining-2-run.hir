@@ -1,0 +1,18 @@
+// rule: SEM-1
+// expect: run
+// jiff fff640d4 crates/jiff/src/tz/timezone.rs:3252, time_zone_posix_to_ambiguous_timestamp, NST3:30NDT,M3.2.0,M11.1.0; remaining 2 rows.
+pub fn main(t: Test) -> Result[(), ()] {
+  let zone = test.expect_ok(
+    t,
+    time_zone.from_tzif(check.footer_only("NST3:30NDT,M3.2.0,M11.1.0"))
+  )
+  check.ambiguity(
+    t,
+    zone,
+    [
+      ("2024-03-10T01:59:59.999999999", 0, -12600, -12600),
+      ("2024-11-03T00:59:59.999999999", 0, -9000, -9000)
+    ]
+  )
+  Ok(())
+}

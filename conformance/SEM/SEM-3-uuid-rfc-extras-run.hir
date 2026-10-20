@@ -1,0 +1,55 @@
+// rule: SEM-3
+// expect: run
+// RFC 9562 A.1/A.2/A.4/A.5/B.1/B.2 Figures 16, 19, 24, 25, 27, 30; uuid-rs 276c2362 src/parser.rs:337-382 test_parse_valid.
+pub fn main(t: Test) -> Result[(), ()] {
+  let id1 = test.expect_ok(t, uuid.parse("c232ab00-9414-11ec-b3c8-9f6bdeced846"))
+  test.equal(t, uuid.version(id1), 1u8)
+  test.equal(t, uuid.variant(id1), Rfc9562())
+  test.equal(t, uuid.to_string(id1), "c232ab00-9414-11ec-b3c8-9f6bdeced846")
+  test.equal(t, id1.bits, 0xc232ab00941411ecb3c89f6bdeced846u128)
+  let id2 = test.expect_ok(t, uuid.parse("5df41881-3aed-3515-88a7-2f4a814cf09e"))
+  test.equal(t, uuid.version(id2), 3u8)
+  test.equal(t, uuid.variant(id2), Rfc9562())
+  test.equal(t, uuid.to_string(id2), "5df41881-3aed-3515-88a7-2f4a814cf09e")
+  test.equal(t, id2.bits, 0x5df418813aed351588a72f4a814cf09eu128)
+  let id3 = test.expect_ok(t, uuid.parse("2ed6657d-e927-568b-95e1-2665a8aea6a2"))
+  test.equal(t, uuid.version(id3), 5u8)
+  test.equal(t, uuid.variant(id3), Rfc9562())
+  test.equal(t, uuid.to_string(id3), "2ed6657d-e927-568b-95e1-2665a8aea6a2")
+  test.equal(t, id3.bits, 0x2ed6657de927568b95e12665a8aea6a2u128)
+  let id4 = test.expect_ok(t, uuid.parse("1ec9414c-232a-6b00-b3c8-9f6bdeced846"))
+  test.equal(t, uuid.version(id4), 6u8)
+  test.equal(t, uuid.variant(id4), Rfc9562())
+  test.equal(t, uuid.to_string(id4), "1ec9414c-232a-6b00-b3c8-9f6bdeced846")
+  test.equal(t, id4.bits, 0x1ec9414c232a6b00b3c89f6bdeced846u128)
+  let id5 = test.expect_ok(t, uuid.parse("2489e9ad-2ee2-8e00-8ec9-32d5f69181c0"))
+  test.equal(t, uuid.version(id5), 8u8)
+  test.equal(t, uuid.variant(id5), Rfc9562())
+  test.equal(t, uuid.to_string(id5), "2489e9ad-2ee2-8e00-8ec9-32d5f69181c0")
+  test.equal(t, id5.bits, 0x2489e9ad2ee28e008ec932d5f69181c0u128)
+  let id6 = test.expect_ok(t, uuid.parse("5c146b14-3c52-8afd-938a-375d0df1fbf6"))
+  test.equal(t, uuid.version(id6), 8u8)
+  test.equal(t, uuid.variant(id6), Rfc9562())
+  test.equal(t, uuid.to_string(id6), "5c146b14-3c52-8afd-938a-375d0df1fbf6")
+  test.equal(t, id6.bits, 0x5c146b143c528afd938a375d0df1fbf6u128)
+  test.equal(
+    t,
+    uuid.to_string(test.expect_ok(t, uuid.parse("00000000000000000000000000000000"))),
+    "00000000-0000-0000-0000-000000000000"
+  )
+  test.equal(
+    t,
+    uuid.to_string(
+      test.expect_ok(t, uuid.parse("urn:UUID:67e55044-10b1-426f-9247-bb680e5fe0c8"))
+    ),
+    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+  )
+  test.equal(
+    t,
+    uuid.to_string(
+      test.expect_ok(t, uuid.parse("{6d93bade-bd9f-4e13-8914-9474e1e3567b}"))
+    ),
+    "6d93bade-bd9f-4e13-8914-9474e1e3567b"
+  )
+  Ok(())
+}

@@ -1,5 +1,5 @@
-// TOML 1.0 contracts: STD-OP-toml.* and TYPE-ROW-Value/TomlError/Segment/Document.
-// Grammar and table-definition rules follow toml-lang/toml v1.0.0 (toml.abnf) as
+// TOML 1.1 contracts: STD-OP-toml.* and TYPE-ROW-Value/TomlError/Segment/Document.
+// Grammar and table-definition rules follow toml-lang/toml v1.1.0 (toml.abnf) as
 // exercised by toml-test ff49d109861c1ad25af53f687f2aef19ab650600; the document
 // model and edit placement adapt toml-rs/toml crates/toml_edit at
 // ceac6e4412420d5a5c19e4f7293ad005cf1a31b2 (MIT/Apache-2.0).
@@ -230,7 +230,8 @@ fn hex_value(data: Bytes, mut pos: u64, digits: u64) -> Result[u32, TomlError] u
   Ok(n)
 }
 
-// Basic-string escapes (toml.abnf escape-seq-char); pos is after the backslash.
+// Basic-string escapes: toml-rs toml_parser/src/decoder/string.rs:312-370
+// (escape), including TOML 1.1 e/x; pos is after the backslash.
 @preserves_unique(output)
 fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
   (),
@@ -242,6 +243,8 @@ fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
     core@1/list.push(mut output, e)
   } else if e == b'b' {
     core@1/list.push(mut output, 8)
+  } else if e == b'e' {
+    core@1/list.push(mut output, 27)
   } else if e == b't' {
     core@1/list.push(mut output, 9)
   } else if e == b'n' {
@@ -250,8 +253,10 @@ fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
     core@1/list.push(mut output, 12)
   } else if e == b'r' {
     core@1/list.push(mut output, 13)
-  } else if e == b'u' || e == b'U' {
-    let digits: u64 = if e == b'u' {
+  } else if e == b'x' || e == b'u' || e == b'U' {
+    let digits: u64 = if e == b'x' {
+      2
+    } else if e == b'u' {
       4
     } else {
       8
@@ -430,22 +435,28 @@ fn days_in_month(year: u64, month: u64) -> u64 uses {} {
   }
 }
 
-// RFC 3339 partial-time with mandatory seconds (TOML 1.0): HH:MM:SS[.fraction].
+// TOML 1.1 partial-time, following toml-rs toml_datetime/src/datetime.rs:451-499:
+// HH:MM with optional :SS[.fraction]; an omitted second is zero.
 fn time_part(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
   if !digit_run(data, pos, 2) || peek(data, pos + 2) != b':' || !digit_run(
     data,
     pos + 3,
     2
-  ) || peek(data, pos + 5) != b':' || !digit_run(data, pos + 6, 2) {
+  ) {
     return Error(syntax(data, pos))
   }
-  if two_digits(data, pos) > 23 || two_digits(data, pos + 3) > 59 || two_digits(
-    data,
-    pos + 6
-  ) > 60 {
+  if two_digits(data, pos) > 23 || two_digits(data, pos + 3) > 59 {
     return Error(syntax(data, pos))
   }
-  pos += 8
+  pos += 5
+  if peek(data, pos) != b':' {
+    return Ok(())
+  }
+  pos += 1
+  if !digit_run(data, pos, 2) || two_digits(data, pos) > 60 {
+    return Error(syntax(data, pos))
+  }
+  pos += 2
   if peek(data, pos) == b'.' {
     pos += 1
     if !std@1/ascii.is_digit(peek(data, pos)) {
@@ -880,15 +891,17 @@ fn parse_value(
     pos += 1
     id
   } else if c == b'{' {
+    // toml-rs toml_parser/src/parser/document.rs:962-1256: trivia between
+    // members and a closing brace after a comma (TOML 1.1).
     let id = add_node(mut tree, data, pos, TABLE, INLINE, placeholder(), parent)?
     pos += 1
-    skip_space(data, mut pos)
+    skip_array_trivia(data, mut pos)?
     if peek(data, pos) == b'}' {
       pos += 1
     } else {
       while true {
         keyval(mut tree, data, mut pos, id, id, path, NONE)?
-        skip_space(data, mut pos)
+        skip_array_trivia(data, mut pos)?
         let next = peek(data, pos)
         pos += 1
         if next == b'}' {
@@ -897,7 +910,11 @@ fn parse_value(
         if next != b',' {
           return Error(syntax(data, pos - 1))
         }
-        skip_space(data, mut pos)
+        skip_array_trivia(data, mut pos)?
+        if peek(data, pos) == b'}' {
+          pos += 1
+          break
+        }
       }
     }
     // Dotted tables inside an inline table are sealed with it.
@@ -1102,7 +1119,7 @@ fn build(tree: Tree, id: u64) -> Value uses {} {
   Table(take entries)
 }
 
-// Parses TOML 1.0 text into its root table.
+// Parses TOML 1.1 text into its root table.
 pub fn parse(take text: String) -> Result[Value, TomlError] uses {} {
   let data = core@1/string.as_bytes(text)
   let parsed = parse_tree(data)?
@@ -1280,13 +1297,22 @@ fn valid_datetime(s: String) -> bool uses {} {
   }
 }
 
-// HH:MM:SS[.fraction] at pos of a validated spelling, the fraction truncated to
+// HH:MM[:SS[.fraction]] at pos of a validated spelling, the fraction truncated to
 // nanoseconds; a leap second has no time of day.
 fn time_of(data: Bytes, pos: u64) -> Result[(time.TimeOfDay, u64), TomlError] uses {} {
   let hour: u8 = core@1/int.narrow(two_digits(data, pos))
   let minute: u8 = core@1/int.narrow(two_digits(data, pos + 3))
-  let second: u8 = core@1/int.narrow(two_digits(data, pos + 6))
-  let mut end = pos + 8
+  let has_seconds = peek(data, pos + 5) == b':'
+  let second: u8 = if has_seconds {
+    core@1/int.narrow(two_digits(data, pos + 6))
+  } else {
+    0
+  }
+  let mut end = pos + if has_seconds {
+    8
+  } else {
+    5
+  }
   let mut nanos: u32 = 0
   let mut scale: u32 = 100000000
   if peek(data, end) == b'.' {
@@ -2115,13 +2141,13 @@ fn insert_inline(doc: Document, container: u64, keys: List[Segment], value: Valu
     return splice(data, n.value_start, n.value_end, text.finish_valid(take whole))
   }
   let e = doc.tree.entries[last]
-  // A multi-line array with a trailing comma gets a new line in the same style.
+  // A multi-line array or inline table with a trailing comma gets a new line in the same style.
   let close = n.value_end - 1
   let mut probe = e.value_end
   while probe < close && is_blank(data[probe]) {
     probe += 1
   }
-  if n.kind == ARRAY && probe < close && data[probe] == b',' {
+  if probe < close && data[probe] == b',' {
     let mut j = probe + 1
     while j < close && data[j] != b'\n' {
       j += 1
