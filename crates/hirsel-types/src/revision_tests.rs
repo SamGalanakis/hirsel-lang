@@ -1718,3 +1718,42 @@ fn caller_tracking_changes_declaration_identity_without_changing_callable_types(
     );
     assert_eq!(original.kind, signature.kind);
 }
+
+#[test]
+fn signature_types_names_each_directly_named_row_in_encoding_order() {
+    let types = TypeInterner::new(None);
+    let (_, record) = plain_record(&types);
+    let SignatureKind::Type(declaration) = &record.kind else {
+        unreachable!()
+    };
+    // The representation's field row is reached through it, not named.
+    assert_eq!(
+        encoding::signature_types(&types, &record),
+        vec![declaration.representation.unwrap()]
+    );
+    let unit = types.intern(Type::unit());
+    let scalar = types.intern(scalar());
+    let TypeKind::Function(mut callable) = function(unit, vec![]).kind else {
+        unreachable!()
+    };
+    callable.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Borrow,
+        ty: scalar,
+    }]
+    .into();
+    callable.error = Some(scalar);
+    let signature = Signature {
+        definition: DefId::intern(&path("f")),
+        metadata: SignatureMetadata::default(),
+        fingerprint: Default::default(),
+        kind: SignatureKind::Function(callable),
+    };
+    let roots = encoding::signature_types(&types, &signature);
+    assert!(
+        roots.contains(&unit) && roots.contains(&scalar),
+        "{roots:?}"
+    );
+    assert!(roots.iter().all(|id| types.contains(*id)));
+}

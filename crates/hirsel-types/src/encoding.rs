@@ -24,6 +24,32 @@ pub fn canonical_encoding(
     signature: &Signature,
     dependencies: &[SignatureDependency],
 ) -> Result<Vec<u8>, EncodingError> {
+    let mut e = Encoder::default();
+    encode_signature(&mut e, types, signature, dependencies)?;
+    if let Some(error) = e.error {
+        return Err(error);
+    }
+    Ok(e.bytes)
+}
+
+/// Every TypeId `signature` names directly, metadata included, in the order
+/// `canonical_encoding` reaches them; repeats are kept. A walk that stops at
+/// a malformed row returns the roots before it.
+pub fn signature_types(types: &TypeInterner, signature: &Signature) -> Vec<TypeId> {
+    let mut e = Encoder {
+        roots: Some(vec![]),
+        ..Encoder::default()
+    };
+    let _ = encode_signature(&mut e, types, signature, &[]);
+    e.roots.unwrap_or_default()
+}
+
+fn encode_signature(
+    e: &mut Encoder,
+    types: &TypeInterner,
+    signature: &Signature,
+    dependencies: &[SignatureDependency],
+) -> Result<(), EncodingError> {
     // No `..`: a new field must be encoded here or excluded with a reason,
     // or a changed declaration would keep its dependents' fingerprint.
     let Signature {
@@ -50,7 +76,6 @@ pub fn canonical_encoding(
         scope_capability,
         heap,
     } = roles;
-    let mut e = Encoder::default();
     e.atom(b"hirsel.signature.encoding.v16");
     e.path(definition.path());
     e.tag(match visibility {
@@ -264,10 +289,7 @@ pub fn canonical_encoding(
         e.path(&d.definition);
         e.atom(&d.fingerprint.0);
     }
-    if let Some(error) = e.error {
-        return Err(error);
-    }
-    Ok(e.bytes)
+    Ok(())
 }
 
 /// SHA-256 with its own domain, using the shared length-framed hash primitive.
@@ -314,6 +336,8 @@ pub struct Encoder {
     error: Option<EncodingError>,
     pub bytes: Vec<u8>,
     active: std::collections::HashSet<TypeId>,
+    /// When recording, the ids `ty` is called with outside any row.
+    roots: Option<Vec<TypeId>>,
 }
 impl Encoder {
     pub fn atom(&mut self, b: &[u8]) {
@@ -460,6 +484,11 @@ impl Encoder {
         }
     }
     pub fn ty(&mut self, id: TypeId, s: &TypeInterner) -> Result<(), EncodingError> {
+        if self.active.is_empty()
+            && let Some(roots) = &mut self.roots
+        {
+            roots.push(id);
+        }
         let t = s.get(id).ok_or(EncodingError::MissingType(id))?;
         if !self.active.insert(id) {
             return Err(EncodingError::StructuralCycle(id));
