@@ -730,7 +730,7 @@ pub(crate) fn execute_frames(
                                     callback_mut_arguments: mut_arguments,
                                     bounds: frame.check.as_ref().map(|check| {
                                         operation_bounds(
-                                            &check.state.borrow().config,
+                                            &check.state.borrow(),
                                             &reference.definition,
                                             &callback_inputs,
                                             &[],
@@ -2044,7 +2044,7 @@ pub(crate) fn execute_frames(
                         if let Some(result) = result {
                             let bounds = frame.check.as_ref().map(|check| {
                                 operation_bounds(
-                                    &check.state.borrow().config,
+                                    &check.state.borrow(),
                                     path,
                                     &checks,
                                     &mut_places,
@@ -4054,14 +4054,14 @@ fn restore_operation(
 /// the values retained by native state. Declared local results include the home
 /// of a borrowed binding, while transferred cursor items retain value bounds.
 fn operation_bounds(
-    config: &crate::checked::CheckedRuntime,
+    state: &crate::checked::State,
     path: &hirsel_syntax::DefPath,
     checks: &[crate::checked::Argument],
     mut_places: &[(usize, PlaceId)],
     taken: &[usize],
 ) -> crate::checked::OperationCheck {
     let total = |i: usize| checks.get(i).map(|c| c.shadow.total()).unwrap_or_default();
-    let signature = config.operations.get(path);
+    let signature = state.config.operations.get(path);
     let function = signature.and_then(|s| match &s.kind {
         hirsel_types::SignatureKind::Function(f) => Some(f),
         _ => None,
@@ -4083,12 +4083,13 @@ fn operation_bounds(
     moved.dedup();
     let mut retained = moved.clone();
     for (i, _) in mut_places {
-        retained.extend(
-            checks
-                .get(*i)
-                .map(|c| c.shadow.content_bound())
-                .unwrap_or_default(),
-        );
+        // Content the operation moves out of `mut` storage is the caller's, as
+        // for Replace: it keeps where it lives, not this frame's access root.
+        if let Some(check) = checks.get(*i) {
+            let mut content = check.shadow.clone();
+            state.caller_content(&mut content);
+            retained.extend(content.content_bound());
+        }
     }
     retained.sort_unstable();
     retained.dedup();

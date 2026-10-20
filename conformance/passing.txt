@@ -931,6 +931,7 @@ conformance/DROP/DROP-2-wave1-resource-run.hir
 conformance/DROP/DROP-2-wave1-short-circuit-run.hir
 conformance/DROP/DROP-2-wave2-bytes-replace-fail.hir
 conformance/DROP/DROP-2-wave2-bytes-replace-run.hir
+conformance/DROP/DROP-2-wrapped-sorted-map-remove-resource-run.hir
 conformance/DROP/DROP-3-propagated-error-bad.hir
 conformance/DROP/DROP-3-propagated-error-ok.hir
 conformance/DROP/DROP-3-resurrection-bad.hir

@@ -701,7 +701,7 @@ impl State {
     }
     /// Moving caller-owned content removes only mutable access roots. Ordinary
     /// binding/capture roots and actual placement bounds remain observable.
-    fn caller_content(&self, shadow: &mut Shadow) {
+    pub(crate) fn caller_content(&self, shadow: &mut Shadow) {
         let map = shadow
             .instances()
             .filter_map(|instance| {
