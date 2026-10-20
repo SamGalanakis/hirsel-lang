@@ -85,6 +85,8 @@ const COUNTS: [&str; 22] = [
     "invalidated by universe errors",
     "invalidated by first heap",
     "invalidated by environment",
+    "mode memo queries",
+    "mode memo hits",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {

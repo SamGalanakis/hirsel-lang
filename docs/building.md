@@ -585,8 +585,10 @@ lowered; under `check`, the bodies lowered at check time), `recomputes`
 (per-definition queries computed rather than reused), `invalidated by <read>`
 (memos the engine marked dirty because one input of that read kind changed:
 signature, lookup, name set, representation, executed body, cited text,
-declaration candidates and the rest of the engine's typed reads) and store and
-object hits and misses (0 until those caches exist).
+declaration candidates and the rest of the engine's typed reads), `mode memo
+queries` and `mode memo hits` (the proofs and comparisons the mode passes ask
+their query's `ContextMemo`, and the entries it reused, interior sub-proofs
+included) and store and object hits and misses (0 until those caches exist).
 
 `runner` reports the native runs made as program images in a runner (`image
 runs`), how many of those images were already cached (`cached images`), and each

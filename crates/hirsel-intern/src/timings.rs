@@ -171,11 +171,15 @@ pub enum Count {
     InvalidatedFirstHeap,
     /// Memos invalidated by a changed environment read.
     InvalidatedEnvironment,
+    /// Proofs and comparisons the mode passes asked their query's `ContextMemo`.
+    ModeMemoQueries,
+    /// Entries those queries reused, interior sub-proofs included.
+    ModeMemoHits,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 22] = [
+    pub const ALL: [Count; 24] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -198,6 +202,8 @@ impl Count {
         Count::InvalidatedUniverseErrors,
         Count::InvalidatedFirstHeap,
         Count::InvalidatedEnvironment,
+        Count::ModeMemoQueries,
+        Count::ModeMemoHits,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -224,6 +230,8 @@ impl Count {
             Count::InvalidatedUniverseErrors => "invalidated by universe errors",
             Count::InvalidatedFirstHeap => "invalidated by first heap",
             Count::InvalidatedEnvironment => "invalidated by environment",
+            Count::ModeMemoQueries => "mode memo queries",
+            Count::ModeMemoHits => "mode memo hits",
         }
     }
 }
@@ -368,6 +376,14 @@ pub fn wait() -> WaitGuard {
 pub fn count(count: Count) {
     if enabled() {
         TOTALS.counts[count as usize].fetch_add(1, Relaxed);
+    }
+}
+
+/// Count `n` `count` events.
+#[inline]
+pub fn count_by(count: Count, n: u64) {
+    if enabled() && n > 0 {
+        TOTALS.counts[count as usize].fetch_add(n, Relaxed);
     }
 }
 

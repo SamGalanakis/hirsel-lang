@@ -7,6 +7,13 @@ use hirsel_types::{
     TypeKind,
 };
 
+/// Count one memo query of a mode pass and the entries it reused (`--timings`).
+pub fn count_memo(hits_before: u64, hits_after: u64) {
+    use hirsel_intern::timings::{self, Count};
+    timings::count(Count::ModeMemoQueries);
+    timings::count_by(Count::ModeMemoHits, hits_after - hits_before);
+}
+
 const STRUCTURAL: ProofFlags = ProofFlags {
     check_root_locality: true,
     use_evidence: true,

@@ -1472,11 +1472,10 @@ impl Checker<'_> {
         let generics = self.declarations().nested(&function.generics);
         let reader = self.reader;
         let mut lookup = |d: DefId| Ok(reader.borrow_mut().read(d).ok());
-        let compatible = ContextMemo::new(self.t, &generics, &mut lookup).view(
-            expected_result,
-            result,
-            TypeRelation::Value,
-        );
+        let mut memo = ContextMemo::new(self.t, &generics, &mut lookup);
+        let compatible = memo.view(expected_result, result, TypeRelation::Value);
+        hirsel_modes::proofs::count_memo(0, memo.hits());
+        drop(memo);
         self.record_reads();
         let compatible = compatible.unwrap_or_else(|error| self.proof_failure(error, false));
         if !compatible {

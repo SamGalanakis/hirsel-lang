@@ -275,7 +275,9 @@ impl Checker<'_> {
         fallback: T,
         proof: impl FnOnce(&mut ContextMemo<'_>) -> Result<T, QueryError>,
     ) -> T {
+        let hits = self.memo.hits();
         let result = proof(&mut self.memo);
+        hirsel_modes::proofs::count_memo(hits, self.memo.hits());
         self.record_reads();
         result.unwrap_or_else(|error| self.proof_failure(error, fallback))
     }

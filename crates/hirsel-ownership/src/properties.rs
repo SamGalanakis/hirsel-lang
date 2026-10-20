@@ -35,7 +35,11 @@ impl<'q> Signatures<'q> {
     }
     /// A flow proof: its lookups see only retained signatures.
     pub fn prove_cached<T>(&self, proof: impl FnOnce(&mut ContextMemo<'q>) -> T) -> T {
-        proof(&mut self.cached_memo.borrow_mut())
+        let memo = &mut self.cached_memo.borrow_mut();
+        let hits = memo.hits();
+        let result = proof(memo);
+        hirsel_modes::proofs::count_memo(hits, memo.hits());
+        result
     }
     pub fn read(
         &mut self,
@@ -61,7 +65,9 @@ impl<'q> Signatures<'q> {
         reads: &mut Vec<DependencyRead>,
         proof: impl FnOnce(&mut ContextMemo<'q>) -> Result<T, QueryError>,
     ) -> Result<T, QueryError> {
+        let hits = self.memo.hits();
         let result = proof(&mut self.memo);
+        hirsel_modes::proofs::count_memo(hits, self.memo.hits());
         self.record(reads);
         result
     }
@@ -80,11 +86,8 @@ impl<'q> Signatures<'q> {
             })
             .collect()
     }
-    /// Memo hits so far, for the lane report.
-    pub fn hits(&self) -> u64 {
-        self.memo.hits() + self.cached_memo.borrow().hits()
-    }
 }
+
 /// SEM-3: naming a function in a nominal receiver's association promises
 /// uniqueness of its builder, including for ordinary direct calls.
 pub(super) fn format_association(
