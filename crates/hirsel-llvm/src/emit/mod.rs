@@ -415,6 +415,8 @@ fn lower<T>(
                 module.make_linkonce_odr(function);
                 let attribute = if unit.header.definition.is_core("list.push")
                     || unit.header.definition.is_core("$native.list_push_spare")
+                    || unit.header.definition.is_core("net.read_into")
+                    || unit.header.definition.is_core("read_half.read_into")
                 {
                     Attribute::AlwaysInline
                 } else {

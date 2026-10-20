@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 10
+// expect: reject CLO-4 at line 11
+// twin: CLO/CLO-4-stream-read-http-ok.hir
 fn unproved(mut r: http.Request) -> () {
   let mut buffer: List[u8] = []
   let _ = http.read_body(mut r, mut buffer, 1)

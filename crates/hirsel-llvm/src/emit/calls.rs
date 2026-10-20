@@ -376,6 +376,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             )?),
             None => None,
         };
+        if name.as_deref() == Some("hirsel_rt_v2_net_read_into")
+            && let Some(function) = function
+        {
+            // The runtime writes only the received prefix and retains no address
+            // past this call. Observed suffixes still retain their initializer.
+            for attribute in [Attribute::WriteOnly, Attribute::CapturesNone] {
+                self.module
+                    .add_attribute(function, AttributeSlot::Parameter(5), attribute);
+            }
+        }
         let mut args = Vec::new();
         let mut result_place = None;
         let codes = self.caller_sites(self.anchor_code(site.anchor)?, site.forward_caller);
