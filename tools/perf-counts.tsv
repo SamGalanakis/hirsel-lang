@@ -1,4 +1,4 @@
-# Cachegrind Ir; LLVM release programs, one small-input epoch; tolerance +/-1%.
+# Cachegrind Ir; LLVM release programs, one small-input epoch; regression tolerance +1%.
 # check/hello-web: open: checked compiler took 113s; compiler counts exceed the pool budget
 # check/todo-api: open: release compiler took 232.56s / 27,528,240,687 Ir; checked exceeded 240s
 case	Ir	function

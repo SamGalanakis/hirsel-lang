@@ -1,0 +1,654 @@
+#!/usr/bin/env python3
+"""The full suite on origin/main each hour, its reds routed to the lanes that caused them.
+
+    tools/main-runs --tick       # the timer's entry: run the suite if origin/main moved
+    tools/main-runs --status     # the last run, the current reds and their owners, the skipped stages
+    tools/main-runs --install    # install and start the systemd user timer (hourly)
+
+A systemd user timer (hirsel-main-runs.timer, Persistent, under the lingering
+user manager) starts `--tick` every hour; it needs no session. A tick takes
+the runner's lock without waiting: while a run (or its bisect) holds it, the
+tick is skipped, never queued. It fetches origin/main and, when main has not
+moved since the last completed run, records the skip and stops. Otherwise it
+checks the sha out in the runner's own worktree (`$HIRSEL_MAIN_RUNS/worktrees/
+main-runs`, so the pool sees its work as lane `main-runs`) and runs that
+sha's copy of this script on it, so a landed fix to the runner holds from the
+next run:
+
+- `tools/gate --full` at pool priority PRIORITY (below the lanes' 50 and
+  land's 75), without a gate slot, each stage's Buck2 logs kept apart
+  (HIRSEL_FULL_LOGS) so every target's result is read back. The stages
+  tools/main-runs-skip.tsv lists are skipped and named;
+- one row per run in `hirsel-main-runs.jsonl` in the clone's common git
+  directory: the sha, every target's and every Buck2-less stage's pass or
+  fail, the pool CPU-hours the run reserved and used (the scheduler's trace on
+  POOL_TRACE_HOST, by the lane identity), the duration and the log;
+- for each new red (a target that passed, or did not exist, in the previous
+  run): the commits since the last run where it passed, bisected over the
+  landings in them (`hirsel-landings.jsonl`: each landed change's tip) with
+  only the failing targets, as tools/land bisects a batch
+  (gating.first_failing), in a second worktree (lane `main-bisect`). The
+  first red landing is the culprit and its lane the owner: a row per failing
+  test id goes into tools/known-failures.tsv, pushed straight to main, and the
+  lane is told with the repro (`sluice tool say`) if its step still runs, the
+  orchestrator otherwise. A red with no earlier pass, or no landing to blame,
+  goes to the orchestrator;
+- a red that is still red in a second run goes to the orchestrator;
+- the instruction budgets ratchet down: when gate-perf-counts passes (it fails
+  only on a regression beyond its tolerance, a red like any other), every
+  count it measured lower than tools/perf-counts.tsv beyond the 1% noise is
+  written into the table (tools/perf-counts ratchet) and pushed straight to
+  main; a drop of more than 15% prints PERF-CHECK and goes to the
+  orchestrator.
+
+Each red is a row of kind `red` in the same file, with its culprit, owner,
+batch and what was said to whom.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+TREE = Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+
+RUNS = Path(os.environ.get('HIRSEL_MAIN_RUNS') or
+            Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hirsel/main-runs')
+TREES = Path(os.environ.get('HIRSEL_MAIN_WORKTREES') or RUNS / 'worktrees')
+RUN_TREE, BISECT_TREE = TREES / 'main-runs', TREES / 'main-bisect'
+ROWS = 'hirsel-main-runs.jsonl'
+LANDINGS = 'hirsel-landings.jsonl'
+LOCK_FD = 'HIRSEL_MAIN_RUNS_LOCK_FD'
+# Below a lane's 50 and land's 75 (tools/buck2/platforms.bzl).
+PRIORITY = 40
+POOL_TRACE_HOST = os.environ.get('HIRSEL_POOL_TRACE_HOST', 'kiln-cache')
+POOL_TRACE_DIR = '/var/lib/kiln-resource-hints/trace'
+PROJECT = 'hirsel-lang'
+ORCHESTRATOR = os.environ.get('HIRSEL_ORCHESTRATOR', '@agentlang-24')
+SLUICE = os.environ.get('HIRSEL_SLUICE', 'sluice')
+PASSED = ('pass', 'skip', 'omitted')
+UNIT = 'hirsel-main-runs'
+PERF_TARGET = 'gate-perf-counts'
+PERF_BASELINE = 'tools/perf-counts.tsv'
+PERF_MARKER = 'PERF_COUNTS_RECORD '
+# A drop this large is checked by hand (PERF-CHECK).
+PERF_CHECK_PERCENT = 15
+
+
+def say(message):
+    print(f'main-runs: {message}', flush=True)
+
+
+def git(*arguments, cwd=TREE, check=True):
+    return subprocess.run(['git', *arguments], cwd=cwd, check=check, capture_output=True, text=True).stdout.strip()
+
+
+def common_dir():
+    return Path(git('rev-parse', '--path-format=absolute', '--git-common-dir'))
+
+
+def now():
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def read_rows(kind=None):
+    path = common_dir() / ROWS
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    return [row for row in rows if kind is None or row.get('kind') == kind]
+
+
+def append_row(row):
+    with open(common_dir() / ROWS, 'a') as out:
+        out.write(json.dumps(row, sort_keys=True) + '\n')
+
+
+def log_tick(message):
+    RUNS.mkdir(parents=True, exist_ok=True)
+    with open(RUNS / 'ticks.log', 'a') as out:
+        out.write(f'{now()} {message}\n')
+    say(message)
+
+
+# ---------------------------------------------------------------- the tick
+
+def lock():
+    """The runner's lock, held for a whole run and its bisect, or None when held."""
+    RUNS.mkdir(parents=True, exist_ok=True)
+    handle = open(RUNS / 'main-runs.lock', 'a+')
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+def checkout(tree, sha):
+    """`tree` at `sha`, detached and clean; its ignored files (the prepared
+    toolchains, buck-out) stay, so each run reuses its daemon's state."""
+    if not (tree / '.git').exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(tree, ignore_errors=True)
+        git('worktree', 'add', '-f', '--detach', str(tree), sha)
+    git('checkout', '-q', '-f', '--detach', sha, cwd=tree)
+    git('clean', '-fdq', cwd=tree)
+
+
+def tick():
+    handle = lock()
+    if handle is None:
+        log_tick('skip: a run is still going')
+        return 0
+    git('fetch', '-q', 'origin', 'main')
+    sha = git('rev-parse', 'refs/remotes/origin/main')
+    runs = read_rows('run')
+    if runs and runs[-1]['sha'] == sha:
+        log_tick(f'skip: origin/main is still {sha[:12]}, which the last run checked')
+        return 0
+    log_tick(f'run: origin/main {sha[:12]}')
+    checkout(RUN_TREE, sha)
+    os.set_inheritable(handle.fileno(), True)
+    os.execve(sys.executable, [sys.executable, str(RUN_TREE / 'tools/main-runs'), '--run', sha],
+              os.environ | {LOCK_FD: str(handle.fileno())})
+
+
+# ---------------------------------------------------------------- one run
+
+def gating_module():
+    """This tree's gating.py (the run's sha)."""
+    sys.path.insert(0, str(TREE / 'tools/buck2'))
+    import gating
+    return gating
+
+
+def full_run(sha, directory):
+    """`tools/gate --full` on this tree: (exit status, seconds, log)."""
+    log = directory / 'gate.log'
+    env = os.environ | dict(HIRSEL_PRIORITY=str(PRIORITY), HIRSEL_FULL_LOGS=str(directory / 'logs'),
+                            CARGO_BUILD_JOBS='4', HIRSEL_JOBS='4', RUST_TEST_THREADS='4')
+    env.pop('HIRSEL_GATE_SLOTS', None)
+    (directory / 'logs').mkdir(parents=True, exist_ok=True)
+    say(f'tools/gate --full on {sha[:12]}; log {log}')
+    started = time.monotonic()
+    with open(log, 'w') as out:
+        status = subprocess.run([str(TREE / 'tools/gate'), '--full'], cwd=TREE, env=env,
+                                stdout=out, stderr=subprocess.STDOUT).returncode
+    return status, time.monotonic() - started, log
+
+
+def stage_rows(logs):
+    path = logs / 'stages.jsonl'
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+def key(target, tag):
+    return f'{target} [{tag}]' if tag else target
+
+
+def target_results(gating, folder):
+    """Every Buck2 test result in a folder of event logs, later runs last."""
+    found = {}
+    for path in sorted(Path(folder).glob('*.pb.zst')) if Path(folder).is_dir() else []:
+        try:
+            found.update(gating.test_results(path))
+        except (subprocess.CalledProcessError, ValueError, OSError) as error:
+            say(f'cannot read {path}: {error}')
+    return found
+
+
+def collect(gating, logs):
+    """(targets, stages, skipped): each target's and Buck2-less stage's
+    result, and the stages the skip list skipped."""
+    targets, stages, skipped = {}, [], []
+    for row in stage_rows(logs):
+        if row['status'] == 'skipped':
+            skipped.append(row['skip'])
+            continue
+        stages.append(dict(stage=row['stage'], status=row['status'], seconds=row.get('seconds')))
+        failed = False
+        for name, result in target_results(gating, logs / row['logs']).items():
+            status = gating.STATUS.get(result['status'], str(result['status'])).lower()
+            passed = status in PASSED
+            failed |= not passed
+            targets[key(name, row['tag'])] = dict(
+                result='pass' if passed else 'fail', stage=row['stage'], target=name, tag=row['tag'],
+                ids=[] if passed else gating.failing_ids(name, result['details'])[:40],
+                details='' if passed else gating.last_lines(result['details'], 12),
+                measurement=perf_measurement('pass' if passed else 'fail', result['details'])
+                if name == PERF_TARGET else None)
+        # A stage that failed without a failed target is a red of its own.
+        targets[f'stage: {row["stage"]}'] = dict(result='fail' if row['status'] and not failed else 'pass',
+                                                 stage=row['stage'], target=None, tag='')
+    return targets, stages, skipped
+
+
+def pool_cpu(lane, start):
+    """The pool CPU-hours (reserved, used) the lane's executions took since
+    `start` (epoch seconds), from the scheduler's usage trace; or the error.
+    Only the run uses the lane: its bisect runs as lane main-bisect."""
+    needle = f'|lane:{lane}|'
+    command = f'cd {POOL_TRACE_DIR} && sudo -n grep -h -F {shlex.quote(needle)} *.jsonl'
+    try:
+        lines = subprocess.run(['ssh', '-o', 'BatchMode=yes', POOL_TRACE_HOST, command], capture_output=True,
+                               text=True, timeout=600).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, None, str(error)
+    seen, end = {}, time.time()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if (event.get('event') == 'usage' and needle in f'|{event.get("identity", "")}|'
+                and event.get('wall_time_ms') is not None and start <= event.get('end_s', 0) <= end):
+            seen[(event['operation'], event.get('attempt'))] = event
+    reserved = sum(e['effective_cpu'] * e['wall_time_ms'] for e in seen.values()) / 3_600_000
+    used = sum(e.get('cpu_time_ms', 0) for e in seen.values()) / 3_600_000
+    return round(reserved, 2), round(used, 2), None if seen else f'no usage events for lane {lane}'
+
+
+def run(sha):
+    if LOCK_FD not in os.environ:
+        raise SystemExit('main-runs: --run is the tick\'s; run tools/main-runs --tick')
+    gating = gating_module()
+    directory = RUNS / 'runs' / f'{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())}-{sha[:12]}'
+    directory.mkdir(parents=True)
+    start, started = now(), time.time()
+    status, seconds, log = full_run(sha, directory)
+    targets, stages, skipped = collect(gating, directory / 'logs')
+    reserved, used, error = pool_cpu(TREE.name, started)
+    row = dict(kind='run', sha=sha, start=start, end=now(), duration_seconds=round(seconds), exit=status,
+               result='pass' if status == 0 else 'fail', cpu_hours=reserved, cpu_used_hours=used, cpu_error=error,
+               targets={name: found['result'] for name, found in sorted(targets.items())},
+               failing={name: {k: found[k] for k in ('stage', 'target', 'tag', 'ids')}
+                        for name, found in targets.items() if found['result'] == 'fail'},
+               stages=stages, skipped=skipped, log=str(log))
+    previous = read_rows('run')
+    measured = targets.get(PERF_TARGET, {}).get('measurement')
+    row['perf'] = ratchet_perf(gating, sha, measured) if measured else None
+    append_row(row)
+    say(f'{sha[:12]}: {row["result"]} in {seconds / 60:.0f} min, {reserved} CPU-h reserved; '
+        f'{len(row["failing"])} reds of {len(targets)}')
+    route(gating, sha, targets, previous, directory)
+    return 0
+
+
+# ---------------------------------------------------------------- reds
+
+def landings():
+    """Each landed change's tip on main, with its landing row."""
+    path = common_dir() / LANDINGS
+    found = {}
+    for line in path.read_text().splitlines() if path.exists() else []:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get('landed'):
+            found[row['landed']] = row
+    return found
+
+
+def last_pass(previous, name):
+    for row in reversed(previous):
+        if row['targets'].get(name) == 'pass':
+            return row['sha']
+    return None
+
+
+def route(gating, sha, targets, previous, directory):
+    """Bisect each new red, list it as a known failure and tell its owner;
+    escalate a red that survived a second run."""
+    last = previous[-1]['targets'] if previous else {}
+    reds = {name: found for name, found in targets.items() if found['result'] == 'fail'}
+    new = {name: found for name, found in reds.items() if last.get(name) != 'fail'}
+    again = sorted(name for name in reds
+                   if last.get(name) == 'fail' and (len(previous) < 2 or previous[-2]['targets'].get(name) != 'fail'))
+    if again:
+        tell(ORCHESTRATOR, f'main-runs: {len(again)} reds on origin/main survived a second run ({sha[:12]}): '
+             + '; '.join(again) + f'. Owners: tools/main-runs --status. Log: {directory / "gate.log"}')
+    orphans, by_green = [], {}
+    for name, found in sorted(new.items()):
+        green = last_pass(previous, name)
+        if green is None:
+            orphans.append(name)
+            append_row(dict(kind='red', sha=sha, key=name, green=None, culprit=None, owner=None, at=now(),
+                            reason='no earlier run passed it'))
+        else:
+            by_green.setdefault(green, {})[name] = found
+    if orphans:
+        tell(ORCHESTRATOR, f'main-runs: {len(orphans)} reds on origin/main {sha[:12]} with no earlier passing run to '
+             'bisect from: ' + '; '.join(orphans) + f'. Log: {directory / "gate.log"}')
+    if by_green:
+        bisect = Bisect(gating, stage_rows(directory / 'logs'))
+        for green, found in sorted(by_green.items()):
+            for name, culprit in bisect.culprits(green, sha, found).items():
+                blame(gating, bisect, sha, green, name, found[name], culprit, directory)
+
+
+def points(green, red):
+    """The landed changes' tips from `green` to `red` in main's order, ending
+    with `red`: what a bisect over land batches tries."""
+    landed = landings()
+    commits = git('rev-list', '--first-parent', '--reverse', f'{green}..{red}').split()
+    tips = [commit for commit in commits if commit in landed]
+    return tips if tips[-1:] == [red] else tips + [red]
+
+
+class Bisect:
+    """Reruns of a run's red targets at other commits, in the bisect worktree,
+    each (commit, red) once."""
+
+    def __init__(self, gating, stages):
+        self.gating = gating
+        self.stages = {row['stage']: row for row in stages if row['status'] != 'skipped'}
+        self.results = {}   # (sha, red) -> whether it fails
+        self.current = None
+
+    def at(self, sha):
+        """The bisect worktree at `sha`, prepared."""
+        if self.current != sha:
+            checkout(BISECT_TREE, sha)
+            subprocess.run([sys.executable, 'tools/buck2/prepare.py'], cwd=BISECT_TREE, capture_output=True)
+            self.current = sha
+
+    def command(self, row, targets):
+        """The stage's probe for these targets (the stage itself without one),
+        run with the bisect worktree's own scripts."""
+        if targets and row.get('probe'):
+            command = [part for item in row['probe']
+                       for part in ([f'root//:{target}' for target in targets] if item == '{targets}' else [item])]
+        else:
+            command = row.get('command') or ['false']
+        return [part.replace(f'{TREE}/', f'{BISECT_TREE}/') for part in command]
+
+    def fails(self, sha, names, found):
+        """Whether each named red fails at `sha`: only its targets run."""
+        pending = [name for name in names if (sha, name) not in self.results]
+        groups = {}
+        for name in pending:
+            groups.setdefault(found[name]['stage'], []).append(name)
+        for stage, group in groups.items():
+            self.at(sha)
+            targets = [found[name]['target'] for name in group if found[name]['target']]
+            command = self.command(self.stages.get(stage, {}), targets)
+            say(f'bisect: {sha[:12]}: ' + ' '.join(command[:10]) + (' ...' if len(command) > 10 else ''))
+            with tempfile.TemporaryDirectory(prefix='main-bisect-') as logs:
+                status = subprocess.run(command, cwd=BISECT_TREE, capture_output=True, text=True,
+                                        env=os.environ | {'HIRSEL_BUCK2_LOG_DIR': logs}).returncode
+                results = target_results(self.gating, logs)
+            for name in group:
+                target = found[name]['target']
+                if target is None:
+                    self.results[(sha, name)] = status != 0
+                elif target in results:
+                    state = self.gating.STATUS.get(results[target]['status'], '').lower()
+                    self.results[(sha, name)] = state not in PASSED
+                else:
+                    # No result: a commit that does not declare the target cannot fail it.
+                    self.results[(sha, name)] = status != 0 and self.declared(target)
+        return {name: self.results[(sha, name)] for name in names}
+
+    def declared(self, target):
+        found = subprocess.run([str(BISECT_TREE / '.buck2/bin/buck2'), 'uquery', f'root//:{target}'],
+                               cwd=BISECT_TREE, capture_output=True, text=True)
+        return found.returncode == 0 and bool(found.stdout.strip())
+
+    def culprits(self, green, red, found):
+        """The first landing from `green` to `red` at which each red fails,
+        trying each landing's tip with the still unexplained reds alone."""
+        tips = points(green, red)
+        culprits, remaining, low = {}, sorted(found), 0
+        say(f'bisect: {len(remaining)} reds over {len(tips)} landings after {green[:12]}')
+        while remaining:
+            offset = low
+            index = offset + self.gating.first_failing(
+                len(tips) - offset, lambda i: any(self.fails(tips[offset + i], remaining, found).values()))
+            failed = [name for name, red_now in self.fails(tips[index], remaining, found).items() if red_now]
+            for name in failed:
+                culprits[name] = tips[index]
+            remaining = [name for name in remaining if name not in failed]
+            low = index + 1
+            if remaining and low >= len(tips):
+                # Red at main's tip in the run, but not when rerun: the tip is all it can name.
+                culprits.update({name: red for name in remaining})
+                break
+        return culprits
+
+
+def lane_running(step):
+    shown = subprocess.run([SLUICE, 'tool', 'step_get', '--project', PROJECT, '--step', step, '--compact'],
+                           capture_output=True, text=True)
+    try:
+        return json.loads(shown.stdout)['step']['status'] == 'running'
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def tell(to, body):
+    with tempfile.NamedTemporaryFile('w', prefix='main-runs-', suffix='.md') as message:
+        message.write(body + '\n')
+        message.flush()
+        sent = subprocess.run([SLUICE, 'tool', 'say', '--project', PROJECT, '--to', to, '--body-file', message.name],
+                              capture_output=True, text=True, env=os.environ | {'SLUICE_ME': '@main-runs'})
+    say(f'told {to}' + ('' if sent.returncode == 0 else f' (failed: {sent.stderr.strip()[-300:]})'))
+    return sent.returncode == 0
+
+
+def repro(found, culprit):
+    if found['target'] is None:
+        return f'git checkout {culprit[:12]}; tools/gate --full (stage: {found["stage"]})'
+    tag = f' in the {found["tag"]} profile of tools/gate --full' if found['tag'] else ''
+    return f'git checkout {culprit[:12]}; tools/gate --tests {found["target"]}{tag}'
+
+
+def blame(gating, bisect, sha, green, name, found, culprit, directory):
+    landing = landings().get(culprit)
+    owner = landing.get('branch') if landing else None
+    ids = found.get('ids') or ([found['target']] if found['target'] else [])
+    command = repro(found, culprit)
+    added = add_known_failures(gating, ids, owner, culprit, sha, command) if owner and found['target'] else []
+    bisect.current = None  # the known failures moved the bisect worktree to main
+    body = (f'main-runs: {name} turned red on origin/main at {culprit[:12]}'
+            + (f', the landing of {owner} (batch: {", ".join(landing.get("batch") or [owner])})' if owner else
+               ', a commit no landing recorded')
+            + f'; it passed at {green[:12]} and fails at {sha[:12]}.'
+            + (f' Failing: {", ".join(ids)}.' if ids else '')
+            + f' Repro: {command}.'
+            + (f' Listed in tools/known-failures.tsv with you as owner: {", ".join(added)}; your next landing expires it.'
+               if added else '')
+            + (f'\n{found["details"]}' if found.get('details') else '')
+            + f'\nLog: {directory / "gate.log"}')
+    to = owner if owner and lane_running(owner) else ORCHESTRATOR
+    told = tell(to, body)
+    append_row(dict(kind='red', sha=sha, key=name, green=green, culprit=culprit, owner=owner, at=now(),
+                    batch=landing.get('batch') if landing else None, known_failures=added, told=to if told else None,
+                    repro=command))
+
+
+def add_known_failures(gating, ids, owner, culprit, sha, command, attempts=5):
+    """Push rows for these ids, owned by the culprit's lane, straight to main:
+    the ids added."""
+    for _ in range(attempts):
+        git('fetch', '-q', 'origin', 'main', cwd=BISECT_TREE)
+        checkout(BISECT_TREE, git('rev-parse', 'refs/remotes/origin/main', cwd=BISECT_TREE))
+        path = BISECT_TREE / gating.KNOWN_FAILURES
+        text = path.read_text() if path.exists() else ''
+        listed = gating.parse_known_failures(text)
+        added = [i for i in ids if i not in listed]
+        if not added:
+            return []
+        reason = (f'red on main since {culprit[:12]} (found by the hourly main run at {sha[:12]}); '
+                  f'repro: {command}').replace('\t', ' ')
+        day = time.strftime('%Y-%m-%d', time.gmtime())
+        path.write_text(text + ('' if not text or text.endswith('\n') else '\n')
+                        + ''.join(f'{i}\t{reason}\t{owner}\t{day}\n' for i in added))
+        git('add', '--', gating.KNOWN_FAILURES, cwd=BISECT_TREE)
+        git('commit', '-q', '-m', f'List the failures {owner}\'s landing {culprit[:12]} made on main as known failures.',
+            cwd=BISECT_TREE)
+        if subprocess.run(['git', 'push', '-q', 'origin', 'HEAD:main'], cwd=BISECT_TREE,
+                          capture_output=True).returncode == 0:
+            say(f'listed {", ".join(added)} as known failures owned by {owner}')
+            return added
+    say(f'cannot push the known failures of {owner} after {attempts} attempts')
+    return []
+
+
+# ---------------------------------------------------------------- instruction budgets
+
+def perf_measurement(result, details):
+    """The complete measurement a passing gate-perf-counts run printed, or None."""
+    if result != 'pass':
+        return None
+    records = [line.removeprefix(PERF_MARKER) for line in details.splitlines() if line.startswith(PERF_MARKER)]
+    return json.loads(records[0]) if len(records) == 1 else None
+
+
+def ratchet_perf(gating, sha, measured, attempts=5):
+    """Write the counts main measured lower than the table into it and push
+    the table straight to main: the improvements, or None when there are none."""
+    import runpy
+    for _ in range(attempts):
+        git('fetch', '-q', 'origin', 'main', cwd=TREE)
+        main = git('rev-parse', 'refs/remotes/origin/main', cwd=TREE)
+        checkout(BISECT_TREE, main)
+        counts = runpy.run_path(str(BISECT_TREE / 'tools/perf-counts'))
+        baseline = BISECT_TREE / PERF_BASELINE
+        try:
+            rows, improvements = counts['ratchet'](counts['read_table'](baseline), [measured])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            say(f'cannot ratchet the instruction budgets: {error}')
+            return dict(error=str(error))
+        if not improvements:
+            return None
+        baseline.write_text(counts['table'](rows))
+        git('add', '--', PERF_BASELINE, cwd=BISECT_TREE)
+        git('commit', '-q', '-m', f'Ratchet the instruction budgets main measured at {sha[:12]}.', cwd=BISECT_TREE)
+        if subprocess.run(['git', 'push', '-q', 'origin', 'HEAD:main'], cwd=BISECT_TREE,
+                          capture_output=True).returncode == 0:
+            pushed = git('rev-parse', 'HEAD', cwd=BISECT_TREE)
+            say(f'ratcheted {len(improvements)} instruction budgets in {pushed[:12]}')
+            checks = [item for item in improvements
+                      if (item['old'] - item['new']) * 100 > item['old'] * PERF_CHECK_PERCENT]
+            for item in checks:
+                say(f'PERF-CHECK {item["count"]} {item["old"]} -> {item["new"]} (measured at {sha[:12]})')
+            if checks:
+                tell(ORCHESTRATOR, 'main-runs: PERF-CHECK: instruction counts dropped more than '
+                     f'{PERF_CHECK_PERCENT}% on origin/main at {sha[:12]}: '
+                     + '; '.join(f'{i["count"]} {i["old"]:,} -> {i["new"]:,}' for i in checks)
+                     + f'. Ratcheted in {pushed[:12]}; check that the drop is real.')
+            return dict(pushed=pushed, improvements=improvements, checks=[item['count'] for item in checks])
+    say(f'cannot push the ratcheted instruction budgets after {attempts} attempts')
+    return dict(error='push rejected')
+
+
+# ---------------------------------------------------------------- status and install
+
+def status():
+    runs = read_rows('run')
+    holder = lock()
+    if holder is None:
+        say('a run is going now' + (f' (log under {RUNS / "runs"})' if (RUNS / 'runs').is_dir() else ''))
+    else:
+        holder.close()
+    if not runs:
+        say('no completed run yet')
+        return 0
+    last = runs[-1]
+    say(f'last run: {last["sha"][:12]} finished {last["end"]}: {last["result"]}, '
+        f'{last["duration_seconds"] / 60:.0f} min, {last["cpu_hours"]} CPU-h reserved '
+        f'({last["cpu_used_hours"]} used); log {last["log"]}')
+    blamed = {}
+    for row in read_rows('red'):
+        blamed[row['key']] = row
+    reds = sorted(last['failing'])
+    say(f'reds: {len(reds)}')
+    for name in reds:
+        streak = 0
+        for row in reversed(runs):
+            if row['targets'].get(name) != 'fail':
+                break
+            streak += 1
+        row = blamed.get(name, {})
+        owner = row.get('owner') or 'unknown'
+        culprit = f', culprit {row["culprit"][:12]}' if row.get('culprit') else ''
+        say(f'  {name}: red for {streak} runs; owner {owner}{culprit}')
+    for skip in last.get('skipped', []):
+        say(f'skipped stage: {skip["stage"]}: {skip["reason"]} (owner {skip["owner"]}, since {skip["date"]})')
+    return 0
+
+
+SERVICE = '''[Unit]
+Description=Hirsel: the full suite on a new origin/main (tools/main-runs)
+
+[Service]
+Type=oneshot
+ExecStart={python} {script} --tick
+Environment=PATH={path}
+Environment=HIRSEL_MAIN_RUNS={runs}
+Nice=10
+MemoryMax=8G
+CPUQuota=400%
+TimeoutStartSec=infinity
+'''
+TIMER = '''[Unit]
+Description=Hirsel: the hourly full suite on origin/main
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+'''
+
+
+def install():
+    """Install the timer; its service runs the runner worktree's copy."""
+    git('fetch', '-q', 'origin', 'main')
+    if not (RUN_TREE / '.git').exists():
+        checkout(RUN_TREE, git('rev-parse', 'refs/remotes/origin/main'))
+    units = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'systemd/user'
+    units.mkdir(parents=True, exist_ok=True)
+    path = ':'.join(dict.fromkeys([str(Path.home() / '.local/bin'), str(Path.home() / '.cargo/bin'),
+                                   '/usr/local/bin', '/usr/bin', '/bin']))
+    (units / f'{UNIT}.service').write_text(SERVICE.format(python=sys.executable, script=RUN_TREE / 'tools/main-runs',
+                                                          path=path, runs=RUNS))
+    (units / f'{UNIT}.timer').write_text(TIMER)
+    env = os.environ | {'XDG_RUNTIME_DIR': os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'}
+    env.setdefault('DBUS_SESSION_BUS_ADDRESS', f'unix:path={env["XDG_RUNTIME_DIR"]}/bus')
+    for command in (['daemon-reload'], ['enable', '--now', f'{UNIT}.timer']):
+        subprocess.run(['systemctl', '--user', *command], check=True, env=env)
+    say(f'installed {units / UNIT}.timer (hourly) and its service')
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--tick', action='store_true', help='run the suite if origin/main moved (the timer\'s entry)')
+    mode.add_argument('--status', action='store_true', help='the last run, the current reds, their owners')
+    mode.add_argument('--install', action='store_true', help='install and start the hourly systemd user timer')
+    mode.add_argument('--run', metavar='SHA', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.tick:
+        return tick()
+    if args.status:
+        return status()
+    if args.install:
+        return install()
+    return run(args.run)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

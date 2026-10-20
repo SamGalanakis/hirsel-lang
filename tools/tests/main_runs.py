@@ -1,242 +1,277 @@
 #!/usr/bin/env python3
-"""Exercise the scheduled runner against a local origin and a fake resource scope."""
+"""The hourly main runner (tools/main-runs) against a local origin, and the full gate's stages."""
+import fcntl
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import tempfile
 import sys
+import time
 
 sys.dont_write_bytecode = True
 import unittest
 
-RUNNER = Path(__file__).resolve().parents[1] / 'main-full-run.sh'
-sys.path.insert(0, str(RUNNER.parent / 'buck2'))
+TOOLS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS / 'buck2'))
 from sync import AGREE_LIMIT, NATIVE_FULL_SHARDS  # noqa: E402
 
+# Buck2 for the runner's scratch repository: `test` runs each named target,
+# which fails when the tree holds RED-<name> and prints DETAILS-<name> when it
+# holds that, and writes its result where the full gate's stage keeps its logs;
+# `log show` replays a log.
+FAKE_BUCK2 = r'''#!/usr/bin/env bash
+if [[ $1 == log && $2 == show ]]; then cat "$3"; exit 0; fi
+if [[ $1 == uquery ]]; then echo "${2}"; exit 0; fi
+if [[ $1 == test ]]; then
+  log="$HIRSEL_BUCK2_LOG_DIR/$(date +%s%N)-test.pb.zst"
+  status=0
+  printf '%s\n' "test $PWD ${*:2}" >> "$COMMANDS"
+  for argument in "${@:2}"; do
+    [[ $argument == root//:* ]] || continue
+    name=${argument#root//:}
+    if [[ -e RED-$name ]]; then result=2; details="test case_x ... FAILED"; status=1
+    elif [[ -e DETAILS-$name ]]; then result=1; details=$(cat "DETAILS-$name")
+    else result=1; details="test case_x ... ok"; fi
+    printf '{"Event":{"data":{"Instant":{"data":{"TestResult":{"name":"%s","status":%s,"details":"%s","duration_us":1000}}}}}}\n' \
+      "$argument" "$result" "$details" >> "$log"
+  done
+  exit $status
+fi
+'''
+# The full gate: one Buck2 stage over targets a and b (and gate-perf-counts when
+# the tree prints its measurement), recorded as tools/gate --full records it.
+FAKE_GATE = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+assert sys.argv[1:] == ['--full'] and os.environ['HIRSEL_PRIORITY'] == '40'
+subprocess.run([sys.executable, 'tools/buck2/prepare.py'], check=True)
+logs = Path(os.environ['HIRSEL_FULL_LOGS'])
+(logs / '01-workspace-tests').mkdir(parents=True)
+command = ['.buck2/bin/buck2', 'test', 'root//:a', 'root//:b']
+if Path('DETAILS-gate-perf-counts').exists():
+    command.append('root//:gate-perf-counts')
+status = subprocess.run(command, env=os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs / '01-workspace-tests')}).returncode
+with open(logs / 'stages.jsonl', 'a') as out:
+    out.write(json.dumps(dict(index=1, stage='workspace tests', logs='01-workspace-tests', tag='', command=command,
+                              probe=['.buck2/bin/buck2', 'test', '{targets}'], status=status, seconds=1)) + '\n')
+    out.write(json.dumps(dict(stage='native matrix', status='skipped',
+                              skip=dict(stage='native matrix', reason='never completes', owner='native-coverage',
+                                        date='2026-10-20'))) + '\n')
+sys.exit(status)
+'''
+FAKE_PREPARE = '''import os
+if not os.path.exists('.buck2/bin'):
+    os.makedirs('.buck2', exist_ok=True)
+    os.symlink(os.environ['FAKE_BUCK2_BIN'], '.buck2/bin')
+'''
+# sluice: a step is running when it is in RUNNING; `say` is logged with its body.
+FAKE_SLUICE = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+value = lambda flag: args[args.index(flag) + 1]
+if args[:2] == ['tool', 'step_get']:
+    status = 'running' if value('--step') in os.environ.get('RUNNING', '').split() else 'done'
+    print(json.dumps({'step': {'status': status}}))
+elif args[:2] == ['tool', 'say']:
+    with open(os.environ['SAID'], 'a') as out:
+        out.write(json.dumps(dict(to=value('--to'), me=os.environ.get('SLUICE_ME'),
+                                  body=open(value('--body-file')).read())) + '\n')
+'''
+# The pool's trace host: one usage event of the runner's lane, now.
+FAKE_SSH = r'''#!/usr/bin/env python3
+import json, sys, time
+if 'lane:main-runs|' in sys.argv[-1]:
+    print(json.dumps(dict(event='usage', operation='op', attempt='1', identity='repo:hirsel-lang|lane:main-runs|user:t',
+                          effective_cpu=2, wall_time_ms=1_800_000, cpu_time_ms=1_800_000, end_s=time.time())))
+'''
 
-class MainFullRun(unittest.TestCase):
+
+def git(root, *args):
+    return subprocess.run(['git', *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+
+class MainRuns(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.repo = self.root / 'repo'
-        self.runs = self.root / 'runs'
-        self.trees = self.root / 'trees'
-        self.bin = self.root / 'bin'
-        for directory in (self.repo / 'tools', self.bin):
-            directory.mkdir(parents=True)
-        (self.repo / 'tools/main-full-run.sh').write_text(RUNNER.read_text())
-        (self.repo / 'tools/main_full_result.py').write_text(
-            (RUNNER.parent / 'main_full_result.py').read_text())
-        self.env = os.environ | {
-            'PATH': f'{self.bin}:{os.environ["PATH"]}',
-            'HIRSEL_MAIN_RUNS': str(self.runs),
-            'HIRSEL_MAIN_WORKTREES': str(self.trees),
-        }
-        self.env['HIRSEL_GATE_SLOTS'] = 'none'
-        self.scope_args = self.root / 'scope-args'
-        self.env['SCOPE_ARGS'] = str(self.scope_args)
-        scope = self.bin / 'systemd-run'
-        scope.write_text('''#!/usr/bin/env bash
-printf '%s\\n' "$@" > "$SCOPE_ARGS"
-while [[ ${1:-} != nice ]]; do shift; done
-exec "$@"
-''')
-        scope.chmod(0o755)
-        self.git('init', '-b', 'main')
-        self.git('config', 'user.email', 'test@example.invalid')
-        self.git('config', 'user.name', 'Gate test')
-        self.gate('echo "gate: passed (0 s)"')
-        origin = self.root / 'origin.git'
-        subprocess.run(['git', 'clone', '--bare', str(self.repo), str(origin)],
-                       check=True, capture_output=True)
-        self.git('remote', 'add', 'origin', str(origin))
+        top = Path(self.temp.name)
+        self.origin, self.clone, self.runs = top / 'origin.git', top / 'clone', top / 'runs'
+        fake = top / 'bin'
+        fake.mkdir()
+        for name, text in (('buck2', FAKE_BUCK2), ('sluice', FAKE_SLUICE), ('ssh', FAKE_SSH)):
+            (fake / name).write_text(text)
+            (fake / name).chmod(0o755)
+        self.said, self.commands = top / 'said', top / 'commands'
+        self.env = os.environ | {'HIRSEL_MAIN_RUNS': str(self.runs), 'HIRSEL_SLUICE': str(fake / 'sluice'),
+                                 'PATH': f'{fake}:{os.environ["PATH"]}', 'FAKE_BUCK2_BIN': str(fake),
+                                 'SAID': str(self.said), 'COMMANDS': str(self.commands), 'RUNNING': 'lane-two',
+                                 'HIRSEL_TEST_HISTORY': str(top / 'history.tsv')}
+        for name in ('HIRSEL_MAIN_WORKTREES', 'HIRSEL_GATE_SLOTS', 'HIRSEL_BUCK2_LOG_DIR'):
+            self.env.pop(name, None)
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(self.origin)], check=True)
+        subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.clone)], check=True, capture_output=True)
+        git(self.clone, 'config', 'user.email', 'test@example.invalid')
+        git(self.clone, 'config', 'user.name', 'Main runs test')
+        files = {'tools/main-runs': (TOOLS / 'main-runs').read_text(), 'tools/gate': FAKE_GATE,
+                 'tools/buck2/prepare.py': FAKE_PREPARE, '.gitignore': '.buck2/\n',
+                 'tools/known-failures.tsv': '# id\treason\towner\tdate\n'}
+        for helper in (TOOLS / 'buck2').glob('*.py'):
+            if helper.name != 'prepare.py':
+                files[f'tools/buck2/{helper.name}'] = helper.read_text()
+        self.commit(files, 'Base')
+        for name in ('main-runs', 'gate'):
+            (self.clone / 'tools' / name).chmod(0o755)
+        git(self.clone, 'commit', '-qam', 'Executable tools')
+        git(self.clone, 'push', '-q', 'origin', 'main')
 
-    def git(self, *args):
-        return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
-                              capture_output=True, text=True).stdout.strip()
+    def commit(self, files, message):
+        for path, text in files.items():
+            (self.clone / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.clone / path).write_text(text)
+        git(self.clone, 'add', '-A')
+        git(self.clone, 'commit', '-qm', message)
+        return git(self.clone, 'rev-parse', 'HEAD')
 
-    def gate(self, body):
-        path = self.repo / 'tools/gate'
-        path.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n')
-        path.chmod(0o755)
-        self.git('add', '.')
-        self.git('commit', '-m', 'Gate fixture')
+    def land(self, lanes):
+        """Push one commit per lane, as one batch, and log its landings."""
+        batch = [lane for lane, _ in lanes]
+        rows = []
+        for position, (lane, files) in enumerate(lanes, 1):
+            tip = self.commit(files, f'{lane} lands')
+            rows.append(dict(branch=lane, landed=tip, batch=batch, batch_position=position))
+        git(self.clone, 'push', '-q', 'origin', 'main')
+        pushed = git(self.clone, 'rev-parse', 'HEAD')
+        with open(self.clone / '.git/hirsel-landings.jsonl', 'a') as out:
+            out.writelines(json.dumps(row | dict(pushed=pushed)) + '\n' for row in rows)
+        return [row['landed'] for row in rows]
 
-    def run_gate(self):
-        return subprocess.run(['bash', str(self.repo / 'tools/main-full-run.sh')],
-                              env=self.env, capture_output=True, text=True)
+    def tick(self):
+        result = subprocess.run([sys.executable, str(self.clone / 'tools/main-runs'), '--tick'], cwd=self.clone,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
 
-    def result(self):
-        text = (self.runs / 'latest.json').read_text()
-        self.assertEqual(len(text.splitlines()), 1)
-        self.assertFalse((self.runs / 'main-full.pid').exists())
-        self.assertEqual(list(self.trees.iterdir()), [])
-        return json.loads(text)
+    def rows(self, kind):
+        path = self.clone / '.git/hirsel-main-runs.jsonl'
+        rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return [row for row in rows if row['kind'] == kind]
 
-    def test_pins_origin_and_cleans_worktree_under_required_scope(self):
-        sha = self.git('rev-parse', 'HEAD')
-        # Dirty local code must never run on scheduled main.
-        (self.repo / 'tools/gate').write_text('#!/bin/sh\nexit 99\n')
-        run = self.run_gate()
-        self.assertEqual(run.returncode, 0, run.stderr)
-        result = self.result()
-        self.assertEqual(result['sha'], sha)
-        self.assertEqual(result['result'], 'pass')
-        self.assertIsNone(result['first_failing_stage'])
-        self.assertEqual(result['failing_tests'], [])
-        self.assertTrue(Path(result['log']).exists())
-        args = self.scope_args.read_text().splitlines()
-        self.assertEqual(args[:6], ['--user', '--scope', '-p', 'MemoryMax=8G',
-                                   '-p', 'CPUQuota=400%'])
-        self.assertEqual(args[6:], ['nice', '-n', '10', 'tools/gate', '--full'])
+    def messages(self):
+        return [json.loads(line) for line in self.said.read_text().splitlines()] if self.said.exists() else []
 
-    def test_reports_inner_native_failure_and_failed_tests(self):
-        self.gate('''echo 'test native::seed_law ... FAILED'
-echo 'check-native.sh: native laws failed (exit 101, 1 s)'
-echo 'gate: native and Lean checks failed (exit 101, 1 s)'
-exit 101''')
-        self.git('push', 'origin', 'main')
-        run = self.run_gate()
-        self.assertEqual(run.returncode, 101)
-        result = self.result()
-        self.assertEqual(result['result'], 'fail')
-        self.assertEqual(result['first_failing_stage'], 'native laws')
-        self.assertEqual(result['failing_tests'], ['native::seed_law'])
+    def test_a_run_records_every_target_its_cpu_and_its_skipped_stages_and_an_unmoved_main_is_skipped(self):
+        self.tick()
+        [run] = self.rows('run')
+        self.assertEqual(run['sha'], git(self.clone, 'rev-parse', 'origin/main'))
+        self.assertEqual((run['result'], run['targets']),
+                         ('pass', {'a': 'pass', 'b': 'pass', 'stage: workspace tests': 'pass'}))
+        self.assertEqual((run['cpu_hours'], run['cpu_used_hours']), (1.0, 0.5))
+        self.assertEqual([skip['stage'] for skip in run['skipped']], ['native matrix'])
+        self.tick()
+        self.assertEqual(len(self.rows('run')), 1)
+        self.assertIn('skip: origin/main is still', (self.runs / 'ticks.log').read_text())
+        status = subprocess.run([sys.executable, str(self.clone / 'tools/main-runs'), '--status'], cwd=self.clone,
+                                env=self.env, capture_output=True, text=True, check=True).stdout
+        self.assertIn('reds: 0', status)
+        self.assertIn('skipped stage: native matrix: never completes (owner native-coverage', status)
 
-    def test_records_every_stage_of_a_run_that_continues_past_failures(self):
-        self.gate('''echo 'gate: workspace build passed (3 s)'
-echo 'gate: workspace tests failed (exit 32, 40 s)' >&2
-echo 'check-native.sh: Lean RC model audit failed (exit 1, 2 s)' >&2
-echo 'check-native.sh: runtime C harness passed (5 s)'
-echo 'gate: native and Lean checks failed (exit 1, 9 s)' >&2
-echo 'gate: native matrix: both targets and named exclusions passed (60 s)'
-echo 'gate: 2 failing stages: workspace tests;native and Lean checks' >&2
-exit 32''')
-        self.git('push', 'origin', 'main')
-        self.assertEqual(self.run_gate().returncode, 32)
-        result = self.result()
-        self.assertEqual(result['first_failing_stage'], 'workspace tests')
-        self.assertEqual([(s['gate'], s['stage'], s['result'], s['exit'], s['seconds'])
-                          for s in result['stages']], [
-            ('gate', 'workspace build', 'pass', 0, 3),
-            ('gate', 'workspace tests', 'fail', 32, 40),
-            ('check-native.sh', 'Lean RC model audit', 'fail', 1, 2),
-            ('check-native.sh', 'runtime C harness', 'pass', 0, 5),
-            ('gate', 'native and Lean checks', 'fail', 1, 9),
-            ('gate', 'native matrix: both targets and named exclusions', 'pass', 0, 60)])
-
-    def test_collects_named_cli_failures(self):
-        self.gate("""echo 'conformance/run/corpus.hir: wrong observation'
-echo 'memcheck: conformance/run/memory.hir under x86: invalid read'
-echo 'topology: native-tests/topology/units.hir: wrong observation'
-echo 'generated: success-1 under arm: unavailable'
-echo 'hash sweep: conformance/run/hash.hir under x86: wrong observation'
-echo 'native: conformance/run/matrix.hir llvm under x86: new exclusion'
-echo 'gate: native matrix failed (exit 1, 1 s)'
-exit 1""")
-        self.git('push', 'origin', 'main')
-        self.assertEqual(self.run_gate().returncode, 1)
-        self.assertEqual(self.result()['failing_tests'], [
-            'conformance/run/corpus.hir', 'conformance/run/hash.hir', 'conformance/run/matrix.hir',
-            'conformance/run/memory.hir', 'native-tests/topology/units.hir', 'success-1'])
-
-    def test_collects_only_failed_agreement_clusters(self):
-        report = json.dumps({'clusters': [
-            {'kind': 'native/known', 'path': 'known.hir'},
-            {'kind': 'native/new', 'path': 'new.hir'}]})
-        for stage, native, expected in [
-                ('source and IR checker agreement', False, ['known.hir', 'new.hir']),
-                ('agreement campaign on heap and native code', True, ['new.hir']),
-                ('agreement under second hash seed', True, ['new.hir'])]:
-            with self.subTest(stage=stage):
-                data = json.loads(report)
-                if native:
-                    data['known_kinds'] = 1
-                self.gate(f"""echo '{json.dumps(data)}'
-echo 'agree: new discrepancy kind: native/new'
-echo 'gate: {stage} failed (exit 1, 1 s)'
-exit 1""")
-                self.git('push', 'origin', 'main')
-                self.assertEqual(self.run_gate().returncode, 1)
-                self.assertEqual(self.result()['failing_tests'], expected)
-
-    def test_collects_failures_from_buck2_timestamped_output(self):
-        # The shape of 20261015T163232Z: Buck2 prefixes every line of a test's
-        # output with a timestamp and colours its summary.
-        ts = '[2026-10-15T19:22:00.843+02:00] '
-        self.gate(f"""printf '%s\\n' \\
-  '{ts}✗ Fail: root//:hirsel-pipeline-tests-test-it-shard-1 (34:40.0s)' \\
-  '{ts}---- STDOUT ----' '{ts}' '{ts}running 3 tests' \\
-  '{ts}test rt_measurement_native::full_gate_binarytrees_and_inline_counts_match_on_x86_64 ... ok' \\
-  '{ts}test rt_io_native::full_gate_io_leaves_agree_and_replay_on_both_targets ... FAILED' \\
-  '{ts}test rt_text_native::full_gate_text_calls_failures_c_abi_and_compiled_drops_agree_on_both_targets ... FAILED' \\
-  '{ts}' '{ts}failures:' '{ts}' \\
-  '{ts}---- rt_io_native::full_gate_io_leaves_agree_and_replay_on_both_targets stdout ----' \\
-  '{ts}thread panicked at crates/hirsel-pipeline-tests/tests/it/rt_io_native.rs:217:9:' \\
-  '{ts}test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 562 filtered out' \\
-  '{ts}memcheck: native-tests/regressions/leak.hir under x86_64/regions/elide/reuse/flat-walk/llvm-O0/whole/diagnostic: exit 97' \\
-  '{ts}✓ Pass: root//:hirsel-lir-unittest (0.1s)' \\
-  'Tests finished: \\033[38;5;10mPass 64\\033[39m. \\033[38;5;9mFail 1\\033[39m. Timeout 0.' \\
-  '1 TESTS FAILED' \\
-  '  ✗ root//:hirsel-pipeline-tests-test-it-shard-1 (root//tools/buck2:dev#b48a97a5614255e0)' \\
-  '{ts}✗ Timeout: root//:gate-native-full (14400.0s)' \\
-  'gate: full gate crate tests failed (exit 32, 2081 s)'
-exit 32""")
-        self.git('push', 'origin', 'main')
-        self.assertEqual(self.run_gate().returncode, 32)
-        result = self.result()
-        self.assertEqual(result['first_failing_stage'], 'full gate crate tests')
-        self.assertEqual(result['failing_tests'], [
-            'native-tests/regressions/leak.hir',
-            'root//:gate-native-full',
-            'root//:hirsel-pipeline-tests-test-it-shard-1',
-            'rt_io_native::full_gate_io_leaves_agree_and_replay_on_both_targets',
-            'rt_text_native::full_gate_text_calls_failures_c_abi_and_compiled_drops_agree_on_both_targets'])
-        self.assertEqual(result['infra_failures'], [])
-
-    def test_separates_targets_the_pool_never_started(self):
-        ts = '[2026-10-16T13:19:09.431+02:00] '
-        self.gate(f"""printf '%s\\n' \\
-  '{ts}✗ Fail: root//:gate-agree-full-shard-43 (0.0s)' '{ts}---- STDOUT ----' '{ts}' '{ts}---- STDERR ----' \\
-  '{ts}Remote Execution Error on Execute with digest cb43:147 for ReSession GRPC-SESSION-ID' \\
-  '{ts}✗ Fail: root//:gate-agree-full-shard-7 (812.0s)' '{ts}---- STDOUT ----' '{ts}' '{ts}---- STDERR ----' \\
-  '{ts}agree: 1 discrepancy cluster' \\
-  '  ✗ root//:gate-agree-full-shard-43 (root//tools/buck2:dev#b48a97a5614255e0)' \\
-  '  ✗ root//:gate-agree-full-shard-7 (root//tools/buck2:dev#b48a97a5614255e0)' \\
-  'gate: source and IR checker agreement (unrestricted) failed (exit 32, 250 s)'
-exit 32""")
-        self.git('push', 'origin', 'main')
-        self.assertEqual(self.run_gate().returncode, 32)
-        result = self.result()
-        self.assertEqual(result['failing_tests'], ['root//:gate-agree-full-shard-7'])
-        self.assertEqual(result['infra_failures'], ['root//:gate-agree-full-shard-43'])
-
-    def test_active_lock_refuses_to_fetch_or_replace_latest(self):
+    def test_a_tick_while_a_run_holds_the_lock_is_skipped_not_queued(self):
         self.runs.mkdir()
-        latest = self.runs / 'latest.json'
-        latest.write_text('previous\n')
-        with (self.runs / 'main-full.lock').open('w') as lock:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            run = self.run_gate()
-        self.assertEqual(run.returncode, 75)
-        self.assertEqual(latest.read_text(), 'previous\n')
-        self.assertFalse(self.trees.exists())
+        with open(self.runs / 'main-runs.lock', 'a+') as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.tick()
+        self.assertEqual(self.rows('run'), [])
+        self.assertIn('skip: a run is still going', (self.runs / 'ticks.log').read_text())
 
-    def test_stale_pid_does_not_prevent_run(self):
-        self.runs.mkdir()
-        (self.runs / 'main-full.pid').write_text('999999999\n')
-        self.assertEqual(self.run_gate().returncode, 0)
-        self.assertEqual(self.result()['result'], 'pass')
+    def test_a_planted_red_is_bisected_to_its_landing_listed_and_its_lane_told(self):
+        self.tick()
+        green = git(self.clone, 'rev-parse', 'origin/main')
+        one, two, three = self.land([('lane-one', {'one.txt': '1\n'}), ('lane-two', {'RED-b': 'red\n'}),
+                                     ('lane-three', {'three.txt': '3\n'})])
+        self.tick()
+        run = self.rows('run')[-1]
+        self.assertEqual((run['sha'], run['result'], run['targets']['a'], run['targets']['b']),
+                         (three, 'fail', 'pass', 'fail'))
+        [red] = self.rows('red')
+        self.assertEqual((red['key'], red['green'], red['culprit'], red['owner'], red['told']),
+                         ('b', green, two, 'lane-two', 'lane-two'))
+        self.assertEqual(red['batch'], ['lane-one', 'lane-two', 'lane-three'])
+        # Only the failing target ran at each bisect point, never a.
+        probes = [line for line in self.commands.read_text().splitlines() if 'main-bisect' in line]
+        self.assertTrue(probes)
+        self.assertTrue(all(line.endswith(' root//:b') for line in probes), probes)
+        # The known failure is on main, owned by the culprit's lane.
+        git(self.clone, 'fetch', '-q', 'origin')
+        listed = git(self.clone, 'show', 'origin/main:tools/known-failures.tsv').splitlines()[-1].split('\t')
+        self.assertEqual((listed[0], listed[2]), ('b::case_x', 'lane-two'))
+        self.assertIn(two[:12], listed[1])
+        [told] = self.messages()
+        self.assertEqual((told['to'], told['me']), ('lane-two', '@main-runs'))
+        self.assertIn(f'turned red on origin/main at {two[:12]}, the landing of lane-two', told['body'])
+        self.assertIn('Repro: git checkout', told['body'])
+        # Still red in the next run (main moved by the known-failure row): the orchestrator hears once.
+        self.tick()
+        self.assertEqual(len(self.rows('run')), 3)
+        self.assertEqual(len(self.rows('red')), 1)
+        escalated = self.messages()[1:]
+        self.assertEqual([message['to'] for message in escalated], ['@agentlang-24'])
+        self.assertIn('survived a second run', escalated[0]['body'])
+        status = subprocess.run([sys.executable, str(self.clone / 'tools/main-runs'), '--status'], cwd=self.clone,
+                                env=self.env, capture_output=True, text=True, check=True).stdout
+        self.assertIn(f'  b: red for 2 runs; owner lane-two, culprit {two[:12]}', status)
 
-    def test_scope_failure_still_records_and_cleans(self):
-        (self.bin / 'systemd-run').write_text('#!/bin/sh\nexit 7\n')
-        self.assertEqual(self.run_gate().returncode, 7)
-        result = self.result()
-        self.assertEqual(result['first_failing_stage'], 'resource scope')
-        self.assertEqual(result['result'], 'fail')
+    def test_a_passing_perf_run_ratchets_the_lower_budgets_onto_main_and_flags_a_large_drop(self):
+        def row(total, function):
+            return {'Ir': total, 'functions': {'f': function}}
+        before = {'micro/a': row(1000, 900), 'micro/b': row(1000, 900)}
+        table = runpy.run_path(str(TOOLS / 'perf-counts'))['table']
+        # micro/a drops 20% (ratcheted and checked by hand); micro/b's 0.5% is noise.
+        measured = {'micro/a': row(800, 700), 'micro/b': row(995, 900)}
+        record = 'PERF_COUNTS_RECORD ' + json.dumps(measured, sort_keys=True, separators=(',', ':'))
+        sha = self.commit({'tools/perf-counts': (TOOLS / 'perf-counts').read_text(),
+                           'tools/perf-counts.tsv': table(before),
+                           'DETAILS-gate-perf-counts': json.dumps(record)[1:-1]}, 'Perf baseline')
+        git(self.clone, 'push', '-q', 'origin', 'main')
+        self.tick()
+        [run] = self.rows('run')
+        self.assertEqual((run['sha'], run['targets']['gate-perf-counts']), (sha, 'pass'))
+        self.assertEqual(run['perf']['improvements'], [dict(count='micro/a', old=1000, new=800)])
+        self.assertEqual(run['perf']['checks'], ['micro/a'])
+        git(self.clone, 'fetch', '-q', 'origin')
+        self.assertEqual(git(self.clone, 'rev-parse', 'origin/main'), run['perf']['pushed'])
+        self.assertEqual(git(self.clone, 'log', '-1', '--format=%s', 'origin/main'),
+                         f'Ratchet the instruction budgets main measured at {sha[:12]}.')
+        self.assertEqual(git(self.clone, 'show', 'origin/main:tools/perf-counts.tsv') + '\n',
+                         table({'micro/a': row(800, 700), 'micro/b': row(1000, 900)}))
+        [told] = self.messages()
+        self.assertEqual(told['to'], '@agentlang-24')
+        self.assertIn('PERF-CHECK', told['body'])
+        self.assertIn('micro/a 1,000 -> 800', told['body'])
+        # The ratchet's push is a new main measuring the same: nothing more to write.
+        self.tick()
+        self.assertEqual(self.rows('run')[-1]['perf'], None)
+        self.assertEqual(len(self.messages()), 1)
+
+    def test_a_red_whose_lane_has_finished_goes_to_the_orchestrator(self):
+        self.env['RUNNING'] = ''
+        self.tick()
+        _, two = self.land([('lane-one', {'one.txt': '1\n'}), ('lane-two', {'RED-a': 'red\n'})])
+        self.tick()
+        [red] = self.rows('red')
+        self.assertEqual((red['culprit'], red['owner'], red['told']), (two, 'lane-two', '@agentlang-24'))
+
+    def test_reds_with_no_earlier_passing_run_go_to_the_orchestrator_unbisected(self):
+        self.commit({'RED-a': 'red\n'}, 'Red from the start')
+        git(self.clone, 'push', '-q', 'origin', 'main')
+        self.tick()
+        [red] = self.rows('red')
+        self.assertEqual((red['key'], red['culprit']), ('a', None))
+        [told] = self.messages()
+        self.assertEqual(told['to'], '@agentlang-24')
+        self.assertIn('no earlier passing run', told['body'])
+        self.assertFalse(any('main-bisect' in line for line in self.commands.read_text().splitlines()))
 
 
 class GateCommands(unittest.TestCase):
@@ -248,12 +283,12 @@ class GateCommands(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('.buck2/bin', 'tools/tests', 'tools/buck2', 'bench/native/tests'):
             (self.root / directory).mkdir(parents=True)
-        for test in ('main_full_run', 'buck2_sync', 'gate'):
+        for test in ('main_runs', 'buck2_sync', 'gate'):
             (self.root / f'tools/tests/{test}.py').write_text('# fixture gate tests\n')
         (self.root / 'bench/native/tests/test_fixture.py').write_text(
             'import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        pass\n')
         for helper in ('gating', 'generated', 'graph', 'impact', 'event_logs', 'test_sizes_from_usage'):
-            (self.root / f'tools/buck2/{helper}.py').write_text((RUNNER.parent / f'buck2/{helper}.py').read_text())
+            (self.root / f'tools/buck2/{helper}.py').write_text((TOOLS / f'buck2/{helper}.py').read_text())
         for helper in ('prepare', 'sync', 'clippy', 'fmt', 'conformance', 'agree'):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys
 AGREE_LIMIT = {AGREE_LIMIT}
@@ -276,13 +311,11 @@ if os.environ.get("FAIL_COUNTS") == "1":
 sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
 ''')
         gate = self.root / 'tools/gate'
-        gate.write_text((RUNNER.parent / 'gate').read_text())
+        gate.write_text((TOOLS / 'gate').read_text())
         gate.chmod(0o755)
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7',
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
-        # Scratch gates must not acquire a slot held by the gate running this test.
-        self.env['HIRSEL_GATE_SLOTS'] = 'none'
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.write_text('''#!/usr/bin/env bash
 if [[ ${2:-} == --event-log ]]; then command=$1; shift 3; set -- "$command" "$@"; fi
@@ -365,11 +398,10 @@ class NativeGate(unittest.TestCase):
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
-        self.env['HIRSEL_GATE_SLOTS'] = 'none'
         (self.root / 'tools').mkdir()
-        (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
+        (self.root / 'tools/check-native.sh').write_text((TOOLS / 'check-native.sh').read_text())
         (self.root / 'tools/buck2').mkdir()
-        (self.root / 'tools/buck2/event_logs.py').write_text((RUNNER.parent / 'buck2/event_logs.py').read_text())
+        (self.root / 'tools/buck2/event_logs.py').write_text((TOOLS / 'buck2/event_logs.py').read_text())
         for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh',
                      'proofs/ordered/check.sh'):
             path = self.root / tool
@@ -414,7 +446,7 @@ if [[ $1 == build ]]; then echo /archives; fi
 
 class AgreementShards(unittest.TestCase):
     def setUp(self):
-        sys.path.insert(0, str(RUNNER.parent / 'buck2'))
+        sys.path.insert(0, str(TOOLS / 'buck2'))
         import agree
         self.agree = agree
         self.report = dict(seed=1, limit=4, hash_seed=0, programs=3, generated=9, eligible=9, variants_per_program=96,
@@ -479,7 +511,7 @@ class AgreementShards(unittest.TestCase):
 
 class NativeAgreementShards(unittest.TestCase):
     def setUp(self):
-        sys.path.insert(0, str(RUNNER.parent / 'buck2'))
+        sys.path.insert(0, str(TOOLS / 'buck2'))
         import agree
         self.agree = agree
         self.known = {'native/heap/a', 'native/llvm/b'}
@@ -558,7 +590,7 @@ class NativeAgreementShards(unittest.TestCase):
 
 class ActionSizing(unittest.TestCase):
     def setUp(self):
-        sys.path.insert(0, str(RUNNER.parent / 'buck2'))
+        sys.path.insert(0, str(TOOLS / 'buck2'))
         import action_sizes_from_log
         self.module = action_sizes_from_log
         self.action = dict(target='hirsel-check', profile='dev', phase='rlib [pic]',

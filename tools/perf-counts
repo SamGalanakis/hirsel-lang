@@ -40,7 +40,7 @@ MICRO_OUTPUTS = {
 
 
 def table(rows):
-    lines = ['# Cachegrind Ir; LLVM release programs, one small-input epoch; tolerance +/-1%.']
+    lines = ['# Cachegrind Ir; LLVM release programs, one small-input epoch; regression tolerance +1%.']
     lines.extend(f'# {name}: {reason}' for name, (_, reason) in COMPILER_CASES.items() if name not in rows)
     lines.append(COLUMNS)
     for name, row in sorted(rows.items()):
@@ -102,9 +102,9 @@ def compare(expected, actual):
             continue
         before, after = expected[name], actual[name]
         delta = after['Ir'] - before['Ir']
-        if abs(delta) * 100 <= before['Ir']:
+        if delta * 100 <= before['Ir']:
             continue
-        errors.append(f'{name}: {before["Ir"]:,} -> {after["Ir"]:,} Ir ({100 * delta / before["Ir"]:+.2f}%; tolerance +/-1%)')
+        errors.append(f'{name}: {before["Ir"]:,} -> {after["Ir"]:,} Ir ({100 * delta / before["Ir"]:+.2f}%; regression tolerance +1%)')
         names = sorted(before['functions'].keys() | after['functions'].keys(),
                        key=lambda fn: (-abs(after['functions'].get(fn, 0) - before['functions'].get(fn, 0)), fn))[:20]
         def lines(row):
@@ -113,6 +113,36 @@ def compare(expected, actual):
         errors.extend(line.rstrip() for line in difflib.unified_diff(lines(before), lines(after),
                       fromfile='baseline cg_annotate top functions', tofile='current cg_annotate top functions', n=20))
     return errors
+
+
+def ratchet(baseline, measurements):
+    """Keep the lowest measured case totals beyond 1% noise, with their profile.
+
+    Measurements come only from passing runs of main's hourly suite
+    (tools/main-runs). A run may have measured before another baseline
+    landed: it must never raise that newer baseline. Function rows are
+    diagnostic, not budgets.
+    """
+    rows = dict(baseline)
+    for measured in measurements:
+        if not isinstance(measured, dict) or measured.keys() != baseline.keys():
+            raise ValueError('the measured cases differ from the baseline')
+        for name, row in measured.items():
+            if (not isinstance(row, dict) or type(row.get('Ir')) is not int or row['Ir'] <= 0
+                    or not isinstance(row.get('functions'), dict)
+                    or any(not isinstance(fn, str) or type(count) is not int or count <= 0
+                           for fn, count in row['functions'].items())):
+                raise ValueError(f'invalid measurement: {name}')
+            if row['Ir'] < rows[name]['Ir']:
+                rows[name] = row
+    improvements = []
+    for name, before in baseline.items():
+        after = rows[name]
+        if (before['Ir'] - after['Ir']) * 100 > before['Ir']:
+            improvements.append(dict(count=name, old=before['Ir'], new=after['Ir']))
+        else:
+            rows[name] = before
+    return rows, sorted(improvements, key=lambda item: item['count'])
 
 
 def run(command, env, **kwargs):
@@ -232,10 +262,16 @@ def main():
         return 0
     if args.filter:
         raise ValueError('--filter is diagnostic only; use --record')
-    errors = compare(read_table(BASELINE), rows)
+    baseline = read_table(BASELINE)
+    errors = compare(baseline, rows)
     if errors:
         print('\n'.join(errors))
         return 1
+    _, improvements = ratchet(baseline, [rows])
+    for item in improvements:
+        print(f'perf-counts: improvement {item["count"]}: {item["old"]:,} -> {item["new"]:,} Ir; '
+              'pass (main\'s hourly run, tools/main-runs, records the lower budget)', flush=True)
+    print(MARKER + json.dumps(rows, sort_keys=True, separators=(',', ':')))
     return 0
 
 

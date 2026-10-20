@@ -15,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
 import graph
 import impact
+import gating
 
 COUNTS = runpy.run_path(str(ROOT / 'tools/perf-counts'))
+MAIN_RUNS = runpy.run_path(str(ROOT / 'tools/main-runs'))
 
 
 def row(count, **functions):
@@ -24,13 +26,62 @@ def row(count, **functions):
 
 
 class PerfCounts(unittest.TestCase):
-    def test_tolerance_is_inclusive_in_both_directions_and_uses_integers(self):
+    def test_regressions_fail_but_improvements_and_exact_tolerance_pass(self):
         compare = COUNTS['compare']
-        for count in (9900, 10000, 10100):
+        for count in (1, 9899, 9900, 10000, 10100):
             self.assertEqual(compare({'case': row(10000)}, {'case': row(count)}), [])
-        for count in (9899, 10101):
-            self.assertTrue(compare({'case': row(10000)}, {'case': row(count)}))
+        self.assertTrue(compare({'case': row(10000)}, {'case': row(10101)}))
         self.assertTrue(compare({'case': row(99)}, {'case': row(100)}))
+
+    def test_ratchet_combines_lanes_without_raising_a_count_or_recording_noise(self):
+        before = {'a': row(10000, work=10000), 'b': row(10000), 'noise': row(10000)}
+        first = dict(before, a=row(8000, faster=8000), noise=row(9900))
+        second = dict(before, b=row(9000, work=9000))
+        for measurements in ([first, second], [second, first]):
+            actual, changes = COUNTS['ratchet'](before, measurements)
+            self.assertEqual(actual, dict(before, a=first['a'], b=second['b']))
+            self.assertEqual(changes, [dict(count='a', old=10000, new=8000),
+                                       dict(count='b', old=10000, new=9000)])
+        newer = dict(before, a=row(7000))
+        self.assertEqual(COUNTS['ratchet'](newer, [first])[0], newer)
+
+    def test_ratchet_refuses_missing_cases_and_malformed_measurements(self):
+        for measured in ([], {}, {'a': None}, {'a': row(0)}, {'a': row(True)}, {'a': row(10, bad=-1)}):
+            with self.subTest(measured=measured), self.assertRaises(ValueError):
+                COUNTS['ratchet']({'a': row(100)}, [measured])
+
+    def test_only_a_passing_complete_main_run_result_supplies_a_measurement(self):
+        measured = {'a': row(100)}
+        marker = COUNTS['MARKER'] + json.dumps(measured)
+        for status, details, expected in (('pass', marker, measured),
+                                          ('fail', marker, None),
+                                          ('pass', '', None),
+                                          ('pass', marker + '\n' + marker, None)):
+            self.assertEqual(MAIN_RUNS['perf_measurement'](status, details), expected)
+
+    def test_improved_case_passes_with_note_and_complete_landing_measurement(self):
+        main = COUNTS['main']
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['perf-counts']), \
+                patch.dict(main.__globals__, native_cases=Mock(return_value=[('a', [], b'')]),
+                           micro_cases=Mock(return_value=[]), measure=Mock(return_value=row(80)),
+                           read_table=Mock(return_value={'a': row(100)})), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        self.assertIn('improvement a: 100 -> 80 Ir; pass', output.getvalue())
+        self.assertEqual(MAIN_RUNS['perf_measurement']('pass', output.getvalue()), {'a': row(80)})
+
+    def test_regression_fails_without_a_landing_measurement(self):
+        main = COUNTS['main']
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['perf-counts']), \
+                patch.dict(main.__globals__, native_cases=Mock(return_value=[('a', [], b'')]),
+                           micro_cases=Mock(return_value=[]), measure=Mock(return_value=row(102)),
+                           read_table=Mock(return_value={'a': row(100)})), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(main(), 1)
+        self.assertIn('+2.00%', output.getvalue())
+        self.assertNotIn(COUNTS['MARKER'], output.getvalue())
 
     def test_missing_extra_and_removed_cases_fail_closed(self):
         compare = COUNTS['compare']

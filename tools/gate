@@ -215,7 +215,9 @@ def test_rows(report, results, tests):
         if result is None:
             report.add(False, f'{name}: no result (see the build failures and the log)')
         elif result['status'] in (gating.PASS, gating.SKIP, gating.OMITTED):
-            report.add(True, f'{name} ({result["seconds"]:.0f} s)')
+            notes = [line for line in result.get('details', '').splitlines()
+                     if line.startswith('perf-counts: improvement ')]
+            report.add(True, f'{name} ({result["seconds"]:.0f} s)', notes)
         elif not report.known_failure(name, result):
             report.add(False, f'{name} ({gating.STATUS.get(result["status"], result["status"])}, '
                        f'{result["seconds"]:.0f} s)', gating.rerun(name, result['details']))

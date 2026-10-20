@@ -1,0 +1,5 @@
+# Stages tools/gate --full (the hourly main run, tools/main-runs) skips until their owner fixes what stops them.
+# One row each, tab-separated: stage (as tools/gate --full names it), reason, owner lane (the step fixing it), date (UTC).
+# Removing a row runs its stage again; tools/main-runs --status lists every row.
+native matrix: both targets and named exclusions	native-selection derive never completes (0 of 720 runs; more than 9 GiB and 28 min per shard); it feeds the gate-native-full shards	native-coverage	2026-10-20
+agreement campaign on heap and native code (unrestricted)	native-selection derive never completes (0 of 720 runs; more than 9 GiB and 28 min per shard); it feeds the gate-agree-native-full shards	native-coverage	2026-10-20
