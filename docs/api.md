@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1610 exported definitions; 612 variants.
+1629 exported definitions; 628 variants.
 
 ## Types and roots
 
@@ -414,7 +414,7 @@ Variant of FailureKind.
 
 <a id="def-core_401_2fFileError"></a>
 
-- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()`
+- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice() | Truncated()`
 
 <a id="def-core_401_2fFileError_23AlreadyExists"></a>
 
@@ -473,6 +473,12 @@ Variant of FileError.
 <a id="def-core_401_2fFileError_23PermissionDenied"></a>
 
 - `PermissionDenied() -> FileError`
+
+Variant of FileError.
+
+<a id="def-core_401_2fFileError_23Truncated"></a>
+
+- `Truncated() -> FileError`
 
 Variant of FileError.
 
@@ -651,6 +657,10 @@ Variant of IpAddr.
 <a id="def-core_401_2fMap"></a>
 
 - `type Map[K: key, V] uses {K, V}`
+
+<a id="def-core_401_2fMapped"></a>
+
+- `opaque resource type Mapped: noalloc_drop uses {Dir}`
 
 <a id="def-core_401_2fMetadata"></a>
 
@@ -1506,26 +1516,6 @@ Variant of TlsRoots.
 
 - `type TlsServer uses {} = { identities: List[TlsIdentity], clients: TlsClientAuth }`
 
-<a id="def-core_401_2fTx"></a>
-
-- `@capability(local) opaque type Tx: noalloc_drop uses {Tx}`
-
-<a id="def-core_401_2fTxFailure"></a>
-
-- `type TxFailure[E] uses {E} = Aborted(E) | Canceled(CancelCause)`
-
-<a id="def-core_401_2fTxFailure_23Aborted"></a>
-
-- `Aborted(E) -> TxFailure[E]`
-
-Variant of TxFailure.
-
-<a id="def-core_401_2fTxFailure_23Canceled"></a>
-
-- `Canceled(CancelCause) -> TxFailure[E]`
-
-Variant of TxFailure.
-
 <a id="def-core_401_2fUdpReceived"></a>
 
 - `type UdpReceived: serializable uses {} = { count: u64, peer: SocketAddr, truncated: bool }`
@@ -1561,6 +1551,44 @@ Variant of WaitError.
 <a id="def-core_401_2fWallClock"></a>
 
 - `@capability(global) opaque type WallClock: plain + copyable + sendable + noalloc_drop uses {WallClock}`
+
+<a id="def-core_401_2fWatchEvent"></a>
+
+- `type WatchEvent: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Created(Path) | Modified(Path) | Removed(Path) | Renamed(Path, Path) | Overflow()`
+
+<a id="def-core_401_2fWatchEvent_23Created"></a>
+
+- `Created(Path) -> WatchEvent`
+
+Variant of WatchEvent.
+
+<a id="def-core_401_2fWatchEvent_23Modified"></a>
+
+- `Modified(Path) -> WatchEvent`
+
+Variant of WatchEvent.
+
+<a id="def-core_401_2fWatchEvent_23Overflow"></a>
+
+- `Overflow() -> WatchEvent`
+
+Variant of WatchEvent.
+
+<a id="def-core_401_2fWatchEvent_23Removed"></a>
+
+- `Removed(Path) -> WatchEvent`
+
+Variant of WatchEvent.
+
+<a id="def-core_401_2fWatchEvent_23Renamed"></a>
+
+- `Renamed(Path, Path) -> WatchEvent`
+
+Variant of WatchEvent.
+
+<a id="def-core_401_2fWatcher"></a>
+
+- `opaque resource type Watcher: noalloc_drop uses {Dir}`
 
 <a id="def-core_401_2fbool"></a>
 
@@ -4505,6 +4533,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 
 References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/DirEntry`](#def-core_401_2fDirEntry), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Path`](#def-core_401_2fPath), [`core@1/Result`](#def-core_401_2fResult)
 
+<a id="def-core_401_2ffile_2fmap"></a>
+
+- `fn file.map(d: Dir, p: Path) -> Result[Mapped of d, FileError]`
+
 <a id="def-core_401_2ffile_2fmetadata"></a>
 
 - `fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]`
@@ -4574,6 +4606,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fwalk"></a>
 
 - `fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]`
+
+<a id="def-core_401_2ffile_2fwatch"></a>
+
+- `fn file.watch(d: Dir, p: Path, recursive: bool) -> Result[Watcher of d, FileError]`
 
 <a id="def-core_401_2ffile_2fwrite"></a>
 
@@ -7500,6 +7536,13 @@ References: [`core@1/Map`](#def-core_401_2fMap)
 - `@preserves_unique(m) @unretained(k, initial, update) fn map.upsert_with[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, update: fn(mut value: unique V) -> () uses {}) -> ()`
 
 
+## mapped
+
+<a id="def-core_401_2fmapped_2fwith"></a>
+
+- `fn mapped.with[R](d: Dir, m: Mapped of d, body: fn(view: Bytes) -> R) -> Result[R, FileError]`
+
+
 ## markdown
 
 <a id="def-std_401_2fmarkdown_2fKind"></a>
@@ -10052,6 +10095,47 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 
 ## store
 
+<a id="def-std_401_2fstore_2fCallFailure"></a>
+
+- `@serializable pub type store.CallFailure[E] = Tx(TxFailure[E]) | Denied | Rejected`
+
+Why a call returned no outcome of its own: `Tx(f)` as for `transact`;
+`Denied()` when a later executor epoch holds the stream; `Rejected()` for a
+position the stream cannot take, or a retained position with another digest.
+
+References: [`std@1/store/TxFailure`](#def-std_401_2fstore_2fTxFailure)
+
+<a id="def-std_401_2fstore_2fCallFailure_23Denied"></a>
+
+- `Denied -> store.CallFailure[E]`
+
+Variant of store.CallFailure.
+
+<a id="def-std_401_2fstore_2fCallFailure_23Rejected"></a>
+
+- `Rejected -> store.CallFailure[E]`
+
+Variant of store.CallFailure.
+
+<a id="def-std_401_2fstore_2fCallFailure_23Tx"></a>
+
+- `Tx(TxFailure[E]) -> store.CallFailure[E]`
+
+Variant of store.CallFailure.
+
+References: [`std@1/store/TxFailure`](#def-std_401_2fstore_2fTxFailure)
+
+<a id="def-std_401_2fstore_2fCallRequest"></a>
+
+- `@serializable pub type store.CallRequest { stream: Bytes, epoch: u64, position: u64, digest: Bytes, acknowledged: u64, }`
+
+One call on an ordered call stream: the caller's stream identity and
+executor epoch, the call's position (consecutive from 1), the digest of
+the request, and the highest position whose outcome the caller has made
+durable, which the store may then forget.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-std_401_2fstore_2fSnapshot"></a>
 
 - `pub opaque type store.Snapshot: copyable uses {}`
@@ -10068,7 +10152,7 @@ References: [`core@1/Dir`](#def-core_401_2fDir)
 
 <a id="def-std_401_2fstore_2fStoreConfig"></a>
 
-- `pub type store.StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults, }`
+- `pub type store.StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults, limits: StoreLimits, }`
 
 How the store makes commits survive a crash, and where it may stop for a
 test. `durability` is the mode of every log object: `Durable()` returns a
@@ -10078,11 +10162,11 @@ writes groups without syncing, so a crash may lose any suffix of commits
 that fills the group writes it, and `durable` writes a partial group; 1
 writes every commit on its own. `faults` injects a stop for crash tests.
 
-References: [`core@1/Durability`](#def-core_401_2fDurability), [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/StoreFaults`](#def-std_401_2fstore_2fStoreFaults)
+References: [`core@1/Durability`](#def-core_401_2fDurability), [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/StoreFaults`](#def-std_401_2fstore_2fStoreFaults), [`std@1/store/StoreLimits`](#def-std_401_2fstore_2fStoreLimits)
 
 <a id="def-std_401_2fstore_2fStoreError"></a>
 
-- `pub type store.StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed`
+- `@serializable pub type store.StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed`
 
 Why a store operation failed. `Storage` is the Dir's own error; `Corrupt`
 names an object that fails its checksum or the layout's rules before the
@@ -10157,11 +10241,109 @@ Variant of store.StoreFaults.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fstore_2fStoreLimits"></a>
+
+- `pub type store.StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64, }`
+
+The most a `transact` commit may write: any key over `key_bytes`, any value
+over `value_bytes`, or keys and values together over `transaction_bytes`
+refuse the commit with `Limit(..)` and no effect.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-std_401_2fstore_2fTicket"></a>
 
 - `pub opaque type store.Ticket: copyable + plain + data uses {}`
 
 A commit's place in the store's commit order, awaited with `durable`.
+
+<a id="def-std_401_2fstore_2fTx"></a>
+
+- `@capability(local) pub opaque type store.Tx: () uses {}`
+
+The scoped capability a `transact` body holds: reads see the commit the
+transaction began at plus its own writes. It cannot leave the body.
+
+<a id="def-std_401_2fstore_2fTxFailure"></a>
+
+- `@serializable pub type store.TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StoreError) | Limit( TxLimit ) | Unknown(StoreError)`
+
+How a transaction ended without its outcome: `Aborted(e)` when the body
+returned `Error(e)` and its writes were discarded; `Canceled(cause)` before
+the body started (only the call-stream form is canceled); `Storage(e)` and
+`Limit(..)` when nothing was committed; `Unknown(e)` when the commit was
+attempted and the store could not tell whether it became durable, which the
+next `open` decides.
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError), [`std@1/store/TxLimit`](#def-std_401_2fstore_2fTxLimit)
+
+<a id="def-std_401_2fstore_2fTxFailure_23Aborted"></a>
+
+- `Aborted(E) -> store.TxFailure[E]`
+
+Variant of store.TxFailure.
+
+<a id="def-std_401_2fstore_2fTxFailure_23Canceled"></a>
+
+- `Canceled(CancelCause) -> store.TxFailure[E]`
+
+Variant of store.TxFailure.
+
+References: [`core@1/CancelCause`](#def-core_401_2fCancelCause)
+
+<a id="def-std_401_2fstore_2fTxFailure_23Limit"></a>
+
+- `Limit( TxLimit ) -> store.TxFailure[E]`
+
+Variant of store.TxFailure.
+
+References: [`std@1/store/TxLimit`](#def-std_401_2fstore_2fTxLimit)
+
+<a id="def-std_401_2fstore_2fTxFailure_23Storage"></a>
+
+- `Storage(StoreError) -> store.TxFailure[E]`
+
+Variant of store.TxFailure.
+
+References: [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fTxFailure_23Unknown"></a>
+
+- `Unknown(StoreError) -> store.TxFailure[E]`
+
+Variant of store.TxFailure.
+
+References: [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fTxLimit"></a>
+
+- `@serializable pub type store.TxLimit = KeyBytes | ValueBytes | TransactionBytes | RangeRows`
+
+Which of the configured limits a commit exceeded.
+
+<a id="def-std_401_2fstore_2fTxLimit_23KeyBytes"></a>
+
+- `KeyBytes -> store.TxLimit`
+
+Variant of store.TxLimit.
+
+<a id="def-std_401_2fstore_2fTxLimit_23RangeRows"></a>
+
+- `RangeRows -> store.TxLimit`
+
+Variant of store.TxLimit.
+
+<a id="def-std_401_2fstore_2fTxLimit_23TransactionBytes"></a>
+
+- `TransactionBytes -> store.TxLimit`
+
+Variant of store.TxLimit.
+
+<a id="def-std_401_2fstore_2fTxLimit_23ValueBytes"></a>
+
+- `ValueBytes -> store.TxLimit`
+
+Variant of store.TxLimit.
 
 <a id="def-std_401_2fstore_2fTxn"></a>
 
@@ -10177,6 +10359,22 @@ Dropping it aborts it.
 Starts a transaction at the latest commit.
 
 References: [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2fstore_2fcall"></a>
+
+- `pub fn store.call[R: inert + serializable, E: inert + serializable]( mut s: Store, req: CallRequest, body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, CallFailure[E]]`
+
+`transact` as one call on an ordered call stream, exactly once per
+position. The stream's row decides the request in the transaction that
+would run it: an epoch below the row's is `Denied()`; a position at or
+below the acknowledged one, above the next one, or retained with another
+digest is `Rejected()`; a retained position with an equal digest returns
+its recorded outcome without running `body`; the next position runs
+`body`, and the same commit records the outcome in the row, so an outcome
+is recorded exactly when its writes commit. An outcome that writes
+nothing (an abort, a limit) is recorded by a commit of the row alone.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/CallFailure`](#def-std_401_2fstore_2fCallFailure), [`std@1/store/CallRequest`](#def-std_401_2fstore_2fCallRequest), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx)
 
 <a id="def-std_401_2fstore_2fclose"></a>
 
@@ -10220,7 +10418,8 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/i32`](#def-core_40
 
 - `pub fn store.default_config() -> StoreConfig uses {}`
 
-Durable log objects, 64 commits per group and no injected faults.
+Durable log objects, 64 commits per group, no injected faults, and limits
+of 4096-byte keys, 1 MiB values and 16 MiB per transaction.
 
 References: [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig)
 
@@ -10269,6 +10468,15 @@ last key received.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
 
+<a id="def-std_401_2fstore_2freserved"></a>
+
+- `pub fn store.reserved(key: Bytes) -> bool uses {}`
+
+Whether `key` lies in `hirsel.`, the key space the store keeps for its own
+rows; a transaction body writes no key there.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fstore_2fsequence"></a>
 
 - `@noalloc pub fn store.sequence(t: Ticket) -> u64 uses {}`
@@ -10294,6 +10502,51 @@ References: [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot), [`std@1/s
 The commit a snapshot reflects: every commit up to it, no later one.
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
+
+<a id="def-std_401_2fstore_2ftransact"></a>
+
+- `pub fn store.transact[R: inert, E: inert]( mut s: Store, body: fn(mut tx: Tx) -> Result[R, E] uses {} ) -> Result[R, TxFailure[E]]`
+
+Runs `body` once with a fresh `Tx` at the latest commit and commits its
+writes as one commit when it returns `Ok`. The outcome, of any kind, is
+returned only once every commit the body could see, and its own, is
+durable: the output gate. `Error(e)` discards the writes and returns
+`Aborted(e)`; a failure in the body discards them and propagates.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/store/TxFailure`](#def-std_401_2fstore_2fTxFailure)
+
+<a id="def-std_401_2fstore_2ftx_5fdelete"></a>
+
+- `pub fn store.tx_delete(mut tx: Tx, take key: Bytes) -> () uses {} requires !reserved(key)`
+
+Removes `key` when the transaction commits.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/store/reserved`](#def-std_401_2fstore_2freserved)
+
+<a id="def-std_401_2fstore_2ftx_5fget"></a>
+
+- `pub fn store.tx_get(tx: Tx, key: Bytes) -> Option[Bytes] in tx uses {}`
+
+The value under `key` as the transaction sees it.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx)
+
+<a id="def-std_401_2fstore_2ftx_5fput"></a>
+
+- `pub fn store.tx_put(mut tx: Tx, take key: Bytes, take value: Bytes) -> () uses {} requires !reserved(key)`
+
+Stores `value` under `key` when the transaction commits.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx), [`std@1/store/reserved`](#def-std_401_2fstore_2freserved)
+
+<a id="def-std_401_2fstore_2ftx_5frange"></a>
+
+- `pub fn store.tx_range( tx: Tx, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64 ) -> List[(Bytes, Bytes)] uses {}`
+
+At most `limit` entries with keys between `from` and `to` as the
+transaction sees them, in `direction` order, as fresh copies.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/store/Tx`](#def-std_401_2fstore_2fTx)
 
 
 ## stream
@@ -11346,6 +11599,10 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_
 <a id="def-core_401_2ftest_2fdir"></a>
 
 - `fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir`
+
+<a id="def-core_401_2ftest_2fdir_5fevent"></a>
+
+- `fn test.dir_event(t: Test, d: Dir, event: WatchEvent) -> ()`
 
 <a id="def-std_401_2ftest_2fequal"></a>
 
@@ -13235,6 +13492,13 @@ References: [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid), [`std@1/uuid/Varian
 The version field, the top four bits of byte 6, whatever the variant.
 
 References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+
+## watcher
+
+<a id="def-core_401_2fwatcher_2fnext"></a>
+
+- `fn watcher.next(d: Dir, mut w: Watcher of d) -> Result[WatchEvent, FileError]`
 
 
 ## x509
