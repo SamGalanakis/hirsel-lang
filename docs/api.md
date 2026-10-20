@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1433 exported definitions; 512 variants.
+1471 exported definitions; 525 variants.
 
 ## Types and roots
 
@@ -7837,6 +7837,137 @@ References: [`core@1/Option`](#def-core_401_2fOption)
 References: [`core@1/Option`](#def-core_401_2fOption)
 
 
+## ordered_map
+
+<a id="def-std_401_2fordered_5fmap_2fBound"></a>
+
+- `pub type ordered_map.Bound[K] = Unbounded | Included(K) | Excluded(K)`
+
+One end of a key range: no limit, the key itself included, or excluded.
+
+<a id="def-std_401_2fordered_5fmap_2fBound_23Excluded"></a>
+
+- `Excluded(K) -> ordered_map.Bound[K]`
+
+Variant of ordered_map.Bound.
+
+<a id="def-std_401_2fordered_5fmap_2fBound_23Included"></a>
+
+- `Included(K) -> ordered_map.Bound[K]`
+
+Variant of ordered_map.Bound.
+
+<a id="def-std_401_2fordered_5fmap_2fBound_23Unbounded"></a>
+
+- `Unbounded -> ordered_map.Bound[K]`
+
+Variant of ordered_map.Bound.
+
+<a id="def-std_401_2fordered_5fmap_2fDirection"></a>
+
+- `pub type ordered_map.Direction = Ascending | Descending`
+
+The order a range is returned in.
+
+<a id="def-std_401_2fordered_5fmap_2fDirection_23Ascending"></a>
+
+- `Ascending -> ordered_map.Direction`
+
+Variant of ordered_map.Direction.
+
+<a id="def-std_401_2fordered_5fmap_2fDirection_23Descending"></a>
+
+- `Descending -> ordered_map.Direction`
+
+Variant of ordered_map.Direction.
+
+<a id="def-std_401_2fordered_5fmap_2fOrderedMap"></a>
+
+- `pub opaque type ordered_map.OrderedMap[K: copyable, V: copyable]: copyable uses {K, V}`
+
+<a id="def-std_401_2fordered_5fmap_2fcontains"></a>
+
+- `pub fn ordered_map.contains[K: copyable, V: copyable](m: OrderedMap[K, V], key: K) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2fempty"></a>
+
+- `pub fn ordered_map.empty[K: copyable, V: copyable](take by: fn(K, K) -> i32 uses {}) -> OrderedMap[ K, V ] uses {}`
+
+An empty map ordered by `by`, which returns a negative, zero or positive
+result as its first argument sorts before, equal to or after its second.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2ffirst"></a>
+
+- `pub fn ordered_map.first[K: copyable, V: copyable](m: OrderedMap[K, V]) -> Option[(K, V)] in m uses {}`
+
+The least entry, or `None()` for an empty map.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2ffold_5frange"></a>
+
+- `pub fn ordered_map.fold_range[K: copyable, V: copyable, A]( m: OrderedMap[K, V], from: Bound[K], to: Bound[K], direction: Direction, take initial: A, step: fn(take A, K, V) -> (A, bool) ) -> A uses {initial, step}`
+
+Folds `step` over the entries whose keys lie between `from` and `to`, in
+`direction` order, starting from `initial`. `step` returns the next
+accumulator and whether to continue; the walk also ends at the far bound.
+It reads entries in place, so collecting them is the caller's choice.
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2fget"></a>
+
+- `pub fn ordered_map.get[K: copyable, V: copyable](m: OrderedMap[K, V], key: K) -> Option[V] in m uses {}`
+
+The value stored under `key`, or `None()`.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2finsert"></a>
+
+- `pub fn ordered_map.insert[K: copyable, V: copyable]( mut m: OrderedMap[K, V], take key: K, take value: V ) -> () uses {}`
+
+Stores `value` under `key`, replacing any value already there.
+
+References: [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2flast"></a>
+
+- `pub fn ordered_map.last[K: copyable, V: copyable](m: OrderedMap[K, V]) -> Option[(K, V)] in m uses {}`
+
+The greatest entry, or `None()` for an empty map.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2flen"></a>
+
+- `@noalloc pub fn ordered_map.len[K: copyable, V: copyable](m: OrderedMap[K, V]) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2fremove"></a>
+
+- `pub fn ordered_map.remove[K: copyable, V: copyable](mut m: OrderedMap[K, V], key: K) -> Option[V] uses {}`
+
+Removes `key` and returns its value, or `None()` when the map lacks it.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+<a id="def-std_401_2fordered_5fmap_2fvalid"></a>
+
+- `pub fn ordered_map.valid[K: copyable, V: copyable](m: OrderedMap[K, V]) -> bool uses {}`
+
+Whether the tree's invariants hold: keys strictly ordered across the whole
+tree, every node within its key bounds, every leaf at one depth and the
+count equal to the number of entries. For tests of this module.
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/ordered_map/OrderedMap`](#def-std_401_2fordered_5fmap_2fOrderedMap)
+
+
 ## out
 
 <a id="def-core_401_2fout_2fprint"></a>
@@ -8862,6 +8993,252 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/shake256/State`](#d
 <a id="def-core_401_2fstdin_2fread"></a>
 
 - `@preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]`
+
+
+## store
+
+<a id="def-std_401_2fstore_2fSnapshot"></a>
+
+- `pub opaque type store.Snapshot: copyable uses {}`
+
+A stable view of the store as of one commit: later commits never change it.
+
+<a id="def-std_401_2fstore_2fStore"></a>
+
+- `pub opaque resource type store.Store: () uses {Dir}`
+
+The writer of one store directory.
+
+References: [`core@1/Dir`](#def-core_401_2fDir)
+
+<a id="def-std_401_2fstore_2fStoreConfig"></a>
+
+- `pub type store.StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults, }`
+
+How the store makes commits survive a crash, and where it may stop for a
+test. `durability` is the mode of every log object: `Durable()` returns a
+commit's ticket from `durable` only once its group is synced, `Volatile()`
+writes groups without syncing, so a crash may lose any suffix of commits
+(never part of one). `group_limit` commits share one log object: a commit
+that fills the group writes it, and `durable` writes a partial group; 1
+writes every commit on its own. `faults` injects a stop for crash tests.
+
+References: [`core@1/Durability`](#def-core_401_2fDurability), [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/StoreFaults`](#def-std_401_2fstore_2fStoreFaults)
+
+<a id="def-std_401_2fstore_2fStoreError"></a>
+
+- `pub type store.StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed`
+
+Why a store operation failed. `Storage` is the Dir's own error; `Corrupt`
+names an object that fails its checksum or the layout's rules before the
+log's tail; `Fenced` means another writer claimed the store; `Conflict` means
+another commit landed after the transaction began; `Injected` is a
+`StopAfterWrites` stop. After `Storage`, `Corrupt`, `Fenced` or `Injected`
+the store is closed and every later call returns `Closed`.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstore_2fStoreError_23Closed"></a>
+
+- `Closed -> store.StoreError`
+
+Variant of store.StoreError.
+
+<a id="def-std_401_2fstore_2fStoreError_23Conflict"></a>
+
+- `Conflict -> store.StoreError`
+
+Variant of store.StoreError.
+
+<a id="def-std_401_2fstore_2fStoreError_23Corrupt"></a>
+
+- `Corrupt(String) -> store.StoreError`
+
+Variant of store.StoreError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstore_2fStoreError_23Fenced"></a>
+
+- `Fenced -> store.StoreError`
+
+Variant of store.StoreError.
+
+<a id="def-std_401_2fstore_2fStoreError_23Injected"></a>
+
+- `Injected -> store.StoreError`
+
+Variant of store.StoreError.
+
+<a id="def-std_401_2fstore_2fStoreError_23Storage"></a>
+
+- `Storage(FileError) -> store.StoreError`
+
+Variant of store.StoreError.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2fstore_2fStoreFaults"></a>
+
+- `pub type store.StoreFaults = NoFaults | StopAfterWrites(u64)`
+
+A test seam: `StopAfterWrites(n)` refuses the store's storage mutation after
+its first `n` (creates, removals and directory creations, from `open` on),
+with no effect, as a crash at that point would; the store then closes.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fstore_2fStoreFaults_23NoFaults"></a>
+
+- `NoFaults -> store.StoreFaults`
+
+Variant of store.StoreFaults.
+
+<a id="def-std_401_2fstore_2fStoreFaults_23StopAfterWrites"></a>
+
+- `StopAfterWrites(u64) -> store.StoreFaults`
+
+Variant of store.StoreFaults.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fstore_2fTicket"></a>
+
+- `pub opaque type store.Ticket: copyable + plain + data uses {}`
+
+A commit's place in the store's commit order, awaited with `durable`.
+
+<a id="def-std_401_2fstore_2fTxn"></a>
+
+- `pub opaque type store.Txn: copyable uses {}`
+
+A transaction: reads see the snapshot it began at plus its own writes.
+Dropping it aborts it.
+
+<a id="def-std_401_2fstore_2fbegin"></a>
+
+- `pub fn store.begin(mut s: Store) -> Txn uses {}`
+
+Starts a transaction at the latest commit.
+
+References: [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2fstore_2fclose"></a>
+
+- `pub fn store.close(take store: Store) -> Result[(), StoreError]`
+
+Writes any pending commits and closes the store.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fcommit"></a>
+
+- `pub fn store.commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError]`
+
+Commits `t`'s writes as the next commit, visible at once to later
+snapshots and transactions, and returns its ticket. `Conflict()` when another
+commit landed since `t` began. A commit that fills its group writes the
+group's log object; await its durability with `durable`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError), [`std@1/store/Ticket`](#def-std_401_2fstore_2fTicket), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2fstore_2fcompact"></a>
+
+- `pub fn store.compact(mut s: Store) -> Result[(), StoreError]`
+
+Writes every commit into a new snapshot object, publishes it with a new
+manifest and removes the objects it supersedes. A crash at any point
+recovers: until the manifest exists the old state is current, and after it
+the superseded objects are garbage that the next open removes.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fcompare_5fkeys"></a>
+
+- `@noalloc pub fn store.compare_keys(a: Bytes, b: Bytes) -> i32 uses {}`
+
+Byte-lexicographic order, a proper prefix first: the order of every key.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/i32`](#def-core_401_2fi32)
+
+<a id="def-std_401_2fstore_2fdefault_5fconfig"></a>
+
+- `pub fn store.default_config() -> StoreConfig uses {}`
+
+Durable log objects, 64 commits per group and no injected faults.
+
+References: [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig)
+
+<a id="def-std_401_2fstore_2fdurable"></a>
+
+- `pub fn store.durable(mut s: Store, t: Ticket) -> Result[(), StoreError]`
+
+The output gate: returns once the commit `t` names is in a written log
+object, synced when the store is `Durable()`, together with every earlier
+commit. Writes the pending group if `t` is in it.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError), [`std@1/store/Ticket`](#def-std_401_2fstore_2fTicket)
+
+<a id="def-std_401_2fstore_2fget"></a>
+
+- `pub fn store.get(snap: Snapshot, key: Bytes) -> Option[Bytes] in snap uses {}`
+
+The value stored under `key` in the snapshot.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
+
+<a id="def-std_401_2fstore_2fopen"></a>
+
+- `pub fn store.open(d: Dir, config: StoreConfig) -> Result[Store, StoreError]`
+
+Opens the store in `d`, creating its layout when `d` is empty, recovers the
+newest valid state and claims the store as its writer at the next epoch.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/Result`](#def-core_401_2fResult), [`std@1/store/Store`](#def-std_401_2fstore_2fStore), [`std@1/store/StoreConfig`](#def-std_401_2fstore_2fStoreConfig), [`std@1/store/StoreError`](#def-std_401_2fstore_2fStoreError)
+
+<a id="def-std_401_2fstore_2fprefix_5fbounds"></a>
+
+- `pub fn store.prefix_bounds(prefix: Bytes) -> ( ordered_map.Bound[Bytes], ordered_map.Bound[Bytes] ) uses {}`
+
+The bounds that select exactly the keys starting with `prefix`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound)
+
+<a id="def-std_401_2fstore_2frange"></a>
+
+- `pub fn store.range( snap: Snapshot, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64 ) -> List[(Bytes, Bytes)] uses {}`
+
+At most `limit` entries of the snapshot with keys between `from` and `to`,
+in `direction` order, as fresh copies. Page by passing `Excluded` of the
+last key received.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
+
+<a id="def-std_401_2fstore_2fsequence"></a>
+
+- `@noalloc pub fn store.sequence(t: Ticket) -> u64 uses {}`
+
+The commit order position of a ticket: the n-th commit since the store
+was created has sequence n.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Ticket`](#def-std_401_2fstore_2fTicket)
+
+<a id="def-std_401_2fstore_2fsnapshot"></a>
+
+- `pub fn store.snapshot(mut s: Store) -> Snapshot uses {}`
+
+A stable view of every commit so far, durable or not. Later commits never
+change it, and holding it never holds up the writer.
+
+References: [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot), [`std@1/store/Store`](#def-std_401_2fstore_2fStore)
+
+<a id="def-std_401_2fstore_2fsnapshot_5fsequence"></a>
+
+- `@noalloc pub fn store.snapshot_sequence(snap: Snapshot) -> u64 uses {}`
+
+The commit a snapshot reflects: every commit up to it, no later one.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
 
 
 ## string
@@ -10330,6 +10707,42 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/toml/Document`](#
 - `pub fn toml.stringify(value: Value) -> Result[unique String, TomlError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+
+## txn
+
+<a id="def-std_401_2ftxn_2fdelete"></a>
+
+- `pub fn txn.delete(mut t: store.Txn, take key: Bytes) -> () uses {}`
+
+Removes `key` when the transaction commits.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2ftxn_2fget"></a>
+
+- `pub fn txn.get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}`
+
+The value under `key` as this transaction sees it.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2ftxn_2fput"></a>
+
+- `pub fn txn.put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {}`
+
+Stores `value` under `key` when the transaction commits.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
+
+<a id="def-std_401_2ftxn_2frange"></a>
+
+- `pub fn txn.range( t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64 ) -> List[(Bytes, Bytes)] uses {}`
+
+At most `limit` entries with keys between `from` and `to` as this
+transaction sees them, in `direction` order, as fresh copies.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/ordered_map/Bound`](#def-std_401_2fordered_5fmap_2fBound), [`std@1/ordered_map/Direction`](#def-std_401_2fordered_5fmap_2fDirection), [`std@1/store/Txn`](#def-std_401_2fstore_2fTxn)
 
 
 ## type_shape
