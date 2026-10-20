@@ -518,7 +518,7 @@ pub fn connect(
   let mut response: Option[http.ResponseHead] = None()
   while response == None() {
     let buf = bufio.contents(input)
-    if let Some((head, end)) = http.parse_response_head(buf, config.transport) ? Http {
+    if let Some((head, end)) = http.parse_response_head(buf, config.transport, false) ? Http {
       if end > max {
         return Error(Http(HeadTooLarge()))
       }

@@ -1821,7 +1821,7 @@ fn http.dial(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[Stream of n,
 fn http.request_target(parsed_uri: uri.Uri) -> unique String uses {}
 fn http.host_header(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {}
 fn http.validate_headers(headers: List[Header]) -> Result[(), HttpError] uses {}
-fn http.parse_response_head(buf: Bytes, config: Config) -> Result[Option[(ResponseHead, u64)], HttpError] uses {}
+fn http.parse_response_head(buf: Bytes, config: Config, head_request: bool) -> Result[Option[(ResponseHead, u64)], HttpError] uses {}
 fn http.detach(take s: ServerStream) -> Result[Detached, HttpError]
 ```
 
@@ -1833,7 +1833,8 @@ a TCP connect under the connect timeout, the read and write timeouts, then TLS w
 URL spells one. `validate_headers` applies `request`'s header-name and value checks.
 `parse_response_head` parses one response head from the start of `buf` under
 `config.max_head_bytes` and `max_headers`, returning the head and its byte length, or
-`None()` while incomplete. `detach` hands over an HTTP/1.1 connection's stream with the
+`None()` while incomplete; `head_request` marks the answer to a HEAD request, which has
+no body. `detach` hands over an HTTP/1.1 connection's stream with the
 bytes read past the request once `next_stream` has yielded the `ServerStream` and before
 any `respond`; otherwise, and for an HTTP/2 stream, it is `OutOfOrder()`, or `Closed()`
 once closed, and the stream is dropped. The `ServerConnection` then yields no further
