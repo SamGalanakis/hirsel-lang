@@ -286,8 +286,15 @@ so host cache geometry and wall time cannot change the verdict.
 `tools/perf-counts --bless` measures on the pool and regenerates
 [`tools/perf-counts.tsv`](../perf-counts.tsv) on the host. Review and commit
 that diff. An increase beyond 1% fails; exactly 1% passes. A decrease passes
-and prints `perf-counts: improvement`; main's hourly run (`tools/main-runs`)
+and prints `perf-counts: improvement`; main's full run (`tools/main-runs`)
 writes the lower counts it measures into the table with a direct push.
+An automatic update never raises a budget; upward moves require an explicit
+reviewed bless with a reason. Drops over 15% still update the baseline and
+print `main-runs: PERF-CHECK <count> <old> -> <new> (run: <sha>)` after a
+successful push. The report and the run's `runs.jsonl` row retain these
+`perf_checks`, including the measured and pushed SHAs, for review of skipped
+work. Exactly 15% does not alert. A rejected push regenerates from the newer
+baseline and reports only the changes that actually land.
 The table retains the top 50 `cg_annotate` function counts per case, without
 worker source paths. Failures print the largest 20 function deltas against
 those saved counts. Missing and removed cases fail too.

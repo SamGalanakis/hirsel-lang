@@ -310,10 +310,14 @@ def api_index(tree):
     (tree / 'docs/api.md').write_bytes(page)
 
 
-def ratchet(measured):
+def ratchet(measured, perf_checks):
     def update(tree):
         counts = runpy.run_path(str(tree / 'tools/perf-counts'))
         rows, improvements = counts['ratchet'](counts['read_table'](tree / 'tools/perf-counts.tsv'), [measured])
+        # push_to_main can retry against a newer baseline. Only report the
+        # changes in the successful push, never a superseded attempt.
+        perf_checks[:] = [item for item in improvements
+                          if (item['old'] - item['new']) * 100 > item['old'] * 15]
         if improvements:
             (tree / 'tools/perf-counts.tsv').write_text(counts['table'](rows))
     return update
@@ -327,12 +331,17 @@ def run(sha, tier):
         reds, ran, skipped, perf = run_stages(directory, log, tier)
     report = RUNS / 'reports' / f'{directory.name}.md'
     route(sha, reds, rows(), report)
-    pushed = []
+    pushed, perf_checks = [], []
+    ratchet_checks = []
     for name, update in (('Regenerate the API index.', api_index),
-                         ('Ratchet the instruction budgets main measured.', ratchet(perf) if perf else None)):
+                         ('Ratchet the instruction budgets main measured.', ratchet(perf, ratchet_checks) if perf else None)):
         try:
             if update and (commit := push_to_main(name, update)):
                 pushed.append(f'{commit[:12]} {name}')
+                if name == 'Ratchet the instruction budgets main measured.':
+                    for item in ratchet_checks:
+                        say(f'PERF-CHECK {item["count"]} {item["old"]} -> {item["new"]} (run: {sha[:12]})')
+                        perf_checks.append(dict(item, measured_sha=sha, pushed=commit))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError, ValueError) as error:
             pushed.append(f'{name} failed: {error}')
     minutes = (time.time() - start) / 60
@@ -344,6 +353,8 @@ def run(sha, tier):
                                          if red.get('kind', 'code') == kind] + ['']
     lines += [f'- skipped: {row[0]}: {row[1]} (owner {row[2]}, since {row[3]})' for row in skipped]
     lines += [f'- pushed: {line}' for line in pushed]
+    lines += [f'- PERF-CHECK {item["count"]} {item["old"]} -> {item["new"]} '
+              f'(pushed {item["pushed"][:12]})' for item in perf_checks]
     report.parent.mkdir(exist_ok=True)
     report.write_text('\n'.join(lines) + '\n')
     (RUNS / 'latest.md').write_text(report.read_text())
@@ -351,7 +362,8 @@ def run(sha, tier):
     code_reds = {key: {k: v for k, v in red.items() if k not in ('kind', 'reason')}
                  for key, red in reds.items() if red.get('kind', 'code') == 'code'}
     with open(ROWS, 'a') as out:
-        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds, report=str(report))) + '\n')
+        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds,
+                                  report=str(report), perf_checks=perf_checks)) + '\n')
     say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
     return 0
 
