@@ -15,7 +15,8 @@ from suite import buck2_build, native_environment  # noqa: E402
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('case', choices=sorted(p.stem for p in (HERE / 'programs').glob('*.hir')))
+    sources = {p.stem: p for p in (HERE / 'programs').rglob('*.hir')}
+    parser.add_argument('case', choices=sorted(sources))
     parser.add_argument('--size', type=int, default=1000, help='workload size in the generated participant list')
     parser.add_argument('--epochs', type=int, default=1, help='epochs in the generated participant list')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/micro')
@@ -25,7 +26,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source = output / f'{args.case}.hir'
-    source.write_text((HERE / 'programs' / source.name).read_text())
+    source.write_text(sources[args.case].read_text())
     sidecar = {'schema': 1, 'package': {'name': 'micro', 'version': '1'},
                'entry': {'module': [], 'name': 'main'}, 'sources': [{'path': source.name, 'module': []}],
                'dependencies': [{'manifest': str(ROOT / 'stdlib/std@1/hirsel.json'),
@@ -37,12 +38,19 @@ def main():
     capped = str(ROOT / 'tools/capped')
     subprocess.run([capped, '--timeout', '900', str(Path(bundle) / 'hirsel'),
                     'build', '--release', str(source), '-o', str(output / args.case)], env=env, check=True)
-    subprocess.run([capped, 'rustc', '--edition=2021', '-O', str(HERE / 'rust/main.rs'),
-                    '-o', str(output / 'rust')], check=True)
+    if args.case == 'json':
+        reference = buck2_build('--target-platforms', '//tools/buck2:release',
+                                '//bench/micro-json-reference:json-reference')['json-reference']
+        shutil.copy2(reference, output / 'rust-json')
+        rust_command = [str(output / 'rust-json')]
+    else:
+        subprocess.run([capped, 'rustc', '--edition=2021', '-O', str(HERE / 'rust/main.rs'),
+                        '-o', str(output / 'rust')], check=True)
+        rust_command = [str(output / 'rust'), args.case]
     shutil.copyfile(HERE / 'grants.json', output / 'grants.json')
     workload = [str(args.size)] + ([] if args.case in ('print', 'channel') else [str(args.epochs)])
     participants = [
-        {'name': 'rust', 'command': [str(output / 'rust'), args.case, *workload]},
+        {'name': 'rust', 'command': [*rust_command, *workload]},
         {'name': 'hirsel', 'command': [str(output / args.case), '--hirsel-grants',
                                        str(output / 'grants.json'), *workload]},
     ]

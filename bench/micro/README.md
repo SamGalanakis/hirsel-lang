@@ -90,6 +90,8 @@ wrapping checksum. Harness rounds are independent process samples.
 | `map_u64` | 1000000 | integer-key inserts and gets |
 | `map_str` | 2000000 | 4,096 string-key counters |
 | `map_remove` | 20000 | insert then remove all integer keys |
+| `map_str_upsert` | 2000000 | same counter using one upsert per selection |
+| `json` | 20000 | construct JSON, then ten std parse/stringify/drop round trips |
 | `channel` | 100000 | two-channel ping-pong, sum of replies; no epochs argument |
 
 The first seven pairs were promoted from perfsmash-rt's 2026-10-19 scratchpad.
@@ -113,3 +115,17 @@ flock /workspace/code/hirsel-briefs/locks/cpu31-timing.lock tools/capped taskset
 The profiling platform applies release codegen/reservations to first-party and
 third-party compiler code. Runtime archives retain their native target profile;
 this recipe profiles compiler execution.
+
+The `json` pair uses std `json` and serde_json 1.0.151 with `Value` (default
+features). It checks the total serialized byte length; object field ordering
+differs but lengths agree. This is separate from `bench/native`'s lossless
+spelling-preserving JSON algorithm. `map_str` preserves the original two-probe
+source; `map_str_upsert` measures the collections API introduced afterwards.
+
+See [http/README.md](http/README.md) for the finite HTTP keep-alive pair and its
+independent open-loop client.
+
+The additional JSON and upsert programs live in `programs/extended/`; the existing
+Cachegrind budget set remains the eight top-level programs. `build` discovers
+both directories. The serde_json reference has its own sibling Buck2 package,
+[../micro-json-reference](../micro-json-reference/README.md).

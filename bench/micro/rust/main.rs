@@ -237,7 +237,7 @@ fn main() {
     for r in 0..rounds {
         sum = sum.wrapping_add(match which {
             "map_u64" => map_u64(n, r),
-            "map_str" => map_str(n, r),
+            "map_str" | "map_str_upsert" => map_str(n, r),
             "strbuild" => strbuild(n, r),
             "sha" => sha(n, r),
             "sort" => sort(n, r),
