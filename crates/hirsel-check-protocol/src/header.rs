@@ -2,11 +2,15 @@
 //! signature phase and the query engine that drives it through a trait object.
 use hirsel_syntax as ast;
 use hirsel_types::{
-    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition,
+    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition, TypeInterner, TypeMemo,
 };
 
 /// All borrowed input snapshots must belong to the same syntax/interner session.
 pub struct Input<'a> {
+    /// The session interner: every row read or produced lives here.
+    pub types: &'a TypeInterner,
+    /// Implementation-side structural memos (substitution).
+    pub memo: &'a TypeMemo,
     pub syntax: &'a ast::ItemSyntax,
     pub context: &'a ast::FileContext,
     pub resolution: &'a Resolution,

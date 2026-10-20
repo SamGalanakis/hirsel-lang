@@ -5,10 +5,7 @@ impl Normalizer<'_, '_> {
     pub(super) fn import(
         &mut self,
         id: TypeId,
-        source: &TypeStore,
         args: &[GenericArgument],
-        _map: &mut BTreeMap<TypeId, TypeId>,
-        _active: &mut BTreeSet<TypeId>,
     ) -> Result<TypeId, QueryError> {
         let authorities: Vec<_> = args
             .iter()
@@ -17,12 +14,11 @@ impl Normalizer<'_, '_> {
                 GenericArgument::Size(_) => AuthoritySummary::inert(),
             })
             .collect();
-        let start = self.types.len();
-        let result = substitute_type(
-            source,
+        let result = substitute(
+            self.types,
+            self.memo,
             id,
-            &mut self.types,
-            Substitution {
+            &Substitution {
                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                 roles: &NominalRoles {
                     unsafe_capability: self.input.metadata.unsafe_capability.clone(),
@@ -47,13 +43,11 @@ impl Normalizer<'_, '_> {
             )
         })?;
         let owner = &self.input.syntax.item.definition;
-        let dependencies: BTreeSet<_> = self
-            .types
+        let dependencies: BTreeSet<_> = closure(self.types, [result])
             .iter()
-            .skip(start)
-            .filter_map(|(_, t)| match &t.kind {
-                TypeKind::Named { definition, .. } if definition != owner => {
-                    Some(definition.clone())
+            .filter_map(|t| match &self.types.row(*t).kind {
+                TypeKind::Named { definition, .. } if definition.path() != owner => {
+                    Some(definition.path().clone())
                 }
                 _ => None,
             })
@@ -65,11 +59,9 @@ impl Normalizer<'_, '_> {
         // Plain argument needs its declaration to erase inert locality and
         // uniqueness before this imported callback header is published.
         let generics = self.declarations();
-        let mut types = std::mem::take(&mut self.types);
-        let normalized = canonical_plain_type_in(&mut types, result, &generics, &mut |path| {
-            self.property_signature(path)
-        });
-        self.types = types;
-        normalized
+        let types = self.types;
+        canonical_plain_type_in(types, result, &generics, &mut |definition| {
+            self.property_signature(definition.path())
+        })
     }
 }

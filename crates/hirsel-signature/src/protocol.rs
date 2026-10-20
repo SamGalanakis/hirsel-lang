@@ -4,6 +4,8 @@ use super::*;
 /// Validate an association even when no loop uses the nominal declaration.
 /// Name resolution (stage one) never reads these operation headers.
 pub fn validate_loop_source(
+    t: &TypeInterner,
+    m: &TypeMemo,
     signature: &Signature,
     span: Span,
     provider: &mut dyn SignatureProvider,
@@ -14,8 +16,8 @@ pub fn validate_loop_source(
     let Some(association) = &nominal.loop_source else {
         return Ok(());
     };
-    let open = provider.signature(&association.open)?;
-    let next = provider.signature(&association.next)?;
+    let open = provider.signature(DefId::intern(&association.open))?;
+    let next = provider.signature(DefId::intern(&association.next))?;
     let (SignatureKind::Function(open_f), SignatureKind::Function(next_f)) =
         (&open.kind, &next.kind)
     else {
@@ -25,7 +27,7 @@ pub fn validate_loop_source(
             "loop association operations must be functions",
         ));
     };
-    if !matches!(open_f.parameters.as_slice(), [parameter] if matches!(open.types.get(parameter.ty), Some(Type { kind: TypeKind::Named { definition, .. }, .. }) if definition == &signature.definition))
+    if !matches!(open_f.parameters.as_slice(), [parameter] if matches!(t.get(parameter.ty), Some(Type { kind: TypeKind::Named { definition, .. }, .. }) if *definition == signature.definition))
     {
         return Err(diagnostic(
             const { RuleId::of("SEM-4") },
@@ -34,7 +36,7 @@ pub fn validate_loop_source(
         ));
     }
     if signature.metadata.visibility != ast::Visibility::Private {
-        for (operation, function) in [(&open, open_f), (&next, next_f)] {
+        for function in [open_f, next_f] {
             let mut pending: Vec<_> = function
                 .parameters
                 .iter()
@@ -42,12 +44,12 @@ pub fn validate_loop_source(
                 .chain([function.result])
                 .chain(function.error)
                 .collect();
-            let mut seen = BTreeSet::new();
+            let mut seen = std::collections::HashSet::new();
             while let Some(ty) = pending.pop() {
                 if !seen.insert(ty) {
                     continue;
                 }
-                let row = operation.types.get(ty).ok_or_else(|| {
+                let row = t.get(ty).ok_or_else(|| {
                     diagnostic(
                         const { RuleId::of("SEM-4") },
                         span,
@@ -56,7 +58,7 @@ pub fn validate_loop_source(
                 })?;
                 pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
                 if let TypeKind::Named { definition, .. } = &row.kind {
-                    if provider.signature(definition)?.metadata.visibility
+                    if provider.signature(*definition)?.metadata.visibility
                         == ast::Visibility::Private
                     {
                         return Err(diagnostic(
@@ -69,8 +71,7 @@ pub fn validate_loop_source(
             }
         }
     }
-    let mut types = TypeStore::default();
-    let receiver = symbolic_receiver(signature, nominal, &mut types);
+    let receiver = symbolic_receiver(t, signature, nominal);
     let loop_error = || {
         diagnostic(
             const { RuleId::of("SEM-4") },
@@ -79,9 +80,9 @@ pub fn validate_loop_source(
         )
     };
     let cursor = specialize(
-        &open.types,
+        t,
+        m,
         open_f,
-        &mut types,
         receiver,
         PassingMode::Borrow,
         &nominal.generics,
@@ -89,9 +90,8 @@ pub fn validate_loop_source(
         0,
         &loop_error,
     )?;
-    if !types
-        .get(cursor)
-        .unwrap()
+    if !t
+        .row(cursor)
         .modes
         .relation
         .parameter_roots()
@@ -104,9 +104,9 @@ pub fn validate_loop_source(
         ));
     }
     let result = specialize(
-        &next.types,
+        t,
+        m,
         next_f,
-        &mut types,
         cursor,
         PassingMode::Mut,
         &nominal.generics,
@@ -123,7 +123,7 @@ pub fn validate_loop_source(
         name: "Option".into(),
     });
     if association.option != core_option
-        || !matches!(&types.get(result).unwrap().kind, TypeKind::Named { definition, arguments } if definition == &core_option && matches!(arguments.as_slice(), [GenericArgument::Type(_)]))
+        || !matches!(&t.row(result).kind, TypeKind::Named { definition, arguments } if *definition.path() == core_option && matches!(arguments.as_slice(), [GenericArgument::Type(_)]))
     {
         return Err(diagnostic(
             const { RuleId::of("SEM-4") },
@@ -140,6 +140,8 @@ pub fn validate_loop_source(
 /// borrowed receiver, an unlabelled `mut` UTF-8 builder implicitly preserved unique,
 /// and no error result.
 pub fn validate_format(
+    t: &TypeInterner,
+    m: &TypeMemo,
     signature: &Signature,
     span: Span,
     provider: &mut dyn SignatureProvider,
@@ -158,16 +160,15 @@ pub fn validate_format(
              generic over T's own parameters, with no error result",
         )
     };
-    let function = provider.signature(path)?;
+    let function = provider.signature(DefId::intern(path))?;
     let SignatureKind::Function(f) = &function.kind else {
         return Err(error());
     };
-    let mut types = TypeStore::default();
-    let receiver = symbolic_receiver(signature, nominal, &mut types);
+    let receiver = symbolic_receiver(t, signature, nominal);
     let result = specialize(
-        &function.types,
+        t,
+        m,
         f,
-        &mut types,
         receiver,
         PassingMode::Borrow,
         &nominal.generics,
@@ -177,14 +178,14 @@ pub fn validate_format(
     )?;
     let out = &f.parameters[1];
     let builder = |ty: TypeId| {
-        let byte = |argument: &GenericArgument| matches!(argument, GenericArgument::Type(t) if matches!(function.types.get(*t).map(|r| &r.kind), Some(TypeKind::Primitive(Primitive::U8))));
-        matches!(function.types.get(ty).map(|r| &r.kind), Some(TypeKind::Builtin { kind: BuiltinType::List, arguments }) if matches!(arguments.as_slice(), [a] if byte(a)))
+        let byte = |argument: &GenericArgument| matches!(argument, GenericArgument::Type(ty) if matches!(t.get(*ty).map(|r| &r.kind), Some(TypeKind::Primitive(Primitive::U8))));
+        matches!(t.get(ty).map(|r| &r.kind), Some(TypeKind::Builtin { kind: BuiltinType::List, arguments }) if matches!(arguments.as_slice(), [a] if byte(a)))
     };
     if out.passing != PassingMode::Mut
         || out.label.is_some()
         || !builder(out.ty)
         || f.error.is_some()
-        || !matches!(&types.get(result).unwrap().kind, TypeKind::Tuple(items) if items.is_empty())
+        || !matches!(&t.row(result).kind, TypeKind::Tuple(items) if items.is_empty())
     {
         return Err(error());
     }
@@ -195,6 +196,7 @@ pub fn validate_format(
 /// header `fn(value: T) -> bool uses {}`: one unlabelled borrowed receiver of the type,
 /// no generics, no error result, `@noalloc` and no foreign contract.
 pub fn validate_serializable_check(
+    t: &TypeInterner,
     signature: &Signature,
     span: Span,
     provider: &mut dyn SignatureProvider,
@@ -213,16 +215,15 @@ pub fn validate_serializable_check(
         )
     };
     let path = &check.function;
-    if path.0.package != signature.definition.0.package
-        || path.0.modules != signature.definition.0.modules
-    {
+    let owner = signature.definition.path();
+    if path.0.package != owner.0.package || path.0.modules != owner.0.modules {
         return Err(error());
     }
-    let function = provider.signature(path)?;
+    let function = provider.signature(DefId::intern(path))?;
     let SignatureKind::Function(f) = &function.kind else {
         return Err(error());
     };
-    let kind = |ty: TypeId| function.types.get(ty).map(|r| &r.kind);
+    let kind = |ty: TypeId| t.get(ty).map(|r| &r.kind);
     let receiver = match f.parameters.as_slice() {
         [p] if p.passing == PassingMode::Borrow && p.label.is_none() => kind(p.ty),
         _ => None,
@@ -243,17 +244,13 @@ pub fn validate_serializable_check(
 }
 /// The declaring type applied to its own generic parameters, as the
 /// association's operations must accept it.
-fn symbolic_receiver(
-    signature: &Signature,
-    nominal: &TypeDefinition,
-    types: &mut TypeStore,
-) -> TypeId {
+fn symbolic_receiver(t: &TypeInterner, signature: &Signature, nominal: &TypeDefinition) -> TypeId {
     let arguments = nominal
         .generics
         .iter()
         .enumerate()
         .map(|(ordinal, g)| match g {
-            GenericParameter::Type { .. } => GenericArgument::Type(types.push(Type {
+            GenericParameter::Type { .. } => GenericArgument::Type(t.intern(Type {
                 drop_allocation: DropAllocation::DependsOn(
                     vec![TypeParameterRef::bound(TypeParamId(ordinal as u32))].into(),
                 ),
@@ -266,19 +263,19 @@ fn symbolic_receiver(
             )),
         })
         .collect();
-    types.push(Type {
+    t.intern(Type {
         drop_allocation: DropAllocation::MayAllocate,
         ..Type::with_kind(TypeKind::Named {
-            definition: signature.definition.clone(),
+            definition: signature.definition,
             arguments,
         })
     })
 }
 
 fn specialize(
-    source: &TypeStore,
+    t: &TypeInterner,
+    m: &TypeMemo,
     function: &FunctionType,
-    types: &mut TypeStore,
     actual: TypeId,
     passing: PassingMode,
     receiver_generics: &[GenericParameter],
@@ -295,25 +292,25 @@ fn specialize(
     if parameter.passing != passing || parameter.label.is_some() {
         return Err(error());
     }
-    let formal = import_type(source, parameter.ty, types).map_err(|_| error())?;
+    let formal = parameter.ty;
     let mut inferred = vec![None; function.generics.len()];
     let mut pending = vec![(formal, actual, 0)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some((formal, actual, depth)) = pending.pop() {
         if !seen.insert((formal, actual, depth)) {
             continue;
         }
-        let a = types.get(formal).unwrap();
-        let b = types.get(actual).unwrap();
+        let a = t.row(formal);
+        let b = t.row(actual);
         if let TypeKind::Parameter(p) = a.kind
             && p.binder() == GenericBinder::Bound(depth)
         {
-            let actual = leave_binders(types, actual, depth).map_err(|_| error())?;
+            let actual = leave_binders(t, actual, depth).map_err(|_| error())?;
             let slot = inferred
                 .get_mut(p.parameter().0 as usize)
                 .ok_or_else(error)?;
             if let Some(GenericArgument::Type(old)) = slot {
-                if !shape_equal(types, *old, types, actual).unwrap_or(false) {
+                if !shape_equal(t, *old, actual).unwrap_or(false) {
                     return Err(error());
                 }
             } else if slot.is_some() {
@@ -363,7 +360,7 @@ fn specialize(
                 }
                 pending.push((x.result, y.result, depth + 1));
             }
-            _ if shape_equal(types, formal, types, actual).unwrap_or(false) => (),
+            _ if shape_equal(t, formal, actual).unwrap_or(false) => (),
             _ => return Err(error()),
         }
     }
@@ -375,13 +372,13 @@ fn specialize(
             (GenericParameter::Size { .. }, GenericArgument::Size(_)) => (),
             (GenericParameter::Type { bounds, .. }, GenericArgument::Type(ty)) => {
                 for bound in bounds {
-                    let lookup = &mut |path: &ast::DefPath| provider.signature(path).map(Some);
+                    let lookup = &mut |definition: DefId| provider.signature(definition).map(Some);
                     let valid = match bound {
                         Bound::Serializable => {
-                            structural_serializable(types, *ty, &declarations, lookup)?
+                            structural_serializable(t, *ty, &declarations, lookup)?
                         }
                         Bound::Plain | Bound::Copyable | Bound::Sendable => structural_property(
-                            types,
+                            t,
                             *ty,
                             match bound {
                                 Bound::Plain => StructuralProperty::Plain,
@@ -391,13 +388,13 @@ fn specialize(
                             &declarations,
                             lookup,
                         )?,
-                        Bound::Flat => structural_flat(types, *ty, &declarations, lookup)?,
+                        Bound::Flat => structural_flat(t, *ty, &declarations, lookup)?,
                         Bound::Data | Bound::Key => {
-                            structural_equality(types, *ty, *bound, &declarations, lookup)?
+                            structural_equality(t, *ty, *bound, &declarations, lookup)?
                         }
                         Bound::Inert => {
                             structural_authority(
-                                types,
+                                t,
                                 *ty,
                                 &NominalRoles::default(),
                                 &declarations,
@@ -407,7 +404,7 @@ fn specialize(
                                 },
                             )? == AuthoritySummary::inert()
                         }
-                        Bound::NoallocDrop => match &types.get(*ty).unwrap().drop_allocation {
+                        Bound::NoallocDrop => match &t.row(*ty).drop_allocation {
                             DropAllocation::NoAlloc => true,
                             DropAllocation::DependsOn(ps) => ps.iter().all(|p| {
                                 declarations
@@ -426,11 +423,11 @@ fn specialize(
             _ => return Err(error()),
         }
     }
-    let parameter = substitute_type(
-        source,
+    let parameter = substitute(
+        t,
+        m,
         parameter.ty,
-        types,
-        Substitution {
+        &Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles: &NominalRoles::default(),
             arguments: &arguments,
@@ -441,26 +438,27 @@ fn specialize(
     // The symbolic nominal receiver starts without a cleanup summary. Its
     // parameter row supplies that type-owned summary, not a value-flow proof.
     let actual = if passing == PassingMode::Borrow {
-        let mut row = types.get(actual).unwrap().clone();
-        row.drop_allocation = types.get(parameter).unwrap().drop_allocation.clone();
-        types.push(row)
+        let mut row = t.row(actual).clone();
+        row.drop_allocation = t.row(parameter).drop_allocation.clone();
+        t.intern(row)
     } else {
         actual
     };
-    let lookup = &mut |path: &ast::DefPath| provider.signature(path).map(Some);
+    let mut lookup = |definition: DefId| provider.signature(definition).map(Some);
+    let mut memo = ContextMemo::new(t, &declarations, &mut lookup);
     let compatible = if passing == PassingMode::Mut {
-        compatible_handback_type(types, parameter, actual, &declarations, lookup)?
+        memo.handback(parameter, actual)?
     } else {
-        compatible_view_type(types, parameter, actual, &declarations, lookup)?
+        memo.view(parameter, actual, TypeRelation::Parameter)?
     };
     if !compatible {
         return Err(error());
     }
-    substitute_type(
-        source,
+    substitute(
+        t,
+        m,
         function.result,
-        types,
-        Substitution {
+        &Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles: &NominalRoles::default(),
             arguments: &arguments,
@@ -513,7 +511,7 @@ fn infer_actuals(
 
 // Inference can descend into a callable, but its actual must leave that lexical
 // context before becoming an operation generic. Inner references cannot escape.
-fn leave_binders(store: &mut TypeStore, root: TypeId, count: u32) -> Result<TypeId, GraphError> {
+fn leave_binders(store: &TypeInterner, root: TypeId, count: u32) -> Result<TypeId, GraphError> {
     if count == 0 {
         return Ok(root);
     }
