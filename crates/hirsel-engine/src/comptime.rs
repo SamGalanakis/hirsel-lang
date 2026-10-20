@@ -87,6 +87,20 @@ impl TirProvider for Evaluation<'_> {
     }
 }
 impl QueryEngine {
+    /// The views `constant`'s retained evaluation reflected or decoded
+    /// (`Representation(d)`), each with the digest it saw.
+    pub fn representation_reads(&self, constant: &DefPath) -> Option<Vec<(DefPath, ContentHash)>> {
+        let state = self.adapters.compiler_state.as_ref()?.borrow();
+        let value = state.constant_values.get(constant)?;
+        Some(
+            value
+                .executed
+                .representations
+                .iter()
+                .map(|(path, digest)| (path.clone(), *digest))
+                .collect(),
+        )
+    }
     /// Evaluate a declared constant in this source snapshot. Implementation changes
     /// invalidate materializations, even when every exported signature is unchanged.
     pub fn materialize_constant(&mut self, path: &DefPath) -> Result<Constant, QueryError> {

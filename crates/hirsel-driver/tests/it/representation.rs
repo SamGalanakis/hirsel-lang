@@ -326,7 +326,9 @@ fn adding_a_private_shape_retries_a_cached_owner_rejection() {
 
 /// A constant in another file reflects the opaque type through a helper: no
 /// text it executed and no public fingerprint changes when the private field
-/// does, so only the recorded `Representation` read can invalidate it.
+/// does. Its evaluation records `Representation(Hidden)` with the digest of
+/// the private view it reflected, which the edit changes and reverting it
+/// restores.
 #[test]
 fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edits() {
     with_compiler_stack(|| {
@@ -341,6 +343,9 @@ fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edit
         engine.parse_file(file, &default_context()).unwrap();
         let mut field = entry_path(&default_context());
         field.0.name = "field".into();
+        let mut hidden_path = field.clone();
+        hidden_path.0.name = "Hidden".into();
+        let mut digests = vec![];
         for (source, spelling) in [
             (hidden.to_owned(), "u64"),
             (hidden.replace("value: u64", "value: u32"), "u32"),
@@ -348,10 +353,22 @@ fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edit
         ] {
             let file = engine.sources.add("hidden.hir", source).unwrap();
             engine.parse_file(file, &default_context()).unwrap();
+            let public = engine.item_signature(&hidden_path).unwrap().value.fingerprint;
             assert_eq!(
                 engine.materialize_constant(&field).unwrap(),
                 hirsel_tir::Constant::String(spelling.into())
             );
+            let reads = engine.representation_reads(&field).unwrap();
+            let [(read, digest)] = &reads[..] else {
+                panic!("{spelling}: {reads:?}")
+            };
+            assert_eq!(read, &hidden_path);
+            assert_ne!(*digest, hirsel_syntax::ContentHash::default());
+            digests.push((public, *digest));
         }
+        // The public fingerprint never moves; the reflected view's digest does.
+        assert_eq!(digests[0].0, digests[1].0);
+        assert_ne!(digests[0].1, digests[1].1);
+        assert_eq!(digests[0].1, digests[2].1);
     });
 }
