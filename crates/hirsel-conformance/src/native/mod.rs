@@ -358,7 +358,11 @@ fn checked_with_config(
             hirsel_engine::check_progress(engine, file, &context).map_err(|e| format!("{e:?}"))?;
         (output, crate::selected_entry(source, &context))
     };
-    if let Some(d) = output.diagnostics.first() {
+    if let Some(d) = output
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == hirsel_diag::Severity::Error)
+    {
         return Err(format!("check: {} {}", d.rule, d.message));
     }
     let reference = if let Some(expected) = expected {

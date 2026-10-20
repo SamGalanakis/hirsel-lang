@@ -41,6 +41,26 @@ fn on_compiler<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 }
 
 #[test]
+fn native_preparation_accepts_warnings_but_rejects_errors() {
+    on_compiler(|| {
+        let source = r#"
+fn read(xs: Bytes) -> u64 { bytes.len(xs) }
+pub fn main(rt: Io) -> Result[(), ()] {
+  let xs = b"warning"
+  failure.check(read(copy xs) == 7, TextInvariant())
+  Ok(())
+}
+"#;
+        let observation = artifact::reference(source, None).expect("OWN-4 is only a warning");
+        assert_eq!(observation.exit_code, Some(0));
+        assert!(observation.failures.is_empty());
+        assert!(
+            artifact::reference(&source.replace("read(copy xs)", "missing(xs)"), None).is_none()
+        );
+    });
+}
+
+#[test]
 fn a_stored_artifact_replays_from_another_path_and_arena_numbering() {
     on_compiler(|| {
         // The checked-in fixture: `tools/bless.sh replay` rewrites it from its source.
