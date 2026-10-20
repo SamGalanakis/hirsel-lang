@@ -105,6 +105,17 @@ impl DefId {
     pub fn count() -> usize {
         DEFS.assigned.load(Atomic::Relaxed) as usize
     }
+
+    /// `DefPath::is_core` of the path.
+    pub fn is_core(self, name: &str) -> bool {
+        self.path().is_core(name)
+    }
+}
+
+impl From<&DefPath> for DefId {
+    fn from(path: &DefPath) -> Self {
+        DefId::intern(path)
+    }
 }
 
 impl Ord for DefId {
