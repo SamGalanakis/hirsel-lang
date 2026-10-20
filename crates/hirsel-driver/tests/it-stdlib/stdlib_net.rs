@@ -326,3 +326,52 @@ fn rust_rejects_malformed_address_text_without_panics() {
     ];
     ip_vectors(&vectors, "parse_ip");
 }
+
+/// Rust coretests/tests/net/ip_addr.rs:123-183 and socket_addr.rs:4-72,165-192,
+/// at f6c1107f. Formatting all literal rows exceeds the corpus's 1M steps.
+#[test]
+fn rust_display_vectors_with_padding() {
+    with_compiler_stack(|| {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/net-rust-display.hir");
+        let source = std::fs::read_to_string(fixture).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/std_source/main.hir");
+        let mut program = load_program_source(&path, Some(&source)).unwrap();
+        program.check_for_execution().unwrap();
+        program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps: Some(10_000_000),
+                call_depth: 256,
+            },
+            ..Default::default()
+        }));
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let snapshot =
+            run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        assert!(
+            matches!(
+                snapshot.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ),
+            "{:?}",
+            snapshot.outcome
+        );
+        let checked =
+            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        assert!(
+            matches!(
+                checked.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ),
+            "{:?}",
+            checked.outcome
+        );
+    });
+}

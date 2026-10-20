@@ -1,5 +1,5 @@
 // The gRPC interop test server and client (grpc/grpc doc/interop-test-descriptions.md),
-// ported from grpc-go interop/test_utils.go (Apache-2.0), against the grpc.testing
+// ported from grpc-go 679b224 interop/test_utils.go (Apache-2.0), against the grpc.testing
 // service generated into testing.hir from proto/.
 //
 //   interop server --port=N
@@ -205,7 +205,8 @@ fn handle(clock: Option[MonotonicClock], mut call: grpc.ServerCall) -> Result[
       testing.Empty,
       grpc.Status
     ] {
-      Error(grpc.status(UNIMPLEMENTED(), ""))
+      // grpc-go interop/grpc_testing/test_grpc.pb.go:254-255.
+      Error(grpc.status(UNIMPLEMENTED(), "method UnimplementedCall not implemented"))
     }
   )
 }
@@ -471,6 +472,63 @@ fn custom_metadata(mut conn: grpc.ClientConn) -> Result[(), AppError] {
   check_metadata(grpc.response_headers(call), grpc.response_trailers(call))
 }
 
+// grpc-go interop/test_utils.go:223-237 DoEmptyStream.
+fn empty_stream(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  grpc.close_send(mut conn, call) ? Rpc
+  let last = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc
+  check(option.is_none(last), "empty stream returned a message")
+}
+
+// grpc-go interop/test_utils.go:462-493 DoCancelAfterFirstResponse.
+fn cancel_after_first_response(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let mut call = testing.TestService_FullDuplexCall_start(mut conn, grpc.call_options()) ? Rpc
+  let mut request = output_request([31415])
+  request.payload = Some(payload(27182))
+  testing.TestService_FullDuplexCall_send(mut conn, call, request) ? Rpc
+  let Some(reply) = testing.TestService_FullDuplexCall_receive(mut conn, mut call) ? Rpc else {
+    return Error(Failed("stream ended before its first response"))
+  }
+  check(body_size(reply.payload) == 31415, "first response has the wrong size")?
+  grpc.cancel(mut conn, mut call)
+  match testing.TestService_FullDuplexCall_receive(mut conn, mut call) {
+    Ok(_) => Error(Failed("receive after cancellation succeeded")),
+    Error(s) => check(s.code == CANCELLED(), f"cancel ended {grpc.code_name(s.code)}"),
+  }
+}
+
+// grpc-go interop/test_utils.go:614-631 DoSpecialStatusMessage.
+fn special_status_message(mut conn: grpc.ClientConn) -> Result[(), AppError] {
+  let message = "\t\ntest with whitespace\r\nand Unicode BMP ☺ and non-BMP 😈\t\n"
+  let mut request = testing.default_SimpleRequest()
+  request.response_status = Some(
+    testing.EchoStatus(code: 2, message: copy message, unknown_fields: b"")
+  )
+  match testing.TestService_UnaryCall(mut conn, request, grpc.call_options()) {
+    Ok(_) => Error(Failed("special status call succeeded")),
+    Error(s) => check(
+      s.code == UNKNOWN() && s.message == message,
+      "special status was not preserved"
+    ),
+  }
+}
+
+// grpc-go interop/test_utils.go:634-648 DoUnimplemented{Service,Method}.
+fn unimplemented(mut conn: grpc.ClientConn, service: String) -> Result[(), AppError] {
+  match grpc.unary(
+    mut conn,
+    f"/grpc.testing.{service}/UnimplementedCall",
+    b"",
+    grpc.call_options()
+  ) {
+    Ok(_) => Error(Failed("unimplemented call succeeded")),
+    Error(s) => check(
+      s.code == UNIMPLEMENTED(),
+      f"unimplemented ended {grpc.code_name(s.code)}"
+    ),
+  }
+}
+
 fn client(rt: Io, host: String, port: u16, test_case: String) -> Result[(), AppError] {
   let n = io.net(rt) ? Grant
   let clock = io.monotonic_clock(rt) ? Grant
@@ -492,6 +550,16 @@ fn client(rt: Io, host: String, port: u16, test_case: String) -> Result[(), AppE
     timeout_on_sleeping_server(mut conn, clock)
   } else if test_case == "status_code_and_message" {
     status_code_and_message(mut conn)
+  } else if test_case == "empty_stream" {
+    empty_stream(mut conn)
+  } else if test_case == "cancel_after_first_response" {
+    cancel_after_first_response(mut conn)
+  } else if test_case == "special_status_message" {
+    special_status_message(mut conn)
+  } else if test_case == "unimplemented_method" {
+    unimplemented(mut conn, "TestService")
+  } else if test_case == "unimplemented_service" {
+    unimplemented(mut conn, "UnimplementedService")
   } else if test_case == "custom_metadata" {
     custom_metadata(mut conn)
   } else {

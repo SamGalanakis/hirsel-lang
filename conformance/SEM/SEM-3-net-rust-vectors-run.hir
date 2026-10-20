@@ -1,0 +1,460 @@
+// rule: SEM-3
+// expect: run
+// Rust f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT), library/coretests/tests/net/.
+// Expected octets are constructors from upstream, never this parser's output.
+// See docs/prior-art-web-small.md for the API adaptations.
+fn v4_socket(text: String) -> Result[SocketAddr, net.AddrParseError] {
+  let a = net.parse_socket_addr(text)?
+  match a.ip {
+    V4(_) => Ok(a),
+    _ => Error(Invalid()),
+  }
+}
+
+fn v6_socket(text: String) -> Result[SocketAddr, net.AddrParseError] {
+  let a = net.parse_socket_addr(text)?
+  match a.ip {
+    V6(_) => Ok(a),
+    _ => Error(Invalid()),
+  }
+}
+
+fn parse_ipv4() {
+  // parser.rs:27
+  failure.check(net.parse_ipv4("192.168.0.1") == Ok([192, 168, 0, 1]), TextInvariant())
+  // parser.rs:29
+  failure.check(results.is_error(net.parse_ipv4("192.168.0.1:8080")), TextInvariant())
+  // parser.rs:30
+  failure.check(results.is_error(net.parse_ipv4("0127.0.0.1")), TextInvariant())
+  // parser.rs:31
+  failure.check(results.is_error(net.parse_ipv4("0x10.0.0.1")), TextInvariant())
+  // parser.rs:32
+  failure.check(
+    results.is_error(net.parse_ipv4("2001:db8:0:0:0:0:c0a8:1")),
+    TextInvariant()
+  )
+  // parser.rs:33
+  failure.check(results.is_error(net.parse_ipv4("2001:db8::c0a8:1")), TextInvariant())
+  // parser.rs:34
+  failure.check(
+    results.is_error(net.parse_ipv4("2001:db8::192.168.0.1")),
+    TextInvariant()
+  )
+  // parser.rs:35
+  failure.check(
+    results.is_error(net.parse_ipv4("[2001:db8::c0a8:1]:8080")),
+    TextInvariant()
+  )
+}
+
+fn parse_ipv6() {
+  // parser.rs:41
+  failure.check(
+    net.parse_ipv6("2001:db8:0:0:0:0:c0a8:1") == Ok(
+      [32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // parser.rs:44
+  failure.check(
+    net.parse_ipv6("2001:db8::c0a8:1") == Ok(
+      [32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // parser.rs:47
+  failure.check(
+    net.parse_ipv6("2001:db8::192.168.0.1") == Ok(
+      [32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // parser.rs:49
+  failure.check(
+    results.is_error(net.parse_ipv6("2001:db8::0127.0.0.1")),
+    TextInvariant()
+  )
+  // parser.rs:50
+  failure.check(
+    results.is_error(net.parse_ipv6("2001:db8::0x10.0.0.1")),
+    TextInvariant()
+  )
+  // parser.rs:51
+  failure.check(results.is_error(net.parse_ipv6("192.168.0.1")), TextInvariant())
+  // parser.rs:52
+  failure.check(results.is_error(net.parse_ipv6("192.168.0.1:8080")), TextInvariant())
+  // parser.rs:53
+  failure.check(
+    results.is_error(net.parse_ipv6("[2001:db8::c0a8:1]:8080")),
+    TextInvariant()
+  )
+}
+
+fn parse_ip() {
+  // parser.rs:59
+  failure.check(
+    net.parse_ip("192.168.0.1") == Ok(V4([192, 168, 0, 1])),
+    TextInvariant()
+  )
+  // parser.rs:62
+  failure.check(
+    net.parse_ip("2001:db8:0:0:0:0:c0a8:1") == Ok(
+      V6([32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1])
+    ),
+    TextInvariant()
+  )
+  // parser.rs:65
+  failure.check(
+    net.parse_ip("2001:db8::c0a8:1") == Ok(
+      V6([32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1])
+    ),
+    TextInvariant()
+  )
+  // parser.rs:68
+  failure.check(
+    net.parse_ip("2001:db8::192.168.0.1") == Ok(
+      V6([32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1])
+    ),
+    TextInvariant()
+  )
+  // parser.rs:70
+  failure.check(results.is_error(net.parse_ip("192.168.0.1:8080")), TextInvariant())
+  // parser.rs:71
+  failure.check(
+    results.is_error(net.parse_ip("[2001:db8::c0a8:1]:8080")),
+    TextInvariant()
+  )
+}
+
+fn parse_socket_v4() {
+  // parser.rs:77
+  failure.check(
+    net.parse_socket_addr("192.168.0.1:8080") == Ok(
+      SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)
+    ),
+    TextInvariant()
+  )
+  // parser.rs:79
+  failure.check(results.is_error(v4_socket("192.168.0.1")), TextInvariant())
+  // parser.rs:80
+  failure.check(results.is_error(v4_socket("2001:db8:0:0:0:0:c0a8:1")), TextInvariant())
+  // parser.rs:81
+  failure.check(results.is_error(v4_socket("2001:db8::c0a8:1")), TextInvariant())
+  // parser.rs:82
+  failure.check(results.is_error(v4_socket("2001:db8::192.168.0.1")), TextInvariant())
+  // parser.rs:83
+  failure.check(results.is_error(v4_socket("[2001:db8::c0a8:1]:8080")), TextInvariant())
+}
+
+fn parse_socket_v6() {
+  // parser.rs:88
+  failure.check(
+    v6_socket("[2001:db8::c0a8:1]:8080") == Ok(
+      SocketAddr(
+        ip: V6([32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]),
+        port: 8080
+      )
+    ),
+    TextInvariant()
+  )
+  // parser.rs:89
+  failure.check(
+    results.is_error(v6_socket("[2001:db8::c0a8:1%1337]:8080")),
+    TextInvariant()
+  ) // no scope_id field
+  // parser.rs:91
+  failure.check(results.is_error(v6_socket("192.168.0.1")), TextInvariant())
+  // parser.rs:92
+  failure.check(results.is_error(v6_socket("192.168.0.1:8080")), TextInvariant())
+  // parser.rs:93
+  failure.check(results.is_error(v6_socket("2001:db8:0:0:0:0:c0a8:1")), TextInvariant())
+  // parser.rs:94
+  failure.check(results.is_error(v6_socket("2001:db8::c0a8:1")), TextInvariant())
+  // parser.rs:95
+  failure.check(results.is_error(v6_socket("2001:db8::192.168.0.1")), TextInvariant())
+}
+
+fn parse_socket() {
+  // parser.rs:101
+  failure.check(
+    net.parse_socket_addr("192.168.0.1:8080") == Ok(
+      SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)
+    ),
+    TextInvariant()
+  )
+  // parser.rs:104
+  failure.check(
+    net.parse_socket_addr("[2001:db8::c0a8:1]:8080") == Ok(
+      SocketAddr(
+        ip: V6([32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]),
+        port: 8080
+      )
+    ),
+    TextInvariant()
+  )
+  // parser.rs:106
+  failure.check(results.is_error(net.parse_socket_addr("192.168.0.1")), TextInvariant())
+  // parser.rs:107
+  failure.check(
+    results.is_error(net.parse_socket_addr("2001:db8:0:0:0:0:c0a8:1")),
+    TextInvariant()
+  )
+  // parser.rs:108
+  failure.check(
+    results.is_error(net.parse_socket_addr("2001:db8::c0a8:1")),
+    TextInvariant()
+  )
+  // parser.rs:109
+  failure.check(
+    results.is_error(net.parse_socket_addr("2001:db8::192.168.0.1")),
+    TextInvariant()
+  )
+}
+
+fn ipv6_corner_cases() {
+  // parser.rs:115
+  failure.check(
+    net.parse_ipv6("1::") == Ok([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    TextInvariant()
+  )
+  // parser.rs:118
+  failure.check(
+    net.parse_ipv6("1:1::") == Ok([0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    TextInvariant()
+  )
+  // parser.rs:121
+  failure.check(
+    net.parse_ipv6("::1") == Ok([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+    TextInvariant()
+  )
+  // parser.rs:124
+  failure.check(
+    net.parse_ipv6("::1:1") == Ok([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1]),
+    TextInvariant()
+  )
+  // parser.rs:127
+  failure.check(
+    net.parse_ipv6("::") == Ok([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    TextInvariant()
+  )
+  // parser.rs:130
+  failure.check(
+    net.parse_ipv6("::192.168.0.1") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // parser.rs:133
+  failure.check(
+    net.parse_ipv6("::1:192.168.0.1") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // parser.rs:136
+  failure.check(
+    net.parse_ipv6("1:1:1:1:1:1:192.168.0.1") == Ok(
+      [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 192, 168, 0, 1]
+    ),
+    TextInvariant()
+  )
+}
+
+fn ipv6_corner_failures() {
+  // parser.rs:143
+  failure.check(results.is_error(net.parse_ipv6("1:192.168.0.1::")), TextInvariant())
+  // parser.rs:146
+  failure.check(results.is_error(net.parse_ipv6("1:1:1:1::1:1:1:1")), TextInvariant())
+  // parser.rs:149
+  failure.check(results.is_error(v6_socket("1:1:1:1:1:1:1:1:8080")), TextInvariant())
+}
+
+fn test_from_str_ipv4() {
+  // ip_addr.rs:10
+  failure.check(net.parse_ipv4("127.0.0.1") == Ok([127, 0, 0, 1]), TextInvariant())
+  // ip_addr.rs:11
+  failure.check(
+    net.parse_ipv4("255.255.255.255") == Ok([255, 255, 255, 255]),
+    TextInvariant()
+  )
+  // ip_addr.rs:12
+  failure.check(net.parse_ipv4("0.0.0.0") == Ok([0, 0, 0, 0]), TextInvariant())
+  // ip_addr.rs:15
+  failure.check(results.is_error(net.parse_ipv4("256.0.0.1")), TextInvariant())
+  // ip_addr.rs:18
+  failure.check(results.is_error(net.parse_ipv4("255.0.0")), TextInvariant())
+  // ip_addr.rs:21
+  failure.check(results.is_error(net.parse_ipv4("255.0.0.1.2")), TextInvariant())
+  // ip_addr.rs:24
+  failure.check(results.is_error(net.parse_ipv4("255.0..1")), TextInvariant())
+  // ip_addr.rs:27
+  failure.check(results.is_error(net.parse_ipv4("255.0.0.01")), TextInvariant())
+  // ip_addr.rs:30
+  failure.check(results.is_error(net.parse_ipv4("255.0.0.00")), TextInvariant())
+  // ip_addr.rs:32
+  failure.check(results.is_error(net.parse_ipv4("255.0.00.0")), TextInvariant())
+}
+
+fn test_from_str_ipv6() {
+  // ip_addr.rs:38
+  failure.check(
+    net.parse_ipv6("0:0:0:0:0:0:0:0") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:39
+  failure.check(
+    net.parse_ipv6("0:0:0:0:0:0:0:1") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:41
+  failure.check(
+    net.parse_ipv6("::1") == Ok([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+    TextInvariant()
+  )
+  // ip_addr.rs:42
+  failure.check(
+    net.parse_ipv6("::") == Ok([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    TextInvariant()
+  )
+  // ip_addr.rs:44
+  failure.check(
+    net.parse_ipv6("2a02:6b8::11:11") == Ok(
+      [42, 2, 6, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 0, 17]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:47
+  failure.check(results.is_error(net.parse_ipv6("::00000")), TextInvariant())
+  // ip_addr.rs:50
+  failure.check(results.is_error(net.parse_ipv6("1:2:3:4:5:6:7")), TextInvariant())
+  // ip_addr.rs:53
+  failure.check(results.is_error(net.parse_ipv6("1:2:3:4:5:6:7:8:9")), TextInvariant())
+  // ip_addr.rs:56
+  failure.check(results.is_error(net.parse_ipv6("1:2:::6:7:8")), TextInvariant())
+  // ip_addr.rs:59
+  failure.check(results.is_error(net.parse_ipv6("1:2::6::8")), TextInvariant())
+  // ip_addr.rs:62
+  failure.check(results.is_error(net.parse_ipv6("1:2:3:4::5:6:7:8")), TextInvariant())
+}
+
+fn test_from_str_ipv4_in_ipv6() {
+  // ip_addr.rs:68
+  failure.check(
+    net.parse_ipv6("::192.0.2.33") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 33]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:69
+  failure.check(
+    net.parse_ipv6("::FFFF:192.0.2.33") == Ok(
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 192, 0, 2, 33]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:70
+  failure.check(
+    net.parse_ipv6("64:ff9b::192.0.2.33") == Ok(
+      [0, 100, 255, 155, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 33]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:74
+  failure.check(
+    net.parse_ipv6("2001:db8:122:c000:2:2100:192.0.2.33") == Ok(
+      [32, 1, 13, 184, 1, 34, 192, 0, 0, 2, 33, 0, 192, 0, 2, 33]
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:80
+  failure.check(results.is_error(net.parse_ipv4("::127.0.0.1:")), TextInvariant())
+  // ip_addr.rs:83
+  failure.check(
+    results.is_error(net.parse_ipv6("1:2:3:4:5:127.0.0.1")),
+    TextInvariant()
+  )
+  // ip_addr.rs:86
+  failure.check(
+    results.is_error(net.parse_ipv6("1:2:3:4:5:6:7:127.0.0.1")),
+    TextInvariant()
+  )
+}
+
+fn test_from_str_socket_addr() {
+  // ip_addr.rs:92
+  failure.check(
+    net.parse_socket_addr("77.88.21.11:80") == Ok(
+      SocketAddr(ip: V4([77, 88, 21, 11]), port: 80)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:93
+  failure.check(
+    net.parse_socket_addr("77.88.21.11:80") == Ok(
+      SocketAddr(ip: V4([77, 88, 21, 11]), port: 80)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:94
+  failure.check(
+    net.parse_socket_addr("[2a02:6b8:0:1::1]:53") == Ok(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:98
+  failure.check(
+    net.parse_socket_addr("[2a02:6b8:0:1::1]:53") == Ok(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:102
+  failure.check(
+    net.parse_socket_addr("[::127.0.0.1]:22") == Ok(
+      SocketAddr(ip: V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 1]), port: 22)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:103
+  failure.check(
+    net.parse_socket_addr("[::127.0.0.1]:22") == Ok(
+      SocketAddr(ip: V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 1]), port: 22)
+    ),
+    TextInvariant()
+  )
+  // ip_addr.rs:109
+  failure.check(results.is_error(net.parse_socket_addr("127.0.0.1")), TextInvariant())
+  // ip_addr.rs:112
+  failure.check(results.is_error(net.parse_socket_addr("127.0.0.1:")), TextInvariant())
+  // ip_addr.rs:115
+  failure.check(
+    results.is_error(net.parse_socket_addr("[127.0.0.1]:22")),
+    TextInvariant()
+  )
+  // ip_addr.rs:118
+  failure.check(
+    results.is_error(net.parse_socket_addr("127.0.0.1:123456")),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  parse_ipv4()
+  parse_ipv6()
+  parse_ip()
+  parse_socket_v4()
+  parse_socket_v6()
+  parse_socket()
+  ipv6_corner_cases()
+  ipv6_corner_failures()
+  test_from_str_ipv4()
+  test_from_str_ipv6()
+  test_from_str_ipv4_in_ipv6()
+  test_from_str_socket_addr()
+  Ok(())
+}

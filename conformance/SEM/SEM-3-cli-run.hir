@@ -1,6 +1,6 @@
 // rule: SEM-3
 // expect: run
-// Go FlagSet token/error ideas, adapted to explicit specs and ordered repeats.
+// Go flag token handling; explicit specs and ordered text repeats (see cli.hir).
 fn specs() -> List[std@1/cli.Flag] {
   [
     std@1/cli.Flag(
@@ -24,7 +24,7 @@ fn invalid(args: List[String]) -> Result[std@1/cli.Parsed, std@1/cli.ParseError]
 
 pub fn main() -> Result[(), ()] {
   let initial = match std@1/cli.parse(
-    ["one", "-v", "--output=a", "-o", "b", "--output=", "--", "--unknown", "-"],
+    ["-v", "--output=a", "-o", "b", "--output=", "--", "one", "--unknown", "-"],
     specs()
   ) {
     Ok(parsed) => take parsed,
@@ -34,7 +34,7 @@ pub fn main() -> Result[(), ()] {
     },
   }
   failure.check(initial.positional == ["one", "--unknown", "-"], TextInvariant())
-  failure.check(map.get(initial.flags, "verbose") == Some([""]), TextInvariant())
+  failure.check(map.get(initial.flags, "verbose") == Some(["true"]), TextInvariant())
   failure.check(
     map.get(initial.flags, "output") == Some(["a", "b", ""]),
     TextInvariant()
@@ -57,7 +57,7 @@ pub fn main() -> Result[(), ()] {
     _ => failure.check(false, TextInvariant()),
   }
   match invalid(["--output", "--", "bad", "--what"]) {
-    Error(UnknownFlag(3)) => (),
+    Ok(p) => failure.check(p.positional == ["bad", "--what"], TextInvariant()),
     _ => failure.check(false, TextInvariant()),
   }
   let mut duplicates = specs()
@@ -88,7 +88,7 @@ pub fn main() -> Result[(), ()] {
     std@1/cli.usage("app", specs()) == "Usage: app [options] [--] [arguments]\n  -v, --verbose\tverbose output\n  -o, --output <value>\toutput path\n",
     TextInvariant()
   )
-  let positional = match std@1/cli.parse(["-", "", "--output", "-3"], specs()) {
+  let positional = match std@1/cli.parse(["--output", "-3", "-", ""], specs()) {
     Ok(parsed) => take parsed,
     Error(_) => {
       failure.check(false, TextInvariant())

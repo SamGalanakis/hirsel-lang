@@ -4893,6 +4893,7 @@ conformance/SEM/SEM-3-chacha20poly1305-wycheproof-run.hir
 conformance/SEM/SEM-3-char-run.hir
 conformance/SEM/SEM-3-character-literals-run.hir
 conformance/SEM/SEM-3-checksum-list-run.hir
+conformance/SEM/SEM-3-cli-go-flag-run.hir
 conformance/SEM/SEM-3-cli-run.hir
 conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
@@ -5197,6 +5198,7 @@ conformance/SEM/SEM-3-msgpack-invalid-run.hir
 conformance/SEM/SEM-3-msgpack-nesting-run.hir
 conformance/SEM/SEM-3-msgpack-vectors-run.hir
 conformance/SEM/SEM-3-net-address-text-run.hir
+conformance/SEM/SEM-3-net-rust-vectors-run.hir
 conformance/SEM/SEM-3-net-uri-text-run.hir
 conformance/SEM/SEM-3-nfc-boundary-run.hir
 conformance/SEM/SEM-3-nfc-run.hir

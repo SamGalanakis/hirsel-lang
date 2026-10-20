@@ -1,0 +1,227 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef, src/flag/flag_test.go:165-235, :652-706, :784-816 (BSD-3-Clause).
+// Keep the argument rows verbatim. Typed values are converted by the caller;
+// duration syntax and base prefixes are retained as text by cli.parse.
+fn specs() -> List[std@1/cli.Flag] {
+  let mut out: List[std@1/cli.Flag] = []
+  let name_rows: List[String] = [
+    "bool",
+    "bool2",
+    "int",
+    "int64",
+    "uint",
+    "uint64",
+    "string",
+    "float64",
+    "duration"
+  ]
+  for name in name_rows {
+    list.push(
+      mut out,
+      std@1/cli.Flag(
+        name: copy name,
+        short: None(),
+        kind: if name == "bool" || name == "bool2" {
+          Switch()
+        } else {
+          Value()
+        },
+        help: ""
+      )
+    )
+  }
+  take out
+}
+
+fn parsed(args: List[String]) -> std@1/cli.Parsed {
+  match std@1/cli.parse(unique args, specs()) {
+    Ok(p) => take p,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      std@1/cli.Parsed(flags: map.empty(), positional: [])
+    },
+  }
+}
+
+fn value(p: std@1/cli.Parsed, name: String) -> String {
+  let Some(values) = map.get(p.flags, name) else {
+    failure.check(false, TextInvariant())
+    return ""
+  }
+  failure.check(list.len(values) == 1, TextInvariant())
+  unique values[0]
+}
+
+// Go's typed FlagSet.Value.Set is ordinary scalar conversion at this boundary.
+fn converted(p: std@1/cli.Parsed, name: String) -> Result[(), scalar.ParseError] {
+  let v = value(p, name)
+  if name == "bool" {
+    let _ = bool.parse(v)?
+  } else if name == "int" || name == "int64" {
+    let _ = i64.parse(v)?
+  } else if name == "uint" || name == "uint64" {
+    let _ = u64.parse(v)?
+  } else if name == "float64" {
+    let _ = f64.parse(v)?
+  } else if name == "duration" {
+    let _ = duration.parse(v)?
+  }
+  Ok(())
+}
+
+fn test_parse() {
+  let p = parsed(
+    [
+      "-bool",
+      "-bool2=true",
+      "--int",
+      "22",
+      "--int64",
+      "0x23",
+      "-uint",
+      "24",
+      "--uint64",
+      "25",
+      "-string",
+      "hello",
+      "-float64",
+      "2718e28",
+      "-duration",
+      "2m",
+      "one-extra-argument"
+    ]
+  )
+  failure.check(value(p, "bool") == "true", TextInvariant())
+  failure.check(value(p, "bool2") == "true", TextInvariant())
+  failure.check(i64.parse(value(p, "int")) == Ok(22), TextInvariant())
+  failure.check(value(p, "int64") == "0x23", TextInvariant())
+  failure.check(u64.parse(value(p, "uint")) == Ok(24), TextInvariant())
+  failure.check(u64.parse(value(p, "uint64")) == Ok(25), TextInvariant())
+  failure.check(value(p, "string") == "hello", TextInvariant())
+  failure.check(f64.parse(value(p, "float64")) == Ok(2718e28), TextInvariant())
+  failure.check(value(p, "duration") == "2m", TextInvariant())
+  failure.check(p.positional == ["one-extra-argument"], TextInvariant())
+}
+
+fn test_parse_error() {
+  // flag_test.go:652-674: all seven input rows.
+  match std@1/cli.parse(["-bool=x"], specs()) {
+    Error(UnexpectedValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let name_rows: List[String] = [
+    "int",
+    "int64",
+    "uint",
+    "uint64",
+    "float64",
+    "duration"
+  ]
+  for name in name_rows {
+    let p = parsed([f"-{name}=x"])
+    failure.check(converted(p, name) == Error(Invalid()), TextInvariant())
+  }
+}
+
+fn test_range_error() {
+  // flag_test.go:676-706: all five input rows, including the original float.
+  let name_rows: List[String] = ["int", "int64", "uint", "uint64"]
+  for name in name_rows {
+    let p = parsed([f"-{name}=123456789012345678901"])
+    failure.check(converted(p, name) == Error(OutOfRange()), TextInvariant())
+  }
+  failure.check(
+    converted(parsed(["-float64=1e1000"]), "float64") == Error(OutOfRange()),
+    TextInvariant()
+  )
+}
+
+fn test_invalid_flags() {
+  let name_rows: List[String] = ["-foo", "foo=bar"]
+  for name in name_rows {
+    let bad: List[std@1/cli.Flag] = [
+      std@1/cli.Flag(name: copy name, short: None(), kind: Value(), help: "")
+    ]
+    match std@1/cli.parse([], bad) {
+      Error(InvalidSpec()) => (),
+      _ => failure.check(false, TextInvariant()),
+    }
+  }
+}
+
+fn token_rules() {
+  failure.check(
+    parsed(["positional", "-bool", "--int=3"]).positional == [
+      "positional",
+      "-bool",
+      "--int=3"
+    ],
+    TextInvariant()
+  )
+  failure.check(parsed(["--", "-bool"]).positional == ["-bool"], TextInvariant())
+  failure.check(parsed(["-", "-bool"]).positional == ["-", "-bool"], TextInvariant())
+  failure.check(value(parsed(["-bool=false"]), "bool") == "false", TextInvariant())
+  let v_rows: List[String] = [
+    "1",
+    "t",
+    "T",
+    "TRUE",
+    "true",
+    "True",
+    "0",
+    "f",
+    "F",
+    "FALSE",
+    "false",
+    "False"
+  ]
+  for v in v_rows {
+    failure.check(value(parsed([f"--bool={v}"]), "bool") == v, TextInvariant())
+  }
+  let aliases: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "verbose", short: Some(b'v'), kind: Switch(), help: "")
+  ]
+  let token_rows: List[String] = ["-v", "--v", "-verbose", "--verbose"]
+  for token in token_rows {
+    match std@1/cli.parse([copy token], aliases) {
+      Ok(p) => failure.check(
+        map.get(p.flags, "verbose") == Some(["true"]),
+        TextInvariant()
+      ),
+      Error(_) => failure.check(false, TextInvariant()),
+    }
+  }
+  let collision: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "verbose", short: Some(b'v'), kind: Switch(), help: ""),
+    std@1/cli.Flag(name: "v", short: None(), kind: Value(), help: "")
+  ]
+  failure.check(results.is_error(std@1/cli.parse([], collision)), TextInvariant())
+  // Missing values, malformed tokens, aliases and duplicate registrations.
+  match std@1/cli.parse(["-int"], specs()) {
+    Error(MissingValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let invalid_tokens: List[String] = ["---bool", "-=x", "--=x", "-unknown"]
+  for token in invalid_tokens {
+    failure.check(
+      results.is_error(std@1/cli.parse([copy token], specs())),
+      TextInvariant()
+    )
+  }
+  failure.check(value(parsed(["-string", "--"]), "string") == "--", TextInvariant())
+  failure.check(value(parsed(["--string=a=b"]), "string") == "a=b", TextInvariant())
+  failure.check(
+    map.get(parsed(["-string=1", "--string=2"]).flags, "string") == Some(["1", "2"]),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  test_parse()
+  test_parse_error()
+  test_range_error()
+  test_invalid_flags()
+  token_rules()
+  Ok(())
+}

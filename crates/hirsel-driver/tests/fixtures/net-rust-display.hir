@@ -1,0 +1,297 @@
+// Rust f6c1107f coretests/tests/net/{ip_addr,socket_addr}.rs Display vectors.
+// Forty-six checks, run by stdlib_net::rust_display_vectors_with_padding.
+// These exceed the corpus 1M-step budget; the Rust test supplies a 10M bound.
+// See docs/prior-art-web-small.md for the scope-ID and formatter adaptations.
+fn ipv4_addr_to_string() {
+  // ip_addr.rs:124
+  failure.check(net.ip_to_string(V4([127, 0, 0, 1])) == "127.0.0.1", TextInvariant())
+  // ip_addr.rs:126
+  failure.check(net.ip_to_string(V4([1, 1, 1, 1])) == "1.1.1.1", TextInvariant())
+  // ip_addr.rs:128
+  failure.check(
+    net.ip_to_string(V4([127, 127, 127, 127])) == "127.127.127.127",
+    TextInvariant()
+  )
+  // ip_addr.rs:131
+  failure.check(
+    f"{net.ip_to_string(V4([1, 1, 1, 1])):<16}" == "1.1.1.1         ",
+    TextInvariant()
+  )
+  // ip_addr.rs:132
+  failure.check(
+    f"{net.ip_to_string(V4([1, 1, 1, 1])):>16}" == "         1.1.1.1",
+    TextInvariant()
+  )
+}
+
+fn ipv6_addr_to_string() {
+  // ip_addr.rs:139
+  failure.check(
+    net.ip_to_string(V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 192, 0, 2, 128])) == "::ffff:192.0.2.128",
+    TextInvariant()
+  )
+  // ip_addr.rs:143
+  failure.check(
+    net.ip_to_string(V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 128])) == "::c000:280",
+    TextInvariant()
+  )
+  // ip_addr.rs:146
+  failure.check(
+    net.ip_to_string(V6([0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 0, 14, 0, 15])) == "8:9:a:b:c:d:e:f",
+    TextInvariant()
+  )
+  // ip_addr.rs:149
+  failure.check(
+    net.ip_to_string(
+      V6([17, 17, 34, 34, 51, 51, 68, 68, 85, 85, 102, 102, 119, 119, 136, 136])
+    ) == "1111:2222:3333:4444:5555:6666:7777:8888",
+    TextInvariant()
+  )
+  // ip_addr.rs:154
+  failure.check(
+    f"{net.ip_to_string(V6([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8])):<20}" == "1:2:3:4:5:6:7:8     ",
+    TextInvariant()
+  )
+  // ip_addr.rs:155
+  failure.check(
+    f"{net.ip_to_string(V6([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8])):>20}" == "     1:2:3:4:5:6:7:8",
+    TextInvariant()
+  )
+  // ip_addr.rs:158
+  failure.check(
+    net.ip_to_string(V6([0, 174, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 1, 2, 3, 4])) == "ae::ffff:102:304",
+    TextInvariant()
+  )
+  // ip_addr.rs:164
+  failure.check(
+    net.ip_to_string(V6([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 0, 0, 8])) == "1:2:3:4:5:6:0:8",
+    TextInvariant()
+  )
+  // ip_addr.rs:167
+  failure.check(
+    net.ip_to_string(V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])) == "::",
+    TextInvariant()
+  )
+  // ip_addr.rs:170
+  failure.check(
+    net.ip_to_string(V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])) == "::1",
+    TextInvariant()
+  )
+  // ip_addr.rs:173
+  failure.check(
+    net.ip_to_string(V6([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])) == "1::",
+    TextInvariant()
+  )
+  // ip_addr.rs:176
+  failure.check(
+    net.ip_to_string(V6([0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 8])) == "1:0:0:4::8",
+    TextInvariant()
+  )
+  // ip_addr.rs:179
+  failure.check(
+    net.ip_to_string(V6([0, 1, 0, 0, 0, 0, 0, 4, 0, 5, 0, 0, 0, 0, 0, 8])) == "1::4:5:0:0:8",
+    TextInvariant()
+  )
+  // ip_addr.rs:182
+  failure.check(
+    net.ip_to_string(V6([0, 1, 0, 0, 0, 0, 0, 4, 0, 5, 0, 0, 0, 0, 0, 8])) == "1::4:5:0:0:8",
+    TextInvariant()
+  )
+}
+
+fn ipv4_socket_addr_to_string() {
+  // socket_addr.rs:6
+  failure.check(
+    net.socket_addr_to_string(SocketAddr(ip: V4([0, 0, 0, 0]), port: 0)) == "0.0.0.0:0",
+    TextInvariant()
+  )
+  // socket_addr.rs:9
+  failure.check(
+    net.socket_addr_to_string(SocketAddr(ip: V4([255, 255, 255, 255]), port: 65535)) == "255.255.255.255:65535",
+    TextInvariant()
+  )
+  // socket_addr.rs:15
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([1, 1, 1, 1]), port: 53)):<16}" == "1.1.1.1:53      ",
+    TextInvariant()
+  )
+  // socket_addr.rs:19
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([1, 1, 1, 1]), port: 53)):>16}" == "      1.1.1.1:53",
+    TextInvariant()
+  )
+}
+
+fn ipv6_socket_addr_to_string() {
+  // socket_addr.rs:28
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(
+        ip: V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 192, 0, 2, 128]),
+        port: 8080
+      )
+    ) == "[::ffff:192.0.2.128]:8080",
+    TextInvariant()
+  )
+  // socket_addr.rs:35
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(
+        ip: V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 128]),
+        port: 8080
+      )
+    ) == "[::c000:280]:8080",
+    TextInvariant()
+  )
+  // socket_addr.rs:41
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(
+        ip: V6([0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 0, 14, 0, 15]),
+        port: 80
+      )
+    ) == "[8:9:a:b:c:d:e:f]:80",
+    TextInvariant()
+  )
+  // socket_addr.rs:47
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(ip: V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), port: 0)
+    ) == "[::]:0",
+    TextInvariant()
+  )
+  // socket_addr.rs:50
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(
+        ip: V6([17, 17, 34, 34, 51, 51, 68, 68, 85, 85, 102, 102, 119, 119, 136, 136]),
+        port: 65535
+      )
+    ) == "[1111:2222:3333:4444:5555:6666:7777:8888]:65535",
+    TextInvariant()
+  )
+  // socket_addr.rs:62
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]), port: 9)
+    ):<22}" == "[1:2:3:4:5:6:7:8]:9   ",
+    TextInvariant()
+  )
+  // socket_addr.rs:66
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]), port: 9)
+    ):>22}" == "   [1:2:3:4:5:6:7:8]:9",
+    TextInvariant()
+  )
+}
+
+fn socket_v4_to_str() {
+  // socket_addr.rs:168
+  failure.check(
+    net.socket_addr_to_string(SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)) == "192.168.0.1:8080",
+    TextInvariant()
+  )
+  // socket_addr.rs:169
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)):<20}" == "192.168.0.1:8080    ",
+    TextInvariant()
+  )
+  // socket_addr.rs:170
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)):>20}" == "    192.168.0.1:8080",
+    TextInvariant()
+  )
+  // socket_addr.rs:171
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)):^20}" == "  192.168.0.1:8080  ",
+    TextInvariant()
+  )
+  // socket_addr.rs:172
+  failure.check(
+    f"{net.socket_addr_to_string(SocketAddr(ip: V4([192, 168, 0, 1]), port: 8080)):.10}" == "192.168.0.",
+    TextInvariant()
+  )
+}
+
+fn socket_v6_to_str() {
+  // socket_addr.rs:179
+  failure.check(
+    net.socket_addr_to_string(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ) == "[2a02:6b8:0:1::1]:53",
+    TextInvariant()
+  )
+  // socket_addr.rs:180
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ):<24}" == "[2a02:6b8:0:1::1]:53    ",
+    TextInvariant()
+  )
+  // socket_addr.rs:181
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ):>24}" == "    [2a02:6b8:0:1::1]:53",
+    TextInvariant()
+  )
+  // socket_addr.rs:182
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ):^24}" == "  [2a02:6b8:0:1::1]:53  ",
+    TextInvariant()
+  )
+  // socket_addr.rs:183
+  failure.check(
+    f"{net.socket_addr_to_string(
+      SocketAddr(ip: V6([42, 2, 6, 184, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]), port: 53)
+    ):.15}" == "[2a02:6b8:0:1::",
+    TextInvariant()
+  )
+}
+
+// socket_addr.rs:50-59, :187-191: scoped Display is unavailable.
+// Retain every literal and pin rejection rather than discarding a zone ID.
+fn scoped_display_unsupported() {
+  failure.check(
+    results.is_error(
+      net.parse_socket_addr(
+        "[1111:2222:3333:4444:5555:6666:7777:8888%4294967295]:65535"
+      )
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    results.is_error(net.parse_socket_addr("[2a02:6b8:0:1::1%5]:53")),
+    TextInvariant()
+  )
+  failure.check(
+    results.is_error(net.parse_socket_addr("[2a02:6b8:0:1::1%5]:53  ")),
+    TextInvariant()
+  )
+  failure.check(
+    results.is_error(net.parse_socket_addr("  [2a02:6b8:0:1::1%5]:53")),
+    TextInvariant()
+  )
+  failure.check(
+    results.is_error(net.parse_socket_addr(" [2a02:6b8:0:1::1%5]:53 ")),
+    TextInvariant()
+  )
+  failure.check(
+    results.is_error(net.parse_socket_addr("[2a02:6b8:0:1::1%5")),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  ipv4_addr_to_string()
+  ipv6_addr_to_string()
+  ipv4_socket_addr_to_string()
+  ipv6_socket_addr_to_string()
+  socket_v4_to_str()
+  socket_v6_to_str()
+  scoped_display_unsupported()
+  Ok(())
+}

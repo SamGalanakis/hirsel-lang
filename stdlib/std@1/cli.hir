@@ -1,4 +1,8 @@
-// Go flag.FlagSet.parseOne token handling, with immutable explicit specs.
+// Go src/flag/flag.go:1096-1187 FlagSet.parseOne, ebe2feef (BSD-3-Clause).
+// Both dash spellings name a flag; stop at the first positional or --.
+// Immutable specs, short-name aliases and ordered text values replace mutable
+// typed flag storage; scalar conversion is the caller's job.
+// See docs/prior-art-web-small.md for every adaptation and imported vector.
 @serializable
 pub type Kind = Switch | Value
 
@@ -49,6 +53,13 @@ fn valid_specs(specs: List[Flag]) -> bool uses {} {
     }
     let mut j: u64 = 0
     while j < i {
+      let i_name = core@1/string.as_bytes(specs[i].name)
+      let j_name = core@1/string.as_bytes(specs[j].name)
+      if core@1/bytes.len(i_name) == 1 && specs[j].short == Some(i_name[0]) || core@1/bytes.len(
+        j_name
+      ) == 1 && specs[i].short == Some(j_name[0]) {
+        return false
+      }
       if specs[i].name == specs[j].name {
         return false
       }
@@ -92,20 +103,16 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
       let mut selected: Option[u64] = None()
       let mut j: u64 = 0
       while j < core@1/list.len(specs) {
-        let matches = if long {
-          let name_bytes = core@1/string.as_bytes(specs[j].name)
-          let mut same = core@1/bytes.len(name_bytes) == end - start
-          let mut k: u64 = 0
-          while same && k < end - start {
-            if data[start + k] != name_bytes[k] {
-              same = false
-            }
-            k += 1
+        let name_bytes = core@1/string.as_bytes(specs[j].name)
+        let mut same = core@1/bytes.len(name_bytes) == end - start
+        let mut k: u64 = 0
+        while same && k < end - start {
+          if data[start + k] != name_bytes[k] {
+            same = false
           }
-          same
-        } else {
-          end - start == 1 && specs[j].short == Some(data[start])
+          k += 1
         }
+        let matches = same || end - start == 1 && specs[j].short == Some(data[start])
         if matches {
           selected = Some(j)
         }
@@ -116,11 +123,7 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
       }
       let spec = specs[which]
       let mut value = ""
-      if spec.kind == Switch() {
-        if end != len {
-          return Error(UnexpectedValue(index))
-        }
-      } else if end != len {
+      if end != len {
         let mut builder: List[u8] = []
         let mut k = end + 1
         while k < len {
@@ -134,12 +137,17 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
             ""
           },
         }
+      } else if spec.kind == Switch() {
+        value = "true"
       } else {
         if index + 1 == core@1/list.len(args) {
           return Error(MissingValue(index))
         }
         index += 1
         value = copy args[index]
+      }
+      if spec.kind == Switch() && !(value == "true" || value == "false" || value == "1" || value == "0" || value == "t" || value == "f" || value == "T" || value == "F" || value == "TRUE" || value == "FALSE" || value == "True" || value == "False") {
+        return Error(UnexpectedValue(index))
       }
       std@1/map.upsert(
         mut flags,
@@ -154,6 +162,7 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
         }
       )
     } else {
+      options = false
       core@1/list.push(mut positional, copy token)
     }
     index += 1

@@ -1,4 +1,5 @@
-// Escaping table adapted from Go x/net/html; see third-party/NOTICES.md.
+// Go src/html/escape.go:166-181 htmlEscaper/EscapeString,
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; third-party/NOTICES.md).
 
 /// Text to escape when formatted.
 @format(escaped_format)

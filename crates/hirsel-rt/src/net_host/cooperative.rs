@@ -189,6 +189,11 @@ impl CooperativeNet {
             }
         }
     }
+    // Nonblocking TLS reference: rustls 0.23.46, f04804f, examples/src/bin/
+    // tlsclient-mio.rs:88-124 (read_tls/process_new_packets), :147-185
+    // (write_tls and wants_read/wants_write readiness). Hirsel parks the current
+    // operation on WouldBlock rather than reregistering a mio client; readiness,
+    // deadlines and committed writes belong to its replayable provider boundary.
     /// Start a handshake on its first issue, then drive it across readiness waits.
     fn handshake(
         &mut self,
