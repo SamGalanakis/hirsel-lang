@@ -71,7 +71,7 @@ still exports it, so the copy only lets LLVM inline it there; whether a call
 inlines does not depend on the partition. An object's code therefore depends on
 the small callee bodies it copies.
 
-Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract and the native backends. Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
+Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract, the native backends, and `object` (reading runner, image and stub ELF files, writing the runner note). Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
 
 Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
 `HIRSEL_LINK_KIT`, and for the targets and variants that use them
@@ -98,10 +98,11 @@ static LLVM libunwind; its `digest` is its identity. An executable's line is
 floor's loader predates DT_RELR. The build ID is a hash of the kit digest, the
 line with every input path replaced by that input's content hash, and those
 contents, so it never depends on a checkout, cache or scratch directory. A
-program library (`link_library`) links its units and the runtime's compiler
-builtins (`libhirsel_builtins.a`) `-shared`, leaving runtime entries to its
-host; `link_host`'s host is `host.c` compiled without headers by the pinned
-clang and linked by the same line. Memcheck launches replace the interpreter
+program image (`native/runner.rs`) links its units, its launcher objects and
+the runtime's compiler builtins (`libhirsel_builtins.a`) `-shared -Bsymbolic`,
+leaving runtime entries to the process that loads it; `link_host`'s host is
+`host.c` compiled without headers by the pinned clang and linked by the same
+line, exporting the runner's export manifest. Memcheck launches replace the interpreter
 with Valgrind's pinned loader and its library directory as run path. A
 foreign `link` library the kit provides (`c`, `m`, `pthread`, ...) is its stub;
 any other resolves to the first `lib<name>.so` or `.a` in the host's system
@@ -228,3 +229,25 @@ the engine; native launches return that same hirsel-run-config outcome, retainin
 all failure causes and source-linked parked waits. Native observation admission
 checks the actual process status against `RunOutcome::exit_code()` before an
 observation may enter differential/agreement comparison.
+
+Runners and program images (`native/runner.rs`, link design §2): `link_runnable`
+links a program for a launch as an image of the toolchain's runner unless the
+toolchain selects executables (`Execution::Executable`) or the program needs one
+(any foreign-call surface, memcheck), and `link_tests` links a test package's
+dispatcher and adapters the same way; `launch_runnable`, the differential
+campaigns, `run --native` and `test --native` run either. A runner links the
+runtime archive and the kit's unwinder with `main` an lld alias of
+`hirsel_rt::runner`'s `hirsel_runner_main`, rooting and exporting its export
+manifest (the archive's `hirsel_rt*` definitions and the runtime symbols the
+builtin-support archive imports); its dynamic table is checked against the
+manifest and its startup audit (init arrays, `DT_INIT`, needed libraries) picks
+fork-server or exec mode, all recorded in `runners/<build-id>/runner.json`. An
+image's build ID is its key; its imports, needed libraries and segments are
+checked against the runner's exports and the kit's stub versions before it is
+published under `images/`. A refusal or an lld error falls back to an
+executable, counted by reason (`native::counts`). Served runs go to a pool of
+fork servers, one request at a time each over a Unix socket that carries the
+run's streams (`SCM_RIGHTS`); the server replies with the child's process ID and
+then its raw wait status, and a timeout kills the child's process group.
+`runner_oracle_in` holds a configuration's executable and image to byte-identical
+output, status and observation record, and cross-replays their tapes.

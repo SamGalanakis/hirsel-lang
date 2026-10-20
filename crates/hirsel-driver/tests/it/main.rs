@@ -68,6 +68,7 @@ mod recursive_groups;
 mod registry_sources;
 mod representation;
 mod run_isolation;
+mod runner;
 mod runtime;
 mod scalar_return_ir;
 mod seals;

@@ -185,6 +185,14 @@ fn table(command: &str, wall: Duration, report: &timings::Report) -> String {
     for (count, value) in &report.counts {
         text += &format!("  {:<18}{value:>10}\n", count.name());
     }
+    let runner = hirsel_driver::native::counts();
+    text += &format!(
+        "runner\n  {:<18}{:>10}\n  {:<18}{:>10}\n",
+        "image runs", runner.images, "cached images", runner.cached
+    );
+    for (kind, count) in &runner.fallbacks {
+        text += &format!("  fallback: {} ({count})\n", runner.reasons[kind]);
+    }
     text
 }
 
@@ -220,6 +228,15 @@ fn json(
             .iter()
             .map(|(count, value)| (count.name().to_string(), (*value).into()))
             .collect::<serde_json::Map<_, _>>(),
+    });
+    let runner = hirsel_driver::native::counts();
+    value["runner"] = serde_json::json!({
+        "image_runs": runner.images,
+        "cached_images": runner.cached,
+        "fallbacks": runner.fallbacks.iter().map(|(kind, count)| serde_json::json!({
+            "reason": runner.reasons[kind],
+            "count": count,
+        })).collect::<Vec<_>>(),
     });
     if let Some(memory) = memory {
         value["memory"] = serde_json::json!({

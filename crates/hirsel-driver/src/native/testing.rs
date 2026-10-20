@@ -48,11 +48,13 @@ pub fn bench_path(
     bench(&mut loaded, &benches, backend, target).map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
-/// One executable whose argument selects which entry of `tests` it launches.
+/// One executable (or its image in a runner) whose argument selects which entry of `tests`
+/// it launches.
 struct Executable {
     input: NativeInput,
     program: super::ReadyProgram,
-    path: PathBuf,
+    runnable: super::Runnable,
+    toolchain: Toolchain,
     scratch: super::executable::Scratch,
 }
 
@@ -86,11 +88,12 @@ impl Executable {
             false,
             None,
         )?;
-        let path = super::link::link_tests(&mut program, tests, &objects, &tools, &scratch.0)?;
+        let runnable = super::link::link_tests(&mut program, tests, &objects, &tools, &scratch.0)?;
         Ok(Self {
             input,
             program,
-            path,
+            runnable,
+            toolchain: tools,
             scratch,
         })
     }
@@ -106,7 +109,7 @@ impl Executable {
         let record = self.scratch.0.join("observation");
         let _ = std::fs::remove_file(&record);
         let start = Instant::now();
-        let mut command = Command::new(&self.path);
+        let mut command = Command::new("tests");
         command
             .arg(index.to_string())
             .env_clear()
@@ -114,9 +117,14 @@ impl Executable {
         if let Some(scheduler) = scheduler {
             command.env("HIRSEL_RT_SCHEDULER", scheduler.to_string());
         }
-        let output = command
-            .output()
-            .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+        let output = super::link::run_bounded(
+            &self.runnable,
+            &self.program.target,
+            &self.toolchain,
+            &self.scratch.0.join("tooling"),
+            &command,
+            None,
+        )?;
         let elapsed = start.elapsed();
         let launched = super::Launched {
             audit_required: false,

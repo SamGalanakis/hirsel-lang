@@ -723,6 +723,91 @@ pub fn replay_source_with_config(
     }
 }
 
+/// Run one source's runner oracle (`runner_oracle_in`) under `matrix`'s native
+/// configurations, cross-replaying tapes under the first. Must be called on a compiler stack.
+pub fn oracle_source(
+    id: &str,
+    source: &str,
+    path: Option<&Path>,
+    matrix: &[Configuration],
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> CaseResult {
+    let launch = matrix
+        .first()
+        .map(|c| c.options.launch.clone())
+        .unwrap_or_default();
+    let probe = |validated: &hirsel_engine::ValidatedNativeInput,
+                 entry: &hirsel_engine::DefPath,
+                 matrix: &[Configuration],
+                 dir: &Path| {
+        let natives: Vec<_> = matrix
+            .iter()
+            .filter(|c| !matches!(c.engine, Engine::Heap { .. }))
+            .cloned()
+            .collect();
+        let fixture = crate::fixture(source).unwrap();
+        natives
+            .iter()
+            .enumerate()
+            .flat_map(|(index, configuration)| {
+                hirsel_driver::native::runner_oracle_in(
+                    validated,
+                    entry,
+                    std::slice::from_ref(configuration),
+                    toolchain,
+                    dir,
+                    &fixture,
+                    index == 0,
+                )
+                .into_iter()
+                .map(|(name, outcome)| (name, Class::of(configuration), outcome))
+            })
+            .collect()
+    };
+    if source.lines().any(|line| line.trim() == "// expect: test") {
+        return visit_test_suite(
+            id,
+            source,
+            path,
+            dir,
+            launch,
+            |validated, test, _, test_dir| {
+                let mut configurations = matrix.to_vec();
+                for c in &mut configurations {
+                    c.options.launch.test_seed = test.seed;
+                }
+                probe(validated, &test.entry, &configurations, test_dir)
+            },
+        );
+    }
+    let mut engine = hirsel_engine::QueryEngine::new(
+        hirsel_engine::default_environment(),
+        hirsel_driver::compiler_adapters(),
+    );
+    match checked_with_config(&mut engine, id, source, path, launch) {
+        Err(reason) => CaseResult {
+            id: id.to_string(),
+            snapshot: Some(reason),
+            outcomes: Vec::new(),
+            reference: None,
+            wall: Default::default(),
+        },
+        Ok(Prepared {
+            input: validated,
+            entry,
+            reference,
+            ..
+        }) => CaseResult {
+            id: id.to_string(),
+            snapshot: None,
+            outcomes: probe(&validated, &entry, matrix, dir),
+            reference: Some(reference),
+            wall: Default::default(),
+        },
+    }
+}
+
 /// Run every case on `jobs` threads, each in its own scratch directory.
 pub fn run_cases(
     cases: &[Case],

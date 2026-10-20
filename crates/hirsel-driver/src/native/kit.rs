@@ -38,6 +38,7 @@ struct Target {
 /// A loaded kit: its identity and each target's inputs.
 #[derive(Debug)]
 pub(crate) struct Kit {
+    root: PathBuf,
     digest: String,
     targets: BTreeMap<String, Target>,
 }
@@ -108,7 +109,20 @@ impl Kit {
             .ok_or_else(|| failed(format!("the link kit manifest's {triple} is malformed")))?;
             targets.insert(triple.clone(), parsed);
         }
-        Ok(Self { digest, targets })
+        Ok(Self {
+            root: root.to_path_buf(),
+            digest,
+            targets,
+        })
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// `triple`'s stub DSOs, in the loader's search order.
+    pub(crate) fn libraries(&self, triple: &str) -> Result<&[PathBuf], NativeError> {
+        Ok(&self.target(triple)?.libraries)
     }
 
     fn target(&self, triple: &str) -> Result<&Target, NativeError> {
@@ -135,11 +149,17 @@ pub(crate) enum Kind {
     /// interpreter or, for a checking tool's launch, by `loader` with
     /// `library_path` as its run path.
     Executable { loader: Option<(PathBuf, PathBuf)> },
-    /// A program library its host process loads: units only, with the runtime
-    /// left to the host and only `script`'s symbols exported.
-    Library { script: PathBuf },
-    /// An executable exporting `exports` to the libraries it loads.
-    Host { exports: Vec<String> },
+    /// A program image a runner or host loads: units and launcher objects only,
+    /// bound to themselves (`-Bsymbolic`), with the runtime left to the process
+    /// that loads it and only `script`'s symbols exported.
+    Image { script: PathBuf },
+    /// An executable exporting `exports` (each also an undefined root, so its
+    /// archive member is linked) to the images it loads. With `main`, that
+    /// runtime function is its `main` and no object defines one.
+    Host {
+        exports: Vec<String>,
+        main: Option<String>,
+    },
 }
 
 /// One link: the program's objects in shipped order, the runtime archive (or,
@@ -191,7 +211,7 @@ impl Link<'_> {
             .map(OsString::from)
             .collect();
         args.extend(target.options.iter().map(OsString::from));
-        let executable = !matches!(self.kind, Kind::Library { .. });
+        let executable = !matches!(self.kind, Kind::Image { .. });
         match &self.kind {
             Kind::Executable { loader: None } | Kind::Host { .. } => {
                 args.push("-pie".into());
@@ -207,17 +227,23 @@ impl Link<'_> {
                 args.push("-rpath".into());
                 args.push(library_path.into());
             }
-            Kind::Library { script } => {
-                args.push("-shared".into());
+            Kind::Image { script } => {
+                args.extend(["-shared".into(), "-Bsymbolic".into()]);
                 let mut option = OsString::from("--version-script=");
                 option.push(script);
                 args.push(option);
             }
         }
-        if let Kind::Host { exports } = &self.kind {
-            // The libraries resolve their runtime imports against the host's one runtime.
-            args.push("--export-dynamic".into());
-            args.extend(exports.iter().map(|s| format!("--undefined={s}").into()));
+        if let Kind::Host { exports, main } = &self.kind {
+            // The images resolve their runtime imports against the host's one runtime.
+            for export in exports {
+                args.push(format!("--undefined={export}").into());
+                args.push(format!("--export-dynamic-symbol={export}").into());
+            }
+            if let Some(main) = main {
+                args.push(format!("--undefined={main}").into());
+                args.push(format!("--defsym=main={main}").into());
+            }
         }
         if executable {
             args.extend(target.start.iter().map(Into::into));
@@ -242,7 +268,11 @@ impl Link<'_> {
     /// files by its digest), and the line with input paths replaced by those
     /// contents, so it never depends on a checkout, cache or scratch directory.
     fn build_id(&self, args: &[OsString]) -> Result<[u8; 20], NativeError> {
-        let mut parts: Vec<Vec<u8>> = vec![self.kit.digest.as_bytes().to_vec()];
+        // The pinned ld.lld is the loaded libLLVM's release (`hirsel_llvm::PINNED_LLVM`).
+        let mut parts: Vec<Vec<u8>> = vec![
+            self.kit.digest.as_bytes().to_vec(),
+            format!("ld.lld {}", hirsel_llvm::PINNED_LLVM).into_bytes(),
+        ];
         let named: BTreeMap<&Path, ContentHash> = {
             let mut named = BTreeMap::new();
             for path in self.objects.iter().chain(self.foreign) {
@@ -253,7 +283,7 @@ impl Link<'_> {
             if let Some(runtime) = self.runtime {
                 named.insert(runtime, archive_identity(runtime)?);
             }
-            if let Kind::Library { script } = &self.kind {
+            if let Kind::Image { script } = &self.kind {
                 let bytes = std::fs::read(script)
                     .map_err(|e| failed(format!("{}: {e}", script.display())))?;
                 named.insert(script.as_path(), ContentHash::of_bytes(&bytes));
@@ -268,7 +298,7 @@ impl Link<'_> {
                 .map(|script| Path::new(std::ffi::OsStr::from_bytes(script)));
             let bytes = match named.get(script.unwrap_or(path)) {
                 Some(hash) => [b"content:" as &[u8], &hash.0].concat(),
-                None => match path.strip_prefix(self.kit_root()) {
+                None => match path.strip_prefix(&self.kit.root) {
                     Ok(inside) => [b"kit:" as &[u8], inside.as_os_str().as_bytes()].concat(),
                     Err(_) => arg.to_vec(),
                 },
@@ -277,15 +307,6 @@ impl Link<'_> {
         }
         let hash = ContentHash::of_parts("hirsel.build-id.v1", parts.iter().map(Vec::as_slice));
         Ok(hash.0[..20].try_into().unwrap())
-    }
-
-    fn kit_root(&self) -> &Path {
-        // Every kit path in the line is `<root>/<triple>/...`.
-        self.kit
-            .target(self.triple)
-            .ok()
-            .and_then(|t| t.unwind.parent()?.parent())
-            .unwrap_or(Path::new("/"))
     }
 
     /// The `lld` command writing `output`, and the build ID it carries.

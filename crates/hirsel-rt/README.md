@@ -1323,3 +1323,18 @@ create. Both use an open-loop client on CPU 7 and the server on CPU 31. The two
 sessions' absolute times are never compared. All speedups normalize a trace
 against that same trace's one-worker model. The observed sibling load was high,
 so these remain conditional projections, not measured multicore throughput.
+
+### Runner launcher
+
+`runner.rs` is a runner's launcher (link design §2): `hirsel_runner_main`, which a
+runner's link aliases as its `main`, runs a program image's `main` either in this
+process (`exec <tooling> <image> <argv...>`) or in a forked child per request of a
+single-threaded fork server on its standard input (`serve`). The server runs no
+program code, admits no run and maps no image; each child joins its own process
+group, takes the request's streams, closes the server's descriptors, restores
+the server's startup signal mask, enters the request's directory and
+environment, checks without loading it that the image is whole and that its
+`Hirsel` note names this runner's GNU build ID, then `dlopen`s it and calls its
+`main` (the generated launcher, which enters `hirsel_rt_v2_main`) and exits
+through `exit`. A failure before that is reported to the request's tooling path
+with exit status 125, never as a program outcome.

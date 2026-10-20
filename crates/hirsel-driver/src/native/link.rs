@@ -58,6 +58,10 @@ pub struct Toolchain {
     /// How long one launched process may run before it is killed and its
     /// launch fails.
     pub launch_timeout: Duration,
+    /// Where runners and program images are kept (`native/runner.rs`).
+    pub cache: PathBuf,
+    /// How a program linked for a launch runs: in a runner unless an executable is selected.
+    pub execution: super::runner::Execution,
 }
 
 /// A corpus program finishes in well under a second natively and in seconds
@@ -112,10 +116,9 @@ fn tool(stage: StageName, command: &mut Command) -> Result<std::process::Output,
 /// Run `command` in its own process group to completion, or kill the group
 /// once `timeout` has passed and fail.
 fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Output, NativeError> {
-    use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
-    let mut child = command
+    let child = command
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -127,6 +130,16 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
                 format!("could not run {:?}: {e}", command.get_program()),
             )
         })?;
+    finish(super::runner::Started::spawned(child), Some(timeout))
+}
+
+/// Wait for `started`, its own process group, to complete, or kill the group once `timeout`
+/// has passed and fail.
+fn finish(
+    mut started: super::runner::Started,
+    timeout: Option<Duration>,
+) -> Result<std::process::Output, NativeError> {
+    use std::io::Read;
     // Each pipe reaches its end when every process of the group has exited.
     let (sender, ended) = std::sync::mpsc::channel();
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -140,13 +153,14 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
             bytes
         })
     };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
-    let deadline = Instant::now() + timeout;
-    let timed_out = (0..2).any(|_| {
-        ended
+    let stdout = drain(started.stdout.take());
+    let stderr = drain(started.stderr.take());
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    let timed_out = (0..2).any(|_| match deadline {
+        Some(deadline) => ended
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .is_err()
+            .is_err(),
+        None => ended.recv().is_err(),
     });
     let mut timeout_state = String::new();
     if timed_out {
@@ -155,18 +169,18 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
         // child's PID must remain reserved while we address its process group.
         timeout_state = format!(
             "stat {:?}; wchan {:?}",
-            std::fs::read_to_string(format!("/proc/{}/stat", child.id())),
-            std::fs::read_to_string(format!("/proc/{}/wchan", child.id())),
+            std::fs::read_to_string(format!("/proc/{}/stat", started.id)),
+            std::fs::read_to_string(format!("/proc/{}/wchan", started.id)),
         );
         // SAFETY: kill(2) on the child's own process group.
-        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+        unsafe { libc::kill(-(started.id as libc::pid_t), libc::SIGKILL) };
     }
-    let status = child.wait().map_err(|e| {
-        NativeError::new(StageName::Launch, format!("waiting for {command:?}: {e}"))
-    })?;
+    let status = started
+        .wait()
+        .map_err(|e| NativeError::new(StageName::Launch, format!("waiting for a launch: {e}")))?;
     let stdout = stdout.join().unwrap_or_default();
     let stderr = stderr.join().unwrap_or_default();
-    if timed_out {
+    if let (true, Some(timeout)) = (timed_out, timeout) {
         return Err(NativeError::new(
             StageName::Launch,
             format!(
@@ -183,7 +197,7 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
     })
 }
 
-fn checked(stage: StageName, command: &mut Command) -> Result<(), NativeError> {
+pub(crate) fn checked(stage: StageName, command: &mut Command) -> Result<(), NativeError> {
     let output = tool(stage, command)?;
     if output.status.success() {
         return Ok(());
@@ -396,6 +410,8 @@ impl Toolchain {
             builtins,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
+            cache: build_dir.to_path_buf(),
+            execution: Default::default(),
         })
     }
 
@@ -422,8 +438,8 @@ impl Toolchain {
             .map(PathBuf::as_path)
     }
 
-    /// `triple`'s compiler builtins alone, for program libraries.
-    fn builtins_archive(&self, triple: &str) -> Result<&Path, NativeError> {
+    /// `triple`'s compiler builtins alone, which program images link.
+    pub(crate) fn builtins_archive(&self, triple: &str) -> Result<&Path, NativeError> {
         self.builtins
             .get(triple)
             .map(PathBuf::as_path)
@@ -964,6 +980,38 @@ pub(crate) fn link_objects_with_run(
         .map(|linked| linked.path)
 }
 
+/// Link `objects` to launch with `entry` as the launch entry, bound to `requested` (or the
+/// fixture run) as [`link_objects`] binds an executable: as the image of the toolchain's runner
+/// (`native/runner.rs`), or, when the toolchain selects executables, the program needs one or
+/// its image is refused, as the executable `dir/program`.
+pub fn link_runnable(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+) -> Result<Runnable, NativeError> {
+    if toolchain.execution == super::runner::Execution::Executable {
+        return link_objects_with_run(program, entry, objects, toolchain, dir, requested)
+            .map(Runnable::Executable);
+    }
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
+    let runner = super::runner::runner(toolchain, &program.target)?;
+    let main = launcher_object(program, entry, objects, dir, requested, false, "main")?;
+    let main = write(dir, "main.o", &main)?;
+    let linked = link_launcher(
+        program,
+        entry,
+        objects,
+        toolchain,
+        dir,
+        Output::Image(&runner),
+        &[main],
+    )?;
+    Ok(linked.runnable())
+}
+
 /// A standalone executable `dir/program` and, for a `debug_info` toolchain, its
 /// `<build-id>.debug` beside it.
 pub(crate) fn link_standalone(
@@ -976,16 +1024,16 @@ pub(crate) fn link_standalone(
     link_objects_impl(program, entry, objects, toolchain, dir, None, true)
 }
 
-/// A compiled program as a library a host process loads ([`link_host`]): its path and the
-/// runtime entries it imports, which the host provides.
+/// A compiled program as an image a host process loads ([`link_host`]): the image and the run
+/// record it binds.
 #[derive(Clone, Debug)]
 pub struct Library {
     pub path: PathBuf,
-    pub imports: std::collections::BTreeSet<String>,
+    pub run: PathBuf,
 }
 
-/// Link `objects` as a program library in `dir` (`program.so`) whose [`LIBRARY_RUN`] runs
-/// `entry` once, without a runtime of its own, bound to `run` (or the fixture run) as
+/// Link `objects` as the image of the toolchain's runner (`native/runner.rs`) whose `main`
+/// runs `entry` once, without a runtime of its own, bound to `run` (or the fixture run) as
 /// [`link_objects`] binds an executable; `dir/run.json` holds the bound run's record.
 pub fn link_library(
     program: &ReadyProgram,
@@ -995,34 +1043,35 @@ pub fn link_library(
     dir: &Path,
     run: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<Library, NativeError> {
-    let main = launcher_object(program, entry, objects, dir, run, false, LIBRARY_RUN)?;
+    let main = launcher_object(program, entry, objects, dir, run, false, "main")?;
     let main = write(dir, "main.o", &main)?;
-    let path = link_launcher(
+    let runner = super::runner::runner(toolchain, &program.target)?;
+    let linked = link_launcher(
         program,
         entry,
         objects,
         toolchain,
         dir,
-        Output::Library,
+        Output::Image(&runner),
         &[main],
-    )?
-    .path;
-    let mut imports: std::collections::BTreeSet<String> = objects
-        .iter()
-        .flat_map(|o| &o.imports)
-        .filter(|import| import.kind == hirsel_lir::stage::ObjectSymbolKind::Runtime)
-        .map(|import| import.name.clone())
-        .collect();
-    imports.extend(["hirsel_rt_v2_main", "hirsel_rt_v2_exit_report"].map(String::from));
-    Ok(Library { path, imports })
+    )?;
+    match linked.image {
+        Some(image) => Ok(Library {
+            path: image.path,
+            run: dir.join("run.json"),
+        }),
+        None => Err(NativeError::new(
+            StageName::Link,
+            "the program links as an executable, not an image",
+        )),
+    }
 }
 
-/// Link a host executable in `dir` (`host`) holding one runtime, which loads each library named
-/// by its arguments in turn into its own process, runs it once with the run record beside it
-/// (`--hirsel-run <dir>/run.json`) and prints `host: run <i> exited <status>` after it. Every
+/// Link a host executable in `dir` (`host`) holding one runtime, which loads each image named
+/// by its arguments in turn into its own process, runs its `main` once with the run record
+/// after it (`--hirsel-run <record>`) and prints `host: run <i> exited <status>` after it. Every
 /// run ends at its host; none ends the process.
 pub fn link_host(
-    libraries: &[Library],
     target: &TargetSpec,
     toolchain: &Toolchain,
     dir: &Path,
@@ -1039,31 +1088,24 @@ pub fn link_host(
     })?;
     // The libc declarations it uses, written out so the compile reads no
     // headers: glibc's RTLD_NOW is 2 and RTLD_LOCAL 0 on both targets.
-    let source = format!(
-        "typedef unsigned long size_t;\ntypedef struct _IO_FILE FILE;\n\
+    let source = "typedef struct _IO_FILE FILE;\n\
          extern FILE *stdout, *stderr;\n\
          void *dlopen(const char *, int);\nvoid *dlsym(void *, const char *);\n\
          char *dlerror(void);\nint fprintf(FILE *, const char *, ...);\n\
-         int printf(const char *, ...);\nint snprintf(char *, size_t, const char *, ...);\n\
-         char *strrchr(const char *, int);\nint fflush(FILE *);\n\
-         int main(int argc, char **argv) {{\n\
-         for (int i = 1; i < argc; i++) {{\n\
-         void *library = dlopen(argv[i], 2);\n\
-         int (*run)(int, const char *const *) = library\n\
-           ? (int (*)(int, const char *const *))dlsym(library, \"{LIBRARY_RUN}\") : 0;\n\
-         if (!run) {{ fprintf(stderr, \"host: %s\\n\", dlerror()); return 3; }}\n\
-         char record[4096];\n\
-         const char *slash = strrchr(argv[i], '/');\n\
-         int length = slash ? (int)(slash - argv[i]) : 0;\n\
-         snprintf(record, sizeof record, \"%.*s/run.json\", length, argv[i]);\n\
-         const char *const arguments[] = {{argv[i], \"--hirsel-run\", record}};\n\
+         int printf(const char *, ...);\nint fflush(FILE *);\n\
+         int main(int argc, char **argv) {\n\
+         for (int i = 1; i + 1 < argc; i += 2) {\n\
+         void *image = dlopen(argv[i], 2);\n\
+         int (*run)(int, const char *const *) = image\n\
+           ? (int (*)(int, const char *const *))dlsym(image, \"main\") : 0;\n\
+         if (!run) { fprintf(stderr, \"host: %s\\n\", dlerror()); return 3; }\n\
+         const char *const arguments[] = {argv[i], \"--hirsel-run\", argv[i + 1]};\n\
          fflush(stdout);\n\
          int status = run(3, arguments);\n\
-         printf(\"host: run %d exited %d\\n\", i, status);\n\
+         printf(\"host: run %d exited %d\\n\", i / 2 + 1, status);\n\
          fflush(stdout);\n\
-         }}\n\
-         return 0;\n}}\n"
-    );
+         }\n\
+         return 0;\n}\n";
     let source_path = write(dir, "host.c", source.as_bytes())?;
     let object = dir.join("host.o");
     let target_option = format!("--target={}", target.triple);
@@ -1086,16 +1128,16 @@ pub fn link_host(
     )?;
     let host = dir.join("host");
     let kit = super::kit::Kit::load(&toolchain.kit)?;
-    let mut exports: Vec<String> = libraries
-        .iter()
-        .flat_map(|library| library.imports.iter().cloned())
-        .collect();
-    exports.sort();
-    exports.dedup();
     let link = super::kit::Link {
         kit: &kit,
         triple: &target.triple,
-        kind: super::kit::Kind::Host { exports },
+        kind: super::kit::Kind::Host {
+            exports: super::runner::export_manifest(
+                archive,
+                toolchain.builtins_archive(&target.triple)?,
+            )?,
+            main: None,
+        },
         objects: &[object],
         runtime: Some(archive),
         unwind: true,
@@ -1114,12 +1156,8 @@ pub fn run_host(
 ) -> Result<std::process::Output, NativeError> {
     let mut command = Command::new(host);
     command.env_clear();
-    // Absolute, so each library's run record beside it is too.
     for library in libraries {
-        command.arg(
-            std::fs::canonicalize(&library.path)
-                .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?,
-        );
+        command.arg(&library.path).arg(absolute(&library.run)?);
     }
     bounded(&mut command, toolchain.launch_timeout)
 }
@@ -1358,20 +1396,16 @@ done:
 }
 
 /// What a link produces.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Output {
+#[derive(Clone, Copy)]
+enum Output<'a> {
     /// An executable run for the run the driver bound (`program`).
     Launched,
     /// An executable that is its own host (`hirsel build`).
     Standalone,
-    /// A shared library a host loads (`program.so`), exporting only [`LIBRARY_RUN`].
-    Library,
+    /// The image `runner` loads (`native/runner.rs`), or, when the program needs an
+    /// executable or the image is refused, a launched executable.
+    Image(&'a super::runner::Runner),
 }
-
-/// The one symbol a program library exports: `int32_t hirsel_program_run(int32_t argc, const
-/// char *const *argv)`, which runs the program once, as `argv` selects, in its host's process
-/// and returns its outcome's exit status (`hirsel_rt_v2_main`).
-pub const LIBRARY_RUN: &str = "hirsel_program_run";
 
 fn link_launcher(
     program: &ReadyProgram,
@@ -1379,7 +1413,7 @@ fn link_launcher(
     objects: &[hirsel_lir::stage::ObjectArtifact],
     toolchain: &Toolchain,
     dir: &Path,
-    output: Output,
+    mut output: Output<'_>,
     launchers: &[PathBuf],
 ) -> Result<Linked, NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
@@ -1440,33 +1474,36 @@ fn link_launcher(
             ),
         )
     })?;
-    let executable = dir.join(if output == Output::Library {
-        "program.so"
-    } else {
-        "program"
-    });
+    let executable = dir.join("program");
     let kit = super::kit::Kit::load(&toolchain.kit)?;
     let mut inputs: Vec<PathBuf> = launchers.to_vec();
     for (index, object) in objects.iter().enumerate() {
         inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?);
     }
+    if let Output::Image(runner) = output {
+        let image = match executable_reason(program, objects, toolchain) {
+            Some(reason) => Err(reason),
+            None => super::runner::link_image(toolchain, target, runner, &inputs, dir)?,
+        };
+        match image {
+            Ok(image) => {
+                return Ok(Linked {
+                    path: image.path.clone(),
+                    debug: None,
+                    image: Some(image),
+                });
+            }
+            Err(reason) => {
+                super::runner::count_fallback(&reason);
+                output = Output::Launched;
+            }
+        }
+    }
     // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
     let foreign = foreign_inputs(&kit, &target.triple, &program.foreign_links)?;
-    let debug = toolchain.debug_info && output != Output::Library;
+    let debug = toolchain.debug_info;
     let (kind, runtime) = match output {
-        Output::Library => {
-            // Runtime entries stay undefined: the host process supplies its one
-            // runtime. Compiler builtins are the runtime's, linked in.
-            let script = write(
-                dir,
-                "exports.map",
-                format!("{{ global: {LIBRARY_RUN}; local: *; }};\n").as_bytes(),
-            )?;
-            (
-                super::kit::Kind::Library { script },
-                toolchain.builtins_archive(&target.triple)?,
-            )
-        }
+        Output::Image(_) => unreachable!("an image links above"),
         Output::Standalone => (
             super::kit::Kind::Executable { loader: None },
             runtime_archive(toolchain, &target.triple, archive, debug)?,
@@ -1484,7 +1521,7 @@ fn link_launcher(
         kind,
         objects: &inputs,
         runtime: Some(runtime),
-        unwind: output != Output::Library,
+        unwind: true,
         foreign: &foreign,
     };
     let (mut command, build_id) = link.command(&toolchain.lld, &executable)?;
@@ -1495,17 +1532,50 @@ fn link_launcher(
     Ok(Linked {
         path: executable,
         debug,
+        image: None,
     })
 }
 
-/// A linked file and, for a `debug_info` toolchain, its split debug information.
+/// Why `program` runs as an executable rather than an image (link design §2): it has a
+/// foreign-call surface (an extern import, a C callback or a foreign link input, even an
+/// `unsafe ffi` with no library calling libc), or it runs under memcheck.
+fn executable_reason(
+    program: &ReadyProgram,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+) -> Option<String> {
+    let foreign = objects
+        .iter()
+        .flat_map(|o| &o.imports)
+        .any(|i| i.kind == hirsel_lir::stage::ObjectSymbolKind::Foreign);
+    if foreign || !program.callbacks.is_empty() || !program.foreign_links.is_empty() {
+        return Some("foreign: the program calls C".into());
+    }
+    if toolchain.runtime_build.memcheck || toolchain.uses_memcheck() {
+        return Some("memcheck: memcheck runs an executable".into());
+    }
+    None
+}
+
+/// A linked file and, for a `debug_info` toolchain, its split debug information; or the
+/// program's image.
 pub(crate) struct Linked {
     pub path: PathBuf,
     pub debug: Option<PathBuf>,
+    pub image: Option<super::runner::Image>,
+}
+
+impl Linked {
+    fn runnable(self) -> Runnable {
+        match self.image {
+            Some(image) => Runnable::Image(image),
+            None => Runnable::Executable(self.path),
+        }
+    }
 }
 
 /// The archive a link reads: the debug-stripped one, or the debug-bearing one.
-fn runtime_archive<'a>(
+pub(crate) fn runtime_archive<'a>(
     toolchain: &'a Toolchain,
     triple: &str,
     stripped: &'a Path,
@@ -1523,14 +1593,14 @@ fn runtime_archive<'a>(
 }
 
 /// The file name of an executable's split debug information.
-fn debug_file_name(build_id: &[u8; 20]) -> String {
+pub(crate) fn debug_file_name(build_id: &[u8; 20]) -> String {
     let hex: String = build_id.iter().map(|b| format!("{b:02x}")).collect();
     format!("{hex}.debug")
 }
 
 /// Move `executable`'s debug information into `<build-id>.debug` beside it,
 /// which its `.gnu_debuglink` names (with the file's CRC), as debuggers look it up.
-fn split_debug(
+pub(crate) fn split_debug(
     toolchain: &Toolchain,
     executable: &Path,
     build_id: &[u8; 20],
@@ -1549,15 +1619,13 @@ fn split_debug(
         }
         checked(StageName::Link, &mut command)
     };
-    run(&[
-        "--only-keep-debug".as_ref(),
-        executable.as_os_str(),
-        debug.as_os_str(),
-    ])?;
-    // A relative name, so the link is the file name alone, never this directory.
+    // objcopy runs in the file's directory, so it names both files by their names alone,
+    // which also keeps the link to the file name, never this directory.
+    let (file, debug_name) = (executable.file_name().unwrap(), debug.file_name().unwrap());
+    run(&["--only-keep-debug".as_ref(), file, debug_name])?;
     let mut link = std::ffi::OsString::from("--add-gnu-debuglink=");
-    link.push(debug.file_name().unwrap());
-    run(&["--strip-debug".as_ref(), &link, executable.as_os_str()])?;
+    link.push(debug_name);
+    run(&["--strip-debug".as_ref(), &link, file])?;
     Ok(debug)
 }
 
@@ -1616,15 +1684,16 @@ fn cranelift_objects(objects: &[hirsel_lir::stage::ObjectArtifact]) -> bool {
         })
 }
 
-/// Link one package test executable. Each child selects one adapter; the
-/// runtime starts fresh with Test as its only root and its own fixed seed.
+/// Link one package test executable, or its image when the toolchain runs programs in
+/// runners. Each child selects one adapter; the runtime starts fresh with Test as its only root
+/// and its own fixed seed.
 pub(crate) fn link_tests(
     program: &mut ReadyProgram,
     tests: &[crate::testing::Test],
     objects: &[hirsel_lir::stage::ObjectArtifact],
     toolchain: &Toolchain,
     dir: &Path,
-) -> Result<PathBuf, NativeError> {
+) -> Result<Runnable, NativeError> {
     let mut declarations = String::new();
     let mut cases = String::new();
     let mut launchers = vec![dir.join("tests.o")];
@@ -1673,16 +1742,20 @@ refuse:\n ret i32 3\n}}\n",
             .bytes
     };
     write(dir, "tests.o", &dispatcher)?;
+    let runner = match toolchain.execution {
+        super::runner::Execution::Executable => None,
+        _ => Some(super::runner::runner(toolchain, &program.target)?),
+    };
     link_launcher(
         program,
         &tests[0].entry,
         objects,
         toolchain,
         dir,
-        Output::Launched,
+        runner.as_ref().map_or(Output::Launched, Output::Image),
         &launchers,
     )
-    .map(|linked| linked.path)
+    .map(Linked::runnable)
 }
 
 /// The encoded failure table every source program's descriptor carries.
@@ -1703,6 +1776,13 @@ pub struct Launched {
     pub stderr: Vec<u8>,
     /// The launcher's observation record (`hirsel_rt::launch`).
     pub record: String,
+}
+
+/// What a launch runs: a linked executable, or a program image in its runner.
+#[derive(Clone, Debug)]
+pub enum Runnable {
+    Executable(PathBuf),
+    Image(super::runner::Image),
 }
 
 /// Run a linked executable with an empty granted directory under `dir`.
@@ -1748,8 +1828,27 @@ pub fn launch_with(
     diagnostic: bool,
     tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
+    launch_runnable(
+        &Runnable::Executable(executable.to_path_buf()),
+        target,
+        toolchain,
+        dir,
+        diagnostic,
+        tape,
+    )
+}
+
+/// `launch_with` for an executable or an image.
+pub fn launch_runnable(
+    runnable: &Runnable,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    diagnostic: bool,
+    tape: Tape<'_>,
+) -> Result<Launched, NativeError> {
     launch_impl(
-        executable,
+        runnable,
         target,
         toolchain,
         dir,
@@ -1761,7 +1860,7 @@ pub fn launch_with(
 }
 
 pub(crate) fn launch_fixture(
-    executable: &Path,
+    runnable: &Runnable,
     target: &TargetSpec,
     toolchain: &Toolchain,
     dir: &Path,
@@ -1770,7 +1869,7 @@ pub(crate) fn launch_fixture(
     fixture: &super::Fixture,
 ) -> Result<Launched, NativeError> {
     launch_impl(
-        executable, target, toolchain, dir, diagnostic, tape, None, fixture,
+        runnable, target, toolchain, dir, diagnostic, tape, None, fixture,
     )
 }
 
@@ -1825,7 +1924,7 @@ fn launcher(
 
 /// Harness execution or a user launch with an explicit admitted run record.
 fn launch_impl(
-    executable: &Path,
+    runnable: &Runnable,
     target: &TargetSpec,
     toolchain: &Toolchain,
     dir: &Path,
@@ -1838,12 +1937,16 @@ fn launch_impl(
     let record = dir.join("observation");
     // Where the executable reports a launch it refused, instead of standard error.
     let refusal = dir.join("refusal");
+    // Where a runner reports a failure before the program's code ran.
+    let tooling = dir.join("tooling");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_file(&record);
     let _ = std::fs::remove_file(&refusal);
+    let _ = std::fs::remove_file(&tooling);
     std::fs::create_dir_all(&root)
         .map_err(|e| NativeError::new(StageName::Launch, format!("granted directory: {e}")))?;
-    let mut command = launcher(executable, target, toolchain)?;
+    // The program's arguments after the one naming it, and its environment.
+    let mut command = Command::new("program");
     command
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
@@ -1904,27 +2007,46 @@ fn launch_impl(
     if diagnostic {
         command.env("HIRSEL_RT_DIAGNOSTIC", "1");
     }
-    let output = if let Some(live) = live {
-        // A replay reads no host input.
-        let stdin = !matches!(tape, Tape::Replay(_))
+    // A replay reads no host input.
+    let stdin = live.as_ref().is_some_and(|live| {
+        !matches!(tape, Tape::Replay(_))
             && live
                 .run
                 .record()
                 .io
                 .as_ref()
-                .is_some_and(|io| io.stdin.is_some());
-        run_live(&mut command, stdin, live.inherit, live.stdout, live.stderr)?
-    } else {
-        bounded(&mut command, toolchain.launch_timeout).inspect_err(|error| {
+                .is_some_and(|io| io.stdin.is_some())
+    });
+    let output = match live {
+        Some(live) => {
+            let (mut process, _hold) = process(runnable, target, toolchain, &tooling, &command)?;
+            let output = run_live(&mut process, stdin, live.inherit, live.stdout, live.stderr)?;
+            if let Runnable::Image(image) = runnable {
+                if let Some(error) = super::runner::tooling_failure(&tooling) {
+                    return Err(error);
+                }
+                super::runner::count_image(image);
+            }
+            output
+        }
+        None => run_bounded(
+            runnable,
+            target,
+            toolchain,
+            &tooling,
+            &command,
+            Some(toolchain.launch_timeout),
+        )
+        .inspect_err(|error| {
             if error.message.contains("launch timeout") {
-                match super::timeout::retain(dir, &command, &error.message) {
+                match retain_timeout(runnable, dir, &command, &error.message) {
                     Ok(path) => {
                         eprintln!("native: timed-out launch retained at {}", path.display())
                     }
                     Err(error) => eprintln!("native: could not retain timed-out launch: {error}"),
                 }
             }
-        })?
+        })?,
     };
     Ok(Launched {
         audit_required: toolchain.runtime_build.diagnostic || toolchain.runtime_build.measurement,
@@ -1935,6 +2057,114 @@ fn launch_impl(
             .or_else(|_| std::fs::read_to_string(&refusal))
             .unwrap_or_default(),
     })
+}
+
+/// The process that runs `runnable` with `command`'s arguments and environment: the
+/// executable, or a fresh runner process loading the image, each under its target's emulator
+/// or loader. The hold keeps a cached image in place while the run lasts.
+fn process(
+    runnable: &Runnable,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    tooling: &Path,
+    command: &Command,
+) -> Result<(Command, Option<std::fs::File>), NativeError> {
+    let (mut process, hold) = match runnable {
+        Runnable::Executable(executable) => (launcher(executable, target, toolchain)?, None),
+        Runnable::Image(image) => {
+            let mut process = launcher(&image.runner.path, target, toolchain)?;
+            process
+                .arg("exec")
+                .arg(tooling)
+                .arg(&image.path)
+                .arg(&image.path);
+            (process, super::runner::hold(&image.path))
+        }
+    };
+    process.env_clear().args(command.get_args());
+    for (name, value) in command.get_envs() {
+        if let Some(value) = value {
+            process.env(name, value);
+        }
+    }
+    Ok((process, hold))
+}
+
+/// Keep a timed-out launch's directory for diagnosis (`super::timeout`), with the image it
+/// ran when it ran one, since an image lives in the cache rather than the launch directory.
+fn retain_timeout(
+    runnable: &Runnable,
+    dir: &Path,
+    command: &Command,
+    reason: &str,
+) -> std::io::Result<PathBuf> {
+    let retained = super::timeout::retain(dir, command, reason)?;
+    if let Runnable::Image(image) = runnable
+        && let Some(name) = image.path.file_name()
+    {
+        std::fs::copy(&image.path, retained.join(name))?;
+    }
+    Ok(retained)
+}
+
+/// Run `runnable` with `command`'s arguments and environment in its own process group, with
+/// no standard input and captured output, to completion or, past `timeout`, killed with its
+/// group and failed. An image runs on its runner's fork server unless the startup audit, the
+/// toolchain or a wrapper selects a fresh runner process; a failure before the program's code
+/// ran (`tooling`) is a tool outcome.
+pub(crate) fn run_bounded(
+    runnable: &Runnable,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    tooling: &Path,
+    command: &Command,
+    timeout: Option<Duration>,
+) -> Result<std::process::Output, NativeError> {
+    let _ = std::fs::remove_file(tooling);
+    let served = match runnable {
+        Runnable::Image(image)
+            if image.runner.mode == super::runner::Mode::Fork
+                && toolchain.execution == super::runner::Execution::Runner
+                && toolchain.wrapper.is_empty() =>
+        {
+            Some(image)
+        }
+        _ => None,
+    };
+    let output = match served {
+        Some(image) => {
+            let _hold = super::runner::hold(&image.path);
+            let prefix = launcher(&image.runner.path, target, toolchain)?;
+            let started = super::runner::start_served(&prefix, image, tooling, command, timeout)
+                .map_err(|e| NativeError::new(StageName::Launch, format!("the runner: {e}")))?;
+            finish(started, timeout)?
+        }
+        None => {
+            use std::os::unix::process::CommandExt;
+            use std::process::Stdio;
+            let (mut process, _hold) = process(runnable, target, toolchain, tooling, command)?;
+            let child = process
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    NativeError::new(
+                        StageName::Launch,
+                        format!("could not run {:?}: {e}", process.get_program()),
+                    )
+                })?;
+            finish(super::runner::Started::spawned(child), timeout)?
+        }
+    };
+    if let Runnable::Image(image) = runnable {
+        if let Some(error) = super::runner::tooling_failure(tooling) {
+            return Err(error);
+        }
+        super::runner::count_image(image);
+    }
+    Ok(output)
 }
 
 fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
@@ -1950,7 +2180,7 @@ pub(crate) struct LiveRun<'a> {
 
 /// A user's server runs until it exits or is interrupted; harness timeouts remain tooling.
 pub(crate) fn launch_live(
-    executable: &Path,
+    runnable: &Runnable,
     target: &TargetSpec,
     toolchain: &Toolchain,
     dir: &Path,
@@ -1958,7 +2188,7 @@ pub(crate) fn launch_live(
     live: LiveRun<'_>,
 ) -> Result<Launched, NativeError> {
     launch_impl(
-        executable,
+        runnable,
         target,
         toolchain,
         dir,
@@ -2467,6 +2697,8 @@ mod tests {
             builtins: BTreeMap::new(),
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
+            cache: "/unused/cache".into(),
+            execution: Default::default(),
         };
         let shape = |target: &TargetSpec| {
             let command = launcher(Path::new("/out/app"), target, &tools).unwrap();
@@ -2524,6 +2756,8 @@ mod tests {
                 "printf '%s' \"$VALGRIND_LIB\"".into(),
             ],
             launch_timeout: LAUNCH_TIMEOUT,
+            cache: "/unused/cache".into(),
+            execution: Default::default(),
         };
         let launched = launch(
             Path::new("/unused/program"),

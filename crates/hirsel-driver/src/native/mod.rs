@@ -16,6 +16,7 @@ mod link;
 mod observe;
 mod pairwise;
 mod proofs;
+mod runner;
 mod runtime_cache;
 pub use runtime_cache::RuntimeInputs;
 mod stages;
@@ -29,7 +30,7 @@ pub use coverage::backend_features;
 pub use differential::{
     Configuration, Engine, Fixture, MATRIX_VERSION, Outcome, Runtime, differential,
     differential_in, full_matrix, real_io_replay, real_io_replay_in, real_io_replay_with_config,
-    runtime_builds, smoke_matrix, topology_matrix,
+    runner_oracle_in, runtime_builds, smoke_matrix, topology_matrix,
 };
 pub use emit::{
     Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,
@@ -43,14 +44,15 @@ pub use hirsel_llvm::c_call;
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{
-    LIBRARY_RUN, Launched, Library, Observed, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS,
-    Tape, Toolchain, emit_backend_objects, emit_objects, launch, launch_with, link, link_host,
-    link_library, link_objects, link_profile, observe, observe_run, partition_backend_objects,
-    partition_objects, run_host,
+    Launched, Library, Observed, Partition, Runnable, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape,
+    Toolchain, emit_backend_objects, emit_objects, launch, launch_runnable, launch_with, link,
+    link_host, link_library, link_objects, link_profile, link_runnable, observe, observe_run,
+    partition_backend_objects, partition_objects, run_host,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
+pub use runner::{Counts, Execution, Image, Mode, Runner, counts, runner};
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
 pub use tool::{Output, run_path_native, run_path_native_backend, run_path_native_with_config};
 

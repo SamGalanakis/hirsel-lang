@@ -103,6 +103,7 @@ fn report(stderr: &[u8]) -> serde_json::Value {
         "counts",
         "intervals",
         "phases",
+        "runner",
         "schema",
         "untimed_ns",
         "wait_ns",
@@ -120,6 +121,12 @@ fn report(stderr: &[u8]) -> serde_json::Value {
     assert_eq!(keys, expected, "{report}");
     assert_eq!(report["schema"], 1);
     assert!(report["command"].is_string());
+    for field in ["image_runs", "cached_images"] {
+        assert!(report["runner"][field].is_u64(), "{field}: {report}");
+    }
+    for row in report["runner"]["fallbacks"].as_array().unwrap() {
+        assert!(row["reason"].is_string() && row["count"].is_u64(), "{row}");
+    }
     for field in ["wall_ns", "untimed_ns", "wait_ns"] {
         assert!(report[field].is_u64(), "{field}: {report}");
     }

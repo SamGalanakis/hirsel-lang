@@ -108,6 +108,40 @@ fn generated_cases(seed: u64, count: u64, filter: &Filter) -> Vec<Case> {
     cases
 }
 
+/// Report how many programs ran as images in runners and why any fell back to a linked
+/// executable. A program that calls C or runs under memcheck runs as an executable by design;
+/// any other fallback (an lld error, a refused image) fails the campaign.
+fn runner_counts(campaign: &str) -> bool {
+    let counts = hirsel_driver::native::counts();
+    let fallbacks: Vec<String> = counts
+        .fallbacks
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    println!(
+        "{campaign}: {} runs as images in runners ({} images cached), fallbacks to executables: {}",
+        counts.images,
+        counts.cached,
+        if fallbacks.is_empty() {
+            "none".to_string()
+        } else {
+            fallbacks.join(", ")
+        }
+    );
+    let unexpected: Vec<&String> = counts
+        .fallbacks
+        .keys()
+        .filter(|reason| !matches!(reason.as_str(), "foreign" | "memcheck"))
+        .collect();
+    for reason in &unexpected {
+        println!(
+            "{campaign}: FAILED: a fallback other than by design: {}",
+            counts.reasons[*reason]
+        );
+    }
+    unexpected.is_empty()
+}
+
 /// An explicit smoke selection exercises the same programs on both backends.
 /// Unfiltered smoke retains its smaller fixed Cranelift control set.
 fn smoke_cranelift_cases(
@@ -320,9 +354,28 @@ fn run() -> Result<bool, String> {
                 jobs,
             );
             ok &= all_agree("cranelift", &compiled);
+            // The runner oracle: every case's native configurations, as linked executables and
+            // as images in their runners, byte for byte, with cross-replayed tapes on x86-64.
+            let oracle = native::run_cases_with(
+                &cases,
+                &native::scratch("smoke-oracle")?,
+                jobs,
+                |case, dir| {
+                    native::oracle_source(
+                        &case.id,
+                        &case.source,
+                        case.path.as_deref(),
+                        &matrix,
+                        &toolchain,
+                        dir,
+                    )
+                },
+            );
+            ok &= all_agree("runner oracle", &oracle);
+            ok &= runner_counts("native smoke");
             println!(
                 "native smoke: {} cases under {} configurations and real Io record and replay, \
-                 {} as Cranelift executables{}",
+                 {} as Cranelift executables, runner and executable byte for byte{}",
                 results.len(),
                 matrix.len(),
                 compiled.len(),
@@ -841,6 +894,55 @@ fn full(
     if whole || !generated.is_empty() {
         ok &= all_agree("generated", &generated_results);
     }
+    // The runner oracle on both targets: each case's shipped-archive O3 program as a linked
+    // executable and as an image in its runner, byte for byte, with cross-replayed tapes.
+    let mut oracle_matrix: Vec<Configuration> = Vec::new();
+    for configuration in &matrix {
+        let shipped = matches!(
+            configuration.engine,
+            Engine::Native {
+                opt: OptLevel::Speed,
+                partition: Partition::Whole,
+                runtime: Runtime::Default,
+            }
+        );
+        if shipped
+            && !oracle_matrix
+                .iter()
+                .any(|c| c.options.target == configuration.options.target)
+        {
+            oracle_matrix.push(configuration.clone());
+        }
+    }
+    if !oracle_matrix.is_empty() {
+        let oracle =
+            native::run_cases_with(&cases, &native::scratch("oracle")?, jobs, |case, dir| {
+                native::oracle_source(
+                    &case.id,
+                    &case.source,
+                    case.path.as_deref(),
+                    &oracle_matrix,
+                    &toolchain,
+                    dir,
+                )
+            });
+        if whole || !cases.is_empty() {
+            let agree = all_agree("runner oracle", &oracle);
+            if agree {
+                let targets: Vec<&str> = oracle_matrix
+                    .iter()
+                    .map(|c| c.options.target.triple.as_str())
+                    .collect();
+                println!(
+                    "native full: runner oracle: {} cases on {}, runner and executable byte for byte agree",
+                    oracle.len(),
+                    targets.join(" and ")
+                );
+            }
+            ok &= agree;
+        }
+    }
+    ok &= runner_counts("native full");
     // A restriction may empty a campaign, but not the whole run; the
     // unrestricted run checks every campaign (all_agree refuses an empty one).
     if matrix.is_empty() || whole && cases.is_empty() {

@@ -240,6 +240,17 @@ Where the facts stop:
 Cranelift has no parameter aliasing attribute, so it states none of these facts. Both
 backends produce the same observations.
 
+**Running without an executable.** Shipped output is a static-runtime executable linked by
+the pinned `ld.lld` from the link kit. The native edit loop links no executable: a program's
+units and the same launcher objects form a content-keyed image, a shared object bound to
+itself that exports only the launcher's `main`, which a prebuilt runner (the runtime
+archive, linked once per target and runtime archive, exporting every runtime entry) loads
+in a fresh process, forked from a single-threaded server or started per run. Both paths
+run one generated `main`, so a program observes the same arguments, environment, streams,
+outcome and exit status from either; the native gates hold them to byte-identical output
+and observation records on both targets. A program with any foreign-call surface runs as an
+executable.
+
 ### Failure and cleanup
 
 Failures propagate by explicit status through compiler-generated cleanup code backed by

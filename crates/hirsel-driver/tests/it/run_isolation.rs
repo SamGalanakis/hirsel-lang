@@ -1,7 +1,7 @@
 //! A run, not the process, is the unit of failure: one process runs programs one after another,
 //! and a run that blocks (CONC-8), passes the codec's operational budget (environmental, in
 //! both engines) or fails ends alone, with its own outcome, while runs of other programs before and after it complete. Natively the
-//! programs are libraries loaded into one host's runtime, so each failure names its own program's
+//! programs are images loaded into one host's runtime, so each failure names its own program's
 //! site from that program's failure table.
 use hirsel_driver::compiler_adapters;
 use hirsel_driver::native::{
@@ -214,7 +214,7 @@ fn native_runs_that_block_stop_or_fail_end_alone_in_one_host_process_on_both_bac
                 &completes,
             ]
             .map(Clone::clone);
-            let host = link_host(&runs, &x86(), &toolchain, &dir).unwrap();
+            let host = link_host(&x86(), &toolchain, &dir).unwrap();
             let output = run_host(&host, &runs, &toolchain).unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);

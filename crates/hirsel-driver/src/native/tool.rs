@@ -1,7 +1,7 @@
-//! `hirsel run --native`: the checked program as an optimized host executable.
+//! `hirsel run --native`: the checked program, optimized, run as an image in the host's
+//! runner (or, when it calls C, as an executable).
 use super::{
-    NativeError, Observation, OptLevel, Options, Partition, Sites, StageName, TargetSpec,
-    Toolchain, build, observe,
+    NativeError, OptLevel, Options, Partition, Sites, StageName, TargetSpec, Toolchain, build,
 };
 use hirsel_engine::{RunOutcome, ToolError};
 use std::io::Write;
@@ -225,16 +225,10 @@ fn run(
             false,
             None,
         )?;
-        let executable = super::link::link_objects_with_run(
-            &program,
-            entry,
-            &objects,
-            &toolchain,
-            &scratch,
-            Some(run),
-        )?;
+        let runnable =
+            super::link::link_runnable(&program, entry, &objects, &toolchain, &scratch, Some(run))?;
         let launched = super::link::launch_live(
-            &executable,
+            &runnable,
             &target,
             &toolchain,
             &scratch,

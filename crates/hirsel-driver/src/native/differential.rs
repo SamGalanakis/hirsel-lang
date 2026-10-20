@@ -5,7 +5,7 @@
 //! from its name alone.
 use super::emit::Backend;
 use super::link::{
-    Partition, RuntimeBuild, Toolchain, emit_backend_objects, link, link_objects, observe,
+    Partition, RuntimeBuild, Toolchain, emit_backend_objects, link_runnable, observe,
 };
 use super::observe::{Observation, Sites};
 use super::stages::{NativeError, Options, ReadyProgram, StageName, build};
@@ -386,11 +386,11 @@ pub fn differential_in(
             }
         };
         let objects = emitted[at].1.as_ref().map_err(Clone::clone)?;
-        let executable = link_objects(program, entry, objects, toolchain, dir)?;
+        let runnable = link_runnable(program, entry, objects, toolchain, dir, None)?;
         let target = &program.target;
         let diagnostic = runtime == Runtime::Diagnostic;
         let launched = super::link::launch_fixture(
-            &executable,
+            &runnable,
             target,
             toolchain,
             dir,
@@ -449,6 +449,142 @@ pub fn differential_in(
             Err(error) => Outcome::Unavailable(error),
         };
         out.push((configuration.name(), outcome));
+    }
+    out
+}
+
+/// The runner oracle (link design §2): under each native configuration of `configurations`,
+/// the program's linked executable and its image in the runner, each launched once in the
+/// fixture world, give byte-identical stdout, stderr, exit status and observation records.
+/// With `tapes`, each path then records its Io completion tape and the other path replays it,
+/// and both replays observe what the recordings did. A configuration whose program runs as an
+/// executable anyway (a fallback, [`super::counts`]) compares the executable with itself.
+pub fn runner_oracle_in(
+    validated: &ValidatedNativeInput,
+    entry: &DefPath,
+    configurations: &[Configuration],
+    toolchain: &Toolchain,
+    dir: &Path,
+    fixture: &Fixture,
+    tapes: bool,
+) -> Vec<(String, Outcome)> {
+    let sites = Sites::new(validated.snapshot());
+    let mut out = Vec::new();
+    for configuration in configurations {
+        let (backend, opt, partition, runtime) = match configuration.engine {
+            Engine::Heap { .. } => continue,
+            Engine::Native {
+                opt,
+                partition,
+                runtime,
+            } => (Backend::Llvm, opt, partition, runtime),
+            Engine::Cranelift { partition, runtime } => {
+                (Backend::Cranelift, OptLevel::None, partition, runtime)
+            }
+        };
+        let toolchain = toolchain.with_runtime(runtime.build());
+        let diagnostic = runtime == Runtime::Diagnostic;
+        let run = || -> Result<(), NativeError> {
+            let program = build(validated, &configuration.options)?;
+            let target = &program.target;
+            let objects = emit_backend_objects(
+                &program,
+                backend,
+                opt,
+                partition,
+                toolchain.runtime_build.measurement,
+                None,
+            )?;
+            let executable = Toolchain {
+                execution: super::runner::Execution::Executable,
+                ..toolchain.clone()
+            };
+            let paths = [
+                link_runnable(&program, entry, &objects, &executable, dir, None)?,
+                link_runnable(&program, entry, &objects, &toolchain, dir, None)?,
+            ];
+            let launch = |runnable: &super::link::Runnable, tape: super::link::Tape<'_>| {
+                super::link::launch_fixture(
+                    runnable, target, &toolchain, dir, diagnostic, tape, fixture,
+                )
+            };
+            let live = super::link::Tape::Live {
+                record: None,
+                revocations: None,
+            };
+            let [linked, loaded] = [launch(&paths[0], live)?, launch(&paths[1], live)?];
+            for (field, a, b) in [
+                (
+                    "exit status",
+                    format!("{:?}", linked.exit),
+                    format!("{:?}", loaded.exit),
+                ),
+                (
+                    "stdout",
+                    String::from_utf8_lossy(&linked.stdout).into_owned(),
+                    String::from_utf8_lossy(&loaded.stdout).into_owned(),
+                ),
+                (
+                    "stderr",
+                    String::from_utf8_lossy(&linked.stderr).into_owned(),
+                    String::from_utf8_lossy(&loaded.stderr).into_owned(),
+                ),
+                (
+                    "observation record",
+                    linked.record.clone(),
+                    loaded.record.clone(),
+                ),
+            ] {
+                if a != b {
+                    return Err(NativeError::new(
+                        StageName::Launch,
+                        format!(
+                            "runner oracle: the {field} differs: executable {a:?}, runner {b:?}"
+                        ),
+                    ));
+                }
+            }
+            if !tapes {
+                return Ok(());
+            }
+            let mut replays = Vec::new();
+            for (recorder, replayer) in [(0, 1), (1, 0)] {
+                let tape = dir.join(format!("oracle-tape-{recorder}"));
+                let _ = std::fs::remove_file(&tape);
+                let recorded = launch(
+                    &paths[recorder],
+                    super::link::Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                )?;
+                let recorded = observe(&recorded, &program, &sites)?;
+                let replayed = launch(&paths[replayer], super::link::Tape::Replay(&tape))?;
+                let replayed = observe(&replayed, &program, &sites)?;
+                if replayed != recorded {
+                    return Err(NativeError::new(
+                        StageName::Launch,
+                        format!(
+                            "runner oracle: a tape recorded by the {} replays differently",
+                            ["executable", "runner"][recorder]
+                        ),
+                    ));
+                }
+                replays.push(replayed);
+            }
+            if replays[0] != replays[1] {
+                return Err(NativeError::new(
+                    StageName::Launch,
+                    "runner oracle: the cross replays observe differently",
+                ));
+            }
+            Ok(())
+        };
+        let outcome = match run() {
+            Ok(()) => Outcome::Agree,
+            Err(error) => Outcome::Unavailable(error),
+        };
+        out.push((format!("{}/runner-oracle", configuration.name()), outcome));
     }
     out
 }
@@ -512,18 +648,19 @@ pub fn real_io_replay_in(
         options.launch = launch_config;
         let program = build(validated, &options)?;
         let sites = Sites::new(validated.snapshot());
-        let executable = link(
+        let objects = emit_backend_objects(
             &program,
-            entry,
+            Backend::Llvm,
             OptLevel::Speed,
             Partition::Whole,
-            toolchain,
-            dir,
+            toolchain.runtime_build.measurement,
+            None,
         )?;
+        let runnable = link_runnable(&program, entry, &objects, toolchain, dir, None)?;
         let tape = dir.join("io-tape");
         let _ = std::fs::remove_file(&tape);
         let recorded = super::link::launch_fixture(
-            &executable,
+            &runnable,
             &target,
             toolchain,
             dir,
@@ -572,7 +709,7 @@ pub fn real_io_replay_in(
             ));
         }
         let replayed = super::link::launch_fixture(
-            &executable,
+            &runnable,
             &target,
             toolchain,
             dir,

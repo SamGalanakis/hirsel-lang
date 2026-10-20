@@ -247,6 +247,55 @@ artifact with the pinned qemu and a glibc for AArch64 (the cross sysroot here):
   --hirsel-run /absolute/path/run.json
 ```
 
+### Native runs without an executable
+
+`hirsel run --native`, `hirsel test --native` and the native agreement and
+differential campaigns write no executable. A program links once, per changed
+revision, into a content-keyed program *image*: a shared object of its units
+and the same launcher objects an executable links, plus the builtin-support
+archive and the link kit's glibc stubs, linked by the pinned `ld.lld`
+(`-shared -Bsymbolic`, `--eh-frame-hdr`, exporting only `main`). A prebuilt
+*runner*, the runtime archive and the kit's unwinder linked once per target and
+runtime archive, loads it and runs its `main` in a fresh process, exactly as the
+executable's `main` runs: the same arguments, environment, streams, outcome and
+exit status. An unchanged revision reuses its cached image and runs no linker.
+
+Runners and images live in the native cache (`$HIRSEL_NATIVE_CACHE`, or the
+driver's build directory) under `runners/<build-id>/` and `images/`. A runner's
+build ID is its compatibility identity; each image carries its runner's in a
+`Hirsel` ELF note and is keyed by its own build ID, a hash of every input by
+content. The least recently used images past 512 are removed when no run holds
+them.
+
+Before an image is published, its imports are checked: each is a runtime symbol
+the runner exports (and its dynamic table was checked against when it was
+built) or a kit library's symbol at the version the executable would bind, none
+is weak, it needs only kit libraries and has no text relocation, executable
+stack or writable code. A program with any foreign-call surface (an extern, a C
+callback or an `unsafe_ffi` link input, even `link: []` calling libc), a memcheck
+run, an lld error and a refused image run as a linked executable instead; each
+fallback is counted with its reason, which `--timings` reports and the native
+campaigns gate (only `foreign` and `memcheck` fallbacks pass). A runner that
+cannot load an image (one linked for another runner, a truncated file, a
+`dlopen` error) reports a tooling outcome, `Tooling(ImageLoad)`, before any
+program code runs.
+
+A runner whose startup audit admits every constructor that runs before its
+`main` (glibc's and crtbegin's, AArch64's CPU probes, Rust std's unread argv
+capture) serves bounded runs (tests and campaigns) from one fork server per
+runner: each run is a forked child in its own process group, which takes the
+run's streams, environment and directory, checks the image's note, `dlopen`s it
+and calls its `main`. `run --native`, runs under a launch wrapper and runners the
+audit refuses start a fresh runner process per run (`hirsel-runner exec`), in
+the launcher's process group as an executable would be. AArch64 runners run
+under qemu like executables, children forked inside the emulator.
+
+The native smoke gate and `tools/gate --full` hold the two paths to each other:
+on both targets every case runs as its linked executable and as its image in the
+runner, and stdout, stderr, exit status and observation record must agree byte
+for byte; under the first configuration each path's recorded Io tape must replay
+through the other with the same observation.
+
 ## Run a package's tests
 
 ```sh
@@ -276,8 +325,9 @@ moving the definition between files does not change it. `--seed` supplies the
 same u64 seed to every selected test. Failures (including Error results and
 runtime checks) run normal cleanup and do not prevent later tests from running.
 The runner prints each test's name, outcome and seed, then totals; exit 1 means
-at least one failed. Native mode builds one executable for the package and
-launches it separately for each selected test, with the same output and seeds.
+at least one failed. Native mode links the package's tests once, as one image
+(or, when the package calls C, one executable), and runs it in a fresh process
+for each selected test, with the same output and seeds.
 
 Interpreted tests run under a budget of 10^9 interpreter steps each, the `run`
 default; `--max-steps <n|unbounded>` replaces it, and a test that exhausts it fails
@@ -547,6 +597,11 @@ lowered; under `check`, the bodies lowered at check time), `recomputes`
 (per-definition queries computed rather than reused) and store and object
 hits and misses (0 until those caches exist).
 
+`runner` reports the native runs made as program images in a runner (`image
+runs`), how many of those images were already cached (`cached images`), and each
+kind of fallback to a linked executable with its first reason (`fallback: foreign:
+the program calls C (1)`); see "Native runs without an executable".
+
 `--timings=json` prints the same report as one JSON line, the last on stderr,
 which compiler-bench reads:
 
@@ -555,7 +610,8 @@ which compiler-bench reads:
  "intervals":[{"interval":"image open","wall_ns":101000000}, ...],
  "phases":[{"phase":"parse","work_ns":3000000,"cpu_ns":2900000,"calls":128}, ...],
  "comptime_verify":{"work_ns":0,"cpu_ns":0,"calls":0},"wait_ns":0,
- "counts":{"definitions":2,"units":168, ...}}
+ "counts":{"definitions":2,"units":168, ...},
+ "runner":{"image_runs":1,"cached_images":0,"fallbacks":[]}}
 ```
 
 Every interval, phase and count appears, in that order, including those still
