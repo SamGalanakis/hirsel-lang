@@ -1,0 +1,16 @@
+// rule: PROV-1
+// expect: accept
+// Alias and raw family cross a package boundary in both directions.
+fn raw(m: SortedMap[u32, String] of u32.order) -> u64 uses {} {
+  u32_maps.len(m)
+}
+
+fn named(m: u32_maps.OrderedMap[String]) -> u64 uses {} {
+  raw(m)
+}
+
+fn probe() -> u64 uses {} {
+  let by = u32.order
+  let m: SortedMap[u32, String] of by = sorted_map.empty(by)
+  named(m)
+}

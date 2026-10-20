@@ -18,9 +18,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let o = io.stdout(rt)?
   let by = u64.order
   let mut m: unique SortedMap[u64, Trace] of by = sorted_map.empty(by)
-  sorted_map.insert(by, mut m, 3, Trace(stdout: o, text: "three\n"))
-  sorted_map.insert(by, mut m, 2, Trace(stdout: o, text: "two\n"))
-  sorted_map.insert(by, mut m, 1, Trace(stdout: o, text: "one\n"))
+  u64_maps.insert(mut m, 3, Trace(stdout: o, text: "three\n"))
+  u64_maps.insert(mut m, 2, Trace(stdout: o, text: "two\n"))
+  u64_maps.insert(mut m, 1, Trace(stdout: o, text: "one\n"))
   let _ = out.print(o, "before\n")
   match sorted_map.remove(by, mut m, 2) {
     Some(item) => {
@@ -29,7 +29,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     },
     None => failure.check(false, Bounds()),
   }
-  failure.check(sorted_map.len(by, m) == 2, Bounds())
+  failure.check(u64_maps.len(m) == 2, Bounds())
   let _ = out.print(o, "after\n")
   Ok(())
 }

@@ -1,0 +1,246 @@
+{
+  "baseline": "b37afd182199b86fd85331a7edacfc4f3590ffa1",
+  "survey_baseline": "e50d5e6eaaeb498378b636cdf7887fb332286f54",
+  "sites": [
+    {
+      "path": "conformance/CT/CT-2-sortedmap-constant-ok.hir",
+      "key": "u32",
+      "survey_sites": 1,
+      "migrated": {
+        "empty": 0,
+        "insert": 0,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 7,
+      "after_lines": 7
+    },
+    {
+      "path": "conformance/DROP/DROP-2-sorted-map-replaced-value.hir",
+      "key": "u32",
+      "survey_sites": 4,
+      "migrated": {
+        "empty": 0,
+        "insert": 3,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 26,
+      "after_lines": 26
+    },
+    {
+      "path": "conformance/DROP/DROP-2-std-sorted-map-remove-run.hir",
+      "key": "u64",
+      "survey_sites": 6,
+      "migrated": {
+        "empty": 0,
+        "insert": 3,
+        "len": 1,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 1,
+      "before_lines": 35,
+      "after_lines": 35
+    },
+    {
+      "path": "conformance/GEN/GEN-1-sorted-map-copyable-key.hir",
+      "key": "u32",
+      "survey_sites": 1,
+      "migrated": {
+        "empty": 0,
+        "insert": 0,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 21,
+      "after_lines": 21
+    },
+    {
+      "path": "conformance/GEN/GEN-1-sortedmap-runtime-equality-bad.hir",
+      "key": "u32",
+      "survey_sites": 2,
+      "migrated": {
+        "empty": 0,
+        "insert": 1,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 16,
+      "after_lines": 16
+    },
+    {
+      "path": "conformance/MEM/MEM-6-sorted-map-arena-run.hir",
+      "key": "u64",
+      "survey_sites": 25,
+      "migrated": {
+        "empty": 0,
+        "insert": 10,
+        "len": 6,
+        "get": 1,
+        "remove": 2
+      },
+      "blocked_empty": 6,
+      "blocked_resource_remove": 0,
+      "before_lines": 147,
+      "after_lines": 147
+    },
+    {
+      "path": "conformance/MEM/MEM-6-std-sorted-map-arena-get-run.hir",
+      "key": "u64",
+      "survey_sites": 4,
+      "migrated": {
+        "empty": 0,
+        "insert": 1,
+        "len": 0,
+        "get": 2,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 33,
+      "after_lines": 33
+    },
+    {
+      "path": "conformance/MODE/MODE-2-std-container-empty-run.hir",
+      "key": "u64",
+      "survey_sites": 2,
+      "migrated": {
+        "empty": 0,
+        "insert": 0,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 2,
+      "blocked_resource_remove": 0,
+      "before_lines": 25,
+      "after_lines": 25
+    },
+    {
+      "path": "conformance/OWN/OWN-4-heap-capacity-sorted-closure-run.hir",
+      "key": "u32",
+      "survey_sites": 3,
+      "migrated": {
+        "empty": 0,
+        "insert": 2,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 17,
+      "after_lines": 16
+    },
+    {
+      "path": "conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir",
+      "key": "u32",
+      "survey_sites": 3,
+      "migrated": {
+        "empty": 0,
+        "insert": 2,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 31,
+      "after_lines": 31
+    },
+    {
+      "path": "conformance/SEM/SEM-5-sorted-map-resource-modes-run.hir",
+      "key": "u32",
+      "survey_sites": 2,
+      "migrated": {
+        "empty": 0,
+        "insert": 1,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 35,
+      "after_lines": 35
+    },
+    {
+      "path": "conformance/SEM/SEM-5-std-sorted-map-access-run.hir",
+      "key": "u64",
+      "survey_sites": 18,
+      "migrated": {
+        "empty": 0,
+        "insert": 3,
+        "len": 4,
+        "get": 3,
+        "remove": 7
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 51,
+      "after_lines": 45
+    },
+    {
+      "path": "conformance/SEM/SEM-5-std-sorted-map-owned-cycle-run.hir",
+      "key": "u64",
+      "survey_sites": 3,
+      "migrated": {
+        "empty": 0,
+        "insert": 1,
+        "len": 1,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 26,
+      "after_lines": 26
+    },
+    {
+      "path": "conformance/SEM/SEM-5-std-sorted-map-string-get-run.hir",
+      "key": "u64",
+      "survey_sites": 10,
+      "migrated": {
+        "empty": 0,
+        "insert": 3,
+        "len": 1,
+        "get": 5,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 18,
+      "after_lines": 18
+    },
+    {
+      "path": "native-tests/regressions/history/native-heap-heap-d15facecd1.hir",
+      "key": "u32",
+      "survey_sites": 3,
+      "migrated": {
+        "empty": 0,
+        "insert": 2,
+        "len": 0,
+        "get": 0,
+        "remove": 0
+      },
+      "blocked_empty": 1,
+      "blocked_resource_remove": 0,
+      "before_lines": 12,
+      "after_lines": 12
+    }
+  ]
+}

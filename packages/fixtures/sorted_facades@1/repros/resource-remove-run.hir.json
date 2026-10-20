@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "resource_remove_repro",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "resource-remove-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../hirsel.json",
+      "package": {
+        "name": "sorted_facades",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "u32_maps",
+          "module": [
+            "u32_maps"
+          ]
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

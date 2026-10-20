@@ -1760,6 +1760,7 @@ conformance/LANG/LANG-7-exhaustive-product-options-run.hir
 conformance/LANG/LANG-7-exhaustive-product-record-run.hir
 conformance/LANG/LANG-7-extern-preserves-unique-bad.hir
 conformance/LANG/LANG-7-extern-preserves-unique-ok.hir
+conformance/LANG/LANG-7-facade-map-reserved-bad.hir
 conformance/LANG/LANG-7-field-locality-bad.hir
 conformance/LANG/LANG-7-field-locality-ok.hir
 conformance/LANG/LANG-7-generic-callable-conflict-bad.hir
@@ -2293,6 +2294,8 @@ conformance/MEM/MEM-5-discarded-temporary-cleanup-run.hir
 conformance/MEM/MEM-5-escaping-closure-bad.hir
 conformance/MEM/MEM-5-escaping-closure-ok.hir
 conformance/MEM/MEM-5-explicit-arena-ok.hir
+conformance/MEM/MEM-5-facade-insert-bad.hir
+conformance/MEM/MEM-5-facade-len-ok.hir
 conformance/MEM/MEM-5-failure-path-bad.hir
 conformance/MEM/MEM-5-failure-path-ok.hir
 conformance/MEM/MEM-5-failure-path-temporary-cleanup-bad.hir
@@ -2366,6 +2369,8 @@ conformance/MEM/MEM-5-pathtime-path-parent-reject.hir
 conformance/MEM/MEM-5-pathtime-time-format-accept.hir
 conformance/MEM/MEM-5-pathtime-time-format-reject.hir
 conformance/MEM/MEM-5-proven-unique-no-copy.hir
+conformance/MEM/MEM-5-raw-insert-bad.hir
+conformance/MEM/MEM-5-raw-len-ok.hir
 conformance/MEM/MEM-5-retained-literal-destination-ok.hir
 conformance/MEM/MEM-5-retained-tuple-literal-destination-ok.hir
 conformance/MEM/MEM-5-saxpy-example.hir
@@ -2617,6 +2622,8 @@ conformance/MODE/MODE-1-environment-relation-on-binding-ok.hir
 conformance/MODE/MODE-1-environment-result-non-plain-parameter-bad.hir
 conformance/MODE/MODE-1-environment-result-non-plain-parameter-ok.hir
 conformance/MODE/MODE-1-environment-result-plain-parameter-ok.hir
+conformance/MODE/MODE-1-facade-get-loan-bad.hir
+conformance/MODE/MODE-1-facade-get-loan-ok.hir
 conformance/MODE/MODE-1-field-path-caller-copied-same-field-bad.hir
 conformance/MODE/MODE-1-field-path-caller-copied-sibling-ok.hir
 conformance/MODE/MODE-1-field-path-caller-projected-same-field-bad.hir
@@ -2747,6 +2754,8 @@ conformance/MODE/MODE-1-propagated-borrowed-error-bad.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-ok.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-variant-bad.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-variant-ok.hir
+conformance/MODE/MODE-1-raw-get-loan-bad.hir
+conformance/MODE/MODE-1-raw-get-loan-ok.hir
 conformance/MODE/MODE-1-receiving-global-holder-inferred-field-bad.hir
 conformance/MODE/MODE-1-receiving-global-holder-local-field-bad.hir
 conformance/MODE/MODE-1-receiving-local-holder-branch-field-ok.hir
@@ -2955,6 +2964,10 @@ conformance/MODE/MODE-2-equality-operand-drops-unique-mismatch-bad.hir
 conformance/MODE/MODE-2-equality-operand-drops-unique-ok.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-bad.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-ok.hir
+conformance/MODE/MODE-2-facade-insert-shared-bad.hir
+conformance/MODE/MODE-2-facade-insert-shared-ok.hir
+conformance/MODE/MODE-2-facade-remove-bad.hir
+conformance/MODE/MODE-2-facade-remove-ok.hir
 conformance/MODE/MODE-2-flat-capture-preserves-unique-ok.hir
 conformance/MODE/MODE-2-flat-copy-preserves-unique-ok.hir
 conformance/MODE/MODE-2-fresh-aggregate-run.hir
@@ -3126,6 +3139,10 @@ conformance/MODE/MODE-2-push-loop-aliased-bad.hir
 conformance/MODE/MODE-2-push-then-pop-aliased-bad.hir
 conformance/MODE/MODE-2-push-then-pop-ok.hir
 conformance/MODE/MODE-2-push-unique-element-ok.hir
+conformance/MODE/MODE-2-raw-insert-shared-bad.hir
+conformance/MODE/MODE-2-raw-insert-shared-ok.hir
+conformance/MODE/MODE-2-raw-remove-bad.hir
+conformance/MODE/MODE-2-raw-remove-ok.hir
 conformance/MODE/MODE-2-record-aliased-part-bad.hir
 conformance/MODE/MODE-2-record-aliased-part-ok.hir
 conformance/MODE/MODE-2-release-failure-block-end-bad.hir
@@ -4061,6 +4078,9 @@ conformance/PROV/PROV-1-ended-owner-use-ok.hir
 conformance/PROV/PROV-1-exiting-branch-else-ok.hir
 conformance/PROV/PROV-1-exiting-branch-match-ok.hir
 conformance/PROV/PROV-1-exiting-branch-then-ok.hir
+conformance/PROV/PROV-1-facade-alias-package-ok.hir
+conformance/PROV/PROV-1-facade-default-order-bad.hir
+conformance/PROV/PROV-1-facade-default-order-ok.hir
 conformance/PROV/PROV-1-field-index-container-bad.hir
 conformance/PROV/PROV-1-field-index-container-ok.hir
 conformance/PROV/PROV-1-field-owner-for-bad.hir
@@ -4142,6 +4162,8 @@ conformance/PROV/PROV-1-owned-replacement-other-bad.hir
 conformance/PROV/PROV-1-owned-replacement-self-bad.hir
 conformance/PROV/PROV-1-owner-leaves-scope-bad.hir
 conformance/PROV/PROV-1-owner-leaves-scope-ok.hir
+conformance/PROV/PROV-1-raw-default-order-bad.hir
+conformance/PROV/PROV-1-raw-default-order-ok.hir
 conformance/PROV/PROV-1-reassign-ends-brand-bad.hir
 conformance/PROV/PROV-1-reassign-ends-brand-ok.hir
 conformance/PROV/PROV-1-record-held-owner-take-bad.hir
@@ -4213,6 +4235,11 @@ conformance/PROV/PROV-2-computed-addition-bad.hir
 conformance/PROV/PROV-2-computed-addition-ok.hir
 conformance/PROV/PROV-2-computed-bitwise-bad.hir
 conformance/PROV/PROV-2-computed-bitwise-ok.hir
+conformance/PROV/PROV-2-facade-alias-binding-bad.hir
+conformance/PROV/PROV-2-facade-concrete-result-annotation-bad.hir
+conformance/PROV/PROV-2-facade-concrete-result-ok.hir
+conformance/PROV/PROV-2-facade-generic-result-bad.hir
+conformance/PROV/PROV-2-facade-package-result-bad.hir
 conformance/PROV/PROV-2-instant-compare-ok.hir
 conformance/PROV/PROV-2-instant-constructor-bad.hir
 conformance/PROV/PROV-2-instant-copy-clock-ok.hir

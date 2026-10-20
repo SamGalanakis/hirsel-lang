@@ -1,0 +1,15 @@
+// rule: PROV-2
+// expect: accept
+fn empty() -> unique SortedMap[u32, u8] of u32.order uses {} {
+  let by = u32.order
+  sorted_map.empty(by)
+}
+
+fn size(m: SortedMap[u32, u8] of u32.order) -> u64 uses {} {
+  sorted_map.len(u32.order, m)
+}
+
+fn probe() -> u64 uses {} {
+  let m = empty()
+  size(m)
+}

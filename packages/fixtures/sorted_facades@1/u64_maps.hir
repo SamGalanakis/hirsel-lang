@@ -1,0 +1,24 @@
+// Existing-language facade pilot; fixture support, not public std.
+pub type OrderedMap[V] = SortedMap[u64, V] of u64.order
+
+pub fn empty[V]() -> unique OrderedMap[V] uses {} {
+  sorted_map.empty(u64.order)
+}
+
+@noalloc
+pub fn len[V](m: OrderedMap[V]) -> u64 uses {} {
+  sorted_map.len(u64.order, m)
+}
+
+@preserves_unique(m)
+pub fn insert[V](mut m: OrderedMap[V], take key: u64, take value: V) -> () uses {} {
+  sorted_map.insert(u64.order, mut m, take key, take value)
+}
+
+pub fn get[V: copyable](m: OrderedMap[V], key: u64) -> Option[V] in m uses {} {
+  sorted_map.get(u64.order, m, key)
+}
+
+pub fn remove[V](mut m: unique OrderedMap[V], key: u64) -> unique Option[V] uses {} {
+  sorted_map.remove(u64.order, mut m, key)
+}

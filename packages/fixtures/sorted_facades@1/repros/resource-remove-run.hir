@@ -1,0 +1,20 @@
+// rule: DROP-2
+// expect: run
+// Known pilot blocker: normal run returns; checked run reaches a dead region.
+resource type Token {
+  label: String,
+}
+drop(v) {}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let by = u32.order
+  let mut m: unique SortedMap[u32, Token] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 1, Token(label: "owned"))
+  match u32_maps.remove(mut m, 1) {
+    Some(value) => {
+      let n = string.byte_len(value.label)
+    },
+    None => {},
+  }
+  Ok(())
+}

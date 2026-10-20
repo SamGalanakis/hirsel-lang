@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn probe(by: Order[u32], mut m: SortedMap[u32, u8] of by) -> () uses {} {
+  let _ = sorted_map.len(by, m)
+}

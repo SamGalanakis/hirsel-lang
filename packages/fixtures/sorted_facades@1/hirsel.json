@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sorted_facades",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "u32_maps.hir",
+      "module": [
+        "u32_maps"
+      ]
+    },
+    {
+      "path": "u64_maps.hir",
+      "module": [
+        "u64_maps"
+      ]
+    }
+  ],
+  "dependencies": []
+}

@@ -17,10 +17,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let o = io.stdout(rt)?
   let by = u32.order
   let mut m: SortedMap[u32, Trace] of by = sorted_map.empty(by)
-  sorted_map.insert(by, mut m, 1, Trace(stdout: o, text: "v1\n"))
-  sorted_map.insert(by, mut m, 2, Trace(stdout: o, text: "v2\n"))
+  u32_maps.insert(mut m, 1, Trace(stdout: o, text: "v1\n"))
+  u32_maps.insert(mut m, 2, Trace(stdout: o, text: "v2\n"))
   let _ = out.print(o, "before replace\n")
-  sorted_map.insert(by, mut m, 1, Trace(stdout: o, text: "v1b\n"))
+  u32_maps.insert(mut m, 1, Trace(stdout: o, text: "v1b\n"))
   let _ = out.print(o, "after replace\n")
   Ok(())
 }
