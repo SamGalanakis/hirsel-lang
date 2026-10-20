@@ -254,3 +254,31 @@ fn world(t: &TypeInterner) -> Vec<SignatureRef> {
     opaque.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
     vec![Arc::new(wrap), Arc::new(opaque)]
 }
+
+/// A whole unique `(String)` taken into an aliased `(String)` field: the
+/// payload view weakens the nested uniqueness, as main's walk does.
+#[test]
+fn a_taken_unique_part_is_received_through_its_payload_view() {
+    let t = TypeInterner::new(None);
+    let aliased = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::String)));
+    let mut unique = Type::with_kind(TypeKind::Primitive(Primitive::String));
+    unique.modes.uniqueness = Uniqueness::Unique;
+    let unique = t.intern(unique);
+    let mut expected = Type::with_kind(TypeKind::Tuple(vec![aliased].into()));
+    expected.modes.sendability = Sendability::NotSendable;
+    let expected = t.intern(expected);
+    let mut actual = Type::with_kind(TypeKind::Tuple(vec![unique].into()));
+    actual.modes.uniqueness = Uniqueness::Unique;
+    actual.modes.sendability = Sendability::Sendable;
+    let actual = t.intern(actual);
+    let generics = GenericDeclarations::default();
+    let verdict = compatible_view_type_in(
+        &t,
+        expected,
+        actual,
+        TypeRelation::Value,
+        &generics,
+        &mut |_| Ok(None),
+    );
+    assert_eq!(verdict, Ok(true));
+}

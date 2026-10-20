@@ -512,3 +512,46 @@ fn type_outputs_do_not_depend_on_id_assignment() {
         "salted runs agree with the unsalted one"
     );
 }
+
+#[test]
+fn concurrent_interning_gives_every_row_one_id() {
+    // Eight threads intern overlapping 10k-row workloads (shared leaves,
+    // per-thread and shared composites) as an -j8 session does.
+    let t = TypeInterner::new(None);
+    let work = |thread: u32| -> Vec<TypeId> {
+        let mut out = vec![];
+        for i in 0..10_000u32 {
+            // Half the rows are shared by every thread, half are this thread's.
+            let n = if i % 2 == 0 { i } else { 100_000 + i * 8 + thread };
+            let leaf = t.intern(row(TypeKind::Builtin {
+                kind: BuiltinType::Inline,
+                arguments: vec![
+                    GenericArgument::Type(primitive(&t, Primitive::U8)),
+                    GenericArgument::Size(Size::Constant(u64::from(n))),
+                ]
+                .into(),
+            }));
+            out.push(t.intern(row(TypeKind::Tuple(vec![leaf, leaf].into()))));
+        }
+        out
+    };
+    let runs: Vec<Vec<TypeId>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..8).map(|i| s.spawn(move || work(i))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for run in &runs[1..] {
+        for i in (0..10_000).step_by(2) {
+            assert_eq!(run[i], runs[0][i], "a shared row has one id");
+        }
+    }
+    let stats = t.stats();
+    // u8, then 5000 shared and 8 x 5000 private leaves, each with its tuple.
+    assert_eq!(stats.rows, 1 + 2 * (5_000 + 8 * 5_000));
+    eprintln!(
+        "8 threads: {} rows, {} bytes, {} hits, {} us lock wait",
+        stats.rows,
+        stats.row_bytes,
+        stats.hits,
+        stats.lock_wait_ns / 1000
+    );
+}
