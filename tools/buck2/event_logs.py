@@ -21,7 +21,13 @@ CASE_COST = re.compile(r'^test (\S+)(?: - should panic)? \.\.\. ok <(\d+(?:\.\d+
 
 def case_costs(details):
     """Successful per-case timings in one libtest result (failures stay unpriced)."""
-    return {match[1]: float(match[2]) for line in details.splitlines() if (match := CASE_COST.match(line))}
+    rows = {}
+    for line in details.splitlines():
+        match = CASE_COST.match(line) or re.fullmatch(
+            r'native case\t([^\t]+)\t([0-9.]+)\t(?:[0-9]+|unknown)', line)
+        if match:
+            rows[match[1]] = float(match[2])
+    return rows
 
 
 class NoTestHistory:

@@ -7,6 +7,9 @@
 
 hirsel_guard::install!();
 
+#[path = "native/isolate.rs"]
+mod isolate;
+
 use hirsel_cli_args::{
     CommonOption, CommonOptions, Shard,
     lexopt::{Arg::*, Parser, ValueExt},
@@ -24,7 +27,10 @@ const USAGE: &str = "usage: native --std-compile [--filter MODULE] [--shard I/N]
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
-    match hirsel_engine::with_compiler_stack(run) {
+    let started = std::time::Instant::now();
+    let result = hirsel_engine::with_compiler_stack(run);
+    isolate::report(started.elapsed(), matches!(result, Ok(true)));
+    match result {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(message) => {
@@ -46,6 +52,9 @@ impl Filter {
 
     /// Whether the text selects `id`, whichever shard holds it.
     fn matches(&self, id: &str) -> bool {
+        if let Some(selected) = isolate::selected() {
+            return id == selected;
+        }
         self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str()))
     }
 
@@ -665,6 +674,11 @@ fn run() -> Result<bool, String> {
                     filter.0
                 ));
             }
+            if !filter.0.is_empty()
+                && let Some(ok) = isolate::cases(&cases, jobs)?
+            {
+                return Ok(ok);
+            }
             let results = native::run_cases(
                 &cases,
                 &matrix,
@@ -844,6 +858,9 @@ fn cranelift(
     cases.extend(generated_cases(seed, 64, filter));
     let empty_fails = filter.empty_fails(cases.iter().map(|c| c.id.as_str()));
     cases.retain(|c| filter.keeps(&c.id));
+    if let Some(ok) = isolate::cases(&cases, jobs)? {
+        return Ok(ok);
+    }
     if clif {
         for case in &cases {
             let case = case.clone();

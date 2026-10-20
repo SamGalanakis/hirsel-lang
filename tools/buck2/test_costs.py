@@ -27,6 +27,7 @@ import event_logs
 from sync import SHARDED
 
 HERE = Path(__file__).resolve().parent
+NATIVE_STAGES = {'gate-native-changed', 'gate-native-cranelift-changed'}
 TABLES = HERE / 'test-costs'
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 TIMESTAMP = re.compile(r'^\[[^\]]+\]\s*')
@@ -41,7 +42,7 @@ def inventory(lines):
         line = TIMESTAMP.sub('', ANSI.sub('', line)).rstrip()
         if match := TARGET.match(line):
             binary = re.sub(r'-shard-\d+$', '', match[2])
-            binary = binary if binary in SHARDED else None
+            binary = binary if binary in SHARDED or binary in NATIVE_STAGES else None
         elif binary and (match := re.fullmatch(r'(\S+): test', line)):
             cases.setdefault(binary, set()).add(match[1])
     return cases
@@ -64,7 +65,9 @@ def parse(lines):
             status, target, wall = match.groups()
             walls[target] = (status, seconds(wall))
             binary = re.sub(r'-shard-\d+$', '', target)
-            binary = binary if binary in SHARDED else None
+            binary = binary if binary in SHARDED or binary in NATIVE_STAGES else None
+        elif binary in NATIVE_STAGES and (match := re.fullmatch(r'native case\t([^\t]+)\t([0-9.]+)\t(?:[0-9]+|unknown)', line)):
+            costs.setdefault(binary, {})[match[1]] = float(match[2])
         elif binary and (match := CASE.match(line)):
             costs.setdefault(binary, {})[match.group(1)] = float(match.group(2))
     return walls, costs
@@ -115,7 +118,7 @@ def history_costs(path, binary, since):
     rows, latest = {}, {}
     for row in event_logs.test_history_rows(path):
         target, date = row['target'], row['date']
-        if target not in SHARDED or (binary != 'all' and target != binary) or date < since:
+        if target not in set(SHARDED) | NATIVE_STAGES or (binary != 'all' and target != binary) or date < since:
             continue
         for case, cost in json.loads(row.get('case_costs') or '{}').items():
             key = target, case
@@ -174,9 +177,10 @@ def main():
             print(f'{cost:8.1f} s  {case}')
         if not args.report_only:
             path = TABLES / f'{binary}.tsv'
-            count = configured_shards(binary)
-            complete = all(walls.get(f'{binary}-shard-{i}', ('',))[0] == 'Pass' for i in range(1, count + 1)) \
-                if count > 1 else walls.get(binary, ('',))[0] == 'Pass'
+            count = configured_shards(binary) if binary not in NATIVE_STAGES else 0
+            complete = binary not in NATIVE_STAGES and (
+                all(walls.get(f'{binary}-shard-{i}', ('',))[0] == 'Pass' for i in range(1, count + 1))
+                if count > 1 else walls.get(binary, ('',))[0] == 'Pass')
             write_table(path, rows if complete else read_table(path) | rows)
 
 

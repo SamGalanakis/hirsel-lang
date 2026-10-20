@@ -411,12 +411,14 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         # The LLVM slice rotates with each full run's fresh seed.
         args = args + ["--seed", TEST_SEED]
     if changed_native:
-        # This setting is part of the test command and therefore its cache key.
-        # No selection must never turn a per-push target into a whole campaign.
-        filters = read_root_config("hirsel", "native_filters", "").split("|")
-        if filters == [""]:
-            filters = ["__no_changed_native_programs__"]
-        args = args + [arg for path in filters for arg in ["--filter", path]]
+        slices = [part for part in read_root_config("hirsel", "native_filters", "").split(";") if part]
+        if not slices:
+            slices = ["__no_changed_native_programs__"]
+        for index, part in enumerate(slices):
+            shard_name = name if len(slices) == 1 else name + "-shard-" + str(index + 1)
+            _native_changed_test(shard_name, binary, args, data, cwd, runtime_archives, precheck,
+                                 native_selection, measured_as or name, part.split("|"))
+        return
     _rust_test(
         name = name,
         harness = binary,
@@ -434,6 +436,26 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         relocate = True,
         native_selection = native_selection,
         seed = TEST_SEED if full else "",
+        visibility = ["PUBLIC"],
+    )
+
+def _native_changed_test(name, binary, args, data, cwd, runtime_archives, precheck, native_selection, measured_as, filters):
+    _rust_test(
+        name = name,
+        harness = binary,
+        args = args + [arg for path in filters for arg in ["--filter", path]],
+        data = data,
+        cwd = cwd,
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs() if runtime_archives else {},
+        runtime_archives = runtime_archives,
+        precheck = precheck,
+        labels = ["gate"],
+        exec_compatible_with = _test_platform(measured_as),
+        pool = not TESTS_ON_HOST,
+        request = _request(measured_as),
+        relocate = True,
+        native_selection = native_selection,
         visibility = ["PUBLIC"],
     )
 
