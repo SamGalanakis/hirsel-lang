@@ -2143,6 +2143,52 @@ hirsel_test(
 )
 
 hirsel_library(
+    name = "hirsel-free",
+    deps = [],
+    doctests = True,
+    crate = "hirsel_free",
+    crate_root = "crates/hirsel-free/src/lib.rs",
+    srcs = glob(["crates/hirsel-free/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-free",
+    package_name = "hirsel-free",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-free-unittest",
+    deps = ["//:hirsel-guard"],
+    data = glob(["crates/hirsel-free/Cargo.toml"]) + glob(["crates/hirsel-free/src/**"], exclude = ["crates/hirsel-free/src/**/*.rs"]),
+    crate = "hirsel_free",
+    crate_root = "crates/hirsel-free/src/lib.rs",
+    srcs = glob(["crates/hirsel-free/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-free",
+    package_name = "hirsel-free",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-free-test-it",
+    deps = [
+        "//:hirsel-free",
+        "//:hirsel-guard",
+    ],
+    bin_exes = {},
+    data = glob(["crates/hirsel-free/Cargo.toml"]) + glob(["crates/hirsel-free/tests/it/**"], exclude = ["crates/hirsel-free/tests/it/**/*.rs"]),
+    crate = "it",
+    crate_root = "crates/hirsel-free/tests/it/main.rs",
+    srcs = glob(["crates/hirsel-free/tests/it/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-free",
+    package_name = "hirsel-free",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
     opt_level = 1,
     name = "hirsel-graph",
     deps = ["//:hirsel-syntax"],

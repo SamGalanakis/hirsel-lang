@@ -14,10 +14,11 @@
 
 The floor runs on every gate: documentation links and whitespace, the gate
 tooling's tests when it changed (the Lean model's checks when it or its
-vectors changed, the TLA+ model's TLC runs when it changed), formatting,
-Clippy, the workspace build and the build-file check. They run before the
-gate queues for a slot, and a failure stops it there: a red floor never waits
-in the queue. Then, holding a slot, the test
+vectors changed, the TLA+ model's TLC runs when it changed, the free-mode
+protocol's loom and GenMC models when they or the kernel source they compile
+changed), formatting, Clippy, the workspace build and the build-file check.
+They run before the gate queues for a slot, and a failure stops it there: a
+red floor never waits in the queue. Then, holding a slot, the test
 targets of every crate whose source changed and of every changed test file,
 and every changed or added corpus case with its twins. The chosen corpus
 cases run first, in their own invocation; when one fails, the gate stops

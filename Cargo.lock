@@ -618,6 +618,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-free"
+version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+]
+
+[[package]]
 name = "hirsel-graph"
 version = "0.1.0"
 dependencies = [

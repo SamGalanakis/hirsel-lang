@@ -8,7 +8,8 @@ A changed path is one of:
   fast consistency check of its links and whitespace, nothing else;
 - the gate's own Python tooling and the native benchmark harness (TOOL_PATHS):
   the tooling tests, bench/native/tests among them, and `sync.py --check`;
-- the Lean RC model (PROOFS): its audit and vector replay on the host;
+- the Lean RC model (PROOFS): its audit and vector replay on the host; the
+  free-mode protocol models (FREE_MODEL): their loom and GenMC runs;
 - a build-wide input (BUILD_WIDE): every test and every campaign;
 - anything else: the Buck2 tests that read it, directly or through any
   dependency (the owners' reverse dependencies in graph.py's static reading of
@@ -91,6 +92,8 @@ CRATE_CAMPAIGNS = {
     'hirsel-cli': frozenset(),
     'hirsel-native-build': frozenset(),
     'hirsel-pipeline-tests': frozenset(),
+    # The free-mode protocol kernel no engine runs through yet: only its own tests.
+    'hirsel-free': frozenset(),
     # Host providers no corpus program runs through: only their own tests.
     'hirsel-object-storage': frozenset(),
     'hirsel-code-store': frozenset(),
@@ -185,11 +188,16 @@ BUILD_WIDE = (
 # Under tools/ but read by particular tests: selected through their owners.
 TOOL_INPUTS = ('tools/buck2/test-costs/**', 'tools/native-toolchain/**')
 
-# The Lean RC model and the TLA+ ordered-mode model: no Buck2 target reads them; their own
-# checks run on the host (proof_checks), as do the protocol vectors the Lean model replays.
+# The Lean RC model, the TLA+ ordered-mode model and the free-mode models: no Buck2 target
+# reads them; their own checks run on the host (proof_checks), as do the protocol vectors the
+# Lean model replays.
 PROOFS = ('proofs/**',)
 PROOF_VECTORS = 'native-tests/model/'
 ORDERED_MODEL = ('proofs/ordered/**',)
+# The free-mode protocol's loom and GenMC models, which also compile the kernel's own source.
+FREE_MODEL = ('proofs/free/**',)
+FREE_MODEL_SOURCES = ('crates/hirsel-free/src/sync.rs', 'crates/hirsel-free/src/phase.rs',
+                      'crates/hirsel-free/src/section.rs', 'crates/hirsel-free/src/claim.rs')
 
 # Documentation, and repository metadata no build reads.
 DOCS = ('**.md', 'LICENSE', 'docs/**', '.gitignore')
@@ -605,11 +613,15 @@ def campaign_data(path: str) -> frozenset:
 
 def proof_checks(paths) -> list[tuple[str, list[str]]]:
     """The models' own checks a change selects: the Lean audit when the Lean model
-    changes, its vector replay when the model or a vector changes, and the TLC
-    runs when the ordered-mode model changes."""
-    model = any(matches(path, PROOFS) and not matches(path, ORDERED_MODEL) for path in paths)
+    changes, its vector replay when the model or a vector changes, the TLC runs when
+    the ordered-mode model changes, and the free-mode loom and GenMC runs when those
+    models or the kernel source they compile change."""
+    model = any(matches(path, PROOFS) and not matches(path, ORDERED_MODEL)
+                and not matches(path, FREE_MODEL) for path in paths)
     vectors = model or any(path.startswith(PROOF_VECTORS) for path in paths)
     ordered = any(matches(path, ORDERED_MODEL) for path in paths)
+    free = any(matches(path, FREE_MODEL) or path in FREE_MODEL_SOURCES for path in paths)
     return ([('proofs/rc/audit.sh', ['proofs/rc/audit.sh'])] if model else []) + \
         ([('proofs/rc/check-vectors.sh', ['proofs/rc/check-vectors.sh'])] if vectors else []) + \
-        ([('proofs/ordered/check.sh', ['proofs/ordered/check.sh'])] if ordered else [])
+        ([('proofs/ordered/check.sh', ['proofs/ordered/check.sh'])] if ordered else []) + \
+        ([('proofs/free/check.sh', ['proofs/free/check.sh'])] if free else [])

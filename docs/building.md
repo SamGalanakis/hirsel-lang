@@ -556,8 +556,10 @@ an atomic update to every allocation, so time a run without `--mem-usage`.
 - `native-tests/` holds native-only fixtures (heap, layout, replay, topology)
   and the native exclusion list.
 - `stdlib/` and `packages/` are Hirsel library sources and package fixtures.
-- `proofs/rc/` is the Lean model of the reference-counting protocol, and
-  `proofs/ordered/` the TLA+ model of ordered multi-core execution.
+- `proofs/rc/` is the Lean model of the reference-counting protocol,
+  `proofs/ordered/` the TLA+ model of ordered multi-core execution, and
+  `proofs/free/` the loom and GenMC models of the free-mode protocol
+  (`crates/hirsel-free`); `proofs/free/check.sh` runs them.
 - `bench/native/` is the native benchmark harness and its programs.
 - `tools/` holds the Buck2 build (`tools/buck2/`), the pinned LLVM toolchain
   (`tools/native-toolchain/`) and gate scripts.
@@ -569,8 +571,10 @@ The native backend needs LLVM 21.1.8 (`tools/native-toolchain/llvm-21.lock`);
 `.cargo/config.toml` points `LLVM_SYS_211_PREFIX` at `/usr/lib/llvm-21`
 unless the environment already sets it. `tools/native-toolchain/README.md`
 installs the pinned tree. Native tests carry pinned qemu, an AArch64 cross toolchain and Valgrind as
-Buck2 inputs; only the Lean checks and the TLA+ model (Java 11 or later; `check.sh` fetches
-the pinned `tla2tools.jar`) need a host installation.
+Buck2 inputs; only the Lean checks, the TLA+ model (Java 11 or later; `check.sh` fetches
+the pinned `tla2tools.jar`) and the free-mode models need a host installation
+(`proofs/free/check.sh` builds its pinned GenMC once into the cache; it needs cmake, LLVM
+19-22 development files and libffi).
 
 The build caps itself for a shared host: `.cargo/config.toml` limits Cargo
 to 4 jobs and sets `RUST_TEST_THREADS` and `HIRSEL_JOBS` (in-process worker
@@ -762,7 +766,8 @@ The floor:
 - the gate's own tooling under `tools/`: its tests; the Lean model under
   `proofs/` (and its vectors in `native-tests/model/`): its audit and vector
   replay on this host; the TLA+ model under `proofs/ordered/`: its TLC runs
-  (`proofs/ordered/check.sh`) on this host;
+  (`proofs/ordered/check.sh`) on this host; the free-mode models under `proofs/free/` (and
+  the `crates/hirsel-free` source they compile): `proofs/free/check.sh`;
 - the build-file check, formatting, Clippy and the workspace build, which
   includes checking std once (the std precheck). They run first, with the
   local checks, before the gate queues for a slot; when one fails the gate

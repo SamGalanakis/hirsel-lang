@@ -933,6 +933,18 @@
     {
       "dependencies": [
         {
+          "kind": "dev",
+          "name": "hirsel-guard",
+          "path": "crates/hirsel-guard",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-free"
+    },
+    {
+      "dependencies": [
+        {
           "kind": null,
           "name": "hirsel-syntax",
           "path": "crates/hirsel-syntax",

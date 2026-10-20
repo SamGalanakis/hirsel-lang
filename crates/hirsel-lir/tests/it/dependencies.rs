@@ -28,6 +28,8 @@ const CRATES: &[(&str, Class)] = &[
     // Data rather than a leaf utility: its content keys are ContentHash values.
     ("hirsel-graph", Class::Data),
     ("hirsel-guard", Class::LeafUtility),
+    // The free-mode protocol: std only, shared by the runtime and the interpreter.
+    ("hirsel-free", Class::LeafUtility),
     ("hirsel-span", Class::Data),
     ("hirsel-intern", Class::Data),
     ("hirsel-diag", Class::Data),

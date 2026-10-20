@@ -104,6 +104,10 @@ class Classification(unittest.TestCase):
         self.assertEqual(names('proofs/ordered/Ordered.tla'), ['proofs/ordered/check.sh'])
         self.assertEqual(names('proofs/ordered/MC.tla', 'proofs/rc/Rc.lean'), [*lean, 'proofs/ordered/check.sh'])
         self.assertEqual(self.classify('proofs/ordered/check.sh').proofs, ['proofs/ordered/check.sh'])
+        self.assertEqual(names('proofs/free/genmc/gate.c'), ['proofs/free/check.sh'])
+        self.assertEqual(names('crates/hirsel-free/src/section.rs'), ['proofs/free/check.sh'])
+        self.assertEqual(names('crates/hirsel-free/src/replay.rs'), [])
+        self.assertEqual(names('proofs/free/check.sh', 'proofs/rc/Rc.lean'), [*lean, 'proofs/free/check.sh'])
 
     def test_documentation_a_build_reads_is_an_input(self):
         # Literally (include_bytes of the grammar) or under a data glob (the corpus).
