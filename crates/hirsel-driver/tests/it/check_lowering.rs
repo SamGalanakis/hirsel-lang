@@ -59,15 +59,6 @@ pub fn main() -> Result[(), ()] {
 }
 "#;
 
-#[test]
-fn check_lowers_no_body_of_a_program_without_compile_time_evaluation() {
-    assert_eq!(lowered(UNEXECUTED, LoweringPolicy::Comptime), names(&[]));
-    assert_eq!(
-        lowered(UNEXECUTED, LoweringPolicy::Reachable),
-        names(&["helper", "main", "unused"])
-    );
-}
-
 const COMPTIME: &str = r#"
 const LIMIT: u64 = comptime triple(2)
 

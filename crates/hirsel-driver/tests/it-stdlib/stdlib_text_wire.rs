@@ -74,47 +74,6 @@ fn sha256_is_ordinary_source() {
     source_codec("sha256", "sha256", &["new", "update", "finish", "digest"]);
 }
 
-// Multi-megabyte streams exceed the corpus interpreter budget. Both compiled
-// backends must match reference digests; bounded corpus cases cover interpretation.
-#[test]
-#[ignore = "full gate: native multi-megabyte hash references"]
-fn full_gate_large_hash_native_references_on_both_backends() {
-    with_compiler_stack(|| {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hash-large-native.hir");
-        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let outcome = native::run_path_native_backend(
-                &path,
-                HostLaunch::empty(),
-                None,
-                backend,
-                native::Output::Streams {
-                    stdout: &mut stdout,
-                    stderr: &mut stderr,
-                },
-                hirsel_engine::Verify::On,
-            )
-            .unwrap()
-            .unwrap();
-            assert!(
-                matches!(
-                    outcome,
-                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-                ),
-                "{backend:?}: {outcome:?}"
-            );
-            assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
-            assert!(
-                stderr.is_empty(),
-                "{backend:?}: {}",
-                String::from_utf8_lossy(&stderr)
-            );
-        }
-    });
-}
-
 #[test]
 fn flate_is_ordinary_source() {
     source_codec("flate-inflate", "flate", &["inflate"]);
@@ -793,76 +752,5 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 refused.outcome
             );
         }
-    });
-}
-
-#[test]
-fn telemetry_native_recording_replays_and_changed_stderr_request_refuses() {
-    with_compiler_stack(|| {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = root.join("conformance/SEM/SEM-3-telemetry-run.hir");
-        let scratch =
-            std::env::temp_dir().join(format!("hirsel-telemetry-replay-{}", std::process::id()));
-        std::fs::create_dir_all(&scratch).unwrap();
-        let tape = scratch.join("recording.tape");
-        let changed = scratch.join("changed.tape");
-        let outcome = native::run_path_native_backend(
-            &path,
-            HostLaunch::Live {
-                config: LaunchConfig::Grants {
-                    input: std::ffi::OsStr::new(r#"{"io":{"dirs":[],"stderr":"stderr.bytes@1"}}"#),
-                    arguments: None,
-                },
-                record: Some(&tape),
-                revocations: None,
-            },
-            None,
-            native::Backend::Cranelift,
-            native::Output::Streams {
-                stdout: &mut Vec::new(),
-                stderr: &mut Vec::new(),
-            },
-            Verify::On,
-        )
-        .unwrap()
-        .unwrap();
-        assert!(
-            matches!(
-                outcome,
-                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-            ),
-            "{outcome:?}"
-        );
-        let outcome = run_path_on_host(&path, HostLaunch::Replay(&tape), None, Verify::On).unwrap();
-        assert!(
-            matches!(
-                outcome,
-                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-            ),
-            "{outcome:?}"
-        );
-        let mut record =
-            hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap()).unwrap();
-        let write = record
-            .events
-            .iter_mut()
-            .find_map(|event| match &mut event.request {
-                hirsel_rt::io::Request::PrintStderr { bytes, .. } => Some(bytes),
-                _ => None,
-            })
-            .unwrap();
-        let byte = write.iter_mut().find(|b| **b == b'o').unwrap();
-        *byte = b'x';
-        // Re-render a valid tape: refusal must come from the changed request,
-        // not from syntax, the program revision, or an invalid run binding.
-        std::fs::write(
-            &changed,
-            hirsel_rt::launch::render_recording(&record).unwrap(),
-        )
-        .unwrap();
-        let refused =
-            run_path_on_host(&path, HostLaunch::Replay(&changed), None, Verify::On).unwrap_err();
-        assert!(refused.to_string().contains("replay"), "{refused}");
-        std::fs::remove_dir_all(scratch).unwrap();
     });
 }

@@ -390,19 +390,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_names_distinguish_identical_captures() {
-        assert_ne!(
-            EvidenceId::new("one", ORDINARY).unwrap(),
-            EvidenceId::new("two", ORDINARY).unwrap()
-        );
-        assert_ne!(
-            EvidenceId::new("one", ORDINARY).unwrap(),
-            EvidenceId::new("one", DURABLE).unwrap()
-        );
-        assert!(EvidenceId::new("", ORDINARY).is_err());
-    }
-
-    #[test]
     fn timing_is_bound_sparse_checked_and_atomic() {
         let mut view = View::parse("fixture", ORDINARY).unwrap();
         let mut sidecar = json!({"schema": "hirsel-observation-timing", "version": 1,

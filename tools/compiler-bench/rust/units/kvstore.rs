@@ -370,30 +370,3 @@ pub fn main(args: &[String]) -> Result<(), ServerError> {
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mutations_advance_versions_and_snapshot_state() {
-        let mut st = Store { version: 0, entries: BTreeMap::new() };
-        let created = apply(&mut st, Action::Write("key".into(), "first".into()));
-        assert!(created.status == 201 && created.save.is_some());
-        let updated = apply(&mut st, Action::Write("key".into(), "last".into()));
-        assert!(updated.status == 200 && st.version == 2);
-        assert_eq!(apply(&mut st, Action::Read("key".into())).body, "last");
-        assert_eq!(apply(&mut st, Action::Delete("key".into())).status, 204);
-        assert_eq!(st.version, 3);
-        assert_eq!(apply(&mut st, Action::Delete("key".into())).status, 404);
-        assert_eq!(st.version, 3);
-    }
-
-    #[test]
-    fn persisted_entries_round_trip_and_reject_non_strings() {
-        let entries = parse_entries(r#"{"é":"value"}"#).ok().unwrap();
-        assert_eq!(entries_json(&entries), r#"{"é":"value"}"#);
-        assert!(parse_entries(r#"{"key":1}"#).is_err());
-        assert!(parse_entries("[]").is_err());
-    }
-}

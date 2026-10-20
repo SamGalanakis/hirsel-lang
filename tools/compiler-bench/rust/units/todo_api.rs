@@ -487,32 +487,3 @@ pub fn main(args: &[String]) -> Result<(), ServerError> {
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ids_are_not_reused_after_removal() {
-        let mut st = Store { next_id: 1, version: 0, todos: vec![] };
-        assert_eq!(apply(&mut st, Action::Create("first".into())).status, 201);
-        assert_eq!(apply(&mut st, Action::Update(1, true)).status, 200);
-        assert!(st.todos[0].done);
-        assert_eq!(apply(&mut st, Action::Remove(1)).status, 204);
-        assert_eq!(apply(&mut st, Action::Create("second".into())).status, 201);
-        assert!(st.todos[0].id == 2 && st.next_id == 3 && st.version == 4);
-        assert_eq!(apply(&mut st, Action::Show(1)).status, 404);
-    }
-
-    #[test]
-    fn state_round_trips_and_rejects_wrong_field_types() {
-        let original = Store {
-            next_id: 4,
-            version: 0,
-            todos: vec![Todo { id: 3, title: "é".into(), done: true }],
-        };
-        assert_eq!(parse_store(&store_json(&original)).ok(), Some(original));
-        assert!(parse_store(r#"{"next_id":4,"todos":[{"id":3,"title":"x","done":"yes"}]}"#).is_err());
-        assert!(parse_store("{}").is_err());
-    }
-}

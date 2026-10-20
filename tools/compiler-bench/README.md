@@ -62,12 +62,12 @@ measuring held memory walks the allocator and slows the run.
 | `scale` (`pairs`) | synthetic 3k, 10k, 30k, 50k, 100k lines | size scaling: copies of the six examples, one module each, all reachable from `main` |
 | `edit` | the 10k synthetic program after one edit | the edit loop: a body edit, a private signature edit and a public signature edit |
 
-The Rust ports (`rust/units/`) keep each example's types, functions, error
-cases and tests, and use std plus a pinned dependency set that stands in for
+The Rust ports (`rust/units/`) keep each example's types, functions and error
+cases (not its tests, which no bench mode compiles), and use std plus a pinned dependency set that stands in for
 Hirsel's std (`serde`/`serde_json` with derive, `sha2`, `base64`, `csv`,
 `unicode-normalization`; `rust/Cargo.toml.in`, `rust/Cargo.lock.in`, built
-`--offline`). Each port has about the same size as its example (1,916 lines
-against 1,817 in all; csvjson is the largest difference at +27%, since Rust has
+`--offline`). Each port has about the same size as its example (1,765 lines
+against 1,817 in all; csvjson is the largest difference, since Rust has
 no flag parser in std). HTTP request parsing, a
 seeded generator and a bounded arena are written out in the ports, where Hirsel
 gets them from std. Their output is not compared byte for byte with Hirsel's:

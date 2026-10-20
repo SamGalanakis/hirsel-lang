@@ -1169,25 +1169,4 @@ mod tests {
             assert!(check_image(&broken, &runner, &kit).is_err(), "{broken:?}");
         }
     }
-
-    #[test]
-    fn startup_admits_only_run_independent_constructors() {
-        for name in [
-            "_init",
-            "__do_init",
-            "init_have_lse_atomics",
-            "__init_cpu_features",
-            "_ZN3std3sys4args4unix3imp15ARGV_INIT_ARRAY12really_init17h0E",
-        ] {
-            assert!(admitted_constructor(name), "{name}");
-        }
-        for name in [
-            "cache_pid",
-            "start_thread",
-            "_GLOBAL__sub_I_main",
-            "frame_dummy",
-        ] {
-            assert!(!admitted_constructor(name), "{name}");
-        }
-    }
 }

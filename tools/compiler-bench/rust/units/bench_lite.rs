@@ -199,17 +199,3 @@ pub fn main(args: &[String]) -> Result<(), String> {
     print!("{text}");
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn corpus_is_reproducible_and_empty_summaries_agree() {
-        assert_eq!(corpus(12, 42), corpus(12, 42));
-        let empty = corpus(0, 42);
-        assert_eq!(arena_summary(&empty, 65536), Ok(heap_summary(&empty)));
-        let words: Vec<String> = ["ba", "ce", "ba"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(heap_summary(&words).top, vec![("ba".to_string(), 2), ("ce".to_string(), 1)]);
-    }
-}

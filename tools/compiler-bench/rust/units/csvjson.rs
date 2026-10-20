@@ -299,28 +299,3 @@ pub fn main(args: &[String]) -> Result<(), Error> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn converts_quoted_csv_and_hashes_base64() {
-        let mut source = MemorySource { data: b"id,body\n1,\"YWJj\"\n".to_vec(), offset: 0 };
-        let output = convert(&mut source, memory_refill, Some("body")).ok().unwrap();
-        assert_eq!(
-            output,
-            "[{\"body\":\"YWJj\",\"body_sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\",\"id\":\"1\"}]\n"
-        );
-    }
-
-    #[test]
-    fn rejects_duplicate_headers_and_width_mismatches() {
-        for csv in [&b"a,a\n1,2\n"[..], &b"a,b\n1\n"[..]] {
-            let mut source = MemorySource { data: csv.to_vec(), offset: 0 };
-            assert!(convert(&mut source, memory_refill, None).is_err());
-        }
-        let mut source = MemorySource { data: b"body,body_sha256\nYWJj,x\n".to_vec(), offset: 0 };
-        assert!(convert(&mut source, memory_refill, Some("body")).is_err());
-    }
-}

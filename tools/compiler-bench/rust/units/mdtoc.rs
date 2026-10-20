@@ -153,22 +153,3 @@ pub fn main(args: &[String]) -> Result<(), String> {
     print!("{text}");
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn anchors_normalize_unicode_and_punctuation() {
-        assert_eq!(slug("Hello, World!"), "hello-world");
-        assert_eq!(slug("CAFÉ"), "café");
-    }
-
-    #[test]
-    fn headings_require_a_separator() {
-        let found = heading("## title ##").unwrap();
-        assert_eq!(found.level, 2);
-        assert_eq!(found.title, "title");
-        assert!(heading("##not-a-heading").is_none());
-    }
-}
