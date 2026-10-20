@@ -73,7 +73,7 @@ pub fn main() -> Result[(), ()] {
   ] {
     failure.check(
       markdown.render_html_with_options(
-        Node(kind: HtmlBlock(f"<{tag}>x</{tag}>\n"), children: []),
+        markdown.Node(kind: HtmlBlock(f"<{tag}>x</{tag}>\n"), children: []),
         gfm
       ) == f"&lt;{tag}>x&lt;/{tag}>\n",
       TextInvariant()

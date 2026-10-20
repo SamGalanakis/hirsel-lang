@@ -20,6 +20,25 @@ spec = importlib.util.spec_from_file_location('markdown_vectors', Path(__file__)
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 ROOT = base.ROOT
+# Measured above the fixed corpus budget; executed by the Rust std suite.
+LARGE = {
+    'SEM-3-markdown-cmark-pathological-1-run.hir',
+    'SEM-3-markdown-cmark-pathological-14-run.hir',
+    'SEM-3-markdown-cmark-pathological-16-run.hir',
+    'SEM-3-markdown-cmark-pathological-17-run.hir',
+    'SEM-3-markdown-cmark-pathological-18-run.hir',
+    'SEM-3-markdown-cmark-pathological-19-run.hir',
+    'SEM-3-markdown-cmark-pathological-20-run.hir',
+    'SEM-3-markdown-cmark-pathological-21-run.hir',
+    'SEM-3-markdown-cmark-pathological-6-run.hir',
+    'SEM-3-markdown-cmark-pathological-9-run.hir',
+    'SEM-3-markdown-cmark-regression-22-run.hir',
+    'SEM-3-markdown-cmark-regression-8-run.hir',
+    'SEM-3-markdown-js-pathological-12-run.hir',
+    'SEM-3-markdown-js-pathological-3-run.hir',
+    'SEM-3-markdown-js-pathological-4-run.hir',
+    'SEM-3-markdown-js-regression-25-run.hir',
+}
 
 
 def js_value(checkout, source, expression):
@@ -88,7 +107,8 @@ def main():
         origins[('cmark-pathological', number)] = f'cmark-gfm test/pathological_tests.py:14-121; {name}'
         expected = gfm_render(source)
         assert pattern.search(expected), f'upstream pathological oracle: {name}: {expected!r}'
-        vectors.append(('cmark-pathological', number, source, expected, True, False))
+        configs[('cmark-pathological', number)] = {'table'}
+        vectors.append(('cmark-pathological', number, source, expected, False, False))
     safe = test[test.index('var safeCases = ['):test.index('var safe_parse_and_render')]
     for number, case in enumerate(js_value(args.commonmark, safe, 'c.safeCases'), 1):
         origins[('safe', number)] = f'commonmark.js test/test.js:322-370; {case["name"]}'
@@ -99,10 +119,11 @@ def main():
             vectors.append(('gfm-tagfilter', number, source, expected, True, False))
     # Ordinary regression/pathological twins use independent reference output.
     paths = []
+    large_paths = []
     for suite, number, source, expected, gfm, safe in vectors:
         twin = source[:len(source) // 2] + '\0[&unterminated'
         flags = configs.get((suite, number), set())
-        if suite == 'cmark-regression':
+        if suite in ('cmark-regression', 'cmark-pathological'):
             oracle = base.gfm_renderer(args.cmark_build, footnotes='footnotes' in flags, extensions=tuple(flag.encode() for flag in flags if flag != 'footnotes'))
             assert oracle(source) == expected, f'cmark regression oracle mismatch: {number}'
             twin_expected = oracle(twin)
@@ -126,22 +147,28 @@ def main():
         if not safe:
             lines.append(f'  failed += harness.check(s, {base.literal(suite + "/" + str(number) + "/malformed")}, {base.literal(twin)}, {base.literal(twin_expected)}, options)')
         lines += ['  failure.check(failed == 0, TextInvariant())', '  Ok(())', '}', '']
-        path = ROOT / 'conformance/SEM' / (stem + '.hir')
+        is_large = stem + '.hir' in LARGE
+        directory = ROOT / ('crates/hirsel-driver/tests/fixtures/markdown' if is_large else 'conformance/SEM')
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / (stem + '.hir')
         path.write_text('\n'.join(lines))
         manifest = {'schema': 1, 'package': {'name': 'application', 'version': '1'}, 'entry': {'module': [], 'name': 'main'}, 'sources': [{'path': stem + '.hir', 'module': []}, {'path': '../../packages/fixtures/markdown_vectors@1/harness.hir', 'module': ['harness']}], 'dependencies': [{'manifest': '../../stdlib/std@1/hirsel.json', 'package': {'name': 'std', 'version': '1'}, 'expose': []}]}
+        if is_large:
+            manifest['sources'][1]['path'] = '../../../../../packages/fixtures/markdown_vectors@1/harness.hir'
+            manifest['dependencies'][0]['manifest'] = '../../../../../stdlib/std@1/hirsel.json'
         path.with_suffix('.hir.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        paths.append(path.relative_to(ROOT).as_posix())
+        (large_paths if is_large else paths).append(path.relative_to(ROOT).as_posix())
     passing = ROOT / 'conformance/passing.txt'
     if passing.exists():
-        entries = set(passing.read_text().splitlines())
+        entries = {entry for entry in passing.read_text().splitlines() if Path(entry).name not in LARGE}
         entries.update(paths)
         passing.write_text('\n'.join(sorted(entries)) + '\n')
     if args.hirsel:
-        for path in paths:
+        for path in paths + large_paths:
             subprocess.run([str(args.hirsel.resolve()), 'fmt', path], cwd=ROOT, check=True)
     from collections import Counter
     print(dict(Counter(v[0] for v in vectors)))
-    print(f'{len(vectors)} vectors in {len(paths)} bounded programs with {sum(not v[5] for v in vectors)} malformed twins')
+    print(f'{len(vectors)} vectors in {len(paths)} corpus and {len(large_paths)} Rust fixtures with {sum(not v[5] for v in vectors)} malformed twins')
 
 
 if __name__ == '__main__':

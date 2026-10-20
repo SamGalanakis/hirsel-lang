@@ -8,7 +8,8 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  let mut options = std@1/markdown.gfm_options()
+  let mut options = std@1/markdown.default_options()
+  options.tables = true
   failed += harness.check(
     s,
     "cmark-pathological/8",

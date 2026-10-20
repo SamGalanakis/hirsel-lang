@@ -15,10 +15,13 @@ ported from cmark-gfm `extensions/tagfilter.c:5-60`, independently of unsafe
 rendering. It escapes the leading angle bracket of the nine forbidden tags.
 
 `tools/generate-markdown-hostile.py` imports the following pinned vectors,
-each in its own corpus program with the interpreter's one-million-step
-budget and the conformance runner's timeout:
+each as a bounded Hirsel fixture. Programs within one million interpreter
+steps run in the conformance corpus. Sixteen measured larger fixtures run in
+`crates/hirsel-driver/tests/it-stdlib/stdlib_markdown.rs` with a ten-million-step
+budget and the Buck2 runner's timeout. Their sources and expected HTML are
+unchanged. This follows the host rule for fixtures above the corpus budget:
 
-| Source | Original vectors | Corpus vectors |
+| Source | Original vectors | Ported vectors |
 | --- | ---: | ---: |
 | commonmark.js `test/regression.txt:1-740` | 47 | 47 + 47 malformed twins |
 | cmark-gfm `test/regression.txt:1-375` | 26 | 26 + 26 malformed twins |
@@ -53,6 +56,12 @@ Deviations and reasons:
   renderer rather than a JavaScript renderer object or C extension callback.
   Hirsel's owned AST and capability-free rendering use explicit values.
   The renderer and footnote pass are separate sources in the same module.
+- Sixteen fixtures exceed the corpus's fixed one-million-step budget: cmark
+  pathological 1, 6, 9, 14, 16-21; JavaScript pathological 3, 4, 12; cmark
+  regressions 8 and 22; JavaScript regression 25. The Rust suite executes these
+  same fixtures with ten million steps. All other fixtures use the corpus cap.
+- The cmark pathological suite enables only its requested table extension,
+  matching `test/pathological_tests.py:141`, rather than all GFM extensions.
 - Pathological repetition counts are reduced to fit the corpus interpreter's
   fixed step budget: JavaScript 1000/10000 become 12/24; title backslashes
   10/100/1000 become 10/20/30; cmark repeated patterns become 24, lists 12,

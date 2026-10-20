@@ -190,7 +190,11 @@ fn render_node(
       text.append(mut out, "<pre><code")
       let words = string.split_ascii_whitespace(unique info)
       if core@1/list.len(words) != 0 {
-        text.append(mut out, " class=\"language-")
+        // commonmark.js lib/render/html.js:157-165 avoids a duplicate prefix.
+        text.append(mut out, " class=\"")
+        if !string.starts_with(words[0], "language-") {
+          text.append(mut out, "language-")
+        }
         escape_html(mut out, words[0])
         core@1/list.push(mut out, 34u8)
       }

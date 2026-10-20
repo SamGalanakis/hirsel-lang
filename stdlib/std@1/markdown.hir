@@ -338,9 +338,9 @@ fn can_contain(kind: u8, child: u8) -> bool uses {} {
 
 fn finish_at(id: u64, line: u64, mut p: Parser) -> () uses {} {
   if p.nodes[id].kind == 1 {
-    if !remove_references(mut p, id) {
-      unlink(mut p.nodes, id)
-    }
+    // Keep definition-only paragraphs until lists have measured blank gaps,
+    // as commonmark.js lib/blocks.js:277-299 does before document finalization.
+    let _ = remove_references(mut p, id)
   }
   p.nodes[id].open = false
   p.nodes[id].end_line = line
@@ -1962,6 +1962,13 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
     finish_at(close_id, close_line, mut p)
   }
   let count = core@1/list.len(p.nodes)
+  let mut empty_id: u64 = 1
+  while empty_id < count {
+    if p.nodes[empty_id].kind == 1 && p.nodes[empty_id].value == "" {
+      unlink(mut p.nodes, empty_id)
+    }
+    empty_id += 1
+  }
   let mut id: u64 = 1
   while id < count {
     if p.nodes[id].kind == 1 || p.nodes[id].kind == 2 || p.nodes[id].kind == 21 {
@@ -1995,6 +2002,10 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
 fn table_cells(s: String) -> List[String] uses {} {
   let source = trim(s)
   let mut out: List[String] = []
+  // cmark-gfm extensions/table.c:213-219: a lone leading pipe has no cell.
+  if source == "|" {
+    return take out
+  }
   let mut cell: List[u8] = []
   let mut i: u64 = if byte(source, 0) == 124 {
     1
