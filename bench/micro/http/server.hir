@@ -1,4 +1,6 @@
-pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError) | Output(OutputError)
+pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError) | Output(
+  OutputError
+)
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let tasks = io.tasks(rt) ? Grant
@@ -9,7 +11,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 18475u16)
   ) ? Network
   let (stream, _) = net.accept(n, mut listener) ? Network
-  let mut connection = http.server_connection(tasks, n, take stream, http.default_config())
+  let mut connection = http.server_connection(
+    tasks,
+    n,
+    take stream,
+    http.default_config()
+  )
   for _ in 0u64..1024u64 {
     let (owned, _) = match http.next_stream(mut connection, Some(clock)) {
       Ok(Some(exchange)) => take exchange,

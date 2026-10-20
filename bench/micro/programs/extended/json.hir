@@ -5,7 +5,10 @@ fn document(n: u64) -> String {
     if i > 0u64 {
       text.append(mut out, ",")
     }
-    text.append(mut out, f"{{\"id\":{i},\"name\":\"user{i}\",\"score\":{i * 7u64 % 1000u64}.5,\"tags\":[\"a\",\"bb\",\"ccc\"],\"active\":true,\"ref\":null}}")
+    text.append(
+      mut out,
+      f"{{\"id\":{i},\"name\":\"user{i}\",\"score\":{i * 7u64 % 1000u64}.5,\"tags\":[\"a\",\"bb\",\"ccc\"],\"active\":true,\"ref\":null}}"
+    )
   }
   text.append(mut out, "]")
   text.finish_valid(take out)
