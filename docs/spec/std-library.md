@@ -1020,14 +1020,16 @@ fn deque.push_front[T](mut q: unique deque.Deque[T], take value: unique T) -> ()
 fn deque.push_back[T](mut q: unique deque.Deque[T], take value: unique T) -> () uses {q, value}
 fn deque.pop_front[T](mut q: unique deque.Deque[T]) -> unique Option[T] uses {q}
 fn deque.pop_back[T](mut q: unique deque.Deque[T]) -> unique Option[T] uses {q}
+fn deque.get[T: copyable](q: deque.Deque[T], index: u64) -> Option[T] in q uses {}
+fn deque.front[T: copyable](q: deque.Deque[T]) -> Option[T] in q uses {}
+fn deque.back[T: copyable](q: deque.Deque[T]) -> Option[T] in q uses {}
 ```
 
-`Deque[T]` is an opaque source container owning its elements in two unique Lists
-of unique elements. Rebalancing reverses each side in place and uses constant
-extra space.
-Length is O(1); endpoint operations are amortized O(1). When one side is empty,
-half the other side moves across, preserving logical order and avoiding repeated
-whole-queue reversals when callers alternate removals. Empty pops return `None`.
+`Deque[T]` is an opaque source ring buffer owning optional slots in a unique List.
+Growth doubles capacity from four slots and moves elements in logical order.
+Length, indexed access and endpoint observations are O(1); endpoint mutations
+are amortized O(1). Empty pops and observations, and out-of-bounds `get`, return
+`None`. Observations copy only copyable elements.
 Push requires a unique input: use `unique value` to copy an aliased value into
 a fresh unique owner before pushing. Pop transfers deep uniqueness; leftover items follow ordinary
 cleanup,
@@ -1036,15 +1038,19 @@ including resource payloads and failure paths. A fresh empty deque is unique.
 ## Priority queue
 
 ```text
-fn priority_queue.empty[T]() -> unique priority_queue.Heap[T] uses {}
+fn priority_queue.empty[T](take by: @noalloc fn(T, T) -> i32 uses {}) -> unique priority_queue.Heap[T] uses {}
 N fn priority_queue.len[T](h: priority_queue.Heap[T]) -> u64 uses {}
-fn priority_queue.push[T](mut h: unique priority_queue.Heap[T], take value: unique T, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {h, value}
-fn priority_queue.pop[T](mut h: unique priority_queue.Heap[T], by: @noalloc fn(T, T) -> i32 uses {}) -> unique Option[T] uses {h}
+fn priority_queue.push[T](mut h: unique priority_queue.Heap[T], take value: unique T) -> () uses {h, value}
+fn priority_queue.pop[T](mut h: unique priority_queue.Heap[T]) -> unique Option[T] uses {h}
+fn priority_queue.peek[T: copyable](h: priority_queue.Heap[T]) -> Option[T] in h uses {}
+fn priority_queue.from_list[T](take by: @noalloc fn(T, T) -> i32 uses {}, take input: unique List[unique T]) -> unique priority_queue.Heap[T] uses {input}
 ```
 
 `Heap[T]` is an opaque source min-heap over a unique List of unique elements.
-The module is named `priority_queue` because `heap` is reserved. Callers must use the same ordering
-on every operation. Pop transfers the least element under that ordering, or returns
+The module is named `priority_queue` because `heap` is reserved. Construction stores
+a unique copy of its comparator and captured context. `from_list` heapifies the
+owned input in O(n). `peek` copies a copyable least element, or returns `None`
+when empty. Pop transfers the least element under the stored ordering, or returns
 `None` when empty; equal priorities have no stable order. Length is O(1), push and
 pop O(log n), with ordinary allocation growth on push. Push requires a unique
 input; `unique value` copies an aliased value into a fresh unique owner before
@@ -1052,7 +1058,7 @@ pushing. Push owns its input and
 remaining elements are released on cleanup, including comparator failure. Pop and
 the heapsort fallback of List sort use sift kernels; reversing the priority-queue
 comparator never negates an i32.
-A fresh empty heap is unique. This surface provides no peek or indexed update.
+A fresh empty heap is unique. This surface provides no indexed update.
 
 ## Ordered maps
 
