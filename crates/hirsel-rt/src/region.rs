@@ -36,19 +36,34 @@ pub const SEGMENT_SIZE: usize = 64 * 1024;
 /// MEM-10: idle pooled backing retained per task at each region exit.
 pub const REGION_POOL_IDLE_CAP: u64 = 8 * 1024 * 1024;
 
-const SEGMENT_HEADER: usize = 32;
+const SEGMENT_HEADER: usize = 48;
+const _: () = assert!(size_of::<Segment>() <= SEGMENT_HEADER);
 const REGION_ACTIVE: u64 = 0x5245_4741_4354_4956; // "REGACTIV"
 const REGION_EXITED: u64 = 0x5245_4745_5849_5444; // "REGEXITD"
 
 /// Segment bookkeeping. `prev` chains a region's segments (or the idle pool); `lent_prev` and
 /// `lent_next` link every segment lent to a region, so task exit can return them without
-/// reading region records whose frames may be gone.
+/// reading region records whose frames may be gone. `owner` is the id of the heap whose pool
+/// lent it: a region that exits on another heap's worker (its task migrated; regions cross
+/// tasks, `ownership.md:325`) pushes it on the owner's `returns` (design §6 Heaps).
 #[repr(C)]
 pub(crate) struct Segment {
     prev: *mut Segment,
     size: u64,
     lent_prev: *mut Segment,
     lent_next: *mut Segment,
+    owner: u32,
+    _reserved: u32,
+    return_next: *mut Segment,
+}
+
+impl crate::remote::Link for Segment {
+    unsafe fn set_next(node: *mut Segment, next: *mut Segment) {
+        unsafe { (*node).return_next = next }
+    }
+    unsafe fn next(node: *mut Segment) -> *mut Segment {
+        unsafe { (*node).return_next }
+    }
 }
 
 /// A region record in compiler-reserved storage, initialized by `hirsel_rt_v2_region_enter`.
@@ -558,6 +573,10 @@ struct Entry {
 pub(crate) struct RegionPool {
     idle: *mut Segment,
     lent: *mut Segment,
+    /// The id of the heap this pool belongs to, which its segments carry.
+    id: u32,
+    /// Segments regions exiting on other heaps gave back.
+    pub(crate) returns: crate::remote::Returns<Segment>,
     pub(crate) idle_bytes: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) active_bytes: u64,
@@ -566,8 +585,12 @@ pub(crate) struct RegionPool {
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) backing_allocations: u64,
     /// The run's memory budget, shared with its heap.
-    meter: std::rc::Rc<crate::budget::Meter>,
+    meter: std::sync::Arc<crate::budget::Meter>,
 }
+
+// SAFETY: a pool is reached by its heap's collector only, or through `returns`, whose pushes
+// hand a segment over with release/acquire ordering.
+unsafe impl Send for RegionPool {}
 
 fn segment_layout(size: u64) -> HostLayout {
     // SAFETY: sizes are validated multiples of 16 below isize::MAX.
@@ -580,10 +603,12 @@ impl RegionPool {
     fn record_backing_allocation(&mut self) {
         self.backing_allocations += 1;
     }
-    pub(crate) fn new(meter: std::rc::Rc<crate::budget::Meter>) -> RegionPool {
+    pub(crate) fn new(meter: std::sync::Arc<crate::budget::Meter>, id: u32) -> RegionPool {
         RegionPool {
             idle: ptr::null_mut(),
             lent: ptr::null_mut(),
+            id,
+            returns: crate::remote::Returns::new(),
             idle_bytes: 0,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             active_bytes: 0,
@@ -613,7 +638,10 @@ impl RegionPool {
                 self.record_backing_allocation();
             }
             // SAFETY: fresh storage.
-            unsafe { (*found).size = size };
+            unsafe {
+                (*found).size = size;
+                (*found).owner = self.id;
+            }
         }
         // SAFETY: `found` is this pool's segment.
         unsafe { self.lend(found) };
@@ -686,6 +714,43 @@ impl RegionPool {
         }
     }
 
+    /// Return a segment of a region that exited on this pool's heap: into the idle pool when
+    /// it is this pool's, else onto its owner pool's `returns`.
+    ///
+    /// # Safety
+    /// `segment` is lent to an exited region of `heap`'s run, and `owner` finds the pool of a
+    /// heap by id.
+    pub(crate) unsafe fn return_segment(
+        &mut self,
+        segment: *mut Segment,
+        owner: impl FnOnce(u32) -> *mut RegionPool,
+    ) {
+        // SAFETY: caller contract.
+        unsafe {
+            if (*segment).owner == self.id {
+                self.give_back(segment);
+            } else {
+                (*owner((*segment).owner)).returns.push(segment);
+            }
+        }
+    }
+
+    /// Take back every segment other heaps returned; the number taken.
+    pub(crate) fn collect(&mut self) -> u64 {
+        let mut collected = 0;
+        let mut segment = self.returns.take();
+        while !segment.is_null() {
+            // SAFETY: a returned segment is lent by this pool and given back once.
+            unsafe {
+                let next = <Segment as crate::remote::Link>::next(segment);
+                self.give_back(segment);
+                segment = next;
+            }
+            collected += 1;
+        }
+        collected
+    }
+
     /// Take a lent segment back into the idle pool.
     unsafe fn give_back(&mut self, segment: *mut Segment) {
         // SAFETY: `segment` is lent by this pool.
@@ -731,6 +796,8 @@ impl RegionPool {
     /// Task exit: free pooled segments and those lent to regions still active. Region records
     /// are not read; they live in frames the task no longer has.
     pub(crate) fn release_all(&mut self) {
+        // Returned segments are still on the lent list, freed below.
+        self.returns.take();
         self.trim(0);
         let mut segment = self.lent;
         while !segment.is_null() {
@@ -898,9 +965,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut TaskCtx, region: *m
             exhausted: 0,
         });
         ctx.region = region;
+        // A region may exit on another worker than it entered on, so each pool's count is a
+        // share of the run's (wrapping); their sum is the run's active regions.
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            ctx.pool().active_count += 1;
+            ctx.pool().active_count = ctx.pool().active_count.wrapping_add(1);
         }
     }
 }
@@ -1139,7 +1208,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
                 memcheck::undefined(data, (*segment).size as usize - SEGMENT_HEADER);
                 ptr::write_bytes(data, FREE_POISON, (*segment).size as usize - SEGMENT_HEADER);
             }
-            ctx.pool().give_back(segment);
+            ctx.return_segment(segment);
             #[cfg(feature = "measurement")]
             {
                 let idle_bytes = ctx.pool().idle_bytes;
@@ -1153,7 +1222,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
         ctx.region = (*region).parent;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            ctx.pool().active_count -= 1;
+            ctx.pool().active_count = ctx.pool().active_count.wrapping_sub(1);
         }
         ctx.trim();
         status

@@ -1,0 +1,24 @@
+# The loom model of cross-worker storage return: it compiles crates/hirsel-rt/src/remote.rs from
+# its own source against loom's atomics. Its own workspace, outside the Buck2 graph;
+# proofs/heaps/check.sh runs it.
+[package]
+name = "hirsel-heaps-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+# Mutations, each of which must fail: the owner's direct collection of its current page clears
+# the queued flag (dequeue instead of take), and the trim releases an empty slab without the
+# busy test.
+direct-dequeue = []
+blind-trim = []
+
+[dependencies]
+loom = "=0.7.2"
+
+[profile.test]
+opt-level = 2
+debug-assertions = true

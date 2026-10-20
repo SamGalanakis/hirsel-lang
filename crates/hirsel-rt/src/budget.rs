@@ -9,26 +9,28 @@
 //! `Stop::BudgetExceeded`, as a Blocked run stops (`crate::stop`).
 use crate::TaskCtx;
 use hirsel_run_schema::BudgetKind;
-use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The backing bytes a run holds against its `memory_bytes` budget; zero is no budget.
 #[derive(Debug, Default)]
 pub(crate) struct Meter {
-    limit: Cell<u64>,
-    held: Cell<u64>,
+    limit: AtomicU64,
+    held: AtomicU64,
 }
 impl Meter {
     pub(crate) fn set_limit(&self, limit: u64) {
-        self.limit.set(limit);
+        self.limit.store(limit, Ordering::Relaxed);
     }
     #[inline]
     pub(crate) fn metered(&self) -> bool {
-        self.limit.get() != 0
+        self.limit.load(Ordering::Relaxed) != 0
     }
     /// Whether `bytes` more stay within the budget.
     #[inline]
     pub(crate) fn fits(&self, bytes: u64) -> bool {
-        !self.metered() || self.held.get().saturating_add(bytes) <= self.limit.get()
+        !self.metered()
+            || self.held.load(Ordering::Relaxed).saturating_add(bytes)
+                <= self.limit.load(Ordering::Relaxed)
     }
     /// Charge `bytes` about to be taken, or end the run when they do not fit.
     #[inline]
@@ -37,14 +39,22 @@ impl Meter {
             if !self.fits(bytes) {
                 exceeded(BudgetKind::Memory);
             }
-            self.held.set(self.held.get() + bytes);
+            self.held.fetch_add(bytes, Ordering::Relaxed);
         }
     }
     /// Credit `bytes` given back.
     #[inline]
     pub(crate) fn give(&self, bytes: u64) {
         if self.metered() {
-            self.held.set(self.held.get().saturating_sub(bytes));
+            let mut held = self.held.load(Ordering::Relaxed);
+            while let Err(current) = self.held.compare_exchange_weak(
+                held,
+                held.saturating_sub(bytes),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                held = current;
+            }
         }
     }
 }

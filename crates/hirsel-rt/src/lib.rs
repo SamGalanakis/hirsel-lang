@@ -68,6 +68,7 @@ mod fiber;
 pub mod finalize;
 pub mod foreign;
 mod free;
+mod heaps;
 pub mod host;
 #[cfg(feature = "measurement")]
 pub mod measurement;
@@ -75,6 +76,8 @@ mod memcheck;
 pub mod multicore_policy;
 pub mod region;
 pub mod release;
+mod remote;
+mod remote_sync;
 #[cfg(feature = "diagnostic")]
 mod root_trace;
 pub mod roots;
@@ -86,10 +89,11 @@ pub mod tasks;
 
 pub use alloc::{
     CLASS_COUNT, CLASS_SIZES, CTX_DUP_MAX_OFFSET, CTX_FREE_INLINE_OFFSET, CTX_FUEL_OFFSET,
-    CTX_IDLE_SLABS_OFFSET, CTX_PAGES_OFFSET, DOMAIN_HEAP, DOMAIN_REGION, DOMAIN_STATIC,
-    HEADER_SIZE, Header, LARGE_CLASS, PAGE_FREE_OFFSET, PAGE_LIVE_OFFSET, PAGE_LOCAL_FREE_OFFSET,
-    POOL_COUNT, SLAB_SIZE, SMALL_ALIGN_MAX, SMALL_MAX, STATE_FIELDS_PENDING,
-    STATE_FINALIZE_PENDING, STATE_FINALIZING, STATE_FREE, STATE_LIVE, STATE_RAW, class_of,
+    CTX_HEAP_ID_OFFSET, CTX_IDLE_SLABS_OFFSET, CTX_PAGES_OFFSET, DOMAIN_HEAP, DOMAIN_REGION,
+    DOMAIN_STATIC, HEADER_SIZE, Header, LARGE_CLASS, PAGE_FREE_OFFSET, PAGE_LIVE_OFFSET,
+    PAGE_LOCAL_FREE_OFFSET, PAGE_OWNER_OFFSET, PAGE_XTHREAD_FREE_OFFSET, POOL_COUNT, SLAB_SIZE,
+    SMALL_ALIGN_MAX, SMALL_MAX, STATE_FIELDS_PENDING, STATE_FINALIZE_PENDING, STATE_FINALIZING,
+    STATE_FREE, STATE_LIVE, STATE_RAW, class_of,
 };
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
 pub use context::Stats;
@@ -109,7 +113,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 25;
+pub const ABI_VERSION: u32 = 26;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

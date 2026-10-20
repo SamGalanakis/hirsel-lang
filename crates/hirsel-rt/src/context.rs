@@ -146,17 +146,71 @@ pub struct TaskCtx {
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
 
-/// One OS thread that runs Hirsel code, and what is its own: its heap, region pool and idle
-/// fiber stacks.
+/// One OS thread that runs Hirsel code, and what is its own: its heap (with its region pool),
+/// which lives in the run's registry and outlives the worker, and its idle fiber stacks.
 pub(crate) struct Worker {
-    pub(crate) heap: Heap,
-    pub(crate) regions: RegionPool,
+    pub(crate) id: u32,
+    heap: *mut Heap,
+    run: *mut RunShared,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) immortalized: u64,
     /// Stacks of completed tasks, for the next spawns.
     pub(crate) idle_stacks: Vec<crate::fiber::Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     pub(crate) retired: Option<crate::fiber::Stack>,
+}
+
+impl Worker {
+    /// A new worker of `run`, with an orphaned heap it re-adopts or a fresh one from the run's
+    /// registry (design §6 Heaps).
+    ///
+    /// # Safety
+    /// `run` is live and outlives the worker.
+    pub(crate) unsafe fn create(run: *mut RunShared) -> *mut Worker {
+        // SAFETY: caller contract.
+        let heaps = unsafe { &(*run).heaps };
+        let id = heaps.worker_id();
+        let heap = heaps.attach(id);
+        Box::into_raw(Box::new(Worker {
+            id,
+            heap,
+            run,
+            #[cfg(any(feature = "diagnostic", feature = "measurement"))]
+            immortalized: 0,
+            idle_stacks: Vec::new(),
+            retired: None,
+        }))
+    }
+
+    /// The worker leaves: its heap stays in the registry, orphaned, and any live worker
+    /// collects it from then on.
+    ///
+    /// # Safety
+    /// `worker` came from [`Worker::create`], runs no task and is not used again.
+    pub(crate) unsafe fn retire(worker: *mut Worker) {
+        // SAFETY: caller contract.
+        unsafe {
+            let worker = Box::from_raw(worker);
+            (*worker.run).heaps.retire(worker.heap);
+        }
+    }
+
+    /// The worker's heap.
+    #[inline(always)]
+    pub(crate) fn heap(&mut self) -> &mut Heap {
+        // SAFETY: the run's registry keeps the heap while the worker lives, and only its
+        // worker reaches it through this borrow.
+        unsafe { &mut *self.heap }
+    }
+
+    /// A scheduling point: take back what other heaps published to this worker's heap, and
+    /// collect orphaned heaps.
+    #[inline]
+    pub(crate) fn collect(&mut self) {
+        self.heap().collect();
+        // SAFETY: the run outlives its workers.
+        unsafe { (*self.run).heaps.collect_orphans(self.id) };
+    }
 }
 
 /// What every task of a run shares: its configuration, scheduler, Io binding, failure table and
@@ -182,6 +236,8 @@ pub(crate) struct RunShared {
     pub(crate) free: Option<Box<crate::free::Free>>,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
+    /// Every worker's heap, until the run ends (`crate::heaps`).
+    pub(crate) heaps: Box<crate::heaps::HeapRegistry>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -220,18 +276,32 @@ impl TaskCtx {
     /// The running worker's heap.
     #[inline(always)]
     pub(crate) fn heap(&mut self) -> &mut Heap {
-        &mut self.worker().heap
+        self.worker().heap()
     }
     /// The running worker's heap, read only.
     #[inline(always)]
     pub(crate) fn heap_ref(&self) -> &Heap {
         // SAFETY: as for `worker`.
-        unsafe { &(*self.worker).heap }
+        unsafe { &*(*self.worker).heap }
     }
     /// The running worker's region pool.
     #[inline(always)]
     pub(crate) fn pool(&mut self) -> &mut RegionPool {
-        &mut self.worker().regions
+        &mut self.heap().regions
+    }
+
+    /// Return a segment of a region that exited on this task's worker to the pool that lent
+    /// it (`crate::region`).
+    ///
+    /// # Safety
+    /// `segment` is lent to a region of this run that exited.
+    pub(crate) unsafe fn return_segment(&mut self, segment: *mut crate::region::Segment) {
+        let run = self.run;
+        // SAFETY: caller contract; the run's registry holds every heap of the run.
+        unsafe {
+            self.pool()
+                .return_segment(segment, |id| &raw mut (*(*run).heaps.heap(id)).regions)
+        }
     }
     /// The run this task belongs to.
     #[inline(always)]
@@ -268,6 +338,7 @@ impl TaskCtx {
             TaskCtx::attach(ctx, worker);
             crate::stop::set_running(ctx);
             crate::foreign::restore((*ctx).foreign);
+            (*worker).collect();
         }
     }
 
@@ -276,14 +347,14 @@ impl TaskCtx {
     ///
     /// # Safety
     /// As for [`TaskCtx::switch_in`].
-    unsafe fn attach(ctx: *mut TaskCtx, worker: *mut Worker) {
+    pub(crate) unsafe fn attach(ctx: *mut TaskCtx, worker: *mut Worker) {
         // SAFETY: caller contract.
         unsafe {
             (*ctx).worker = worker;
-            (*worker).heap.bind(&raw mut (*ctx).view);
+            (*worker).heap().bind(&raw mut (*ctx).view);
             #[cfg(feature = "measurement")]
             {
-                (*worker).heap.measurement.active_site = (*ctx).site;
+                (*worker).heap().measurement.active_site = (*ctx).site;
             }
         }
     }
@@ -376,32 +447,32 @@ impl TaskCtx {
 
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) fn stats(&mut self) -> Stats {
-        let worker = self.worker();
-        let (live_blocks, live_bytes) = worker.heap.live();
-        let idle_slabs = worker.heap.view().idle_slabs;
+        let immortalized = self.worker().immortalized;
+        let heap = self.heap();
+        let (live_blocks, live_bytes) = heap.live();
+        let idle_slabs = heap.view().idle_slabs;
         Stats {
-            backing_bytes: worker.heap.backing_bytes()
-                + worker.regions.active_bytes
-                + worker.regions.idle_bytes,
-            backing_allocations: worker.heap.backing_allocations
-                + worker.regions.backing_allocations,
-            slab_bytes: worker.heap.slab_count * SLAB_SIZE as u64,
+            backing_bytes: heap.backing_bytes()
+                + heap.regions.active_bytes
+                + heap.regions.idle_bytes,
+            backing_allocations: heap.backing_allocations + heap.regions.backing_allocations,
+            slab_bytes: heap.slab_count * SLAB_SIZE as u64,
             idle_slab_bytes: idle_slabs * SLAB_SIZE as u64,
-            large_bytes: worker.heap.large_bytes,
+            large_bytes: heap.large_bytes,
             live_blocks,
             live_bytes,
-            region_active_bytes: worker.regions.active_bytes,
-            region_pool_bytes: worker.regions.idle_bytes,
-            active_regions: worker.regions.active_count,
-            immortalized_blocks: worker.immortalized,
+            region_active_bytes: heap.regions.active_bytes,
+            region_pool_bytes: heap.regions.idle_bytes,
+            active_regions: heap.regions.active_count,
+            immortalized_blocks: immortalized,
         }
     }
 
     /// A trim point: idle slabs and pooled region segments above their caps go back.
     pub(crate) fn trim(&mut self) {
-        let worker = self.worker();
-        worker.regions.trim(REGION_POOL_IDLE_CAP);
-        worker.heap.trim();
+        let heap = self.heap();
+        heap.regions.trim(REGION_POOL_IDLE_CAP);
+        heap.trim();
     }
 
     /// Task exit: return all storage, live or idle, and report what was still held.
@@ -442,18 +513,18 @@ impl TaskCtx {
             }
         }
         self.region = ptr::null_mut();
-        let worker = self.worker();
-        worker.regions.release_all();
-        worker.heap.release_all();
+        let heap = self.heap();
+        heap.regions.release_all();
+        heap.release_all();
         self.failure.clear();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            let worker = self.worker();
-            worker.immortalized = 0;
+            self.worker().immortalized = 0;
+            let heap = self.heap();
             return Audit {
-                retained_bytes: worker.heap.backing_bytes()
-                    + worker.regions.active_bytes
-                    + worker.regions.idle_bytes,
+                retained_bytes: heap.backing_bytes()
+                    + heap.regions.active_bytes
+                    + heap.regions.idle_bytes,
                 ..audit
             };
         }
@@ -479,12 +550,13 @@ impl TaskCtx {
     pub(crate) fn exit_audit(&self) -> Audit {
         // SAFETY: as for `worker`.
         let worker = unsafe { &*self.worker };
-        let (live_blocks, live_bytes) = worker.heap.live();
+        let heap = self.heap_ref();
+        let (live_blocks, live_bytes) = heap.live();
         Audit {
             live_blocks,
             live_bytes,
             immortalized_blocks: worker.immortalized,
-            active_regions: worker.regions.active_count,
+            active_regions: heap.regions.active_count,
             retained_bytes: 0,
         }
     }
@@ -536,20 +608,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
     }
     let diagnostic = config.flags & CONFIG_DIAGNOSTIC != 0;
     let count_max = finite_count_max(config.count_max);
-    let mut heap = Heap::new(layouts.into_boxed_slice(), diagnostic, idle_cap);
     // Diagnostic mode checks every dup and measurement counts it, so neither adds holders inline.
-    if !diagnostic && !cfg!(feature = "measurement") {
-        heap.set_dup_max(count_max);
-    }
-    let meter = heap.meter.clone();
-    let worker = Box::into_raw(Box::new(Worker {
-        heap,
-        regions: RegionPool::new(meter),
-        #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-        immortalized: 0,
-        idle_stacks: Vec::new(),
-        retired: None,
-    }));
+    let dup_max = if !diagnostic && !cfg!(feature = "measurement") {
+        count_max
+    } else {
+        0
+    };
+    let heaps = crate::heaps::HeapRegistry::new(crate::heaps::Template {
+        layouts: layouts.into_boxed_slice(),
+        diagnostic,
+        idle_cap,
+        dup_max,
+        meter: Default::default(),
+    });
     let run = Box::into_raw(Box::new(RunShared {
         count_max,
         close_handle: config.close_handle,
@@ -564,6 +635,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: None,
         root_overflow: Default::default(),
+        heaps,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]
@@ -571,12 +643,61 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         #[cfg(feature = "measurement")]
         profile_output: None,
     }));
+    // SAFETY: the run was just created; its root context owns it and the worker.
+    let worker = unsafe { Worker::create(run) };
     // The root task's context, which owns the worker and the run.
     let ctx = Box::into_raw(Box::new(TaskCtx::new(worker, run)));
     // SAFETY: both were just created, and the root is the worker's first task.
     unsafe { TaskCtx::attach(ctx, worker) };
     unsafe { out.write(ctx) };
     LAUNCH_OK
+}
+
+/// A context for a new worker of `ctx`'s run, on a heap of its own from the run's registry
+/// (design §6 Heaps): the substrate W1's pool runs tasks on, and how the two-thread heap tests
+/// put a second worker in one run.
+///
+/// # Safety
+/// `ctx` is a live context of a started or created run, which outlives the new context; the
+/// new context is used by one thread at a time.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_worker_create(ctx: *mut TaskCtx) -> *mut TaskCtx {
+    // SAFETY: caller contract.
+    unsafe {
+        let run = (*ctx).run;
+        let worker = Worker::create(run);
+        let fresh = Box::into_raw(Box::new(TaskCtx::new(worker, run)));
+        TaskCtx::attach(fresh, worker);
+        fresh
+    }
+}
+
+/// Retire the worker of a context from [`hirsel_rt_v2_worker_create`] and free the context:
+/// its heap stays in the run's registry, orphaned, collected by the run's live workers.
+///
+/// # Safety
+/// `ctx` came from `hirsel_rt_v2_worker_create`, has no release in progress and is not used
+/// again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_worker_retire(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract.
+    unsafe {
+        let ctx = Box::from_raw(ctx);
+        if !ctx.work.is_null() {
+            fault("a worker retires with release work pending");
+        }
+        Worker::retire(ctx.worker);
+    }
+}
+
+/// A scheduling point of `ctx`'s worker: take back what other workers freed to its heap, and
+/// collect orphaned heaps.
+///
+/// # Safety
+/// `ctx` is live and its worker's thread calls this.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_worker_collect(ctx: *mut TaskCtx) {
+    unsafe { (*ctx).worker().collect() };
 }
 
 /// Write a storage snapshot to `out`.

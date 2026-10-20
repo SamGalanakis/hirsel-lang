@@ -26,6 +26,13 @@ pub struct Counters {
     pub peak_live_bytes: u64,
     pub region_high_water_bytes: u64,
     pub region_pool_high_water_bytes: u64,
+    /// Frees of another heap's block, large block or region segment, published to its owner
+    /// (design §5 headroom row "Root traffic; remote frees").
+    pub remote_frees: u64,
+    /// Published blocks, large blocks and segments this heap's collector took back.
+    pub remote_collected: u64,
+    /// Orphaned heaps a new worker took over.
+    pub heap_adoptions: u64,
 }
 
 impl Default for Counters {
@@ -45,6 +52,9 @@ impl Default for Counters {
             peak_live_bytes: 0,
             region_high_water_bytes: 0,
             region_pool_high_water_bytes: 0,
+            remote_frees: 0,
+            remote_collected: 0,
+            heap_adoptions: 0,
         }
     }
 }
@@ -95,6 +105,9 @@ impl Counters {
                 "region_pool_high_water_bytes",
                 self.region_pool_high_water_bytes,
             ),
+            ("remote_frees", self.remote_frees),
+            ("remote_collected", self.remote_collected),
+            ("heap_adoptions", self.heap_adoptions),
         ] {
             writeln!(out, "{name} {value}")?;
         }

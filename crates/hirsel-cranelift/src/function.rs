@@ -1155,6 +1155,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.terminator(terminator)
     }
 
+    // Runtime ABI 26 puts the running worker's heap id right after the fuel word. Cranelift's
+    // code frees every block through the runtime, which checks the page owner itself, so it
+    // reads neither; the layout it shares with LLVM's inline paths is pinned here too.
+    const _HEAP_ID_AFTER_FUEL: () = assert!(
+        hirsel_lir::runtime_abi::CTX_HEAP_ID_OFFSET == hirsel_lir::runtime_abi::CTX_FUEL_OFFSET + 8
+    );
+
     /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word loses one,
     /// and a negative result ends the run in `hirsel_rt_v2_fuel_exhausted`.
     fn charge_fuel(&mut self) -> Emitted {

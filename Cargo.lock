@@ -779,6 +779,7 @@ name = "hirsel-llvm"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
+ "hirsel-cranelift",
  "hirsel-graph",
  "hirsel-guard",
  "hirsel-heapcheck",

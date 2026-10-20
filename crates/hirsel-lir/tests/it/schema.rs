@@ -2018,6 +2018,12 @@ fn runtime_declarations_match_the_landed_c_header() {
         ("CTX_IDLE_SLABS_OFFSET", runtime_abi::CTX_IDLE_SLABS_OFFSET),
         ("CTX_PAGES_OFFSET", runtime_abi::CTX_PAGES_OFFSET),
         ("CTX_FUEL_OFFSET", runtime_abi::CTX_FUEL_OFFSET),
+        ("CTX_HEAP_ID_OFFSET", runtime_abi::CTX_HEAP_ID_OFFSET),
+        ("PAGE_OWNER_OFFSET", runtime_abi::PAGE_OWNER_OFFSET),
+        (
+            "PAGE_XTHREAD_FREE_OFFSET",
+            runtime_abi::PAGE_XTHREAD_FREE_OFFSET,
+        ),
         ("POOL_COUNT", runtime_abi::POOL_COUNT),
         ("PAGE_FREE_OFFSET", runtime_abi::PAGE_FREE_OFFSET),
         ("PAGE_LIVE_OFFSET", runtime_abi::PAGE_LIVE_OFFSET),

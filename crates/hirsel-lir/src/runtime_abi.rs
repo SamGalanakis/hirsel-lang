@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 25;
+pub const ABI_VERSION: u32 = 26;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
@@ -117,9 +117,17 @@ pub const POOL_COUNT: u64 = 64;
 /// code subtracts one at each fuel point and calls `hirsel_rt_v2_fuel_exhausted` when the
 /// result is negative. A run without a fuel budget starts it at `i64::MAX`.
 pub const CTX_FUEL_OFFSET: u64 = CTX_PAGES_OFFSET + 8 * POOL_COUNT;
+/// After the fuel word, the `u32` id of the running worker's heap (runtime ABI 26). A page's
+/// `u32` owner at [`PAGE_OWNER_OFFSET`] is its heap's id: compiled code frees a small block
+/// inline only on a page whose owner equals it, and sends any other to `hirsel_rt_v2_free`,
+/// which publishes it on the page's [`PAGE_XTHREAD_FREE_OFFSET`] list for its owner.
+pub const CTX_HEAP_ID_OFFSET: u64 = CTX_FUEL_OFFSET + 8;
 pub const PAGE_FREE_OFFSET: u64 = 16;
 pub const PAGE_LIVE_OFFSET: u64 = 24;
 pub const PAGE_LOCAL_FREE_OFFSET: u64 = 72;
+pub const PAGE_OWNER_OFFSET: u64 = 96;
+pub const PAGE_XTHREAD_FREE_OFFSET: u64 = 104;
+const _: () = assert!(CTX_HEAP_ID_OFFSET == 536);
 
 /// The small pool serving `extent` payload bytes at `align`: the size class (16-byte steps to
 /// 256 bytes, then quarter powers of two to [`SMALL_MAX`]), offset by the class count when the
@@ -476,6 +484,12 @@ pub enum RuntimeEntry {
     ExitReport,
     /// A fuel point found the run's fuel spent: the run ends with BudgetExceeded.
     FuelExhausted,
+    /// A context for a new worker of a run, on its own heap (runtime ABI 26).
+    WorkerCreate,
+    /// A worker retires; its heap stays in the run, orphaned.
+    WorkerRetire,
+    /// A worker's scheduling point: collect storage other workers freed to its heap.
+    WorkerCollect,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -547,7 +561,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 71] = [
+    pub const ALL: [RuntimeEntry; 74] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -619,6 +633,9 @@ impl RuntimeEntry {
         Self::CallbackFailed,
         Self::ExitReport,
         Self::FuelExhausted,
+        Self::WorkerCreate,
+        Self::WorkerRetire,
+        Self::WorkerCollect,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1058,6 +1075,13 @@ impl RuntimeEntry {
                 },
             ),
             Self::FuelExhausted => ("hirsel_rt_v2_fuel_exhausted", VOID, const { &[CTX] }),
+            Self::WorkerCreate => (
+                "hirsel_rt_v2_worker_create",
+                ptr(N::Ctx, 1),
+                const { &[CTX] },
+            ),
+            Self::WorkerRetire => ("hirsel_rt_v2_worker_retire", VOID, const { &[CTX] }),
+            Self::WorkerCollect => ("hirsel_rt_v2_worker_collect", VOID, const { &[CTX] }),
         };
         RuntimeDeclaration {
             entry: self,
@@ -1179,4 +1203,7 @@ snapshot_enum!(RuntimeEntry {
     CallbackFailed,
     ExitReport,
     FuelExhausted,
+    WorkerCreate,
+    WorkerRetire,
+    WorkerCollect,
 });

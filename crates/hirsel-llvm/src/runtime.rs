@@ -104,7 +104,10 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::CallbackFailed
         | R::ForeignViolation
         | R::ExitReport
-        | R::FuelExhausted => (MemoryEffects::ReadWrite, false, &[]),
+        | R::FuelExhausted
+        | R::WorkerCreate
+        | R::WorkerRetire
+        | R::WorkerCollect => (MemoryEffects::ReadWrite, false, &[]),
         // The calling thread's foreign context cell: no block memory, no callbacks.
         R::ForeignEnter | R::ForeignLeave | R::CallbackContext => {
             (MemoryEffects::ReadWrite, true, &[])
@@ -549,11 +552,22 @@ fn idle_slabs<'m>(
 }
 
 /// T16 Free of a dead block (its last credit consumed, its fields released) under the compiled
-/// fast path contract: a small block goes on its page's `local_free` list, and a page left
-/// with no live block joins the idle count. A first deferred free of a page (its `local_free`
-/// list is empty, so the page may have to join its class's available list), a large block,
+/// fast path contract: a small block of the running worker's heap goes on its page's
+/// `local_free` list, and a page left with no live block joins the idle count. A first
+/// deferred free of a page (its `local_free` list is empty, so the page may have to join its
+/// class's available list), a block of another worker's heap (its page's owner is not the
+/// context's heap id, runtime ABI 26: the runtime publishes it to its owner), a large block,
 /// and every block while the context's inline-free flag is zero (diagnostic mode, measurement
 /// builds, the system allocator) go to `hirsel_rt_v2_free`.
+// The inline free reads the page owner and the context's heap id at their runtime ABI 26
+// places: right after the fuel word, and after the page's last runtime-only word.
+const _: () = assert!(
+    hirsel_lir::runtime_abi::CTX_HEAP_ID_OFFSET == hirsel_lir::runtime_abi::CTX_FUEL_OFFSET + 8
+);
+const _: () = assert!(
+    hirsel_lir::runtime_abi::PAGE_OWNER_OFFSET > hirsel_lir::runtime_abi::PAGE_LOCAL_FREE_OFFSET
+);
+
 fn free<'m>(
     builder: &crate::context::Builder<'m>,
     function: Function<'m>,
@@ -563,8 +577,8 @@ fn free<'m>(
 ) {
     use crate::context::{BinOp, Cast, IntPredicate};
     use hirsel_lir::runtime_abi::{
-        CTX_FREE_INLINE_OFFSET, KIND_SHIFT, KIND_SMALL, LAYOUT_OFFSET, PAGE_LIVE_OFFSET,
-        PAGE_LOCAL_FREE_OFFSET, SLAB_SIZE,
+        CTX_FREE_INLINE_OFFSET, CTX_HEAP_ID_OFFSET, KIND_SHIFT, KIND_SMALL, LAYOUT_OFFSET,
+        PAGE_LIVE_OFFSET, PAGE_LOCAL_FREE_OFFSET, PAGE_OWNER_OFFSET, SLAB_SIZE,
     };
     let module = builder.module();
     let (ptr, i32_ty, i64_ty) = (module.ptr_type(), module.int_type(32), module.int_type(64));
@@ -590,8 +604,14 @@ fn free<'m>(
     let page = builder.cast(Cast::IntToPtr, base, ptr);
     let local_at = builder.offset(page, word(PAGE_LOCAL_FREE_OFFSET));
     let head = builder.load(ptr, local_at, 8);
+    let owner = builder.load(i32_ty, builder.offset(page, word(PAGE_OWNER_OFFSET)), 4);
+    let heap = builder.load(i32_ty, builder.offset(context, word(CTX_HEAP_ID_OFFSET)), 4);
     builder.cold_cond_br(
-        builder.icmp(IntPredicate::Eq, head, module.const_zero(ptr)),
+        builder.binary(
+            BinOp::Or,
+            builder.icmp(IntPredicate::Eq, head, module.const_zero(ptr)),
+            builder.icmp(IntPredicate::Ne, owner, heap),
+        ),
         slow,
         fast,
     );

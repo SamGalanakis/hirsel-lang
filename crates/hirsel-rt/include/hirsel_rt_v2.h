@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 25
+#define HIRSEL_RT_V2_ABI_VERSION 26
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -98,7 +98,9 @@ extern "C" {
  *          (storage kind small).
  *   free:  of a dead block (glue's count was COUNT_UNIQUE) when the u32 at CTX_FREE_INLINE_OFFSET is
  *          nonzero and the descriptor's kind bits are KIND_SMALL: page = header & ~(SLAB_SIZE - 1);
- *          head = page->local_free; unless head is nonnull, hirsel_rt_v2_free; otherwise
+ *          head = page->local_free; unless head is nonnull and the u32 page->owner (at
+ *          PAGE_OWNER_OFFSET) equals the u32 heap id at CTX_HEAP_ID_OFFSET, hirsel_rt_v2_free
+ *          (a block of another worker's heap is published to its owner); otherwise
  *          *(void **)header = head; page->local_free = header; page->live -= 1, and if that
  *          leaves it 0 the idle slab count gains one.
  * A zero dup bound, a zero free flag and null pages (diagnostic mode, measurement builds, the
@@ -113,9 +115,19 @@ extern "C" {
  * build's code subtracts one at each fuel point and calls hirsel_rt_v2_fuel_exhausted when
  * the result is negative; a run without a fuel budget starts it at INT64_MAX. */
 #define HIRSEL_RT_V2_CTX_FUEL_OFFSET 528
+/* Runtime ABI 26: after the fuel word, the u32 id of the heap whose pages the context holds
+ * (the running worker's). A slab's u32 owner is its heap's id; its xthread_free word is the
+ * runtime's list of blocks other heaps freed, which compiled code never touches. */
+#define HIRSEL_RT_V2_CTX_HEAP_ID_OFFSET 536
 #define HIRSEL_RT_V2_PAGE_FREE_OFFSET 16
 #define HIRSEL_RT_V2_PAGE_LIVE_OFFSET 24
 #define HIRSEL_RT_V2_PAGE_LOCAL_FREE_OFFSET 72
+#define HIRSEL_RT_V2_PAGE_OWNER_OFFSET 96
+#define HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET 104
+_Static_assert(HIRSEL_RT_V2_CTX_HEAP_ID_OFFSET == HIRSEL_RT_V2_CTX_FUEL_OFFSET + 8,
+               "the heap id follows the fuel word");
+_Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_OFFSET + 8,
+               "the xthread list follows the owner id and its padding");
 
 #define HIRSEL_RT_V2_DOMAIN_HEAP 1
 #define HIRSEL_RT_V2_DOMAIN_STATIC 2
@@ -350,6 +362,13 @@ void hirsel_rt_v2_task_exit(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_audit *out);
 void hirsel_rt_v2_ctx_stats(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_stats *out);
 #endif
 void hirsel_rt_v2_trim(hirsel_rt_v2_ctx *ctx);
+/* Workers (runtime ABI 26, src/heaps.rs): a context for a new worker of ctx's run, on a heap of
+ * its own; its retirement, after which its heap stays in the run, orphaned, until the run ends;
+ * and a worker's scheduling point, which takes back the storage other workers freed to its heap
+ * and collects orphaned heaps. A free of another heap's block publishes it to its owner. */
+hirsel_rt_v2_ctx *hirsel_rt_v2_worker_create(hirsel_rt_v2_ctx *ctx);
+void hirsel_rt_v2_worker_retire(hirsel_rt_v2_ctx *ctx);
+void hirsel_rt_v2_worker_collect(hirsel_rt_v2_ctx *ctx);
 
 /* Launch (src/launch.rs): run a compiled `main(rt: Io, args: Args) -> Result[(), E]` entry at
  * the Hirsel ABI whose inline result is result_size bytes; returns the process exit code. */

@@ -104,6 +104,7 @@ Invariants and boundary:
   code pops a constant small request off its pool's page, adds a holder below the dup bound and
   pushes a dead small block onto its page's `local_free` list, keeping the page's live count
   and the idle slab count exact; a null page, an empty list, a page's first deferred free, a
+  page of another worker's heap (its `owner` is not the context's `heap_id`, runtime ABI 26), a
   saturated count and a large block take the runtime entry. Diagnostic mode, measurement
   archives and the system allocator keep the bound and flag zero and the pages null, so every
   operation reaches its entry there; the memcheck archive keeps the bound but zeroes the flag
@@ -612,19 +613,32 @@ is the context `hirsel_rt_v2_ctx_create` returns, a child's lies at the top of i
 The context splits three ways:
 
 - **`TaskCtx`, the task's own:** at offset 0 its view of the worker's compiled words (pages,
-  idle slabs, dup bound, fuel) with the worker and heap epoch the pages were copied at; its
+  idle slabs, dup bound, fuel, heap id) with the heap and heap epoch the pages were copied at; its
   failure chain with spawn paths and isolate scratch; its finalizer shield; its release
   worklist; its innermost region; its freeze/thaw stack; its foreign scope while switched out.
-- **`Worker`, one per thread that runs Hirsel code:** the heap (size classes, large blocks,
-  slabs), the region pool, idle fiber stacks and measurement. Runtime code reaches it only
+- **`Worker`, one per thread that runs Hirsel code:** its heap (size classes, large blocks,
+  slabs, region pool and measurement) and idle fiber stacks. Runtime code reaches it only
   through `TaskCtx::worker` and `TaskCtx::heap`, which borrow the context; the suspending
   scheduler entries take `&mut TaskCtx`, so no worker borrow lives across a suspension.
 - **`RunShared`:** the scheduler, channels and synchronizers, the Io binding, the launcher's
-  driver, the failure table, the count bound, the hash seed and the scheduler policy. The
-  binding's Path identities and launch arguments (`paths::Names`) are shared with it when the
-  binding is bound, so interning a Path, ordering two and reading an argument never reach the
-  binding: the intern table is a concurrent service behind one mutex, after lasso's
-  `ThreadedRodeo`.
+  driver, the failure table, the count bound, the hash seed, the scheduler policy and the heap
+  registry. The binding's Path identities and launch arguments (`paths::Names`) are shared
+  with it when the binding is bound, so interning a Path, ordering two and reading an argument
+  never reach the binding: the intern table is a concurrent service behind one mutex, after
+  lasso's `ThreadedRodeo`.
+
+Heaps (design §6 Heaps, `heaps.rs`, `remote.rs`) live in the run's registry until the run
+ends, each with a nonzero id that its slabs, large blocks and region segments carry. A free on
+another worker's heap publishes the storage to its owner instead of touching the owner's
+lists, as mimalloc's thread-free lists do: a small block on its slab's `xthread` list (whose
+low bit marks the slab queued on its heap), a large block or region segment on the owner
+heap's return list. The owner collects at its allocation slow path, trim points and every
+switch-in; a slab goes back only when it holds no live block and no published one. A retiring
+worker (`hirsel_rt_v2_worker_retire`) orphans its heap: any live worker's scheduling point
+adopts it for one collection, and a new worker (`hirsel_rt_v2_worker_create`) re-adopts an
+orphan before it creates a heap. Diagnostic registries sit per heap behind a lock, and a state
+lookup searches the run's heaps. `proofs/heaps` model-checks the lists with loom; the
+measurement archive counts `remote_frees`, `remote_collected` and `heap_adoptions`.
 
 A switch moves the worker from one task to the next: switch-out folds the view's idle-slab and
 fuel counters back into the worker and saves the thread's foreign scope; switch-in copies the
@@ -982,7 +996,10 @@ reset/reuse retains the same allocation. The remaining rows are `KEY VALUE`:
 - `reuse_hits`, `reuse_misses`: non-null token reuse and null-token allocation;
 - `live_bytes`, `peak_live_bytes`: live/draining/raw heap payload capacity bytes;
 - `region_high_water_bytes`, `region_pool_high_water_bytes`: simultaneously lent
-  and idle segment bytes, including segment headers/unused capacity; and
+  and idle segment bytes, including segment headers/unused capacity;
+- `remote_frees`, `remote_collected`, `heap_adoptions`: frees of another worker's block, large
+  block or segment, what this heap's collector took back, and orphaned heaps a new worker took
+  over (design §5 headroom row "Root traffic; remote frees"); and
 - `arena_high_water_bytes unavailable`: native arenas are dependency-owned.
 
 The report snapshots before forced task-exit reclamation, so an unbalanced run

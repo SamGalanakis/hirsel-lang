@@ -12,6 +12,7 @@ mod native;
 mod noalias;
 mod once_capture;
 mod ready;
+mod remote_free;
 mod root_ssa;
 mod sequence_capacity;
 #[path = "../support/mod.rs"]

@@ -658,6 +658,12 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_ctx_destroy", Admission),
     entry("hirsel_rt_v2_task_exit", Admission),
     entry("hirsel_rt_v2_trim", Local),
+    // A worker's creation and retirement (design §6 Heaps) run outside every task, where W1's
+    // pool starts and stops threads; a scheduling point's collection of storage other workers
+    // freed is a concurrent, unobservable service.
+    entry("hirsel_rt_v2_worker_create", Admission),
+    entry("hirsel_rt_v2_worker_retire", Admission),
+    entry("hirsel_rt_v2_worker_collect", Concurrent),
     // copy.rs
     entry("hirsel_rt_v2_unique_copy", Local),
     entry("hirsel_rt_v2_unique_copy_value", Local),
@@ -907,6 +913,11 @@ pub const INLINE: &[Inline] = &[
         word: "CTX_FUEL_OFFSET",
         locality: Local,
         effect: "the fuel decrement",
+    },
+    Inline {
+        word: "CTX_HEAP_ID_OFFSET",
+        locality: Local,
+        effect: "inline free's owner check: a block of another worker's heap goes to the runtime",
     },
     Inline {
         word: "COUNT_OFFSET",

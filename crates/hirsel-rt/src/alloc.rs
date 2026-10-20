@@ -15,8 +15,16 @@
 //! A slab with no live block is idle. At each trim point (region exit and the explicit trim
 //! entry) idle slabs above the context's idle cap go back to the backing allocator; free blocks
 //! inside a slab that still holds a live block are not returnable and are reported as
-//! fragmentation. Task exit returns every slab and large block. Nothing here is shared between
-//! tasks (OWN-6): the allocator lives in its task's run context.
+//! fragmentation. Task exit returns every slab and large block.
+//!
+//! Each worker has its own heap, and heaps live in their run's [`crate::heaps::HeapRegistry`]
+//! until the run ends (design §6 Heaps). A slab, large block and region segment carries its
+//! heap's id, and a free on another heap publishes the storage to its owner instead of touching
+//! the owner's lists ([`crate::remote`]): a small block on its slab's `xthread` list, a large
+//! block or segment on the owner heap's return list. The owner collects at its slow paths, trim
+//! points and scheduling points; a slab goes back only when it holds no live block and no
+//! published one. Semantic destruction always runs on the releasing task; only storage
+//! reclamation is deferred.
 //!
 //! The `system-allocator` archive has no slabs. A block of a fixed-size layout
 //! ([`crate::LAYOUT_NO_EXTENT`] without [`crate::release::LAYOUT_WIDE_CURSOR`]), at most
@@ -38,6 +46,7 @@ use crate::context::TaskCtx;
 use crate::memcheck;
 use crate::memcheck::SLAB_REDZONE;
 use crate::release::check_layout;
+use crate::remote::{self, Link, Owner, Page, Returns, Xthread};
 use crate::{STATUS_OK, environmental, fault};
 
 #[cfg(not(target_pointer_width = "64"))]
@@ -441,6 +450,39 @@ pub(crate) struct Slab {
     /// Untouched storage, extended in sequential batches of at most 8 KiB.
     bump: *mut u8,
     end: *mut u8,
+    /// The id of the heap whose lists this slab is on (runtime ABI 26): a free from another
+    /// heap publishes to `xthread` instead.
+    owner: u32,
+    _reserved: u32,
+    /// Blocks other heaps freed, with the queued flag (`crate::remote`).
+    xthread: Xthread<Header>,
+    /// The next slab on its heap's queue of slabs with published blocks.
+    queue_next: *mut Slab,
+}
+
+impl Link for Header {
+    unsafe fn set_next(node: *mut Header, next: *mut Header) {
+        unsafe { write_free(node, next) }
+    }
+    unsafe fn next(node: *mut Header) -> *mut Header {
+        unsafe { free_next(node) }
+    }
+}
+
+impl Link for Slab {
+    unsafe fn set_next(node: *mut Slab, next: *mut Slab) {
+        unsafe { (*node).queue_next = next }
+    }
+    unsafe fn next(node: *mut Slab) -> *mut Slab {
+        unsafe { (*node).queue_next }
+    }
+}
+
+impl Page for Slab {
+    type Block = Header;
+    unsafe fn xthread<'a>(page: *mut Slab) -> &'a Xthread<Header> {
+        unsafe { &(*page).xthread }
+    }
 }
 
 const SLAB_HEADER: usize = 128;
@@ -451,9 +493,15 @@ pub const CTX_FREE_INLINE_OFFSET: usize = std::mem::offset_of!(Compiled, free_in
 pub const CTX_IDLE_SLABS_OFFSET: usize = std::mem::offset_of!(Compiled, idle_slabs);
 pub const CTX_PAGES_OFFSET: usize = std::mem::offset_of!(Compiled, pages);
 pub const CTX_FUEL_OFFSET: usize = std::mem::offset_of!(Compiled, fuel);
+pub const CTX_HEAP_ID_OFFSET: usize = std::mem::offset_of!(Compiled, heap_id);
 pub const PAGE_FREE_OFFSET: usize = std::mem::offset_of!(Slab, free);
 pub const PAGE_LIVE_OFFSET: usize = std::mem::offset_of!(Slab, live);
 pub const PAGE_LOCAL_FREE_OFFSET: usize = std::mem::offset_of!(Slab, local_free);
+pub const PAGE_OWNER_OFFSET: usize = std::mem::offset_of!(Slab, owner);
+pub const PAGE_XTHREAD_FREE_OFFSET: usize = std::mem::offset_of!(Slab, xthread);
+const _: () = assert!(CTX_HEAP_ID_OFFSET == CTX_FUEL_OFFSET + 8);
+const _: () = assert!(PAGE_OWNER_OFFSET == 96 && PAGE_XTHREAD_FREE_OFFSET == 104);
+const _: () = assert!(size_of::<Xthread<Header>>() == 8);
 const _: () = assert!(std::mem::offset_of!(View, compiled) == 0);
 /// Size-class pools: each class at 8-byte and at 16-byte alignment.
 pub const POOL_COUNT: usize = CLASS_COUNT * 2;
@@ -468,8 +516,21 @@ struct LargePrefix {
     align: u64,
     capacity: u64,
     shadow: u32,
+    /// The id of the heap whose large list holds this block.
+    owner: u32,
+    /// The next block on the owner heap's return list.
+    return_next: *mut LargePrefix,
     #[cfg(feature = "system-allocator")]
     allocation: *mut u8,
+}
+
+impl Link for LargePrefix {
+    unsafe fn set_next(node: *mut LargePrefix, next: *mut LargePrefix) {
+        unsafe { (*node).return_next = next }
+    }
+    unsafe fn next(node: *mut LargePrefix) -> *mut LargePrefix {
+        unsafe { (*node).return_next }
+    }
 }
 
 const LARGE_PREFIX: u64 = size_of::<LargePrefix>() as u64;
@@ -496,11 +557,60 @@ const EMPTY_CLASS: Class = Class {
     slabs: ptr::null_mut(),
 };
 
+/// A slab the diagnostic registry knows: live (its blocks' states are in the slab) or retired
+/// (its storage went back, and every block of it reads as `state`).
 struct SlabRecord {
-    state: std::cell::Cell<u8>,
+    state: u8,
     first: u32,
     stride: u32,
     slots: u32,
+}
+
+impl Diag {
+    /// The state byte of `block` if this registry knows it, and whether its record is live (an
+    /// allocated slab's, or a large or bare block's that is not free) rather than retired.
+    /// The pointer is valid while the registry stays locked.
+    unsafe fn find(&mut self, block: *mut Header) -> Option<(bool, *mut u8)> {
+        if let Some(state) = self.large_states.get_mut(&block.addr()) {
+            return Some((*state != STATE_FREE, state as *mut u8));
+        }
+        let slab = slab_of(block);
+        let record = self.slabs.get_mut(&slab.addr())?;
+        let delta = block
+            .addr()
+            .wrapping_sub(slab.addr() + record.first as usize);
+        if delta >= record.slots as usize * record.stride as usize
+            || !delta.is_multiple_of(record.stride as usize)
+        {
+            // A retired slab's memory may since back another heap's large block.
+            if record.state != STATE_LIVE {
+                return None;
+            }
+            fault("invalid slab slot");
+        }
+        if record.state == STATE_LIVE {
+            // SAFETY: an allocated slab's state array has a byte per slot.
+            Some((true, unsafe { (*slab).states.add(slot_of(slab, block)) }))
+        } else {
+            Some((false, &raw mut record.state))
+        }
+    }
+}
+
+/// A heap's diagnostic registries, behind its lock so a free on another heap can find a
+/// block's state (design §6 Heaps). Empty in production: only diagnostic mode records states,
+/// and only the system allocator's correctness and measurement archives list bare blocks.
+#[derive(Default)]
+struct Diag {
+    /// States of blocks outside slabs: large and bare blocks.
+    large_states: std::collections::BTreeMap<usize, u8>,
+    slabs: std::collections::BTreeMap<usize, SlabRecord>,
+    /// The live bare blocks.
+    #[cfg(all(
+        feature = "system-allocator",
+        any(feature = "diagnostic", feature = "measurement")
+    ))]
+    bare: std::collections::HashSet<usize>,
 }
 
 /// The words compiled code reads at fixed offsets from the task context (runtime ABI 4,
@@ -526,17 +636,21 @@ pub(crate) struct Compiled {
     /// fuel build's code subtracts one at each fuel point and calls
     /// `hirsel_rt_v2_fuel_exhausted` when the result is negative.
     pub(crate) fuel: i64,
+    /// The id of the heap whose pages these are (runtime ABI 26): compiled code frees a small
+    /// block inline only when its slab's `owner` equals it.
+    pub(crate) heap_id: u32,
+    _reserved: u32,
 }
 
 /// A task's copy of its worker's [`Compiled`] words, at the start of its context, and the
-/// worker and heap epoch whose pages it holds. Switching a task in on a worker ([`Heap::bind`])
+/// heap and heap epoch whose pages it holds. Switching a task in on a worker ([`Heap::bind`])
 /// copies the pages only when that stamp differs, and always hands over the counters; switching
 /// it out ([`Heap::unbind`]) folds them back. Only the bound view changes while its task runs:
 /// a slow path that moves a current page updates the worker's words and the view together.
 #[repr(C)]
 pub(crate) struct View {
     pub(crate) compiled: Compiled,
-    worker: u32,
+    heap: u32,
     epoch: u64,
 }
 
@@ -550,8 +664,10 @@ impl View {
                 idle_slabs: 0,
                 pages: [ptr::null_mut(); POOL_COUNT],
                 fuel: 0,
+                heap_id: 0,
+                _reserved: 0,
             },
-            worker: u32::MAX,
+            heap: 0,
             epoch: 0,
         }
     }
@@ -562,11 +678,25 @@ pub(crate) struct Heap {
     /// The worker's own [`Compiled`] words. While a task runs its bound view holds the live
     /// counters (`idle_slabs`, `fuel`); these hold them between tasks, and the pages always.
     compiled: Compiled,
-    /// The worker these pages belong to and their epoch, which every page change bumps.
-    worker: u32,
+    /// This heap's id in its run's registry (nonzero, never reused within the run), and the
+    /// epoch of its pages, which every page change bumps.
+    pub(crate) id: u32,
     epoch: u64,
-    /// The running task's view ([`Heap::bind`]).
+    /// The running task's view ([`Heap::bind`]), or [`Heap::parked`] while no task runs here.
     view: *mut View,
+    /// The view of a heap no task is bound to: its collector's, between tasks or once its
+    /// worker retired.
+    parked: View,
+    /// The worker collecting this heap (`crate::remote::Owner`).
+    pub(crate) owner: Owner,
+    /// Slabs with blocks other heaps freed, and large blocks other heaps freed.
+    queue: Returns<Slab>,
+    large_returns: Returns<LargePrefix>,
+    /// The worker's region segment pool, which lives and returns with its heap.
+    pub(crate) regions: crate::region::RegionPool,
+    /// The run's registry, through which a free finds another heap; null for a heap outside
+    /// any run (unit tests), all of whose storage is its own.
+    registry: *const crate::heaps::HeapRegistry,
     /// The linked program's layout descriptors, by index.
     layouts: Box<[*const crate::Layout]>,
     /// Each layout's bare blocks, by index, so a bare allocation reads one entry.
@@ -574,15 +704,7 @@ pub(crate) struct Heap {
     bare_layouts: Box<[BareLayout]>,
     classes: [Class; POOL_COUNT],
     large: *mut LargePrefix,
-    /// Diagnostic states of blocks outside slabs: large and bare blocks.
-    large_states: Option<std::collections::BTreeMap<usize, std::cell::Cell<u8>>>,
-    /// The live bare blocks, which only the correctness and measurement archives list.
-    #[cfg(all(
-        feature = "system-allocator",
-        any(feature = "diagnostic", feature = "measurement")
-    ))]
-    bare: std::collections::HashSet<usize>,
-    slab_records: Option<std::collections::BTreeMap<usize, SlabRecord>>,
+    diag: std::sync::Mutex<Diag>,
     pub(crate) diagnostic: bool,
     pub(crate) idle_cap: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -594,7 +716,7 @@ pub(crate) struct Heap {
     #[cfg(feature = "measurement")]
     pub(crate) measurement: crate::measurement::Accounting,
     /// The run's memory budget, shared with its region pool.
-    pub(crate) meter: std::rc::Rc<crate::budget::Meter>,
+    pub(crate) meter: std::sync::Arc<crate::budget::Meter>,
 }
 
 #[inline]
@@ -677,6 +799,7 @@ impl Heap {
         diagnostic: bool,
         idle_cap: u64,
     ) -> Heap {
+        let meter = std::sync::Arc::<crate::budget::Meter>::default();
         Heap {
             compiled: Compiled {
                 dup_max: 0,
@@ -684,10 +807,18 @@ impl Heap {
                 idle_slabs: 0,
                 pages: [ptr::null_mut(); POOL_COUNT],
                 fuel: i64::MAX,
+                heap_id: 1,
+                _reserved: 0,
             },
-            worker: 0,
+            id: 1,
             epoch: 0,
             view: ptr::null_mut(),
+            parked: View::new(),
+            owner: Owner::new(0),
+            queue: Returns::new(),
+            large_returns: Returns::new(),
+            regions: crate::region::RegionPool::new(meter.clone(), 1),
+            registry: ptr::null(),
             // SAFETY: the run context validated every descriptor.
             #[cfg(feature = "system-allocator")]
             bare_layouts: layouts
@@ -697,13 +828,7 @@ impl Heap {
             layouts,
             classes: [EMPTY_CLASS; POOL_COUNT],
             large: ptr::null_mut(),
-            large_states: diagnostic.then(Default::default),
-            #[cfg(all(
-                feature = "system-allocator",
-                any(feature = "diagnostic", feature = "measurement")
-            ))]
-            bare: Default::default(),
-            slab_records: diagnostic.then(Default::default),
+            diag: Default::default(),
             diagnostic,
             idle_cap,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -714,8 +839,56 @@ impl Heap {
             backing_allocations: 0,
             #[cfg(feature = "measurement")]
             measurement: Default::default(),
-            meter: Default::default(),
+            meter,
         }
+    }
+
+    /// Make this heap the registry's `id`, collected by `worker`, charging the run's `meter`.
+    /// Called once, before any storage is taken.
+    pub(crate) fn join(
+        &mut self,
+        id: u32,
+        worker: u32,
+        registry: *const crate::heaps::HeapRegistry,
+        meter: std::sync::Arc<crate::budget::Meter>,
+    ) {
+        self.id = id;
+        self.compiled.heap_id = id;
+        self.owner = Owner::new(worker);
+        self.registry = registry;
+        self.regions = crate::region::RegionPool::new(meter.clone(), id);
+        self.meter = meter;
+    }
+
+    /// Bind the heap's own parked view: no task runs on it from here on, and its collector's
+    /// slow paths (local frees of collected blocks, trims) update the parked counters.
+    pub(crate) fn park(&mut self) {
+        let parked = &raw mut self.parked;
+        if !self.view.is_null() && self.view != parked {
+            self.unbind();
+        }
+        self.parked.compiled.pages = self.compiled.pages;
+        self.parked.compiled.idle_slabs = self.compiled.idle_slabs;
+        self.parked.compiled.fuel = self.compiled.fuel;
+        self.parked.compiled.heap_id = self.id;
+        self.parked.heap = self.id;
+        self.parked.epoch = self.epoch;
+        self.view = parked;
+    }
+
+    /// Bind the parked view without reading the bound one, which may be gone: run teardown.
+    pub(crate) fn forget_view(&mut self) {
+        self.parked.compiled.pages = self.compiled.pages;
+        self.view = &raw mut self.parked;
+    }
+
+    /// The heap with id `id` in this heap's run.
+    fn heap_of(&self, id: u32) -> *mut Heap {
+        if self.registry.is_null() {
+            fault("storage of another heap outside any run");
+        }
+        // SAFETY: the registry outlives every heap in it.
+        unsafe { (*self.registry).heap(id) }
     }
 
     /// The running task's compiled words.
@@ -733,13 +906,17 @@ impl Heap {
     /// `view` is a live task context's view that stays live while bound.
     #[inline]
     pub(crate) unsafe fn bind(&mut self, view: *mut View) {
+        if self.view == &raw mut self.parked {
+            self.unbind();
+        }
         // SAFETY: caller contract.
         let v = unsafe { &mut *view };
-        if v.worker != self.worker || v.epoch != self.epoch {
+        if v.heap != self.id || v.epoch != self.epoch {
             v.compiled.pages = self.compiled.pages;
             v.compiled.dup_max = self.compiled.dup_max;
             v.compiled.free_inline = self.compiled.free_inline;
-            v.worker = self.worker;
+            v.compiled.heap_id = self.id;
+            v.heap = self.id;
             v.epoch = self.epoch;
         }
         v.compiled.idle_slabs = self.compiled.idle_slabs;
@@ -879,61 +1056,59 @@ impl Heap {
     }
 
     pub(crate) fn forget_foreign_record(&mut self, address: usize) {
-        if let Some(states) = &mut self.large_states {
-            states.remove(&address);
+        if self.diagnostic {
+            self.diag().large_states.remove(&address);
         }
     }
 
-    pub(crate) unsafe fn state_ptr(&self, block: *mut Header) -> *mut u8 {
-        unsafe {
-            for pool in &self.classes {
-                let mut slab = pool.slabs;
-                while !slab.is_null() {
-                    let start = slab as usize + (*slab).first as usize;
-                    let delta = (block as usize).wrapping_sub(start);
-                    if delta < (*slab).slots as usize * (*slab).stride as usize {
-                        if !delta.is_multiple_of((*slab).stride as usize) {
-                            fault("invalid slab slot");
-                        }
-                        return (*slab).states.add(slot_of(slab, block));
-                    }
-                    slab = (*slab).next;
-                }
-            }
-            if let Some(state) = self
-                .large_states
-                .as_ref()
-                .and_then(|states| states.get(&block.addr()))
-            {
-                return state.as_ptr();
-            }
-            if let Some(record) = self
-                .slab_records
-                .as_ref()
-                .and_then(|records| records.get(&slab_of(block).addr()))
-            {
-                let delta = block
-                    .addr()
-                    .wrapping_sub(slab_of(block).addr() + record.first as usize);
-                if delta < record.slots as usize * record.stride as usize
-                    && delta.is_multiple_of(record.stride as usize)
-                {
-                    return record.state.as_ptr();
-                }
-                fault("invalid retired slab slot");
-            }
-            ptr::null_mut()
-        }
+    /// This heap's diagnostic registries.
+    fn diag(&self) -> std::sync::MutexGuard<'_, Diag> {
+        self.diag
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    /// This heap, then the other heaps of its run: where a block's diagnostic state may be.
+    /// It allocates nothing, since releases run under allocation-counting tests.
+    fn related_heaps(&self) -> impl Iterator<Item = *const Heap> + '_ {
+        let this = self as *const Heap;
+        // SAFETY: the registry outlives every heap in it.
+        let others = unsafe { self.registry.as_ref() }
+            .into_iter()
+            .flat_map(|registry| registry.heaps())
+            .map(|heap| heap.cast_const())
+            .filter(move |&heap| heap != this);
+        std::iter::once(this).chain(others)
+    }
+
+    /// Run `f` on the diagnostic state byte of `block`, under the lock of the heap whose
+    /// registry holds it; None when no heap of the run knows the block. A slab or large block
+    /// that a heap gave back and another heap took again at the same address may still have a
+    /// retired record in the first heap, so a live record anywhere wins over a retired one.
+    unsafe fn with_state<R>(&self, block: *mut Header, f: impl FnOnce(*mut u8) -> R) -> Option<R> {
+        let mut retired = None;
+        for heap in self.related_heaps() {
+            // SAFETY: the run's heaps are live.
+            let mut diag = unsafe { (*heap).diag() };
+            match unsafe { diag.find(block) } {
+                Some((true, state)) => return Some(f(state)),
+                Some((false, _)) if retired.is_none() => retired = Some(heap),
+                _ => {}
+            }
+        }
+        let heap = retired?;
+        // SAFETY: as above.
+        let mut diag = unsafe { (*heap).diag() };
+        let (_, state) = unsafe { diag.find(block) }?;
+        Some(f(state))
+    }
+
     pub(crate) unsafe fn state(&self, block: *mut Header) -> u8 {
         unsafe {
-            let state = self.state_ptr(block);
-            if !state.is_null() {
-                state.read()
-            } else if (*block).domain() == DOMAIN_STATIC {
-                STATE_LIVE
-            } else {
-                fault("block does not belong to the context");
+            match self.with_state(block, |state| state.read()) {
+                Some(state) => state,
+                None if (*block).domain() == DOMAIN_STATIC => STATE_LIVE,
+                None => fault("block does not belong to the context"),
             }
         }
     }
@@ -949,11 +1124,9 @@ impl Heap {
     #[inline(never)]
     unsafe fn write_state(&self, block: *mut Header, state: u8) {
         unsafe {
-            let slot = self.state_ptr(block);
-            if slot.is_null() {
+            if self.with_state(block, |slot| slot.write(state)).is_none() {
                 fault("block does not belong to the context");
             }
-            slot.write(state);
         }
     }
 
@@ -984,7 +1157,7 @@ impl Heap {
             }
         }
         #[cfg(feature = "system-allocator")]
-        for &block in &self.bare {
+        for &block in &self.diag().bare {
             blocks += 1;
             // SAFETY: a listed bare block is live or raw, with its descriptor index.
             bytes += unsafe { self.capacity(block as *const Header) };
@@ -1055,9 +1228,11 @@ impl Heap {
     fn list_bare(&mut self, block: *mut Header, capacity: u64) {
         self.record_backing_allocation();
         self.large_bytes += HEADER_SIZE as u64 + capacity;
-        self.bare.insert(block.addr());
-        if let Some(states) = &mut self.large_states {
-            states.insert(block.addr(), std::cell::Cell::new(STATE_FREE));
+        let diagnostic = self.diagnostic;
+        let mut diag = self.diag();
+        diag.bare.insert(block.addr());
+        if diagnostic {
+            diag.large_states.insert(block.addr(), STATE_FREE);
         }
     }
 
@@ -1156,11 +1331,17 @@ impl Heap {
     #[inline(never)]
     unsafe fn refill(&mut self, class: usize) -> *mut Header {
         unsafe {
-            let state = &mut self.classes[class];
-            let mut slab = state.current;
-            if !slab.is_null() && page_refill(slab) {
-                return page_pop(slab);
+            self.collect();
+            let mut slab = self.classes[class].current;
+            if !slab.is_null() {
+                // mimalloc's `_mi_page_free_collect`: the current page's published blocks
+                // join its local frees before the page counts as exhausted.
+                self.collect_page(slab);
+                if page_refill(slab) {
+                    return page_pop(slab);
+                }
             }
+            let state = &mut self.classes[class];
             slab = state.available;
             if slab.is_null() {
                 self.new_slab(class);
@@ -1215,11 +1396,11 @@ impl Heap {
         } else {
             ptr::null_mut()
         };
-        let state = &mut self.classes[class];
+        let next = self.classes[class].slabs;
         // SAFETY: `base` is a fresh slab.
         unsafe {
             slab.write(Slab {
-                next: state.slabs,
+                next,
                 available: ptr::null_mut(),
                 free: ptr::null_mut(),
                 live: 0,
@@ -1235,12 +1416,16 @@ impl Heap {
                 local_free: ptr::null_mut(),
                 bump: base.wrapping_add(first),
                 end,
+                owner: self.id,
+                _reserved: 0,
+                xthread: Xthread::new(),
+                queue_next: ptr::null_mut(),
             });
-            if let Some(records) = &mut self.slab_records {
-                records.insert(
+            if self.diagnostic {
+                self.diag().slabs.insert(
                     slab.addr(),
                     SlabRecord {
-                        state: std::cell::Cell::new(STATE_LIVE),
+                        state: STATE_LIVE,
                         first: first as u32,
                         stride: stride as u32,
                         slots: slots as u32,
@@ -1248,7 +1433,7 @@ impl Heap {
                 );
             }
         }
-        state.slabs = slab;
+        self.classes[class].slabs = slab;
         self.set_current(class, slab);
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
@@ -1303,6 +1488,8 @@ impl Heap {
                 align,
                 capacity,
                 shadow: 0,
+                owner: self.id,
+                return_next: ptr::null_mut(),
                 #[cfg(feature = "system-allocator")]
                 allocation,
             });
@@ -1316,8 +1503,8 @@ impl Heap {
                 .write(prefix);
             (*block).descriptor = KIND_LARGE << KIND_SHIFT;
         }
-        if let Some(states) = &mut self.large_states {
-            states.insert(block.addr(), std::cell::Cell::new(STATE_FREE));
+        if self.diagnostic {
+            self.diag().large_states.insert(block.addr(), STATE_FREE);
         }
         self.large = prefix;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -1379,7 +1566,12 @@ impl Heap {
     ))]
     #[inline(never)]
     unsafe fn unlist_bare(&mut self, block: *mut Header) {
-        if !self.bare.remove(&block.addr()) {
+        // A bare block freed on another heap is listed by the heap that took it.
+        let listed = self.related_heaps().any(|heap| {
+            // SAFETY: the run's heaps are live.
+            unsafe { (*heap).diag().bare.remove(&block.addr()) }
+        });
+        if !listed {
             fault("a bare block is not listed by its heap");
         }
         // SAFETY: the block is live or raw, with its descriptor index.
@@ -1393,11 +1585,24 @@ impl Heap {
     #[inline(always)]
     pub(crate) unsafe fn free_small(&mut self, block: *mut Header) {
         unsafe {
+            let slab = slab_of(block);
+            if (*slab).owner != self.id {
+                return self.free_remote(slab, block);
+            }
             #[cfg(feature = "measurement")]
             self.measurement.free((*block).capacity());
-            let slab = slab_of(block);
             #[cfg(feature = "memcheck")]
             memcheck::pool_free(slab.cast(), block.cast());
+            self.free_local(slab, block);
+        }
+    }
+
+    /// Put the dead `block` on its slab's `local_free` list: a free on this heap, or a block
+    /// another heap published that this heap's collector took.
+    #[cfg(not(feature = "system-allocator"))]
+    #[inline(always)]
+    unsafe fn free_local(&mut self, slab: *mut Slab, block: *mut Header) {
+        unsafe {
             let head = (*slab).local_free;
             write_free(block, head);
             (*slab).local_free = block;
@@ -1415,13 +1620,109 @@ impl Heap {
             }
         }
     }
+
+    /// Free a block of another heap's slab: publish it to the owner (`crate::remote`).
+    #[cfg(not(feature = "system-allocator"))]
+    #[cold]
+    #[inline(never)]
+    unsafe fn free_remote(&mut self, slab: *mut Slab, block: *mut Header) {
+        unsafe {
+            #[cfg(feature = "measurement")]
+            {
+                self.measurement.free((*block).capacity());
+                self.measurement.remote_frees += 1;
+            }
+            #[cfg(feature = "memcheck")]
+            memcheck::pool_free(slab.cast(), block.cast());
+            let owner = self.heap_of((*slab).owner);
+            remote::free_remote(&(*owner).queue, slab, block);
+        }
+    }
+
+    /// Collect what other heaps published to this one: blocks of its slabs, its large blocks
+    /// and its region segments. Only this heap's collector calls it (`crate::remote::Owner`).
+    pub(crate) fn collect(&mut self) {
+        #[cfg(not(feature = "system-allocator"))]
+        if !self.queue.is_empty() {
+            let queue: *const Returns<Slab> = &self.queue;
+            // SAFETY: this is the heap's collector, and the queue lives as long as the heap.
+            let _collected =
+                unsafe { remote::collect(&*queue, |slab, block| self.free_local(slab, block)) };
+            #[cfg(feature = "measurement")]
+            {
+                self.measurement.remote_collected += _collected;
+            }
+        }
+        if !self.large_returns.is_empty() {
+            let mut prefix = self.large_returns.take();
+            while !prefix.is_null() {
+                // SAFETY: a returned large block is this heap's, freed once by its releaser.
+                unsafe {
+                    let next = LargePrefix::next(prefix);
+                    self.release_large_block(prefix);
+                    prefix = next;
+                }
+                #[cfg(feature = "measurement")]
+                {
+                    self.measurement.remote_collected += 1;
+                }
+            }
+        }
+        if !self.regions.returns.is_empty() {
+            let _collected = self.regions.collect();
+            #[cfg(feature = "measurement")]
+            {
+                self.measurement.remote_collected += _collected;
+            }
+        }
+    }
+
+    /// The direct collection of `slab`, a page this heap allocates from: its published blocks
+    /// join its local frees. Its queued flag stays for the queue's collection to clear.
+    #[cfg(not(feature = "system-allocator"))]
+    unsafe fn collect_page(&mut self, slab: *mut Slab) {
+        unsafe {
+            let chain = (*slab).xthread.take();
+            if !chain.is_null() {
+                let _collected =
+                    remote::drain(slab, chain, &mut |slab, block| self.free_local(slab, block));
+                #[cfg(feature = "measurement")]
+                {
+                    self.measurement.remote_collected += _collected;
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "system-allocator")]
+    unsafe fn collect_page(&mut self, _slab: *mut Slab) {}
+
     #[cold]
     #[inline(never)]
     pub(crate) unsafe fn free_large(&mut self, block: *mut Header) {
-        // SAFETY: `block` is a large block of this heap; its prefix precedes it.
+        // SAFETY: `block` is a large block; its prefix precedes it.
         unsafe {
-            let align = (*block).align();
             let prefix = (*block).large_prefix();
+            #[cfg(feature = "measurement")]
+            self.measurement.free((*prefix).capacity);
+            if (*prefix).owner != self.id {
+                // Another heap's: publish it to its owner's return list.
+                #[cfg(feature = "measurement")]
+                {
+                    self.measurement.remote_frees += 1;
+                }
+                (*self.heap_of((*prefix).owner)).large_returns.push(prefix);
+                return;
+            }
+            self.release_large_block(prefix);
+        }
+    }
+
+    /// Unlink this heap's large block behind `prefix` and give its storage back.
+    unsafe fn release_large_block(&mut self, prefix: *mut LargePrefix) {
+        // SAFETY: `prefix` is a large block of this heap.
+        unsafe {
+            let align = (*prefix).align;
             let total = (*prefix).total;
             if (*prefix).prev.is_null() {
                 self.large = (*prefix).next;
@@ -1435,8 +1736,6 @@ impl Heap {
             {
                 self.large_bytes -= total;
             }
-            #[cfg(feature = "measurement")]
-            self.measurement.free((*prefix).capacity);
             self.meter.give(total);
             release_large(prefix, total, align);
         }
@@ -1445,6 +1744,7 @@ impl Heap {
     /// Return idle slabs above the idle cap to the backing allocator. Free blocks of returned
     /// slabs leave their class free lists; no other free block moves.
     pub(crate) fn trim(&mut self) {
+        self.collect();
         let keep = self.idle_cap / SLAB_SIZE as u64;
         let idle_slabs = self.view().idle_slabs;
         if idle_slabs <= keep {
@@ -1460,7 +1760,8 @@ impl Heap {
             // SAFETY: the slab list holds this heap's live slabs.
             unsafe {
                 while !slab.is_null() && excess > 0 {
-                    if (*slab).live == 0 {
+                    // A slab still queued after the collection above waits for the next one.
+                    if (*slab).live == 0 && !(*slab).xthread.busy() {
                         (*slab).doomed = 1;
                         doomed += 1;
                         excess -= 1;
@@ -1497,13 +1798,7 @@ impl Heap {
                 let slab = *link;
                 if (*slab).doomed != 0 {
                     *link = (*slab).next;
-                    if let Some(record) = self
-                        .slab_records
-                        .as_ref()
-                        .and_then(|records| records.get(&slab.addr()))
-                    {
-                        record.state.set(STATE_FREE);
-                    }
+                    self.retire_record(slab);
                     release_slab(slab);
                     self.meter.give(SLAB_SIZE as u64);
                     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -1518,27 +1813,39 @@ impl Heap {
         }
     }
 
+    /// A slab goes back: its diagnostic record now reads every block as free.
+    fn retire_record(&self, slab: *mut Slab) {
+        if self.diagnostic
+            && let Some(record) = self.diag().slabs.get_mut(&slab.addr())
+        {
+            record.state = STATE_FREE;
+        }
+    }
+
     /// Task exit: return every slab and large block, live or not, and every listed bare block.
+    /// Storage other heaps published back is still on this heap's lists, so the published
+    /// lists are only forgotten.
     pub(crate) fn release_all(&mut self) {
+        self.queue.take();
+        self.large_returns.take();
         #[cfg(all(
             feature = "system-allocator",
             any(feature = "diagnostic", feature = "measurement")
         ))]
-        for block in std::mem::take(&mut self.bare) {
-            let block = block as *mut Header;
-            // SAFETY: each listed bare block is this heap's, live or raw, and is freed once.
-            unsafe {
-                if let Some(state) = self
-                    .large_states
-                    .as_ref()
-                    .and_then(|states| states.get(&block.addr()))
-                {
-                    state.set(STATE_FREE);
+        {
+            let bare = std::mem::take(&mut self.diag().bare);
+            for block in bare {
+                let block = block as *mut Header;
+                // SAFETY: each listed bare block is this heap's, live or raw, and is freed once.
+                unsafe {
+                    if let Some(state) = self.diag().large_states.get_mut(&block.addr()) {
+                        *state = STATE_FREE;
+                    }
+                    #[cfg(feature = "measurement")]
+                    self.measurement.free(self.capacity(block));
+                    self.meter.give(HEADER_SIZE as u64 + self.capacity(block));
+                    libc::free(block.cast());
                 }
-                #[cfg(feature = "measurement")]
-                self.measurement.free(self.capacity(block));
-                self.meter.give(HEADER_SIZE as u64 + self.capacity(block));
-                libc::free(block.cast());
             }
         }
         for class in 0..POOL_COUNT {
@@ -1550,13 +1857,7 @@ impl Heap {
                     #[cfg(feature = "measurement")]
                     self.measurement
                         .free_many(class_capacity(class), (*slab).live as u64);
-                    if let Some(record) = self
-                        .slab_records
-                        .as_ref()
-                        .and_then(|records| records.get(&slab.addr()))
-                    {
-                        record.state.set(STATE_FREE);
-                    }
+                    self.retire_record(slab);
                     release_slab(slab);
                     self.meter.give(SLAB_SIZE as u64);
                     slab = next;
@@ -1572,12 +1873,13 @@ impl Heap {
             // SAFETY: each large block is this heap's and is freed once.
             unsafe {
                 let next = (*prefix).next;
-                if let Some(state) = self
-                    .large_states
-                    .as_ref()
-                    .and_then(|states| states.get(&large_block(prefix).addr()))
+                if self.diagnostic
+                    && let Some(state) = self
+                        .diag()
+                        .large_states
+                        .get_mut(&large_block(prefix).addr())
                 {
-                    state.set(STATE_FREE);
+                    *state = STATE_FREE;
                 }
                 #[cfg(feature = "measurement")]
                 self.measurement.free((*prefix).capacity);
