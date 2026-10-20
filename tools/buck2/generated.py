@@ -4,8 +4,8 @@ so no rebase can conflict on one.
 - BUILD_INPUTS: what sync.py derives from the Cargo workspace and the committed
   measurements and pins. They are gitignored and generated on demand:
   bootstrap.py writes them, and every entry point that runs Buck2 (prepare.py,
-  tools/land, tools/main-runs, tools/bless.sh) regenerates them when the tree
-  they were generated from changed (`sync.py --if-stale`). Without them a bare
+  tools/land, tools/main-runs, tools/bless.sh) regenerates the parts whose
+  inputs changed since they were generated (`sync.py --if-stale`). Without them a bare
   `.buck2/bin/buck2` reads the committed BUCK.unsynced stubs and fails with
   one line saying to run sync.py.
 - MAIN_WRITTEN: generated pages people read in the repository. They stay
@@ -13,10 +13,12 @@ so no rebase can conflict on one.
   regenerates them and pushes a change to main. tools/land refuses a lane
   change that touches one.
 
-The stamp records the tree the build inputs were generated from: HEAD's tree
-and every path `git status` reports, with its content. Generation reads only
-the tree (and the tools the tree pins), so an unchanged stamp means unchanged
-outputs.
+The stamp records, for each part of the build inputs, what its generation
+read (`Reads`: file contents, existence tests and glob matches, including the
+generator's own code) and the outputs it wrote. A part is stale when an output
+is missing or edited or when anything it read reads differently, so an edit
+to a file generation never reads (documentation, a corpus program) regenerates
+nothing, and generation writes an output only when its bytes change.
 """
 
 from __future__ import annotations
@@ -28,68 +30,134 @@ from pathlib import Path
 import subprocess
 import sys
 
-BUILD_INPUTS = (
-    'BUCK',
-    'third-party/BUCK',
-    'third-party/Cargo.toml',
-    'third-party/Cargo.lock',
-    'third-party/lib.rs',
-    'tools/buck2/exec_sizes.bzl',
-    'tools/buck2/test_sizes.bzl',
-    'tools/buck2/workspace-metadata.json',
-    'tools/native-toolchain/pins.bzl',
-)
+# Each part's outputs. Third-party dependency generation (Cargo metadata, then
+# Reindeer) and first-party inventory generation (Cargo metadata, then source
+# inspection) are stamped apart, so neither reruns for the other's inputs.
+PARTS = {
+    'third-party': ('third-party/BUCK', 'third-party/Cargo.toml', 'third-party/Cargo.lock', 'third-party/lib.rs'),
+    'first-party': ('BUCK', 'tools/buck2/exec_sizes.bzl', 'tools/buck2/test_sizes.bzl',
+                    'tools/buck2/workspace-metadata.json', 'tools/native-toolchain/pins.bzl'),
+}
+BUILD_INPUTS = tuple(sorted(path for outputs in PARTS.values() for path in outputs))
 MAIN_WRITTEN = ('docs/api.md',)
 STAMP = '.buck2/sync-stamp.json'
 SYNC_HINT = 'run python3 tools/buck2/sync.py'
 
 
-def git(root: Path, *arguments: str) -> bytes:
-    return subprocess.run(['git', *arguments], cwd=root, check=True, capture_output=True).stdout
+CHANGED = 'changed during generation'
 
 
-def tree_state(root: Path) -> str:
-    """A digest of the tree the build inputs derive from: HEAD's tree, and each
-    changed, deleted or untracked path that git reports, with its content.
-    The outputs and ignored files (Buck2's state) are not part of it."""
-    digest = hashlib.sha256()
-    head = subprocess.run(['git', 'rev-parse', '-q', '--verify', 'HEAD^{tree}'], cwd=root,
-                          capture_output=True, text=True).stdout.strip()
-    digest.update(head.encode() + b'\0')
-    status = git(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames')
-    for entry in sorted(path for path in status.split(b'\0') if path):
-        if os.fsdecode(entry[3:]) in BUILD_INPUTS:
-            continue  # an output, even while its removal from git is uncommitted
-        path = root / os.fsdecode(entry[3:])
-        digest.update(entry + b'\0')
-        if path.is_file() and not path.is_symlink():
-            digest.update(hashlib.sha256(path.read_bytes()).digest())
-    return digest.hexdigest()
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
-def outputs(root: Path) -> dict[str, str]:
-    """Each build input's content digest, or '' when it is missing."""
-    return {path: hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else ''
-            for path in BUILD_INPUTS}
+class Reads:
+    """What one part's generation read: each file's content digest, each path
+    whose existence alone it tested, and each glob's matches. Generation reads
+    the tree only through these methods, so the record is everything its
+    outputs depend on, ignored files included."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+        self.files: dict[str, str] = {}
+        self.probes: dict[str, bool] = {}
+        self.globs: dict[str, dict[str, list[str]]] = {}
+
+    def key(self, path) -> str:
+        return key(self.root, path)
+
+    def bytes(self, path) -> bytes:
+        data = Path(path).read_bytes()
+        self.note(self.files, self.key(path), digest(data))
+        return data
+
+    @staticmethod
+    def note(record: dict, name: str, value) -> None:
+        """Record what a read saw. One that reads differently a second time in
+        the same generation changed while it ran: the record then matches
+        nothing, so the part stays stale."""
+        record[name] = value if record.get(name, value) == value else CHANGED
+
+    def text(self, path, errors: str = 'strict') -> str:
+        """The file as `Path.read_text` reads it: UTF-8 with universal newlines."""
+        text = self.bytes(path).decode('utf-8', errors)
+        return text.replace('\r\n', '\n').replace('\r', '\n')
+
+    def is_file(self, path) -> bool:
+        found = Path(path).is_file()
+        self.note(self.probes, self.key(path), found)
+        return found
+
+    def glob(self, directory, pattern: str) -> list[Path]:
+        matches = sorted(Path(directory).glob(pattern))
+        self.note(self.globs.setdefault(self.key(directory), {}), pattern, [self.key(match) for match in matches])
+        return matches
+
+    def record(self) -> dict:
+        return {'files': self.files, 'probes': self.probes, 'globs': self.globs}
 
 
-def record(root: Path, state: str) -> None:
-    """Note that the build inputs were generated from the tree with `state`."""
-    stamp = root / STAMP
-    stamp.parent.mkdir(exist_ok=True)
-    pending = stamp.with_name(f'.{stamp.name}.{os.getpid()}')
-    pending.write_text(json.dumps({'tree': state, 'outputs': outputs(root)}, indent=1, sort_keys=True) + '\n')
-    pending.replace(stamp)
+def key(root: Path, path) -> str:
+    """A path as a stamp names it: relative to the root, or absolute outside it."""
+    text, prefix = os.fspath(path), os.fspath(root)
+    if text == prefix:
+        return '.'
+    return text[len(prefix) + 1:] if text.startswith(prefix + os.sep) else text
 
 
-def current(root: Path) -> bool:
-    """Whether every build input exists, unedited, as generated from this tree."""
+def unchanged(root: Path, reads: dict) -> bool:
+    """Whether every file, probe and glob a part's generation read reads the same now."""
+    root = root.resolve()
+    for path, recorded in reads['files'].items():
+        file = root / path
+        if not file.is_file() or digest(file.read_bytes()) != recorded:
+            return False
+    if any((root / path).is_file() != found for path, found in reads['probes'].items()):
+        return False
+    return all([key(root, match) for match in sorted((root / directory).glob(pattern))] == matches
+               for directory, patterns in reads['globs'].items() for pattern, matches in patterns.items())
+
+
+def outputs(root: Path, part: str) -> dict[str, str]:
+    """Each of a part's outputs' content digest, or '' when it is missing."""
+    return {path: digest((root / path).read_bytes()) if (root / path).is_file() else '' for path in PARTS[part]}
+
+
+def load(root: Path) -> dict:
     try:
         stamp = json.loads((root / STAMP).read_text())
     except (OSError, ValueError):
-        return False
-    found = outputs(root)
-    return all(found.values()) and stamp.get('outputs') == found and stamp.get('tree') == tree_state(root)
+        return {}
+    return stamp.get('parts', {}) if isinstance(stamp, dict) else {}
+
+
+def record(root: Path, part: str, reads: Reads) -> None:
+    """Note that a part's outputs, as they are now, were generated from `reads`."""
+    stamp = root / STAMP
+    stamp.parent.mkdir(exist_ok=True)
+    parts = load(root) | {part: {'reads': reads.record(), 'outputs': outputs(root, part)}}
+    pending = stamp.with_name(f'.{stamp.name}.{os.getpid()}')
+    pending.write_text(json.dumps({'parts': parts}, indent=1, sort_keys=True) + '\n')
+    pending.replace(stamp)
+
+
+def stale(root: Path) -> list[str]:
+    """The parts whose outputs are missing, edited, or generated from inputs
+    that read differently now."""
+    parts = load(root)
+    found = []
+    for part in PARTS:
+        entry = parts.get(part)
+        current_outputs = outputs(root, part)
+        if not (entry and all(current_outputs.values()) and entry.get('outputs') == current_outputs
+                and unchanged(root, entry['reads'])):
+            found.append(part)
+    return found
+
+
+def current(root: Path) -> bool:
+    """Whether every build input exists, unedited, as generated from what is there now."""
+    return not stale(root)
 
 
 def ensure(root: Path) -> subprocess.CompletedProcess | None:
@@ -97,7 +165,7 @@ def ensure(root: Path) -> subprocess.CompletedProcess | None:
     current, otherwise sync.py's result."""
     if current(root):
         return None
-    return subprocess.run([sys.executable, str(root / 'tools/buck2/sync.py')], cwd=root,
+    return subprocess.run([sys.executable, str(root / 'tools/buck2/sync.py'), '--if-stale'], cwd=root,
                           capture_output=True, text=True)
 
 

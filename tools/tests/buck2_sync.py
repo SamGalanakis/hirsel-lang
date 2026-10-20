@@ -17,54 +17,61 @@ sync = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sync)
 
 
-def git(root, *arguments):
-    subprocess.run(['git', *arguments], cwd=root, check=True, capture_output=True)
-
-
-class GeneratedFiles(unittest.TestCase):
-    """generated.py's stamp: the build inputs are current only for the tree they
-    were generated from."""
+class GeneratedStamp(unittest.TestCase):
+    """generated.py's stamp: a part is current while every output is as written
+    and everything its generation read reads the same."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        git(self.root, 'init', '-q', '-b', 'main')
-        (self.root / '.gitignore').write_text(''.join(f'/{path}\n' for path in sync.generated.BUILD_INPUTS)
-                                              + '/.buck2/\n')
-        (self.root / 'Cargo.toml').write_text('[workspace]\n')
-        git(self.root, 'add', '-A')
-        git(self.root, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'base')
-        self.generate()
+        self.root = Path(self.temp.name).resolve()
+        (self.root / 'src').mkdir()
+        (self.root / 'src/lib.rs').write_text('fn f() {}\n')
+        (self.root / 'README.md').write_text('notes\n')
+        for part in sync.generated.PARTS:
+            self.generate(part)
 
-    def generate(self):
-        state = sync.generated.tree_state(self.root)
-        for path in sync.generated.BUILD_INPUTS:
+    def generate(self, part):
+        reads = sync.generated.Reads(self.root)
+        reads.text(self.root / 'src/lib.rs')
+        reads.is_file(self.root / 'src/main.rs')
+        reads.glob(self.root / 'src', '**/*.rs')
+        for path in sync.generated.PARTS[part]:
             (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text(path + '\n')
-        sync.generated.record(self.root, state)
+        sync.generated.record(self.root, part, reads)
 
-    def test_a_generated_tree_is_current_until_an_input_or_an_output_changes(self):
-        current = lambda: sync.generated.current(self.root)  # noqa: E731
-        self.assertTrue(current())
-        for change, undo in [(lambda: (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = []\n'),
-                              lambda: git(self.root, 'checkout', '--', 'Cargo.toml')),
-                             (lambda: (self.root / 'new.rs').write_text('fn f() {}\n'),
-                              lambda: (self.root / 'new.rs').unlink()),
-                             (lambda: (self.root / 'BUCK').write_text('edited\n'),
-                              lambda: (self.root / 'BUCK').write_text('BUCK\n')),
-                             (lambda: (self.root / 'third-party/BUCK').unlink(),
-                              lambda: (self.root / 'third-party/BUCK').write_text('third-party/BUCK\n'))]:
+    def test_a_part_is_current_until_a_read_a_probe_a_glob_or_an_output_changes(self):
+        stale = lambda: sync.generated.stale(self.root)  # noqa: E731
+        self.assertEqual(stale(), [])
+        (self.root / 'README.md').write_text('more notes\n')
+        self.assertEqual(stale(), [], 'generation never read it')
+        for change, undo, parts in [
+                (lambda: (self.root / 'src/lib.rs').write_text('fn g() {}\n'),
+                 lambda: (self.root / 'src/lib.rs').write_text('fn f() {}\n'), list(sync.generated.PARTS)),
+                (lambda: (self.root / 'src/main.rs').write_text(''), lambda: (self.root / 'src/main.rs').unlink(),
+                 list(sync.generated.PARTS)),
+                (lambda: (self.root / 'src/deep').mkdir() or (self.root / 'src/deep/x.rs').write_text(''),
+                 lambda: (self.root / 'src/deep/x.rs').unlink() or (self.root / 'src/deep').rmdir(),
+                 list(sync.generated.PARTS)),
+                (lambda: (self.root / 'BUCK').write_text('edited\n'), lambda: (self.root / 'BUCK').write_text('BUCK\n'),
+                 ['first-party']),
+                (lambda: (self.root / 'third-party/BUCK').unlink(),
+                 lambda: (self.root / 'third-party/BUCK').write_text('third-party/BUCK\n'), ['third-party'])]:
             change()
-            self.assertFalse(current())
+            self.assertEqual(stale(), parts)
             undo()
-            self.assertTrue(current())
-        # A commit moves HEAD's tree: the stamp names the old one.
-        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = []\n')
-        git(self.root, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-am', 'next')
-        self.assertFalse(current())
-        self.generate()
-        self.assertTrue(current())
+            self.assertEqual(stale(), [])
+
+    def test_a_file_that_changes_while_generation_reads_it_leaves_the_part_stale(self):
+        reads = sync.generated.Reads(self.root)
+        reads.text(self.root / 'src/lib.rs')
+        (self.root / 'src/lib.rs').write_text('fn g() {}\n')
+        reads.text(self.root / 'src/lib.rs')
+        sync.generated.record(self.root, 'first-party', reads)
+        for content in ('fn f() {}\n', 'fn g() {}\n'):
+            (self.root / 'src/lib.rs').write_text(content)
+            self.assertIn('first-party', sync.generated.stale(self.root))
 
     def test_a_lane_change_touching_a_generated_file_is_refused_with_the_commands_that_drop_it(self):
         self.assertEqual(sync.generated.refusal(['README.md', 'crates/a/src/lib.rs']), [])
@@ -72,6 +79,97 @@ class GeneratedFiles(unittest.TestCase):
         self.assertIn('no lane commits: BUCK, docs/api.md', refused)
         self.assertIn('git checkout $(git merge-base HEAD origin/main) -- docs/api.md', refused)
         self.assertIn('git rm -q --cached BUCK', refused)
+
+
+class GeneratedParts(unittest.TestCase):
+    """The real generation on a copy of HEAD's workspace: each part reruns for
+    exactly its inputs, and an unchanged output is never rewritten."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix='hirsel-sync-')
+        cls.root = Path(cls.temp.name).resolve()
+        archive = subprocess.run(['git', 'archive', 'HEAD', '--', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
+                                  'crates', 'conformance', 'third-party', 'tools/buck2', 'tools/native-toolchain',
+                                  'README.md'], cwd=sync.ROOT, check=True, capture_output=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(cls.root)], input=archive, check=True)
+        cls.patches = [patch.object(sync, 'ROOT', cls.root), patch.object(sync, 'HERE', cls.root / 'tools/buck2'),
+                       patch.object(sync, 'THIRD_PARTY', cls.root / 'third-party'),
+                       patch.object(sync, 'COSTS', cls.root / 'tools/buck2/test-costs')]
+        for active in cls.patches:
+            active.start()
+        cls.sync()
+
+    @classmethod
+    def tearDownClass(cls):
+        for active in cls.patches:
+            active.stop()
+        cls.temp.cleanup()
+
+    @classmethod
+    def sync(cls, *flags):
+        """Run sync.py; returns the parts it regenerated."""
+        with patch.object(sys, 'argv', ['sync.py', *flags]), patch.object(sync, 'generate', wraps=sync.generate) as run:
+            assert sync.main() == 0
+        return list(run.call_args.args[1]) if run.called else []
+
+    def setUp(self):
+        self.assertEqual(sync.generated.stale(self.root), [])
+        self.written = self.identities()
+
+    def identities(self):
+        return {path: (lambda found: (found.st_ino, found.st_mtime_ns))((self.root / path).stat())
+                for path in sync.generated.BUILD_INPUTS}
+
+    def rewritten(self):
+        return sorted(path for path, identity in self.identities().items() if identity != self.written[path])
+
+    def edit(self, path, text):
+        """Write a file, restoring it (and the generated files) after the test."""
+        file = self.root / path
+        before = file.read_bytes() if file.exists() else None
+        self.addCleanup(self.sync, '--if-stale')
+        self.addCleanup(lambda: file.write_bytes(before) if before is not None else file.unlink())
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(text)
+
+    def buck(self):
+        return (self.root / 'BUCK').read_text()
+
+    def test_a_documentation_or_corpus_program_edit_regenerates_nothing(self):
+        self.edit('README.md', 'A different readme\n')
+        self.edit('docs/notes.md', 'notes\n')
+        program = next((self.root / 'conformance').rglob('*.hir')).relative_to(self.root)
+        self.edit(program, '// edited\n')
+        self.assertEqual(self.sync('--if-stale'), [])
+
+    def test_a_manifest_edit_regenerates_both_parts_and_rewrites_only_what_changed(self):
+        manifest = (self.root / 'Cargo.toml').read_text()
+        old = '[profile.dev.package.hirsel-span]\nopt-level = 1\n'
+        self.assertIn(old, manifest)
+        self.assertIn('    opt_level = 1,\n    name = "hirsel-span",\n', self.buck())
+        self.edit('Cargo.toml', manifest.replace(old, '[profile.dev.package.hirsel-span]\nopt-level = 2\n'))
+        self.assertEqual(self.sync('--if-stale'), list(sync.generated.PARTS))
+        self.assertIn('    opt_level = 2,\n    name = "hirsel-span",\n', self.buck())
+        self.assertEqual(self.rewritten(), ['BUCK'])
+
+    def test_an_added_test_file_adds_its_target_without_rerunning_reindeer(self):
+        self.edit('crates/hirsel-span/tests/added.rs', 'hirsel_guard::install!();\n\n#[test]\nfn added() {}\n')
+        self.assertEqual(self.sync('--if-stale'), ['first-party'])
+        self.assertIn('    name = "hirsel-span-test-added",\n', self.buck())
+        self.assertEqual(self.rewritten(), ['BUCK'])
+
+    def library(self, name):
+        """The crate's hirsel_library call in the root BUCK."""
+        return next(block.split('\n)\n')[0] for block in self.buck().split('hirsel_library(\n')[1:]
+                    if f'    name = "{name}",\n' in block.split('\n)\n')[0])
+
+    def test_a_doc_comment_code_block_turns_on_the_crates_doctests(self):
+        crate = next(path for path in sorted((self.root / 'crates').glob('*/src/lib.rs'))
+                     if 'doctests' not in self.library(path.parents[1].name))
+        self.edit(crate.relative_to(self.root), crate.read_text() + '\n/// ```\n/// assert!(true);\n/// ```\nfn documented() {}\n')
+        self.assertEqual(self.sync('--if-stale'), ['first-party'])
+        self.assertIn('doctests = True', self.library(crate.parents[1].name))
 
 
 class NativePoolRouting(unittest.TestCase):
@@ -131,7 +229,7 @@ class SeededTests(unittest.TestCase):
 class ShardSizing(unittest.TestCase):
     def test_check_fails_on_cost_coverage_even_with_fresh_generated_files(self):
         with patch.object(sys, 'argv', ['sync.py', '--check']), \
-             patch.object(sync, 'REINDEER', Path(__file__)), patch.object(sync.generated, 'current', return_value=True), \
+             patch.object(sync, 'REINDEER', Path(__file__)), patch.object(sync.generated, 'stale', return_value=[]), \
              patch.object(sync, 'generate') as generate, \
              patch.object(sync, 'check_cost_coverage', return_value=['costs missing']), \
              contextlib.redirect_stderr(io.StringIO()) as errors:
@@ -139,15 +237,6 @@ class ShardSizing(unittest.TestCase):
         self.assertIn('costs missing', errors.getvalue())
         generate.assert_not_called()
 
-    def test_if_stale_generates_and_stamps_only_a_changed_tree(self):
-        for fresh in (True, False):
-            with self.subTest(fresh=fresh), patch.object(sys, 'argv', ['sync.py', '--if-stale']), \
-                 patch.object(sync, 'REINDEER', Path(__file__)), \
-                 patch.object(sync.generated, 'current', return_value=fresh), \
-                 patch.object(sync.generated, 'tree_state', return_value='state'), \
-                 patch.object(sync.generated, 'record') as record, patch.object(sync, 'generate') as generate:
-                self.assertEqual(sync.main(), 0)
-                self.assertEqual((generate.called, record.called), (not fresh, not fresh))
 
     def test_granted_cpus_determine_shards(self):
         with tempfile.TemporaryDirectory() as scratch:

@@ -21,8 +21,18 @@ own directory are found by following literal `include*!` and `#[path]`
 references, plus the files an `include_str!(concat!("<prefix>", $arg))` macro
 names through the file's string literals.
 
-`--if-stale` regenerates only when the tree changed since the last generation
-(generated.py's stamp). `--check` does that, then lists the sharded test
+Generation has two parts, each stamped with exactly what it read
+(generated.py): third-party dependency generation reads the Cargo manifests,
+Cargo.lock, the Rust toolchain pin, the Reindeer pin, config and fixups;
+first-party inventory generation reads the manifests, Cargo's target layout,
+the Rust sources it inspects (compile-time includes, `#[path]` modules,
+doctests, `proptest!`, the memory guard, example cases), the corpus manifests,
+and the measurements and pins it renders. Both read this generator's own code.
+Either part writes an output only when its bytes change.
+
+Without flags, sync.py regenerates both parts. `--if-stale` regenerates only
+the parts whose outputs are missing or edited or whose inputs read differently
+since they were generated. `--check` does that, then lists the sharded test
 binaries on the pool for their test-cost coverage (`--files-only` skips the
 listing, which runs Buck2).
 """
@@ -30,12 +40,12 @@ listing, which runs Buck2).
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -59,6 +69,10 @@ HOST = "x86_64-unknown-linux-gnu"
 # that name a file under the prefix are what it includes.
 INCLUDE_CONCAT = re.compile(r'include(?:_str|_bytes)?!\(\s*concat!\(\s*"([^"]+)"\s*,\s*\$\w+\s*\)\s*\)')
 LITERAL = re.compile(r'"([^"\\\n]+)"')
+
+# Everything first-party generation reads from the tree goes through READS
+# (generated.Reads), which first_party_reads() starts afresh.
+READS = generated.Reads(ROOT)
 
 # What the engine's build script reads (crates/hirsel-engine/build.rs), as
 # repository paths: it hashes these into the frozen runtime revision.
@@ -89,12 +103,13 @@ BUILD_SCRIPT_INPUTS = {
 MANIFEST_REFERENCE = re.compile(r'"manifest"\s*:\s*"([^"]+)"')
 
 
+@functools.cache
 def corpus_packages() -> list[str]:
     """The directories of packages the corpus's manifests name outside the
     corpus, the stdlib and packages/ (crate test fixtures), as globs."""
     found = set()
-    for manifest in sorted((ROOT / "conformance").rglob("*.json")):
-        for reference in MANIFEST_REFERENCE.findall(manifest.read_text()):
+    for manifest in READS.glob(ROOT / "conformance", "**/*.json"):
+        for reference in MANIFEST_REFERENCE.findall(READS.text(manifest)):
             target = (manifest.parent / reference).resolve()
             try:
                 relative = target.parent.relative_to(ROOT).as_posix()
@@ -105,9 +120,18 @@ def corpus_packages() -> list[str]:
     return sorted(found)
 
 
+# Where a data list holds CORPUS_PACKAGES, it means corpus_packages(): read
+# while generating, not on import, so a stamp check reads no manifest.
+CORPUS_PACKAGES = "<corpus packages>"
+
+
+def expand(paths: list[str]) -> list[str]:
+    return [found for path in paths for found in (corpus_packages() if path == CORPUS_PACKAGES else [path])]
+
+
 # A conformance program's manifests reach the stdlib, the package fixtures and
 # some crates' test packages.
-CORPUS_DATA = ["conformance/**", "packages/**", "stdlib/**", *corpus_packages()]
+CORPUS_DATA = ["conformance/**", "packages/**", "stdlib/**", CORPUS_PACKAGES]
 
 RUNTIME_DATA = {
     "hirsel-cranelift": ["crates/hirsel-rt/include/**"],
@@ -183,7 +207,7 @@ SEEDED = re.compile(r"\bproptest!")
 
 
 def seeded(source_dir: pathlib.Path, crate_root: pathlib.Path) -> bool:
-    return any(SEEDED.search(source.read_text()) for source in sorted(set(source_dir.rglob("*.rs")) | {crate_root}))
+    return any(SEEDED.search(READS.text(source)) for source in sorted(set(READS.glob(source_dir, "**/*.rs")) | {crate_root}))
 
 
 # Test binaries whose cases are split over parallel targets. Each has a table of
@@ -219,7 +243,7 @@ REQUIRED_COSTS = {"hirsel-driver-test-it"}
 def shards(binary: str) -> tuple[int, str | None]:
     """A test binary's shard count and cost table (unsharded: 1, None)."""
     if binary in CASE_SHARDED:
-        source = (ROOT / CASE_SHARDED[binary]).read_text()
+        source = READS.text(ROOT / CASE_SHARDED[binary])
         # This harness declares top-level tests and example!(...) test cases;
         # the indented #[test] inside the macro is its template, not a case.
         count = len(re.findall(r"(?m)^#\[test\]$|^example!\(", source))
@@ -227,10 +251,10 @@ def shards(binary: str) -> tuple[int, str | None]:
     if binary not in SHARDED:
         return 1, None
     table = COSTS / f"{binary}.tsv"
-    if not table.is_file():
+    if not READS.is_file(table):
         raise SystemExit(f"{binary} is sharded but has no {relative(table)}; measure it (tools/buck2/test_costs.py)")
-    total = sum(float(line.split("\t")[1]) for line in table.read_text().splitlines())
-    sizes = json.loads((HERE / "test-sizes.json").read_text())
+    total = sum(float(line.split("\t")[1]) for line in READS.text(table).splitlines())
+    sizes = json.loads(READS.text(HERE / "test-sizes.json"))
     cpu = sizes[binary]["cpu_count"]
     if type(cpu) is not int or not 1 <= cpu <= 4:
         raise ValueError(f"{binary}: cpu_count must be in 1..4 (test launcher's thread ceiling)")
@@ -277,7 +301,7 @@ def check_cost_coverage() -> list[str]:
 
 def dev_opt_levels() -> dict[str, int]:
     """Members' `[profile.dev.package.<name>] opt-level` entries in the root Cargo.toml."""
-    packages = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["dev"].get("package", {})
+    packages = tomllib.loads(READS.text(ROOT / "Cargo.toml"))["profile"]["dev"].get("package", {})
     return {name: entry["opt-level"] for name, entry in packages.items() if name != "*" and "opt-level" in entry}
 
 # The corpus campaigns as tests over the whole corpus, so
@@ -290,7 +314,7 @@ CORPUS = [
     "docs/spec/**",
     "packages/**",
     "stdlib/**",
-    *corpus_packages(),
+    CORPUS_PACKAGES,
 ]
 GATE = dict(cwd="crates/hirsel-conformance")
 # The conformance stage runs as shards of the corpus by path hash, each well
@@ -487,26 +511,92 @@ def third_party_manifest(meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_third_party(meta: dict, out: pathlib.Path) -> None:
-    out.mkdir(parents=True, exist_ok=True)
-    if out.resolve() != THIRD_PARTY.resolve():
-        shutil.copytree(THIRD_PARTY / "fixups", out / "fixups")
-        shutil.copyfile(THIRD_PARTY / "reindeer.toml", out / "reindeer.toml")
-    (out / "Cargo.toml").write_text(third_party_manifest(meta), encoding="utf-8")
-    (out / "lib.rs").write_text("// The package Reindeer reads; it has no code (tools/buck2/sync.py).\n", encoding="utf-8")
-    # Start from the workspace's own lock so every version stays exactly as
-    # Cargo resolved it; Cargo then drops the workspace members and adds this
-    # package, choosing nothing new.
-    shutil.copyfile(ROOT / "Cargo.lock", out / "Cargo.lock")
-    metadata(out / "Cargo.toml", locked=False)
-    workspace = {(p["name"], p["version"]) for p in tomllib.loads((ROOT / "Cargo.lock").read_text())["package"]}
-    for package in tomllib.loads((out / "Cargo.lock").read_text())["package"]:
-        if package["name"] != "hirsel-third-party" and (package["name"], package["version"]) not in workspace:
-            raise SystemExit(f"third-party resolution chose {package['name']} {package['version']}, which Cargo.lock does not have")
-    subprocess.run(
-        [str(REINDEER), "--config", str(out / "reindeer.toml"), "buckify"],
-        check=True, cwd=out, stdout=subprocess.DEVNULL,
-    )
+THIRD_PARTY_OUTPUTS = ("BUCK", "Cargo.toml", "Cargo.lock", "lib.rs")
+
+
+def write_third_party(meta: dict, out: pathlib.Path) -> generated.Reads:
+    """Run Reindeer in a scratch package, then replace the outputs whose bytes
+    changed; returns what it read."""
+    reads = generated.Reads(ROOT)
+    cargo_reads(reads, meta, layout=False)
+    reads.bytes(HERE / "reindeer-lock.json")  # the Reindeer that bootstrap installed
+    with tempfile.TemporaryDirectory(prefix="hirsel-third-party-") as scratch:
+        work = pathlib.Path(scratch)
+        for fixup in reads.glob(THIRD_PARTY / "fixups", "**/*"):
+            if reads.is_file(fixup):
+                copy = work / "fixups" / fixup.relative_to(THIRD_PARTY / "fixups")
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                copy.write_bytes(reads.bytes(fixup))
+        (work / "reindeer.toml").write_bytes(reads.bytes(THIRD_PARTY / "reindeer.toml"))
+        (work / "Cargo.toml").write_text(third_party_manifest(meta), encoding="utf-8")
+        (work / "lib.rs").write_text("// The package Reindeer reads; it has no code (tools/buck2/sync.py).\n", encoding="utf-8")
+        # Start from the workspace's own lock so every version stays exactly as
+        # Cargo resolved it; Cargo then drops the workspace members and adds this
+        # package, choosing nothing new.
+        lock = reads.bytes(ROOT / "Cargo.lock")
+        (work / "Cargo.lock").write_bytes(lock)
+        metadata(work / "Cargo.toml", locked=False)
+        workspace = {(p["name"], p["version"]) for p in tomllib.loads(lock.decode())["package"]}
+        for package in tomllib.loads((work / "Cargo.lock").read_text())["package"]:
+            if package["name"] != "hirsel-third-party" and (package["name"], package["version"]) not in workspace:
+                raise SystemExit(f"third-party resolution chose {package['name']} {package['version']}, which Cargo.lock does not have")
+        subprocess.run(
+            [str(REINDEER), "--config", str(work / "reindeer.toml"), "buckify"],
+            check=True, cwd=work, stdout=subprocess.DEVNULL,
+        )
+        for name in THIRD_PARTY_OUTPUTS:
+            write(out / name, (work / name).read_bytes())
+    return reads
+
+
+def write(path: pathlib.Path, content: bytes | str) -> None:
+    """Replace a generated file only when its bytes change, so an unchanged
+    output wakes no file watcher."""
+    data = content.encode() if isinstance(content, str) else content
+    if path.is_file() and path.read_bytes() == data:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f".{path.name}.{os.getpid()}")
+    pending.write_bytes(data)
+    pending.replace(path)
+
+
+def optional(reads: generated.Reads, path: pathlib.Path) -> None:
+    if reads.is_file(path):
+        reads.bytes(path)
+
+
+def cargo_reads(reads: generated.Reads, meta: dict, layout: bool) -> None:
+    """Record what `cargo metadata` read: the root and member manifests, the
+    lock, the toolchain pin, the repository's Cargo config and the members a
+    workspace glob finds; with `layout`, also the files Cargo discovers each
+    member's targets from (its lib, main and build script, and the binaries,
+    tests, examples and benches beside them)."""
+    workspace = tomllib.loads(reads.text(ROOT / "Cargo.toml")).get("workspace", {})
+    reads.bytes(ROOT / "Cargo.lock")
+    for path in ("rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"):
+        optional(reads, ROOT / path)
+    for pattern in workspace.get("members", []) + workspace.get("exclude", []):
+        reads.glob(ROOT, f"{pattern}/Cargo.toml")
+    for package in meta["packages"]:
+        if package["source"] is not None:
+            continue
+        manifest = pathlib.Path(package["manifest_path"])
+        reads.bytes(manifest)
+        if layout:
+            for path in ("src/lib.rs", "src/main.rs", "build.rs"):
+                reads.is_file(manifest.parent / path)
+            for directory in ("src/bin", "tests", "examples", "benches"):
+                reads.glob(manifest.parent / directory, "*.rs")
+                reads.glob(manifest.parent / directory, "*/main.rs")
+
+
+def code_reads(reads: generated.Reads) -> None:
+    """Record this generator's own code: every loaded module from tools/buck2."""
+    for module in list(sys.modules.values()):
+        path = getattr(module, "__file__", None)
+        if path and pathlib.Path(path).resolve().parent == pathlib.Path(__file__).resolve().parent:
+            reads.bytes(path)
 
 
 # ---------------------------------------------------------------- first party
@@ -517,15 +607,15 @@ def relative(path: pathlib.Path) -> str:
 
 def references(source: pathlib.Path, seen: set[pathlib.Path]) -> set[str]:
     """Repository paths of the files `source` pulls in at compile time, transitively."""
-    if source in seen or not source.is_file():
+    if source in seen or not READS.is_file(source):
         return set()
     seen.add(source)
     found = set()
-    text = source.read_text(encoding="utf-8", errors="replace")
+    text = READS.text(source, errors="replace")
     for prefix in set(INCLUDE_CONCAT.findall(text)):
         for match in LITERAL.finditer(text):
             target = (source.parent / (prefix + match.group(1))).resolve()
-            if target.is_file() and target.is_relative_to(ROOT):
+            if target.is_relative_to(ROOT) and READS.is_file(target):
                 found.add(relative(target))
     for match in INCLUDE.finditer(text):
         target = (source.parent / match.group(1)).resolve()
@@ -537,11 +627,11 @@ def references(source: pathlib.Path, seen: set[pathlib.Path]) -> set[str]:
         # non-mod.rs file's own module directory; both resolve in one of these.
         for base in (source.parent, source.with_suffix("")):
             target = (base / match.group(1)).resolve()
-            if target.is_file():
+            if READS.is_file(target):
                 # Its own `mod x;` items live beside it, so take its directory.
                 found.add("dir:" + relative(target.parent))
                 found |= references(target, seen)
-                for sibling in sorted(target.parent.rglob("*.rs")):
+                for sibling in READS.glob(target.parent, "**/*.rs"):
                     found |= references(sibling, seen)
                 break
     return found
@@ -555,12 +645,12 @@ GUARD = re.compile(r'^(?:hirsel_guard::)?install!\(', re.MULTILINE)
 def guarded(crate_root: pathlib.Path) -> bool:
     """Whether a binary's or test harness's root, or a module the root names by
     `#[path]`, installs the memory guard."""
-    text = crate_root.read_text(encoding="utf-8")
+    text = READS.text(crate_root)
     if GUARD.search(text):
         return True
-    return any(GUARD.search(target.read_text(encoding="utf-8"))
+    return any(GUARD.search(READS.text(target))
                for target in ((crate_root.parent / m.group(1)).resolve() for m in PATH_ATTR.finditer(text))
-               if target.is_file())
+               if READS.is_file(target))
 
 
 def sources(root_dir: pathlib.Path, crate_root: pathlib.Path) -> Raw:
@@ -568,7 +658,7 @@ def sources(root_dir: pathlib.Path, crate_root: pathlib.Path) -> Raw:
     own = relative(root_dir)
     seen: set[pathlib.Path] = set()
     found: set[str] = set()
-    for path in sorted(root_dir.rglob("*.rs")):
+    for path in READS.glob(root_dir, "**/*.rs"):
         found |= references(path, seen)
     found |= references(crate_root, seen)
     found.add(relative(crate_root))
@@ -586,7 +676,7 @@ DOC_BLOCK = re.compile(r'^\s*//[/!]\s*```', re.MULTILINE)
 
 def has_doctests(package_dir):
     """Whether any documentation comment in the crate's src/ opens a code block."""
-    return any(DOC_BLOCK.search(path.read_text()) for path in sorted((package_dir / "src").rglob("*.rs")))
+    return any(DOC_BLOCK.search(READS.text(path)) for path in READS.glob(package_dir / "src", "**/*.rs"))
 
 
 def target_dir(package_dir: pathlib.Path, src: pathlib.Path) -> pathlib.Path:
@@ -609,7 +699,7 @@ def test_data(binary: str, package: str, package_dir: pathlib.Path, src: pathlib
     TEST_DATA, and the non-Rust files of its own directory. A single-file
     `tests/<name>.rs` has no directory of its own: `tests/` holds its siblings.
     The package manifest keeps the directory the test runs from in its inputs."""
-    paths = RUNTIME_DATA.get(package, []) + TEST_DATA.get(binary, []) + [relative(package_dir / "Cargo.toml")]
+    paths = expand(RUNTIME_DATA.get(package, [])) + TEST_DATA.get(binary, []) + [relative(package_dir / "Cargo.toml")]
     expression = f"glob({starlark(paths, 4)})"
     if binary == "hirsel-lir-test-it":
         expression += ' + ["//tools/buck2:workspace-metadata.json"]'
@@ -789,10 +879,10 @@ def first_party(meta: dict) -> str:
     if unguarded:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
-    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
-    out.append("\n" + call("hirsel_native_timeouts", name="native-timeout-repro", data=Raw(f"glob({starlark(CORPUS, 4)})")))
+    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+    out.append("\n" + call("hirsel_native_timeouts", name="native-timeout-repro", data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for gate in GATE_TESTS:
-        out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(CORPUS, 4)})")))
+        out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     out.append("\n" + call("hirsel_test", name="hirsel-test-tool-profile", crate="test_tool_profile",
                             crate_root="tools/tests/test_tool_profile.rs", srcs=["tools/tests/test_tool_profile.rs"],
                             features=[], deps=[], manifest_dir=".", package_name="test-tool-profile",
@@ -821,7 +911,7 @@ def first_party(meta: dict) -> str:
 
 def execution_sizes() -> str:
     """Measured requests stay separate from crate BUCK files."""
-    data = json.loads((HERE / "action-sizes.json").read_text())
+    data = json.loads(READS.text(HERE / "action-sizes.json"))
     profiles = data["profiles"]
     budgets = {(1, 1048576, "")}
     requests = {}
@@ -863,26 +953,41 @@ def check_test_data(buck: str) -> None:
             raise SystemExit(f"TEST_DATA or FULL_GATE_SKIPS names no test binary: {binary} (tools/buck2/sync.py)")
 
 
-def generate(out_root: pathlib.Path) -> None:
+def generate(out_root: pathlib.Path, parts=tuple(generated.PARTS)) -> dict[str, generated.Reads]:
+    """Write the named parts' outputs under `out_root`, each only where its
+    bytes change; returns what each part read."""
     meta = metadata(ROOT / "Cargo.toml")
-    write_third_party(meta, out_root / "third-party")
+    found = {}
+    if "third-party" in parts:
+        found["third-party"] = write_third_party(meta, out_root / "third-party")
+    if "first-party" in parts:
+        found["first-party"] = write_first_party(meta, out_root)
+    for reads in found.values():
+        code_reads(reads)
+    return found
+
+
+def write_first_party(meta: dict, out_root: pathlib.Path) -> generated.Reads:
+    global READS
+    READS = generated.Reads(ROOT)
+    corpus_packages.cache_clear()
+    cargo_reads(READS, meta, layout=True)
     workspace = {p["id"] for p in meta["packages"] if p["id"] in meta["workspace_members"]}
     packages = [{"name": p["name"], "dependencies": [
         {key: (str(pathlib.Path(value).relative_to(ROOT)) if key == "path" and value else value)
          for key, value in dependency.items() if key in ("name", "kind", "path", "req", "uses_default_features")}
         for dependency in p["dependencies"]]} for p in meta["packages"] if p["id"] in workspace]
-    metadata_file = out_root / "tools/buck2/workspace-metadata.json"
-    metadata_file.parent.mkdir(parents=True, exist_ok=True)
-    metadata_file.write_text(json.dumps({"packages": packages}, indent=2, sort_keys=True) + "\n")
-    (out_root / "BUCK").write_text(root_buck(meta), encoding="utf-8")
-    sizes = out_root / "tools/buck2/exec_sizes.bzl"
-    sizes.parent.mkdir(parents=True, exist_ok=True)
-    sizes.write_text(execution_sizes(), encoding="utf-8")
-    (out_root / "tools/buck2/test_sizes.bzl").write_text(
-        requests_bzl(json.loads((HERE / "test-sizes.json").read_text())), encoding="utf-8")
-    pins = out_root / "tools/native-toolchain/pins.bzl"
-    pins.parent.mkdir(parents=True, exist_ok=True)
-    pins.write_text(native_toolchain_pins(), encoding="utf-8")
+    contents = {
+        "tools/buck2/workspace-metadata.json": json.dumps({"packages": packages}, indent=2, sort_keys=True) + "\n",
+        "BUCK": root_buck(meta),
+        "tools/buck2/exec_sizes.bzl": execution_sizes(),
+        "tools/buck2/test_sizes.bzl": requests_bzl(json.loads(READS.text(HERE / "test-sizes.json"))),
+        "tools/native-toolchain/pins.bzl": native_toolchain_pins(),
+    }
+    assert set(contents) == set(generated.PARTS["first-party"])
+    for path, content in contents.items():
+        write(out_root / path, content)
+    return READS
 
 
 def root_buck(meta: dict) -> str:
@@ -894,16 +999,16 @@ def root_buck(meta: dict) -> str:
 
 def native_toolchain_pins() -> str:
     directory = ROOT / "tools/native-toolchain"
-    records = [line.split() for line in (directory / "llvm-21.lock").read_text().splitlines()
+    records = [line.split() for line in READS.text(directory / "llvm-21.lock").splitlines()
                if line and not line.startswith("#")]
     scalars = {row[0]: " ".join(row[1:]) for row in records if row[0] != "deb"}
     llvm = [{"url": f"{scalars['apt_pool']}/{name}_{scalars['apt_version'].split(':', 1)[1]}_{arch}.deb",
              "sha256": sha, "size": int(size)}
             for key, name, arch, sha, size in (row for row in records if row[0] == "deb")]
-    runtime = json.loads((HERE / "llvm-runtime-lock.json").read_text())["debs"]
+    runtime = json.loads(READS.text(HERE / "llvm-runtime-lock.json"))["debs"]
     llvm += [{"url": row["urls"][0].replace("http:", "https:"), "sha256": row["sha256"], "size": row["size"]}
              for row in runtime]
-    pins = json.loads((directory / "native.lock.json").read_text())
+    pins = json.loads(READS.text(directory / "native.lock.json"))
     valgrind_runtime = pins.pop("valgrind_runtime")
     link_kit = pins.pop("link_kit")
     return (HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4)
@@ -914,17 +1019,18 @@ def native_toolchain_pins() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--if-stale", action="store_true", help="regenerate only when the tree changed since the last generation")
+    parser.add_argument("--if-stale", action="store_true",
+                        help="regenerate only the parts whose outputs or inputs changed since they were generated")
     parser.add_argument("--check", action="store_true",
                         help="regenerate when stale, then check the sharded test binaries' test-cost coverage on the pool")
     parser.add_argument("--files-only", action="store_true", help="with --check, skip the pool's test-cost inventory")
     args = parser.parse_args()
     if not REINDEER.is_file():
         raise SystemExit("run tools/buck2/bootstrap.py first (Reindeer is missing)")
-    if not ((args.if_stale or args.check) and generated.current(ROOT)):
-        state = generated.tree_state(ROOT)
-        generate(ROOT)
-        generated.record(ROOT, state)
+    parts = generated.stale(ROOT) if args.if_stale or args.check else list(generated.PARTS)
+    if parts:
+        for part, reads in generate(ROOT, parts).items():
+            generated.record(ROOT, part, reads)
     if args.check and not args.files_only and (errors := check_cost_coverage()):
         print("\n".join(errors), file=sys.stderr)
         return 1

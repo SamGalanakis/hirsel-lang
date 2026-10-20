@@ -16,9 +16,15 @@ No lane commits a generated file, so no rebase can conflict on one
   `tools/native-toolchain/pins.bzl`. `bootstrap.py` (so `prepare.py`),
   `tools/land`, `tools/main-runs`, `tools/bless.sh`, `tools/native-plants.py` and
   the runtime benchmark harness run
-  `sync.py --if-stale`, which regenerates them only when the tree changed since
-  the last generation (a stamp in `.buck2/` of HEAD's tree and every path `git
-  status` reports). After you edit sources or rebase, run `prepare.py` or
+  `sync.py --if-stale`. Generation has two parts, third-party dependencies
+  (Cargo metadata, then Reindeer) and the first-party inventory (Cargo
+  metadata, then source inspection), and a stamp in `.buck2/` records each
+  part's outputs and every file, existence test and glob it read. `--if-stale`
+  regenerates only a part whose outputs are missing or edited or whose inputs
+  read differently, so a documentation edit regenerates nothing and a Rust
+  source edit reruns only the inventory; either part replaces an output only
+  when its bytes change. `sync.py` without flags regenerates both parts. After
+  you edit sources or rebase, run `prepare.py` or
   `sync.py --if-stale` before a bare `.buck2/bin/buck2`. Where the root BUCK is
   missing, Buck2 reads the committed `BUCK.unsynced` (`[buildfile]` in
   `.buckconfig`), which fails saying to run `sync.py`. The files are
