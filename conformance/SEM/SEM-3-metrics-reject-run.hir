@@ -43,13 +43,13 @@ fn measured(
   copy values[0]
 }
 
-pub fn main() -> () uses {} {
+pub fn main() -> Result[(), std@1/metrics.MetricError] uses {} {
   let c = descriptor(Counter(), "c", [])
   let h = descriptor(Histogram(), "h", [0, 1, 18446744073709551615])
   let u = descriptor(UpDownCounter(), "u", [])
   let mut Ok(r) = std@1/metrics.registry(config([copy c, copy h, copy u], 1)) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   failure.check(
     std@1/metrics.record(mut r, measured(c, Unsigned(18446744073709551615), [])) == Ok(
@@ -83,7 +83,7 @@ pub fn main() -> () uses {} {
   failure.check(std@1/metrics.snapshot(r) == previous, TextInvariant())
   let mut Ok(negative) = std@1/metrics.registry(config([copy u], 0)) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   failure.check(
     std@1/metrics.record(mut negative, measured(u, Signed(-9223372036854775808), [])) == Ok(
@@ -140,7 +140,7 @@ pub fn main() -> () uses {} {
   )
   let mut Ok(offline) = std@1/metrics.registry(config([copy c], 1)) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   failure.check(
     std@1/metrics.fold(
@@ -180,7 +180,7 @@ pub fn main() -> () uses {} {
   )
   let Ok(data) = std@1/metrics.checkpoint_data(before_fold) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let mut malformed = unique data
   malformed.reducer_version = 2
@@ -230,7 +230,7 @@ pub fn main() -> () uses {} {
   count_limit.state.instruments[0].series[0].aggregate.count = 18446744073709551615
   let mut Ok(counted) = std@1/metrics.restore_data(count_limit, e) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let prior_count = std@1/metrics.checkpoint(counted)
   failure.check(
@@ -250,4 +250,5 @@ pub fn main() -> () uses {} {
     ),
     TextInvariant()
   )
+  Ok(())
 }

@@ -50,7 +50,7 @@ fn evidence(name: String) -> std@1/metrics.EvidenceId uses {} {
   )
 }
 
-pub fn main() -> () uses {} {
+pub fn main() -> Result[(), std@1/metrics.MetricError] uses {} {
   let d = descriptor(Histogram(), "h", [1, 3, 6])
   let c = descriptor(Counter(), "c", [])
   let u = descriptor(UpDownCounter(), "u", [])
@@ -58,11 +58,11 @@ pub fn main() -> () uses {} {
   let cfg = config([copy d, copy c, copy u, copy g], 1)
   let mut Ok(online) = std@1/metrics.registry(cfg) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let mut Ok(offline) = std@1/metrics.registry(cfg) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let e = evidence("capture-A")
   let mut saved = std@1/metrics.checkpoint(offline)
@@ -98,11 +98,11 @@ pub fn main() -> () uses {} {
   }
   let mut Ok(restarted) = std@1/metrics.restore(saved, e) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let Ok(raw) = std@1/metrics.checkpoint_data(saved) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let mut impossible = unique raw
   impossible.state.instruments[0].series[0].aggregate.unsigned = 18446744073709551615
@@ -116,11 +116,11 @@ pub fn main() -> () uses {} {
   let decoded: Result[std@1/metrics.CheckpointData, DecodeError] = codec.decode(bytes)
   let Ok(data) = decoded else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let Ok(durable) = std@1/metrics.restore_data(data, e) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   failure.check(
     std@1/metrics.snapshot(durable) == std@1/metrics.snapshot(restarted),
@@ -207,4 +207,5 @@ pub fn main() -> () uses {} {
     ),
     TextInvariant()
   )
+  Ok(())
 }

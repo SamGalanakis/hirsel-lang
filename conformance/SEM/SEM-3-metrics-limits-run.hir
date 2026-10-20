@@ -43,7 +43,7 @@ fn measured(
   copy values[0]
 }
 
-pub fn main() -> () uses {} {
+pub fn main() -> Result[(), std@1/metrics.MetricError] uses {} {
   let d = descriptor(Counter(), "c", [])
   let a = std@1/telemetry.Attribute(name: "a", value: Text("ok"))
   let z = std@1/telemetry.Attribute(name: "z", value: Bool(true))
@@ -71,7 +71,7 @@ pub fn main() -> () uses {} {
   )
   let mut Ok(r) = std@1/metrics.registry(config([copy d], 1)) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   let previous = std@1/metrics.snapshot(r)
   let long = measured(
@@ -127,7 +127,7 @@ pub fn main() -> () uses {} {
   )
   let mut Ok(r2) = std@1/metrics.registry(config([copy d, copy d], 1)) else {
     failure.check(false, TextInvariant())
-    return
+    return Ok(())
   }
   failure.check(
     core@1/list.len(std@1/metrics.snapshot(r2).instruments) == 1,
@@ -144,4 +144,5 @@ pub fn main() -> () uses {} {
     core@1/list.len(snap.instruments[0].series) == 1 && snap.instruments[0].series[0].aggregate.count == 2 && snap.instruments[0].overflow.count == 0,
     TextInvariant()
   )
+  Ok(())
 }
