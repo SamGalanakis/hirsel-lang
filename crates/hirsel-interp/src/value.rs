@@ -514,7 +514,21 @@ pub fn f64_value(value: f64) -> Value {
 }
 
 impl Clone for Value {
+    #[inline]
     fn clone(&self) -> Self {
+        // The scalars the evaluator copies on most steps, without a call.
+        match *self {
+            Value::Unit => return Value::Unit,
+            Value::Bool(x) => return Value::Bool(x),
+            Value::Integer(x) => return Value::Integer(x),
+            _ => {}
+        }
+        self.clone_aggregate()
+    }
+}
+impl Value {
+    #[inline(never)]
+    fn clone_aggregate(&self) -> Self {
         fn shallow(v: &Value) -> Value {
             match v {
                 Value::FunctionReference(reference) => Value::FunctionReference(reference.clone()),

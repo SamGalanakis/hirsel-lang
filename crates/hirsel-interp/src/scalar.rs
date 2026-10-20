@@ -72,71 +72,75 @@ fn comparison(op: BinaryOp, order: Option<Ordering>) -> Option<Value> {
         _ => return None,
     }))
 }
+/// Two integers of one kind: the comparisons, shifts, bitwise and checked arithmetic
+/// operators.
+pub fn integer(op: BinaryOp, a: Integer, b: Integer) -> Result<Value, ScalarError> {
+    use BinaryOp::*;
+    let order = if a.is_signed() {
+        a.signed().cmp(&b.signed())
+    } else {
+        a.bits().cmp(&b.bits())
+    };
+    if let Some(result) = comparison(op, Some(order)) {
+        return Ok(result);
+    }
+    if matches!(op, Shl | Shr) {
+        // SEM-1 issue #32: bit-vector left shift, arithmetic signed right shift;
+        // negative counts fail, MIN % -1 is the representable mathematical zero.
+        if (b.is_signed() && b.signed() < 0) || b.bits() >= a.width() as u128 {
+            return Err(ScalarError::ShiftRange);
+        }
+        let count = b.bits() as u32;
+        let bits = match op {
+            Shl => a.bits() << count,
+            Shr if a.is_signed() => (a.signed() >> count) as u128,
+            _ => a.bits() >> count,
+        };
+        return Ok(Value::Integer(a.masked(bits)));
+    }
+    if matches!(op, BitAnd | BitOr | BitXor) {
+        return Ok(Value::Integer(a.masked(match op {
+            BitAnd => a.bits() & b.bits(),
+            BitOr => a.bits() | b.bits(),
+            _ => a.bits() ^ b.bits(),
+        })));
+    }
+    if matches!(op, Div | Rem) && b.bits() == 0 {
+        return Err(ScalarError::DivisionByZero);
+    }
+    if a.is_signed() {
+        let (x, y) = (a.signed(), b.signed());
+        signed_result(
+            a,
+            match op {
+                Add => x.checked_add(y),
+                Sub => x.checked_sub(y),
+                Mul => x.checked_mul(y),
+                Div => x.checked_div(y),
+                Rem if y == -1 => Some(0),
+                Rem => x.checked_rem(y),
+                _ => return Err(ScalarError::InvalidOperation),
+            },
+        )
+    } else {
+        let (x, y) = (a.bits(), b.bits());
+        unsigned_result(
+            a,
+            match op {
+                Add => x.checked_add(y),
+                Sub => x.checked_sub(y),
+                Mul => x.checked_mul(y),
+                Div => x.checked_div(y),
+                Rem => x.checked_rem(y),
+                _ => return Err(ScalarError::InvalidOperation),
+            },
+        )
+    }
+}
 pub fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, ScalarError> {
     use BinaryOp::*;
     match (left, right) {
-        (Value::Integer(a), Value::Integer(b)) if a.kind() == b.kind() => {
-            let order = if a.is_signed() {
-                a.signed().cmp(&b.signed())
-            } else {
-                a.bits().cmp(&b.bits())
-            };
-            if let Some(result) = comparison(op, Some(order)) {
-                return Ok(result);
-            }
-            if matches!(op, Shl | Shr) {
-                // SEM-1 issue #32: bit-vector left shift, arithmetic signed right shift;
-                // negative counts fail, MIN % -1 is the representable mathematical zero.
-                if (b.is_signed() && b.signed() < 0) || b.bits() >= a.width() as u128 {
-                    return Err(ScalarError::ShiftRange);
-                }
-                let count = b.bits() as u32;
-                let bits = match op {
-                    Shl => a.bits() << count,
-                    Shr if a.is_signed() => (a.signed() >> count) as u128,
-                    _ => a.bits() >> count,
-                };
-                return Ok(Value::Integer(a.masked(bits)));
-            }
-            if matches!(op, BitAnd | BitOr | BitXor) {
-                return Ok(Value::Integer(a.masked(match op {
-                    BitAnd => a.bits() & b.bits(),
-                    BitOr => a.bits() | b.bits(),
-                    _ => a.bits() ^ b.bits(),
-                })));
-            }
-            if matches!(op, Div | Rem) && b.bits() == 0 {
-                return Err(ScalarError::DivisionByZero);
-            }
-            if a.is_signed() {
-                let (x, y) = (a.signed(), b.signed());
-                signed_result(
-                    a,
-                    match op {
-                        Add => x.checked_add(y),
-                        Sub => x.checked_sub(y),
-                        Mul => x.checked_mul(y),
-                        Div => x.checked_div(y),
-                        Rem if y == -1 => Some(0),
-                        Rem => x.checked_rem(y),
-                        _ => return Err(ScalarError::InvalidOperation),
-                    },
-                )
-            } else {
-                let (x, y) = (a.bits(), b.bits());
-                unsigned_result(
-                    a,
-                    match op {
-                        Add => x.checked_add(y),
-                        Sub => x.checked_sub(y),
-                        Mul => x.checked_mul(y),
-                        Div => x.checked_div(y),
-                        Rem => x.checked_rem(y),
-                        _ => return Err(ScalarError::InvalidOperation),
-                    },
-                )
-            }
-        }
+        (Value::Integer(a), Value::Integer(b)) if a.kind() == b.kind() => integer(op, a, b),
         (Value::Char(a), Value::Char(b)) => {
             comparison(op, Some(a.cmp(&b))).ok_or(ScalarError::InvalidOperation)
         }

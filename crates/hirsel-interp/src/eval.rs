@@ -2281,18 +2281,24 @@ fn dispatch(
                 if moved && left.slot == right.slot || frame.slots[slot as usize].is_some() {
                     return true;
                 }
-                let result = if matches!(
-                    op,
-                    hirsel_syntax::BinaryOp::Eq
-                        | hirsel_syntax::BinaryOp::Ne
-                        | hirsel_syntax::BinaryOp::Lt
-                        | hirsel_syntax::BinaryOp::Le
-                        | hirsel_syntax::BinaryOp::Gt
-                        | hirsel_syntax::BinaryOp::Ge
-                ) {
-                    crate::structural::binary(op, a, b).ok()
-                } else {
-                    scalar::binary(op, a.clone(), b.clone()).ok()
+                let result = match (a, b) {
+                    // Structural order on two integers of one kind is their scalar order.
+                    (&Value::Integer(a), &Value::Integer(b)) if a.kind() == b.kind() => {
+                        scalar::integer(op, a, b).ok()
+                    }
+                    _ if matches!(
+                        op,
+                        hirsel_syntax::BinaryOp::Eq
+                            | hirsel_syntax::BinaryOp::Ne
+                            | hirsel_syntax::BinaryOp::Lt
+                            | hirsel_syntax::BinaryOp::Le
+                            | hirsel_syntax::BinaryOp::Gt
+                            | hirsel_syntax::BinaryOp::Ge
+                    ) =>
+                    {
+                        crate::structural::binary(op, a, b).ok()
+                    }
+                    _ => scalar::binary(op, a.clone(), b.clone()).ok(),
                 };
                 let Some(result) = result else {
                     return true;
