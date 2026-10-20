@@ -1,0 +1,27 @@
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let Ok(stdout) = io.stdout(rt) else {
+    return Error(())
+  }
+  let Ok(dir) = io.dir(rt, path.of("data")) else {
+    return Error(())
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(())
+  }
+  let Ok(level_text) = arg.text(args, 1) else {
+    return Error(())
+  }
+  let Ok(level) = u64.parse(level_text) else {
+    return Error(())
+  }
+  let Ok(data) = file.read_bytes(dir, path.of(name)) else {
+    return Error(())
+  }
+  let mut sum = 0u64
+  for i in 0u64..20u64 {
+    let output = flate.deflate(data, level)
+    sum += core@1/int.widen(crc32.digest(output))
+  }
+  let _ = out.print(stdout, f"{sum}\n")
+  Ok(())
+}

@@ -1,0 +1,96 @@
+// rule: SEM-3
+// expect: run
+// libzstd 49cf5179 lib/common/fse_decompress.c:59-160 accepts one symbol
+// with all 32 states. entropy_common.c:42-195 reads these normalized counts.
+// FSE_Compressed is legal here even though zstd's encoder normally picks RLE.
+// Each sequence below has LL=1, OF=0 (repeat offset 1), ML=0 (length 3).
+pub fn main(t: Test) -> Result[(), ()] {
+  // FSE_Compressed: LL; all other tables RLE.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x55\x00\x00\x08\x61\x01\x94\x10\xf8\x01\x00\x00\x20",
+      64,
+      1024
+    ),
+    Ok(b"aaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x55\x00\x00\x08\x61\x01\x94\x10\xf8\x01\x00\x00",
+      64,
+      1024
+    ),
+    Error(Truncated())
+  )
+  // FSE_Compressed: OF; all other tables RLE.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x4d\x00\x00\x08\x61\x01\x64\x01\xf0\x03\x00\x20",
+      64,
+      1024
+    ),
+    Ok(b"aaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x4d\x00\x00\x08\x61\x01\x64\x01\xf0\x03\x00",
+      64,
+      1024
+    ),
+    Error(Truncated())
+  )
+  // FSE_Compressed: ML; all other tables RLE.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x4d\x00\x00\x08\x61\x01\x58\x01\x00\xf0\x03\x20",
+      64,
+      1024
+    ),
+    Ok(b"aaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x4d\x00\x00\x08\x61\x01\x58\x01\x00\xf0\x03",
+      64,
+      1024
+    ),
+    Error(Truncated())
+  )
+  // FSE_Compressed: LL, OF, ML; all other tables RLE.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x6d\x00\x00\x08\x61\x01\xa8\x10\xf8\x01\xf0\x03\xf0\x03\x00\x80",
+      64,
+      1024
+    ),
+    Ok(b"aaaa")
+  )
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x6d\x00\x00\x08\x61\x01\xa8\x10\xf8\x01\xf0\x03\xf0\x03\x00",
+      64,
+      1024
+    ),
+    Error(Truncated())
+  )
+  // Single-symbol compressed Huffman weights consume no state-update bits.
+  // libzstd rejects the overflowing weight stream; Hirsel must also stop.
+  test.equal(
+    t,
+    zstd.decode(
+      b"\x28\xb5\x2f\xfd\x00\x00\x5d\x00\x00\x12\xc0\x01\x05\x10\xf8\x01\x00\x04\x02\x00",
+      64,
+      1024
+    ),
+    Error(Corrupt())
+  )
+  Ok(())
+}

@@ -2,6 +2,9 @@
 // huffmanBlock, dataBlock and the huffmanDecoder.init completeness rule),
 // src/compress/gzip/gunzip.go and src/compress/zlib/reader.go, golang/go
 // ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; third-party/NOTICES.md).
+// Canonical count/symbol construction and decoding port madler/zlib
+// 09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851 contrib/puff/puff.c:235-255,340-379
+// (Mark Adler; zlib license), with a lazily built direct table for short codes.
 // One resumable decoder serves whole buffers and buffered sources: it stops at
 // an output bound and, when input runs out, rewinds to the start of the unit
 // (header, block header, symbol or trailer) it was reading.
@@ -198,7 +201,8 @@ fn fast_table(h: Huffman) -> unique List[u64] uses {} {
   take table
 }
 
-// Go huffSym: a bit sequence matching no code of at most `max` bits is corrupt.
+// puff.c:235-255 decode (SLOW): first/code/index canonical walk. As in Go
+// huffSym, a sequence matching no code of at most `max` bits is corrupt.
 // `table` is empty until fast_table builds it.
 fn decode(data: Bytes, mut s: Bits, h: Huffman, table: List[u64]) -> Result[
   u64,
@@ -940,8 +944,9 @@ pub fn file_read(
 // deflate_fast, deflate_slow) and trees.c, madler/zlib 09155ea (zlib license;
 // third-party/NOTICES.md), at windowBits 15, memLevel 8 and the default
 // strategy, so each level writes zlib's bytes. Level 0 writes stored blocks of
-// 65535 bytes, as one zlib deflate call with ample output does. The hash heads
-// are a map, so an encoder costs nothing before its input arrives.
+// 65535 bytes, as one zlib deflate call with ample output does. As in zlib
+// deflate.c:155-164, hash heads are indexed directly. Allocate them only when
+// the first string is inserted, so unused and level-0 encoders need no heads.
 /// The container around a DEFLATE stream: none (RFC 1951), zlib (RFC 1950)
 /// or gzip (RFC 1952).
 @serializable
@@ -1243,7 +1248,7 @@ pub opaque type Encoder: copyable + inert + noalloc_drop uses {} {
   level: u64,
   started: bool,
   window: List[u8],
-  head: Map[u64, u64],
+  head: Array[u64],
   prev: List[u64],
   ins_h: u64,
   strstart: u64,
@@ -1278,7 +1283,7 @@ pub fn encoder(format: Format, level: u64) -> unique Encoder uses {} {
     level: level,
     started: false,
     window: [],
-    head: core@1/map.empty(),
+    head: [],
     prev: [],
     ins_h: 0,
     strstart: 0,
@@ -1821,16 +1826,16 @@ fn tally_match(mut e: Encoder, dist: u64, lc: u64) -> bool uses {} {
 fn insert_string(mut e: Encoder, at: u64) -> u64 uses {} {
   let c: u64 = core@1/int.widen(e.window[at + 2])
   e.ins_h = (e.ins_h << 5 ^ c) & HASH_MASK
-  let previous = match core@1/map.get(e.head, e.ins_h) {
-    Some(position) => position,
-    None() => 0,
+  if core@1/array.len(e.head) == 0 {
+    e.head = [0u64; 32768]
   }
+  let previous = e.head[e.ins_h]
   let slot = at & WMASK
   while core@1/list.len(e.prev) <= slot {
     core@1/list.push(mut e.prev, 0)
   }
   e.prev[slot] = previous
-  core@1/map.insert(mut e.head, e.ins_h, at)
+  e.head[e.ins_h] = at
   previous
 }
 
@@ -1841,15 +1846,15 @@ fn reset_hash(mut e: Encoder, at: u64) -> () uses {} {
   e.ins_h = (first << 5 ^ second) & HASH_MASK
 }
 
-// zlib slide_hash.
+// zlib deflate.c:187-211 slide_hash: subtract WSIZE, saturating at NIL (0).
 fn slide_hash(mut e: Encoder) -> () uses {} {
-  let mut head: Map[u64, u64] = core@1/map.empty()
-  for (hash, position) in e.head {
-    if position > WSIZE {
-      core@1/map.insert(mut head, hash, position - WSIZE)
+  for position in mut e.head {
+    position = if position >= WSIZE {
+      position - WSIZE
+    } else {
+      0
     }
   }
-  e.head = take head
   for position in mut e.prev {
     position = if position >= WSIZE {
       position - WSIZE

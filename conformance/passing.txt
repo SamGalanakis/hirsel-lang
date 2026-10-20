@@ -4951,6 +4951,10 @@ conformance/SEM/SEM-3-empty-scalars.hir
 conformance/SEM/SEM-3-flate-bomb-run.hir
 conformance/SEM/SEM-3-flate-cpython-run.hir
 conformance/SEM/SEM-3-flate-dynamic-run.hir
+conformance/SEM/SEM-3-flate-go-huffman-1-run.hir
+conformance/SEM/SEM-3-flate-go-huffman-2-run.hir
+conformance/SEM/SEM-3-flate-go-huffman-3-run.hir
+conformance/SEM/SEM-3-flate-go-missing-streams-run.hir
 conformance/SEM/SEM-3-flate-go-streams-1-run.hir
 conformance/SEM/SEM-3-flate-go-streams-2-run.hir
 conformance/SEM/SEM-3-flate-go-streams-3-run.hir
@@ -5989,6 +5993,7 @@ conformance/SEM/SEM-3-zstd-golden-run.hir
 conformance/SEM/SEM-3-zstd-huffman-run.hir
 conformance/SEM/SEM-3-zstd-malformed-run.hir
 conformance/SEM/SEM-3-zstd-sequences-run.hir
+conformance/SEM/SEM-3-zstd-single-symbol-run.hir
 conformance/SEM/SEM-4-array-borrow.hir
 conformance/SEM/SEM-4-array-mut.hir
 conformance/SEM/SEM-4-array-take.hir

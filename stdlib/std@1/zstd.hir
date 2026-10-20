@@ -1,5 +1,7 @@
 // Adapted from Zig lib/std/compress/zstd{.zig,/Decompress.zig}, ziglang/zig
 // bff490a23889750de7096d9057c0a432efc929a8 (MIT; third-party/NOTICES.md).
+// FSE table construction ports facebook/zstd 49cf51799ea051457f57243527aa2058f999f005
+// lib/common/fse_decompress.c:59-160 FSE_buildDTable_internal (BSD-3-Clause).
 // Whole-buffer RFC 8878 decoder. Unlike Zig's streaming adapter, every access
 // is checked against its containing section, checksums are always verified,
 // and raw-content and formatted dictionaries are supported.
@@ -165,9 +167,9 @@ fn backward(data: Bytes, mut b: Reverse, n: u64) -> Result[u64, ZstdError] uses 
   Ok(extract(data, b.left, n))
 }
 
-// Zig Table.build: -1 probabilities occupy the table's high end; positive
-// probabilities spread with the RFC step. Sorting each symbol's states is
-// equivalent to visiting the completed table in increasing state order.
+// libzstd FSE_buildDTable_internal: -1 counts occupy the table's high end;
+// positive counts spread with the RFC step, then symbolNext builds each state.
+// A single positive count filling the table is valid (all entries use 0 bits).
 // `values` encodes normalized counts plus one (0 = -1, 1 = absent).
 fn build_fse(values: List[u64], accuracy: u64) -> Result[Fse, ZstdError] uses {} {
   let size = 1u64 << accuracy
@@ -176,7 +178,6 @@ fn build_fse(values: List[u64], accuracy: u64) -> Result[Fse, ZstdError] uses {}
   let mut next = zeros(core@1/list.len(values))
   let mut symbol: u64 = 0
   let mut total: u64 = 0
-  let mut present: u64 = 0
   while symbol < core@1/list.len(values) {
     let v = values[symbol]
     if v == 0 {
@@ -187,15 +188,13 @@ fn build_fse(values: List[u64], accuracy: u64) -> Result[Fse, ZstdError] uses {}
       symbols[high] = symbol
       next[symbol] = 1
       total += 1
-      present += 1
     } else if v > 1 {
       next[symbol] = v - 1
       total += v - 1
-      present += 1
     }
     symbol += 1
   }
-  if total != size || present < 2 {
+  if total != size {
     return Error(Corrupt())
   }
   let step = size / 2 + size / 8 + 3

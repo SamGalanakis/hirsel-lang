@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Prepare byte-identical zlib/Hirsel encoder workloads outside measurements.
+
+Usage: bench/flate/prepare OUTPUT ZLIB_REFERENCE_CLONE
+Build zlib 1.3 (09155ea) in the clone first: ./configure --static && make libz.a.
+Seal Hirsel variants with `hirsel build --release OUTPUT/encode.hir -o BINARY`.
+Then pass participants from this directory to bench/micro/run (10 rounds).
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import random
+import shutil
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[2]
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('output', type=Path)
+p.add_argument('zlib', type=Path)
+a = p.parse_args()
+out = a.output.resolve()
+out.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(ROOT / 'bench/flate/encode.hir', out / 'encode.hir')
+manifest = dict(schema=1, package=dict(name='flate_bench', version='1'),
+                entry=dict(module=[], name='main'),
+                sources=[dict(path='encode.hir', module=[])],
+                dependencies=[dict(manifest=str(ROOT / 'stdlib/std@1/hirsel.json'),
+                                   package=dict(name='std', version='1'), expose=[])])
+(out / 'encode.hir.json').write_text(json.dumps(manifest, indent=2) + '\n')
+(out / 'grants.json').write_text(json.dumps(dict(io=dict(stdout='stdout.bytes@1', dirs=[
+    dict(path='data', host=str(out), access='read')])), indent=2) + '\n')
+words = b'the quick brown fox jumps over the lazy dog. deflate compression tests canonical huffman trees and sliding windows.\n'
+inputs = dict(words=(words * 1000)[:100000], noise=random.Random(42).randbytes(70000),
+              runs=b'a' * 100000 + b'b' * 100000)
+for name, data in inputs.items():
+    (out / (name + '.raw')).write_bytes(data)
+(out / 'inputs.json').write_text(json.dumps({name: dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                                           for name, data in inputs.items()}, indent=2) + '\n')
+subprocess.run(['cc', '-O3', '-I' + str(a.zlib.resolve()), str(ROOT / 'bench/flate/reference.c'),
+                str(a.zlib.resolve() / 'libz.a'), '-o', str(out / 'zlib')], check=True)
+for name in inputs:
+    for level in (1, 6, 9):
+        participants = [dict(name=variant, command=[str(out / variant), '--hirsel-grants',
+                        str(out / 'grants.json'), name + '.raw', str(level)])
+                        for variant in ('map', 'array')]
+        participants.append(dict(name='zlib', command=[str(out / 'zlib'),
+                             str(out / (name + '.raw')), str(level)]))
+        (out / f'{name}-{level}-participants.json').write_text(json.dumps(participants, indent=2) + '\n')
