@@ -26,12 +26,10 @@ impl Store for Files {
             if let Some(s) = n
                 .strip_prefix("board-")
                 .and_then(|s| s.strip_suffix(".json"))
+                && s.len() == 20
+                && let Ok(rev) = s.parse::<u64>()
             {
-                if s.len() == 20 {
-                    if let Ok(rev) = s.parse::<u64>() {
-                        revisions.push(rev);
-                    }
-                }
+                revisions.push(rev);
             }
         }
         revisions.sort_unstable();
@@ -65,12 +63,10 @@ impl Store for Files {
             if self.durable {
                 file.sync_all()?;
             }
-            match fs::hard_link(&temp, &path) {
-                Ok(()) => (),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && fs::read(&path)? == data => {
-                    ()
-                }
-                Err(e) => return Err(e),
+            if let Err(e) = fs::hard_link(&temp, &path)
+                && (e.kind() != io::ErrorKind::AlreadyExists || fs::read(&path)? != data)
+            {
+                return Err(e);
             }
             fs::remove_file(&temp)?;
             if self.durable {

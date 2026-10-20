@@ -1,5 +1,5 @@
+use crate::unicode;
 use serde::{Deserialize, Serialize};
-use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Status {
@@ -102,7 +102,7 @@ pub struct Screen {
     pub selected: u64,
 }
 pub fn fold(text: &str) -> String {
-    text.case_fold().collect()
+    unicode::fold(text)
 }
 pub fn date(text: &str) -> Option<chrono::NaiveDate> {
     if text.len() != 10 || text.as_bytes()[4] != b'-' || text.as_bytes()[7] != b'-' {
@@ -136,17 +136,14 @@ impl Draft {
         };
         let mut tags = Vec::new();
         for part in self.tags.split(',') {
-            let tag = part.trim().to_lowercase();
+            let tag = unicode::lower(part.trim());
             if tag.is_empty() || tags.contains(&tag) {
                 continue;
             }
             if tag.len() > 32 {
                 return Err("a tag is at most 32 bytes");
             }
-            if !tag
-                .chars()
-                .all(|c| c.is_alphabetic() || c.is_numeric() || c == '-' || c == '_')
-            {
+            if !tag.chars().all(unicode::tag_char) {
                 return Err("tags hold letters, digits, - and _");
             }
             tags.push(tag);

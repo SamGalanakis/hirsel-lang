@@ -1,5 +1,6 @@
 mod model;
 mod store;
+mod unicode;
 mod view;
 
 use axum::{
@@ -145,14 +146,14 @@ fn response(status: u16, media: &'static str, body: impl Into<Body>) -> Response
 fn not_found() -> Response {
     response(404, "text/html; charset=utf-8", view::not_found())
 }
-fn allowed(method: &str, methods: &'static str) -> Result<(), Response> {
+fn allowed(method: &str, methods: &'static str) -> Result<(), Box<Response>> {
     if methods.split(", ").any(|m| m == method) {
         Ok(())
     } else {
         let mut r = response(405, "text/plain; charset=utf-8", "method not allowed\n");
         r.headers_mut()
             .insert(header::ALLOW, methods.parse().unwrap());
-        Err(r)
+        Err(Box::new(r))
     }
 }
 fn signals(text: impl Into<String>) -> Response {
@@ -173,7 +174,7 @@ fn param<'a>(pairs: &'a [(String, String)], key: &str) -> &'a str {
         .map(|(_, v)| v.as_str())
         .unwrap_or("")
 }
-async fn dispatch(app: Arc<App>, request: Request) -> Result<Response, Response> {
+async fn dispatch(app: Arc<App>, request: Request) -> Result<Response, Box<Response>> {
     let method = request.method().as_str().to_owned();
     let path = request.uri().path();
     let parts: Vec<_> = path
@@ -233,11 +234,20 @@ async fn dispatch(app: Arc<App>, request: Request) -> Result<Response, Response>
         let mut updates = app.updates.subscribe();
         let mut stop = app.stop.subscribe();
         let events = async_stream::stream! {
+            let mut shown = None;
             loop {
                 if *stop.borrow() { break; }
                 updates.borrow_and_update();
-                let html={ let board=app.board.read().await; view::live(&board,&screen,app.logger.today()) };
-                yield Ok::<_,Infallible>(PatchElements::new(html).write_as_axum_sse_event());
+                let patch = {
+                    let board = app.board.read().await;
+                    if shown == Some(board.revision) { None } else {
+                        shown = Some(board.revision);
+                        Some(view::live(&board, &screen, app.logger.today()))
+                    }
+                };
+                if let Some(html) = patch {
+                    yield Ok::<_,Infallible>(PatchElements::new(html).write_as_axum_sse_event());
+                }
                 tokio::select! { _=stop.changed()=>break, changed=updates.changed()=>if changed.is_err() {break;} }
             }
         };
@@ -248,7 +258,10 @@ async fn dispatch(app: Arc<App>, request: Request) -> Result<Response, Response>
     }
     if parts.len() == 2 && parts[0] == "static" {
         allowed(&method, "GET, HEAD")?;
-        let asset = app.assets.get(&parts[1]).ok_or_else(not_found)?;
+        let asset = app
+            .assets
+            .get(&parts[1])
+            .ok_or_else(|| Box::new(not_found()))?;
         let cached = request
             .headers()
             .get(header::IF_NONE_MATCH)
@@ -374,7 +387,7 @@ async fn dispatch(app: Arc<App>, request: Request) -> Result<Response, Response>
 async fn handle(State(app): State<Arc<App>>, request: Request) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
-    let mut r = dispatch(app.clone(), request).await.unwrap_or_else(|r| r);
+    let mut r = dispatch(app.clone(), request).await.unwrap_or_else(|r| *r);
     app.logger.note(1,if path=="/updates" {"stream"} else {"request"},serde_json::json!({"method":method.as_str(),"path":path,"status":r.status().as_u16().to_string()}));
     if method == axum::http::Method::HEAD {
         *r.body_mut() = Body::empty();

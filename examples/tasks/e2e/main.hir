@@ -144,7 +144,7 @@ fn exchange(
   let mut head: List[u8] = []
   text.append(mut head, f"HTTP/1.1 {response.status}\r\n")
   for h in response.headers {
-    text.append(mut head, f"{h.name}: {h.value}\r\n")
+    text.append(mut head, f"{string.ascii_lower(h.name)}: {h.value}\r\n")
   }
   match string.from_bytes(unique response.body) {
     Ok(text_body) => Ok(
@@ -319,7 +319,7 @@ fn signals_of(mut checks: Checks, response: Response, what: String) -> Result[
   String
 ] {
   expect_status(mut checks, response, 200, what)?
-  expect_in(mut checks, response.head, "Content-Type: text/event-stream", what)?
+  expect_in(mut checks, response.head, "content-type: text/event-stream", what)?
   let event = parse_event(response.body)
   check(
     mut checks,
@@ -334,7 +334,7 @@ fn signals_of(mut checks: Checks, response: Response, what: String) -> Result[
 fn first_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
   let home = get(n, port, "/")?
   expect_status(mut checks, home, 200, "GET /")?
-  expect_in(mut checks, home.head, "Content-Type: text/html; charset=utf-8", "GET /")?
+  expect_in(mut checks, home.head, "content-type: text/html; charset=utf-8", "GET /")?
   expect_in(
     mut checks,
     home.body,
@@ -344,8 +344,8 @@ fn first_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
   expect_in(mut checks, home.body, "@get('/updates'", "GET /")?
   let css = get(n, port, "/static/app.css")?
   expect_status(mut checks, css, 200, "GET /static/app.css")?
-  expect_in(mut checks, css.head, "Content-Type: text/css", "GET /static/app.css")?
-  let Some((_, after)) = string.split_once(css.head, "ETag: ") else {
+  expect_in(mut checks, css.head, "content-type: text/css", "GET /static/app.css")?
+  let Some((_, after)) = string.split_once(css.head, "etag: ") else {
     return Error(f"no ETag in:\n{css.head}")
   }
   let etag = match string.split_once(after, "\r\n") {
@@ -367,7 +367,7 @@ fn first_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
   expect_in(
     mut checks,
     script.head,
-    "Content-Type: text/javascript",
+    "content-type: text/javascript",
     "GET /static/datastar.js"
   )?
   // Two browsers: one sees everything, one filters by the tag `farm`.
@@ -599,7 +599,7 @@ fn first_run(n: Net, port: u16, mut checks: Checks) -> Result[(), String] {
   expect_status(mut checks, get(n, port, "/nowhere")?, 404, "GET /nowhere")?
   let refused = exchange(n, port, "PUT", "/tasks/1", "", "")?
   expect_status(mut checks, refused, 405, "PUT /tasks/1")?
-  expect_in(mut checks, refused.head, "Allow: GET, HEAD, POST, DELETE", "PUT /tasks/1")?
+  expect_in(mut checks, refused.head, "allow: GET, HEAD, POST, DELETE", "PUT /tasks/1")?
   let filtered_home = get(n, port, "/?status=doing&q=OATS")?
   expect_in(
     mut checks,
