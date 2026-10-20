@@ -416,17 +416,17 @@ fn rotate2(x: u64) -> u64 uses {} {
 
 // The cipher on four blocks of planes in place.
 @noalloc
-fn encrypt(schedule: Schedule, mut p: Inline[u64, 8]) -> () uses {} {
-  p[0] = p[0] ^ schedule.planes[0]
-  p[1] = p[1] ^ schedule.planes[1]
-  p[2] = p[2] ^ schedule.planes[2]
-  p[3] = p[3] ^ schedule.planes[3]
-  p[4] = p[4] ^ schedule.planes[4]
-  p[5] = p[5] ^ schedule.planes[5]
-  p[6] = p[6] ^ schedule.planes[6]
-  p[7] = p[7] ^ schedule.planes[7]
+fn encrypt(round_keys: Schedule, mut p: Inline[u64, 8]) -> () uses {} {
+  p[0] = p[0] ^ round_keys.planes[0]
+  p[1] = p[1] ^ round_keys.planes[1]
+  p[2] = p[2] ^ round_keys.planes[2]
+  p[3] = p[3] ^ round_keys.planes[3]
+  p[4] = p[4] ^ round_keys.planes[4]
+  p[5] = p[5] ^ round_keys.planes[5]
+  p[6] = p[6] ^ round_keys.planes[6]
+  p[7] = p[7] ^ round_keys.planes[7]
   let mut round: u64 = 1
-  while round <= schedule.rounds {
+  while round <= round_keys.rounds {
     sub(mut p)
     let s0 = shift_rows(p[0])
     let s1 = shift_rows(p[1])
@@ -436,7 +436,7 @@ fn encrypt(schedule: Schedule, mut p: Inline[u64, 8]) -> () uses {} {
     let s5 = shift_rows(p[5])
     let s6 = shift_rows(p[6])
     let s7 = shift_rows(p[7])
-    if round < schedule.rounds {
+    if round < round_keys.rounds {
       // MixColumns: with u = x ^ rotate1(x), x ^ rotate2(u) ^ xtime(u).
       let u0 = s0 ^ rotate1(s0)
       let u1 = s1 ^ rotate1(s1)
@@ -473,21 +473,21 @@ fn encrypt(schedule: Schedule, mut p: Inline[u64, 8]) -> () uses {} {
       p[7] = s7
     }
     let at = 8 * round
-    p[0] = p[0] ^ schedule.planes[at + 0]
-    p[1] = p[1] ^ schedule.planes[at + 1]
-    p[2] = p[2] ^ schedule.planes[at + 2]
-    p[3] = p[3] ^ schedule.planes[at + 3]
-    p[4] = p[4] ^ schedule.planes[at + 4]
-    p[5] = p[5] ^ schedule.planes[at + 5]
-    p[6] = p[6] ^ schedule.planes[at + 6]
-    p[7] = p[7] ^ schedule.planes[at + 7]
+    p[0] = p[0] ^ round_keys.planes[at + 0]
+    p[1] = p[1] ^ round_keys.planes[at + 1]
+    p[2] = p[2] ^ round_keys.planes[at + 2]
+    p[3] = p[3] ^ round_keys.planes[at + 3]
+    p[4] = p[4] ^ round_keys.planes[at + 4]
+    p[5] = p[5] ^ round_keys.planes[at + 5]
+    p[6] = p[6] ^ round_keys.planes[at + 6]
+    p[7] = p[7] ^ round_keys.planes[at + 7]
     round += 1
   }
 }
 
 // Four blocks, as eight little-endian words, encrypted.
 @noalloc
-fn encrypt_words(schedule: Schedule, words: Inline[u64, 8]) -> Inline[u64, 8] uses {} {
+fn encrypt_words(round_keys: Schedule, words: Inline[u64, 8]) -> Inline[u64, 8] uses {} {
   let mut p: Inline[u64, 8] = [0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64]
   let mut m: u64 = 0
   while m < 8 {
@@ -503,7 +503,7 @@ fn encrypt_words(schedule: Schedule, words: Inline[u64, 8]) -> Inline[u64, 8] us
     p[7] = p[7] | (x & 0xff) << s
     m += 1
   }
-  encrypt(schedule, mut p)
+  encrypt(round_keys, mut p)
   let mut out: Inline[u64, 8] = [0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64]
   m = 0
   while m < 8 {
@@ -598,10 +598,10 @@ fn ghash(start: u128, h: u128, data: Bytes) -> u128 uses {} {
 
 // AES(0), AES(nonce || 1) and the keystream blocks for counters 2 and 3.
 @noalloc
-fn first(schedule: Schedule, nonce: Bytes) -> Inline[u64, 8] uses {} {
+fn first(round_keys: Schedule, nonce: Bytes) -> Inline[u64, 8] uses {} {
   let prefix = load32(nonce, 0) | load32(nonce, 4) << 32
   encrypt_words(
-    schedule,
+    round_keys,
     [
       0u64,
       0u64,
@@ -622,7 +622,7 @@ fn word_byte(words: Inline[u64, 8], at: u64) -> u8 uses {} {
 
 // `data` XORed with the keystream from counter 2: the last two blocks of `start`,
 // then four blocks per encryption.
-fn ctr(schedule: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> unique Bytes uses {} {
+fn ctr(round_keys: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> unique Bytes uses {} {
   let prefix = load32(nonce, 0) | load32(nonce, 4) << 32
   let len = core@1/bytes.len(data)
   let mut out: List[u8] = []
@@ -634,7 +634,7 @@ fn ctr(schedule: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> 
   while at < len {
     if offset == 64 {
       stream = encrypt_words(
-        schedule,
+        round_keys,
         [
           prefix,
           counter_word(nonce, counter),
@@ -695,11 +695,11 @@ fn key_schedule(key: Bytes, nonce: Bytes) -> Schedule uses {} {
 // The ciphertext followed by its 16-byte tag; the key's length (16, 24 or 32 bytes)
 // selects AES-128, AES-192 or AES-256.
 pub fn seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {} {
-  let schedule = key_schedule(key, nonce)
+  let round_keys = key_schedule(key, nonce)
   core@1/failure.check(core@1/bytes.len(plaintext) <= MAX_MESSAGE, Arithmetic())
   core@1/failure.check(core@1/bytes.len(data) <= MAX_DATA, Arithmetic())
-  let start = first(schedule, nonce)
-  let ciphertext = ctr(schedule, nonce, start, plaintext)
+  let start = first(round_keys, nonce)
+  let ciphertext = ctr(round_keys, nonce, start, plaintext)
   let mac = tag(start, data, ciphertext)
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, core@1/bytes.len(ciphertext) + 16)
@@ -718,16 +718,16 @@ pub fn open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[
   unique Bytes,
   std@1/aead.OpenError
 ] uses {} {
-  let schedule = key_schedule(key, nonce)
+  let round_keys = key_schedule(key, nonce)
   let len = core@1/bytes.len(sealed)
   if len < 16 || len - 16 > MAX_MESSAGE || core@1/bytes.len(data) > MAX_DATA {
     return Error(AuthenticationFailed())
   }
   let ciphertext = core@1/bytes.slice(sealed, 0, len - 16)
-  let start = first(schedule, nonce)
+  let start = first(round_keys, nonce)
   let expected = tag(start, data, ciphertext)
   if !std@1/constant_time.equal(expected, core@1/bytes.slice(sealed, len - 16, len)) {
     return Error(AuthenticationFailed())
   }
-  Ok(ctr(schedule, nonce, start, ciphertext))
+  Ok(ctr(round_keys, nonce, start, ciphertext))
 }
