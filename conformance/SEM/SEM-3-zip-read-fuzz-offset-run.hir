@@ -1,0 +1,50 @@
+// rule: SEM-3
+// expect: run
+// Go reader_test.go:1838 TestBaseOffsetPlusOverflow, plus a minimized
+// ZIP64 prefix+entry-offset overflow seed. Both public readers must return Format.
+fn format_error(data: Bytes) -> bool {
+  match zip.entries(data) {
+    Error(Format(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let bad = b"!PK\x01\x02\x14\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xffx\x01\x00\x08\x00\xff\xff\xff\xff\xff\xff\xff\xffPK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00;\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  test.check(t, format_error(bad))
+  let go = b"                                        \xff\xff                                                                 PK\x06\x06                                  \xff\xff \x00\x00\x00\x00\x00\x00\x00 \x08\x00\x00\x00\x00\x00\x80PK\x06\x07\x00\x00\x00\x00k\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00PK\x05\x06    \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff \x00"
+  test.check(t, format_error(go))
+  let dir = test.dir(t, [(path.of("bad.zip"), copy bad), (path.of("go.zip"), copy go)])
+  let mut f = file.open(dir, path.of("bad.zip"))?
+  test.check(
+    t,
+    match zip.file_entries(dir, mut f, core@1/bytes.len(bad)) {
+      Error(Archive(Format(_))) => true,
+      _ => false,
+    }
+  )
+  let mut g = file.open(dir, path.of("go.zip"))?
+  test.check(
+    t,
+    match zip.file_entries(dir, mut g, core@1/bytes.len(go) + 1875) {
+      Error(Archive(Format(_))) => true,
+      _ => false,
+    }
+  )
+  // ZIP64 compressed-size plus descriptor allowance must not wrap either.
+  let packed = b"PK\x03\x04\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00xPK\x01\x02\x14\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x01\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00x\x01\x00\x08\x00\xff\xff\xff\xff\xff\xff\xff\xffPK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00;\x00\x00\x00\x1f\x00\x00\x00\x00\x00"
+  let dir2 = test.dir(t, [(path.of("packed.zip"), copy packed)])
+  let mut h = file.open(dir2, path.of("packed.zip"))?
+  let es = match zip.entries(packed) {
+    Ok(es) => es,
+    Error(_) => return Error(FileFault(1u32)),
+  }
+  test.check(
+    t,
+    match zip.file_read(dir2, mut h, es[0], 1024) {
+      Error(Archive(Format(_))) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

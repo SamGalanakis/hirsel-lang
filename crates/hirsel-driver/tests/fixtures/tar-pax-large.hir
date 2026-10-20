@@ -1,0 +1,13 @@
+// Go tar/reader_test.go:252 TestReader pax-bad-hdr-large.tar.bz2.
+// The original 1 MiB special header exceeds the reader's SPECIAL bound.
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let dir = io.dir(rt, path.of("."))?
+  let mut f = file.open(dir, path.of("large.tar"))?
+  let mut t = tar.reader(None())
+  let mut r = bufio.new(512)
+  failure.check(
+    tar.file_next(dir, mut f, mut t, mut r) == Error(Archive(Header(0))),
+    Bounds()
+  )
+  Ok(())
+}

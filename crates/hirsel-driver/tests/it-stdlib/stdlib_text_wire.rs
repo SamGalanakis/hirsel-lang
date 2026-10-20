@@ -169,6 +169,90 @@ fn zip_large_vectors_execute_std_source() {
     });
 }
 
+// Go TestReader's 4 MiB archive cannot be embedded in a bounded corpus program.
+#[test]
+fn zip_big_directory_executes_std_source() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zip-big.hir");
+        let mut simulation = SimulationConfig::default();
+        simulation.files.insert(
+            "big.zip".into(),
+            include_bytes!("../fixtures/zip-big.bin").to_vec(),
+        );
+        let outcome = run_path_with_step_budget(
+            &path,
+            simulation,
+            Some(5_000_000),
+            hirsel_engine::Verify::On,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
+    });
+}
+
+// Original Go pax-bad-hdr-large input is carried outside the bounded corpus.
+#[test]
+fn tar_large_pax_header_executes_std_source() {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tar-pax-large.hir");
+        let mut simulation = SimulationConfig::default();
+        simulation.files.insert(
+            "large.tar".into(),
+            include_bytes!("../fixtures/tar-pax-large.bin").to_vec(),
+        );
+        let outcome = run_path_with_step_budget(
+            &path,
+            simulation,
+            Some(5_000_000),
+            hirsel_engine::Verify::On,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
+    });
+}
+
+// Go TestInvalidFiles scans 70 KiB of zeros beyond the corpus step budget.
+#[test]
+fn zip_invalid_zeros_execute_std_source() {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zip-invalid-zeros.hir");
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            Some(10_000_000),
+            hirsel_engine::Verify::On,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
+    });
+}
+
 // zlib's output at window, block-split and stored-fallback scale runs only as
 // a built executable; the corpus covers every level on short inputs.
 #[test]

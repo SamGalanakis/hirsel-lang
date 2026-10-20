@@ -161,7 +161,7 @@ type Directory {
   end: u64,
 }
 
-fn directory_end(data: Bytes) -> Result[Directory, ZipError] uses {} {
+fn directory_end(data: Bytes, origin: u64) -> Result[Directory, ZipError] uses {} {
   let len = core@1/bytes.len(data)
   // Go searches the last 1 KiB, then the last 65 KiB.
   let near = if len > 1024 {
@@ -178,14 +178,14 @@ fn directory_end(data: Bytes) -> Result[Directory, ZipError] uses {} {
     Some(at) => at,
     None() => match find_end(data, far) {
       Some(at) => at,
-      None() => return Error(Format(len)),
+      None() => return Error(Format(origin + len)),
     },
   }
   let mut d = Directory(
     records: le16(data, at + 10),
     size: le32(data, at + 12),
     offset: le32(data, at + 16),
-    end: at
+    end: origin + at
   )
   if d.records == MAX16 || d.size == MAX32 || d.offset == MAX32 {
     // Go findDirectory64End: a locator just before the end record.
@@ -193,18 +193,22 @@ fn directory_end(data: Bytes) -> Result[Directory, ZipError] uses {} {
       data,
       at - 4
     ) == 1 {
-      let p = le64(data, at - 12)
-      if p > len || len - p < 56 || le32(data, p) != END64 {
-        return Error(Format(p))
+      let absolute = le64(data, at - 12)
+      if absolute < origin || absolute - origin > len || len - (absolute - origin) < 56 {
+        return Error(Format(absolute))
+      }
+      let p = absolute - origin
+      if le32(data, p) != END64 {
+        return Error(Format(absolute))
       }
       d.records = le64(data, p + 32)
       d.size = le64(data, p + 40)
       d.offset = le64(data, p + 48)
-      d.end = p
+      d.end = absolute
     }
   }
   if d.size >> 63 != 0 || d.offset >> 63 != 0 || d.size + d.offset > d.end {
-    return Error(Format(at))
+    return Error(Format(origin + at))
   }
   Ok(d)
 }
@@ -252,7 +256,8 @@ fn directory_entry(data: Bytes, at: u64, base: u64) -> Result[
     size: le32(data, at + 24),
     offset: le32(data, at + 42)
   )
-  // Go parseExtras: ZIP64 sizes and offset, and an extended timestamp.
+  // Go reader.go:416-482 parseExtras (ebe2feef): ZIP64 and timestamps.
+  // Keep only whole Unix seconds, as Entry.modified specifies.
   let mut i = extra_at
   while i + 4 <= comment_at {
     let tag = le16(data, i)
@@ -284,11 +289,42 @@ fn directory_entry(data: Bytes, at: u64, base: u64) -> Result[
         }
         e.offset = le64(data, p)
       }
+    } else if tag == 0x000a && field >= 4 {
+      // NTFS reserved word, followed by tagged attributes. Ignore malformed
+      // attributes and unrelated tags just as Go's parseExtras does.
+      let mut p = field_at + 4
+      let field_end = field_at + field
+      while p + 4 <= field_end {
+        let attr = le16(data, p)
+        let size = le16(data, p + 2)
+        p += 4
+        if size > field_end - p {
+          break
+        }
+        if attr == 1 && size == 24 {
+          let ticks: i64 = core@1/int.truncate(le64(data, p))
+          let mut seconds = ticks / 10000000
+          if ticks < 0 && ticks % 10000000 != 0 {
+            seconds -= 1
+          }
+          e.modified = Some(seconds - 11644473600)
+        }
+        p += size
+      }
+    } else if (tag == 0x000d || tag == 0x5855) && field >= 8 {
+      let seconds: i64 = core@1/int.truncate(le32(data, field_at + 4))
+      e.modified = Some(seconds)
     } else if tag == 0x5455 && field >= 5 && data[field_at] & 1 != 0 {
       let seconds: i64 = core@1/int.truncate(le32(data, field_at + 1))
       e.modified = Some(seconds)
     }
     i = field_at + field
+  }
+  // Go Reader.init/readDirectoryEnd reject offsets outside signed file
+  // positions (reader.go:143,599-610). Check before adding: Hirsel integer
+  // overflow is a language failure, never an archive error.
+  if e.offset > 9223372036854775807 || base > 9223372036854775807 - e.offset {
+    return Error(Format(at))
   }
   e.offset += base
   Ok(Some((e, next)))
@@ -318,7 +354,7 @@ pub fn archive_comment(data: Bytes) -> Result[unique String, ZipError] uses {} {
 /// central directory when its recorded offset does not hold a directory
 /// header.
 pub fn entries(data: Bytes) -> Result[List[Entry], ZipError] uses {} {
-  let d = directory_end(data)?
+  let d = directory_end(data, 0)?
   let mut base = d.end - d.size - d.offset
   if base > 0 && directory_entry(data, d.offset, 0)? != None() {
     base = 0
@@ -446,12 +482,11 @@ pub fn file_entries(dir: Dir, mut f: File of dir, size: u64) -> Result[
     0
   }
   let tail = file_bytes(dir, mut f, tail_start, size - tail_start) ? Storage
-  let d = match directory_end(tail) {
+  let d = match directory_end(tail, tail_start) {
     Ok(d) => d,
-    Error(Format(n)) => return Error(Archive(Format(tail_start + n))),
     Error(error) => return Error(Archive(error)),
   }
-  let end = tail_start + d.end
+  let end = d.end
   let mut base = end - d.size - d.offset
   let directory = file_bytes(dir, mut f, base + d.offset, d.size) ? Storage
   if base > 0 {
@@ -494,6 +529,9 @@ pub fn file_read(dir: Dir, mut f: File of dir, e: Entry, limit: u64) -> Result[
   let skip = 30 + le16(header, 26) + le16(header, 28)
   // The local header, then the entry's data and up to a 16-byte descriptor,
   // re-based so that `read` finds them at offset 0.
+  if e.offset > 9223372036854775807 - skip || e.compressed > 9223372036854775791 {
+    return Error(Archive(Format(e.offset)))
+  }
   let region = file_bytes(dir, mut f, e.offset + skip, e.compressed + 16) ? Storage
   let mut rebuilt: List[u8] = []
   for byte in header {

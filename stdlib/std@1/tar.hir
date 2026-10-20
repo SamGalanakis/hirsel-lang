@@ -633,14 +633,26 @@ fn pax_time(value: String) -> Result[i64, ()] uses {} {
   if negative || len > 0 && chars[0] == 43 {
     i = 1
   }
+  // Go tar/strconv.go:206 calls ParseInt; internal/strconv/atoi.go:200-206
+  // permits magnitude 2^63 only for a negative number. Bound before each
+  // multiply/add so no malformed decimal can reach a failing int.narrow.
+  let limit: u64 = if negative {
+    9223372036854775808
+  } else {
+    9223372036854775807
+  }
   let mut seconds: u64 = 0
   let begin = i
   while i < len && chars[i] != 46 {
     let c = chars[i]
-    if c < 48 || c > 57 || seconds > 922337203685477580 {
+    if c < 48 || c > 57 {
       return Error(())
     }
-    seconds = seconds * 10 + core@1/int.widen(c - 48)
+    let digit: u64 = core@1/int.widen(c - 48)
+    if seconds > (limit - digit) / 10 {
+      return Error(())
+    }
+    seconds = seconds * 10 + digit
     i += 1
   }
   if i == begin {
@@ -649,14 +661,22 @@ fn pax_time(value: String) -> Result[i64, ()] uses {} {
   let mut fraction = false
   if i < len {
     i += 1
+    let fraction_at = i
     while i < len {
       let c = chars[i]
       if c < 48 || c > 57 {
         return Error(())
       }
-      fraction = fraction || c != 48
+      fraction = fraction || i - fraction_at < 9 && c != 48
       i += 1
     }
+  }
+  if seconds == 9223372036854775808 {
+    // A fractional decrement below i64 min has no whole-second value.
+    if fraction {
+      return Error(())
+    }
+    return Ok(-9223372036854775808i64)
   }
   let whole: i64 = core@1/int.narrow(seconds)
   if negative {
@@ -743,8 +763,8 @@ fn special[S, E](
 
 /// Go Reader.Next: skips the rest of the current entry and returns the next
 /// entry's header, or None after the end-of-archive marker or at the end of
-/// the input at a block boundary. PAX `x` records and GNU long names apply to
-/// the entry that follows them; a PAX global header is returned as a `Global`
+/// the input after an entry's data (including inside its padding). PAX `x`
+/// records and GNU long names apply to the entry that follows them; a PAX global header is returned as a `Global`
 /// entry. Entry names are returned as stored: `extract` refuses unsafe ones.
 pub fn next[S, E](
   mut t: Reader,
@@ -759,9 +779,22 @@ pub fn next[S, E](
     return Ok(None())
   }
   while true {
-    skip(mut t, mut r, mut source, refill, t.left + t.pad)?
+    // Go reader.go:88-94 discards data strictly, but tryReadFull of
+    // padding returns EOF even if only part of that padding is present.
+    let left = t.left
+    skip(mut t, mut r, mut source, refill, left)?
     t.left = 0
-    t.pad = 0
+    if t.pad > 0 {
+      let pad = t.pad
+      let have = want(mut t, mut r, mut source, refill, pad)?
+      if have < t.pad {
+        t.ended = true
+        return Ok(None())
+      }
+      t.at += t.pad
+      t.offset += t.pad
+      t.pad = 0
+    }
     let at = t.offset
     let n = want(mut t, mut r, mut source, refill, BLOCK)?
     if n == 0 {

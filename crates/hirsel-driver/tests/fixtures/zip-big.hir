@@ -1,0 +1,22 @@
+// Go zip/reader_test.go:374 and :1049 TestReader big.zip, original bytes.
+// List the 4 GiB member without inflating its payload.
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let dir = io.dir(rt, path.of("."))?
+  let mut f = file.open(dir, path.of("big.zip"))?
+  let size = file.size(dir, path.of("big.zip"))?
+  let entries = match zip.file_entries(dir, mut f, size) {
+    Ok(entries) => entries,
+    Error(_) => return Error(FileFault(1u32)),
+  }
+  failure.check(list.len(entries) == 1, Bounds())
+  let e = entries[0]
+  failure.check(
+    e.name == "big.file" && e.size == 4294967295 && e.method == Deflate(),
+    Bounds()
+  )
+  failure.check(
+    zip.file_read(dir, mut f, e, 1024) == Error(Archive(TooLarge())),
+    Bounds()
+  )
+  Ok(())
+}
