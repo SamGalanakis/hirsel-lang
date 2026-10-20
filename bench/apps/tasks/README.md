@@ -1,0 +1,45 @@
+# Tasks application comparison
+
+`./bench/apps/tasks/bench` builds native LLVM Hirsel and the locked Rust release
+project, then runs one seeded, interleaved session on the CPU31 timing lock.
+Servers use CPU31, clients CPU7; CPU15 busy share is sampled around each cell.
+Requires the repository Buck2 setup, `perf`, Linux `/proc`, Python 3 and Cargo.
+No system packages or load tools are installed. The load generator is the
+`load` binary in the same pinned Cargo project (reqwest + HdrHistogram).
+
+Defaults: ten rounds, three-second open-loop cells at 1, 4 and 16 requests/s,
+10,000 persisted tasks, three participants (Hirsel, Rust current_thread, Rust
+multi_thread with **one** worker), plus 1/100/1000-client SSE cells. Rates can be
+extended with `--rates 1,4,16,64`; cells that cannot keep up retain their corrected
+latency and completion rate. The knee is the first rate whose achieved rate is
+below 90% of offered rate. If no knee is reached the report says so; extend the
+sweep before drawing a capacity conclusion. `--rounds` cannot be below ten.
+`--skip-build` reuses existing binaries; it is only for iterative harness checks.
+`--only` selects comma-separated operations for a focused run. A partial run is
+labelled partial in its generated report. All raw results are saved before
+rendering `RESULTS.md`. Never compare wall times from separate invocations.
+
+The server is a fresh capped process for every sample. Cold-start cells use an
+empty board; restart and operation cells start with the same 10k snapshot.
+Open-loop latency includes queueing from the scheduled arrival (no coordinated
+omission). Each response body is fully consumed, keeping HTTP connections alive.
+SSE clients use a selective search over the 10k board, consume their initial
+patch, and await one complete patch each after a status mutation. Their histogram
+measures mutation-to-patch arrival per client; CPU/request is per mutation, not
+per subscriber. RSS is sampled at readiness and after the measured load (the
+latter is a resident snapshot, not a high-water mark).
+
+Each cell has server `perf stat` task-clock, cycles, instructions and user-only
+cycles/instructions. Operation counters attach with `-p` and explicit enable/disable
+acknowledgements, excluding startup and initial subscriptions. Cold/restart
+counters cover process lifetime through shutdown. The instruction ratio is the
+verdict. Ratios, IPC, cycles and task-clock have paired bootstrap confidence
+intervals; Rust baseline variation is reported. Binary size is on-disk ELF bytes,
+including the matching release profiles' debug sections. File durability is
+volatile (the common cheap default); every acknowledged mutation has atomically
+published a compact snapshot and keeps the last two revisions.
+
+`./bench/apps/tasks/e2e --kind rust` drives the original Hirsel HTTP e2e suite
+(first, watch/shutdown, second/restart) against Rust. `--kind rust-one-worker`
+checks the one-worker scheduler; `--kind hirsel` checks the benchmarked Hirsel
+binary. The original fixture controls clocks and reads persisted revisions.

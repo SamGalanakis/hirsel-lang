@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tasks</title>
+<link rel="stylesheet" href="/static/app.css">
+<script type="module" src="/static/datastar.js"></script>
+</head>
+<body data-signals="{{SIGNALS}}">
+<div id="updates" data-effect="$filter.status; $filter.tag; $filter.text; $filter.sort; $selected; @get('/updates', {openWhenHidden: true, filterSignals: {include: /^(filter|selected)/}})"></div>
+<header class="top"><h1><a href="/">Tasks</a></h1>{{STATS}}</header>
+<section class="new" data-on:keydown="evt.key == 'Enter' &amp;&amp; evt.target.tagName == 'INPUT' &amp;&amp; @post('/tasks')"><input data-bind:draft.title placeholder="New task" aria-label="Title" maxlength="200"><select data-bind:draft.priority aria-label="Priority">{{PRIORITIES}}</select><input type="date" data-bind:draft.due aria-label="Due date"><input data-bind:draft.tags placeholder="tags, comma separated" aria-label="Tags"><button data-on:click="@post('/tasks')">Add</button><textarea data-bind:draft.description rows="2" placeholder="Description (optional)" aria-label="Description"></textarea><p class="error" data-show="$error != ''" data-text="$error"></p></section>
+<section class="filters"><select data-bind:filter.status aria-label="Status">{{STATUSES}}</select>{{TAGS}}<input type="search" data-bind:filter.text placeholder="Search" aria-label="Search"><select data-bind:filter.sort aria-label="Sort">{{SORTS}}</select></section>
+<main>
+{{LIST}}
+{{DETAIL}}
+</main>
+</body>
+</html>

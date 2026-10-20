@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""Build and run an interleaved, core-parity task-manager benchmark."""
+import argparse
+import fcntl
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path
+import random
+import shutil
+import signal
+import statistics
+import subprocess
+import tempfile
+import time
+from support import APP, CAPPED, ROOT, RUST, TOOLCHAIN, Server, free_port, line
+
+EVENTS = 'task-clock,cycles,instructions,cycles:u,instructions:u'
+KINDS = ['hirsel', 'rust', 'rust-one-worker']
+
+
+def run(command, **kwargs):
+    return subprocess.run([str(v) for v in command], check=True, **kwargs)
+
+
+def build(binary):
+    run([CAPPED, '--timeout', 300, 'cargo', 'build', '--release', '--locked',
+         '--manifest-path', APP / 'rust/Cargo.toml', '--target-dir', APP / 'rust/target'])
+    output = subprocess.check_output([str(ROOT / '.buck2/bin/buck2'), 'build',
+        '--target-platforms', '//tools/buck2:release', '//:hirsel-toolchain', '//:hirsel-rt-archives',
+        '//tools/buck2/native-toolchain:kit', '//tools/buck2/native-toolchain:glibc_floor', '--show-full-output'], cwd=ROOT, text=True)
+    paths = {line.split()[0].rsplit(':', 1)[1]: line.split()[1] for line in output.splitlines() if line.startswith('root//')}
+    environment = dict(os.environ, LLVM_SYS_211_PREFIX='/usr/lib/llvm-21',
+        HIRSEL_RUNTIME_ARCHIVES=paths['hirsel-rt-archives'], HIRSEL_LINK_KIT=paths['kit'], HIRSEL_GLIBC_FLOOR=paths['glibc_floor'])
+    run([CAPPED, '--timeout', 300, Path(paths['hirsel-toolchain']) / 'hirsel', 'build', ROOT / 'examples/tasks/hirsel.json',
+         '--release', '-o', binary], env=environment)
+
+
+def sibling():
+    fields = next(s.split()[1:] for s in Path('/proc/stat').read_text().splitlines() if s.startswith('cpu15 '))
+    values = list(map(int, fields))[:8]
+    return {'busy': sum(values) - values[3] - values[4], 'total': sum(values)}
+
+
+def rss(pid):
+    fields = dict(s.split(':', 1) for s in Path(f'/proc/{pid}/status').read_text().splitlines() if ':' in s)
+    return int(fields['VmRSS'].split()[0]) * 1024
+
+
+def request(port):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+    connection.request('GET', '/?q=Task+9999')
+    response = connection.getresponse()
+    assert response.status == 200, response.status
+    response.read()
+    connection.close()
+
+
+def fixture(directory, count):
+    directory.mkdir()
+    board = dict(next_id=count + 1, revision=1, tasks=[dict(id=n, title=f'Task {n}',
+        description='Benchmark description', status='Todo', priority='Medium',
+        due=None, tags=['bench', f'group-{n % 10}']) for n in range(1, count + 1)])
+    (directory / 'board-00000000000000000001.json').write_text(json.dumps(board, separators=(',', ':')))
+
+
+def counters(path):
+    output = {}
+    for raw in path.read_text().splitlines():
+        if raw.startswith('#'):
+            continue
+        parts = raw.split(';')
+        if len(parts) >= 3 and parts[2] in EVENTS.split(','):
+            try:
+                output[parts[2]] = float(parts[0])
+            except ValueError:
+                raise RuntimeError(f'counter unavailable: {raw}')
+    if set(output) != set(EVENTS.split(',')):
+        raise RuntimeError(f'incomplete perf counters: {path.read_text()}')
+    return output
+
+
+class AttachedPerf:
+    def __init__(self, pid, directory):
+        self.control = directory / 'control'
+        self.ack = directory / 'ack'
+        os.mkfifo(self.control)
+        os.mkfifo(self.ack)
+        # RDWR avoids FIFO-open deadlock, acknowledgements synchronize measurement.
+        self.control_fd = os.open(self.control, os.O_RDWR)
+        self.ack_fd = os.open(self.ack, os.O_RDWR)
+        self.output = directory / 'perf.csv'
+        self.process = subprocess.Popen(['perf', 'stat', '-x', ';', '-o', str(self.output), '-e', EVENTS,
+            '-p', str(pid), '-D', '-1', '--control', f'fifo:{self.control},{self.ack}'], stderr=subprocess.PIPE)
+
+    def send(self, command):
+        os.write(self.control_fd, (command + '\n').encode())
+        import select
+        if not select.select([self.ack_fd], [], [], 30)[0]:
+            raise RuntimeError('perf control acknowledgement timed out')
+        assert os.read(self.ack_fd, 1024).startswith(b'ack'), 'bad perf acknowledgement'
+
+    def stop(self):
+        self.process.send_signal(signal.SIGINT)
+        _, error = self.process.communicate(timeout=30)
+        os.close(self.control_fd)
+        os.close(self.ack_fd)
+        self.control.unlink()
+        self.ack.unlink()
+        if self.process.returncode not in (0, -signal.SIGINT):
+            raise RuntimeError(error.decode())
+        return counters(self.output)
+
+
+def sample(kind, operation, rate, args, directory, round_number):
+    directory.mkdir()
+    data = directory / 'data'
+    count = 0 if operation == 'cold' else 10000
+    fixture(data, count)
+    port = free_port()
+    before = sibling()
+    lifetime = directory / 'lifetime.csv' if operation in ('cold', 'restart') else None
+    server = Server(kind, data, port, args.binary, directory / 'server.log', timeout=900, perf=lifetime)
+    client = None
+    perf = None
+    try:
+        marker = json.loads(server.marker.read_text())
+        pid = marker['pid']
+        request(port)
+        first_ms = (time.monotonic_ns() - marker['started_ns']) / 1e6
+        idle_rss = rss(pid)
+        result = {'kind': kind, 'operation': operation, 'rate': rate, 'round': round_number,
+                  'first_ms': first_ms, 'idle_rss': idle_rss, 'binary_bytes': (args.binary if kind == 'hirsel' else RUST).stat().st_size,
+                  'sibling_before': before}
+        if operation not in ('cold', 'restart'):
+            client = subprocess.Popen([str(CAPPED), '--timeout', '600', 'taskset', '-c', '7',
+                str(APP / 'rust/target/release/load'), str(port), operation, str(rate), str(args.seconds)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(directory / 'client.log', 'wb'), bufsize=0,
+                env=dict(os.environ, HIRSEL_JOBS='1'))
+            assert line(client, 120) == 'ready'
+            perf = AttachedPerf(pid, directory)
+            perf.send('enable')
+            client.stdin.write(b'go\n')
+            client.stdin.flush()
+            output, _ = client.communicate(timeout=600)
+            perf.send('disable')
+            result.update(json.loads(output))
+            result['perf'] = perf.stop()
+            perf = None
+            if client.returncode:
+                raise RuntimeError((directory / 'client.log').read_text())
+            result['load_rss'] = rss(pid)
+            denominator = 1 if operation == 'sse' else result['completed']
+            result['instructions_per_request'] = result['perf']['instructions'] / denominator
+            result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000 / denominator
+        server.stop()
+        if lifetime:
+            result['perf'] = counters(lifetime)
+            result['instructions_per_request'] = result['perf']['instructions']
+            result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000
+        after = sibling()
+        result['sibling_after'] = after
+        result['sibling_busy_share'] = (after['busy'] - before['busy']) / max(1, after['total'] - before['total'])
+        return result
+    finally:
+        if client and client.poll() is None:
+            client.terminate()
+            client.wait(30)
+        if perf:
+            perf.stop()
+        server.stop(check=False)
+        # Snapshot artifacts can exceed gigabytes over a long run; retain counters
+        # and diagnostics, but remove the fully reproducible seeded board.
+        shutil.rmtree(data)
+
+
+def ci(values, rng):
+    points = sorted(statistics.median(rng.choices(values, k=len(values))) for _ in range(2000))
+    return f'{statistics.median(values):.3f} [{points[49]:.3f}, {points[1949]:.3f}]'
+
+
+def report(document, path):
+    rows = document['samples']
+    rng = random.Random(document['seed'])
+    text = ['# Tasks benchmark results', '', 'Generated by `bench/apps/tasks/bench`; raw samples: [results.json](results.json).', '',
+        f"Session: {document['session']}; git {document['git']}; seed {document['seed']}; {document['rounds']} rounds.",
+        f"Offered rates {document['rates']} req/s, {document['seconds']} s per cell. Fresh process per sample; 10,000 tasks except empty cold start.",
+        'Server CPU31; client CPU7; SMT sibling CPU15 busy counters retained for each sample. Rust current_thread and multi_thread/one worker have core parity.', '',
+        'Instruction ratios are the verdict. Ratios below are Hirsel / Rust current_thread with paired bootstrap 95% CIs. All timing ratios belong to this session.', '']
+    if document.get('errors'):
+        text += ['**Incomplete session: failed cells are listed below. No capacity or overall parity verdict.**', '']
+    text += ['| Operation / offered rate | Participant | Completed req/s | p50 / p99 / p99.9 / max (ms) | CPU s/request | Instructions/request | Idle / load RSS (MiB) | CPU15 busy |',
+             '|---|---|---:|---|---:|---:|---|---:|']
+    cells = sorted(set((r['operation'], r['rate']) for r in rows))
+    for op, rate in cells:
+        for kind in KINDS:
+            group = [r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, kind)]
+            if not group:
+                continue
+            med = lambda name: statistics.median(r[name] for r in group)
+            if op in ('cold', 'restart'):
+                latency = f"first response {med('first_ms'):.3f} ms"
+            else:
+                latency = ' / '.join(f'{med(k) / 1000:.3f}' for k in ['p50_us', 'p99_us', 'p999_us', 'max_us'])
+            text += [f"| {op} / {rate} | {kind} (n={len(group)}) | {med('requests_per_s') if 'requests_per_s' in group[0] else 0:.2f} | {latency} | {med('cpu_s_per_request'):.6f} | {med('instructions_per_request'):.0f} | {med('idle_rss') / 2**20:.1f} / {med('load_rss') / 2**20 if 'load_rss' in group[0] else med('idle_rss') / 2**20:.1f} | {med('sibling_busy_share'):.1%} |"]
+    text += ['', '| Operation / rate | Instructions ratio | Cycles ratio | task-clock ratio | Hirsel / Rust IPC |', '|---|---|---|---|---|']
+    for op, rate in cells:
+        a = {r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'hirsel')}
+        b = {r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')}
+        keys = sorted(a.keys() & b.keys())
+        if not keys:
+            continue
+        ratios = [ci([a[n]['perf'][metric] / b[n]['perf'][metric] for n in keys], rng) for metric in ['instructions', 'cycles', 'task-clock']]
+        ipc_a = statistics.median(a[n]['perf']['instructions'] / a[n]['perf']['cycles'] for n in keys)
+        ipc_b = statistics.median(b[n]['perf']['instructions'] / b[n]['perf']['cycles'] for n in keys)
+        text += [f"| {op} / {rate} | {' | '.join(ratios)} | {ipc_a:.3f} / {ipc_b:.3f} |"]
+    text += ['', 'Binary bytes: ' + ', '.join(f"{kind} {next((r['binary_bytes'] for r in rows if r['kind'] == kind), 'unavailable')}" for kind in KINDS) + '.', '',
+             'Rust baseline noise (current_thread instructions/request; median absolute deviation / median and range):']
+    for op, rate in cells:
+        values = [r['instructions_per_request'] for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'rust')]
+        if values:
+            median = statistics.median(values)
+            mad = statistics.median(abs(v - median) for v in values) / median
+            text += [f'- {op}/{rate}: MAD {mad:.2%}, range {min(values):.0f}–{max(values):.0f} instructions.']
+    text += ['', 'Capacity knee (first achieved rate below 90% of offered rate):']
+    for kind in KINDS:
+        for op in ['list', 'search', 'create', 'update']:
+            cells_for_op = sorted(set(r['rate'] for r in rows if r['kind'] == kind and r['operation'] == op))
+            knee = next((rate for rate in cells_for_op if statistics.median(r['requests_per_s'] for r in rows if (r['kind'], r['operation'], r['rate']) == (kind, op, rate)) < .9 * rate), None)
+            text += [f'- {kind}/{op}: {knee if knee else "not reached in measured sweep"}.']
+    text += ['', 'Profile evidence and >1.2× gaps:', '']
+    profiles = document.get('profiles', {})
+    for key, value in profiles.items():
+        text += [f'`{key}`:', '', '```text', value, '```', '']
+    if not profiles:
+        text += ['No profile captured. Cause attribution remains open; no cause is inferred from elapsed time alone.', '']
+    for error in document.get('errors', []):
+        text += [f"- Failed {error['cell']}: {error['error']}"]
+    path.write_text('\n'.join(text) + '\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--seconds', type=float, default=3)
+    parser.add_argument('--rates', default='1,4,16')
+    parser.add_argument('--seed', type=int, default=20261020)
+    parser.add_argument('--binary', type=Path, default=APP / 'build/tasks-hirsel')
+    parser.add_argument('--skip-build', action='store_true')
+    parser.add_argument('--only', default='cold,restart,list,search,create,update,sse')
+    args = parser.parse_args()
+    if args.rounds < 10:
+        parser.error('measurement protocol requires at least 10 rounds')
+    if args.seconds <= 0:
+        parser.error('--seconds must be positive')
+    args.rates = [int(s) for s in args.rates.split(',')]
+    if not args.rates or min(args.rates) < 1:
+        parser.error('rates must be positive integers')
+    args.binary.parent.mkdir(parents=True, exist_ok=True)
+    if not args.skip_build:
+        build(args.binary)
+    lock = open('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock', 'a')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    session = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    document = dict(session=session, git=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    rounds=args.rounds, seconds=args.seconds, rates=args.rates, seed=args.seed, samples=[], errors=[], profiles={})
+    document['binaries'] = {k: hashlib.sha256((args.binary if k == 'hirsel' else RUST).read_bytes()).hexdigest() for k in KINDS}
+    rng = random.Random(args.seed)
+    operations = args.only.split(',')
+    cells = [(op, rate) for op in operations for rate in ([0] if op in ('cold', 'restart') else [1, 100, 1000] if op == 'sse' else args.rates)]
+    archive = APP / 'build' / session.replace(':', '')
+    archive.mkdir(parents=True)
+    failed = set()
+    for round_number in range(args.rounds):
+        order = [(kind, op, rate) for op, rate in cells for kind in KINDS]
+        rng.shuffle(order)
+        for kind, op, rate in order:
+            if (kind, op, rate) in failed:
+                continue
+            cell = f'{round_number}-{kind}-{op}-{rate}'
+            print(cell, flush=True)
+            try:
+                result = sample(kind, op, rate, args, archive / cell, round_number)
+                document['samples'].append(result)
+            except Exception as error:
+                document['errors'].append(dict(cell=cell, error=str(error)))
+                failed.add((kind, op, rate))
+                print(f'FAILED: {error}', flush=True)
+            (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+            report(document, APP / 'RESULTS.md')
+    return 1 if document['errors'] else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
