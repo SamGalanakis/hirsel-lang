@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "protoc",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "gen_parse.hir",
+      "module": [
+        "protoc"
+      ]
+    },
+    {
+      "path": "gen_model.hir",
+      "module": [
+        "protoc"
+      ]
+    },
+    {
+      "path": "gen_emit.hir",
+      "module": [
+        "protoc"
+      ]
+    },
+    {
+      "path": "gen_wkt.hir",
+      "module": [
+        "protoc"
+      ]
+    },
+    {
+      "path": "gen_grpc.hir",
+      "module": [
+        "protoc"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,852 @@
+// A parser for proto3 `.proto` files, following the language specification at
+// protobuf.dev/reference/protobuf/proto3-spec and protoc's tokenizer. Options are
+// parsed and ignored, except the field options `packed` and `json_name`.
+
+/// One `.proto` source: its import path (as other files import it) and its text.
+pub type Source {
+  name: String,
+  text: String,
+}
+
+/// A parsed file.
+pub type File {
+  name: String,
+  package: String,
+  imports: List[String],
+  messages: List[Message],
+  enums: List[Enum],
+  services: List[Service],
+}
+
+/// A message declaration with its nested declarations.
+pub type Message {
+  name: String,
+  fields: List[Field],
+  oneofs: List[String],
+  messages: List[Message],
+  enums: List[Enum],
+  line: u64,
+}
+
+/// `Implicit` is a proto3 singular field without presence.
+pub type Label = Implicit | Optional | Repeated
+
+/// A field. `ty` is the type as written (`int32`, `Foo.Bar`, `.pkg.Baz`); a map
+/// field also has `key`. `oneof` indexes the message's `oneofs`.
+pub type Field {
+  name: String,
+  number: u64,
+  label: Label,
+  ty: String,
+  key: Option[String],
+  oneof: Option[u64],
+  json_name: Option[String],
+  packed: Option[bool],
+  line: u64,
+}
+
+/// An enum: values in declaration order, aliases included.
+pub type Enum {
+  name: String,
+  values: List[EnumValue],
+  line: u64,
+}
+
+pub type EnumValue {
+  name: String,
+  number: i32,
+}
+
+pub type Service {
+  name: String,
+  methods: List[Method],
+}
+
+pub type Method {
+  name: String,
+  input: String,
+  output: String,
+  client_streaming: bool,
+  server_streaming: bool,
+}
+
+type Kind = Ident | Int | Float | Str | Sym | End
+
+type Token {
+  kind: Kind,
+  text: String,
+  line: u64,
+}
+
+type Parser {
+  file: String,
+  tokens: List[Token],
+  at: u64,
+}
+
+fn is_letter(b: u8) -> bool uses {} {
+  b >= b'a' && b <= b'z' || b >= b'A' && b <= b'Z' || b == b'_'
+}
+
+fn is_digit(b: u8) -> bool uses {} {
+  b >= b'0' && b <= b'9'
+}
+
+fn hex_value(b: u8) -> Option[u64] uses {} {
+  if is_digit(b) {
+    return Some(int.widen(b - b'0'))
+  }
+  if b >= b'a' && b <= b'f' {
+    return Some(int.widen(b - b'a' + 10))
+  }
+  if b >= b'A' && b <= b'F' {
+    return Some(int.widen(b - b'A' + 10))
+  }
+  None()
+}
+
+fn slice_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn make_token(kind: Kind, take text: String, line: u64) -> Token uses {} {
+  Token(kind: kind, text: take text, line: line)
+}
+
+// Decodes one string literal starting at its quote; returns its value and end.
+fn string_literal(file: String, data: Bytes, start: u64, line: u64) -> Result[
+  (String, u64),
+  String
+] uses {} {
+  let quote = data[start]
+  let len = bytes.len(data)
+  let mut out: List[u8] = []
+  let mut i = start + 1
+  while i < len && data[i] != quote {
+    let b = data[i]
+    if b == b'\n' {
+      return Error(f"{file}:{line}: string literal ends at a line break")
+    }
+    if b != b'\\' {
+      list.push(mut out, b)
+      i += 1
+      continue
+    }
+    i += 1
+    if i >= len {
+      return Error(f"{file}:{line}: unterminated string literal")
+    }
+    let e = data[i]
+    i += 1
+    if e == b'n' {
+      list.push(mut out, b'\n')
+    } else if e == b't' {
+      list.push(mut out, b'\t')
+    } else if e == b'r' {
+      list.push(mut out, b'\r')
+    } else if e == b'a' {
+      list.push(mut out, 7)
+    } else if e == b'b' {
+      list.push(mut out, 8)
+    } else if e == b'f' {
+      list.push(mut out, 12)
+    } else if e == b'v' {
+      list.push(mut out, 11)
+    } else if e == b'x' || e == b'X' {
+      let mut value: u64 = 0
+      let mut digits: u64 = 0
+      while digits < 2 && i < len {
+        let Some(d) = hex_value(data[i]) else {
+          break
+        }
+        value = value * 16 + d
+        i += 1
+        digits += 1
+      }
+      if digits == 0 {
+        return Error(f"{file}:{line}: \\x escape without hex digits")
+      }
+      list.push(mut out, int.truncate(value))
+    } else if e >= b'0' && e <= b'7' {
+      let mut value: u64 = int.widen(e - b'0')
+      let mut digits: u64 = 1
+      while digits < 3 && i < len && data[i] >= b'0' && data[i] <= b'7' {
+        value = value * 8 + int.widen(data[i] - b'0')
+        i += 1
+        digits += 1
+      }
+      if value > 255 {
+        return Error(f"{file}:{line}: octal escape above 255")
+      }
+      list.push(mut out, int.truncate(value))
+    } else {
+      list.push(mut out, e)
+    }
+  }
+  if i >= len {
+    return Error(f"{file}:{line}: unterminated string literal")
+  }
+  match text.finish(take out) {
+    Ok(s) => Ok((s, i + 1)),
+    Error(_) => Error(f"{file}:{line}: string literal is not UTF-8"),
+  }
+}
+
+fn tokenize(file: String, source: String) -> Result[List[Token], String] uses {} {
+  let data = string.as_bytes(source)
+  let len = bytes.len(data)
+  let mut tokens: List[Token] = []
+  let mut i: u64 = 0
+  let mut line: u64 = 1
+  while i < len {
+    let b = data[i]
+    if b == b'\n' {
+      line += 1
+      i += 1
+    } else if b == b' ' || b == b'\t' || b == b'\r' || b == 12 || b == 11 {
+      i += 1
+    } else if b == b'/' && i + 1 < len && data[i + 1] == b'/' {
+      while i < len && data[i] != b'\n' {
+        i += 1
+      }
+    } else if b == b'/' && i + 1 < len && data[i + 1] == b'*' {
+      i += 2
+      while i < len && !(data[i] == b'*' && i + 1 < len && data[i + 1] == b'/') {
+        if data[i] == b'\n' {
+          line += 1
+        }
+        i += 1
+      }
+      if i >= len {
+        return Error(f"{file}:{line}: unterminated block comment")
+      }
+      i += 2
+    } else if is_letter(b) {
+      let start = i
+      while i < len && (is_letter(data[i]) || is_digit(data[i])) {
+        i += 1
+      }
+      list.push(mut tokens, make_token(Ident(), slice_text(data, start, i), line))
+    } else if is_digit(b) || b == b'.' && i + 1 < len && is_digit(data[i + 1]) {
+      let start = i
+      let mut float = b == b'.'
+      if b == b'0' && i + 1 < len && (data[i + 1] == b'x' || data[i + 1] == b'X') {
+        i += 2
+        while i < len && option.is_some(hex_value(data[i])) {
+          i += 1
+        }
+      } else {
+        while i < len && (is_digit(data[i]) || data[i] == b'.' || data[i] == b'e' || data[i] == b'E' || (data[i] == b'+' || data[i] == b'-') && (data[i - 1] == b'e' || data[i - 1] == b'E')) {
+          if data[i] == b'.' || data[i] == b'e' || data[i] == b'E' {
+            float = true
+          }
+          i += 1
+        }
+      }
+      let kind: Kind = if float {
+        Float()
+      } else {
+        Int()
+      }
+      list.push(mut tokens, make_token(kind, slice_text(data, start, i), line))
+    } else if b == b'"' || b == b'\'' {
+      let (value, end) = string_literal(file, data, i, line)?
+      list.push(mut tokens, make_token(Str(), take value, line))
+      i = end
+    } else {
+      list.push(mut tokens, make_token(Sym(), slice_text(data, i, i + 1), line))
+      i += 1
+    }
+  }
+  list.push(mut tokens, make_token(End(), "", line))
+  Ok(take tokens)
+}
+
+fn peek(p: Parser) -> Token in p uses {} {
+  p.tokens[p.at]
+}
+
+fn peek_is(p: Parser, text: String) -> bool uses {} {
+  let t = p.tokens[p.at]
+  (t.kind == Sym() || t.kind == Ident()) && t.text == text
+}
+
+fn fail[T](p: Parser, message: String) -> Result[T, String] uses {} {
+  let t = p.tokens[p.at]
+  let found = if t.kind == End() {
+    "end of file"
+  } else {
+    f"`{t.text}`"
+  }
+  Error(f"{p.file}:{t.line}: {message}, found {found}")
+}
+
+fn advance(mut p: Parser) -> () uses {} {
+  if p.tokens[p.at].kind != End() {
+    p.at += 1
+  }
+}
+
+fn accept(mut p: Parser, text: String) -> bool uses {} {
+  if peek_is(p, text) {
+    advance(mut p)
+    return true
+  }
+  false
+}
+
+fn expect(mut p: Parser, text: String) -> Result[(), String] uses {} {
+  if accept(mut p, text) {
+    return Ok(())
+  }
+  fail(p, f"expected `{text}`")
+}
+
+fn ident(mut p: Parser) -> Result[unique String, String] uses {} {
+  let t = p.tokens[p.at]
+  if t.kind != Ident() {
+    return fail(p, "expected an identifier")
+  }
+  let name = unique t.text
+  advance(mut p)
+  Ok(take name)
+}
+
+fn string_value(mut p: Parser) -> Result[unique String, String] uses {} {
+  let t = p.tokens[p.at]
+  if t.kind != Str() {
+    return fail(p, "expected a string literal")
+  }
+  let mut value: List[u8] = []
+  text.append(mut value, t.text)
+  advance(mut p)
+  // Adjacent string literals concatenate.
+  while p.tokens[p.at].kind == Str() {
+    text.append(mut value, p.tokens[p.at].text)
+    advance(mut p)
+  }
+  Ok(text.finish_valid(take value))
+}
+
+// A possibly qualified name: `.a.b.C`, `a.b` or `C`.
+fn full_ident(mut p: Parser) -> Result[unique String, String] uses {} {
+  let mut out: List[u8] = []
+  if accept(mut p, ".") {
+    text.append(mut out, ".")
+  }
+  text.append(mut out, ident(mut p)?)
+  while accept(mut p, ".") {
+    text.append(mut out, ".")
+    text.append(mut out, ident(mut p)?)
+  }
+  Ok(text.finish_valid(take out))
+}
+
+fn integer_text(text: String) -> Option[u64] uses {} {
+  let data = string.as_bytes(text)
+  let len = bytes.len(data)
+  if len == 0 {
+    return None()
+  }
+  let mut value: u64 = 0
+  if len > 2 && data[0] == b'0' && (data[1] == b'x' || data[1] == b'X') {
+    let mut i: u64 = 2
+    while i < len {
+      let Some(d) = hex_value(data[i]) else {
+        return None()
+      }
+      if value > 1152921504606846975 {
+        return None()
+      }
+      value = value * 16 + d
+      i += 1
+    }
+    return Some(value)
+  }
+  let radix: u64 = if len > 1 && data[0] == b'0' {
+    8
+  } else {
+    10
+  }
+  for b in data {
+    if !is_digit(b) || int.widen(b - b'0') >= radix {
+      return None()
+    }
+    let d: u64 = int.widen(b - b'0')
+    if value > (18446744073709551615 - d) / radix {
+      return None()
+    }
+    value = value * radix + d
+  }
+  Some(value)
+}
+
+// A signed integer, for enum values.
+fn signed(mut p: Parser) -> Result[i64, String] uses {} {
+  let negative = accept(mut p, "-")
+  let t = p.tokens[p.at]
+  if t.kind != Int() {
+    return fail(p, "expected an integer")
+  }
+  let Some(magnitude) = integer_text(t.text) else {
+    return fail(p, "integer out of range")
+  }
+  advance(mut p)
+  if magnitude > 2147483648 || !negative && magnitude > 2147483647 {
+    return fail(p, "enum value out of int32 range")
+  }
+  let wide: i64 = int.narrow(magnitude)
+  Ok(
+    if negative {
+      -wide
+    } else {
+      wide
+    }
+  )
+}
+
+fn field_number(mut p: Parser) -> Result[u64, String] uses {} {
+  let t = p.tokens[p.at]
+  if t.kind != Int() {
+    return fail(p, "expected a field number")
+  }
+  let Some(n) = integer_text(t.text) else {
+    return fail(p, "field number out of range")
+  }
+  if n == 0 || n > 536870911 || n >= 19000 && n <= 19999 {
+    return fail(p, "field numbers are 1 to 536870911, excluding 19000 to 19999")
+  }
+  advance(mut p)
+  Ok(n)
+}
+
+// Skips one option value: a scalar, an identifier, or an aggregate `{ ... }`.
+fn skip_constant(mut p: Parser) -> Result[(), String] uses {} {
+  if accept(mut p, "{") {
+    let mut depth: u64 = 1
+    while depth > 0 {
+      if peek(p).kind == End() {
+        return fail(p, "unterminated option aggregate")
+      }
+      if peek_is(p, "{") {
+        depth += 1
+      } else if peek_is(p, "}") {
+        depth -= 1
+      }
+      advance(mut p)
+    }
+    return Ok(())
+  }
+  let _ = accept(mut p, "-") || accept(mut p, "+")
+  let t = peek(p)
+  if t.kind == End() || t.kind == Sym() {
+    return fail(p, "expected an option value")
+  }
+  if t.kind == Str() {
+    let _ = string_value(mut p)?
+    return Ok(())
+  }
+  if t.kind == Ident() {
+    let _ = full_ident(mut p)?
+    return Ok(())
+  }
+  advance(mut p)
+  Ok(())
+}
+
+// An option name: `name`, `(ext.name)` or `(ext).sub`.
+fn option_name(mut p: Parser) -> Result[unique String, String] uses {} {
+  let mut out: List[u8] = []
+  if accept(mut p, "(") {
+    text.append(mut out, "(")
+    text.append(mut out, full_ident(mut p)?)
+    expect(mut p, ")")?
+    text.append(mut out, ")")
+  } else {
+    text.append(mut out, ident(mut p)?)
+  }
+  while accept(mut p, ".") {
+    text.append(mut out, ".")
+    if accept(mut p, "(") {
+      text.append(mut out, full_ident(mut p)?)
+      expect(mut p, ")")?
+    } else {
+      text.append(mut out, ident(mut p)?)
+    }
+  }
+  Ok(text.finish_valid(take out))
+}
+
+// `option name = value;` at file, message, enum, service or method level.
+fn option_statement(mut p: Parser) -> Result[(), String] uses {} {
+  let _ = option_name(mut p)?
+  expect(mut p, "=")?
+  skip_constant(mut p)?
+  expect(mut p, ";")
+}
+
+// `[name = value, ...]` after a field or enum value; keeps packed and json_name.
+fn field_options(mut p: Parser, mut packed: Option[bool], mut json_name: Option[String]) -> Result[
+  (),
+  String
+] uses {} {
+  if !accept(mut p, "[") {
+    return Ok(())
+  }
+  while true {
+    let name = option_name(mut p)?
+    expect(mut p, "=")?
+    if name == "packed" {
+      if accept(mut p, "true") {
+        packed = Some(true)
+      } else if accept(mut p, "false") {
+        packed = Some(false)
+      } else {
+        return fail(p, "expected `true` or `false`")
+      }
+    } else if name == "json_name" {
+      json_name = Some(string_value(mut p)?)
+    } else {
+      skip_constant(mut p)?
+    }
+    if !accept(mut p, ",") {
+      break
+    }
+  }
+  expect(mut p, "]")
+}
+
+// `reserved 1, 2 to 5, 9 to max;` or `reserved "a", "b";`: checked and dropped.
+fn parse_reserved(mut p: Parser) -> Result[(), String] uses {} {
+  while true {
+    let t = peek(p)
+    if t.kind == Str() {
+      let _ = string_value(mut p)?
+    } else if t.kind == Ident() {
+      // Edition syntax reserves bare identifiers.
+      let _ = ident(mut p)?
+    } else {
+      let _ = signed(mut p)?
+      if accept(mut p, "to") {
+        if !accept(mut p, "max") {
+          let _ = signed(mut p)?
+        }
+      }
+    }
+    if !accept(mut p, ",") {
+      break
+    }
+  }
+  expect(mut p, ";")
+}
+
+const SCALARS: List[String] = [
+  "double",
+  "float",
+  "int32",
+  "int64",
+  "uint32",
+  "uint64",
+  "sint32",
+  "sint64",
+  "fixed32",
+  "fixed64",
+  "sfixed32",
+  "sfixed64",
+  "bool",
+  "string",
+  "bytes"
+]
+
+/// Whether `ty` names a proto scalar type.
+pub fn is_scalar(ty: String) -> bool uses {} {
+  for s in SCALARS {
+    if s == ty {
+      return true
+    }
+  }
+  false
+}
+
+fn parse_field(mut p: Parser, label: Label, oneof: Option[u64]) -> Result[Field, String] uses {} {
+  let line = peek(p).line
+  let mut key: Option[String] = None()
+  let ty = if peek_is(p, "map") && p.tokens[p.at + 1].text == "<" {
+    if label != Implicit() || option.is_some(oneof) {
+      return fail(p, "a map field cannot have a label or belong to a oneof")
+    }
+    advance(mut p)
+    expect(mut p, "<")?
+    let k = ident(mut p)?
+    if !is_scalar(k) || k == "float" || k == "double" || k == "bytes" {
+      return Error(
+        f"{p.file}:{line}: map key type `{k}` is not an integral or string type"
+      )
+    }
+    key = Some(take k)
+    expect(mut p, ",")?
+    let v = full_ident(mut p)?
+    expect(mut p, ">")?
+    take v
+  } else {
+    full_ident(mut p)?
+  }
+  let name = ident(mut p)?
+  expect(mut p, "=")?
+  let number = field_number(mut p)?
+  let mut packed: Option[bool] = None()
+  let mut json_name: Option[String] = None()
+  field_options(mut p, mut packed, mut json_name)?
+  expect(mut p, ";")?
+  let real_label: Label = if option.is_some(key) {
+    Repeated()
+  } else {
+    label
+  }
+  Ok(
+    Field(
+      name: take name,
+      number: number,
+      label: real_label,
+      ty: take ty,
+      key: take key,
+      oneof: oneof,
+      json_name: take json_name,
+      packed: packed,
+      line: line
+    )
+  )
+}
+
+fn enum_body(mut p: Parser) -> Result[Enum, String] uses {} {
+  let line = peek(p).line
+  let name = ident(mut p)?
+  expect(mut p, "{")?
+  let mut values: List[EnumValue] = []
+  while !accept(mut p, "}") {
+    if accept(mut p, ";") {
+      continue
+    }
+    if accept(mut p, "option") {
+      option_statement(mut p)?
+      continue
+    }
+    if accept(mut p, "reserved") {
+      parse_reserved(mut p)?
+      continue
+    }
+    if peek(p).kind == End() {
+      return fail(p, "unterminated enum")
+    }
+    let value_name = ident(mut p)?
+    expect(mut p, "=")?
+    let n = signed(mut p)?
+    let mut packed: Option[bool] = None()
+    let mut json_name: Option[String] = None()
+    field_options(mut p, mut packed, mut json_name)?
+    expect(mut p, ";")?
+    list.push(mut values, EnumValue(name: take value_name, number: int.narrow(n)))
+  }
+  if list.len(values) == 0 {
+    return Error(f"{p.file}:{line}: enum `{name}` has no values")
+  }
+  if values[0].number != 0 {
+    return Error(
+      f"{p.file}:{line}: the first value of proto3 enum `{name}` must be zero"
+    )
+  }
+  Ok(Enum(name: take name, values: take values, line: line))
+}
+
+fn message_body(mut p: Parser) -> Result[Message, String] uses {} {
+  let line = peek(p).line
+  let name = ident(mut p)?
+  expect(mut p, "{")?
+  let mut fields: List[Field] = []
+  let mut oneofs: List[String] = []
+  let mut messages: List[Message] = []
+  let mut enums: List[Enum] = []
+  while !accept(mut p, "}") {
+    if peek(p).kind == End() {
+      return fail(p, "unterminated message")
+    }
+    if accept(mut p, ";") {
+      continue
+    }
+    if accept(mut p, "option") {
+      option_statement(mut p)?
+    } else if accept(mut p, "reserved") {
+      parse_reserved(mut p)?
+    } else if accept(mut p, "message") {
+      list.push(mut messages, message_body(mut p)?)
+    } else if accept(mut p, "enum") {
+      list.push(mut enums, enum_body(mut p)?)
+    } else if peek_is(p, "extensions") {
+      return fail(p, "extensions are proto2 only")
+    } else if peek_is(p, "extend") {
+      return fail(p, "extend is proto2 only")
+    } else if peek_is(p, "required") {
+      return fail(p, "`required` is proto2 only")
+    } else if peek_is(p, "oneof") && p.tokens[p.at + 1].kind == Ident() {
+      advance(mut p)
+      let index = list.len(oneofs)
+      list.push(mut oneofs, ident(mut p)?)
+      expect(mut p, "{")?
+      while !accept(mut p, "}") {
+        if accept(mut p, ";") {
+          continue
+        }
+        if accept(mut p, "option") {
+          option_statement(mut p)?
+          continue
+        }
+        if peek(p).kind == End() {
+          return fail(p, "unterminated oneof")
+        }
+        list.push(mut fields, parse_field(mut p, Implicit(), Some(index))?)
+      }
+    } else if peek_is(p, "repeated") && p.tokens[p.at + 1].kind == Ident() {
+      advance(mut p)
+      list.push(mut fields, parse_field(mut p, Repeated(), None())?)
+    } else if peek_is(p, "optional") && p.tokens[p.at + 1].kind == Ident() {
+      advance(mut p)
+      list.push(mut fields, parse_field(mut p, Optional(), None())?)
+    } else {
+      list.push(mut fields, parse_field(mut p, Implicit(), None())?)
+    }
+  }
+  Ok(
+    Message(
+      name: take name,
+      fields: take fields,
+      oneofs: take oneofs,
+      messages: take messages,
+      enums: take enums,
+      line: line
+    )
+  )
+}
+
+fn rpc(mut p: Parser) -> Result[Method, String] uses {} {
+  let name = ident(mut p)?
+  expect(mut p, "(")?
+  let client_streaming = peek_is(p, "stream") && p.tokens[p.at + 1].kind == Ident() && accept(
+    mut p,
+    "stream"
+  )
+  let input = full_ident(mut p)?
+  expect(mut p, ")")?
+  expect(mut p, "returns")?
+  expect(mut p, "(")?
+  let server_streaming = peek_is(p, "stream") && p.tokens[p.at + 1].kind == Ident() && accept(
+    mut p,
+    "stream"
+  )
+  let output = full_ident(mut p)?
+  expect(mut p, ")")?
+  if accept(mut p, "{") {
+    while !accept(mut p, "}") {
+      if accept(mut p, ";") {
+        continue
+      }
+      if accept(mut p, "option") {
+        option_statement(mut p)?
+        continue
+      }
+      return fail(p, "expected `option` or `}` in an rpc body")
+    }
+  } else {
+    expect(mut p, ";")?
+  }
+  Ok(
+    Method(
+      name: take name,
+      input: take input,
+      output: take output,
+      client_streaming: client_streaming,
+      server_streaming: server_streaming
+    )
+  )
+}
+
+fn service(mut p: Parser) -> Result[Service, String] uses {} {
+  let name = ident(mut p)?
+  expect(mut p, "{")?
+  let mut methods: List[Method] = []
+  while !accept(mut p, "}") {
+    if accept(mut p, ";") {
+      continue
+    }
+    if accept(mut p, "option") {
+      option_statement(mut p)?
+    } else if accept(mut p, "rpc") {
+      list.push(mut methods, rpc(mut p)?)
+    } else {
+      return fail(p, "expected `rpc`, `option` or `}` in a service")
+    }
+  }
+  Ok(Service(name: take name, methods: take methods))
+}
+
+/// Parses one proto3 file.
+pub fn parse(source: Source) -> Result[File, String] uses {} {
+  let tokens = tokenize(source.name, source.text)?
+  let mut p = Parser(file: unique source.name, tokens: take tokens, at: 0)
+  let mut package = ""
+  let mut imports: List[String] = []
+  let mut messages: List[Message] = []
+  let mut enums: List[Enum] = []
+  let mut services: List[Service] = []
+  if !accept(mut p, "syntax") {
+    return fail(p, "expected `syntax = \"proto3\";`")
+  }
+  expect(mut p, "=")?
+  let syntax = string_value(mut p)?
+  if syntax != "proto3" {
+    return Error(
+      f"{source.name}:1: only proto3 is supported, found syntax \"{syntax}\""
+    )
+  }
+  expect(mut p, ";")?
+  while peek(p).kind != End() {
+    if accept(mut p, ";") {
+      continue
+    }
+    if accept(mut p, "package") {
+      package = full_ident(mut p)?
+      expect(mut p, ";")?
+    } else if accept(mut p, "import") {
+      let _ = accept(mut p, "public") || accept(mut p, "weak")
+      list.push(mut imports, string_value(mut p)?)
+      expect(mut p, ";")?
+    } else if accept(mut p, "option") {
+      option_statement(mut p)?
+    } else if accept(mut p, "message") {
+      list.push(mut messages, message_body(mut p)?)
+    } else if accept(mut p, "enum") {
+      list.push(mut enums, enum_body(mut p)?)
+    } else if accept(mut p, "service") {
+      list.push(mut services, service(mut p)?)
+    } else if peek_is(p, "extend") {
+      return fail(p, "extend is proto2 only")
+    } else {
+      return fail(p, "expected a top-level declaration")
+    }
+  }
+  Ok(
+    File(
+      name: unique source.name,
+      package: take package,
+      imports: take imports,
+      messages: take messages,
+      enums: take enums,
+      services: take services
+    )
+  )
+}

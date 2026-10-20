@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "conformance_testee",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "messages.hir",
+      "module": [
+        "pb"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../hirsel.json",
+      "package": {
+        "name": "protobuf",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

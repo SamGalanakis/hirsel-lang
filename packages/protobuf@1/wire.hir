@@ -1,0 +1,618 @@
+// The protobuf binary wire format, adapted from google.golang.org/protobuf
+// encoding/protowire (BSD-3-Clause) and prost's encoding module (Apache-2.0).
+// Readers take the whole input and a mutable byte offset, so a sub-message is a
+// borrowed slice of its parent and decoding copies only strings and bytes.
+
+/// Why binary input failed to decode, with the byte offset where it was found.
+pub type DecodeError = Truncated(u64) | Overflow(u64) | FieldNumber(u64) | WireType(u64) | EndGroup(
+  u64
+) | Utf8(u64) | Depth(u64)
+
+/// The varint wire type: int32, int64, uint32, uint64, sint32, sint64, bool, enum.
+pub const VARINT: u64 = 0
+
+/// The 64-bit wire type: fixed64, sfixed64, double.
+pub const FIXED64: u64 = 1
+
+/// The length-delimited wire type: string, bytes, messages, packed repeated fields.
+pub const LEN: u64 = 2
+
+/// The deprecated start-group wire type, skipped as an unknown field.
+pub const START_GROUP: u64 = 3
+
+/// The deprecated end-group wire type.
+pub const END_GROUP: u64 = 4
+
+/// The 32-bit wire type: fixed32, sfixed32, float.
+pub const FIXED32: u64 = 5
+
+/// The largest field number, 2^29 - 1.
+pub const MAX_FIELD: u64 = 536870911
+
+/// The deepest message nesting a decoder accepts, as in the C++ and Go runtimes.
+pub const MAX_DEPTH: u64 = 100
+
+/// Reads one base-128 varint. A tenth byte above 1 overflows 64 bits.
+pub fn read_varint(data: Bytes, mut pos: u64) -> Result[u64, DecodeError] uses {} {
+  let start = pos
+  let len = bytes.len(data)
+  let mut value: u64 = 0
+  let mut shift: u64 = 0
+  while shift < 64 {
+    if pos >= len {
+      return Error(Truncated(start))
+    }
+    let b: u64 = int.widen(data[pos])
+    pos += 1
+    if shift == 63 && b > 1 {
+      return Error(Overflow(start))
+    }
+    value = value | (b & 127) << shift
+    if b < 128 {
+      return Ok(value)
+    }
+    shift += 7
+  }
+  Error(Overflow(start))
+}
+
+/// Reads a field tag as `(field number, wire type)`. Field number 0, a number above
+/// `MAX_FIELD` and the unused wire types 6 and 7 are errors.
+pub fn read_tag(data: Bytes, mut pos: u64) -> Result[(u64, u64), DecodeError] uses {} {
+  let start = pos
+  let tag = read_varint(data, mut pos)?
+  let field = tag >> 3
+  let wire = tag & 7
+  // A tag is at most five bytes, even when an overlong encoding of a small value.
+  if field == 0 || field > MAX_FIELD || pos - start > 5 {
+    return Error(FieldNumber(start))
+  }
+  if wire > 5 {
+    return Error(WireType(start))
+  }
+  Ok((field, wire))
+}
+
+/// Reads four little-endian bytes.
+pub fn read_fixed32(data: Bytes, mut pos: u64) -> Result[u32, DecodeError] uses {} {
+  if pos > bytes.len(data) || bytes.len(data) - pos < 4 {
+    return Error(Truncated(pos))
+  }
+  let mut value: u32 = 0
+  let mut i: u64 = 4
+  while i > 0 {
+    i -= 1
+    let b: u32 = int.widen(data[pos + i])
+    value = value << 8 | b
+  }
+  pos += 4
+  Ok(value)
+}
+
+/// Reads eight little-endian bytes.
+pub fn read_fixed64(data: Bytes, mut pos: u64) -> Result[u64, DecodeError] uses {} {
+  if pos > bytes.len(data) || bytes.len(data) - pos < 8 {
+    return Error(Truncated(pos))
+  }
+  let mut value: u64 = 0
+  let mut i: u64 = 8
+  while i > 0 {
+    i -= 1
+    let b: u64 = int.widen(data[pos + i])
+    value = value << 8 | b
+  }
+  pos += 8
+  Ok(value)
+}
+
+/// Reads a length prefix and returns the delimited bytes as a slice of `data`.
+pub fn read_len(data: Bytes, mut pos: u64) -> Result[Bytes, DecodeError] in data uses {} {
+  let start = pos
+  let n = read_varint(data, mut pos)?
+  if n > bytes.len(data) - pos {
+    return Error(Truncated(start))
+  }
+  let end = pos + n
+  let body = bytes.slice(data, pos, end)
+  pos = end
+  Ok(body)
+}
+
+/// Reads a length-delimited UTF-8 string. Invalid UTF-8 is `Utf8`, as proto3 requires.
+pub fn read_string(data: Bytes, mut pos: u64) -> Result[unique String, DecodeError] uses {} {
+  let start = pos
+  let body = read_len(data, mut pos)?
+  match string.from_bytes(unique body) {
+    Ok(s) => Ok(unique s),
+    Error(_) => Error(Utf8(start)),
+  }
+}
+
+/// Reads length-delimited bytes as a fresh copy.
+pub fn read_bytes(data: Bytes, mut pos: u64) -> Result[unique Bytes, DecodeError] uses {} {
+  Ok(unique read_len(data, mut pos)?)
+}
+
+/// Reads an int32: the low 32 bits of a varint, so a sign-extended ten-byte
+/// encoding and a five-byte one decode alike.
+pub fn read_int32(data: Bytes, mut pos: u64) -> Result[i32, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  let low: u32 = int.truncate(v)
+  Ok(int.truncate(low))
+}
+
+/// Reads an int64 varint as its two's complement value.
+pub fn read_int64(data: Bytes, mut pos: u64) -> Result[i64, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  Ok(int.truncate(v))
+}
+
+/// Reads a uint32: the low 32 bits of a varint.
+pub fn read_uint32(data: Bytes, mut pos: u64) -> Result[u32, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  Ok(int.truncate(v))
+}
+
+/// Reads a uint64 varint.
+pub fn read_uint64(data: Bytes, mut pos: u64) -> Result[u64, DecodeError] uses {} {
+  read_varint(data, mut pos)
+}
+
+/// Reads a zigzag-encoded sint32.
+pub fn read_sint32(data: Bytes, mut pos: u64) -> Result[i32, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  let low: u32 = int.truncate(v)
+  Ok(unzigzag32(low))
+}
+
+/// Reads a zigzag-encoded sint64.
+pub fn read_sint64(data: Bytes, mut pos: u64) -> Result[i64, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  Ok(unzigzag64(v))
+}
+
+/// Reads a bool: any nonzero varint is true.
+pub fn read_bool(data: Bytes, mut pos: u64) -> Result[bool, DecodeError] uses {} {
+  let v = read_varint(data, mut pos)?
+  Ok(v != 0)
+}
+
+/// Reads an enum number: an int32 varint.
+pub fn read_enum(data: Bytes, mut pos: u64) -> Result[i32, DecodeError] uses {} {
+  read_int32(data, mut pos)
+}
+
+/// Reads a sfixed32.
+pub fn read_sfixed32(data: Bytes, mut pos: u64) -> Result[i32, DecodeError] uses {} {
+  let v = read_fixed32(data, mut pos)?
+  Ok(int.truncate(v))
+}
+
+/// Reads a sfixed64.
+pub fn read_sfixed64(data: Bytes, mut pos: u64) -> Result[i64, DecodeError] uses {} {
+  let v = read_fixed64(data, mut pos)?
+  Ok(int.truncate(v))
+}
+
+/// Reads a float from its little-endian IEEE 754 bits.
+pub fn read_float(data: Bytes, mut pos: u64) -> Result[f32, DecodeError] uses {} {
+  let v = read_fixed32(data, mut pos)?
+  Ok(f32.from_bits(v))
+}
+
+/// Reads a double from its little-endian IEEE 754 bits.
+pub fn read_double(data: Bytes, mut pos: u64) -> Result[f64, DecodeError] uses {} {
+  let v = read_fixed64(data, mut pos)?
+  Ok(f64.from_bits(v))
+}
+
+/// Reads every element of a packed run (the bytes of one length-delimited
+/// field) with `read`, appending them to `out`.
+pub fn read_packed[T](
+  data: Bytes,
+  mut pos: u64,
+  read: fn(Bytes, mut u64) -> Result[T, DecodeError] uses {},
+  mut out: List[T]
+) -> Result[(), DecodeError] uses {} {
+  let start = pos
+  let body = read_len(data, mut pos)?
+  let mut at: u64 = 0
+  while at < bytes.len(body) {
+    let first = at
+    match read(body, mut at) {
+      Ok(v) => list.push(mut out, take v),
+      Error(_) => return Error(Truncated(start + first)),
+    }
+  }
+  Ok(())
+}
+
+/// Skips the value of a field whose tag was just read, including a whole group.
+/// An end-group tag here has no matching start, so it is `EndGroup`.
+pub fn skip(data: Bytes, mut pos: u64, field: u64, wire: u64) -> Result[(), DecodeError] uses {} {
+  skip_depth(data, mut pos, field, wire, 0)
+}
+
+fn skip_depth(data: Bytes, mut pos: u64, field: u64, wire: u64, depth: u64) -> Result[
+  (),
+  DecodeError
+] uses {} {
+  if wire == VARINT {
+    let _ = read_varint(data, mut pos)?
+  } else if wire == FIXED64 {
+    let _ = read_fixed64(data, mut pos)?
+  } else if wire == LEN {
+    let _ = read_len(data, mut pos)?
+  } else if wire == FIXED32 {
+    let _ = read_fixed32(data, mut pos)?
+  } else if wire == START_GROUP {
+    if depth >= MAX_DEPTH {
+      return Error(Depth(pos))
+    }
+    loop_group(data, mut pos, field, depth + 1)?
+  } else {
+    return Error(EndGroup(pos))
+  }
+  Ok(())
+}
+
+fn loop_group(data: Bytes, mut pos: u64, field: u64, depth: u64) -> Result[
+  (),
+  DecodeError
+] uses {} {
+  while true {
+    let start = pos
+    if pos >= bytes.len(data) {
+      return Error(Truncated(pos))
+    }
+    let (inner, wire) = read_tag(data, mut pos)?
+    if wire == END_GROUP {
+      if inner != field {
+        return Error(EndGroup(start))
+      }
+      return Ok(())
+    }
+    skip_depth(data, mut pos, inner, wire, depth)?
+  }
+  Ok(())
+}
+
+/// Appends `data[start..end]`, an unknown field's tag and value, to `unknown`.
+@preserves_unique(unknown)
+pub fn keep(data: Bytes, start: u64, end: u64, mut unknown: List[u8]) -> () uses {} {
+  let mut i = start
+  while i < end {
+    list.push(mut unknown, data[i])
+    i += 1
+  }
+}
+
+/// The two's complement value of a zigzag-encoded 32-bit integer.
+pub fn unzigzag32(v: u32) -> i32 uses {} {
+  let half: i32 = int.truncate(v >> 1)
+  let sign: i32 = int.truncate(v & 1)
+  half ^ -sign
+}
+
+/// The two's complement value of a zigzag-encoded 64-bit integer.
+pub fn unzigzag64(v: u64) -> i64 uses {} {
+  let half: i64 = int.truncate(v >> 1)
+  let sign: i64 = int.truncate(v & 1)
+  half ^ -sign
+}
+
+/// The zigzag encoding of a 32-bit integer.
+pub fn zigzag32(v: i32) -> u32 uses {} {
+  let bits: u32 = int.truncate(v)
+  let sign: u32 = int.truncate(v >> 31)
+  bits << 1 ^ sign
+}
+
+/// The zigzag encoding of a 64-bit integer.
+pub fn zigzag64(v: i64) -> u64 uses {} {
+  let bits: u64 = int.truncate(v)
+  let sign: u64 = int.truncate(v >> 63)
+  bits << 1 ^ sign
+}
+
+/// Appends a base-128 varint.
+@preserves_unique(out)
+pub fn write_varint(v: u64, mut out: List[u8]) -> () uses {} {
+  let mut rest = v
+  while rest >= 128 {
+    let low: u8 = int.truncate(rest & 127 | 128)
+    list.push(mut out, low)
+    rest = rest >> 7
+  }
+  let last: u8 = int.truncate(rest)
+  list.push(mut out, last)
+}
+
+/// Appends a field tag.
+@preserves_unique(out)
+pub fn write_tag(field: u64, wire: u64, mut out: List[u8]) -> () uses {} {
+  write_varint(field << 3 | wire, mut out)
+}
+
+/// Appends four little-endian bytes.
+@preserves_unique(out)
+pub fn write_fixed32(v: u32, mut out: List[u8]) -> () uses {} {
+  let mut rest = v
+  let mut i: u64 = 0
+  while i < 4 {
+    let b: u8 = int.truncate(rest & 255)
+    list.push(mut out, b)
+    rest = rest >> 8
+    i += 1
+  }
+}
+
+/// Appends eight little-endian bytes.
+@preserves_unique(out)
+pub fn write_fixed64(v: u64, mut out: List[u8]) -> () uses {} {
+  let mut rest = v
+  let mut i: u64 = 0
+  while i < 8 {
+    let b: u8 = int.truncate(rest & 255)
+    list.push(mut out, b)
+    rest = rest >> 8
+    i += 1
+  }
+}
+
+/// Appends bytes verbatim, such as preserved unknown fields.
+@preserves_unique(out)
+pub fn write_raw(data: Bytes, mut out: List[u8]) -> () uses {} {
+  list.reserve(mut out, bytes.len(data))
+  for b in data {
+    list.push(mut out, b)
+  }
+}
+
+/// Appends a length prefix and the bytes it delimits.
+@preserves_unique(out)
+pub fn write_len(data: Bytes, mut out: List[u8]) -> () uses {} {
+  write_varint(bytes.len(data), mut out)
+  write_raw(data, mut out)
+}
+
+/// The varint of an int32: negative values sign-extend to ten bytes.
+pub fn int32_varint(v: i32) -> u64 uses {} {
+  let wide: i64 = int.widen(v)
+  int.truncate(wide)
+}
+
+/// The varint of an int64.
+pub fn int64_varint(v: i64) -> u64 uses {} {
+  int.truncate(v)
+}
+
+/// Appends an int32 field.
+@preserves_unique(out)
+pub fn put_int32(field: u64, v: i32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(int32_varint(v), mut out)
+}
+
+/// Appends an int64 field.
+@preserves_unique(out)
+pub fn put_int64(field: u64, v: i64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(int64_varint(v), mut out)
+}
+
+/// Appends a uint32 field.
+@preserves_unique(out)
+pub fn put_uint32(field: u64, v: u32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(int.widen(v), mut out)
+}
+
+/// Appends a uint64 field.
+@preserves_unique(out)
+pub fn put_uint64(field: u64, v: u64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(v, mut out)
+}
+
+/// Appends a sint32 field.
+@preserves_unique(out)
+pub fn put_sint32(field: u64, v: i32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(int.widen(zigzag32(v)), mut out)
+}
+
+/// Appends a sint64 field.
+@preserves_unique(out)
+pub fn put_sint64(field: u64, v: i64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  write_varint(zigzag64(v), mut out)
+}
+
+/// Appends a bool field.
+@preserves_unique(out)
+pub fn put_bool(field: u64, v: bool, mut out: List[u8]) -> () uses {} {
+  write_tag(field, VARINT, mut out)
+  list.push(
+    mut out,
+    if v {
+      1u8
+    } else {
+      0u8
+    }
+  )
+}
+
+/// Appends an enum field from its number.
+@preserves_unique(out)
+pub fn put_enum(field: u64, v: i32, mut out: List[u8]) -> () uses {} {
+  put_int32(field, v, mut out)
+}
+
+/// Appends a fixed32 field.
+@preserves_unique(out)
+pub fn put_fixed32(field: u64, v: u32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED32, mut out)
+  write_fixed32(v, mut out)
+}
+
+/// Appends a fixed64 field.
+@preserves_unique(out)
+pub fn put_fixed64(field: u64, v: u64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED64, mut out)
+  write_fixed64(v, mut out)
+}
+
+/// Appends a sfixed32 field.
+@preserves_unique(out)
+pub fn put_sfixed32(field: u64, v: i32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED32, mut out)
+  write_fixed32(int.truncate(v), mut out)
+}
+
+/// Appends a sfixed64 field.
+@preserves_unique(out)
+pub fn put_sfixed64(field: u64, v: i64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED64, mut out)
+  write_fixed64(int.truncate(v), mut out)
+}
+
+/// Appends a float field.
+@preserves_unique(out)
+pub fn put_float(field: u64, v: f32, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED32, mut out)
+  write_fixed32(f32.bits(v), mut out)
+}
+
+/// Appends a double field.
+@preserves_unique(out)
+pub fn put_double(field: u64, v: f64, mut out: List[u8]) -> () uses {} {
+  write_tag(field, FIXED64, mut out)
+  write_fixed64(f64.bits(v), mut out)
+}
+
+/// Appends a string field.
+@preserves_unique(out)
+pub fn put_string(field: u64, v: String, mut out: List[u8]) -> () uses {} {
+  write_tag(field, LEN, mut out)
+  write_len(string.as_bytes(v), mut out)
+}
+
+/// Appends a bytes field, or an embedded message from its encoding.
+@preserves_unique(out)
+pub fn put_bytes(field: u64, v: Bytes, mut out: List[u8]) -> () uses {} {
+  write_tag(field, LEN, mut out)
+  write_len(v, mut out)
+}
+
+/// Appends a packed run, given the concatenated encodings of its elements.
+@preserves_unique(out)
+pub fn put_packed(field: u64, run: List[u8], mut out: List[u8]) -> () uses {} {
+  if list.len(run) == 0 {
+    return
+  }
+  write_tag(field, LEN, mut out)
+  write_varint(list.len(run), mut out)
+  for b in run {
+    list.push(mut out, b)
+  }
+}
+
+/// `a` followed by `b`: the encoding of a message merged from both, since
+/// parsing concatenated encodings merges them.
+pub fn concat(a: Bytes, b: Bytes) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  list.reserve(mut out, bytes.len(a) + bytes.len(b))
+  write_raw(a, mut out)
+  write_raw(b, mut out)
+  bytes.from_list(take out)
+}
+
+/// Appends an int32 value without a tag, as in a packed run.
+@preserves_unique(out)
+pub fn write_int32(v: i32, mut out: List[u8]) -> () uses {} {
+  write_varint(int32_varint(v), mut out)
+}
+
+/// Appends an int64 value without a tag.
+@preserves_unique(out)
+pub fn write_int64(v: i64, mut out: List[u8]) -> () uses {} {
+  write_varint(int64_varint(v), mut out)
+}
+
+/// Appends a uint32 value without a tag.
+@preserves_unique(out)
+pub fn write_uint32(v: u32, mut out: List[u8]) -> () uses {} {
+  write_varint(int.widen(v), mut out)
+}
+
+/// Appends a uint64 value without a tag.
+@preserves_unique(out)
+pub fn write_uint64(v: u64, mut out: List[u8]) -> () uses {} {
+  write_varint(v, mut out)
+}
+
+/// Appends a sint32 value without a tag.
+@preserves_unique(out)
+pub fn write_sint32(v: i32, mut out: List[u8]) -> () uses {} {
+  write_varint(int.widen(zigzag32(v)), mut out)
+}
+
+/// Appends a sint64 value without a tag.
+@preserves_unique(out)
+pub fn write_sint64(v: i64, mut out: List[u8]) -> () uses {} {
+  write_varint(zigzag64(v), mut out)
+}
+
+/// Appends a bool value without a tag.
+@preserves_unique(out)
+pub fn write_bool(v: bool, mut out: List[u8]) -> () uses {} {
+  list.push(
+    mut out,
+    if v {
+      1u8
+    } else {
+      0u8
+    }
+  )
+}
+
+/// Appends an enum number without a tag.
+@preserves_unique(out)
+pub fn write_enum(v: i32, mut out: List[u8]) -> () uses {} {
+  write_int32(v, mut out)
+}
+
+/// Appends a sfixed32 value without a tag.
+@preserves_unique(out)
+pub fn write_sfixed32(v: i32, mut out: List[u8]) -> () uses {} {
+  write_fixed32(int.truncate(v), mut out)
+}
+
+/// Appends a sfixed64 value without a tag.
+@preserves_unique(out)
+pub fn write_sfixed64(v: i64, mut out: List[u8]) -> () uses {} {
+  write_fixed64(int.truncate(v), mut out)
+}
+
+/// Appends a float value without a tag.
+@preserves_unique(out)
+pub fn write_float(v: f32, mut out: List[u8]) -> () uses {} {
+  write_fixed32(f32.bits(v), mut out)
+}
+
+/// Appends a double value without a tag.
+@preserves_unique(out)
+pub fn write_double(v: f64, mut out: List[u8]) -> () uses {} {
+  write_fixed64(f64.bits(v), mut out)
+}
+
+/// Appends an embedded message field from its encoded fields, even when empty.
+@preserves_unique(out)
+pub fn put_message(field: u64, body: List[u8], mut out: List[u8]) -> () uses {} {
+  write_tag(field, LEN, mut out)
+  write_varint(list.len(body), mut out)
+  for b in body {
+    list.push(mut out, b)
+  }
+}

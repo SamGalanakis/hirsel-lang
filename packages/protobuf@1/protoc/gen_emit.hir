@@ -1,0 +1,1401 @@
+// The emitter: Hirsel source for a resolved model. Every generated name is a
+// prefix and the Hirsel type name, so `encode_Foo` encodes `Foo`; the naming rules
+// are in this package's README.
+
+@preserves_unique(out)
+fn emit_line(mut out: List[u8], s: String) -> () uses {} {
+  text.append(mut out, s)
+  list.push(mut out, b'\n')
+}
+
+fn msg_type(model: Model, j: u64) -> unique String uses {} {
+  let m = model.messages[j]
+  f"{m.qualifier}{m.hirsel}"
+}
+
+fn enum_type(model: Model, j: u64) -> unique String uses {} {
+  let e = model.enums[j]
+  f"{e.qualifier}{e.hirsel}"
+}
+
+// `prefix_Name`, qualified with the type's module.
+fn msg_fn(model: Model, j: u64, prefix: String) -> unique String uses {} {
+  let m = model.messages[j]
+  f"{m.qualifier}{prefix}_{m.hirsel}"
+}
+
+fn enum_fn(model: Model, j: u64, prefix: String) -> unique String uses {} {
+  let e = model.enums[j]
+  f"{e.qualifier}{prefix}_{e.hirsel}"
+}
+
+fn scalar_type(s: String) -> unique String uses {} {
+  if s == "int32" || s == "sint32" || s == "sfixed32" {
+    "i32"
+  } else if s == "int64" || s == "sint64" || s == "sfixed64" {
+    "i64"
+  } else if s == "uint32" || s == "fixed32" {
+    "u32"
+  } else if s == "uint64" || s == "fixed64" {
+    "u64"
+  } else if s == "float" {
+    "f32"
+  } else if s == "double" {
+    "f64"
+  } else if s == "bool" {
+    "bool"
+  } else if s == "string" {
+    "String"
+  } else {
+    "Bytes"
+  }
+}
+
+// The scalar's family in the JSON helpers: `i32`, `u32`, `i64`, `u64`, `f32`, `f64`,
+// `bool`, `string` or `bytes`.
+fn json_kind(s: String) -> unique String uses {} {
+  if s == "string" {
+    "string"
+  } else if s == "bytes" {
+    "bytes"
+  } else {
+    scalar_type(s)
+  }
+}
+
+fn wire_of(s: String) -> u64 uses {} {
+  if s == "fixed32" || s == "sfixed32" || s == "float" {
+    5
+  } else if s == "fixed64" || s == "sfixed64" || s == "double" {
+    1
+  } else if s == "string" || s == "bytes" {
+    2
+  } else {
+    0
+  }
+}
+
+fn zero_of(s: String) -> unique String uses {} {
+  if s == "float" || s == "double" {
+    "0.0"
+  } else if s == "bool" {
+    "false"
+  } else if s == "string" {
+    "\"\""
+  } else if s == "bytes" {
+    "b\"\""
+  } else {
+    "0"
+  }
+}
+
+fn nonzero(s: String, place: String) -> unique String uses {} {
+  if s == "float" {
+    f"f32.bits({place}) != 0"
+  } else if s == "double" {
+    f"f64.bits({place}) != 0"
+  } else if s == "bool" {
+    unique place
+  } else if s == "string" {
+    f"string.byte_len({place}) != 0"
+  } else if s == "bytes" {
+    f"bytes.len({place}) != 0"
+  } else {
+    f"{place} != 0"
+  }
+}
+
+fn quoted(s: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  list.push(mut out, b'"')
+  for c in string.scalars(s) {
+    if c == '"' {
+      text.append(mut out, "\\\"")
+    } else if c == '\\' {
+      text.append(mut out, "\\\\")
+    } else {
+      char.format_into(c, mut out)
+    }
+  }
+  list.push(mut out, b'"')
+  text.finish_valid(take out)
+}
+
+// The element type of a field (without List, Option or box).
+fn element_type(model: Model, ty: Ty) -> unique String uses {} {
+  match ty {
+    Scalar(s) => scalar_type(s),
+    EnumRef(j) => enum_type(model, j),
+    MessageRef(j) => msg_type(model, j),
+  }
+}
+
+fn field_type(model: Model, f: Fld) -> unique String uses {} {
+  let element = element_type(model, f.ty)
+  if let Some(k) = f.decl.key {
+    return f"Map[{scalar_type(k)}, {element}]"
+  }
+  if f.decl.label == Repeated() {
+    return f"List[{element}]"
+  }
+  match f.ty {
+    MessageRef(_) => if f.boxed {
+      f"Option[box {element}]"
+    } else {
+      f"Option[{element}]"
+    },
+    _ => if f.decl.label == Optional() {
+      f"Option[{element}]"
+    } else {
+      take element
+    },
+  }
+}
+
+fn enum_default(model: Model, j: u64) -> unique String uses {} {
+  f"{model.enums[j].variants[0]}()"
+}
+
+fn default_value(model: Model, f: Fld) -> unique String uses {} {
+  if option.is_some(f.decl.key) {
+    return "map.empty()"
+  }
+  if f.decl.label == Repeated() {
+    return "[]"
+  }
+  if f.decl.label == Optional() {
+    return "None()"
+  }
+  match f.ty {
+    Scalar(s) => zero_of(s),
+    EnumRef(j) => enum_default(model, j),
+    MessageRef(_) => "None()",
+  }
+}
+
+fn is_full(model: Model, ty: Ty, full: String) -> bool uses {} {
+  match ty {
+    MessageRef(j) => model.messages[j].full == full,
+    EnumRef(j) => model.enums[j].full == full,
+    Scalar(_) => false,
+  }
+}
+
+// Whether JSON null is a value of this type rather than absence.
+fn null_is_value(model: Model, ty: Ty) -> bool uses {} {
+  is_full(model, ty, ".google.protobuf.Value") || is_full(
+    model,
+    ty,
+    ".google.protobuf.NullValue"
+  )
+}
+
+fn negated(n: i32) -> u64 uses {} {
+  let wide: i64 = int.widen(n)
+  int.narrow(-wide)
+}
+
+// ---- Types ----
+fn emit_enum(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let e = model.enums[j]
+  let mut variants: List[String] = []
+  let mut i: u64 = 0
+  while i < list.len(e.variants) {
+    if e.primary[i] {
+      list.push(mut variants, unique e.variants[i])
+    }
+    i += 1
+  }
+  list.push(mut variants, f"{e.unrecognized}(i32)")
+  emit_line(mut out, f"/// The proto enum `{proto_name(e.full)}`.")
+  emit_line(mut out, f"pub type {e.hirsel} = {string.join(variants, " | ")}")
+  emit_line(mut out, "")
+  // number_E
+  emit_line(mut out, f"pub fn number_{e.hirsel}(e: {e.hirsel}) -> i32 uses {{}} {{")
+  emit_line(mut out, "  match e {")
+  i = 0
+  while i < list.len(e.decl.values) {
+    if e.primary[i] {
+      emit_line(mut out, f"    {e.variants[i]}() => {e.decl.values[i].number},")
+    }
+    i += 1
+  }
+  emit_line(mut out, f"    {e.unrecognized}(n) => n,")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  // from_number_E
+  emit_line(
+    mut out,
+    f"pub fn from_number_{e.hirsel}(n: i32) -> {e.hirsel} uses {{}} {{"
+  )
+  i = 0
+  while i < list.len(e.decl.values) {
+    if e.primary[i] {
+      let number = e.decl.values[i].number
+      let literal = if number < 0 {
+        f"0 - {negated(number)}"
+      } else {
+        i32.to_string(number)
+      }
+      emit_line(mut out, f"  if n == {literal} {{")
+      emit_line(mut out, f"    return {e.variants[i]}()")
+      emit_line(mut out, "  }")
+    }
+    i += 1
+  }
+  emit_line(mut out, f"  {e.unrecognized}(n)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  // name_E
+  emit_line(
+    mut out,
+    f"pub fn name_{e.hirsel}(e: {e.hirsel}) -> Option[String] uses {{}} {{"
+  )
+  emit_line(mut out, "  match e {")
+  i = 0
+  while i < list.len(e.decl.values) {
+    if e.primary[i] {
+      emit_line(
+        mut out,
+        f"    {e.variants[i]}() => Some({quoted(e.decl.values[i].name)}),"
+      )
+    }
+    i += 1
+  }
+  emit_line(mut out, f"    {e.unrecognized}(_) => None(),")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  // from_name_E, aliases included
+  emit_line(
+    mut out,
+    f"pub fn from_name_{e.hirsel}(s: String) -> Option[{e.hirsel}] uses {{}} {{"
+  )
+  i = 0
+  while i < list.len(e.decl.values) {
+    emit_line(mut out, f"  if s == {quoted(e.decl.values[i].name)} {{")
+    emit_line(mut out, f"    return Some({e.variants[i]}())")
+    emit_line(mut out, "  }")
+    i += 1
+  }
+  emit_line(mut out, "  None()")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  // JSON
+  let null_value = e.full == ".google.protobuf.NullValue"
+  emit_line(
+    mut out,
+    f"pub fn to_json_{e.hirsel}(e: {e.hirsel}) -> json.Value uses {{}} {{"
+  )
+  if null_value {
+    emit_line(mut out, "  let _ = e")
+    emit_line(mut out, "  Null()")
+  } else {
+    emit_line(mut out, f"  match name_{e.hirsel}(e) {{")
+    emit_line(mut out, "    Some(s) => Text(s),")
+    emit_line(mut out, f"    None() => Number(i32.to_string(number_{e.hirsel}(e))),")
+    emit_line(mut out, "  }")
+  }
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  emit_line(
+    mut out,
+    f"pub fn from_json_{e.hirsel}(v: json.Value, ignore_unknown: bool) -> Result[Option[{e.hirsel}], protobuf.JsonError] uses {{}} {{"
+  )
+  emit_line(mut out, "  match v {")
+  if null_value {
+    emit_line(mut out, f"    Null() => Ok(Some({e.variants[0]}())),")
+  }
+  emit_line(mut out, f"    Text(s) => match from_name_{e.hirsel}(s) {{")
+  emit_line(mut out, "      Some(e) => Ok(Some(e)),")
+  emit_line(mut out, "      None() => if ignore_unknown {")
+  emit_line(mut out, "        Ok(None())")
+  emit_line(mut out, "      } else {")
+  emit_line(mut out, f"        Error(protobuf.unknown_enum(s, {quoted(e.full)}))")
+  emit_line(mut out, "      },")
+  emit_line(mut out, "    },")
+  emit_line(mut out, f"    _ => Ok(Some(from_number_{e.hirsel}(protobuf.i32_of(v)?))),")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+// A type as spelled inside the declaration of a type in recursive group
+// `group` (`root` when that declaration is the group's root).
+fn emit_message_type(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  emit_line(mut out, f"/// The proto message `{proto_name(m.full)}`.")
+  emit_line(mut out, f"pub type {m.hirsel} {{")
+  let mut oneof_done: Set[u64] = set.empty()
+  for f in m.fields {
+    match f.decl.oneof {
+      Some(index) => if !set.contains(oneof_done, index) {
+        set.insert(mut oneof_done, index)
+        emit_line(
+          mut out,
+          f"  {escape(m.decl.oneofs[index], [])}: Option[{m.oneofs[index]}],"
+        )
+      },
+      None() => emit_line(mut out, f"  {f.name}: {field_type(model, f)},"),
+    }
+  }
+  emit_line(mut out, "  unknown_fields: Bytes,")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  let mut index: u64 = 0
+  while index < list.len(m.oneofs) {
+    let mut variants: List[String] = []
+    for f in m.fields {
+      if f.decl.oneof == Some(index) {
+        let element = element_type(model, f.ty)
+        let payload = if f.boxed {
+          f"box {element}"
+        } else {
+          take element
+        }
+        list.push(mut variants, f"{f.name}({payload})")
+      }
+    }
+    emit_line(mut out, f"/// The oneof `{m.decl.oneofs[index]}` of `{m.hirsel}`.")
+    emit_line(mut out, f"pub type {m.oneofs[index]} = {string.join(variants, " | ")}")
+    emit_line(mut out, "")
+    index += 1
+  }
+}
+
+fn emit_default(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  emit_line(mut out, f"/// A `{m.hirsel}` with every field at its default.")
+  emit_line(mut out, f"pub fn default_{m.hirsel}() -> {m.hirsel} uses {{}} {{")
+  emit_line(mut out, f"  {m.hirsel}(")
+  let mut oneof_done: Set[u64] = set.empty()
+  for f in m.fields {
+    match f.decl.oneof {
+      Some(index) => if !set.contains(oneof_done, index) {
+        set.insert(mut oneof_done, index)
+        emit_line(mut out, f"    {escape(m.decl.oneofs[index], [])}: None(),")
+      },
+      None() => emit_line(mut out, f"    {f.name}: {default_value(model, f)},"),
+    }
+  }
+  emit_line(mut out, "    unknown_fields: b\"\"")
+  emit_line(mut out, "  )")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+fn emit_unbox(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  emit_line(mut out, f"/// The `{m.hirsel}` in a box, sharing its parts.")
+  emit_line(
+    mut out,
+    f"pub fn unbox_{m.hirsel}(b: box {m.hirsel}) -> {m.hirsel} in b uses {{}} {{"
+  )
+  emit_line(mut out, f"  {m.hirsel}(")
+  let mut oneof_done: Set[u64] = set.empty()
+  for f in m.fields {
+    match f.decl.oneof {
+      Some(index) => if !set.contains(oneof_done, index) {
+        set.insert(mut oneof_done, index)
+        let name = escape(m.decl.oneofs[index], [])
+        emit_line(mut out, f"    {name}: copy b.{name},")
+      },
+      None() => emit_line(mut out, f"    {f.name}: copy b.{f.name},"),
+    }
+  }
+  emit_line(mut out, "    unknown_fields: copy b.unknown_fields")
+  emit_line(mut out, "  )")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+// ---- Binary encoding ----
+// Statements appending field `number` with value `x` to `target`.
+fn put(
+  mut out: List[u8],
+  model: Model,
+  ty: Ty,
+  boxed: bool,
+  number: u64,
+  x: String,
+  target: String,
+  indent: String
+) -> () uses {} {
+  match ty {
+    Scalar(s) => emit_line(
+      mut out,
+      f"{indent}protobuf.put_{s}({number}, {x}, mut {target})"
+    ),
+    EnumRef(j) => emit_line(
+      mut out,
+      f"{indent}protobuf.put_enum({number}, {enum_fn(model, j, "number")}({x}), mut {target})"
+    ),
+    MessageRef(j) => {
+      let value = if boxed {
+        f"{msg_fn(model, j, "unbox")}({x})"
+      } else {
+        unique x
+      }
+      emit_line(mut out, f"{indent}let mut sub: List[u8] = []")
+      emit_line(mut out, f"{indent}{msg_fn(model, j, "write")}({value}, mut sub)")
+      emit_line(mut out, f"{indent}protobuf.put_message({number}, sub, mut {target})")
+    },
+  }
+}
+
+// The statements writing field `f` of `m` (or the whole oneof it belongs to).
+fn emit_write_part(mut out: List[u8], model: Model, m: Msg, f: Fld) -> () uses {} {
+  let place = f"m.{f.name}"
+  if let Some(index) = f.decl.oneof {
+    emit_line(mut out, f"  match m.{escape(m.decl.oneofs[index], [])} {{")
+    for member in m.fields {
+      if member.decl.oneof == Some(index) {
+        emit_line(mut out, f"    Some({member.name}(v)) => {{")
+        put(
+          mut out,
+          model,
+          member.ty,
+          member.boxed,
+          member.decl.number,
+          "v",
+          "out",
+          "      "
+        )
+        emit_line(mut out, "    },")
+      }
+    }
+    emit_line(mut out, "    None() => (),")
+    emit_line(mut out, "  }")
+    return
+  }
+  if let Some(k) = f.decl.key {
+    emit_line(mut out, f"  for (k, v) in {place} {{")
+    emit_line(mut out, "    let mut entry: List[u8] = []")
+    emit_line(mut out, f"    protobuf.put_{k}(1, k, mut entry)")
+    put(mut out, model, f.ty, false, 2, "v", "entry", "    ")
+    emit_line(mut out, f"    protobuf.put_message({f.decl.number}, entry, mut out)")
+    emit_line(mut out, "  }")
+    return
+  }
+  if f.decl.label == Repeated() {
+    if f.packed {
+      emit_line(mut out, f"  if list.len({place}) > 0 {{")
+      emit_line(mut out, "    let mut run: List[u8] = []")
+      emit_line(mut out, f"    for v in {place} {{")
+      match f.ty {
+        EnumRef(e) => emit_line(
+          mut out,
+          f"      protobuf.write_enum({enum_fn(model, e, "number")}(v), mut run)"
+        ),
+        Scalar(s) => emit_line(mut out, f"      protobuf.write_{s}(v, mut run)"),
+        MessageRef(_) => (),
+      }
+      emit_line(mut out, "    }")
+      emit_line(mut out, f"    protobuf.put_packed({f.decl.number}, run, mut out)")
+      emit_line(mut out, "  }")
+    } else {
+      emit_line(mut out, f"  for v in {place} {{")
+      put(mut out, model, f.ty, false, f.decl.number, "v", "out", "    ")
+      emit_line(mut out, "  }")
+    }
+    return
+  }
+  let message = match f.ty {
+    MessageRef(_) => true,
+    _ => false,
+  }
+  if f.decl.label == Optional() || message {
+    emit_line(mut out, f"  match {place} {{")
+    emit_line(mut out, "    Some(v) => {")
+    put(mut out, model, f.ty, f.boxed, f.decl.number, "v", "out", "      ")
+    emit_line(mut out, "    },")
+    emit_line(mut out, "    None() => (),")
+    emit_line(mut out, "  }")
+    return
+  }
+  let condition = match f.ty {
+    Scalar(s) => nonzero(s, place),
+    EnumRef(e) => f"{enum_fn(model, e, "number")}({place}) != 0",
+    MessageRef(_) => "true",
+  }
+  emit_line(mut out, f"  if {condition} {{")
+  put(mut out, model, f.ty, false, f.decl.number, place, "out", "    ")
+  emit_line(mut out, "  }")
+}
+
+fn emit_write(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  let mut fields = unique m.fields
+  list.sort(mut fields, by_number)
+  // GAP: see emit_read; each chunk of fields is written by its own function.
+  let units = field_units(fields)
+  let mut calls: List[String] = []
+  let mut start: u64 = 0
+  while start < list.len(units) {
+    let part = f"writepart_{m.hirsel}_{start / CHUNK}"
+    emit_line(mut out, "@preserves_unique(out)")
+    emit_line(
+      mut out,
+      f"fn {part}(m: {m.hirsel}, mut out: List[u8]) -> () uses {{}} {{"
+    )
+    let mut i = start
+    while i < list.len(units) && i < start + CHUNK {
+      emit_write_part(mut out, model, m, fields[units[i]])
+      i += 1
+    }
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    list.push(mut calls, f"  {part}(m, mut out)")
+    start += CHUNK
+  }
+  emit_line(mut out, f"/// Appends the binary encoding of a `{m.hirsel}`.")
+  emit_line(mut out, "@preserves_unique(out)")
+  emit_line(
+    mut out,
+    f"pub fn write_{m.hirsel}(m: {m.hirsel}, mut out: List[u8]) -> () uses {{}} {{"
+  )
+  for call in calls {
+    emit_line(mut out, call)
+  }
+  emit_line(mut out, "  protobuf.write_raw(m.unknown_fields, mut out)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  emit_line(mut out, f"/// The binary encoding of a `{m.hirsel}`.")
+  emit_line(
+    mut out,
+    f"pub fn encode_{m.hirsel}(m: {m.hirsel}) -> unique Bytes uses {{}} {{"
+  )
+  emit_line(mut out, "  let mut out: List[u8] = []")
+  emit_line(mut out, f"  write_{m.hirsel}(m, mut out)")
+  emit_line(mut out, "  bytes.from_list(take out)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+// Fields per generated helper function; see emit_read.
+const CHUNK: u64 = 4
+
+// The indexes of `fields` with each oneof represented once, by its first member.
+fn field_units(fields: List[Fld]) -> List[u64] uses {} {
+  let mut units: List[u64] = []
+  let mut oneof_done: Set[u64] = set.empty()
+  let mut i: u64 = 0
+  while i < list.len(fields) {
+    let unit = match fields[i].decl.oneof {
+      Some(index) => if set.contains(oneof_done, index) {
+        false
+      } else {
+        set.insert(mut oneof_done, index)
+        true
+      },
+      None() => true,
+    }
+    if unit {
+      list.push(mut units, i)
+    }
+    i += 1
+  }
+  units
+}
+
+@noalloc
+fn by_number(a: Fld, b: Fld) -> i32 uses {} {
+  if a.decl.number < b.decl.number {
+    0 - 1
+  } else if a.decl.number > b.decl.number {
+    1
+  } else {
+    0
+  }
+}
+
+// ---- Binary decoding ----
+fn read_value(model: Model, ty: Ty) -> unique String uses {} {
+  match ty {
+    Scalar(s) => f"protobuf.read_{s}(data, mut pos)?",
+    EnumRef(j) => f"{enum_fn(model, j, "from_number")}(protobuf.read_enum(data, mut pos)?)",
+    MessageRef(_) => "",
+  }
+}
+
+fn emit_body(mut out: List[u8], indent: String) -> () uses {} {
+  emit_line(mut out, f"{indent}let body = protobuf.read_len(data, mut pos)?")
+}
+
+// The expression merging a new occurrence (`body`) of a message field into the
+// value `old` taken from it: parsing concatenated encodings merges them.
+fn merged(model: Model, j: u64, boxed: bool, old: String) -> unique String uses {} {
+  let value = if boxed {
+    f"{msg_fn(model, j, "unbox")}({old})"
+  } else {
+    unique old
+  }
+  f"{msg_fn(model, j, "read")}(protobuf.concat({msg_fn(model, j, "encode")}({value}), body), depth + 1)?"
+}
+
+fn emit_read(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  emit_line(mut out, f"/// Decodes a `{m.hirsel}` from its binary encoding.")
+  emit_line(
+    mut out,
+    f"pub fn decode_{m.hirsel}(data: Bytes) -> Result[{m.hirsel}, protobuf.DecodeError] uses {{}} {{"
+  )
+  emit_line(mut out, f"  read_{m.hirsel}(data, 0)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  // GAP: V checks a function in time and memory superlinear in its size (a match
+  // whose arms assign fields through `?` most of all), and each function taking a
+  // large message adds check memory in proportion to the message (reported). So
+  // fields decode in chunks of CHUNK, one function per chunk: for the conformance
+  // messages, one function per field exceeds 4 GiB and chunks of 16 take 820 s.
+  let mut start: u64 = 0
+  while start < list.len(m.fields) {
+    emit_line(
+      mut out,
+      f"fn readpart_{m.hirsel}_{start / CHUNK}(mut m: {m.hirsel}, data: Bytes, mut pos: u64, field: u64, wire: u64, depth: u64) -> Result[bool, protobuf.DecodeError] uses {{}} {{"
+    )
+    emit_line(mut out, "  let found = match field {")
+    let mut i = start
+    while i < list.len(m.fields) && i < start + CHUNK {
+      emit_line(mut out, f"    {m.fields[i].decl.number} => {{")
+      emit_read_arm(mut out, model, m, m.fields[i], "      ", "        ")
+      emit_line(mut out, "      known")
+      emit_line(mut out, "    },")
+      i += 1
+    }
+    emit_line(mut out, "    _ => false,")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  let _ = depth")
+    emit_line(mut out, "  Ok(found)")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    start += CHUNK
+  }
+  emit_line(mut out, f"/// Decodes a `{m.hirsel}` nested `depth` messages deep.")
+  emit_line(
+    mut out,
+    f"pub fn read_{m.hirsel}(data: Bytes, depth: u64) -> Result[{m.hirsel}, protobuf.DecodeError] uses {{}} {{"
+  )
+  emit_line(mut out, "  protobuf.check_depth(depth)?")
+  emit_line(mut out, f"  let mut m = default_{m.hirsel}()")
+  emit_line(mut out, "  let mut unknown: List[u8] = []")
+  emit_line(mut out, "  let mut pos: u64 = 0")
+  emit_line(mut out, "  while pos < bytes.len(data) {")
+  emit_line(mut out, "    let start = pos")
+  emit_line(mut out, "    let (field, wire) = protobuf.read_tag(data, mut pos)?")
+  emit_line(mut out, "    let known = match field {")
+  let mut first: u64 = 0
+  while first < list.len(m.fields) {
+    emit_line(
+      mut out,
+      f"      {chunk_numbers(m.fields, first)} => readpart_{m.hirsel}_{first / CHUNK}(mut m, data, mut pos, field, wire, depth)?,"
+    )
+    first += CHUNK
+  }
+  emit_line(mut out, "      _ => false,")
+  emit_line(mut out, "    }")
+  emit_line(mut out, "    if !known {")
+  emit_line(mut out, "      protobuf.skip(data, mut pos, field, wire)?")
+  emit_line(mut out, "      protobuf.keep(data, start, pos, mut unknown)")
+  emit_line(mut out, "    }")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "  m.unknown_fields = bytes.from_list(take unknown)")
+  emit_line(mut out, "  Ok(m)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  for f in m.fields {
+    if let Some(k) = f.decl.key {
+      emit_entry(mut out, model, m, f, k)
+    }
+  }
+}
+
+// The field numbers of the chunk of `fields` starting at `start`, as a pattern.
+fn chunk_numbers(fields: List[Fld], start: u64) -> unique String uses {} {
+  let mut numbers: List[String] = []
+  let mut i = start
+  while i < list.len(fields) && i < start + CHUNK {
+    list.push(mut numbers, f"{fields[i].decl.number}")
+    i += 1
+  }
+  string.join(numbers, " | ")
+}
+
+fn emit_read_arm(
+  mut out: List[u8],
+  model: Model,
+  m: Msg,
+  f: Fld,
+  b0: String,
+  b1: String
+) -> () uses {} {
+  let n = f.decl.number
+  let place = f"m.{f.name}"
+  if option.is_some(f.decl.key) {
+    emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+    emit_body(mut out, b1)
+    emit_line(
+      mut out,
+      f"{b1}let (k, v) = entry_{m.hirsel}_{f.decl.name}(body, depth + 1)?"
+    )
+    emit_line(mut out, f"{b1}map.insert(mut {place}, take k, take v)")
+    emit_line(mut out, f"{b1}true")
+    emit_line(mut out, f"{b0}}} else {{")
+    emit_line(mut out, f"{b1}false")
+    emit_line(mut out, f"{b0}}}")
+    return
+  }
+  if let Some(index) = f.decl.oneof {
+    let oneof = f"m.{escape(m.decl.oneofs[index], [])}"
+    match f.ty {
+      MessageRef(j) => {
+        emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+        emit_body(mut out, b1)
+        emit_line(mut out, f"{b1}let value = match option.remove(mut {oneof}) {{")
+        emit_line(
+          mut out,
+          f"{b1}  Some({f.name}(old)) => {merged(model, j, f.boxed, "old")},"
+        )
+        emit_line(mut out, f"{b1}  _ => {msg_fn(model, j, "read")}(body, depth + 1)?,")
+        emit_line(mut out, f"{b1}}}")
+        let payload = if f.boxed {
+          "box value"
+        } else {
+          "value"
+        }
+        emit_line(mut out, f"{b1}{oneof} = Some({f.name}({payload}))")
+      },
+      Scalar(s) => {
+        emit_line(mut out, f"{b0}let known = if wire == {wire_of(s)} {{")
+        emit_line(mut out, f"{b1}{oneof} = Some({f.name}({read_value(model, f.ty)}))")
+      },
+      EnumRef(_) => {
+        emit_line(mut out, f"{b0}let known = if wire == 0 {{")
+        emit_line(mut out, f"{b1}{oneof} = Some({f.name}({read_value(model, f.ty)}))")
+      },
+    }
+    emit_line(mut out, f"{b1}true")
+    emit_line(mut out, f"{b0}}} else {{")
+    emit_line(mut out, f"{b1}false")
+    emit_line(mut out, f"{b0}}}")
+    return
+  }
+  if f.decl.label == Repeated() {
+    match f.ty {
+      MessageRef(j) => {
+        emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+        emit_body(mut out, b1)
+        emit_line(
+          mut out,
+          f"{b1}list.push(mut {place}, {msg_fn(model, j, "read")}(body, depth + 1)?)"
+        )
+      },
+      Scalar(s) => if s == "string" || s == "bytes" {
+        emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+        emit_line(mut out, f"{b1}list.push(mut {place}, {read_value(model, f.ty)})")
+      } else {
+        emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+        emit_line(
+          mut out,
+          f"{b1}protobuf.read_packed(data, mut pos, protobuf.read_{s}, mut {place})?"
+        )
+        emit_line(mut out, f"{b1}true")
+        emit_line(mut out, f"{b0}}} else if wire == {wire_of(s)} {{")
+        emit_line(mut out, f"{b1}list.push(mut {place}, {read_value(model, f.ty)})")
+      },
+      EnumRef(e) => {
+        emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+        emit_line(mut out, f"{b1}let mut nums: List[i32] = []")
+        emit_line(
+          mut out,
+          f"{b1}protobuf.read_packed(data, mut pos, protobuf.read_enum, mut nums)?"
+        )
+        emit_line(mut out, f"{b1}for e in nums {{")
+        emit_line(
+          mut out,
+          f"{b1}  list.push(mut {place}, {enum_fn(model, e, "from_number")}(e))"
+        )
+        emit_line(mut out, f"{b1}}}")
+        emit_line(mut out, f"{b1}true")
+        emit_line(mut out, f"{b0}}} else if wire == 0 {{")
+        emit_line(mut out, f"{b1}list.push(mut {place}, {read_value(model, f.ty)})")
+      },
+    }
+    emit_line(mut out, f"{b1}true")
+    emit_line(mut out, f"{b0}}} else {{")
+    emit_line(mut out, f"{b1}false")
+    emit_line(mut out, f"{b0}}}")
+    return
+  }
+  match f.ty {
+    MessageRef(j) => {
+      emit_line(mut out, f"{b0}let known = if wire == 2 {{")
+      emit_body(mut out, b1)
+      emit_line(mut out, f"{b1}let value = match option.remove(mut {place}) {{")
+      emit_line(mut out, f"{b1}  Some(old) => {merged(model, j, f.boxed, "old")},")
+      emit_line(
+        mut out,
+        f"{b1}  None() => {msg_fn(model, j, "read")}(body, depth + 1)?,"
+      )
+      emit_line(mut out, f"{b1}}}")
+      let payload = if f.boxed {
+        "box value"
+      } else {
+        "value"
+      }
+      emit_line(mut out, f"{b1}{place} = Some({payload})")
+    },
+    Scalar(s) => {
+      emit_line(mut out, f"{b0}let known = if wire == {wire_of(s)} {{")
+      if f.decl.label == Optional() {
+        emit_line(mut out, f"{b1}{place} = Some({read_value(model, f.ty)})")
+      } else {
+        emit_line(mut out, f"{b1}{place} = {read_value(model, f.ty)}")
+      }
+    },
+    EnumRef(_) => {
+      emit_line(mut out, f"{b0}let known = if wire == 0 {{")
+      if f.decl.label == Optional() {
+        emit_line(mut out, f"{b1}{place} = Some({read_value(model, f.ty)})")
+      } else {
+        emit_line(mut out, f"{b1}{place} = {read_value(model, f.ty)}")
+      }
+    },
+  }
+  emit_line(mut out, f"{b1}true")
+  emit_line(mut out, f"{b0}}} else {{")
+  emit_line(mut out, f"{b1}false")
+  emit_line(mut out, f"{b0}}}")
+}
+
+fn emit_entry(mut out: List[u8], model: Model, m: Msg, f: Fld, key: String) -> () uses {} {
+  let value_type = element_type(model, f.ty)
+  let value_default = match f.ty {
+    Scalar(s) => zero_of(s),
+    EnumRef(j) => enum_default(model, j),
+    MessageRef(j) => f"{msg_fn(model, j, "default")}()",
+  }
+  emit_line(
+    mut out,
+    f"fn entry_{m.hirsel}_{f.decl.name}(data: Bytes, depth: u64) -> Result[({scalar_type(
+      key
+    )}, {value_type}), protobuf.DecodeError] uses {{}} {{"
+  )
+  emit_line(mut out, "  protobuf.check_depth(depth)?")
+  emit_line(mut out, f"  let mut key: {scalar_type(key)} = {zero_of(key)}")
+  emit_line(mut out, f"  let mut value: {value_type} = {value_default}")
+  emit_line(mut out, "  let mut pos: u64 = 0")
+  emit_line(mut out, "  while pos < bytes.len(data) {")
+  emit_line(mut out, "    let (field, wire) = protobuf.read_tag(data, mut pos)?")
+  emit_line(mut out, "    let known = match field {")
+  emit_line(mut out, f"      1 => if wire == {wire_of(key)} {{")
+  emit_line(mut out, f"        key = protobuf.read_{key}(data, mut pos)?")
+  emit_line(mut out, "        true")
+  emit_line(mut out, "      } else {")
+  emit_line(mut out, "        false")
+  emit_line(mut out, "      },")
+  match f.ty {
+    MessageRef(j) => {
+      emit_line(mut out, "      2 => if wire == 2 {")
+      emit_body(mut out, "        ")
+      emit_line(mut out, f"        value = {merged(model, j, false, "value")}")
+    },
+    Scalar(s) => {
+      emit_line(mut out, f"      2 => if wire == {wire_of(s)} {{")
+      emit_line(mut out, f"        value = {read_value(model, f.ty)}")
+    },
+    EnumRef(_) => {
+      emit_line(mut out, "      2 => if wire == 0 {")
+      emit_line(mut out, f"        value = {read_value(model, f.ty)}")
+    },
+  }
+  emit_line(mut out, "        true")
+  emit_line(mut out, "      } else {")
+  emit_line(mut out, "        false")
+  emit_line(mut out, "      },")
+  emit_line(mut out, "      _ => false,")
+  emit_line(mut out, "    }")
+  emit_line(mut out, "    if !known {")
+  emit_line(mut out, "      protobuf.skip(data, mut pos, field, wire)?")
+  emit_line(mut out, "    }")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "  Ok((take key, take value))")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+// ---- JSON ----
+fn json_value(model: Model, ty: Ty, boxed: bool, x: String) -> unique String uses {} {
+  match ty {
+    Scalar(s) => f"protobuf.json_{json_kind(s)}({x})",
+    EnumRef(j) => f"{enum_fn(model, j, "to_json")}({x})",
+    MessageRef(j) => if boxed {
+      f"{msg_fn(model, j, "to_json")}({msg_fn(model, j, "unbox")}({x}), r)?"
+    } else {
+      f"{msg_fn(model, j, "to_json")}({x}, r)?"
+    },
+  }
+}
+
+// The statements adding field `f` of `m` (or the oneof it belongs to) to `o`.
+fn emit_to_json_part(mut out: List[u8], model: Model, m: Msg, f: Fld) -> () uses {} {
+  let place = f"m.{f.name}"
+  let name = quoted(f.json)
+  if let Some(index) = f.decl.oneof {
+    emit_line(mut out, f"  match m.{escape(m.decl.oneofs[index], [])} {{")
+    for member in m.fields {
+      if member.decl.oneof == Some(index) {
+        emit_line(
+          mut out,
+          f"    Some({member.name}(v)) => map.insert(mut o, {quoted(member.json)}, {json_value(
+            model,
+            member.ty,
+            member.boxed,
+            "v"
+          )}),"
+        )
+      }
+    }
+    emit_line(mut out, "    None() => (),")
+    emit_line(mut out, "  }")
+    return
+  }
+  if let Some(k) = f.decl.key {
+    emit_line(mut out, f"  if map.len({place}) > 0 {{")
+    emit_line(mut out, "    let mut entries: Map[String, json.Value] = map.empty()")
+    emit_line(mut out, f"    for (k, v) in {place} {{")
+    emit_line(
+      mut out,
+      f"      map.insert(mut entries, protobuf.key_{json_kind(k)}(k), {json_value(
+        model,
+        f.ty,
+        false,
+        "v"
+      )})"
+    )
+    emit_line(mut out, "    }")
+    emit_line(mut out, f"    map.insert(mut o, {name}, Object(take entries))")
+    emit_line(mut out, "  }")
+    return
+  }
+  if f.decl.label == Repeated() {
+    emit_line(mut out, f"  if list.len({place}) > 0 {{")
+    emit_line(mut out, "    let mut items: List[json.Value] = []")
+    emit_line(mut out, f"    for v in {place} {{")
+    emit_line(
+      mut out,
+      f"      list.push(mut items, {json_value(model, f.ty, false, "v")})"
+    )
+    emit_line(mut out, "    }")
+    emit_line(mut out, f"    map.insert(mut o, {name}, Array(take items))")
+    emit_line(mut out, "  }")
+    return
+  }
+  let message = match f.ty {
+    MessageRef(_) => true,
+    _ => false,
+  }
+  if f.decl.label == Optional() || message {
+    emit_line(mut out, f"  match {place} {{")
+    emit_line(
+      mut out,
+      f"    Some(v) => map.insert(mut o, {name}, {json_value(model, f.ty, f.boxed, "v")}),"
+    )
+    emit_line(mut out, "    None() => (),")
+    emit_line(mut out, "  }")
+    return
+  }
+  let condition = match f.ty {
+    Scalar(s) => nonzero(s, place),
+    EnumRef(e) => f"{enum_fn(model, e, "number")}({place}) != 0",
+    MessageRef(_) => "true",
+  }
+  emit_line(mut out, f"  if {condition} {{")
+  emit_line(
+    mut out,
+    f"    map.insert(mut o, {name}, {json_value(model, f.ty, false, place)})"
+  )
+  emit_line(mut out, "  }")
+}
+
+fn emit_to_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  // GAP: see emit_read; each chunk of fields is added by its own function.
+  let mut calls: List[String] = []
+  if !is_special(m.full) {
+    let units = field_units(m.fields)
+    let mut start: u64 = 0
+    while start < list.len(units) {
+      let part = f"tojsonpart_{m.hirsel}_{start / CHUNK}"
+      emit_line(
+        mut out,
+        f"fn {part}(m: {m.hirsel}, mut o: Map[String, json.Value], r: protobuf.Registry) -> Result[(), protobuf.JsonError] uses {{}} {{"
+      )
+      emit_line(mut out, "  let _ = r")
+      let mut i = start
+      while i < list.len(units) && i < start + CHUNK {
+        emit_to_json_part(mut out, model, m, m.fields[units[i]])
+        i += 1
+      }
+      emit_line(mut out, "  Ok(())")
+      emit_line(mut out, "}")
+      emit_line(mut out, "")
+      list.push(mut calls, f"  {part}(m, mut o, r)?")
+      start += CHUNK
+    }
+  }
+  emit_line(
+    mut out,
+    f"/// The canonical proto3 JSON of a `{m.hirsel}`; `r` resolves `Any` types."
+  )
+  emit_line(
+    mut out,
+    f"pub fn to_json_{m.hirsel}(m: {m.hirsel}, r: protobuf.Registry) -> Result[json.Value, protobuf.JsonError] uses {{}} {{"
+  )
+  if emit_special_to_json(mut out, m) {
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    return
+  }
+  emit_line(mut out, "  let _ = r")
+  emit_line(mut out, "  let mut o: Map[String, json.Value] = map.empty()")
+  for call in calls {
+    emit_line(mut out, call)
+  }
+  emit_line(mut out, "  Ok(Object(take o))")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+// Statements parsing JSON `src` as one element of type `ty` into `target`
+// (an assignment prefix such as `m.f = ` or `list.push(mut m.f, `, closed by `close`).
+fn parse_element(
+  mut out: List[u8],
+  model: Model,
+  ty: Ty,
+  boxed: bool,
+  src: String,
+  target: String,
+  close: String,
+  indent: String
+) -> () uses {} {
+  match ty {
+    Scalar(s) => emit_line(
+      mut out,
+      f"{indent}{target}protobuf.{json_kind(s)}_of({src})?{close}"
+    ),
+    EnumRef(j) => {
+      emit_line(
+        mut out,
+        f"{indent}if let Some(e) = {enum_fn(model, j, "from_json")}({src}, o.ignore_unknown_fields)? {{"
+      )
+      emit_line(mut out, f"{indent}  {target}e{close}")
+      emit_line(mut out, f"{indent}}}")
+    },
+    MessageRef(j) => {
+      let value = f"{msg_fn(model, j, "from_json")}({src}, o)?"
+      if boxed {
+        emit_line(mut out, f"{indent}{target}box {value}{close}")
+      } else {
+        emit_line(mut out, f"{indent}{target}{value}{close}")
+      }
+    },
+  }
+}
+
+// Closes one field's arm of a JSON chunk function, and the function after its last.
+fn emit_json_close(mut out: List[u8], last: bool) -> () uses {} {
+  emit_line(mut out, "    },")
+  if last {
+    emit_line(mut out, "    _ => (),")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  let _ = seen")
+    emit_line(mut out, "  let _ = o")
+    emit_line(mut out, "  Ok(())")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  }
+}
+
+fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  // GAP: see emit_read; fields parse in chunks of CHUNK. A chain of key
+  // tests around those calls is also superlinear, so a separate function maps
+  // each key to its field number.
+  if !is_special(m.full) && list.len(m.fields) > 0 {
+    emit_line(mut out, f"fn jsonnumber_{m.hirsel}(key: String) -> u64 uses {{}} {{")
+    emit_line(mut out, "  match key {")
+    for f in m.fields {
+      let names = if f.json == f.decl.name {
+        quoted(f.json)
+      } else {
+        f"{quoted(f.json)} | {quoted(f.decl.name)}"
+      }
+      emit_line(mut out, f"    {names} => {f.decl.number},")
+    }
+    emit_line(mut out, "    _ => 0,")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  }
+  if !is_special(m.full) {
+    let mut index_of: u64 = 0
+    for f in m.fields {
+      if index_of % CHUNK == 0 {
+        emit_line(
+          mut out,
+          f"fn jsonpart_{m.hirsel}_{index_of / CHUNK}(mut m: {m.hirsel}, mut seen: Set[u64], number: u64, key: String, value: json.Value, o: protobuf.JsonOptions) -> Result[(), protobuf.JsonError] uses {{}} {{"
+        )
+        emit_line(mut out, "  match number {")
+      }
+      let last = index_of % CHUNK == CHUNK - 1 || index_of + 1 == list.len(m.fields)
+      index_of += 1
+      emit_line(mut out, f"    {f.decl.number} => {{")
+      let place = f"m.{f.name}"
+      let null_value = null_is_value(model, f.ty)
+      if let Some(index) = f.decl.oneof {
+        let oneof = f"m.{escape(m.decl.oneofs[index], [])}"
+        if null_value {
+          emit_line(mut out, f"  {{")
+        } else {
+          emit_line(mut out, f"  if !protobuf.is_null(value) {{")
+        }
+        emit_line(
+          mut out,
+          f"    protobuf.first_member(mut seen, {536870912 + index}, key)?"
+        )
+        parse_element(
+          mut out,
+          model,
+          f.ty,
+          f.boxed,
+          "value",
+          f"{oneof} = Some({f.name}(",
+          "))",
+          "    "
+        )
+        emit_line(mut out, f"  }}")
+        emit_json_close(mut out, last)
+        continue
+      }
+      emit_line(mut out, f"  protobuf.first_member(mut seen, {f.decl.number}, key)?")
+      if let Some(k) = f.decl.key {
+        emit_line(mut out, f"  if !protobuf.is_null(value) {{")
+        emit_line(mut out, f"    let Object(entries) = value else {{")
+        emit_line(mut out, f"      return Error(protobuf.expected(key, \"an object\"))")
+        emit_line(mut out, f"    }}")
+        emit_line(mut out, f"    for (k, item) in entries {{")
+        emit_line(mut out, f"      let parsed_key = protobuf.{json_kind(k)}_key(k)?")
+        if !null_value {
+          emit_line(mut out, f"      if protobuf.is_null(item) {{")
+          emit_line(
+            mut out,
+            f"        return Error(protobuf.expected(key, \"no null map values\"))"
+          )
+          emit_line(mut out, f"      }}")
+        }
+        parse_element(
+          mut out,
+          model,
+          f.ty,
+          false,
+          "item",
+          f"map.insert(mut {place}, copy parsed_key, ",
+          ")",
+          "      "
+        )
+        emit_line(mut out, f"    }}")
+        emit_line(mut out, f"  }}")
+        emit_json_close(mut out, last)
+        continue
+      }
+      if f.decl.label == Repeated() {
+        emit_line(mut out, f"  if !protobuf.is_null(value) {{")
+        emit_line(mut out, f"    let Array(items) = value else {{")
+        emit_line(mut out, f"      return Error(protobuf.expected(key, \"an array\"))")
+        emit_line(mut out, f"    }}")
+        emit_line(mut out, f"    for item in items {{")
+        if !null_value {
+          emit_line(mut out, f"      if protobuf.is_null(item) {{")
+          emit_line(
+            mut out,
+            f"        return Error(protobuf.expected(key, \"no null elements\"))"
+          )
+          emit_line(mut out, f"      }}")
+        }
+        parse_element(
+          mut out,
+          model,
+          f.ty,
+          false,
+          "item",
+          f"list.push(mut {place}, ",
+          ")",
+          "      "
+        )
+        emit_line(mut out, f"    }}")
+        emit_line(mut out, f"  }}")
+        emit_json_close(mut out, last)
+        continue
+      }
+      if null_value {
+        emit_line(mut out, f"  {{")
+      } else {
+        emit_line(mut out, f"  if !protobuf.is_null(value) {{")
+      }
+      let message = match f.ty {
+        MessageRef(_) => true,
+        _ => false,
+      }
+      if f.decl.label == Optional() || message {
+        parse_element(
+          mut out,
+          model,
+          f.ty,
+          f.boxed,
+          "value",
+          f"{place} = Some(",
+          ")",
+          "    "
+        )
+      } else {
+        parse_element(mut out, model, f.ty, false, "value", f"{place} = ", "", "    ")
+      }
+      emit_line(mut out, f"  }}")
+      emit_json_close(mut out, last)
+    }
+  }
+  emit_line(mut out, f"/// Parses the proto3 JSON of a `{m.hirsel}`.")
+  emit_line(
+    mut out,
+    f"pub fn from_json_{m.hirsel}(v: json.Value, o: protobuf.JsonOptions) -> Result[{m.hirsel}, protobuf.JsonError] uses {{}} {{"
+  )
+  if emit_special_from_json(mut out, m) {
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    return
+  }
+  emit_line(mut out, "  let Object(fields) = v else {")
+  emit_line(
+    mut out,
+    f"    return Error(protobuf.expected({quoted(proto_name(m.full))}, \"an object\"))"
+  )
+  emit_line(mut out, "  }")
+  emit_line(mut out, f"  let mut m = default_{m.hirsel}()")
+  emit_line(mut out, "  let mut seen: Set[u64] = set.empty()")
+  emit_line(mut out, "  for (key, value) in fields {")
+  if list.len(m.fields) == 0 {
+    emit_line(mut out, "    protobuf.unknown_field(o, key)?")
+  } else {
+    emit_line(mut out, f"    let number = jsonnumber_{m.hirsel}(key)")
+    emit_line(mut out, "    match number {")
+    let mut start: u64 = 0
+    while start < list.len(m.fields) {
+      emit_line(
+        mut out,
+        f"      {chunk_numbers(m.fields, start)} => jsonpart_{m.hirsel}_{start / CHUNK}(mut m, mut seen, number, key, value, o)?,"
+      )
+      start += CHUNK
+    }
+    emit_line(mut out, "      _ => protobuf.unknown_field(o, key)?,")
+    emit_line(mut out, "    }")
+  }
+  emit_line(mut out, "  }")
+  emit_line(mut out, "  Ok(m)")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+fn emit_registry_entry(mut out: List[u8], model: Model, j: u64) -> () uses {} {
+  let m = model.messages[j]
+  let h = m.hirsel
+  emit_line(
+    mut out,
+    f"fn any_to_json_{h}(data: Bytes, r: protobuf.Registry) -> Result[json.Value, protobuf.JsonError] uses {{}} {{"
+  )
+  emit_line(mut out, f"  match decode_{h}(data) {{")
+  emit_line(mut out, f"    Ok(m) => to_json_{h}(m, r),")
+  emit_line(mut out, "    Error(e) => Error(protobuf.decode_failed(e)),")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  emit_line(
+    mut out,
+    f"fn any_from_json_{h}(v: json.Value, ignore_unknown: bool, r: protobuf.Registry) -> Result[unique Bytes, protobuf.JsonError] uses {{}} {{"
+  )
+  emit_line(
+    mut out,
+    f"  let m = from_json_{h}(v, protobuf.JsonOptions(ignore_unknown_fields: ignore_unknown, registry: unique r))?"
+  )
+  emit_line(mut out, f"  Ok(encode_{h}(m))")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  let special = if is_special(m.full) {
+    "true"
+  } else {
+    "false"
+  }
+  emit_line(mut out, f"/// The registry entry of `{h}`, for `Any` in JSON.")
+  emit_line(mut out, f"pub fn type_{h}() -> protobuf.MessageType uses {{}} {{")
+  emit_line(
+    mut out,
+    f"  protobuf.MessageType(name: {quoted(proto_name(m.full))}, special: {special}, to_json: any_to_json_{h}, from_json: any_from_json_{h})"
+  )
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+/// Generates one Hirsel source holding every type and function of `Config.files`.
+pub fn generate(sources: List[Source], config: Config) -> Result[String, String] uses {} {
+  let model = build(sources, config)?
+  let mut out: List[u8] = []
+  emit_line(
+    mut out,
+    f"// Generated by protoc@1 from {string.join(config.files, ", ")}. Do not edit."
+  )
+  emit_line(mut out, "")
+  let mut boxed: Set[u64] = set.empty()
+  for m in model.messages {
+    for f in m.fields {
+      if f.boxed {
+        if let MessageRef(j) = f.ty {
+          set.insert(mut boxed, j)
+        }
+      }
+    }
+  }
+  let mut j: u64 = 0
+  while j < list.len(model.enums) {
+    if model.enums[j].generate {
+      emit_enum(mut out, model, j)
+    }
+    j += 1
+  }
+  j = 0
+  let mut entries: List[String] = []
+  while j < list.len(model.messages) {
+    if model.messages[j].generate {
+      emit_message_type(mut out, model, j)
+      emit_default(mut out, model, j)
+      if set.contains(boxed, j) {
+        emit_unbox(mut out, model, j)
+      }
+      emit_write(mut out, model, j)
+      emit_read(mut out, model, j)
+      emit_to_json(mut out, model, j)
+      emit_from_json(mut out, model, j)
+      emit_registry_entry(mut out, model, j)
+      list.push(mut entries, f"type_{model.messages[j].hirsel}()")
+    }
+    j += 1
+  }
+  emit_line(mut out, "/// Registry entries for every message of this module.")
+  emit_line(mut out, "pub fn message_types() -> List[protobuf.MessageType] uses {} {")
+  emit_line(mut out, f"  [{string.join(entries, ", ")}]")
+  emit_line(mut out, "}")
+  if config.grpc {
+    emit_services(mut out, model)?
+  }
+  Ok(text.finish_valid(take out))
+}

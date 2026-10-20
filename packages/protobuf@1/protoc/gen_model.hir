@@ -1,0 +1,711 @@
+// Resolution of parsed files into the model the emitter writes: every message and
+// enum with its Hirsel name, every field with its resolved type, and which
+// message fields need a box because their type can contain the message again.
+
+/// Generator settings. `files` names the sources to generate; the others are
+/// imports that only supply declarations. `external` maps a proto package of
+/// such imports to the Hirsel module path its generated code lives in;
+/// `google.protobuf` always maps to `protobuf.wkt`. `grpc` adds service stubs.
+pub type Config {
+  files: List[String],
+  external: List[(String, String)],
+  grpc: bool,
+}
+
+/// A field's resolved type: a scalar by its proto name, or an index into the
+/// model's enums or messages.
+pub type Ty = Scalar(String) | EnumRef(u64) | MessageRef(u64)
+
+pub type Fld {
+  decl: Field,
+  /// The record field name: the proto name, with `_` appended to a keyword.
+  name: String,
+  /// The JSON name: `json_name`, else lowerCamelCase.
+  json: String,
+  ty: Ty,
+  boxed: bool,
+  packed: bool,
+}
+
+pub type Msg {
+  /// `.package.Outer.Inner`
+  full: String,
+  /// `Outer_Inner`
+  hirsel: String,
+  /// `""` for a generated type, else its module path with a trailing dot.
+  qualifier: String,
+  generate: bool,
+  decl: Message,
+  fields: List[Fld],
+  /// The type name of each oneof, by the message's oneof index.
+  oneofs: List[String],
+  package: String,
+}
+
+pub type En {
+  full: String,
+  hirsel: String,
+  qualifier: String,
+  generate: bool,
+  decl: Enum,
+  /// Variant names by declaration order; an alias has the variant of the first
+  /// value with its number.
+  variants: List[String],
+  /// Whether each value is the first with its number.
+  primary: List[bool],
+  unrecognized: String,
+}
+
+/// One method of a generated service.
+pub type Rpc {
+  /// The method name as declared, such as `SayHello`.
+  name: String,
+  /// The request path, `/package.Service/Method`.
+  path: String,
+  /// `Service_Method`, the prefix of the method's generated functions.
+  prefix: String,
+  /// The handler parameter name of the method: snake case.
+  handler: String,
+  input: u64,
+  output: u64,
+  client_streaming: bool,
+  server_streaming: bool,
+}
+
+/// A service of a generated file.
+pub type Svc {
+  /// `package.Service`
+  full: String,
+  hirsel: String,
+  methods: List[Rpc],
+}
+
+pub type Model {
+  messages: List[Msg],
+  enums: List[En],
+  files: List[File],
+  services: List[Svc],
+  config: Config,
+}
+
+/// `SayHello` as `say_hello`.
+pub fn snake_name(name: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let data = string.as_bytes(name)
+  let mut i: u64 = 0
+  while i < bytes.len(data) {
+    let b = data[i]
+    if b >= b'A' && b <= b'Z' {
+      if i > 0 && data[i - 1] != b'_' {
+        list.push(mut out, b'_')
+      }
+      list.push(mut out, b + 32)
+    } else {
+      list.push(mut out, b)
+    }
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+type Def = MessageDef(u64) | EnumDef(u64)
+
+const KEYWORDS: List[String] = [
+  "fn",
+  "let",
+  "mut",
+  "match",
+  "if",
+  "else",
+  "for",
+  "in",
+  "while",
+  "break",
+  "continue",
+  "return",
+  "take",
+  "copy",
+  "unique",
+  "type",
+  "distinct",
+  "flat",
+  "resource",
+  "drop",
+  "box",
+  "pub",
+  "opaque",
+  "const",
+  "comptime",
+  "shape",
+  "heap",
+  "before",
+  "requires",
+  "ensures",
+  "result",
+  "where",
+  "uses",
+  "of",
+  "local",
+  "global",
+  "once",
+  "todo",
+  "extern",
+  "unsafe",
+  "true",
+  "false",
+  "unknown_fields"
+]
+
+// Type names that would shadow a core or std name used by generated code.
+const RESERVED_TYPES: List[String] = [
+  "Option",
+  "Result",
+  "List",
+  "Map",
+  "Set",
+  "String",
+  "Bytes",
+  "Array",
+  "Inline",
+  "Test",
+  "Some",
+  "None",
+  "Ok",
+  "Error",
+  "bool",
+  "char",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "u128",
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "i128",
+  "f32",
+  "f64"
+]
+
+// Local names used by generated bodies; an enum value with one of these names
+// would turn a binding into a pattern, so generation refuses it.
+// Locals of generated service functions, which handler parameters avoid.
+const SERVICE_LOCALS: List[String] = [
+  "call",
+  "path",
+  "request",
+  "response",
+  "conn",
+  "options",
+  "reply",
+  "message"
+]
+
+const LOCALS: List[String] = [
+  "m",
+  "out",
+  "data",
+  "pos",
+  "depth",
+  "field",
+  "wire",
+  "start",
+  "known",
+  "unknown",
+  "v",
+  "k",
+  "sub",
+  "run",
+  "body",
+  "old",
+  "o",
+  "r",
+  "fields",
+  "key",
+  "value",
+  "items",
+  "entries",
+  "seen",
+  "n",
+  "entry",
+  "nums",
+  "s",
+  "e",
+  "t",
+  "inner",
+  "url"
+]
+
+fn contains(xs: List[String], s: String) -> bool uses {} {
+  for x in xs {
+    if x == s {
+      return true
+    }
+  }
+  false
+}
+
+/// A record field, variant or value name: `name`, with `_` appended while it is
+/// a keyword or a reserved name.
+pub fn escape(name: String, reserved: List[String]) -> unique String uses {} {
+  let mut out = unique name
+  while contains(KEYWORDS, out) || contains(reserved, out) {
+    out = f"{out}_"
+  }
+  take out
+}
+
+/// The JSON name protoc derives from a field name: underscores removed, and a
+/// lowercase letter after one capitalized.
+pub fn camel_name(name: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut was_underscore = false
+  for b in string.as_bytes(name) {
+    if b != b'_' {
+      if was_underscore && b >= b'a' && b <= b'z' {
+        list.push(mut out, b - 32)
+      } else {
+        list.push(mut out, b)
+      }
+    }
+    was_underscore = b == b'_'
+  }
+  text.finish_valid(take out)
+}
+
+fn join_name(prefix: String, name: String, separator: String) -> unique String uses {} {
+  if string.byte_len(prefix) == 0 {
+    return unique name
+  }
+  f"{prefix}{separator}{name}"
+}
+
+fn qualifier_for(config: Config, package: String) -> Result[unique String, String] uses {} {
+  if package == "google.protobuf" {
+    return Ok("protobuf.wkt.")
+  }
+  for (proto, module) in config.external {
+    if proto == package {
+      return Ok(f"{module}.")
+    }
+  }
+  Error(
+    f"no module for proto package `{package}`: generate its files in this run or map it in Config.external"
+  )
+}
+
+fn collect(
+  mut model: Model,
+  mut defs: Map[String, Def],
+  mut scopes: Set[String],
+  decl: Message,
+  package: String,
+  prefix: String,
+  qualifier: String,
+  wanted: bool
+) -> Result[(), String] uses {} {
+  let full_prefix = join_name(join_name(".", package, ""), prefix, ".")
+  let relative = join_name(prefix, decl.name, ".")
+  let full = f".{join_name(package, relative, ".")}"
+  if map.contains(defs, full) {
+    return Error(f"`{full}` is declared twice")
+  }
+  let underscored = string.replace(relative, ".", "_")
+  let hirsel = escape(underscored, RESERVED_TYPES)
+  let index = list.len(model.messages)
+  map.insert(mut defs, copy full, MessageDef(index))
+  set.insert(mut scopes, copy full)
+  list.push(
+    mut model.messages,
+    Msg(
+      full: copy full,
+      hirsel: take hirsel,
+      qualifier: unique qualifier,
+      generate: wanted,
+      decl: unique decl,
+      fields: [],
+      oneofs: [],
+      package: unique package
+    )
+  )
+  let _ = full_prefix
+  for e in decl.enums {
+    collect_enum(mut model, mut defs, e, package, relative, qualifier, wanted)?
+  }
+  for nested in decl.messages {
+    collect(
+      mut model,
+      mut defs,
+      mut scopes,
+      nested,
+      package,
+      relative,
+      qualifier,
+      wanted
+    )?
+  }
+  Ok(())
+}
+
+fn collect_enum(
+  mut model: Model,
+  mut defs: Map[String, Def],
+  decl: Enum,
+  package: String,
+  prefix: String,
+  qualifier: String,
+  wanted: bool
+) -> Result[(), String] uses {} {
+  let relative = join_name(prefix, decl.name, ".")
+  let full = f".{join_name(package, relative, ".")}"
+  if map.contains(defs, full) {
+    return Error(f"`{full}` is declared twice")
+  }
+  let underscored = string.replace(relative, ".", "_")
+  let hirsel = escape(underscored, RESERVED_TYPES)
+  let mut variants: List[String] = []
+  let mut primary: List[bool] = []
+  let mut names: List[String] = []
+  let mut i: u64 = 0
+  while i < list.len(decl.values) {
+    let value = decl.values[i]
+    let mut first: Option[u64] = None()
+    let mut j: u64 = 0
+    while j < i {
+      if decl.values[j].number == value.number && option.is_none(first) {
+        first = Some(j)
+      }
+      j += 1
+    }
+    match first {
+      Some(first_index) => {
+        list.push(mut variants, copy variants[first_index])
+        list.push(mut primary, false)
+      },
+      None() => {
+        let name = escape(value.name, RESERVED_TYPES)
+        if wanted && contains(LOCALS, name) {
+          return Error(
+            f"enum value `{value.name}` of `{full}` has the name of a generated local; rename it"
+          )
+        }
+        list.push(mut names, copy name)
+        list.push(mut variants, take name)
+        list.push(mut primary, true)
+      },
+    }
+    i += 1
+  }
+  let mut unrecognized = "Unrecognized"
+  while contains(names, unrecognized) {
+    unrecognized = f"{unrecognized}_"
+  }
+  map.insert(mut defs, copy full, EnumDef(list.len(model.enums)))
+  list.push(
+    mut model.enums,
+    En(
+      full: take full,
+      hirsel: take hirsel,
+      qualifier: unique qualifier,
+      generate: wanted,
+      decl: unique decl,
+      variants: take variants,
+      primary: take primary,
+      unrecognized: take unrecognized
+    )
+  )
+  Ok(())
+}
+
+// Resolves `name` from inside `scope` (a full name such as `.pkg.Outer`) by
+// protobuf's rules: the innermost enclosing scope whose member is the first
+// component wins, and the rest of the name resolves inside it.
+fn resolve(defs: Map[String, Def], scopes: Set[String], scope: String, name: String) -> Option[
+  Def
+] uses {} {
+  if string.starts_with(name, ".") {
+    return match map.get(defs, name) {
+      Some(d) => Some(copy d),
+      None() => None(),
+    }
+  }
+  let first = match string.split_once(name, ".") {
+    Some((head, _)) => unique head,
+    None() => unique name,
+  }
+  let mut current = unique scope
+  while true {
+    let candidate_first = f"{current}.{first}"
+    if map.contains(defs, candidate_first) || set.contains(scopes, candidate_first) {
+      let candidate = f"{current}.{name}"
+      return match map.get(defs, candidate) {
+        Some(d) => Some(copy d),
+        None() => None(),
+      }
+    }
+    if string.byte_len(current) == 0 {
+      return None()
+    }
+    current = match string.split_once(reverse_text(current), ".") {
+      Some((_, rest)) => reverse_text(rest),
+      None() => "",
+    }
+  }
+  None()
+}
+
+fn reverse_text(s: String) -> unique String uses {} {
+  let data = string.as_bytes(s)
+  let mut out: List[u8] = []
+  let mut i = bytes.len(data)
+  while i > 0 {
+    i -= 1
+    list.push(mut out, data[i])
+  }
+  text.finish_valid(take out)
+}
+
+fn packable(ty: Ty) -> bool uses {} {
+  match ty {
+    Scalar(s) => s != "string" && s != "bytes",
+    EnumRef(_) => true,
+    MessageRef(_) => false,
+  }
+}
+
+// Whether message `to` can reach message `from` through singular message fields.
+fn reaches(edges: List[List[u64]], to: u64, from: u64) -> bool uses {} {
+  let mut seen: Set[u64] = set.empty()
+  let mut stack: List[u64] = [to]
+  while let Some(at) = list.pop(mut stack) {
+    if at == from {
+      return true
+    }
+    if set.contains(seen, at) {
+      continue
+    }
+    set.insert(mut seen, at)
+    for next in edges[at] {
+      list.push(mut stack, next)
+    }
+  }
+  false
+}
+
+/// Parses and resolves `sources`, with `Config.files` naming the ones to generate.
+pub fn build(sources: List[Source], config: Config) -> Result[Model, String] uses {} {
+  let mut model = Model(
+    messages: [],
+    enums: [],
+    files: [],
+    services: [],
+    config: unique config
+  )
+  let mut all: List[Source] = unique sources
+  // The well-known types are always available to imports.
+  for wkt in wkt_sources() {
+    let mut present = false
+    for s in sources {
+      if s.name == wkt.name {
+        present = true
+      }
+    }
+    if !present {
+      list.push(mut all, unique wkt)
+    }
+  }
+  let mut defs: Map[String, Def] = map.empty()
+  let mut scopes: Set[String] = set.empty()
+  set.insert(mut scopes, "")
+  let mut file_names: Set[String] = set.empty()
+  for source in all {
+    set.insert(mut file_names, unique source.name)
+  }
+  for name in config.files {
+    if !set.contains(file_names, name) {
+      return Error(f"no source named `{name}`")
+    }
+  }
+  for source in all {
+    let parsed = parse(source)?
+    let wanted = contains(config.files, parsed.name)
+    let qualifier = if wanted {
+      ""
+    } else {
+      qualifier_for(config, parsed.package)?
+    }
+    // Every package prefix is a scope: `.a`, `.a.b`.
+    let mut prefix = ""
+    for part in string.split(unique parsed.package, ".") {
+      prefix = f"{prefix}.{part}"
+      set.insert(mut scopes, copy prefix)
+    }
+    for e in parsed.enums {
+      collect_enum(mut model, mut defs, e, parsed.package, "", qualifier, wanted)?
+    }
+    for m in parsed.messages {
+      collect(mut model, mut defs, mut scopes, m, parsed.package, "", qualifier, wanted)?
+    }
+    list.push(mut model.files, take parsed)
+  }
+  for parsed in model.files {
+    for import in parsed.imports {
+      if !set.contains(file_names, import) {
+        return Error(f"{parsed.name}: import `{import}` was not supplied")
+      }
+    }
+  }
+  // Resolve field types.
+  let count = list.len(model.messages)
+  let mut resolved: List[List[Fld]] = []
+  let mut i: u64 = 0
+  while i < count {
+    let msg = model.messages[i]
+    let mut fields: List[Fld] = []
+    let mut numbers: Set[u64] = set.empty()
+    let mut names: Set[String] = set.empty()
+    for f in msg.decl.fields {
+      if set.contains(numbers, f.number) {
+        return Error(f"{msg.full}: field number {f.number} is used twice")
+      }
+      set.insert(mut numbers, f.number)
+      let ty: Ty = if is_scalar(f.ty) {
+        Scalar(unique f.ty)
+      } else {
+        match resolve(defs, scopes, msg.full, f.ty) {
+          Some(MessageDef(j)) => MessageRef(j),
+          Some(EnumDef(j)) => EnumRef(j),
+          None() => return Error(
+            f"{msg.full}: unknown type `{f.ty}` of field `{f.name}`"
+          ),
+        }
+      }
+      let name = escape(f.name, [])
+      if set.contains(names, name) {
+        return Error(f"{msg.full}: field name `{name}` is used twice")
+      }
+      set.insert(mut names, copy name)
+      let json = match f.json_name {
+        Some(j) => unique j,
+        None() => camel_name(f.name),
+      }
+      let can_pack = f.label == Repeated() && option.is_none(f.key) && packable(ty)
+      let packed = can_pack && f.packed != Some(false)
+      list.push(
+        mut fields,
+        Fld(
+          decl: copy f,
+          name: take name,
+          json: take json,
+          ty: take ty,
+          boxed: false,
+          packed: packed
+        )
+      )
+    }
+    list.push(mut resolved, take fields)
+    i += 1
+  }
+  // Boxing: a singular message field whose type reaches its container.
+  let mut edges: List[List[u64]] = []
+  for fields in resolved {
+    let mut out: List[u64] = []
+    for f in fields {
+      if f.decl.label != Repeated() {
+        if let MessageRef(j) = f.ty {
+          list.push(mut out, j)
+        }
+      }
+    }
+    list.push(mut edges, take out)
+  }
+  i = 0
+  while i < count {
+    let mut fields: List[Fld] = []
+    for f in resolved[i] {
+      let mut field_copy = unique f
+      if field_copy.decl.label != Repeated() {
+        if let MessageRef(target) = f.ty {
+          field_copy.boxed = reaches(edges, target, i)
+        }
+      }
+      list.push(mut fields, take field_copy)
+    }
+    model.messages[i].fields = take fields
+    // Oneof type names.
+    let mut oneofs: List[String] = []
+    for name in model.messages[i].decl.oneofs {
+      let mut type_name = f"{model.messages[i].hirsel}_{name}"
+      while map.contains(defs, f".{model.messages[i].package}.{type_name}") || type_taken(
+        model,
+        type_name
+      ) {
+        type_name = f"{type_name}_"
+      }
+      list.push(mut oneofs, take type_name)
+    }
+    model.messages[i].oneofs = take oneofs
+    i += 1
+  }
+  // Resolve the services of the generated files.
+  let mut services: List[Svc] = []
+  for parsed in model.files {
+    if !contains(config.files, parsed.name) {
+      continue
+    }
+    let scope = if string.byte_len(parsed.package) == 0 {
+      ""
+    } else {
+      f".{parsed.package}"
+    }
+    for svc in parsed.services {
+      let full = join_name(parsed.package, svc.name, ".")
+      let hirsel = escape(svc.name, [])
+      let mut methods: List[Rpc] = []
+      for m in svc.methods {
+        let input = match resolve(defs, scopes, scope, m.input) {
+          Some(MessageDef(j)) => j,
+          _ => return Error(f"{full}.{m.name}: unknown request type `{m.input}`"),
+        }
+        let output = match resolve(defs, scopes, scope, m.output) {
+          Some(MessageDef(j)) => j,
+          _ => return Error(f"{full}.{m.name}: unknown response type `{m.output}`"),
+        }
+        list.push(
+          mut methods,
+          Rpc(
+            name: unique m.name,
+            path: f"/{full}/{m.name}",
+            prefix: f"{hirsel}_{m.name}",
+            handler: escape(snake_name(m.name), SERVICE_LOCALS),
+            input: input,
+            output: output,
+            client_streaming: m.client_streaming,
+            server_streaming: m.server_streaming
+          )
+        )
+      }
+      list.push(
+        mut services,
+        Svc(full: take full, hirsel: take hirsel, methods: take methods)
+      )
+    }
+  }
+  model.services = take services
+  Ok(take model)
+}
+
+fn type_taken(model: Model, name: String) -> bool uses {} {
+  for m in model.messages {
+    if m.generate && m.hirsel == name {
+      return true
+    }
+  }
+  for e in model.enums {
+    if e.generate && e.hirsel == name {
+      return true
+    }
+  }
+  false
+}

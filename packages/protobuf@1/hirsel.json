@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "protobuf",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "wire.hir",
+      "module": [
+        "protobuf"
+      ]
+    },
+    {
+      "path": "json.hir",
+      "module": [
+        "protobuf"
+      ]
+    },
+    {
+      "path": "wkt.hir",
+      "module": [
+        "protobuf",
+        "wkt"
+      ]
+    },
+    {
+      "path": "tests.hir",
+      "module": [
+        "protobuf"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

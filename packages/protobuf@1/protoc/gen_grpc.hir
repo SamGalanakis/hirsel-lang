@@ -1,0 +1,292 @@
+// gRPC stubs for the services of the generated files, over packages/grpc@1. For a
+// method `M` of service `S` (prefix `S_M`), with request `Req` and response `Resp`:
+//
+// Client side, by kind:
+//   unary             S_M(mut conn, request, options) -> Result[Resp, Status]
+//                     S_M_reply(mut conn, request, options) -> Result[Reply[Resp], Status]
+//   server streaming  S_M_start(mut conn, request, options) -> Result[ClientCall, Status]
+//   client streaming  S_M_start(mut conn, options), S_M_send(mut conn, call, request),
+//                     S_M_finish(mut conn, mut call) -> Result[Resp, Status]
+//   bidirectional     S_M_start(mut conn, options), S_M_send(mut conn, call, request)
+// and S_M_receive(mut conn, mut call) -> Result[Option[Resp], Status] for streamed
+// responses.
+//
+// Server side: serve_S(mut call, handlers...) dispatches one call to a handler
+// per method, as scoped closures: unary `fn(Req, mut ServerCall) -> Result[Resp,
+// Status]`; server streaming `fn(Req, mut ServerCall) -> Result[(), Status]`
+// sending with S_M_respond(mut call, response); client streaming `fn(mut
+// ServerCall) -> Result[Resp, Status]` reading with S_M_request(mut call) ->
+// Result[Option[Req], Status]; bidirectional `fn(mut ServerCall) -> Result[(),
+// Status]` with both. S_handles(path) says whether a request path belongs to S.
+
+fn handler_type(model: Model, r: Rpc) -> unique String uses {} {
+  let req = msg_type(model, r.input)
+  let resp = msg_type(model, r.output)
+  if r.client_streaming {
+    if r.server_streaming {
+      "fn(mut grpc.ServerCall) -> Result[(), grpc.Status]"
+    } else {
+      f"fn(mut grpc.ServerCall) -> Result[{resp}, grpc.Status]"
+    }
+  } else if r.server_streaming {
+    f"fn({req}, mut grpc.ServerCall) -> Result[(), grpc.Status]"
+  } else {
+    f"fn({req}, mut grpc.ServerCall) -> Result[{resp}, grpc.Status]"
+  }
+}
+
+fn emit_decode(
+  mut out: List[u8],
+  model: Model,
+  j: u64,
+  source: String,
+  what: String,
+  indent: String
+) -> () uses {} {
+  emit_line(mut out, f"{indent}match {msg_fn(model, j, "decode")}({source}) {{")
+  emit_line(mut out, f"{indent}  Ok(m) => Ok(m),")
+  emit_line(
+    mut out,
+    f"{indent}  Error(_) => Error(grpc.internal(\"grpc: error unmarshalling {what}\")),"
+  )
+  emit_line(mut out, f"{indent}}}")
+}
+
+fn emit_client(mut out: List[u8], model: Model, svc: Svc, r: Rpc) -> () uses {} {
+  let req = msg_type(model, r.input)
+  let resp = msg_type(model, r.output)
+  let p = r.prefix
+  let literal = quoted(r.path)
+  if !r.client_streaming && !r.server_streaming {
+    emit_line(mut out, f"/// Calls `{r.path}`.")
+    emit_line(
+      mut out,
+      f"pub fn {p}(mut conn: grpc.ClientConn, request: {req}, options: grpc.CallOptions) -> Result[{resp}, grpc.Status] {{"
+    )
+    emit_line(
+      mut out,
+      f"  let reply = grpc.unary(mut conn, {literal}, {msg_fn(model, r.input, "encode")}(request), options)?"
+    )
+    emit_decode(mut out, model, r.output, "reply.message", "response", "  ")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    emit_line(mut out, f"/// Calls `{r.path}`, keeping the response metadata.")
+    emit_line(
+      mut out,
+      f"pub fn {p}_reply(mut conn: grpc.ClientConn, request: {req}, options: grpc.CallOptions) -> Result[grpc.Reply[{resp}], grpc.Status] {{"
+    )
+    emit_line(
+      mut out,
+      f"  let reply = grpc.unary(mut conn, {literal}, {msg_fn(model, r.input, "encode")}(request), options)?"
+    )
+    emit_line(
+      mut out,
+      f"  let message = match {msg_fn(model, r.output, "decode")}(reply.message) {{"
+    )
+    emit_line(mut out, "    Ok(m) => m,")
+    emit_line(
+      mut out,
+      "    Error(_) => return Error(grpc.internal(\"grpc: error unmarshalling response\")),"
+    )
+    emit_line(mut out, "  }")
+    emit_line(
+      mut out,
+      "  Ok(grpc.Reply(message: take message, headers: unique reply.headers, trailers: unique reply.trailers))"
+    )
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    return
+  }
+  if r.client_streaming {
+    emit_line(
+      mut out,
+      f"/// Starts a call of `{r.path}`; send requests with `{p}_send`."
+    )
+    emit_line(
+      mut out,
+      f"pub fn {p}_start(mut conn: grpc.ClientConn, options: grpc.CallOptions) -> Result[grpc.ClientCall, grpc.Status] {{"
+    )
+    emit_line(mut out, f"  grpc.start(mut conn, {literal}, options)")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+    emit_line(mut out, f"/// Sends one request of `{r.path}`.")
+    emit_line(
+      mut out,
+      f"pub fn {p}_send(mut conn: grpc.ClientConn, call: grpc.ClientCall, request: {req}) -> Result[(), grpc.Status] {{"
+    )
+    emit_line(
+      mut out,
+      f"  grpc.send_request(mut conn, call, {msg_fn(model, r.input, "encode")}(request))"
+    )
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  } else {
+    emit_line(
+      mut out,
+      f"/// Starts a call of `{r.path}` with its request; read responses with `{p}_receive`."
+    )
+    emit_line(
+      mut out,
+      f"pub fn {p}_start(mut conn: grpc.ClientConn, request: {req}, options: grpc.CallOptions) -> Result[grpc.ClientCall, grpc.Status] {{"
+    )
+    emit_line(mut out, f"  let call = grpc.start(mut conn, {literal}, options)?")
+    emit_line(
+      mut out,
+      f"  grpc.send_request(mut conn, call, {msg_fn(model, r.input, "encode")}(request))?"
+    )
+    emit_line(mut out, "  grpc.close_send(mut conn, call)?")
+    emit_line(mut out, "  Ok(call)")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  }
+  if r.server_streaming {
+    emit_line(
+      mut out,
+      f"/// The next response of `{r.path}`, or `None` when the call ended with OK."
+    )
+    emit_line(
+      mut out,
+      f"pub fn {p}_receive(mut conn: grpc.ClientConn, mut call: grpc.ClientCall) -> Result[Option[{resp}], grpc.Status] {{"
+    )
+    emit_line(
+      mut out,
+      "  let Some(message) = grpc.receive_response(mut conn, mut call)? else {"
+    )
+    emit_line(mut out, "    return Ok(None())")
+    emit_line(mut out, "  }")
+    emit_line(mut out, f"  match {msg_fn(model, r.output, "decode")}(message) {{")
+    emit_line(mut out, "    Ok(m) => Ok(Some(m)),")
+    emit_line(
+      mut out,
+      "    Error(_) => Error(grpc.internal(\"grpc: error unmarshalling response\")),"
+    )
+    emit_line(mut out, "  }")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  } else {
+    emit_line(mut out, f"/// Ends the requests of `{r.path}` and returns its response.")
+    emit_line(
+      mut out,
+      f"pub fn {p}_finish(mut conn: grpc.ClientConn, mut call: grpc.ClientCall) -> Result[{resp}, grpc.Status] {{"
+    )
+    emit_line(mut out, "  grpc.close_send(mut conn, call)?")
+    emit_line(mut out, "  let message = grpc.receive_one(mut conn, mut call)?")
+    emit_decode(mut out, model, r.output, "message", "response", "  ")
+    emit_line(mut out, "}")
+    emit_line(mut out, "")
+  }
+  let _ = svc
+}
+
+fn emit_server_helpers(mut out: List[u8], model: Model, r: Rpc) -> () uses {} {
+  let req = msg_type(model, r.input)
+  let resp = msg_type(model, r.output)
+  let p = r.prefix
+  emit_line(mut out, f"/// The next request of `{r.path}`, or `None` after the last.")
+  emit_line(
+    mut out,
+    f"pub fn {p}_request(mut call: grpc.ServerCall) -> Result[Option[{req}], grpc.Status] {{"
+  )
+  emit_line(mut out, "  let Some(message) = grpc.receive_request(mut call)? else {")
+  emit_line(mut out, "    return Ok(None())")
+  emit_line(mut out, "  }")
+  emit_line(mut out, f"  match {msg_fn(model, r.input, "decode")}(message) {{")
+  emit_line(mut out, "    Ok(m) => Ok(Some(m)),")
+  emit_line(
+    mut out,
+    "    Error(_) => Error(grpc.internal(\"grpc: error unmarshalling request\")),"
+  )
+  emit_line(mut out, "  }")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  emit_line(mut out, f"/// Sends one response of `{r.path}`.")
+  emit_line(
+    mut out,
+    f"pub fn {p}_respond(mut call: grpc.ServerCall, response: {resp}) -> Result[(), grpc.Status] {{"
+  )
+  emit_line(
+    mut out,
+    f"  grpc.send_response(mut call, {msg_fn(model, r.output, "encode")}(response))"
+  )
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+fn emit_server(mut out: List[u8], model: Model, svc: Svc) -> () uses {} {
+  let s = svc.hirsel
+  emit_line(mut out, f"/// Whether a request path names a method of `{svc.full}`.")
+  emit_line(mut out, f"pub fn {s}_handles(path: String) -> bool uses {{}} {{")
+  let mut tests: List[String] = []
+  for r in svc.methods {
+    list.push(mut tests, f"path == {quoted(r.path)}")
+  }
+  if list.len(tests) == 0 {
+    emit_line(mut out, "  let _ = path")
+    emit_line(mut out, "  false")
+  } else {
+    emit_line(mut out, f"  {string.join(tests, " || ")}")
+  }
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+  emit_line(
+    mut out,
+    f"/// Serves one call of `{svc.full}` with a handler per method; any other path is"
+  )
+  emit_line(mut out, "/// `UNIMPLEMENTED`.")
+  let mut params: List[String] = ["mut call: grpc.ServerCall"]
+  for r in svc.methods {
+    list.push(mut params, f"{r.handler}: {handler_type(model, r)}")
+  }
+  emit_line(
+    mut out,
+    f"pub fn serve_{s}({string.join(params, ", ")}) -> Result[(), grpc.Status] {{"
+  )
+  emit_line(mut out, "  let path = unique grpc.method(call)")
+  for r in svc.methods {
+    let p = r.prefix
+    emit_line(mut out, f"  if path == {quoted(r.path)} {{")
+    if r.client_streaming {
+      if r.server_streaming {
+        emit_line(mut out, f"    return {r.handler}(mut call)")
+      } else {
+        emit_line(mut out, f"    let response = {r.handler}(mut call)?")
+        emit_line(mut out, f"    return {p}_respond(mut call, response)")
+      }
+    } else {
+      emit_line(mut out, "    let message = grpc.receive_unary(mut call)?")
+      emit_line(
+        mut out,
+        f"    let request = match {msg_fn(model, r.input, "decode")}(message) {{"
+      )
+      emit_line(mut out, "      Ok(m) => m,")
+      emit_line(
+        mut out,
+        "      Error(_) => return Error(grpc.internal(\"grpc: error unmarshalling request\")),"
+      )
+      emit_line(mut out, "    }")
+      if r.server_streaming {
+        emit_line(mut out, f"    return {r.handler}(request, mut call)")
+      } else {
+        emit_line(mut out, f"    let response = {r.handler}(request, mut call)?")
+        emit_line(mut out, f"    return {p}_respond(mut call, response)")
+      }
+    }
+    emit_line(mut out, "  }")
+  }
+  emit_line(mut out, f"  Error(grpc.unknown_method(path, {quoted(svc.full)}))")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
+}
+
+fn emit_services(mut out: List[u8], model: Model) -> Result[(), String] uses {} {
+  for svc in model.services {
+    emit_line(mut out, f"// Service {svc.full}.")
+    emit_line(mut out, "")
+    for r in svc.methods {
+      emit_client(mut out, model, svc, r)
+      emit_server_helpers(mut out, model, r)
+    }
+    emit_server(mut out, model, svc)
+  }
+  Ok(())
+}

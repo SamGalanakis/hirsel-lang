@@ -1,0 +1,1161 @@
+// The canonical proto3 JSON mapping (protobuf.dev/programming-guides/json), with
+// number, duration, timestamp and field-mask rules adapted from
+// google.golang.org/protobuf encoding/protojson (BSD-3-Clause).
+
+/// Why a message could not be converted to or from JSON.
+pub type JsonError = Json(json.JsonError) | Invalid(String)
+
+/// One message type known to a `Registry`: its full proto name, whether its JSON
+/// is not an object of fields (a well-known type with its own mapping), and its
+/// JSON conversions over the binary encoding. `from_json` takes
+/// `ignore_unknown_fields` and the registry.
+pub type MessageType {
+  name: String,
+  special: bool,
+  to_json: fn(Bytes, Registry) -> Result[json.Value, JsonError] uses {},
+  from_json: fn(json.Value, bool, Registry) -> Result[unique Bytes, JsonError] uses {},
+}
+
+/// The message types an `Any` can hold, by full name.
+pub type Registry {
+  types: Map[String, MessageType],
+}
+
+/// JSON parsing options: `ignore_unknown_fields` skips unknown members and enum
+/// names; `registry` resolves `Any`.
+pub type JsonOptions {
+  ignore_unknown_fields: bool,
+  registry: Registry,
+}
+
+/// A registry of `types`, such as `list.concat(protobuf.wkt.message_types(), message_types())`.
+pub fn registry(types: List[MessageType]) -> Registry uses {} {
+  let mut by_name: Map[String, MessageType] = map.empty()
+  for t in types {
+    map.insert(mut by_name, unique t.name, unique t)
+  }
+  Registry(types: take by_name)
+}
+
+/// Options that reject unknown fields, resolving `Any` through `r`.
+pub fn json_options(r: Registry) -> JsonOptions uses {} {
+  JsonOptions(ignore_unknown_fields: false, registry: unique r)
+}
+
+/// Parses JSON text for a generated `from_json_` function.
+pub fn parse_json(take text: String) -> Result[json.Value, JsonError] uses {} {
+  match json.parse(take text) {
+    Ok(v) => Ok(v),
+    Error(e) => Error(Json(e)),
+  }
+}
+
+/// Compact JSON text of a generated `to_json_` result.
+pub fn json_text(v: json.Value) -> Result[unique String, JsonError] uses {} {
+  match json.stringify(v) {
+    Ok(s) => Ok(s),
+    Error(e) => Error(Json(e)),
+  }
+}
+
+// ---- Errors used by generated code ----
+pub fn expected(what: String, kind: String) -> JsonError uses {} {
+  Invalid(f"{what}: expected {kind}")
+}
+
+pub fn unknown_enum(name: String, full: String) -> JsonError uses {} {
+  Invalid(f"unknown value \"{name}\" of enum {full}")
+}
+
+pub fn decode_failed(e: DecodeError) -> JsonError uses {} {
+  let reason = match e {
+    Truncated(at) => f"truncated at byte {at}",
+    Overflow(at) => f"varint overflow at byte {at}",
+    FieldNumber(at) => f"invalid field number at byte {at}",
+    WireType(at) => f"invalid wire type at byte {at}",
+    EndGroup(at) => f"unmatched end group at byte {at}",
+    Utf8(at) => f"invalid UTF-8 at byte {at}",
+    Depth(at) => f"nesting too deep at byte {at}",
+  }
+  Invalid(f"embedded message: {reason}")
+}
+
+/// `Ok` the first time `id` is seen; a second member for one field, or a second
+/// member of one oneof, is an error.
+pub fn first_member(mut seen: Set[u64], id: u64, key: String) -> Result[(), JsonError] uses {} {
+  if set.contains(seen, id) {
+    return Error(Invalid(f"{key}: field set twice"))
+  }
+  set.insert(mut seen, id)
+  Ok(())
+}
+
+/// An unknown member: an error unless the options ignore unknown fields.
+pub fn unknown_field(o: JsonOptions, key: String) -> Result[(), JsonError] uses {} {
+  if o.ignore_unknown_fields {
+    return Ok(())
+  }
+  Error(Invalid(f"unknown field \"{key}\""))
+}
+
+/// Errors when `depth` exceeds `MAX_DEPTH`.
+pub fn check_depth(depth: u64) -> Result[(), DecodeError] uses {} {
+  if depth > MAX_DEPTH {
+    return Error(Depth(0))
+  }
+  Ok(())
+}
+
+/// Whether a JSON value is `null`.
+pub fn is_null(v: json.Value) -> bool uses {} {
+  match v {
+    Null() => true,
+    _ => false,
+  }
+}
+
+// ---- Numbers ----
+// The sign, integer digits, fraction digits and exponent of a JSON number lexeme.
+type NumberParts {
+  negative: bool,
+  int_digits: List[u8],
+  frac_digits: List[u8],
+  exponent: i64,
+}
+
+fn digit(b: u8) -> bool uses {} {
+  b >= b'0' && b <= b'9'
+}
+
+fn number_parts(lexeme: String) -> Option[NumberParts] uses {} {
+  let s = string.as_bytes(lexeme)
+  let len = bytes.len(s)
+  let mut i: u64 = 0
+  let negative = len > 0 && s[0] == b'-'
+  if negative {
+    i = 1
+  }
+  if i >= len {
+    return None()
+  }
+  let mut int_digits: List[u8] = []
+  if s[i] == b'0' {
+    i += 1
+  } else if s[i] >= b'1' && s[i] <= b'9' {
+    while i < len && digit(s[i]) {
+      list.push(mut int_digits, s[i])
+      i += 1
+    }
+  } else {
+    return None()
+  }
+  let mut frac_digits: List[u8] = []
+  if i < len && s[i] == b'.' {
+    i += 1
+    if i >= len || !digit(s[i]) {
+      return None()
+    }
+    while i < len && digit(s[i]) {
+      list.push(mut frac_digits, s[i])
+      i += 1
+    }
+  }
+  let mut exponent: i64 = 0
+  if i < len && (s[i] == b'e' || s[i] == b'E') {
+    i += 1
+    let mut exp_negative = false
+    if i < len && (s[i] == b'+' || s[i] == b'-') {
+      exp_negative = s[i] == b'-'
+      i += 1
+    }
+    if i >= len || !digit(s[i]) {
+      return None()
+    }
+    while i < len && digit(s[i]) {
+      let d: i64 = int.widen(s[i] - b'0')
+      if exponent > 100000 {
+        return None()
+      }
+      exponent = exponent * 10 + d
+      i += 1
+    }
+    if exp_negative {
+      exponent = -exponent
+    }
+  }
+  if i != len {
+    return None()
+  }
+  Some(
+    NumberParts(
+      negative: negative,
+      int_digits: take int_digits,
+      frac_digits: take frac_digits,
+      exponent: exponent
+    )
+  )
+}
+
+// The magnitude of an integral JSON number lexeme, or None when it has a nonzero
+// fraction or exceeds u64.
+fn integral(lexeme: String) -> Option[(bool, u64)] uses {} {
+  let Some(p) = number_parts(lexeme) else {
+    return None()
+  }
+  let mut digits: List[u8] = copy p.int_digits
+  let frac = list.len(p.frac_digits)
+  if p.exponent >= 0 {
+    let e: u64 = int.narrow(p.exponent)
+    if frac > e {
+      // Fraction digits beyond the exponent must all be zero.
+      let mut i = e
+      while i < frac {
+        if p.frac_digits[i] != b'0' {
+          return None()
+        }
+        i += 1
+      }
+      i = 0
+      while i < e {
+        list.push(mut digits, p.frac_digits[i])
+        i += 1
+      }
+    } else {
+      if list.len(digits) + e > 20 {
+        // Leading zeros cannot occur, so this many digits exceed u64.
+        if list.len(digits) > 0 || frac > 0 {
+          return None()
+        }
+      }
+      for d in p.frac_digits {
+        list.push(mut digits, d)
+      }
+      let mut pad = e - frac
+      if list.len(digits) > 0 {
+        while pad > 0 {
+          list.push(mut digits, b'0')
+          pad -= 1
+        }
+      }
+    }
+  } else {
+    let shift: u64 = int.narrow(-p.exponent)
+    for d in p.frac_digits {
+      if d != b'0' {
+        return None()
+      }
+    }
+    let kept_len: u64 = if shift >= list.len(digits) {
+      0
+    } else {
+      list.len(digits) - shift
+    }
+    let mut i = kept_len
+    while i < list.len(digits) {
+      if digits[i] != b'0' {
+        return None()
+      }
+      i += 1
+    }
+    let mut kept: List[u8] = []
+    i = 0
+    while i < kept_len {
+      list.push(mut kept, digits[i])
+      i += 1
+    }
+    digits = take kept
+  }
+  let mut value: u64 = 0
+  for d in digits {
+    let n: u64 = int.widen(d - b'0')
+    if value > (18446744073709551615 - n) / 10 {
+      return None()
+    }
+    value = value * 10 + n
+  }
+  Some((p.negative && value != 0, value))
+}
+
+// The number text of a JSON value: a number, or a string holding exactly a
+// JSON number lexeme.
+fn number_text(v: json.Value) -> Option[String] in v uses {} {
+  match v {
+    Number(n) => Some(n),
+    Text(s) => Some(s),
+    _ => None(),
+  }
+}
+
+fn integer_of(v: json.Value, what: String) -> Result[(bool, u64), JsonError] uses {} {
+  let Some(n) = number_text(v) else {
+    return Error(expected(what, "a number"))
+  }
+  match integral(n) {
+    Some(x) => Ok(x),
+    None() => Error(Invalid(f"invalid {what} value {n}")),
+  }
+}
+
+fn signed_of(v: json.Value, max: u64, what: String) -> Result[i64, JsonError] uses {} {
+  let (negative, magnitude) = integer_of(v, what)?
+  if negative {
+    if magnitude > max + 1 {
+      return Error(Invalid(f"{what} out of range"))
+    }
+    if magnitude == 9223372036854775808 {
+      return Ok(-9223372036854775807 - 1)
+    }
+    let m: i64 = int.narrow(magnitude)
+    return Ok(-m)
+  }
+  if magnitude > max {
+    return Error(Invalid(f"{what} out of range"))
+  }
+  Ok(int.narrow(magnitude))
+}
+
+fn unsigned_of(v: json.Value, max: u64, what: String) -> Result[u64, JsonError] uses {} {
+  let (negative, magnitude) = integer_of(v, what)?
+  if negative || magnitude > max {
+    return Error(Invalid(f"{what} out of range"))
+  }
+  Ok(magnitude)
+}
+
+/// An int32 from a JSON number or numeric string.
+pub fn i32_of(v: json.Value) -> Result[i32, JsonError] uses {} {
+  let n = signed_of(v, 2147483647, "int32")?
+  Ok(int.narrow(n))
+}
+
+/// An int64 from a JSON number or numeric string.
+pub fn i64_of(v: json.Value) -> Result[i64, JsonError] uses {} {
+  signed_of(v, 9223372036854775807, "int64")
+}
+
+/// A uint32 from a JSON number or numeric string.
+pub fn u32_of(v: json.Value) -> Result[u32, JsonError] uses {} {
+  let n = unsigned_of(v, 4294967295, "uint32")?
+  Ok(int.narrow(n))
+}
+
+/// A uint64 from a JSON number or numeric string.
+pub fn u64_of(v: json.Value) -> Result[u64, JsonError] uses {} {
+  unsigned_of(v, 18446744073709551615, "uint64")
+}
+
+fn special_float(s: String) -> Option[f64] uses {} {
+  if s == "NaN" {
+    Some(f64.from_bits(0x7ff8000000000000))
+  } else if s == "Infinity" {
+    Some(f64.from_bits(0x7ff0000000000000))
+  } else if s == "-Infinity" {
+    Some(f64.from_bits(0xfff0000000000000))
+  } else {
+    None()
+  }
+}
+
+fn finite_f64(x: f64) -> bool uses {} {
+  f64.bits(x) & 0x7ff0000000000000 != 0x7ff0000000000000
+}
+
+fn finite_f32(x: f32) -> bool uses {} {
+  f32.bits(x) & 0x7f800000 != 0x7f800000
+}
+
+/// A double from a JSON number, a numeric string, or `"NaN"`, `"Infinity"` and
+/// `"-Infinity"`. A number beyond the double range is an error.
+pub fn f64_of(v: json.Value) -> Result[f64, JsonError] uses {} {
+  if let Text(s) = v {
+    if let Some(x) = special_float(s) {
+      return Ok(x)
+    }
+  }
+  let Some(n) = number_text(v) else {
+    return Error(expected("double", "a number"))
+  }
+  if option.is_none(number_parts(n)) {
+    return Error(Invalid(f"invalid double value {n}"))
+  }
+  match f64.parse(n) {
+    Ok(x) => if finite_f64(x) {
+      Ok(x)
+    } else {
+      Error(Invalid(f"double out of range: {n}"))
+    },
+    Error(_) => Error(Invalid(f"invalid double value {n}")),
+  }
+}
+
+/// A float from JSON, as `f64_of`; a number beyond the float range is an error.
+pub fn f32_of(v: json.Value) -> Result[f32, JsonError] uses {} {
+  if let Text(s) = v {
+    if let Some(x) = special_float(s) {
+      return Ok(f32.from_f64(x))
+    }
+  }
+  let Some(n) = number_text(v) else {
+    return Error(expected("float", "a number"))
+  }
+  if option.is_none(number_parts(n)) {
+    return Error(Invalid(f"invalid float value {n}"))
+  }
+  match f32.parse(n) {
+    Ok(x) => if finite_f32(x) {
+      Ok(x)
+    } else {
+      Error(Invalid(f"float out of range: {n}"))
+    },
+    Error(_) => Error(Invalid(f"invalid float value {n}")),
+  }
+}
+
+/// A bool from JSON `true` or `false`.
+pub fn bool_of(v: json.Value) -> Result[bool, JsonError] uses {} {
+  match v {
+    Bool(b) => Ok(b),
+    _ => Error(expected("bool", "true or false")),
+  }
+}
+
+/// A string from a JSON string.
+pub fn string_of(v: json.Value) -> Result[unique String, JsonError] uses {} {
+  match v {
+    Text(s) => Ok(unique s),
+    _ => Error(expected("string", "a string")),
+  }
+}
+
+/// Bytes from a base64 JSON string: the standard or URL-safe alphabet, padded or not.
+pub fn bytes_of(v: json.Value) -> Result[unique Bytes, JsonError] uses {} {
+  let Text(s) = v else {
+    return Error(expected("bytes", "a base64 string"))
+  }
+  let url = string.contains(s, "-") || string.contains(s, "_")
+  let alphabet: base64.Alphabet = if url {
+    UrlSafe()
+  } else {
+    Standard()
+  }
+  let padding: base64.Padding = if string.byte_len(s) % 4 == 0 {
+    Required()
+  } else {
+    Omitted()
+  }
+  match base64.decode(canonical_tail(s, url), alphabet, padding) {
+    Ok(b) => Ok(b),
+    Error(_) => Error(Invalid(f"invalid base64 bytes \"{s}\"")),
+  }
+}
+
+// `s` with the unused low bits of its last base64 digit cleared: protobuf accepts
+// them set, as in `"-_"`, where std base64 rejects a noncanonical encoding.
+fn canonical_tail(s: String, url: bool) -> unique String uses {} {
+  let alphabet_digits = string.as_bytes(
+    if url {
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    } else {
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    }
+  )
+  let mut text: List[u8] = []
+  for b in string.as_bytes(s) {
+    list.push(mut text, b)
+  }
+  let mut n = list.len(text)
+  while n > 0 && text[n - 1] == 61 {
+    n -= 1
+  }
+  let mask: u64 = match n % 4 {
+    2 => 48,
+    3 => 60,
+    _ => 63,
+  }
+  if mask != 63 {
+    let mut index: u64 = 0
+    while index < 64 && alphabet_digits[index] != text[n - 1] {
+      index += 1
+    }
+    if index < 64 {
+      text[n - 1] = alphabet_digits[index & mask]
+    }
+  }
+  match string.from_bytes(bytes.from_list(take text)) {
+    Ok(t) => t,
+    Error(_) => unique s,
+  }
+}
+
+// ---- Map keys ----
+pub fn i32_key(k: String) -> Result[i32, JsonError] uses {} {
+  i32_of(Text(unique k))
+}
+
+pub fn i64_key(k: String) -> Result[i64, JsonError] uses {} {
+  i64_of(Text(unique k))
+}
+
+pub fn u32_key(k: String) -> Result[u32, JsonError] uses {} {
+  u32_of(Text(unique k))
+}
+
+pub fn u64_key(k: String) -> Result[u64, JsonError] uses {} {
+  u64_of(Text(unique k))
+}
+
+pub fn bool_key(k: String) -> Result[bool, JsonError] uses {} {
+  if k == "true" {
+    return Ok(true)
+  }
+  if k == "false" {
+    return Ok(false)
+  }
+  Error(Invalid(f"invalid bool map key \"{k}\""))
+}
+
+pub fn string_key(k: String) -> Result[unique String, JsonError] uses {} {
+  Ok(unique k)
+}
+
+pub fn key_i32(k: i32) -> unique String uses {} {
+  i32.to_string(k)
+}
+
+pub fn key_i64(k: i64) -> unique String uses {} {
+  i64.to_string(k)
+}
+
+pub fn key_u32(k: u32) -> unique String uses {} {
+  u32.to_string(k)
+}
+
+pub fn key_u64(k: u64) -> unique String uses {} {
+  u64.to_string(k)
+}
+
+pub fn key_bool(k: bool) -> unique String uses {} {
+  if k {
+    "true"
+  } else {
+    "false"
+  }
+}
+
+pub fn key_string(k: String) -> unique String uses {} {
+  unique k
+}
+
+// ---- Values out ----
+pub fn json_i32(x: i32) -> json.Value uses {} {
+  Number(i32.to_string(x))
+}
+
+pub fn json_u32(x: u32) -> json.Value uses {} {
+  Number(u32.to_string(x))
+}
+
+/// 64-bit integers are JSON strings.
+pub fn json_i64(x: i64) -> json.Value uses {} {
+  Text(i64.to_string(x))
+}
+
+pub fn json_u64(x: u64) -> json.Value uses {} {
+  Text(u64.to_string(x))
+}
+
+fn float_text(bits_nan: bool, positive_inf: bool, negative_inf: bool) -> Option[String] uses {} {
+  if bits_nan {
+    Some("NaN")
+  } else if positive_inf {
+    Some("Infinity")
+  } else if negative_inf {
+    Some("-Infinity")
+  } else {
+    None()
+  }
+}
+
+/// A float as its shortest round-trip decimal, or `"NaN"`, `"Infinity"`, `"-Infinity"`.
+pub fn json_f32(x: f32) -> json.Value uses {} {
+  let bits = f32.bits(x)
+  let special = float_text(
+    bits & 0x7f800000 == 0x7f800000 && bits & 0x7fffff != 0,
+    bits == 0x7f800000,
+    bits == 0xff800000
+  )
+  match special {
+    Some(s) => Text(s),
+    None() => Number(f32.to_string(x)),
+  }
+}
+
+/// A double as its shortest round-trip decimal, or `"NaN"`, `"Infinity"`, `"-Infinity"`.
+pub fn json_f64(x: f64) -> json.Value uses {} {
+  let bits = f64.bits(x)
+  let special = float_text(
+    bits & 0x7ff0000000000000 == 0x7ff0000000000000 && bits & 0xfffffffffffff != 0,
+    bits == 0x7ff0000000000000,
+    bits == 0xfff0000000000000
+  )
+  match special {
+    Some(s) => Text(s),
+    None() => Number(f64.to_string(x)),
+  }
+}
+
+/// A `google.protobuf.Value` number, which JSON cannot hold when not finite.
+pub fn json_number(x: f64) -> Result[json.Value, JsonError] uses {} {
+  if !finite_f64(x) {
+    return Error(Invalid("google.protobuf.Value: a number must be finite"))
+  }
+  Ok(Number(f64.to_string(x)))
+}
+
+pub fn json_bool(x: bool) -> json.Value uses {} {
+  Bool(x)
+}
+
+pub fn json_string(x: String) -> json.Value uses {} {
+  Text(unique x)
+}
+
+/// Bytes as standard padded base64.
+pub fn json_bytes(x: Bytes) -> json.Value uses {} {
+  Text(base64.encode(x, Standard(), Required()))
+}
+
+// ---- Duration and Timestamp ----
+const MAX_DURATION_SECONDS: i64 = 315576000000
+
+const MIN_TIMESTAMP_SECONDS: i64 = -62135596800
+
+const MAX_TIMESTAMP_SECONDS: i64 = 253402300799
+
+@preserves_unique(out)
+fn padded(value: u64, width: u64, mut out: List[u8]) -> () uses {} {
+  let digits = u64.to_string(value)
+  let mut n = string.byte_len(digits)
+  while n < width {
+    list.push(mut out, b'0')
+    n += 1
+  }
+  text.append(mut out, digits)
+}
+
+// `.d{3,6,9}` for nonzero nanos, the shortest of the three that is exact.
+@preserves_unique(out)
+fn fraction(nanos: u64, mut out: List[u8]) -> () uses {} {
+  if nanos == 0 {
+    return
+  }
+  list.push(mut out, b'.')
+  if nanos % 1000000 == 0 {
+    padded(nanos / 1000000, 3, mut out)
+  } else if nanos % 1000 == 0 {
+    padded(nanos / 1000, 6, mut out)
+  } else {
+    padded(nanos, 9, mut out)
+  }
+}
+
+/// The JSON text of a Duration: seconds with 0, 3, 6 or 9 fraction digits and `s`.
+pub fn duration_text(seconds: i64, nanos: i32) -> Result[unique String, JsonError] uses {} {
+  if seconds < -MAX_DURATION_SECONDS || seconds > MAX_DURATION_SECONDS {
+    return Error(Invalid(f"google.protobuf.Duration: seconds out of range {seconds}"))
+  }
+  if nanos < -999999999 || nanos > 999999999 {
+    return Error(Invalid(f"google.protobuf.Duration: nanos out of range {nanos}"))
+  }
+  if seconds > 0 && nanos < 0 || seconds < 0 && nanos > 0 {
+    return Error(Invalid("google.protobuf.Duration: signs of seconds and nanos differ"))
+  }
+  let mut out: List[u8] = []
+  if seconds < 0 || nanos < 0 {
+    list.push(mut out, b'-')
+  }
+  let positive_seconds = if seconds < 0 {
+    -seconds
+  } else {
+    seconds
+  }
+  let wide_nanos: i64 = int.widen(nanos)
+  let positive_nanos = if wide_nanos < 0 {
+    -wide_nanos
+  } else {
+    wide_nanos
+  }
+  let s: u64 = int.narrow(positive_seconds)
+  let n: u64 = int.narrow(positive_nanos)
+  text.append(mut out, u64.to_string(s))
+  fraction(n, mut out)
+  list.push(mut out, b's')
+  Ok(text.finish_valid(take out))
+}
+
+fn digits_value(s: Bytes, start: u64, end: u64) -> Option[u64] uses {} {
+  if start >= end {
+    return None()
+  }
+  let mut value: u64 = 0
+  let mut i = start
+  while i < end {
+    if !digit(s[i]) {
+      return None()
+    }
+    if value > 1844674407370955160 {
+      return None()
+    }
+    value = value * 10 + int.widen(s[i] - b'0')
+    i += 1
+  }
+  Some(value)
+}
+
+// Nanoseconds from 1 to 9 fraction digits.
+fn nanos_of(s: Bytes, start: u64, end: u64) -> Option[u64] uses {} {
+  let count = end - start
+  if count == 0 || count > 9 {
+    return None()
+  }
+  let Some(digits) = digits_value(s, start, end) else {
+    return None()
+  }
+  let mut value = digits
+  let mut n = count
+  while n < 9 {
+    value = value * 10
+    n += 1
+  }
+  Some(value)
+}
+
+/// A Duration from its JSON string: an optional sign, digits with an optional
+/// fraction of up to 9 digits, and `s`.
+pub fn duration_of(v: json.Value) -> Result[(i64, i32), JsonError] uses {} {
+  let Text(text_value) = v else {
+    return Error(expected("google.protobuf.Duration", "a string"))
+  }
+  let bad: JsonError = Invalid(
+    f"invalid google.protobuf.Duration value \"{text_value}\""
+  )
+  let s = string.as_bytes(text_value)
+  let len = bytes.len(s)
+  if len < 2 || s[len - 1] != b's' {
+    return Error(bad)
+  }
+  let end = len - 1
+  let mut i: u64 = 0
+  let negative = s[0] == b'-'
+  if negative || s[0] == b'+' {
+    i = 1
+  }
+  let int_start = i
+  while i < end && digit(s[i]) {
+    i += 1
+  }
+  let int_end = i
+  let mut nanos: u64 = 0
+  if i < end {
+    if s[i] != b'.' {
+      return Error(bad)
+    }
+    let Some(n) = nanos_of(s, i + 1, end) else {
+      return Error(bad)
+    }
+    nanos = n
+  } else if int_start == int_end {
+    return Error(bad)
+  }
+  if int_start == int_end && i + 1 >= end {
+    return Error(bad)
+  }
+  let seconds = if int_start == int_end {
+    0u64
+  } else {
+    let Some(x) = digits_value(s, int_start, int_end) else {
+      return Error(bad)
+    }
+    x
+  }
+  if seconds > 315576000000 {
+    return Error(Invalid(f"google.protobuf.Duration out of range: \"{text_value}\""))
+  }
+  let wide_seconds: i64 = int.narrow(seconds)
+  let wide_nanos: i64 = int.narrow(nanos)
+  if negative {
+    let n: i32 = int.narrow(-wide_nanos)
+    return Ok((-wide_seconds, n))
+  }
+  Ok((wide_seconds, int.narrow(wide_nanos)))
+}
+
+// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
+// days_from_civil).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 uses {} {
+  let y = if month <= 2 {
+    year - 1
+  } else {
+    year
+  }
+  let era = int.div_floor(y, 400)
+  let yoe = y - era * 400
+  let mp = if month > 2 {
+    month - 3
+  } else {
+    month + 9
+  }
+  let doy = (153 * mp + 2) / 5 + day - 1
+  let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+  era * 146097 + doe - 719468
+}
+
+// The (year, month, day) of a day count since 1970-01-01.
+fn civil_from_days(days: i64) -> (i64, i64, i64) uses {} {
+  let z = days + 719468
+  let era = int.div_floor(z, 146097)
+  let doe = z - era * 146097
+  let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+  let y = yoe + era * 400
+  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+  let mp = (5 * doy + 2) / 153
+  let d = doy - (153 * mp + 2) / 5 + 1
+  let m = if mp < 10 {
+    mp + 3
+  } else {
+    mp - 9
+  }
+  let year = if m <= 2 {
+    y + 1
+  } else {
+    y
+  }
+  (year, m, d)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 uses {} {
+  if month == 2 {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+    return if leap {
+      29
+    } else {
+      28
+    }
+  }
+  if month == 4 || month == 6 || month == 9 || month == 11 {
+    return 30
+  }
+  31
+}
+
+/// The RFC 3339 JSON text of a Timestamp in UTC, with 0, 3, 6 or 9 fraction digits.
+pub fn timestamp_text(seconds: i64, nanos: i32) -> Result[unique String, JsonError] uses {} {
+  if seconds < MIN_TIMESTAMP_SECONDS || seconds > MAX_TIMESTAMP_SECONDS {
+    return Error(Invalid(f"google.protobuf.Timestamp: seconds out of range {seconds}"))
+  }
+  if nanos < 0 || nanos > 999999999 {
+    return Error(Invalid(f"google.protobuf.Timestamp: nanos out of range {nanos}"))
+  }
+  let days = int.div_floor(seconds, 86400)
+  let rest: u64 = int.narrow(seconds - days * 86400)
+  let (year, month, day) = civil_from_days(days)
+  let mut out: List[u8] = []
+  padded(int.narrow(year), 4, mut out)
+  list.push(mut out, b'-')
+  padded(int.narrow(month), 2, mut out)
+  list.push(mut out, b'-')
+  padded(int.narrow(day), 2, mut out)
+  list.push(mut out, b'T')
+  padded(rest / 3600, 2, mut out)
+  list.push(mut out, b':')
+  padded(rest / 60 % 60, 2, mut out)
+  list.push(mut out, b':')
+  padded(rest % 60, 2, mut out)
+  fraction(int.narrow(nanos), mut out)
+  list.push(mut out, b'Z')
+  Ok(text.finish_valid(take out))
+}
+
+fn two(s: Bytes, at: u64) -> Option[i64] uses {} {
+  match digits_value(s, at, at + 2) {
+    Some(v) => Some(int.narrow(v)),
+    None() => None(),
+  }
+}
+
+/// A Timestamp from its RFC 3339 JSON string: `YYYY-MM-DDTHH:MM:SS`, an optional
+/// fraction of 1 to 9 digits, and `Z` or a `+HH:MM`/`-HH:MM` offset.
+pub fn timestamp_of(v: json.Value) -> Result[(i64, i32), JsonError] uses {} {
+  let Text(text_value) = v else {
+    return Error(expected("google.protobuf.Timestamp", "a string"))
+  }
+  let bad: JsonError = Invalid(
+    f"invalid google.protobuf.Timestamp value \"{text_value}\""
+  )
+  let s = string.as_bytes(text_value)
+  let len = bytes.len(s)
+  if len < 20 || s[4] != b'-' || s[7] != b'-' || s[10] != b'T' || s[13] != b':' || s[16] != b':' {
+    return Error(bad)
+  }
+  let Some(y) = digits_value(s, 0, 4) else {
+    return Error(bad)
+  }
+  let year: i64 = int.narrow(y)
+  let Some(month) = two(s, 5) else {
+    return Error(bad)
+  }
+  let Some(day) = two(s, 8) else {
+    return Error(bad)
+  }
+  let Some(hour) = two(s, 11) else {
+    return Error(bad)
+  }
+  let Some(minute) = two(s, 14) else {
+    return Error(bad)
+  }
+  let Some(second) = two(s, 17) else {
+    return Error(bad)
+  }
+  if year < 1 || month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) || hour > 23 || minute > 59 || second > 59 {
+    return Error(bad)
+  }
+  let mut i: u64 = 19
+  let mut nanos: u64 = 0
+  if s[i] == b'.' {
+    let start = i + 1
+    i = start
+    while i < len && digit(s[i]) {
+      i += 1
+    }
+    let Some(n) = nanos_of(s, start, i) else {
+      return Error(bad)
+    }
+    nanos = n
+  }
+  if i >= len {
+    return Error(bad)
+  }
+  let mut offset: i64 = 0
+  if s[i] == b'Z' {
+    if i + 1 != len {
+      return Error(bad)
+    }
+  } else if s[i] == b'+' || s[i] == b'-' {
+    if i + 6 != len || s[i + 3] != b':' {
+      return Error(bad)
+    }
+    let Some(oh) = two(s, i + 1) else {
+      return Error(bad)
+    }
+    let Some(om) = two(s, i + 4) else {
+      return Error(bad)
+    }
+    if oh > 23 || om > 59 {
+      return Error(bad)
+    }
+    offset = (oh * 60 + om) * 60
+    if s[i] == b'-' {
+      offset = -offset
+    }
+  } else {
+    return Error(bad)
+  }
+  let seconds = days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second - offset
+  if seconds < MIN_TIMESTAMP_SECONDS || seconds > MAX_TIMESTAMP_SECONDS {
+    return Error(Invalid(f"google.protobuf.Timestamp out of range: \"{text_value}\""))
+  }
+  Ok((seconds, int.narrow(nanos)))
+}
+
+// ---- FieldMask ----
+fn snake_case(s: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  for b in string.as_bytes(s) {
+    if b >= b'A' && b <= b'Z' {
+      list.push(mut out, b'_')
+      list.push(mut out, b + 32)
+    } else {
+      list.push(mut out, b)
+    }
+  }
+  text.finish_valid(take out)
+}
+
+fn camel_case(s: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut was_underscore = false
+  for b in string.as_bytes(s) {
+    if b != b'_' {
+      if was_underscore && b >= b'a' && b <= b'z' {
+        list.push(mut out, b - 32)
+      } else {
+        list.push(mut out, b)
+      }
+    }
+    was_underscore = b == b'_'
+  }
+  text.finish_valid(take out)
+}
+
+// A dotted path of proto identifiers.
+fn valid_path(s: String) -> bool uses {} {
+  let data = string.as_bytes(s)
+  if bytes.len(data) == 0 {
+    return false
+  }
+  let mut start = true
+  for b in data {
+    if b == b'.' {
+      if start {
+        return false
+      }
+      start = true
+    } else if b >= b'a' && b <= b'z' || b >= b'A' && b <= b'Z' || b == b'_' {
+      start = false
+    } else if b >= b'0' && b <= b'9' {
+      if start {
+        return false
+      }
+    } else {
+      return false
+    }
+  }
+  !start
+}
+
+/// The JSON text of a FieldMask: lowerCamelCase paths joined by commas. A path
+/// that would not convert back to itself is an error.
+pub fn field_mask_text(paths: List[String]) -> Result[unique String, JsonError] uses {} {
+  let mut parts: List[String] = []
+  for p in paths {
+    let cc = camel_case(p)
+    if !valid_path(p) || snake_case(cc) != p {
+      return Error(Invalid(f"google.protobuf.FieldMask: irreversible path \"{p}\""))
+    }
+    list.push(mut parts, take cc)
+  }
+  Ok(string.join(parts, ","))
+}
+
+/// A FieldMask's paths from its JSON string.
+pub fn field_mask_of(v: json.Value) -> Result[List[String], JsonError] uses {} {
+  let Text(s) = v else {
+    return Error(expected("google.protobuf.FieldMask", "a string"))
+  }
+  let trimmed = string.trim(s)
+  let mut paths: List[String] = []
+  if string.byte_len(trimmed) == 0 {
+    return Ok(take paths)
+  }
+  for part in string.split(unique trimmed, ",") {
+    let snake = snake_case(part)
+    if string.contains(part, "_") || !valid_path(snake) {
+      return Error(Invalid(f"google.protobuf.FieldMask: invalid path \"{part}\""))
+    }
+    list.push(mut paths, take snake)
+  }
+  Ok(take paths)
+}
+
+// ---- Any ----
+fn type_name(url: String) -> unique String uses {} {
+  let data = string.as_bytes(url)
+  let mut start: u64 = 0
+  let mut i: u64 = 0
+  while i < bytes.len(data) {
+    if data[i] == b'/' {
+      start = i + 1
+    }
+    i += 1
+  }
+  let mut out: List[u8] = []
+  i = start
+  while i < bytes.len(data) {
+    list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn lookup(r: Registry, url: String) -> Result[MessageType, JsonError] uses {} {
+  let name = type_name(url)
+  match map.get(r.types, name) {
+    Some(t) => Ok(unique t),
+    None() => Error(Invalid(f"google.protobuf.Any: unknown type \"{url}\"")),
+  }
+}
+
+/// The JSON of an `Any`: the embedded message's members with `@type` first, or
+/// `@type` and `value` for a well-known type with its own mapping.
+pub fn any_to_json(type_url: String, value: Bytes, r: Registry) -> Result[
+  json.Value,
+  JsonError
+] uses {} {
+  let mut o: Map[String, json.Value] = map.empty()
+  if string.byte_len(type_url) == 0 {
+    if bytes.len(value) == 0 {
+      return Ok(Object(take o))
+    }
+    return Error(Invalid("google.protobuf.Any: value without type_url"))
+  }
+  let t = lookup(r, type_url)?
+  let inner = t.to_json(value, r)?
+  map.insert(mut o, "@type", Text(unique type_url))
+  if t.special {
+    map.insert(mut o, "value", take inner)
+    return Ok(Object(take o))
+  }
+  let Object(members) = inner else {
+    return Error(Invalid("google.protobuf.Any: embedded message is not an object"))
+  }
+  for (k, item) in members {
+    map.insert(mut o, unique k, unique item)
+  }
+  Ok(Object(take o))
+}
+
+/// The type URL and binary value of an `Any` from its JSON.
+pub fn any_of(v: json.Value, o: JsonOptions) -> Result[(String, Bytes), JsonError] uses {} {
+  let Object(members) = v else {
+    return Error(expected("google.protobuf.Any", "an object"))
+  }
+  if map.len(members) == 0 {
+    return Ok(("", b""))
+  }
+  let url = match map.get(members, "@type") {
+    Some(Text(u)) => unique u,
+    Some(_) => return Error(Invalid("google.protobuf.Any: @type is not a string")),
+    None() => return Error(Invalid("google.protobuf.Any: missing @type")),
+  }
+  if string.byte_len(url) == 0 {
+    return Error(Invalid("google.protobuf.Any: empty @type"))
+  }
+  let t = lookup(o.registry, url)?
+  let mut rest: Map[String, json.Value] = map.empty()
+  for (k, item) in members {
+    if k != "@type" {
+      map.insert(mut rest, unique k, unique item)
+    }
+  }
+  if t.special {
+    let mut value: Option[json.Value] = None()
+    for (k, item) in rest {
+      if k == "value" {
+        value = Some(unique item)
+      } else {
+        unknown_field(o, k)?
+      }
+    }
+    let bytes_value = match take value {
+      Some(inner) => t.from_json(inner, o.ignore_unknown_fields, o.registry)?,
+      None() => if t.name == "google.protobuf.Empty" {
+        b""
+      } else {
+        return Error(Invalid("google.protobuf.Any: missing value"))
+      },
+    }
+    return Ok((take url, take bytes_value))
+  }
+  let encoded = t.from_json(Object(take rest), o.ignore_unknown_fields, o.registry)?
+  Ok((take url, take encoded))
+}

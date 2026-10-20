@@ -1,0 +1,153 @@
+// Wire vectors from google.golang.org/protobuf encoding/protowire wire_test.go.
+fn hex_bytes(text: String) -> Bytes uses {} {
+  match hex.decode(text) {
+    Ok(b) => b,
+    Error(_) => b"",
+  }
+}
+
+fn varint_case(t: Test, value: u64, encoded: String) {
+  let mut out: List[u8] = []
+  write_varint(value, mut out)
+  let want = hex_bytes(encoded)
+  test.check(t, bytes.from_list(take out) == want)
+  let mut pos: u64 = 0
+  test.check(t, read_varint(want, mut pos) == Ok(value))
+  test.check(t, pos == bytes.len(want))
+}
+
+@test
+fn varints(t: Test) {
+  varint_case(t, 0, "00")
+  varint_case(t, 1, "01")
+  varint_case(t, 0x7f, "7f")
+  varint_case(t, 0x80, "8001")
+  varint_case(t, 0x3fff, "ff7f")
+  varint_case(t, 0x4000, "808001")
+  varint_case(t, 0x7fffffffffffffff, "ffffffffffffffff7f")
+  varint_case(t, 0x8000000000000000, "80808080808080808001")
+  varint_case(t, 18446744073709551615, "ffffffffffffffffff01")
+  let mut pos: u64 = 0
+  test.check(
+    t,
+    read_varint(hex_bytes("808080808080808080"), mut pos) == Error(Truncated(0))
+  )
+  pos = 0
+  test.check(
+    t,
+    read_varint(hex_bytes("80808080808080808080"), mut pos) == Error(Overflow(0))
+  )
+  pos = 0
+  test.check(
+    t,
+    read_varint(hex_bytes("ffffffffffffffffff02"), mut pos) == Error(Overflow(0))
+  )
+  pos = 0
+  test.check(t, read_varint(hex_bytes("81808080808080808000"), mut pos) == Ok(1u64))
+  pos = 0
+  test.check(
+    t,
+    read_varint(hex_bytes("8180808080808080808000"), mut pos) == Error(Overflow(0))
+  )
+}
+
+// Zigzag vectors from protowire wire_test.go TestZigZag.
+@test
+fn zigzags(t: Test) {
+  test.check(t, zigzag64(0) == 0)
+  test.check(t, zigzag64(-1) == 1)
+  test.check(t, zigzag64(1) == 2)
+  test.check(t, zigzag64(-2) == 3)
+  test.check(t, zigzag64(9223372036854775807) == 18446744073709551614)
+  test.check(t, zigzag64(-9223372036854775808) == 18446744073709551615)
+  test.check(t, zigzag32(-2147483648) == 4294967295)
+  test.check(t, unzigzag64(18446744073709551615) == -9223372036854775808)
+  test.check(t, unzigzag32(4294967294) == 2147483647)
+}
+
+// Tagged encodings, as prost's encoding tests and the protobuf encoding guide
+// give them.
+@test
+fn tagged(t: Test) {
+  let mut out: List[u8] = []
+  put_string(2, "testing", mut out)
+  test.check(t, bytes.from_list(take out) == hex_bytes("120774657374696e67"))
+  let mut sint: List[u8] = []
+  put_sint32(1, -2, mut sint)
+  test.check(t, bytes.from_list(take sint) == hex_bytes("0803"))
+  let mut fixed: List[u8] = []
+  put_fixed32(3, 1, mut fixed)
+  test.check(t, bytes.from_list(take fixed) == hex_bytes("1d01000000"))
+  let mut double: List[u8] = []
+  put_double(1, 1.0, mut double)
+  test.check(t, bytes.from_list(take double) == hex_bytes("09000000000000f03f"))
+  let data = hex_bytes("2206038e029ea705")
+  let mut pos: u64 = 0
+  test.check(t, read_tag(data, mut pos) == Ok((4u64, 2u64)))
+  let mut values: List[i32] = []
+  test.check(t, read_packed(data, mut pos, read_int32, mut values) == Ok(()))
+  test.check(t, values == [3, 270, 86942])
+  // A field number of zero, and an end-group without a start, are errors.
+  pos = 0
+  test.check(t, result_is_error(read_tag(hex_bytes("00"), mut pos)))
+  pos = 0
+  test.check(t, skip(hex_bytes("0c"), mut pos, 1, 4) != Ok(()))
+  // Field 1 as a five-byte tag is accepted; as an overlong nine-byte tag it is
+  // not (conformance BadTag_OverlongVarint).
+  pos = 0
+  test.check(t, read_tag(hex_bytes("8880808000"), mut pos) == Ok((1u64, 0u64)))
+  pos = 0
+  test.check(t, result_is_error(read_tag(hex_bytes("888080808080808000"), mut pos)))
+}
+
+fn result_is_error(r: Result[(u64, u64), DecodeError]) -> bool uses {} {
+  match r {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+}
+
+// Duration and Timestamp text, from protojson's well-known-type encode tests.
+@test
+fn well_known_text(t: Test) {
+  test.check(t, duration_text(0, 0) == Ok("0s"))
+  test.check(t, duration_text(1, 500000000) == Ok("1.500s"))
+  test.check(t, duration_text(-1, -500000000) == Ok("-1.500s"))
+  test.check(t, duration_text(0, 1) == Ok("0.000000001s"))
+  test.check(t, duration_text(0, -1000) == Ok("-0.000001s"))
+  test.check(t, duration_text(315576000001, 0) != Ok("315576000001s"))
+  test.check(t, timestamp_text(0, 0) == Ok("1970-01-01T00:00:00Z"))
+  test.check(t, timestamp_text(1553036601, 0) == Ok("2019-03-19T23:03:21Z"))
+  test.check(t, timestamp_text(-62135596800, 0) == Ok("0001-01-01T00:00:00Z"))
+  test.check(
+    t,
+    timestamp_text(253402300799, 999999999) == Ok("9999-12-31T23:59:59.999999999Z")
+  )
+  test.check(
+    t,
+    timestamp_of(Text("2019-03-19T23:03:21.010+08:00")) == Ok(
+      (1553007801i64, 10000000i32)
+    )
+  )
+  test.check(t, timestamp_of(Text("1970-01-01T00:00:00")) != Ok((0i64, 0i32)))
+  test.check(t, duration_of(Text("-3.1s")) == Ok((-3i64, -100000000i32)))
+  test.check(t, field_mask_text(["foo_bar", "baz"]) == Ok("fooBar,baz"))
+  test.check(
+    t,
+    field_mask_of(Text("fooBar,baz.quxQuux")) == Ok(["foo_bar", "baz.qux_quux"])
+  )
+}
+
+// Number rules of the proto3 JSON mapping, from protojson's decode tests.
+@test
+fn json_numbers(t: Test) {
+  test.check(t, i64_of(Text("-9223372036854775808")) == Ok(-9223372036854775808i64))
+  test.check(t, i64_of(Number("1e2")) == Ok(100i64))
+  test.check(t, i64_of(Number("1.5")) != Ok(1i64))
+  test.check(t, json_i64(5) == Text("5"))
+  test.check(t, json_f64(0.0 / 0.0) == Text("NaN"))
+  test.check(t, bytes_of(Text("_-8=")) == Ok(b"\xff\xef"))
+  test.check(t, bytes_of(Text("/+8")) == Ok(b"\xff\xef"))
+  // Unused trailing bits may be set (conformance BytesFieldBase64Url).
+  test.check(t, bytes_of(Text("-_")) == Ok(b"\xfb"))
+}

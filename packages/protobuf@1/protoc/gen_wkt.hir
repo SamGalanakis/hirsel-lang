@@ -1,0 +1,292 @@
+// The well-known types: their declarations from protocolbuffers/protobuf
+// src/google/protobuf/*.proto (BSD-3-Clause, Copyright 2008 Google Inc.), and the
+// generated bodies of the ones whose JSON mapping is special.
+
+const ANY_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message Any {
+  string type_url = 1;
+  bytes value = 2;
+}
+"#
+
+const DURATION_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message Duration {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+"#
+
+const EMPTY_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message Empty {}
+"#
+
+const FIELD_MASK_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message FieldMask {
+  repeated string paths = 1;
+}
+"#
+
+const STRUCT_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message Struct {
+  map<string, Value> fields = 1;
+}
+message Value {
+  oneof kind {
+    NullValue null_value = 1;
+    double number_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    Struct struct_value = 5;
+    ListValue list_value = 6;
+  }
+}
+enum NullValue {
+  NULL_VALUE = 0;
+}
+message ListValue {
+  repeated Value values = 1;
+}
+"#
+
+const TIMESTAMP_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+"#
+
+const WRAPPERS_PROTO: String = r#"syntax = "proto3";
+package google.protobuf;
+message DoubleValue {
+  double value = 1;
+}
+message FloatValue {
+  float value = 1;
+}
+message Int64Value {
+  int64 value = 1;
+}
+message UInt64Value {
+  uint64 value = 1;
+}
+message Int32Value {
+  int32 value = 1;
+}
+message UInt32Value {
+  uint32 value = 1;
+}
+message BoolValue {
+  bool value = 1;
+}
+message StringValue {
+  string value = 1;
+}
+message BytesValue {
+  bytes value = 1;
+}
+"#
+
+/// The well-known type sources, under the import paths protoc uses.
+pub fn wkt_sources() -> List[Source] uses {} {
+  [
+    Source(name: "google/protobuf/any.proto", text: ANY_PROTO),
+    Source(name: "google/protobuf/duration.proto", text: DURATION_PROTO),
+    Source(name: "google/protobuf/empty.proto", text: EMPTY_PROTO),
+    Source(name: "google/protobuf/field_mask.proto", text: FIELD_MASK_PROTO),
+    Source(name: "google/protobuf/struct.proto", text: STRUCT_PROTO),
+    Source(name: "google/protobuf/timestamp.proto", text: TIMESTAMP_PROTO),
+    Source(name: "google/protobuf/wrappers.proto", text: WRAPPERS_PROTO)
+  ]
+}
+
+/// The import paths of the well-known types, as `Config.files` for `protobuf.wkt`.
+pub fn wkt_files() -> List[String] uses {} {
+  let mut names: List[String] = []
+  for s in wkt_sources() {
+    list.push(mut names, copy s.name)
+  }
+  take names
+}
+
+/// A full name without its leading dot.
+pub fn proto_name(full: String) -> unique String uses {} {
+  let data = string.as_bytes(full)
+  if bytes.len(data) > 0 && data[0] == b'.' {
+    let mut out: List[u8] = []
+    let mut i: u64 = 1
+    while i < bytes.len(data) {
+      list.push(mut out, data[i])
+      i += 1
+    }
+    return text.finish_valid(take out)
+  }
+  unique full
+}
+
+// The wrapper messages and the JSON helper family of their `value`.
+fn wrapper_kind(full: String) -> Option[String] uses {} {
+  if full == ".google.protobuf.DoubleValue" {
+    Some("f64")
+  } else if full == ".google.protobuf.FloatValue" {
+    Some("f32")
+  } else if full == ".google.protobuf.Int64Value" {
+    Some("i64")
+  } else if full == ".google.protobuf.UInt64Value" {
+    Some("u64")
+  } else if full == ".google.protobuf.Int32Value" {
+    Some("i32")
+  } else if full == ".google.protobuf.UInt32Value" {
+    Some("u32")
+  } else if full == ".google.protobuf.BoolValue" {
+    Some("bool")
+  } else if full == ".google.protobuf.StringValue" {
+    Some("string")
+  } else if full == ".google.protobuf.BytesValue" {
+    Some("bytes")
+  } else {
+    None()
+  }
+}
+
+/// Whether a message's JSON is not an object of its fields: inside `Any` its
+/// JSON goes in a `value` member.
+pub fn is_special(full: String) -> bool uses {} {
+  option.is_some(wrapper_kind(full)) || full == ".google.protobuf.Timestamp" || full == ".google.protobuf.Duration" || full == ".google.protobuf.FieldMask" || full == ".google.protobuf.Struct" || full == ".google.protobuf.ListValue" || full == ".google.protobuf.Value" || full == ".google.protobuf.Any"
+}
+
+// Writes the special `to_json_` body of a well-known type; false for others.
+fn emit_special_to_json(mut out: List[u8], m: Msg) -> bool uses {} {
+  if let Some(kind) = wrapper_kind(m.full) {
+    emit_line(mut out, "  let _ = r")
+    emit_line(mut out, f"  Ok(protobuf.json_{kind}(m.value))")
+    return true
+  }
+  let full = m.full
+  if full == ".google.protobuf.Timestamp" {
+    emit_line(mut out, "  let _ = r")
+    emit_line(mut out, "  Ok(Text(protobuf.timestamp_text(m.seconds, m.nanos)?))")
+  } else if full == ".google.protobuf.Duration" {
+    emit_line(mut out, "  let _ = r")
+    emit_line(mut out, "  Ok(Text(protobuf.duration_text(m.seconds, m.nanos)?))")
+  } else if full == ".google.protobuf.FieldMask" {
+    emit_line(mut out, "  let _ = r")
+    emit_line(mut out, "  Ok(Text(protobuf.field_mask_text(m.paths)?))")
+  } else if full == ".google.protobuf.Struct" {
+    emit_line(mut out, "  let mut o: Map[String, json.Value] = map.empty()")
+    emit_line(mut out, "  for (k, v) in m.fields {")
+    emit_line(mut out, "    map.insert(mut o, unique k, to_json_Value(v, r)?)")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  Ok(Object(take o))")
+  } else if full == ".google.protobuf.ListValue" {
+    emit_line(mut out, "  let mut items: List[json.Value] = []")
+    emit_line(mut out, "  for v in m.values {")
+    emit_line(mut out, "    list.push(mut items, to_json_Value(v, r)?)")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  Ok(Array(take items))")
+  } else if full == ".google.protobuf.Value" {
+    emit_line(mut out, "  match m.kind {")
+    emit_line(mut out, "    Some(null_value(_)) => Ok(Null()),")
+    emit_line(mut out, "    Some(number_value(n)) => protobuf.json_number(n),")
+    emit_line(mut out, "    Some(string_value(s)) => Ok(Text(unique s)),")
+    emit_line(mut out, "    Some(bool_value(b)) => Ok(Bool(b)),")
+    emit_line(mut out, "    Some(struct_value(s)) => to_json_Struct(s, r),")
+    emit_line(mut out, "    Some(list_value(l)) => to_json_ListValue(l, r),")
+    emit_line(
+      mut out,
+      "    None() => Error(protobuf.expected(\"google.protobuf.Value\", \"a kind\")),"
+    )
+    emit_line(mut out, "  }")
+  } else if full == ".google.protobuf.Any" {
+    emit_line(mut out, "  protobuf.any_to_json(m.type_url, m.value, r)")
+  } else {
+    return false
+  }
+  true
+}
+
+// Writes the special `from_json_` body of a well-known type; false for others.
+fn emit_special_from_json(mut out: List[u8], m: Msg) -> bool uses {} {
+  if let Some(kind) = wrapper_kind(m.full) {
+    emit_line(mut out, "  let _ = o")
+    emit_line(mut out, f"  let mut m = default_{m.hirsel}()")
+    emit_line(mut out, f"  m.value = protobuf.{kind}_of(v)?")
+    emit_line(mut out, "  Ok(m)")
+    return true
+  }
+  let full = m.full
+  if full == ".google.protobuf.Timestamp" {
+    emit_line(mut out, "  let _ = o")
+    emit_line(mut out, "  let (seconds, nanos) = protobuf.timestamp_of(v)?")
+    emit_line(mut out, "  let mut m = default_Timestamp()")
+    emit_line(mut out, "  m.seconds = seconds")
+    emit_line(mut out, "  m.nanos = nanos")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.Duration" {
+    emit_line(mut out, "  let _ = o")
+    emit_line(mut out, "  let (seconds, nanos) = protobuf.duration_of(v)?")
+    emit_line(mut out, "  let mut m = default_Duration()")
+    emit_line(mut out, "  m.seconds = seconds")
+    emit_line(mut out, "  m.nanos = nanos")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.FieldMask" {
+    emit_line(mut out, "  let _ = o")
+    emit_line(mut out, "  let mut m = default_FieldMask()")
+    emit_line(mut out, "  m.paths = protobuf.field_mask_of(v)?")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.Struct" {
+    emit_line(mut out, "  let Object(fields) = v else {")
+    emit_line(
+      mut out,
+      "    return Error(protobuf.expected(\"google.protobuf.Struct\", \"an object\"))"
+    )
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  let mut m = default_Struct()")
+    emit_line(mut out, "  for (k, item) in fields {")
+    emit_line(
+      mut out,
+      "    map.insert(mut m.fields, unique k, from_json_Value(item, o)?)"
+    )
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.ListValue" {
+    emit_line(mut out, "  let Array(items) = v else {")
+    emit_line(
+      mut out,
+      "    return Error(protobuf.expected(\"google.protobuf.ListValue\", \"an array\"))"
+    )
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  let mut m = default_ListValue()")
+    emit_line(mut out, "  for item in items {")
+    emit_line(mut out, "    list.push(mut m.values, from_json_Value(item, o)?)")
+    emit_line(mut out, "  }")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.Value" {
+    emit_line(mut out, "  let mut m = default_Value()")
+    emit_line(mut out, "  m.kind = Some(")
+    emit_line(mut out, "    match v {")
+    emit_line(mut out, "      Null() => null_value(NULL_VALUE()),")
+    emit_line(mut out, "      Bool(b) => bool_value(b),")
+    emit_line(mut out, "      Number(_) => number_value(protobuf.f64_of(v)?),")
+    emit_line(mut out, "      Text(s) => string_value(unique s),")
+    emit_line(mut out, "      Object(_) => struct_value(from_json_Struct(v, o)?),")
+    emit_line(mut out, "      Array(_) => list_value(from_json_ListValue(v, o)?),")
+    emit_line(mut out, "    }")
+    emit_line(mut out, "  )")
+    emit_line(mut out, "  Ok(m)")
+  } else if full == ".google.protobuf.Any" {
+    emit_line(mut out, "  let (type_url, value) = protobuf.any_of(v, o)?")
+    emit_line(mut out, "  let mut m = default_Any()")
+    emit_line(mut out, "  m.type_url = type_url")
+    emit_line(mut out, "  m.value = value")
+    emit_line(mut out, "  Ok(m)")
+  } else {
+    return false
+  }
+  true
+}

@@ -165,6 +165,12 @@ the license named in its row; the license texts follow once each.
 | Zig compiler | `src/libs/glibc.zig` stub shared objects: `.symver` placeholder assembly per versioned symbol, linked as a DSO with the library's SONAME and a version script; `lib/libc/glibc/abilists` read at GLIBC_2.28 to cross-check the stubs | `tools/buck2/native-toolchain/link_kit.py` (the link kit) | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | LLVM | `compiler-rt/lib/builtins/crt{begin,end}.c` and `libunwind/` compiled into the link kit and linked into every executable | link kit (`tools/buck2/native-toolchain/link_kit.py`) | llvm/llvm-project `llvmorg-21.1.8` | Apache-2.0 WITH LLVM-exception (license text below) |
 | GNU C Library | glibc 2.28's `Scrt1.o`, `crti.o`, `crtn.o` and `libc_nonshared.a` (Debian 2.28-10+deb10u1) linked into every executable; its libraries' public dynamic symbol tables generate the link kit's stubs | link kit (`tools/buck2/native-toolchain/link_kit.py`) | glibc 2.28 (Debian 2.28-10+deb10u1) | LGPL-2.1-or-later, with glibc's exception granting unlimited permission to link these compiled startup and nonshared files into other programs |
+| protobuf-go | `encoding/protowire/wire.go` varint, zigzag, fixed and tag rules and `wire_test.go` vectors; `encoding/protojson` proto3 JSON number, string, bytes, Duration, Timestamp, FieldMask and Any rules | `packages/protobuf@1/{wire,json,tests}.hir`, `packages/protobuf@1/protoc/gen_wkt.hir` | protocolbuffers/protobuf-go `e9ee2a76ab8eef359299e31736cf5cbdbd4d7048` | BSD-3-Clause (Go) |
+| prost | `prost/src/encoding.rs` length-delimited merging, packed/unpacked acceptance and depth limit; `prost-build` naming of nested types and oneofs | `packages/protobuf@1/wire.hir`, `packages/protobuf@1/protoc/gen_{model,emit}.hir` | tokio-rs/prost `aed74ad0e844959ee6948f29c4e9cff0f278e89e` | Apache-2.0 (text below, without the LLVM exception) |
+| Protocol Buffers | well-known type `.proto` files (embedded), `conformance/conformance.proto`, `src/google/protobuf/test_messages_proto3.proto` and the conformance test runner (built outside the tree) | `packages/protobuf@1/protoc/gen_wkt.hir`, `packages/protobuf@1/wkt.hir`, `packages/protobuf@1/conformance/` | protocolbuffers/protobuf `1d8382d5bdbd06af4e60e4d4e4d53241bfa5dbe8` | BSD-3-Clause (Protocol Buffers) |
+| grpc-go | `codes/codes.go`, `internal/transport/http_util.go` status, grpc-message percent-encoding and grpc-timeout rules, `internal/grpcutil/encode_duration.go` and their tests; `interop/test_utils.go` interop cases and server behaviour | `packages/grpc@1/`, `packages/grpc@1/interop/main.hir` | grpc/grpc-go `679b224109d3373eb0e4d80b6e41aafc8d295b6d` | Apache-2.0 (text below, without the LLVM exception) |
+| tonic | `interop/proto/grpc/testing/{test,messages,empty}.proto` (gRPC authors) | `packages/grpc@1/interop/proto/`, generated `packages/grpc@1/interop/testing.hir` | hyperium/tonic `cfe80f9d1e5e8e660cd2c1cd3b0a7579df37ba25` | Apache-2.0 (protos, text below); MIT (tonic) |
+| gRPC | `examples/protos/helloworld.proto`, with a streaming method added | `examples/grpc-greeter/` | grpc/grpc examples | Apache-2.0 (text below, without the LLVM exception) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -209,6 +215,11 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - FoundationDB: Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 - rustc-hash: Copyright (c) The Rust Project Developers
 - Datastar: Copyright (c) Star Federation
+- Protocol Buffers: Copyright 2008 Google Inc. All rights reserved.
+- protobuf-go: Copyright (c) 2018 The Go Authors. All rights reserved.
+- prost: Copyright Dan Burkert and Tokio contributors
+- grpc-go, tonic interop protos and helloworld.proto: Copyright 2014-2019 gRPC authors
+- tonic: Copyright 2019 gRPC authors (MIT)
 
 ## Zlib License (zlib)
 
@@ -1188,4 +1199,41 @@ the avoidance of doubt, this paragraph does not form part of the
 public licenses.
 
 Creative Commons may be contacted at creativecommons.org.
+```
+
+## BSD-3-Clause License (Protocol Buffers)
+
+```
+Copyright 2008 Google Inc.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+    * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Code generated by the Protocol Buffer compiler is owned by the owner
+of the input file used when generating it.  This code is not
+standalone and requires a support library to be linked with it.  This
+support library is itself covered by the above license.
 ```

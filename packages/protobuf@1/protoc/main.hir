@@ -1,0 +1,88 @@
+// protoc for Hirsel: generates one Hirsel source from .proto files.
+//
+//   hirsel run packages/protobuf@1/protoc/hirsel.json --grants <grants> -- \
+//     [--grpc] [--import <file.proto>]... [--external <proto.package>=<module>]... \
+//     <out.hir> <file.proto>...
+//
+// Paths are relative to the granted directory mounted at "". Imports of the
+// well-known types need no --import.
+pub type AppError = Usage(String) | Files(FileError) | Generate(String) | Arguments(
+  ArgError
+)
+
+fn read_source(d: Dir, name: String) -> Result[protoc.Source, AppError] {
+  let data = file.read_bytes(d, path.of(name)) ? Files
+  match string.from_bytes(take data) {
+    Ok(t) => Ok(protoc.Source(name: unique name, text: take t)),
+    Error(_) => Error(Usage(f"{name} is not UTF-8")),
+  }
+}
+
+fn builtin_name(names: List[String], name: String) -> bool {
+  for n in names {
+    if n == name {
+      return true
+    }
+  }
+  false
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let d = io.dir(rt, path.of("")) ? Files
+  let mut grpc = false
+  let mut imports: List[String] = []
+  let mut external: List[(String, String)] = []
+  let mut positional: List[String] = []
+  let mut i: u64 = 0
+  while i < arg.len(args) {
+    let a = arg.text(args, i) ? Arguments
+    if a == "--grpc" {
+      grpc = true
+    } else if a == "--import" || a == "--external" {
+      i += 1
+      if i >= arg.len(args) {
+        return Error(Usage(f"{a} needs a value"))
+      }
+      let value = arg.text(args, i) ? Arguments
+      if a == "--import" {
+        list.push(mut imports, take value)
+      } else {
+        let Some((package, module)) = string.split_once(value, "=") else {
+          return Error(Usage("--external takes <proto.package>=<module>"))
+        }
+        list.push(mut external, (unique package, unique module))
+      }
+    } else {
+      list.push(mut positional, take a)
+    }
+    i += 1
+  }
+  if list.len(positional) < 2 {
+    return Error(
+      Usage(
+        "usage: [--grpc] [--import f]... [--external pkg=module]... <out.hir> <file.proto>..."
+      )
+    )
+  }
+  let mut sources: List[protoc.Source] = []
+  let mut files: List[String] = []
+  i = 1
+  let builtin = protoc.wkt_files()
+  while i < list.len(positional) {
+    // The well-known types are built in.
+    if !builtin_name(builtin, positional[i]) {
+      list.push(mut sources, read_source(d, positional[i])?)
+    }
+    list.push(mut files, unique positional[i])
+    i += 1
+  }
+  for name in imports {
+    list.push(mut sources, read_source(d, name)?)
+  }
+  let config = protoc.Config(files: take files, external: take external, grpc: grpc)
+  let generated = protoc.generate(sources, config) ? Generate
+  let mut output = file.create_atomic(d, path.of(positional[0])) ? Files
+  file.write_all(d, mut output, string.as_bytes(generated)) ? Files
+  file.commit(d, take output) ? Files
+  Ok(())
+}

@@ -1,0 +1,138 @@
+// The testee of Google's protobuf conformance suite (conformance/conformance.proto).
+// It reads length-prefixed ConformanceRequests from stdin and answers each with
+// one base64 line of its ConformanceResponse.
+// GAP: Stdout writes only UTF-8 text (no binary stdout write); adapter.py turns
+// each line back into the suite's length-prefixed binary response.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+const TEST_ALL_TYPES: String = "protobuf_test_messages.proto3.TestAllTypesProto3"
+
+const FAILURE_SET: String = "conformance.FailureSet"
+
+fn registry() -> protobuf.Registry {
+  protobuf.registry(list.concat(protobuf.wkt.message_types(), pb.message_types()))
+}
+
+fn json_error(e: protobuf.JsonError) -> unique String {
+  match e {
+    Json(Syntax(at)) => f"JSON syntax error at byte {at}",
+    Json(DuplicateKey(at)) => f"duplicate JSON key at byte {at}",
+    Json(Nesting(at)) => f"JSON nested too deep at byte {at}",
+    Json(InvalidNumber()) => "invalid JSON number",
+    Invalid(message) => unique message,
+  }
+}
+
+fn decode_error(e: protobuf.DecodeError) -> unique String {
+  json_error(protobuf.decode_failed(e))
+}
+
+fn result_of(take outcome: pb.ConformanceResponse_result) -> pb.ConformanceResponse {
+  let mut response = pb.default_ConformanceResponse()
+  response.result_ = Some(take outcome)
+  take response
+}
+
+// Parses the payload and serializes it in the requested format.
+fn run(request: pb.ConformanceRequest) -> pb.ConformanceResponse {
+  let r = registry()
+  let failure_set = request.message_type == FAILURE_SET
+  if request.message_type != TEST_ALL_TYPES && !failure_set {
+    return result_of(skipped(f"unsupported message type {request.message_type}"))
+  }
+  let ignore = pb.number_TestCategory(request.test_category) == 3
+  let options = protobuf.JsonOptions(ignore_unknown_fields: ignore, registry: copy r)
+  // Both supported types travel as their binary encoding between the steps.
+  let parsed: Result[Bytes, String] = match request.payload {
+    Some(protobuf_payload(data)) => if failure_set {
+      match pb.decode_FailureSet(data) {
+        Ok(m) => Ok(pb.encode_FailureSet(m)),
+        Error(e) => Error(decode_error(e)),
+      }
+    } else {
+      match pb.decode_TestAllTypesProto3(data) {
+        Ok(m) => Ok(pb.encode_TestAllTypesProto3(m)),
+        Error(e) => Error(decode_error(e)),
+      }
+    },
+    Some(json_payload(text)) => {
+      let value = match protobuf.parse_json(unique text) {
+        Ok(v) => v,
+        Error(e) => return result_of(parse_error(json_error(e))),
+      }
+      let converted: Result[Bytes, String] = if failure_set {
+        match pb.from_json_FailureSet(value, options) {
+          Ok(m) => Ok(pb.encode_FailureSet(m)),
+          Error(e) => Error(json_error(e)),
+        }
+      } else {
+        match pb.from_json_TestAllTypesProto3(value, options) {
+          Ok(m) => Ok(pb.encode_TestAllTypesProto3(m)),
+          Error(e) => Error(json_error(e)),
+        }
+      }
+      converted
+    },
+    Some(_) => return result_of(skipped("only protobuf and JSON input are supported")),
+    None() => return result_of(runtime_error("request without a payload")),
+  }
+  let data = match take parsed {
+    Ok(d) => d,
+    Error(message) => return result_of(parse_error(take message)),
+  }
+  let format = pb.number_WireFormat(request.requested_output_format)
+  if format == 1 {
+    return result_of(protobuf_payload(take data))
+  }
+  if format != 2 {
+    return result_of(skipped("only protobuf and JSON output are supported"))
+  }
+  let value = if failure_set {
+    match pb.decode_FailureSet(data) {
+      Ok(m) => pb.to_json_FailureSet(m, r),
+      Error(e) => return result_of(runtime_error(decode_error(e))),
+    }
+  } else {
+    match pb.decode_TestAllTypesProto3(data) {
+      Ok(m) => pb.to_json_TestAllTypesProto3(m, r),
+      Error(e) => return result_of(runtime_error(decode_error(e))),
+    }
+  }
+  match value {
+    Ok(v) => match protobuf.json_text(v) {
+      Ok(text) => result_of(json_payload(take text)),
+      Error(e) => result_of(serialize_error(json_error(e))),
+    },
+    Error(e) => result_of(serialize_error(json_error(e))),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let input = io.stdin(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let mut reader = bufio.new(65536)
+  while true {
+    let mut header: List[u8] = []
+    if bufio.stdin_read_exact(input, mut reader, mut header, 4) != Ok(()) {
+      break
+    }
+    let mut size: u64 = 0
+    let mut i: u64 = 4
+    while i > 0 {
+      i -= 1
+      let b: u64 = int.widen(header[i])
+      size = size << 8 | b
+    }
+    let mut body: List[u8] = []
+    if bufio.stdin_read_exact(input, mut reader, mut body, size) != Ok(()) {
+      break
+    }
+    let response = match pb.decode_ConformanceRequest(bytes.from_list(take body)) {
+      Ok(request) => run(request),
+      Error(e) => result_of(runtime_error(decode_error(e))),
+    }
+    let encoded = pb.encode_ConformanceResponse(response)
+    out.print(output, f"{base64.encode(encoded, Standard(), Required())}\n") ? Output
+  }
+  Ok(())
+}
