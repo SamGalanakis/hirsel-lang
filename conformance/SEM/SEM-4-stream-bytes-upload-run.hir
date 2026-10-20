@@ -49,7 +49,14 @@ pub fn main(t: Test) -> Result[(), Error] {
               Stall()
             ]
           ),
-          Open([Reset()])
+          Open(
+            [
+              Expect(
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n"
+              ),
+              Reset()
+            ]
+          )
         ]
       )
     ],

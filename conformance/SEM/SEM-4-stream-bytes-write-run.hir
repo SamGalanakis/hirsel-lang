@@ -88,13 +88,18 @@ fn all(mut n: u64, data: Bytes) -> Result[u64, u64] {
   Ok(bytes.len(data))
 }
 
-pub fn main(t: Test, rt: Io) -> Result[(), GrantError] {
-  let tasks = io.tasks(rt)?
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
   let written: Atomic[u64] = atomic.create(tasks, 0u64)
   let retained: Atomic[u64] = atomic.create(tasks, 0u64)
   let source = stream.from_results(
     iter.from(
-      take Source(tasks: tasks, written: written, retained: retained, index: 0),
+      take Source(
+        tasks: tasks,
+        written: copy written,
+        retained: copy retained,
+        index: 0
+      ),
       pull
     )
   )
@@ -102,8 +107,8 @@ pub fn main(t: Test, rt: Io) -> Result[(), GrantError] {
     take source,
     take Writer(
       tasks: tasks,
-      written: written,
-      retained: retained,
+      written: copy written,
+      retained: copy retained,
       calls: 0,
       peak_backing: 0
     ),

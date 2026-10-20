@@ -1,5 +1,5 @@
 // rule: CLO-4
-// expect: reject CLO-4
+// expect: reject CLO-4 at line 11
 fn unproved(n: Net, mut s: Stream of n) -> () {
   // TLS uses the same Stream and net.read after tls.connect/tls.accept.
   let mut buffer: List[u8] = []

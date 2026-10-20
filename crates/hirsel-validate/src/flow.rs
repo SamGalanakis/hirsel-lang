@@ -3468,9 +3468,10 @@ impl Checker<'_> {
         state: &mut State,
         place: PlaceId,
         owned: bool,
+        independent_data: bool,
         report: bool,
     ) {
-        self.state_write(model, state, place, report);
+        self.state_install(model, state, place, independent_data, report);
         if self.readonly_map_entry(place) || self.readonly_byte_index(place) {
             self.flow_error(report, ViolationKind::InvalidUse(place));
         }
@@ -3830,7 +3831,8 @@ impl Checker<'_> {
         failure: CleanupId,
         report: bool,
     ) {
-        self.state_write(model, state, destination, report);
+        let independent_data = self.independent_global_data(state, value);
+        self.state_install(model, state, destination, independent_data, report);
         self.replace_creation(model, state, destination, value, displaced);
         if report && self.noalloc_body() {
             let root = self.body.places[destination.0 as usize].root.0 as usize;
@@ -4129,7 +4131,7 @@ impl Checker<'_> {
         self.set_current_global(state, displaced, old_global);
         self.set_current_sendable(state, displaced, old_sendable);
         self.install_crossing_parts(state, displaced, &old_crossing, model.crossing_depth);
-        self.write(model, state, displaced, true, report);
+        self.write(model, state, displaced, true, false, report);
         if if_live {
             for part in model.parts(displaced) {
                 state.places[part] = LIVE | DEAD;
@@ -4171,7 +4173,7 @@ impl Checker<'_> {
         self.set_current_global(state, destination, new_global);
         self.set_current_sendable(state, destination, new_sendable);
         self.install_crossing_parts(state, destination, &new_crossing, model.crossing_depth);
-        self.write(model, state, destination, owned, report);
+        self.write(model, state, destination, owned, independent_data, report);
         self.set_authority(model, state, destination, new_authority);
         self.install_tags(model, state, destination, new_tags);
         self.set_loan_content(model, state, destination, &new_loans);
@@ -5253,7 +5255,14 @@ impl Checker<'_> {
                         &crossing_parts,
                         model.crossing_depth,
                     );
-                    self.write(model, state, *destination, owned, report);
+                    self.write(
+                        model,
+                        state,
+                        *destination,
+                        owned,
+                        global && (unique || sendable),
+                        report,
+                    );
                     self.set_authority(model, state, *destination, authority);
                     self.install_tags(model, state, *destination, tag_parts);
                     self.set_loan_content(model, state, *destination, &content_loans);
@@ -5339,7 +5348,7 @@ impl Checker<'_> {
                         &crossing,
                         model.crossing_depth,
                     );
-                    self.write(model, state, *destination, true, report);
+                    self.write(model, state, *destination, true, false, report);
                     self.set_authority(model, state, *destination, authority);
                     self.install_tags(model, state, *destination, tag_parts);
                     self.set_dependencies(model, state, *destination, BTreeSet::new());
@@ -5483,7 +5492,7 @@ impl Checker<'_> {
                 }
                 for argument in arguments {
                     if argument.value.usage == UseKind::Mut {
-                        self.state_argument(model, state, callee, argument, report);
+                        self.state_argument(model, state, callee, argument, arguments, report);
                     }
                 }
                 let mut invocation_values: Vec<_> = arguments
@@ -6056,7 +6065,7 @@ impl Checker<'_> {
                         .sendability
                         == hirsel_types::Sendability::Sendable,
                 );
-                self.write(model, state, destination, true, report);
+                self.write(model, state, destination, true, false, report);
                 self.set_authority(model, state, destination, authority);
                 self.install_tags(model, state, destination, tags::Parts::new());
                 let locality = self.lifetime(

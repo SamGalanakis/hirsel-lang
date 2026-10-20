@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "package": {
-    "name": "stream_preserve_borrowed_bytes_bad",
+    "name": "stream_bytes_tokio",
     "version": "1"
   },
   "entry": {
@@ -10,13 +10,13 @@
   },
   "sources": [
     {
-      "path": "CLO-4-stream-preserve-borrowed-bytes-bad.hir",
+      "path": "main.hir",
       "module": []
     }
   ],
   "dependencies": [
     {
-      "manifest": "../../stdlib/std@1/hirsel.json",
+      "manifest": "../../../../../stdlib/std@1/hirsel.json",
       "package": {
         "name": "std",
         "version": "1"

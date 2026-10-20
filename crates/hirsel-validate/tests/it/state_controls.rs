@@ -1180,3 +1180,82 @@ fn every_envelope_axis_of_an_unselected_retained_state_is_a_hidden_input() {
         );
     }
 }
+
+// The mutable access row is local; replacing its stored pure data from an
+// independent global receipt preserves the resource's capture envelope.
+fn counted_field_replacement(shared: bool, advance: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let bytes = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::Bytes)));
+    let state = f.slot(
+        TypeKind::Record(
+            vec![Field {
+                name: "input".into(),
+                ty: bytes,
+                growable: false,
+            }]
+            .into(),
+        ),
+        Storage::Parameter,
+    );
+    let old_state = f.body().locals[state as usize].ty;
+    let mut state_row = f.definition.types.get(old_state).unwrap().clone();
+    state_row.modes.relation = Relation::environment();
+    let state_ty = f.definition.types.push(state_row);
+    f.body().locals[state as usize].ty = state_ty;
+    f.body().places[state as usize].ty = state_ty;
+    f.body().parameters = vec![LocalId(state)];
+    owner_signature(&mut f, PassingMode::Mut);
+    let replacement = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Temporary);
+    f.assign(replacement, Rvalue::Constant(Constant::Bytes(vec![1])), 0);
+    let mut view = ty(TypeKind::Primitive(Primitive::Bytes));
+    view.modes.relation = Relation::environment();
+    let view = f.definition.types.push(view);
+    let destination = f.body().places.len() as u32;
+    f.body().places.push(Place {
+        root: LocalId(state),
+        projection: vec![Projection::Field(0)].into(),
+        loan: None,
+        binding: None,
+        ty: view,
+    });
+    let old = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Temporary);
+    f.emit(InstructionKind::Replace {
+        destination: PlaceId(destination),
+        value: if shared {
+            copy(replacement)
+        } else {
+            take(replacement)
+        },
+        displaced: PlaceId(old),
+        if_live: false,
+    });
+    f.emit(InstructionKind::Drop {
+        place: PlaceId(old),
+        if_live: false,
+    });
+    if shared {
+        let cleanup = f.cleanup(vec![drop(replacement)]);
+        f.body().blocks[0]
+            .instructions
+            .last_mut()
+            .unwrap()
+            .on_failure = CleanupId(cleanup);
+        f.emit(InstructionKind::Drop {
+            place: PlaceId(replacement),
+            if_live: false,
+        });
+    }
+    f.valid();
+    promise(&mut f, advance);
+    f
+}
+
+#[test]
+fn counted_inert_replacement_requires_an_owned_receipt_and_a_preservation_selection() {
+    counted_field_replacement(false, false).valid();
+    state_error(&counted_field_replacement(true, false));
+    state_error(&counted_field_replacement(false, true));
+}

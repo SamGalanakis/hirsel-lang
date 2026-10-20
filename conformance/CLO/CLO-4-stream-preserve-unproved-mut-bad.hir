@@ -1,5 +1,5 @@
 // rule: CLO-4
-// expect: reject CLO-4
+// expect: reject CLO-4 at line 14
 resource type Request {
   input: Bytes,
 }

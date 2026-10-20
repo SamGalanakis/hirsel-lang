@@ -575,3 +575,17 @@ fn every_duplicated_checker_site_has_its_own_witness() {
     problems.dedup();
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+#[test]
+fn borrowed_counted_data_cannot_replace_preserved_resource_content() {
+    let source = r#"resource type Request { input: Bytes, }
+drop(s) {}
+@preserves_captures(s)
+fn read(bytes: Bytes, mut s: Request) -> () { s.input = copy bytes }
+"#;
+    let diagnostics = source_diagnostics(source);
+    assert!(
+        diagnostics.iter().any(|d| d.rule.as_str() == "CLO-4"),
+        "{diagnostics:?}"
+    );
+}

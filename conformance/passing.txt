@@ -533,7 +533,6 @@ conformance/CLO/CLO-4-std-stream-terminal-run.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-ok.hir
 conformance/CLO/CLO-4-stream-preserve-authority-bad.hir
-conformance/CLO/CLO-4-stream-preserve-borrowed-bytes-bad.hir
 conformance/CLO/CLO-4-stream-preserve-counted-list-bad.hir
 conformance/CLO/CLO-4-stream-preserve-counted-list-ok.hir
 conformance/CLO/CLO-4-stream-preserve-owned-bytes-ok.hir
@@ -6062,7 +6061,6 @@ conformance/SEM/SEM-4-source-after-consume-ok.hir
 conformance/SEM/SEM-4-stream-bytes-file-run.hir
 conformance/SEM/SEM-4-stream-bytes-http-run.hir
 conformance/SEM/SEM-4-stream-bytes-net-run.hir
-conformance/SEM/SEM-4-stream-bytes-tokio-run.hir
 conformance/SEM/SEM-4-stream-bytes-upload-run.hir
 conformance/SEM/SEM-4-stream-bytes-write-run.hir
 conformance/SEM/SEM-4-view-return-direct-run.hir

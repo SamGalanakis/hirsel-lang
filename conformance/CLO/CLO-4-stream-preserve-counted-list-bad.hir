@@ -1,5 +1,5 @@
 // rule: CLO-4
-// expect: reject CLO-4
+// expect: reject CLO-4 at line 12
 pub type Event = Data(Bytes) | Idle
 
 resource type Request {

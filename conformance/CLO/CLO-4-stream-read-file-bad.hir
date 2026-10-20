@@ -1,5 +1,5 @@
 // rule: CLO-4
-// expect: reject CLO-4
+// expect: reject CLO-4 at line 10
 fn unproved(d: Dir, mut f: File of d) -> () {
   let mut buffer: List[u8] = []
   let _ = file.read(d, mut f, mut buffer, 1)

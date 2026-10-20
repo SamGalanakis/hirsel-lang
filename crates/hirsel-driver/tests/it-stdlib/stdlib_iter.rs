@@ -81,7 +81,7 @@ fn byte_stream_upload_finishes_only_after_clean_eof() {
         let terminators: Vec<_> = events
             .iter()
             .filter(|event| {
-                event.operation == "net.write"
+                matches!(event.operation.as_str(), "net.write" | "net.write_all")
                     && event.input.windows(3).any(|bytes| bytes == b"0\r\n")
             })
             .collect();
@@ -98,6 +98,43 @@ fn byte_stream_upload_finishes_only_after_clean_eof() {
                 .filter(|event| event.operation == "net.close")
                 .count(),
             3
+        );
+    });
+}
+
+// Tokio ce685ee tokio-util/tests/io_reader_stream.rs:39-67. The exact 8000-byte
+// vector exceeds the corpus's 1M steps; this execution test uses normal fuel.
+#[test]
+fn byte_stream_tokio_short_read_then_error_vector() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/stream_bytes_tokio/main.hir");
+        let mut program = load_program(&path).unwrap();
+        program
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps: Some(16_000_000),
+                call_depth: 256,
+            },
+            ..Default::default()
+        }));
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let result =
+            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        assert!(
+            matches!(
+                result.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            ),
+            "{:?}",
+            result.outcome
         );
     });
 }

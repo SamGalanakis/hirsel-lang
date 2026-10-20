@@ -26,7 +26,7 @@ pub fn main(t: Test) -> Result[(), Error] {
     []
   )
   let limit = stream.chunk_limit(8) ? Config
-  let socket = net.connect(n, "example.com", 80u16, None()) ? Net
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? Net
   let mut chunks = stream.net_chunks(n, take socket, limit)
   let mut combined: List[u8] = []
   let mut count: u64 = 0
@@ -52,7 +52,7 @@ pub fn main(t: Test) -> Result[(), Error] {
       _ => false,
     }
   )
-  let broken = net.connect(n, "example.com", 80u16, None()) ? Net
+  let broken = net.connect(n, "example.com", 80u16, Unbounded()) ? Net
   let mut errors = stream.net_chunks(n, take broken, limit)
   test.check(
     t,
@@ -75,15 +75,15 @@ pub fn main(t: Test) -> Result[(), Error] {
       _ => false,
     }
   )
-  let early = net.connect(n, "example.com", 80u16, None()) ? Net
+  let early = net.connect(n, "example.com", 80u16, Unbounded()) ? Net
   let first = stream.take_n(stream.net_chunks(n, take early, limit), 1)
-  let outbound = net.connect(n, "example.com", 80u16, None()) ? Net
+  let outbound = net.connect(n, "example.com", 80u16, Unbounded()) ? Net
   // The one chunk of the first source is x; a separate source supplies upload data.
   let prefix = stream.try_fold(
     take first,
     0u64,
-    fn(take total: u64, take data: Bytes) -> Result[u64, NetError] {
-      Ok(total + bytes.len(data))
+    fn(take total: u64, take chunk: Bytes) -> Result[u64, NetError] {
+      Ok(total + bytes.len(chunk))
     }
   ) ? Net
   test.check(t, prefix == 1)
@@ -99,15 +99,15 @@ pub fn main(t: Test) -> Result[(), Error] {
     }
   )
   stream.net_sink(n, take outbound, stream.from_results(take data)) ? Sink
-  let idle = net.connect(n, "example.com", 80u16, None()) ? Net
+  let idle = net.connect(n, "example.com", 80u16, Unbounded()) ? Net
   let zero = stream.take_n(stream.net_chunks(n, take idle, limit), 0)
-  let count = stream.try_fold(
+  let zero_count = stream.try_fold(
     take zero,
     0u64,
-    fn(take n: u64, take data: Bytes) -> Result[u64, NetError] {
-      Ok(n + bytes.len(data))
+    fn(take total: u64, take chunk: Bytes) -> Result[u64, NetError] {
+      Ok(total + bytes.len(chunk))
     }
   ) ? Net
-  test.check(t, count == 0)
+  test.check(t, zero_count == 0)
   Ok(())
 }

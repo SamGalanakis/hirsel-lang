@@ -162,6 +162,66 @@ impl Checker<'_> {
             && self.closed(&self.definition.types, self.place_type(place), false)
     }
 
+    /// Pure counted data has no hidden environment; only its ownership receipt
+    /// can vary. The root row is the owner's mutable view, not stored locality.
+    fn fixed_inert_data(&self, root: TypeId) -> bool {
+        let types = &self.definition.types;
+        let mut pending = vec![root];
+        let mut seen = BTreeSet::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            let row = types.get(ty).unwrap();
+            if row.erased_captures.is_some()
+                || row.brand != Brand::default()
+                || ty != root && !row.modes.relation.is_global()
+                || row.modes.multiplicity != Multiplicity::Many
+                || row.drop_allocation != hirsel_types::DropAllocation::NoAlloc
+            {
+                return false;
+            }
+            match &row.kind {
+                TypeKind::Parameter(_)
+                | TypeKind::Function(_)
+                | TypeKind::Builtin {
+                    kind: hirsel_types::BuiltinType::Iter,
+                    ..
+                } => return false,
+                TypeKind::Named { .. }
+                    if !self.bound(
+                        types,
+                        ty,
+                        hirsel_types::Bound::Copyable,
+                        &self.generic_declarations(),
+                    ) =>
+                {
+                    return false;
+                }
+                kind => pending.extend(kind.value_parts()),
+            }
+        }
+        self.authority_with_generics(types, root, self.generic_declarations())
+            == AuthoritySummary::inert()
+    }
+
+    pub(super) fn independent_global_data(&self, state: &State, value: &Operand) -> bool {
+        if !self.global_operand(state, value) {
+            return false;
+        }
+        if self.operand_unique(state, value) {
+            return true;
+        }
+        let mut store = self.working_store();
+        let ty = self.transferred_type(state, value, &mut store);
+        hirsel_types::content_sendability(&store, ty, &self.generic_declarations(), &mut |path| {
+            Ok::<_, hirsel_types::QueryError>(
+                self.signatures.get(path).cloned().map(std::sync::Arc::new),
+            )
+        })
+        .is_ok_and(|proof| proof == hirsel_types::Sendability::Sendable)
+    }
+
     fn callee_function(&self, callee: &Callee) -> Option<&hirsel_types::FunctionType> {
         match callee {
             Callee::Definition { path, .. } => {
@@ -198,8 +258,23 @@ impl Checker<'_> {
         place: PlaceId,
         report: bool,
     ) {
+        self.state_install(model, state, place, false, report);
+    }
+
+    pub(super) fn state_install(
+        &mut self,
+        model: &Model,
+        state: &State,
+        place: PlaceId,
+        independent_data: bool,
+        report: bool,
+    ) {
         for (selection, relation, _) in self.selected(model, state, place) {
-            if !self.closed_state_effect(&selection, relation, place) {
+            let inert = independent_data
+                && !selection.advance
+                && relation == Relation::Part
+                && self.fixed_inert_data(self.place_type(place));
+            if !self.closed_state_effect(&selection, relation, place) && !inert {
                 self.state_violation(report);
             }
         }
@@ -310,25 +385,42 @@ impl Checker<'_> {
         state: &State,
         callee: &Callee,
         argument: &CallArgument,
+        arguments: &[CallArgument],
         report: bool,
     ) {
         for (selection, relation, fields) in self.selected(model, state, argument.value.place) {
             if self.closed_state_effect(&selection, relation, argument.value.place) {
                 continue;
             }
-            let covered = self.callee_function(callee).is_some_and(|f| {
-                f.state_promises.iter().any(|p| {
-                    let promised: Vec<u32> = fields
-                        .iter()
-                        .copied()
-                        .chain(p.selector.fields.iter().map(|f| f.0))
-                        .collect();
-                    p.selector.parameter == ParameterRef::bound(argument.parameter)
-                        && p.preserve_captures
-                        && (!selection.advance || p.advance_only)
-                        && (p.selector.fields.is_empty() || selection.fields.starts_with(&promised))
-                })
-            });
+            let inert = !selection.advance
+                && relation == Relation::Part
+                && self.fixed_inert_data(self.place_type(argument.value.place))
+                && self.callee_preserves_unique(callee, argument.parameter)
+                && arguments.iter().all(|other| {
+                    other.parameter == argument.parameter
+                        || self.bound(
+                            &self.definition.types,
+                            self.place_type(other.value.place),
+                            hirsel_types::Bound::Plain,
+                            &self.generic_declarations(),
+                        )
+                        || self.independent_global_data(state, &other.value)
+                });
+            let covered = inert
+                || self.callee_function(callee).is_some_and(|f| {
+                    f.state_promises.iter().any(|p| {
+                        let promised: Vec<u32> = fields
+                            .iter()
+                            .copied()
+                            .chain(p.selector.fields.iter().map(|f| f.0))
+                            .collect();
+                        p.selector.parameter == ParameterRef::bound(argument.parameter)
+                            && p.preserve_captures
+                            && (!selection.advance || p.advance_only)
+                            && (p.selector.fields.is_empty()
+                                || selection.fields.starts_with(&promised))
+                    })
+                });
             if !covered {
                 self.state_violation(report);
             }
