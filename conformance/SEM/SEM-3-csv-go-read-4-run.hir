@@ -1,0 +1,154 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/csv @ ebe2feef, reader_test.go:40-459 readTests.
+fn check(
+  data: Bytes,
+  config: std@1/csv.Config,
+  expected: Result[List[List[String]], std@1/csv.CsvError]
+) -> () {
+  // Short inputs use every two-chunk split. Long inputs use one-byte feeds
+  // to cover every boundary within the corpus interpreter's step budget.
+  if bytes.len(data) > 32 {
+    let mut reader = match std@1/csv.reader(config) {
+      Ok(reader) => take reader,
+      Error(error) => {
+        failure.check(expected == Error(error), TextInvariant())
+        return
+      },
+    }
+    let mut rows: List[List[String]] = []
+    for i in 0u64..bytes.len(data) {
+      match std@1/csv.feed(mut reader, bytes.slice(data, i, i + 1), false) {
+        Error(error) => {
+          failure.check(expected == Error(error), TextInvariant())
+          return
+        },
+        Ok(more) => {
+          for row in more {
+            list.push(mut rows, copy row)
+          }
+        },
+      }
+    }
+    match std@1/csv.feed(mut reader, b"", true) {
+      Error(error) => failure.check(expected == Error(error), TextInvariant()),
+      Ok(more) => {
+        for row in more {
+          list.push(mut rows, copy row)
+        }
+        failure.check(expected == Ok(rows), TextInvariant())
+      },
+    }
+    return
+  }
+  for split in 0u64..bytes.len(data) + 1 {
+    let mut reader = match std@1/csv.reader(config) {
+      Ok(reader) => take reader,
+      Error(error) => {
+        failure.check(expected == Error(error), TextInvariant())
+        return
+      },
+    }
+    let actual: Result[List[List[String]], std@1/csv.CsvError] = match std@1/csv.feed(
+      mut reader,
+      bytes.slice(data, 0, split),
+      false
+    ) {
+      Error(error) => Error(error),
+      Ok(rows) => {
+        let mut combined = unique rows
+        match std@1/csv.feed(
+          mut reader,
+          bytes.slice(data, split, bytes.len(data)),
+          true
+        ) {
+          Error(error) => Error(error),
+          Ok(more) => {
+            for row in more {
+              list.push(mut combined, copy row)
+            }
+            Ok(take combined)
+          },
+        }
+      },
+    }
+    failure.check(actual == expected, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  // CommaFieldTest
+  check(
+    b"x,y,z,w\x0ax,y,z,\x0ax,y,,\x0ax,,,\x0a,,,\x0a\"x\",\"y\",\"z\",\"w\"\x0a\"x\",\"y\",\"z\",\"\"\x0a\"x\",\"y\",\"\",\"\"\x0a\"x\",\"\",\"\",\"\"\x0a\"\",\"\",\"\",\"\"\x0a",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Ok(
+      [
+        ["x", "y", "z", "w"],
+        ["x", "y", "z", ""],
+        ["x", "y", "", ""],
+        ["x", "", "", ""],
+        ["", "", "", ""],
+        ["x", "y", "z", "w"],
+        ["x", "y", "z", ""],
+        ["x", "y", "", ""],
+        ["x", "", "", ""],
+        ["", "", "", ""]
+      ]
+    )
+  )
+  // StartLine1
+  check(
+    b"a,\"b\x0ac\"d,e",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Error(Syntax(std@1/csv.Position(start_line: 1, line: 2, column: 2)))
+  )
+  // StartLine2
+  check(
+    b"a,b\x0a\"d\x0a\x0a,e",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Error(Syntax(std@1/csv.Position(start_line: 2, line: 4, column: 3)))
+  )
+  // CRLFInQuotedField
+  check(
+    b"A,\"Hello\x0d\x0aHi\",B\x0d\x0a",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Ok([["A", "Hello\nHi", "B"]])
+  )
+  // BinaryBlobField
+  check(
+    b"x09A\xb4\x1c,aktau",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Error(InvalidUtf8())
+  )
+  // TrailingCR
+  check(
+    b"field1,field2\x0d",
+    std@1/csv.Config(
+      delimiter: 44,
+      fields_per_record: None(),
+      max_record_bytes: 1048576
+    ),
+    Ok([["field1", "field2"]])
+  )
+  Ok(())
+}

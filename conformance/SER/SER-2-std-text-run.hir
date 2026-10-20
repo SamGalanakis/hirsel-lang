@@ -96,6 +96,14 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
   round(t, padding)?
   let base64_error: base64.DecodeError = NonCanonical(6)
   round(t, base64_error)?
+  let length_error: base64.DecodeError = InvalidLength(4)
+  round(t, length_error)?
+  let csv_position = std@1/csv.Position(start_line: 2, line: 4, column: 3)
+  round(t, csv_position)?
+  let csv_error: std@1/csv.CsvError = Syntax(csv_position)
+  round(t, csv_error)?
+  let width_error: std@1/csv.CsvError = UnequalFields(csv_position)
+  round(t, width_error)?
   let hex_error: hex.DecodeError = InvalidDigit(1)
   round(t, hex_error)?
   Ok(())

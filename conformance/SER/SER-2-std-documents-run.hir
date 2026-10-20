@@ -45,7 +45,9 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
     t,
     csv.Config(delimiter: 59, fields_per_record: Some(3), max_record_bytes: 1024)
   )?
-  let csv_error: csv.CsvError = UnequalFields(2)
+  let csv_error: csv.CsvError = UnequalFields(
+    csv.Position(start_line: 2, line: 2, column: 1)
+  )
   round(t, csv_error)?
   Ok(())
 }

@@ -1,0 +1,56 @@
+// rule: SEM-3
+// expect: run
+// Go @ ebe2feef, src/encoding/base64/base64_test.go:248-279 TestDecodeCorrupt.
+// All 24 rows. CR/LF are rejected by Hirsel's strict RFC4648 policy.
+fn check(input: String, expected: Result[Bytes, std@1/base64.DecodeError]) -> () {
+  failure.check(
+    std@1/base64.decode(input, Standard(), Required()) == expected,
+    TextInvariant()
+  )
+  // This table contains no alphabet-specific symbols.
+  failure.check(
+    std@1/base64.decode(input, UrlSafe(), Required()) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", Ok(b""))
+  check("\n", Error(InvalidByte(0)))
+  check("AAA=\n", Error(InvalidPadding(4)))
+  check("AAAA\n", Error(InvalidByte(4)))
+  check("!!!!", Error(InvalidByte(0)))
+  check("====", Error(InvalidPadding(0)))
+  check("x===", Error(InvalidPadding(1)))
+  check("=AAA", Error(InvalidPadding(0)))
+  check("A=AA", Error(InvalidPadding(1)))
+  check("AA=A", Error(InvalidPadding(2)))
+  check("AA==A", Error(InvalidPadding(4)))
+  check("AAA=AAAA", Error(InvalidPadding(4)))
+  check("AAAAA", Error(InvalidLength(4)))
+  check("AAAAAA", Error(InvalidLength(4)))
+  check("A=", Error(InvalidPadding(1)))
+  check("A==", Error(InvalidPadding(1)))
+  check("AA=", Error(InvalidPadding(3)))
+  check("AA==", Ok(b"\x00"))
+  check("AAA=", Ok(b"\x00\x00"))
+  check("AAAA", Ok(b"\x00\x00\x00"))
+  check("AAAAAA=", Error(InvalidPadding(7)))
+  check("YWJjZA=====", Error(InvalidPadding(8)))
+  check("A!\n", Error(InvalidByte(1)))
+  check("A=\n", Error(InvalidPadding(1)))
+  // Strict unused-bit offsets use the consumed quantum, including padding.
+  failure.check(
+    std@1/base64.decode("Zh==x", Standard(), Required()) == Error(NonCanonical(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("AAAAZh", Standard(), Omitted()) == Error(NonCanonical(4)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("AAAAA", Standard(), Omitted()) == Error(InvalidLength(4)),
+    TextInvariant()
+  )
+  Ok(())
+}

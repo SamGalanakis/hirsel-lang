@@ -1950,7 +1950,9 @@ byte-identical normalization, property and full case table regeneration.
 `std@1/csv` is an ordinary-source incremental CSV parser and writer. Its public
 `Config` has `delimiter: u8`, `fields_per_record: Option[u64]` and
 `max_record_bytes: u64`; `default_config()` chooses comma, no width constraint,
-and 1 MiB per record. `CsvError = Syntax(u64) | UnequalFields(u64) |
+and 1 MiB per record.
+`Position { start_line: u64, line: u64, column: u64 }` locates parser errors.
+`CsvError = Syntax(Position) | UnequalFields(Position) |
 RecordTooLarge | InvalidUtf8 | InvalidDelimiter`, and
 `ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead`.
 
@@ -1962,22 +1964,34 @@ fn csv.read_record[S,E](mut reader: Reader, mut source: S, refill: fn(mut S, mut
 fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[(), CsvError] uses {}
 ```
 
-Delimiters must be nonzero ASCII other than quote/CR/LF. Fields may be quoted,
-contain delimiters or newlines, and escape a quote by doubling it. A quote in an
-unquoted field or data after a closing quote is syntax error. Outside quotes,
-LF, CR and CRLF terminate records; quoted CRLF is preserved as data, matching
-`examples/csvjson`. Empty fields and blank records (one empty field) are
-preserved; empty input has no records, and a final terminator adds no extra row.
-EOF finalizes an unterminated record once, rejecting an unclosed quote. Later
-empty feeds are harmless; a nonempty feed after EOF returns Syntax at EOF.
+Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect
+matches Go `encoding/csv`: fields may be quoted, contain delimiters or newlines,
+and escape a quote by doubling it. A quote in an unquoted field or data after a
+closing quote is a syntax error. LF terminates records; CRLF is normalized to LF
+inside and outside quotes. Bare CR is field data except that a final CR before
+EOF is dropped for Go compatibility. Blank lines are skipped, including trailing
+blank lines under a width constraint. Quoted empty fields remain records; empty
+input has no records. EOF finalizes an unterminated record once, rejecting an
+unclosed quote. Empty feeds after EOF are harmless; nonempty feeds return Syntax.
 
-The record limit counts raw bytes, including quotes and delimiters but excluding
-an outside-quote record terminator. It is checked before retaining another byte;
-zero allows empty records only. Width is checked per record when configured.
-Syntax offsets are absolute input byte offsets (EOF when a quote is unclosed);
-UnequalFields reports the record's starting byte offset. UTF-8 may cross chunks,
-but every completed field must validate. Header uniqueness is application policy.
-Parser errors are terminal; subsequent calls report Syntax at the current offset.
+The record limit counts bytes after CRLF/final-CR normalization, including quotes,
+delimiters and quoted newlines, excluding an outside-quote terminator. It is
+checked before retaining another normalized byte; at most one CR is held as
+lookahead. Zero permits blank lines only. Width is checked per record when
+configured; there is no first-record width inference. Positions have one-based
+line numbers and byte columns, with the record's starting line. A bad closing
+quote points at the quote, and an unclosed field points just past its final
+normalized line. UnequalFields points at column 1 of the starting line. UTF-8 may
+cross chunks, but every completed field must validate. Header uniqueness is
+application policy. Errors are terminal; later calls report Syntax at the current
+input position. Go's partial-record/recovery APIs, Comment, LazyQuotes,
+TrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API.
+
+The writer follows Go `fieldNeedsQuotes`: quote fields containing delimiter,
+quote, CR or LF, fields beginning with Unicode whitespace and the PostgreSQL
+terminator `\.`. Empty fields stay unquoted, quotes are doubled, and each record
+ends with LF. As in Go, writing a single empty field produces a blank line which
+the reader skips; this representation does not round trip as a record.
 
 `feed` returns all complete rows from its explicit chunk, allocating in proportion
 to that chunk. `parse` uses the same transitions. `read_record` parses only through
@@ -2539,7 +2553,7 @@ It is ordinary pure source. Strict conversion remains the existing
 ## Base64 codec
 
 `std@1/base64` provides `Alphabet = Standard | UrlSafe`, `Padding = Required |
-Omitted`, and `DecodeError = InvalidByte(u64) | InvalidLength |
+Omitted`, and `DecodeError = InvalidByte(u64) | InvalidLength(u64) |
 InvalidPadding(u64) | NonCanonical(u64)`. Its pure source functions borrow input
 and return owned output:
 
@@ -2552,9 +2566,14 @@ Encoding checks output-size arithmetic before building. Required padding emits
 and requires `=` for incomplete quanta; complete quanta need no padding. Omitted
 padding rejects every `=`. Decoding rejects whitespace, the other alphabet's
 symbols, padding before the final quantum, and nonzero unused low bits. Errors
-use input byte offsets: the first invalid byte or invalid padding placement is
-reported during scanning, followed by length/padding shape validation, then the
-last data byte of a noncanonical final quantum. No partial output is returned.
+use Go `decodeQuantum` byte offsets and precedence: InvalidLength identifies the
+start of the incomplete quantum, missing second padding points at EOF, an
+incorrect second padding byte points at the first `=`, and trailing garbage
+points just after the padded quantum. NonCanonical uses Go Strict's consumed
+quantum offset (two bytes back for two sextets, one byte back for three), before
+reporting trailing garbage. Unlike Go, CR/LF are rejected rather than skipped.
+Error kinds distinguish invalid bytes, length, padding and unused bits; no partial
+output is returned.
 
 ## Hexadecimal codec
 

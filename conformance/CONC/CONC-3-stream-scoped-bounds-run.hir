@@ -130,7 +130,12 @@ pub fn main(t: Test) -> Result[(), ()] {
       test.check(t, run(s, b"a\n", config(1, 2, 1, 10)) == Error(Limit()))
       test.check(t, run(s, b"x", config(1, 0, 10, 10)) == Error(Limit()))
       test.check(t, run(s, b"x", config(1, 10, 0, 10)) == Error(Limit()))
-      test.check(t, run(s, b"a\"", config(1, 10, 10, 10)) == Error(Csv(Syntax(1))))
+      test.check(
+        t,
+        run(s, b"a\"", config(1, 10, 10, 10)) == Error(
+          Csv(Syntax(csv.Position(start_line: 1, line: 1, column: 2)))
+        )
+      )
       let mut small = config(100, 100, 10, 10)
       small.csv.max_record_bytes = 3
       test.check(t, run(s, b"abc\n", small) == Ok([["abc"]]))

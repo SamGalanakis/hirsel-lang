@@ -292,7 +292,7 @@ fn csvjson_quoted_crlf_and_empty_fields() {
     fixture.run(
         false,
         Some(input("a,b\r\n\"x\r\ny\",\r\n", &[])),
-        "[{\"a\":\"x\\r\\ny\",\"b\":\"\"}]\n",
+        "[{\"a\":\"x\\ny\",\"b\":\"\"}]\n",
         0,
     );
 }
@@ -1783,7 +1783,7 @@ macro_rules! example_tests {
 }
 example_tests!(adventure_package_tests, "adventure", 1);
 example_tests!(bench_lite_package_tests, "bench-lite", 1);
-example_tests!(csvjson_package_tests, "csvjson", 2);
+example_tests!(csvjson_package_tests, "csvjson", 4);
 example_tests!(jsonquery_package_tests, "jsonquery", 2);
 example_tests!(kvstore_package_tests, "kvstore", 2);
 example_tests!(logq_package_tests, "logq", 2);

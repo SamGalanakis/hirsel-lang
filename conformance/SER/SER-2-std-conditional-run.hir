@@ -17,7 +17,9 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
   round(t, source)?
   let limit: bufio.ReadError[FileError] = Limit()
   round(t, limit)?
-  let csv_error: csv.ReadError[FileError] = Csv(Syntax(4))
+  let csv_error: csv.ReadError[FileError] = Csv(
+    Syntax(csv.Position(start_line: 1, line: 1, column: 5))
+  )
   round(t, csv_error)?
   let flate_error: flate.ReadError[FileError] = Input(Source(PermissionDenied()))
   round(t, flate_error)?

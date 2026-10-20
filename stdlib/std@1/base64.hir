@@ -1,4 +1,7 @@
-// Go encoding/base64 Encode/decodeQuantum, with strict RFC4648 input policy.
+// Go encoding/base64 @ ebe2feef, base64.go:328-408 decodeQuantum (BSD-3-Clause).
+// Quantum scan/padding/error precedence and byte offsets follow Go Strict().
+// Deviations: CR/LF rejected (strict RFC4648), typed error kinds, no partial output.
+// Encoder uses the same 24-bit packing; no streaming/assembly fast paths.
 @serializable
 pub type Alphabet = Standard | UrlSafe
 
@@ -6,7 +9,7 @@ pub type Alphabet = Standard | UrlSafe
 pub type Padding = Required | Omitted
 
 @serializable
-pub type DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical(
+pub type DecodeError = InvalidByte(u64) | InvalidLength(u64) | InvalidPadding(u64) | NonCanonical(
   u64
 )
 
@@ -102,61 +105,76 @@ pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
 ] uses {} {
   let data = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(data)
-  let mut end = len
+  let mut out: List[u8] = []
   let mut i: u64 = 0
   while i < len {
-    if data[i] == b'=' {
-      if padding == Omitted() {
-        return Error(InvalidPadding(i))
+    let start = i
+    let mut count: u64 = 0
+    let mut value: u32 = 0
+    let mut padded = false
+    let mut trailing: Option[u64] = None()
+    while count < 4 {
+      if i == len {
+        if count == 1 || padding == Required() {
+          return Error(InvalidLength(start))
+        }
+        break
       }
-      if end == len {
-        end = i
+      let byte = data[i]
+      i += 1
+      let digit = sextet(byte, alphabet)
+      if digit != 64 {
+        value = value * 64u32 + digit
+        count += 1
+        continue
       }
+      if byte != b'=' {
+        return Error(InvalidByte(i - 1))
+      }
+      if padding == Omitted() || count < 2 {
+        return Error(InvalidPadding(i - 1))
+      }
+      if count == 2 {
+        if i == len {
+          return Error(InvalidPadding(len))
+        }
+        if data[i] != b'=' {
+          return Error(InvalidPadding(i - 1))
+        }
+        i += 1
+      }
+      padded = true
+      if i < len {
+        trailing = Some(i)
+      }
+      break
+    }
+    if count == 2 && value % 16u32 != 0 {
+      return Error(NonCanonical(i - 2))
+    }
+    if count == 3 && value % 4u32 != 0 {
+      return Error(NonCanonical(i - 1))
+    }
+    if let Some(at) = trailing {
+      return Error(InvalidPadding(at))
+    }
+    let packed = if count == 2 {
+      value * 4096u32
+    } else if count == 3 {
+      value * 64u32
     } else {
-      if end != len {
-        return Error(InvalidPadding(i))
-      }
-      if sextet(data[i], alphabet) == 64 {
-        return Error(InvalidByte(i))
-      }
+      value
     }
-    i += 1
-  }
-  let rest = end % 4
-  if end != len {
-    let pads = len - end
-    if pads > 2 || rest < 2 || pads != 4 - rest || len % 4 != 0 {
-      return Error(InvalidPadding(end))
+    core@1/list.push(mut out, core@1/int.narrow(packed / 65536u32))
+    if count >= 3 {
+      core@1/list.push(mut out, core@1/int.narrow(packed / 256u32 % 256u32))
     }
-  } else if rest == 1 || padding == Required() && rest != 0 {
-    return Error(InvalidLength())
-  }
-  if rest == 2 && sextet(data[end - 1], alphabet) % 16u32 != 0 {
-    return Error(NonCanonical(end - 1))
-  }
-  if rest == 3 && sextet(data[end - 1], alphabet) % 4u32 != 0 {
-    return Error(NonCanonical(end - 1))
-  }
-  let mut out: List[u8] = []
-  i = 0
-  let mut bits: u32 = 0
-  let mut count: u32 = 0
-  while i < end {
-    bits = bits * 64u32 + sextet(data[i], alphabet)
-    count += 6
-    if count >= 8 {
-      count -= 8
-      let divisor: u32 = if count == 4 {
-        16
-      } else if count == 2 {
-        4
-      } else {
-        1
-      }
-      core@1/list.push(mut out, core@1/int.narrow(bits / divisor))
-      bits = bits % divisor
+    if count == 4 {
+      core@1/list.push(mut out, core@1/int.narrow(packed % 256u32))
     }
-    i += 1
+    if padded {
+      break
+    }
   }
   Ok(core@1/bytes.from_list(take out))
 }

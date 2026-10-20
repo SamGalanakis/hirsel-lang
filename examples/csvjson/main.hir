@@ -191,8 +191,8 @@ fn describe(error: Error) -> String {
     Flags(MissingValue(index)) => f"missing flag value at argument {index}",
     Flags(UnexpectedValue(index)) => f"unexpected flag value at argument {index}",
     Flags(InvalidSpec()) => "invalid flag specification",
-    Csv(Syntax(offset)) => f"malformed CSV at byte {offset}",
-    Csv(UnequalFields(offset)) => f"unequal CSV width at byte {offset}",
+    Csv(Syntax(pos)) => f"malformed CSV at line {pos.line}, column {pos.column} (record starts at line {pos.start_line})",
+    Csv(UnequalFields(pos)) => f"unequal CSV width at line {pos.line}, column {pos.column}",
     Csv(RecordTooLarge()) => "CSV record limit exceeded",
     Csv(InvalidUtf8()) => "CSV field contains invalid UTF-8",
     Csv(InvalidDelimiter()) => "invalid CSV delimiter",
@@ -253,4 +253,33 @@ fn rejects_duplicate_headers_and_width_mismatches(t: Test) {
   }
   let mut source = MemorySource(data: b"body,body_sha256\nYWJj,x\n", offset: 0)
   test.check(t, results.is_error(convert(mut source, memory_refill, Some("body"))))
+}
+
+@test
+fn converts_go_csv_line_endings(t: Test) {
+  let mut source = MemorySource(
+    data: b"name,note\r\n\r\nAda,\"hello\r\nsheep\"\r\nLin,bare\rCR\n\n",
+    offset: 0
+  )
+  let Ok(output) = convert(mut source, memory_refill, None()) else {
+    test.fail(t)
+    return ()
+  }
+  test.check(
+    t,
+    output == "[{\"name\":\"Ada\",\"note\":\"hello\\nsheep\"},{\"name\":\"Lin\",\"note\":\"bare\\rCR\"}]\n"
+  )
+}
+
+@test
+fn describes_csv_line_and_column(t: Test) {
+  let mut source = MemorySource(data: b"name,note\nAda,\"hello\nworld\"x", offset: 0)
+  let Error(error) = convert(mut source, memory_refill, None()) else {
+    test.fail(t)
+    return ()
+  }
+  test.check(
+    t,
+    describe(error) == "malformed CSV at line 3, column 6 (record starts at line 2)"
+  )
 }

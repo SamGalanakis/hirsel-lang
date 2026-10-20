@@ -1,4 +1,9 @@
-// Go encoding/csv reader/writer state transitions, adapted to bounded chunks.
+// Go encoding/csv @ ebe2feef (BSD-3-Clause; third-party/NOTICES.md).
+// reader.go:250-281 readLine, :297-453 readRecord; writer.go:160-184 fieldNeedsQuotes.
+// Same strict dialect, expressed as resumable byte transitions for bounded chunks.
+// Differences: UTF-8 String fields, ASCII delimiters, explicit optional width and
+// record bound; errors are terminal and return no partial record. No Comment,
+// LazyQuotes, TrimLeadingSpace, ReuseRecord, inferred width or UseCRLF options.
 @serializable
 pub type Config {
   delimiter: u8,
@@ -7,7 +12,14 @@ pub type Config {
 }
 
 @serializable
-pub type CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter
+pub type Position {
+  start_line: u64,
+  line: u64,
+  column: u64,
+}
+
+@serializable
+pub type CsvError = Syntax(Position) | UnequalFields(Position) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter
 
 @serializable
 pub type ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead
@@ -22,7 +34,13 @@ pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
   record_bytes: u64,
   offset: u64,
   record_start: u64,
-  skip_lf: bool,
+  line: u64,
+  column: u64,
+  end_line: u64,
+  end_column: u64,
+  quote_line: u64,
+  quote_column: u64,
+  pending_cr: bool,
   ended: bool,
   failed: bool,
 }
@@ -50,8 +68,14 @@ pub fn reader(config: Config) -> Result[Reader, CsvError] uses {} {
       mode: 0,
       record_bytes: 0,
       offset: 0,
-      record_start: 0,
-      skip_lf: false,
+      record_start: 1,
+      line: 1,
+      column: 1,
+      end_line: 1,
+      end_column: 1,
+      quote_line: 1,
+      quote_column: 1,
+      pending_cr: false,
       ended: false,
       failed: false
     )
@@ -73,31 +97,37 @@ fn finish_row(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
   finish_field(mut r)?
   if let Some(width) = r.config.fields_per_record {
     if core@1/list.len(r.row) != width {
-      return Error(UnequalFields(r.record_start))
+      return Error(
+        UnequalFields(
+          Position(start_line: r.record_start, line: r.record_start, column: 1)
+        )
+      )
     }
   }
   let row = unique r.row
   r.row = []
   r.record_bytes = 0
-  r.record_start = r.offset
   Ok(Some(take row))
 }
 
-// One byte, one transition, at most one completed record. No completed-row queue.
-fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses {} {
-  let at = r.offset
-  core@1/failure.check(at < 18446744073709551615u64, TextInvariant())
-  r.offset += 1
-  if r.skip_lf {
-    r.skip_lf = false
-    if byte == b'\n' {
-      r.record_start = r.offset
+fn position(r: Reader) -> Position uses {} {
+  Position(start_line: r.record_start, line: r.line, column: r.column)
+}
+
+// readRecord's unquoted/quoted/closing-quote branches after readLine normalization.
+fn normalized(mut r: Reader, byte: u8, line: u64, column: u64) -> Result[
+  Option[List[String]],
+  CsvError
+] uses {} {
+  if r.record_bytes == 0 {
+    r.record_start = line
+  }
+  r.end_line = line
+  r.end_column = column + 1
+  if r.mode != 2 && byte == b'\n' {
+    if r.record_bytes == 0 {
       return Ok(None())
     }
-  }
-  let terminator = r.mode != 2 && (byte == b'\n' || byte == b'\r')
-  if terminator {
-    r.skip_lf = byte == b'\r'
     return finish_row(mut r)
   }
   if r.record_bytes == r.config.max_record_bytes {
@@ -107,6 +137,8 @@ fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] u
   if r.mode == 2 {
     if byte == b'"' {
       r.mode = 3
+      r.quote_line = line
+      r.quote_column = column
     } else {
       core@1/list.push(mut r.field, byte)
     }
@@ -117,13 +149,23 @@ fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] u
     } else if byte == r.config.delimiter {
       finish_field(mut r)?
     } else {
-      return Error(Syntax(at))
+      return Error(
+        Syntax(
+          Position(
+            start_line: r.record_start,
+            line: r.quote_line,
+            column: r.quote_column
+          )
+        )
+      )
     }
   } else if byte == r.config.delimiter {
     finish_field(mut r)?
   } else if byte == b'"' {
     if r.mode != 0 {
-      return Error(Syntax(at))
+      return Error(
+        Syntax(Position(start_line: r.record_start, line: line, column: column))
+      )
     }
     r.mode = 2
   } else {
@@ -133,10 +175,46 @@ fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] u
   Ok(None())
 }
 
+// Delay CR by one byte: readLine removes CR before LF or EOF, in all modes.
+fn csv_step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses {} {
+  core@1/failure.check(r.offset < 18446744073709551615u64, TextInvariant())
+  r.offset += 1
+  let line = r.line
+  let column = r.column
+  let had_cr = r.pending_cr
+  if r.pending_cr {
+    r.pending_cr = false
+    if byte != b'\n' {
+      let ignored = normalized(mut r, b'\r', line, column - 1)?
+    }
+  }
+  if byte == b'\n' {
+    r.line += 1
+    r.column = 1
+  } else {
+    r.column += 1
+  }
+  if byte == b'\r' {
+    r.pending_cr = true
+    return Ok(None())
+  }
+  let normalized_column = if byte == b'\n' && had_cr {
+    column - 1
+  } else {
+    column
+  }
+  normalized(mut r, byte, line, normalized_column)
+}
+
 fn end(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
   r.ended = true
+  r.pending_cr = false
   if r.mode == 2 {
-    return Error(Syntax(r.offset))
+    return Error(
+      Syntax(
+        Position(start_line: r.record_start, line: r.end_line, column: r.end_column)
+      )
+    )
   }
   if r.record_bytes != 0 {
     return finish_row(mut r)
@@ -151,7 +229,7 @@ pub fn feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[
   let len = core@1/bytes.len(chunk)
   if r.failed || r.cursor != core@1/list.len(r.input) || r.ended && len != 0 {
     r.failed = true
-    return Error(Syntax(r.offset))
+    return Error(Syntax(position(r)))
   }
   let mut rows: List[List[String]] = []
   let mut i: u64 = 0
@@ -190,7 +268,7 @@ pub fn read_record[S, E](
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E]
 ) -> Result[Option[List[String]], ReadError[E]] {
   if r.failed {
-    return Error(Csv(Syntax(r.offset)))
+    return Error(Csv(Syntax(position(r))))
   }
   if r.ended {
     return Ok(None())
@@ -254,15 +332,8 @@ pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> R
       core@1/list.push(mut out, delimiter)
     }
     let data = core@1/string.as_bytes(fields[field_index])
-    let mut quoted = false
+    let quoted = field_needs_quotes(fields[field_index], delimiter)
     let mut i: u64 = 0
-    while i < core@1/bytes.len(data) {
-      let byte = data[i]
-      if byte == delimiter || byte == b'"' || byte == b'\n' || byte == b'\r' {
-        quoted = true
-      }
-      i += 1
-    }
     if quoted {
       core@1/list.push(mut out, b'"')
     }
@@ -281,6 +352,26 @@ pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> R
   }
   core@1/list.push(mut out, b'\n')
   Ok(())
+}
+
+// writer.go:160-184: empty fields stay bare; PostgreSQL's \. is quoted.
+fn field_needs_quotes(field: String, delimiter: u8) -> bool uses {} {
+  let data = core@1/string.as_bytes(field)
+  if core@1/bytes.len(data) == 0 {
+    return false
+  }
+  if field == "\\." {
+    return true
+  }
+  for byte in data {
+    if byte == delimiter || byte == b'"' || byte == b'\n' || byte == b'\r' {
+      return true
+    }
+  }
+  for c in core@1/string.scalars(field) {
+    return std@1/unicode.is_whitespace(c)
+  }
+  false
 }
 
 /// Limits for an owning scoped fold. Zero raw/input budgets forbid further work;

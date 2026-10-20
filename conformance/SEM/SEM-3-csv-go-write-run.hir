@@ -1,0 +1,89 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/csv @ ebe2feef, writer_test.go:24-52, all 26 non-UseCRLF rows.
+fn check(
+  rows: List[List[String]],
+  delimiter: u8,
+  expected: Result[String, std@1/csv.CsvError]
+) -> () {
+  let mut out: List[u8] = []
+  for row in rows {
+    if let Error(error) = std@1/csv.write_record(row, delimiter, mut out) {
+      failure.check(expected == Error(error), TextInvariant())
+      return
+    }
+  }
+  let Ok(actual) = text.finish(take out) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(expected == Ok(actual), TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // writeTests row 1
+  check([["abc"]], 44, Ok("abc\n"))
+  // writeTests row 3
+  check([["\"abc\""]], 44, Ok("\"\"\"abc\"\"\"\n"))
+  // writeTests row 4
+  check([["a\"b"]], 44, Ok("\"a\"\"b\"\n"))
+  // writeTests row 5
+  check([["\"a\"b\""]], 44, Ok("\"\"\"a\"\"b\"\"\"\n"))
+  // writeTests row 6
+  check([[" abc"]], 44, Ok("\" abc\"\n"))
+  // writeTests row 7
+  check([["abc,def"]], 44, Ok("\"abc,def\"\n"))
+  // writeTests row 8
+  check([["abc", "def"]], 44, Ok("abc,def\n"))
+  // writeTests row 9
+  check([["abc"], ["def"]], 44, Ok("abc\ndef\n"))
+  // writeTests row 10
+  check([["abc\ndef"]], 44, Ok("\"abc\ndef\"\n"))
+  // writeTests row 13
+  check([["abc\rdef"]], 44, Ok("\"abc\rdef\"\n"))
+  // writeTests row 14
+  check([[""]], 44, Ok("\n"))
+  // writeTests row 15
+  check([["", ""]], 44, Ok(",\n"))
+  // writeTests row 16
+  check([["", "", ""]], 44, Ok(",,\n"))
+  // writeTests row 17
+  check([["", "", "a"]], 44, Ok(",,a\n"))
+  // writeTests row 18
+  check([["", "a", ""]], 44, Ok(",a,\n"))
+  // writeTests row 19
+  check([["", "a", "a"]], 44, Ok(",a,a\n"))
+  // writeTests row 20
+  check([["a", "", ""]], 44, Ok("a,,\n"))
+  // writeTests row 21
+  check([["a", "", "a"]], 44, Ok("a,,a\n"))
+  // writeTests row 22
+  check([["a", "a", ""]], 44, Ok("a,a,\n"))
+  // writeTests row 23
+  check([["a", "a", "a"]], 44, Ok("a,a,a\n"))
+  // writeTests row 24
+  check([["\\."]], 44, Ok("\"\\.\"\n"))
+  // writeTests row 25
+  failure.check(
+    results.is_error(string.from_bytes(unique b"x09A\xb4\x1c")),
+    TextInvariant()
+  )
+  // writeTests row 26
+  failure.check(
+    results.is_error(string.from_bytes(unique b",x09A\xb4\x1c")),
+    TextInvariant()
+  )
+  // writeTests row 27
+  check([["a", "a", ""]], 124, Ok("a|a|\n"))
+  // writeTests row 28
+  check([[",", ",", ""]], 124, Ok(",|,|\n"))
+  // writeTests row 29
+  check([["foo"]], 34, Error(InvalidDelimiter()))
+  check(
+    [["\tspace", "\u{85}space", "\u{a0}space", "\u{2003}space", "é", " a"]],
+    44,
+    Ok("\"\tspace\",\"\u{85}space\",\"\u{a0}space\",\"\u{2003}space\",é,\" a\"\n")
+  )
+  check([[]], 44, Ok("\n"))
+  Ok(())
+}

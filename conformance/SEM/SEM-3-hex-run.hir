@@ -68,5 +68,7 @@ pub fn main() -> Result[(), ()] {
   failure.check(std@1/hex.decode("00gg") == Error(InvalidDigit(2)), TextInvariant())
   failure.check(std@1/hex.decode("ffeed") == Error(OddLength()), TextInvariant())
   failure.check(std@1/hex.decode("é") == Error(InvalidDigit(0)), TextInvariant())
+  // Go hex_test.go:104, errTests: invalid digit precedes length.
+  failure.check(std@1/hex.decode("0\u{1}") == Error(InvalidDigit(1)), TextInvariant())
   Ok(())
 }

@@ -202,11 +202,11 @@ pub fn main() -> Result[(), ()] {
     Omitted()
   )
   failure.check(
-    std@1/base64.decode("A", Standard(), Required()) == Error(InvalidLength()),
+    std@1/base64.decode("A", Standard(), Required()) == Error(InvalidLength(0)),
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("Zg", Standard(), Required()) == Error(InvalidLength()),
+    std@1/base64.decode("Zg", Standard(), Required()) == Error(InvalidLength(0)),
     TextInvariant()
   )
   failure.check(
@@ -214,11 +214,11 @@ pub fn main() -> Result[(), ()] {
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("AA=A", Standard(), Required()) == Error(InvalidPadding(3)),
+    std@1/base64.decode("AA=A", Standard(), Required()) == Error(InvalidPadding(2)),
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("AA===", Standard(), Required()) == Error(InvalidPadding(2)),
+    std@1/base64.decode("AA===", Standard(), Required()) == Error(InvalidPadding(4)),
     TextInvariant()
   )
   failure.check(
@@ -230,15 +230,15 @@ pub fn main() -> Result[(), ()] {
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("Zh==", Standard(), Required()) == Error(NonCanonical(1)),
+    std@1/base64.decode("Zh==", Standard(), Required()) == Error(NonCanonical(2)),
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("Zm9=", Standard(), Required()) == Error(NonCanonical(2)),
+    std@1/base64.decode("Zm9=", Standard(), Required()) == Error(NonCanonical(3)),
     TextInvariant()
   )
   failure.check(
-    std@1/base64.decode("Zh", Standard(), Omitted()) == Error(NonCanonical(1)),
+    std@1/base64.decode("Zh", Standard(), Omitted()) == Error(NonCanonical(0)),
     TextInvariant()
   )
   failure.check(

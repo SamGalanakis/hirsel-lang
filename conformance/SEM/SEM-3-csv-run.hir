@@ -40,11 +40,11 @@ fn split_case(text: String, expected: List[List[String]]) -> () {
     failure.check(rows == expected, TextInvariant())
     failure.check(std@1/csv.feed(mut reader, b"", true) == Ok([]), TextInvariant())
     failure.check(
-      std@1/csv.feed(mut reader, b"x", false) == Error(Syntax(bytes.len(data))),
+      results.is_error(std@1/csv.feed(mut reader, b"x", false)),
       TextInvariant()
     )
     failure.check(
-      std@1/csv.feed(mut reader, b"", true) == Error(Syntax(bytes.len(data))),
+      results.is_error(std@1/csv.feed(mut reader, b"", true)),
       TextInvariant()
     )
   }
@@ -88,23 +88,29 @@ fn failed(mut source: InputSource, mut out: List[u8], max: u64) -> Result[u64, u
 
 pub fn main() -> Result[(), ()] {
   split_case("", [])
-  split_case("\n", [[""]])
+  split_case("\n", [])
   split_case(",\n", [["", ""]])
   split_case("a,b\r\nc,d", [["a", "b"], ["c", "d"]])
   split_case("\"a,b\",c\n\"a\"\"b\",\"é\nü\"\r\n", [["a,b", "c"], ["a\"b", "é\nü"]])
   split_case("a,", [["a", ""]])
   split_case("\"\"", [[""]])
-  split_case("\"a\r\nb\"", [["a\r\nb"]])
+  split_case("\"a\r\nb\"", [["a\nb"]])
   failure.check(
-    std@1/csv.parse("a\"b", std@1/csv.default_config()) == Error(Syntax(1)),
+    std@1/csv.parse("a\"b", std@1/csv.default_config()) == Error(
+      Syntax(std@1/csv.Position(start_line: 1, line: 1, column: 2))
+    ),
     TextInvariant()
   )
   failure.check(
-    std@1/csv.parse("\"a\"x", std@1/csv.default_config()) == Error(Syntax(3)),
+    std@1/csv.parse("\"a\"x", std@1/csv.default_config()) == Error(
+      Syntax(std@1/csv.Position(start_line: 1, line: 1, column: 3))
+    ),
     TextInvariant()
   )
   failure.check(
-    std@1/csv.parse("\"a", std@1/csv.default_config()) == Error(Syntax(2)),
+    std@1/csv.parse("\"a", std@1/csv.default_config()) == Error(
+      Syntax(std@1/csv.Position(start_line: 1, line: 1, column: 3))
+    ),
     TextInvariant()
   )
   let mut config = std@1/csv.default_config()
@@ -119,7 +125,7 @@ pub fn main() -> Result[(), ()] {
     TextInvariant()
   )
   config.max_record_bytes = 0
-  failure.check(std@1/csv.parse("\r\n", config) == Ok([[""]]), TextInvariant())
+  failure.check(std@1/csv.parse("\r\n", config) == Ok([]), TextInvariant())
   failure.check(
     std@1/csv.parse("a", config) == Error(RecordTooLarge()),
     TextInvariant()
@@ -127,7 +133,9 @@ pub fn main() -> Result[(), ()] {
   config.max_record_bytes = 3
   config.fields_per_record = Some(2)
   failure.check(
-    std@1/csv.parse("a,b\nx", config) == Error(UnequalFields(4)),
+    std@1/csv.parse("a,b\nx", config) == Error(
+      UnequalFields(std@1/csv.Position(start_line: 2, line: 2, column: 1))
+    ),
     TextInvariant()
   )
   config.delimiter = 34
@@ -220,7 +228,7 @@ pub fn main() -> Result[(), ()] {
   let bounded_calls = bounded_source.calls
   failure.check(
     std@1/csv.read_record(mut bounded_reader, mut bounded_source, refill) == Error(
-      Csv(Syntax(4))
+      Csv(Syntax(std@1/csv.Position(start_line: 1, line: 1, column: 5)))
     ),
     TextInvariant()
   )
