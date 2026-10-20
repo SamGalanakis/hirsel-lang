@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1471 exported definitions; 525 variants.
+1474 exported definitions; 526 variants.
 
 ## Types and roots
 
@@ -5088,7 +5088,7 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 
 <a id="def-std_401_2fhttp_2fConfig"></a>
 
-- `@serializable pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, decompress: bool, unix_socket: Option[Path], }`
+- `@serializable pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, decompress: bool, unix_socket: Option[Path], http2_prior_knowledge: bool, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString), [`core@1/TlsRoots`](#def-core_401_2fTlsRoots), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
@@ -5310,15 +5310,28 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 
 <a id="def-std_401_2fhttp_2fServerConnection"></a>
 
-- `pub opaque resource type http.ServerConnection: noalloc_drop uses {Net}`
+- `pub opaque resource type http.ServerConnection: noalloc_drop uses {Net, Tasks}`
 
-References: [`core@1/Net`](#def-core_401_2fNet)
+Owns the connection between exchanges. An unfinished checked-out stream
+makes next_stream return OutOfOrder; abandoning it closes the connection.
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Tasks`](#def-core_401_2fTasks)
 
 <a id="def-std_401_2fhttp_2fServerRequest"></a>
 
 - `@serializable pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool, }`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
+
+<a id="def-std_401_2fhttp_2fServerStream"></a>
+
+- `pub opaque resource type http.ServerStream: sendable + noalloc_drop uses {Net, Tasks}`
+
+An owned request/response exchange. A completed response returns the
+connection through its channel. Dropping an unfinished exchange closes it,
+without fabricating an application response. The next next_stream sees EOF.
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Tasks`](#def-core_401_2fTasks)
 
 <a id="def-std_401_2fhttp_2fSseError"></a>
 
@@ -5344,7 +5357,7 @@ Variant of http.SseError.
 
 <a id="def-std_401_2fhttp_2fVersion"></a>
 
-- `@serializable pub type http.Version = Http10 | Http11`
+- `@serializable pub type http.Version = Http10 | Http11 | Http2`
 
 <a id="def-std_401_2fhttp_2fVersion_23Http10"></a>
 
@@ -5355,6 +5368,12 @@ Variant of http.Version.
 <a id="def-std_401_2fhttp_2fVersion_23Http11"></a>
 
 - `Http11 -> http.Version`
+
+Variant of http.Version.
+
+<a id="def-std_401_2fhttp_2fVersion_23Http2"></a>
+
+- `Http2 -> http.Version`
 
 Variant of http.Version.
 
@@ -5420,13 +5439,11 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 
 <a id="def-std_401_2fhttp_2fend_5fresponse_5fbody"></a>
 
-- `pub fn http.end_response_body(mut c: ServerConnection) -> Result[(), HttpError]`
+- `pub fn http.end_response_body(mut s: ServerStream) -> Result[(), HttpError]`
 
-Finishes a streaming response. Chunked bodies emit the zero chunk and
-empty trailers; close-delimited bodies shut down the stream. Only a fully
-finished, persistent response permits another receive_request.
+Complete a streaming reply and automatically return its transport.
 
-References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
 
 <a id="def-std_401_2fhttp_2ffetch"></a>
 
@@ -5452,11 +5469,29 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Body`](#def-std_401_2fhttp_2fBody), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
+<a id="def-std_401_2fhttp_2fnext_5fstream"></a>
+
+- `pub fn http.next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ Option[(sendable ServerStream, unique ServerRequest)], HttpError ]`
+
+Yield one owned exchange and its decoded request. While it remains open,
+this returns OutOfOrder. Dropping it unfinished ends reception.
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection), [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
+
 <a id="def-std_401_2fhttp_2fparse_5fserver_5frequest"></a>
 
 - `pub fn http.parse_server_request(buf: Bytes, config: Config) -> Result[ Option[(ServerRequest, u64)], HttpError ] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest)
+
+<a id="def-std_401_2fhttp_2fprotocol"></a>
+
+- `pub fn http.protocol(s: ServerStream) -> Version uses {}`
+
+Protocol used by this exchange. The parsed request and response heads carry
+the same Http2 version when HTTP/2 is selected.
+
+References: [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
 
 <a id="def-std_401_2fhttp_2fread_5fall"></a>
 
@@ -5476,33 +5511,35 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/http/ResponseHead`](#def-std_401_2fhttp_2fResponseHead)
 
-<a id="def-std_401_2fhttp_2freceive_5frequest"></a>
-
-- `pub fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ ServerRequest, HttpError ]`
-
-References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection), [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest)
-
 <a id="def-std_401_2fhttp_2frequest"></a>
 
 - `pub fn http.request( n: Net, config: Config, method: Method, url: String, headers: List[Header] ) -> Result[Request, HttpError]`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
 
+<a id="def-std_401_2fhttp_2frequest_5fprotocol"></a>
+
+- `pub fn http.request_protocol(r: Request) -> Version uses {}`
+
+Protocol selected for this request's transport, before sending its headers.
+
+References: [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
+
 <a id="def-std_401_2fhttp_2frespond"></a>
 
-- `pub fn http.respond( mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool ) -> Result[(), HttpError]`
+- `pub fn http.respond( mut s: ServerStream, status: u16, headers: List[Header], body: Bytes, close: bool ) -> Result[(), HttpError]`
 
-References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+Send one complete reply and return the transport to its connection.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
 
 <a id="def-std_401_2fhttp_2frespond_5fhead"></a>
 
-- `pub fn http.respond_head(mut c: ServerConnection, status: u16, headers: List[Header]) -> Result[ (), HttpError ]`
+- `pub fn http.respond_head(mut s: ServerStream, status: u16, headers: List[Header]) -> Result[ (), HttpError ]`
 
-Sends and flushes a response head without a known body length. HTTP/1.1
-uses chunked framing; HTTP/1.0 bodies end by closing the connection.
-The connection cannot receive another request until end_response_body succeeds.
+Begin a streaming reply. The stream remains checked out until completion.
 
-References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
 
 <a id="def-std_401_2fhttp_2fresponse_5fjson"></a>
 
@@ -5524,15 +5561,18 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 <a id="def-std_401_2fhttp_2fserve_5ftls"></a>
 
-- `pub fn http.serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ ServerConnection, HttpError ]`
+- `pub fn http.serve_tls( tasks: Tasks, n: Net, take stream: Stream of n, server: TlsServer, config: Config ) -> Result[ServerConnection, HttpError]`
 
-References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/TlsServer`](#def-core_401_2fTlsServer), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/Tasks`](#def-core_401_2fTasks), [`core@1/TlsServer`](#def-core_401_2fTlsServer), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
 
 <a id="def-std_401_2fhttp_2fserver_5fconnection"></a>
 
-- `pub fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection`
+- `pub fn http.server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection`
 
-References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401_2fStream), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+Construct an HTTP server over an accepted transport. Explicit prior knowledge
+enables cleartext h2c; otherwise this uses HTTP/1.1.
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
 
 <a id="def-std_401_2fhttp_2fsse_5fevent"></a>
 
@@ -5559,12 +5599,11 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 <a id="def-std_401_2fhttp_2fwrite_5fresponse_5fbody"></a>
 
-- `pub fn http.write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[ (), HttpError ]`
+- `pub fn http.write_response_body(mut s: ServerStream, bytes: Bytes) -> Result[(), HttpError]`
 
-Writes and flushes one body fragment. An empty fragment never terminates
-the body. HEAD, 204 and 304 responses elide body bytes.
+Flush one fragment without ending the body; empty fragments are ignored.
 
-References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
 
 
 ## http2
