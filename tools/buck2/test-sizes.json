@@ -185,7 +185,7 @@
     ]
   },
   "gate-native-changed": {
-    "cpu_class": "",
+    "cpu_class": "fast",
     "cpu_count": 2,
     "mean_wall_seconds": 170.1,
     "memory_kb": 12582912,
@@ -510,7 +510,7 @@
     ]
   },
   "hirsel-cli-test-cli": {
-    "cpu_class": "",
+    "cpu_class": "fast",
     "cpu_count": 2,
     "mean_wall_seconds": 214.8,
     "memory_kb": 1835008,

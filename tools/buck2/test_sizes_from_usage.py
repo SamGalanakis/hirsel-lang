@@ -67,7 +67,12 @@ MIN_MEMORY_KB = 524288
 FULL_RUN_CPUS = {"gate-agree-full"}
 # Conformance shards are single-threaded and ran past their limit on the
 # slower worker class; they keep asking for the fast workers.
-CPU_CLASSES = {"gate-conformance": "fast"}
+CPU_CLASSES = {
+    "gate-conformance": "fast",
+    # Ran past 600 s on bazelbox-02 and finished on bazelbox-05 (2026-10-20).
+    "gate-native-changed": "fast",
+    "hirsel-cli-test-cli": "fast",
+}
 NATIVE_STAGES = {
     "gate-native-full", "gate-native-sanitize", "gate-native-hash-sweep",
     "gate-native-library-c", "gate-native-runtime-c", "gate-native-toolchain-pin",
