@@ -64,7 +64,7 @@ fn byte_stream_upload_finishes_only_after_clean_eof() {
         assert!(
             matches!(
                 execution.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}",
             execution.outcome
@@ -131,7 +131,7 @@ fn byte_stream_tokio_short_read_then_error_vector() {
         assert!(
             matches!(
                 result.outcome,
-                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             ),
             "{:?}",
             result.outcome
