@@ -357,11 +357,11 @@ impl DeclarationIndex {
         // Index core declarations alongside source metadata, so merged heads
         // resolve members through the same lookup and visibility path.
         entries.extend(registry.signatures().filter_map(|signature| {
-            if signature.definition.0.modules.iter().any(|m| m.starts_with('$')) {
+            if signature.definition.path().0.modules.iter().any(|m| m.starts_with('$')) {
                 return None;
             }
             Some(DefinitionEntry {
-                definition: signature.definition.clone(),
+                definition: signature.definition.path().clone(),
                 namespace: if matches!(signature.kind, hirsel_types::SignatureKind::Type(_)) {
                     Namespace::Type
                 } else {
@@ -373,7 +373,7 @@ impl DeclarationIndex {
         }));
         let core_heads: std::collections::BTreeSet<_> = registry
             .signatures()
-            .filter_map(|s| s.definition.0.modules.first().cloned())
+            .filter_map(|s| s.definition.path().0.modules.first().cloned())
             .filter(|head| !head.starts_with('$'))
             .collect();
         let complete_heads = |mut heads: Vec<DependencyExposure>| {
