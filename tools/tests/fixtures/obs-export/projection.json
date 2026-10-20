@@ -1,0 +1,102 @@
+{
+  "analysis": "fixture-projection",
+  "evidence": {
+    "capture": "fixture",
+    "sha256": "3bfb43437d780d119377da67936d40c844a417d77c5e4f47c5f472edd07bf2ee"
+  },
+  "records": [
+    {
+      "kind": "log",
+      "level": "Debug",
+      "message": "Example log record",
+      "ordinal": 0,
+      "span_id": "eee19b7ec3c1b174",
+      "trace_id": "5b8efff798038103d269b633813fc60c"
+    },
+    {
+      "kind": "log",
+      "level": "Info",
+      "message": "Example log record",
+      "ordinal": 0,
+      "span_id": "eee19b7ec3c1b174",
+      "trace_id": "5b8efff798038103d269b633813fc60c"
+    },
+    {
+      "kind": "log",
+      "level": "Warn",
+      "message": "Example log record",
+      "ordinal": 0,
+      "span_id": "eee19b7ec3c1b174",
+      "trace_id": "5b8efff798038103d269b633813fc60c"
+    },
+    {
+      "kind": "log",
+      "level": "Error",
+      "message": "Example log record",
+      "ordinal": 0,
+      "span_id": "eee19b7ec3c1b174",
+      "trace_id": "5b8efff798038103d269b633813fc60c"
+    },
+    {
+      "end": 1,
+      "kind": "span",
+      "links": [
+        {
+          "span_id": "eee19b7ec3c1b172",
+          "trace_id": "5b8efff798038103d269b633813fc60c"
+        }
+      ],
+      "name": "I'm a server span",
+      "parent_span_id": "eee19b7ec3c1b173",
+      "span_id": "eee19b7ec3c1b174",
+      "span_kind": "Server",
+      "start": 0,
+      "status": "Success",
+      "trace_id": "5b8efff798038103d269b633813fc60c"
+    },
+    {
+      "attributes": {
+        "my.histogram.attr": "some value"
+      },
+      "bounds": [
+        1
+      ],
+      "bucket_counts": [
+        1,
+        1
+      ],
+      "end": 1,
+      "kind": "histogram",
+      "name": "my.histogram",
+      "start": 0,
+      "sum": 2,
+      "unit": "ns"
+    },
+    {
+      "end": 1,
+      "kind": "counter",
+      "name": "my.counter",
+      "start": 0,
+      "unit": "1",
+      "value": 9223372036854775807
+    },
+    {
+      "end": 1,
+      "kind": "updowncounter",
+      "name": "my.updowncounter",
+      "start": 0,
+      "unit": "1",
+      "value": -5
+    },
+    {
+      "end": 1,
+      "kind": "gauge",
+      "name": "my.gauge",
+      "start": 0,
+      "unit": "1",
+      "value": -10
+    }
+  ],
+  "schema": "hirsel-export-projection",
+  "version": 1
+}

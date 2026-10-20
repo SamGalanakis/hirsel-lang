@@ -338,3 +338,11 @@ checked, bound interpreter host-replay path and `Execution::observable` as execu
 comparison. It never opens live providers or invokes transport exporters. See
 [Offline observation views](determinism.md#offline-observation-views) for evidence,
 timing-sidecar, completeness and diagnostic format contracts.
+
+The standalone `tools/obs_export.py` converts those views and explicit typed
+projections into pinned OTLP/HTTP JSON bundles, then sends only through a separate
+explicit `send` operation. No compiler, runtime, or replay path imports it. Its
+fixture collector in `tools/tests/obs_export.py` validates captured payloads against
+protoc-generated pinned field descriptors. See
+[Separate OTLP export](determinism.md#separate-otlp-export) for timing refusal,
+clock correlation, delivery ambiguity and durable exporter receipts.

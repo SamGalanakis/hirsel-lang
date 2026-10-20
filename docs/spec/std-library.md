@@ -1951,6 +1951,15 @@ propagates its error. There is no global logger, implicit sink, hidden clock or
 ambient level. Ordering/atomicity across tasks is not promised; callers needing
 ordering serialize through their explicit task/channel facilities.
 
+Recorded structured observations can be exported separately with
+`python3 tools/obs_export.py`; see [Separate OTLP export](determinism.md#separate-otlp-export).
+It preserves explicit trace IDs and units and maps Debug/Info/Warn/Error to OTLP
+5/9/13/17. Legacy `log.Entry` rendering and stderr errors keep their existing
+contract. Export is host tooling with its own endpoint and storage grants, not a
+new library effect: neither `log.write` nor source replay contacts a collector.
+Untimed records remain logs without a source timestamp; spans/histograms require
+original timing evidence and an explicit original Unix/monotonic correlation.
+
 ## Additional testing helpers
 
 `test.expect_ok[T,E](t: Test, take value: Result[T,E]) -> T` returns an owned

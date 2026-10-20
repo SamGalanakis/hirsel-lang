@@ -627,3 +627,83 @@ thread-scoped instant with its ordinal as a synthetic coordinate, without durati
 No same-track span nesting, task ancestry, parent/link edges or measured nanoseconds
 are invented from request order. Canonical requests can contain secrets: views and
 exports need the same archival access controls as their source recordings.
+
+### Separate OTLP export
+
+`python3 tools/obs_export.py prepare <view.json> -o <bundle.json>` converts an
+[offline view](#offline-observation-views) without executing its source, opening a
+transport or reading a clock. By default every original event becomes an Info log
+with canonical request/completion text, accepted byte count, ordinal, origin,
+evidence identity and prefix completeness. Replay observer effects are excluded;
+analysis provenance remains separate. Missing time remains missing. This is an
+explicit export of original evidence, never an automatic consequence of replay.
+Apply application redaction/allowlists before capture and protect these archives
+like their source recordings.
+
+`--projection <json>` selects explicit typed analysis records instead. The v1
+`hirsel-export-projection` object contains `schema`, `version`, exact view
+`evidence`, `analysis` identity and `records`. This tooling input does not claim a
+structural effect was a business span. Logs carry `kind: "log"`, `ordinal`, `level`,
+`message`, optional `trace_id`/`span_id` together and scalar `attributes`. Spans
+carry `kind: "span"`, `start`/`end` event ordinals, `name`, both IDs, `span_kind`
+(Internal/Server/Client/Producer/Consumer), optional `parent_span_id`, explicit
+`links: [{trace_id, span_id}]`, and `status` (Unset/Success/Error, default Unset).
+IDs must be nonzero 16/8-byte hex. No outcome is inferred from abandonment or a
+missing end. Replay observer records are never production traffic.
+
+Metric records carry `kind` (counter/updowncounter/gauge/histogram), `name`,
+explicit ASCII `unit`, `start`/`end` ordinals and label `attributes`. Number points
+carry integer `value`; histograms carry sorted unique nonnegative integer `bounds`,
+`bucket_counts` including overflow, and nonnegative integer `sum`. Counts sum with
+checked u64 arithmetic. Histograms are cumulative and bounds include equality;
+counters/up-down counters are cumulative sums with monotonicity true/false.
+OTLP's signed `asInt` rejects counter values above i64::MAX; histogram sums/bounds
+above 2^53 are refused to avoid loss in double fields. Units are preserved without
+implicit conversions; measured durations use `ns`. Incompatible kinds/units for
+one scope/name are refused. Tooling never adds ordinal/request/span IDs to metric
+labels. Derive exact request counts from complete measurements, not sampled spans;
+prefixes retain incompleteness. Attributes are bounded string/bool/i64 scalars;
+`hirsel.*` keys are reserved. The fixture projection is a complete input example.
+
+Spans and metric points require original timing at both ordinals and explicit
+`--correlation <json>`. The v1 `hirsel-original-clock-correlation` object contains
+`schema`, `version`, exact `evidence`, `monotonic_ns`, `unix_ns`, and nonempty
+`provenance` describing the original execution's clock correspondence. It requires
+a view with validated host-monotonic sidecar samples. The original Unix timestamp
+is `unix_ns + sample_ns - monotonic_ns`, checked as nonzero u64. A monotonic sidecar
+alone has no Unix epoch. Correlations must be measured during original execution,
+not fabricated from the exporter's current time. The tool consumes supplied
+archive evidence; it does not measure or authenticate this correspondence.
+Runtime/instrumentation overhead remains included. Projection/correlation digests
+are attached as provenance. Untimed logs omit Timestamp; preparation never invents
+collector ObservedTimestamp. Ordinals and replay duration never become source time.
+
+`python3 tools/obs_export.py send <bundle.json> --endpoint <http(s)-base-url>
+--export-id <id> --receipt <new-file>` is a separate host operation with explicit
+transport destination and storage grants. It uses OTLP/HTTP JSON `/v1/logs`,
+`/v1/traces`, `/v1/metrics`, pinned to opentelemetry-proto
+`09769935deb8b2ebcf73ad1e2142b691d17bf70b`. The mapping uses scope
+`hirsel.observation` version 1, Debug/Info/Warn/Error severities 5/9/13/17,
+lower-camel fields, integer enums, decimal-string 64-bit integers and hex IDs.
+No ambient proxies or redirects expand the endpoint grant. Request/response limits
+are 64/4 MiB; empty signal envelopes are omitted. `--timeout` (default 10 seconds)
+is exporter policy, never application clock authority.
+
+The exclusive-create JSONL receipt (`hirsel-otlp-export`, v1 header) binds export
+identity, original evidence, completeness, endpoint, mapping and bundle digest.
+Each attempt flushes and syncs intent with a request digest before transport;
+results distinguish success, partial success, HTTP errors, malformed responses and
+unacknowledged delivery. Interrupted intent remains ambiguous. Existing receipts
+are never overwritten. `--attempts` defaults to 1, permits 1..10, and retries only
+lost transport acknowledgements and HTTP 429/502/503/504, with Retry-After or
+exponential backoff and jitter. Partial success is terminal, even a warning with
+zero rejection; rejected subsets are never whole-batch retried. Malformed or
+oversized responses are terminal and can conceal acceptance. Acknowledgements do
+not provide end-to-end or exactly-once delivery.
+
+Explicit re-export adds `--reexport-of <previous-export-id>` with a new export
+identity and receipt. Payload resource attributes and receipt mark provenance
+while preserving original capture identity. Lost ack retries use identical bytes
+and may duplicate accepted data; receipts mark that ambiguity. Operator re-export
+can duplicate data too. Replay never invokes the exporter or reconnects to a
+collector; source has no global exporter or exporter-controlled enabled branch.
