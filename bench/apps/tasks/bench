@@ -5,6 +5,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -184,6 +185,21 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
         shutil.rmtree(data)
 
 
+def startup_profile(kind, operation, args, directory):
+    directory.mkdir()
+    data = directory / 'data'
+    fixture(data, 0 if operation == 'cold' else 10000)
+    server = Server(kind, data, free_port(), args.binary, directory / 'server.log', record=directory / 'profile.data')
+    try:
+        request(server.port)
+    finally:
+        server.stop()
+    output = subprocess.check_output([str(CAPPED), '--timeout', '60', 'perf', 'report', '-i', str(directory / 'profile.data'),
+                                      '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '1', '-F', 'overhead,symbol'], text=True)
+    shutil.rmtree(data)
+    return output
+
+
 def memory_profile(kind, args, directory):
     directory.mkdir()
     data = directory / 'data'
@@ -226,6 +242,23 @@ def memory_profile(kind, args, directory):
         regions.append(current)
     largest = sorted(regions, key=lambda r: r.get('Rss', 0), reverse=True)[:12]
     return output + '\nLargest resident mappings after list + 100 subscribers (KiB):\n' + json.dumps(largest, indent=2)
+
+
+def profile_excerpt(key, value):
+    if key.endswith('/heap'):
+        lines = value.splitlines()
+        start = next((i for i, line in enumerate(lines) if line == 'PEAK MEMORY CONSUMERS'), 0)
+        excerpt = lines[start:start + 80]
+        excerpt += [line for line in lines if line.startswith(('total runtime:', 'calls to allocation', 'temporary memory', 'peak heap', 'peak RSS', 'total memory'))]
+        marker = 'Largest resident mappings after list + 100 subscribers (KiB):\n'
+        if marker in value:
+            excerpt += ['', marker.strip(), json.dumps(json.loads(value.split(marker, 1)[1])[:4], indent=2)]
+        return '\n'.join(excerpt)
+    lines = value.splitlines()
+    headers = [line for line in lines if line.startswith(('# Samples:', '# Total Lost Samples:', '# Event count'))]
+    symbols = [line.rstrip() for line in lines if re.match(r'\s+\d+\.\d+%  \[', line)]
+    symbols.sort(key=lambda line: float(line.split('%')[0]), reverse=True)
+    return '\n'.join(headers + ['', *[re.sub(r'\s+-\s+-\s*$', '', line) for line in symbols[:20]]]) or value
 
 
 def report(document, path):
@@ -297,7 +330,7 @@ def report(document, path):
              '| Trigger | Metric | Hirsel / Rust | Cause and classification |', '|---|---|---:|---|']
     annotations = document.get('attribution', {})
     gaps = 0
-    metrics = ['instructions_per_request', 'cpu_s_per_request', 'first_ms', 'idle_rss', 'load_rss',
+    metrics = ['instructions_per_request', 'cycles_per_request', 'cpu_s_per_request', 'first_ms', 'idle_rss', 'load_rss',
                'binary_bytes', 'p50_us', 'p99_us', 'p999_us', 'max_us']
     for op, rate in cells:
         left = [r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, 'hirsel')]
@@ -305,25 +338,33 @@ def report(document, path):
         if not left or not right:
             continue
         for metric in metrics:
-            if metric not in left[0] or metric not in right[0]:
+            if metric != 'cycles_per_request' and (metric not in left[0] or metric not in right[0]):
                 continue
             if metric == 'first_ms' and op not in ('cold', 'restart'):
                 continue
-            value = statistics.median(r[metric] for r in left) / statistics.median(r[metric] for r in right)
+            def metric_value(row):
+                if metric == 'cycles_per_request':
+                    count = 1 if op in ('cold', 'restart', 'sse') else row['completed']
+                    return row['perf']['cycles'] / count
+                return row[metric]
+            value = statistics.median(metric_value(r) for r in left) / statistics.median(metric_value(r) for r in right)
             if value <= 1.2:
                 continue
             gaps += 1
-            category = 'heap' if metric in ('idle_rss', 'load_rss') else op
-            cause = annotations.get(category, 'Attribution open: profile evidence requires review before claiming a cause.')
+            category = 'cold' if op == 'cold' else 'heap' if metric in ('idle_rss', 'load_rss') else op
+            cause = f'[{category}](#cause-{category})' if category in annotations else 'Attribution open: profile evidence requires review before claiming a cause.'
             text += [f'| {op}/{rate} | {metric} | {value:.3f} | {cause} |']
     if not gaps:
         text += ['No >1.2× metric in the measured cells.']
-    text += ['', 'CPU and latency evidence comes from separate `perf record` runs; heap evidence is a separate heaptrack run over the same 10k seed and a full list render plus 100 SSE subscriptions. Neither profiling run contributes timing comparisons.',
+    text += ['']
+    for category, explanation in annotations.items():
+        text += [f'<a id="cause-{category}"></a>', f'**{category}**: {explanation}', '']
+    text += ['', 'Minimal triggers use the fixture generated by `fixture(data, 10000)` and routes shown in each attribution. CPU profiles contain limited samples for short operations and incomplete unwinds across native fiber switches; flat symbol attribution is stronger than their full call chains. Causes identify measured mechanisms, not a percentage decomposition of every gap.', '', 'CPU and latency evidence comes from separate `perf record` runs; heap evidence is a separate heaptrack run over the same 10k seed and a full list render plus 100 SSE subscriptions. Neither profiling run contributes timing comparisons.',
              'Low offered-rate cells have few requests: histogram tail values are empirical order statistics, not a claim of a production tail-latency bound. CPU15 busy samples are retained; time/cycle conclusions require an idle-sibling rerun when interference is present.', '']
     text += ['Profile evidence:', '']
     profiles = document.get('profiles', {})
     for key, value in profiles.items():
-        text += [f'`{key}`:', '', '```text', value, '```', '']
+        text += [f'`{key}` (excerpt; full profile in results.json):', '', '```text', profile_excerpt(key, value), '```', '']
     if not profiles:
         text += ['No profile captured. Cause attribution remains open; no cause is inferred from elapsed time alone.', '']
     for error in document.get('errors', []):
@@ -340,16 +381,28 @@ def main():
     parser.add_argument('--binary', type=Path, default=APP / 'build/tasks-hirsel')
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--report-only', action='store_true', help='regenerate Markdown from saved raw samples')
+    parser.add_argument('--startup-profiles-only', action='store_true', help='record startup user instructions without a nested counter profiler')
     parser.add_argument('--heap-only', action='store_true', help='append non-timing heap evidence to a saved session')
     parser.add_argument('--only', default='cold,restart,list,search,create,update,sse')
     args = parser.parse_args()
     os.sched_setaffinity(0, {7})
-    if args.report_only or args.heap_only:
+    if args.report_only or args.heap_only or args.startup_profiles_only:
         document = json.loads((APP / 'results.json').read_text())
         for error in document.get('errors', []):
             log = APP / 'build' / document['session'].replace(':', '') / error['cell'] / 'server.log'
             if log.exists():
                 error['server_log'] = log.read_text().strip()
+        if args.startup_profiles_only:
+            with timing_lock(31):
+                document = json.loads((APP / 'results.json').read_text())
+                archive = APP / 'build' / (document['session'].replace(':', '') + '-startup')
+                archive.mkdir(exist_ok=True)
+                for op in ('cold', 'restart'):
+                    for kind in ('hirsel', 'rust'):
+                        document['profiles'][f'{kind}/{op}'] = startup_profile(kind, op, args, archive / f'{kind}-{op}')
+                profile = sample('rust', 'sse', 1000, args, archive / 'rust-sse', -1, profile=True)
+                document['profiles']['rust/sse'] = profile['profile']
+            (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
         if args.heap_only:
             with timing_lock(31):
                 document = json.loads((APP / 'results.json').read_text())
@@ -363,6 +416,9 @@ def main():
                     if f'{kind}/heap' not in document['profiles']:
                         document['profiles'][f'{kind}/heap'] = memory_profile(kind, args, archive / kind)
             (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+        notes = json.loads((APP / 'attribution.json').read_text())
+        document['attribution'] = notes['notes'] if notes['binaries'] == document['binaries'] else {}
+        (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
         report(document, APP / 'RESULTS.md')
         return 0
     if args.rounds < 10:
@@ -424,8 +480,12 @@ def main():
         rate = 0 if op in ('cold', 'restart') else 100 if op == 'sse' else min(16, max(args.rates))
         for kind in ('hirsel', 'rust'):
             try:
-                profile = sample(kind, op, rate, args, archive / f'profile-{kind}-{op}', -1, profile=True)
-                document['profiles'][f'{kind}/{op}'] = profile['profile']
+                if op in ('cold', 'restart'):
+                    document['profiles'][f'{kind}/{op}'] = startup_profile(kind, op, args, archive / f'profile-{kind}-{op}')
+                else:
+                    profile_rate = 1000 if op == 'sse' and kind == 'rust' else rate
+                    profile = sample(kind, op, profile_rate, args, archive / f'profile-{kind}-{op}', -1, profile=True)
+                    document['profiles'][f'{kind}/{op}'] = profile['profile']
             except Exception as error:
                 document['errors'].append(dict(cell=f'profile-{kind}-{op}', error=str(error)))
     (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
@@ -435,6 +495,9 @@ def main():
             document['profiles'][f'{kind}/heap'] = memory_profile(kind, args, archive / f'heap-{kind}')
         except Exception as error:
             document['errors'].append(dict(cell=f'heap-{kind}', error=str(error)))
+    (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+    notes = json.loads((APP / 'attribution.json').read_text())
+    document['attribution'] = notes['notes'] if notes['binaries'] == document['binaries'] else {}
     (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
     report(document, APP / 'RESULTS.md')
     lock.close()

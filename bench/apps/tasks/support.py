@@ -59,7 +59,7 @@ class Server:
         self.marker = directory.parent / (directory.name + '-launch.json')
         command = ['taskset', '-c', '31', str(APP / 'rust/target/release/launch'), str(self.marker), *command]
         if record:
-            command = ['perf', 'record', '-e', 'instructions', '-c', '10000', '-g',
+            command = ['perf', 'record', '-e', 'instructions:u', '-c', '10000', '-g', '--call-graph', 'dwarf,8192',
                        '-o', str(record), *command]
         if perf:
             environment['TASKS_PERF_WRAPPER'] = '1'

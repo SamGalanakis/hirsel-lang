@@ -63,3 +63,9 @@ The initial seed is written directly as the common on-disk snapshot, rather than
 spending measurement time creating 10,000 tasks through HTTP. A create cell grows
 that board; an update cell repeatedly edits task 1, and every successful edit
 bumps the revision and saves even when the submitted fields match their old values.
+
+`attribution.json` records the reviewed profile interpretations for the measured
+binary hashes. The generator applies them only to matching binaries; a new
+binary requires fresh profile review. Full profiles remain in `results.json`,
+with compact excerpts in `RESULTS.md`. `--startup-profiles-only` refreshes separate
+startup profiles and never changes the ten-round measurement samples.
