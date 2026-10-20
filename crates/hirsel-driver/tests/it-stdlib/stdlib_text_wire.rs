@@ -371,7 +371,13 @@ fn full_gate_websocket_large_frame_native() {
         let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
             .unwrap()
             .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            ),
+            "{outcome:?}"
+        );
         assert!(stdout.is_empty(), "{stdout:?}");
         assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     });
@@ -427,12 +433,16 @@ fn jwt_verify_reads_the_wall_clock() {
                 &path,
                 simulation,
                 Some(5_000_000),
+                hirsel_engine::Verify::On,
                 &mut Vec::new(),
                 &mut Vec::new(),
             )
             .unwrap();
             assert!(
-                matches!(outcome, RunOutcome::Exit(0)),
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                ),
                 "{expected}: {outcome:?}"
             );
         }
