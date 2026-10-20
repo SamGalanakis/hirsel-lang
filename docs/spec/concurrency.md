@@ -99,8 +99,9 @@ cancellation; `task.check_canceled` marks producer loops. `Canceled` is returned
 the operation had no effect. A runner call (planned) is a cancellation point only until
 its request is sent; after that its scope's cancellation is forwarded to the place and the
 call waits for the acknowledgement ([RUN-9](runners.md#run-9-cancellation)). A store
-transaction (planned) checks cancellation before its body starts; a body, once started, is
-not cancellable ([STORE-3](storage.md#store-3-transaction-scope)). Pure code is not
+transaction checks no cancellation itself: its caller checks before starting it, and the
+call-stream form returns `Canceled` only from a runner; a body, once started, is not
+cancellable ([STORE-3](storage.md#store-3-transaction-scope)). Pure code is not
 cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature states
 what it owns on success and on failure; a borrow or `mut` loan lasts until the call
 completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:

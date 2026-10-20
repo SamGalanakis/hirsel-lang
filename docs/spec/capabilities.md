@@ -85,7 +85,7 @@ program already holds; it grants nothing, and no implicit clock is read. The chi
 file system, network and process access is outside Hirsel's model: granting a program is
 trusting it with whatever the host lets it do ([processes](core-library.md#processes)).
 
-**Runners and stores** (planned). A `Runner` designates a place functions can run together
+**Runners and stores.** A `Runner` (planned) designates a place functions can run together
 with a grant set the run configuration fixes; it can only be narrowed, a call through it
 carries data and a definition's identity, never authority, and the callee's capabilities
 come only from the place ([runners](runners.md)). A store is opened over a `Dir`, and its

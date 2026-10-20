@@ -1,0 +1,88 @@
+// rule: STORE-12
+// expect: run
+// steps: 8000000
+// twenty calls each checksum and write a log object, and two opens recover the store
+// store.call runs each stream position once: a duplicate with the same digest
+// returns the recorded outcome without running the body, an abort is recorded
+// like a success, a changed digest, a gap or an acknowledged position is
+// Rejected, an older executor epoch is Denied, and the recorded outcomes
+// survive a reopen.
+@serializable
+type Short = Empty()
+
+fn request(position: u64, digest: Bytes, epoch: u64, acknowledged: u64) -> store.CallRequest {
+  store.CallRequest(
+    stream: b"caller-1",
+    epoch: epoch,
+    position: position,
+    digest: unique digest,
+    acknowledged: acknowledged
+  )
+}
+
+// Adds one to the counter and returns its new value; Empty when asked to
+// fail.
+fn bump(mut s: store.Store, req: store.CallRequest, fail: bool) -> Result[
+  u64,
+  store.CallFailure[Short]
+] {
+  store.call(
+    mut s,
+    req,
+    fn(mut tx: store.Tx) -> Result[u64, Short] {
+      let n: u64 = match store.tx_get(tx, b"counter") {
+        Some(b) => int.widen(b[0]),
+        None() => 0,
+      }
+      store.tx_put(mut tx, b"counter", bytes.from_list([int.truncate(n + 1)]))
+      if fail {
+        return Error(Empty())
+      }
+      Ok(n + 1)
+    }
+  )
+}
+
+fn counter(mut s: store.Store) -> Option[Bytes] {
+  store.get(store.snapshot(mut s), b"counter")
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open(d, store.default_config())?
+  test.check(t, bump(mut s, request(1, b"a", 1, 0), false) == Ok(1))
+  test.check(t, bump(mut s, request(2, b"b", 1, 0), false) == Ok(2))
+  // Duplicates of applied positions return their outcomes; nothing runs.
+  test.check(t, bump(mut s, request(1, b"a", 1, 0), false) == Ok(1))
+  test.check(t, bump(mut s, request(2, b"b", 1, 0), true) == Ok(2))
+  test.check(t, counter(mut s) == Some(b"\x02"))
+  // Another request at a retained position, a gap, and an
+  // acknowledgement at or past the position itself.
+  test.check(t, bump(mut s, request(2, b"x", 1, 0), false) == Error(Rejected()))
+  test.check(t, bump(mut s, request(4, b"d", 1, 0), false) == Error(Rejected()))
+  test.check(t, bump(mut s, request(3, b"c", 1, 3), false) == Error(Rejected()))
+  // An abort writes nothing but is recorded, so its duplicate returns it.
+  test.check(
+    t,
+    bump(mut s, request(3, b"c", 1, 1), true) == Error(Tx(Aborted(Empty())))
+  )
+  test.check(
+    t,
+    bump(mut s, request(3, b"c", 1, 1), false) == Error(Tx(Aborted(Empty())))
+  )
+  test.check(t, counter(mut s) == Some(b"\x02"))
+  // Position 1 was acknowledged by the last request and is forgotten.
+  test.check(t, bump(mut s, request(1, b"a", 1, 1), false) == Error(Rejected()))
+  store.close(take s)?
+  let mut again = store.open(d, store.default_config())?
+  test.check(t, bump(mut again, request(2, b"b", 1, 1), false) == Ok(2))
+  // A later executor fences the stream, even through a duplicate.
+  test.check(
+    t,
+    bump(mut again, request(3, b"c", 2, 1), false) == Error(Tx(Aborted(Empty())))
+  )
+  test.check(t, bump(mut again, request(4, b"d", 1, 1), false) == Error(Denied()))
+  test.check(t, bump(mut again, request(4, b"d", 2, 3), false) == Ok(3))
+  test.check(t, counter(mut again) == Some(b"\x03"))
+  Ok(())
+}

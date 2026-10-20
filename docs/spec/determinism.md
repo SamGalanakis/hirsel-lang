@@ -358,7 +358,7 @@ or continuation is refused.
 Runner calls are recorded as [RUN-11](runners.md#run-11-linked-tapes) specifies:
 one request and one completion at the caller, parked and readied under
 `tasks.cooperative@1` as network requests are, and replayed without contacting a place.
-Stores (planned) are Hirsel code over a `Dir`, so their effects are recorded as file
+Stores are Hirsel code over a `Dir`, so their effects are recorded as file
 effects ([STORE-10](storage.md#store-10-recording)), and replay never opens a real
 directory.
 

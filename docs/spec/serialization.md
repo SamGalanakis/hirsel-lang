@@ -41,7 +41,7 @@ type Point { x: i32, y: i32 }
 ```
 
 The serializable core types are the errors and outcomes that can cross a call or be
-stored, and the data they carry. `Option`, `Result`, `TxFailure` and `Bounded` are
+stored, and the data they carry. `Option`, `Result` and `Bounded` are
 generic opt-ins like any other, so each is serializable exactly when its arguments are. `DecodeError`, `CancelCause`, `CancelError`, `ChannelError`, `FileError`,
 `FileKind`, `Durability`, `Path`, `DirEntry`, `Metadata`, `IpAddr`, `SocketAddr`,
 `UdpReceived`, `TlsRoots`, `TlsFailure`, `NetError`,

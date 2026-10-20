@@ -30,6 +30,8 @@ mod replay;
 mod runners;
 #[path = "cli/select_race.rs"]
 mod select_race;
+#[path = "cli/store.rs"]
+mod store;
 #[path = "cli/tape_identity.rs"]
 mod tape_identity;
 #[path = "cli/testing.rs"]

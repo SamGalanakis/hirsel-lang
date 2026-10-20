@@ -1,13 +1,13 @@
 // rule: CAP-3
 // expect: accept
 // A restricted body "holds only what it is passed" and declares "uses {}".
-fn restricted(body: fn(tx: Tx) -> () uses {}) -> () {
+fn restricted(body: fn(tx: store.Tx) -> () uses {}) -> () {
   ()
 }
 
 fn query(cap: Tasks, n: u32) -> () {
   restricted(
-    fn(tx: Tx) {
+    fn(tx: store.Tx) {
       let _ = n
     }
   )

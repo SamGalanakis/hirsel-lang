@@ -1,0 +1,9 @@
+// rule: STORE-3
+// expect: reject MODE-6 at line 6
+// A Tx cannot leave its transaction: a closure that keeps it cannot be
+// returned out of the body's helper.
+fn reader(tx: store.Tx) -> once fn() -> bool {
+  fn() {
+    store.tx_get(tx, b"k") != None()
+  }
+}

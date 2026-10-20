@@ -30,9 +30,8 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Scope",
         "Arena",
         "Test",
-        "Tx",
     ] {
-        let scoped = matches!(name, "Scope" | "Arena" | "Test" | "Tx");
+        let scoped = matches!(name, "Scope" | "Arena" | "Test");
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.capability = Some(if scoped {
@@ -215,7 +214,6 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "Check()|Contract()|Depth()|OutOfSpace()|DeadMutex()",
         ),
-        ("TxFailure", "E", "Aborted(E)|Canceled(CancelCause)"),
         ("ShapeVisibility", "", "Private()|Public()|Opaque()"),
         (
             "ShapeBody",
@@ -976,7 +974,7 @@ fn shape_data_bounds() -> Vec<Bound> {
     ]
 }
 /// SER-1: the core errors and outcomes that can cross a runner call or be stored, and the
-/// data they carry. A generic one (`Option`, `Result`, `TxFailure`, `Bounded`) admits no
+/// data they carry. A generic one (`Option`, `Result`, `Bounded`) admits no
 /// bound on its parameters, so it is serializable exactly when its arguments are, proved
 /// after substitution. `Path` is transparent text: a Path is data, and its authority stays in
 /// the `Dir` it is used with. Capability holders (`Deadline`, `Command`), resources, other
@@ -986,7 +984,6 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
         name,
         "Option"
             | "Result"
-            | "TxFailure"
             | "Bounded"
             | "DecodeError"
             | "CancelCause"
@@ -1289,7 +1286,6 @@ impl Builder {
                                 | "Scope"
                                 | "Arena"
                                 | "Test"
-                                | "Tx"
                         ) =>
                     {
                         Some(AuthorityTerm::Parameter(hirsel_types::ParameterRef::bound(
@@ -1483,7 +1479,7 @@ impl Builder {
         if passing != PassingMode::Take {
             t.modes.relation = Relation::environment();
         }
-        if matches!(&t.kind,TypeKind::Named{definition,..} if matches!(definition.0.name.as_str(),"Scope"|"Arena"|"Test"|"Tx"))
+        if matches!(&t.kind,TypeKind::Named{definition,..} if matches!(definition.0.name.as_str(),"Scope"|"Arena"|"Test"))
         {
             t.modes.relation = Relation::environment();
         }

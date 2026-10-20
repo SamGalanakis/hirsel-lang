@@ -25,6 +25,16 @@ pub type StoreConfig {
   durability: Durability,
   group_limit: u64,
   faults: StoreFaults,
+  limits: StoreLimits,
+}
+
+/// The most a `transact` commit may write: any key over `key_bytes`, any value
+/// over `value_bytes`, or keys and values together over `transaction_bytes`
+/// refuse the commit with `Limit(..)` and no effect.
+pub type StoreLimits {
+  key_bytes: u64,
+  value_bytes: u64,
+  transaction_bytes: u64,
 }
 
 /// A test seam: `StopAfterWrites(n)` refuses the store's storage mutation after
@@ -38,7 +48,60 @@ pub type StoreFaults = NoFaults | StopAfterWrites(u64)
 /// another commit landed after the transaction began; `Injected` is a
 /// `StopAfterWrites` stop. After `Storage`, `Corrupt`, `Fenced` or `Injected`
 /// the store is closed and every later call returns `Closed`.
+@serializable
 pub type StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed
+
+/// How a transaction ended without its outcome: `Aborted(e)` when the body
+/// returned `Error(e)` and its writes were discarded; `Canceled(cause)` before
+/// the body started (only the call-stream form is canceled); `Storage(e)` and
+/// `Limit(..)` when nothing was committed; `Unknown(e)` when the commit was
+/// attempted and the store could not tell whether it became durable, which the
+/// next `open` decides.
+@serializable
+pub type TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StoreError) | Limit(
+  TxLimit
+) | Unknown(StoreError)
+
+/// Which of the configured limits a commit exceeded.
+@serializable
+pub type TxLimit = KeyBytes | ValueBytes | TransactionBytes | RangeRows
+
+/// One call on an ordered call stream: the caller's stream identity and
+/// executor epoch, the call's position (consecutive from 1), the digest of
+/// the request, and the highest position whose outcome the caller has made
+/// durable, which the store may then forget.
+@serializable
+pub type CallRequest {
+  stream: Bytes,
+  epoch: u64,
+  position: u64,
+  digest: Bytes,
+  acknowledged: u64,
+}
+
+/// Why a call returned no outcome of its own: `Tx(f)` as for `transact`;
+/// `Denied()` when a later executor epoch holds the stream; `Rejected()` for a
+/// position the stream cannot take, or a retained position with another digest.
+@serializable
+pub type CallFailure[E] = Tx(TxFailure[E]) | Denied | Rejected
+
+// A stream's row under `hirsel.streams/<stream>`: its executor epoch, the
+// last position applied, the last one the caller acknowledged, and the digest
+// and encoded outcome of each position between them.
+@serializable
+type StreamRow {
+  epoch: u64,
+  applied: u64,
+  acknowledged: u64,
+  retained: List[Retained],
+}
+
+@serializable
+type Retained {
+  position: u64,
+  digest: Bytes,
+  outcome: Bytes,
+}
 
 // One write of a commit's write set.
 type Write = Put(key: Bytes, value: Bytes) | Delete(key: Bytes)
@@ -60,6 +123,13 @@ pub opaque type Txn: copyable uses {} {
   base: u64,
   state: ordered_map.OrderedMap[Bytes, Bytes],
   writes: ordered_map.OrderedMap[Bytes, Option[Bytes]],
+}
+
+/// The scoped capability a `transact` body holds: reads see the commit the
+/// transaction began at plus its own writes. It cannot leave the body.
+@capability(local)
+pub opaque type Tx: () uses {} {
+  txn: Txn,
 }
 
 /// The writer of one store directory.
@@ -98,9 +168,29 @@ const OP_PUT: u8 = 1
 
 const OP_DELETE: u8 = 2
 
-/// Durable log objects, 64 commits per group and no injected faults.
+/// Durable log objects, 64 commits per group, no injected faults, and limits
+/// of 4096-byte keys, 1 MiB values and 16 MiB per transaction.
 pub fn default_config() -> StoreConfig uses {} {
-  StoreConfig(durability: Durable(), group_limit: 64, faults: NoFaults())
+  StoreConfig(
+    durability: Durable(),
+    group_limit: 64,
+    faults: NoFaults(),
+    limits: StoreLimits(
+      key_bytes: 4096,
+      value_bytes: 1048576,
+      transaction_bytes: 16777216
+    )
+  )
+}
+
+/// Whether `key` lies in `hirsel.`, the key space the store keeps for its own
+/// rows; a transaction body writes no key there.
+pub fn reserved(key: Bytes) -> bool uses {} {
+  let prefix = b"hirsel."
+  if bytes.len(key) < bytes.len(prefix) {
+    return false
+  }
+  bytes.slice(key, 0, bytes.len(prefix)) == prefix
 }
 
 /// The commit order position of a ticket: the n-th commit since the store
@@ -292,6 +382,284 @@ pub fn close(take store: Store) -> Result[(), StoreError] {
     return Error(Closed())
   }
   flush(mut s)
+}
+
+/// Runs `body` once with a fresh `Tx` at the latest commit and commits its
+/// writes as one commit when it returns `Ok`. The outcome, of any kind, is
+/// returned only once every commit the body could see, and its own, is
+/// durable: the output gate. `Error(e)` discards the writes and returns
+/// `Aborted(e)`; a failure in the body discards them and propagates.
+pub fn transact[R: inert, E: inert](
+  mut s: Store,
+  body: fn(mut tx: Tx) -> Result[R, E] uses {}
+) -> Result[R, TxFailure[E]] {
+  if s.closed {
+    return Error(Storage(Closed()))
+  }
+  let mut tx = Tx(txn: begin(mut s))
+  let returned = body(mut tx)
+  let Tx(txn: t) = take tx
+  match take returned {
+    Ok(v) => {
+      if let Some(l) = over_limit(s.config.limits, t) {
+        gate(mut s, t.base) ? released
+        return Error(Limit(l))
+      }
+      settle(mut s, take t) ? released
+      Ok(take v)
+    },
+    Error(e) => {
+      gate(mut s, t.base) ? released
+      Error(Aborted(take e))
+    },
+  }
+}
+
+/// `transact` as one call on an ordered call stream, exactly once per
+/// position. The stream's row decides the request in the transaction that
+/// would run it: an epoch below the row's is `Denied()`; a position at or
+/// below the acknowledged one, above the next one, or retained with another
+/// digest is `Rejected()`; a retained position with an equal digest returns
+/// its recorded outcome without running `body`; the next position runs
+/// `body`, and the same commit records the outcome in the row, so an outcome
+/// is recorded exactly when its writes commit. An outcome that writes
+/// nothing (an abort, a limit) is recorded by a commit of the row alone.
+pub fn call[R: inert + serializable, E: inert + serializable](
+  mut s: Store,
+  req: CallRequest,
+  body: fn(mut tx: Tx) -> Result[R, E] uses {}
+) -> Result[R, CallFailure[E]] {
+  if s.closed {
+    return Error(Tx(Storage(Closed())))
+  }
+  let key = stream_key(req.stream)
+  let t = begin(mut s)
+  let base = t.base
+  let mut row = match txn.get(t, key) {
+    None() => StreamRow(epoch: 0, applied: 0, acknowledged: 0, retained: []),
+    Some(data) => {
+      let decoded: Result[StreamRow, DecodeError] = codec.decode(data)
+      match take decoded {
+        Ok(r) => take r,
+        Error(_) => return Error(Tx(Storage(stop(mut s, Corrupt("hirsel.streams"))))),
+      }
+    },
+  }
+  if req.epoch < row.epoch {
+    return refuse(mut s, base, Denied())
+  }
+  if req.position <= row.acknowledged || req.position > row.applied + 1 || req.acknowledged >= req.position {
+    return refuse(mut s, base, Rejected())
+  }
+  if req.position <= row.applied {
+    let mut found: Option[Bytes] = None()
+    for r in row.retained {
+      if r.position == req.position && r.digest == req.digest {
+        found = Some(unique r.outcome)
+      }
+    }
+    let Some(recorded) = found else {
+      // Another request at a retained position.
+      return refuse(mut s, base, Rejected())
+    }
+    let stored: Result[Result[R, TxFailure[E]], DecodeError] = codec.decode(recorded)
+    let Ok(outcome) = take stored else {
+      return Error(Tx(Storage(stop(mut s, Corrupt("hirsel.streams")))))
+    }
+    // A later executor's duplicate fences the earlier ones.
+    if req.epoch > row.epoch {
+      row.epoch = req.epoch
+      let mut fence = begin(mut s)
+      txn.put(mut fence, copy key, codec.encode(row))
+      settle(mut s, take fence) ? released_call
+    } else {
+      gate(mut s, base) ? released_call
+    }
+    return match take outcome {
+      Ok(v) => Ok(take v),
+      Error(f) => Error(Tx(take f)),
+    }
+  }
+  let mut tx = Tx(txn: take t)
+  let returned = body(mut tx)
+  let Tx(txn: done) = take tx
+  let limit = over_limit(s.config.limits, done)
+  let outcome: Result[R, TxFailure[E]] = match take returned {
+    Ok(v) => match limit {
+      Some(l) => Error(Limit(l)),
+      None() => Ok(take v),
+    },
+    Error(e) => Error(Aborted(take e)),
+  }
+  row.epoch = req.epoch
+  row.applied = req.position
+  if req.acknowledged > row.acknowledged {
+    row.acknowledged = req.acknowledged
+  }
+  let mut kept: List[Retained] = []
+  for r in row.retained {
+    if r.position > row.acknowledged {
+      list.push(mut kept, copy r)
+    }
+  }
+  list.push(
+    mut kept,
+    Retained(
+      position: req.position,
+      digest: unique req.digest,
+      outcome: codec.encode(outcome)
+    )
+  )
+  row.retained = take kept
+  let mut commit_set = match outcome {
+    Ok(_) => take done,
+    Error(_) => begin(mut s),
+  }
+  txn.put(mut commit_set, take key, codec.encode(row))
+  settle(mut s, take commit_set) ? released_call
+  match take outcome {
+    Ok(v) => Ok(take v),
+    Error(f) => Error(Tx(take f)),
+  }
+}
+
+/// The value under `key` as the transaction sees it.
+pub fn tx_get(tx: Tx, key: Bytes) -> Option[Bytes] in tx uses {} {
+  ordered_map.get(tx.txn.state, key)
+}
+
+/// Stores `value` under `key` when the transaction commits.
+pub fn tx_put(mut tx: Tx, take key: Bytes, take value: Bytes) -> () uses {}
+  requires !reserved(key) {
+  txn.put(mut tx.txn, take key, take value)
+}
+
+/// Removes `key` when the transaction commits.
+pub fn tx_delete(mut tx: Tx, take key: Bytes) -> () uses {}
+  requires !reserved(key) {
+  txn.delete(mut tx.txn, take key)
+}
+
+/// At most `limit` entries with keys between `from` and `to` as the
+/// transaction sees them, in `direction` order, as fresh copies.
+pub fn tx_range(
+  tx: Tx,
+  from: ordered_map.Bound[Bytes],
+  to: ordered_map.Bound[Bytes],
+  direction: ordered_map.Direction,
+  limit: u64
+) -> List[(Bytes, Bytes)] uses {} {
+  entries_in(tx.txn.state, from, to, direction, limit)
+}
+
+fn stream_key(stream: Bytes) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  for b in b"hirsel.streams/" {
+    list.push(mut out, b)
+  }
+  for b in stream {
+    list.push(mut out, b)
+  }
+  bytes.from_list(take out)
+}
+
+// Releases a refusal once every commit the request could see is durable.
+fn refuse[R, E](mut s: Store, base: u64, take f: CallFailure[E]) -> Result[
+  R,
+  CallFailure[E]
+] {
+  gate(mut s, base) ? released_call
+  Error(f)
+}
+
+// The limit a transaction's writes exceed, if any.
+fn over_limit(limits: StoreLimits, t: Txn) -> Option[TxLimit] uses {} {
+  let start: (u64, Option[TxLimit]) = (0, None())
+  let (total, found) = ordered_map.fold_range(
+    t.writes,
+    Unbounded(),
+    Unbounded(),
+    Ascending(),
+    start,
+    fn(take acc: (u64, Option[TxLimit]), k: Bytes, v: Option[Bytes]) -> (
+      (u64, Option[TxLimit]),
+      bool
+    ) {
+      let (sum, _) = acc
+      if bytes.len(k) > limits.key_bytes {
+        return ((sum, Some(KeyBytes())), false)
+      }
+      let value_len = match v {
+        Some(value) => bytes.len(value),
+        None() => 0,
+      }
+      if value_len > limits.value_bytes {
+        return ((sum, Some(ValueBytes())), false)
+      }
+      ((sum + bytes.len(k) + value_len, None()), true)
+    }
+  )
+  match found {
+    Some(l) => Some(l),
+    None() => if total > limits.transaction_bytes {
+      Some(TransactionBytes())
+    } else {
+      None()
+    },
+  }
+}
+
+// The output gate at `version`: writes the pending group when a commit at or
+// below it is not yet durable. Nothing was attempted for this outcome, so a
+// failure is `Storage`.
+fn gate(mut s: Store, version: u64) -> Result[(), Unreleased] {
+  if version <= s.durable {
+    return Ok(())
+  }
+  match flush(mut s) {
+    Ok(()) => Ok(()),
+    Error(e) => Error(Storage(e)),
+  }
+}
+
+// Commits `t` when it writes anything and waits until it is durable; a
+// transaction without writes waits for the commit it began at.
+fn settle(mut s: Store, take t: Txn) -> Result[(), Unreleased] {
+  if ordered_map.len(t.writes) == 0 {
+    return gate(mut s, t.base)
+  }
+  let ticket = match commit(mut s, take t) {
+    Ok(k) => k,
+    Error(e) => return Error(unsettled(take e)),
+  }
+  match durable(mut s, ticket) {
+    Ok(()) => Ok(()),
+    Error(e) => Error(unsettled(take e)),
+  }
+}
+
+// A storage error from a create that may have happened leaves the commit's
+// durability undecided; the store's other errors prove it did not happen.
+fn unsettled(take e: StoreError) -> Unreleased uses {} {
+  match e {
+    Storage(f) => Unknown(Storage(f)),
+    other => Storage(other),
+  }
+}
+
+// Why an outcome could not be released: nothing was committed, or a commit's
+// durability is undecided.
+type Unreleased = Storage(StoreError) | Unknown(StoreError)
+
+fn released[E](take u: Unreleased) -> TxFailure[E] uses {} {
+  match u {
+    Storage(e) => Storage(e),
+    Unknown(e) => Unknown(e),
+  }
+}
+
+fn released_call[E](take u: Unreleased) -> CallFailure[E] uses {} {
+  Tx(released(take u))
 }
 
 // Effective entries of `m` in a range, copied out.

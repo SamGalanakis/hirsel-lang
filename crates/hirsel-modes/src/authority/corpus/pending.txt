@@ -27,7 +27,13 @@ CAP/CAP-2-opaque-package-pure-ok.hir # dependency-owned D/fixture M: LANG-4 line
 CAP/CAP-2-opaque-stdout-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 119 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 CAP/CAP-2-opaque-stdout-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
 CAP/CAP-2-testhelpers-property-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
+CAP/CAP-3-directory-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
+CAP/CAP-3-directory-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-3-net-restricted-body-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+CAP/CAP-3-stdout-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
+CAP/CAP-3-stdout-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
+CAP/CAP-3-tasks-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
+CAP/CAP-3-tasks-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-4-atomic-create-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-4-atomic-create-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-5-seal-ceiling-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
@@ -130,6 +136,7 @@ MODE/MODE-4-error-mapper-occurrence-bad.hir # dependency-owned D/fixture M: LANG
 MODE/MODE-4-error-mapper-occurrence-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
 MODE/MODE-4-iter-mut-handback-sendable-run.hir # not done J: unexpected MODE-4 line 9: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
 MODE/MODE-4-local-result-send-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+MODE/MODE-4-tx-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 MODE/MODE-4-written-agreement-30-aggregate-sequence-shared-ok.hir # dependency-owned H: LANG-7 line 5: expression does not have the expected type
 MODE/MODE-4-written-agreement-third-mut-closure-element-share-bad.hir # not done J: missing MODE-4 line 15
 MODE/MODE-4-written-agreement-third-mut-projected-content-bad.hir # not done J: missing MODE-4 line 13
@@ -170,6 +177,7 @@ MODE/MODE-5-local-capture-bad.hir # not done J: missing CLO-4 line 5
 MODE/MODE-5-once-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-6-net-global-capture-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 MODE/MODE-6-net-test-capture-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+MODE/MODE-6-tx-return-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 PROV/PROV-1-borrowed-directory-narrow-run.hir # dependency-owned D/fixture M: PROG-2 line 8
 PROV/PROV-1-mut-parameter-field-replace-run.hir # dependency-owned D/fixture M: LANG-4 line 17
 PROV/PROV-1-mut-parameter-net-field-replace-bad.hir # dependency-owned E/v20 follow-up: NotImplemented

@@ -70,7 +70,7 @@ Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 | [Capabilities and authority](capabilities.md) | CAP-1 to CAP-6 |
 | [Concurrency](concurrency.md) | CONC-1 to CONC-8 |
 | [Runners](runners.md) (partly shipped): places functions run, entries, calls, outcomes, linked tapes, recording levels, provider seams | RUN-1 to RUN-14 |
-| [Storage](storage.md) (planned): stores over a directory, transactions, the output gate, typed tables, key encoding, schema history, the engine and its storage seam | STORE-1 to STORE-13 |
+| [Storage](storage.md) (partly shipped): stores over a directory, transactions, the output gate, typed tables, key encoding, schema history, the engine and its storage seam | STORE-1 to STORE-13 |
 | [Failure and destruction](failure.md) | FAIL-1 to FAIL-4, DROP-1 to DROP-4 |
 | [Determinism and replay](determinism.md): run configuration, recording, Blocked | DET-1 to DET-4 |
 | [Everyday semantics](semantics.md): integers, floats, strings, iteration, maps | SEM-1 to SEM-5 |
@@ -133,7 +133,7 @@ pub fn main() -> Result[(), String] {
 This root-free entry needs no grants. For programs with I/O, manifests and tests, see the
 [runnable language tour](../tour.md). Rule-specific examples accompany
 [ownership](ownership.md), [memory](memory.md) and [structured tasks](concurrency.md).
-The planned transactional store and runner interfaces have examples in
+The transactional store and the planned runner interfaces have examples in
 [storage](storage.md) and [runners](runners.md).
 
 ## Not in Hirsel

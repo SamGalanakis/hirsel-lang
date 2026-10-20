@@ -860,6 +860,7 @@ conformance/DET/DET-1-std-store-crash-compaction-run.hir
 conformance/DET/DET-1-std-store-crash-model-run.hir
 conformance/DET/DET-1-std-store-fence-run.hir
 conformance/DET/DET-1-std-store-recover-run.hir
+conformance/DET/DET-1-std-store-transact-crash-run.hir
 conformance/DET/DET-1-tls-connect-as-replay-run.hir
 conformance/DET/DET-1-tls-mtls-replay-run.hir
 conformance/DET/DET-1-udp-replay-run.hir
@@ -6236,6 +6237,7 @@ conformance/SER/SER-2-soa-columns-run.hir
 conformance/SER/SER-2-std-archives-run.hir
 conformance/SER/SER-2-std-documents-run.hir
 conformance/SER/SER-2-std-http-run.hir
+conformance/SER/SER-2-std-store-errors-run.hir
 conformance/SER/SER-2-std-text-run.hir
 conformance/SER/SER-2-std-time-run.hir
 conformance/SER/SER-2-std-values-run.hir
@@ -6245,3 +6247,9 @@ conformance/SER/SER-2-truncated-run.hir
 conformance/SER/SER-2-utf8-run.hir
 conformance/SER/SER-2-variable-flat-run.hir
 conformance/SER/SER-2-vectors-run.hir
+conformance/STORE/STORE-12-call-stream-run.hir
+conformance/STORE/STORE-2-transact-run.hir
+conformance/STORE/STORE-3-body-capture-bad.hir
+conformance/STORE/STORE-3-body-capture-ok.hir
+conformance/STORE/STORE-3-tx-escape-bad.hir
+conformance/STORE/STORE-3-tx-escape-ok.hir

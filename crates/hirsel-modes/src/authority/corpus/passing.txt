@@ -70,19 +70,13 @@ CAP/CAP-2-typed-heap-inert-bad.hir
 CAP/CAP-2-typed-heap-inert-ok.hir
 CAP/CAP-3-dir-capture-under-dir-ok.hir
 CAP/CAP-3-dir-capture-under-empty-bad.hir
-CAP/CAP-3-directory-capture-bad.hir
-CAP/CAP-3-directory-capture-ok.hir
 CAP/CAP-3-inferred-literal-value-uses-bad.hir
 CAP/CAP-3-inferred-literal-value-uses-ok.hir
 CAP/CAP-3-known-function-value-uses-bad.hir
 CAP/CAP-3-known-function-value-uses-ok.hir
 CAP/CAP-3-net-restricted-body-ok.hir
-CAP/CAP-3-stdout-capture-bad.hir
-CAP/CAP-3-stdout-capture-ok.hir
 CAP/CAP-3-stdout-capture-under-io-bad.hir
 CAP/CAP-3-stdout-capture-under-stdout-ok.hir
-CAP/CAP-3-tasks-capture-bad.hir
-CAP/CAP-3-tasks-capture-ok.hir
 CAP/CAP-3-unrestricted-callback-value-bad.hir
 CAP/CAP-3-unrestricted-callback-value-ok.hir
 CAP/CAP-3-written-unrestricted-literal-binding-bad.hir
@@ -318,7 +312,6 @@ MODE/MODE-4-test-bad.hir
 MODE/MODE-4-test-ok.hir
 MODE/MODE-4-tuple-part-callable-bad.hir
 MODE/MODE-4-tuple-part-callable-run.hir
-MODE/MODE-4-tx-bad.hir
 MODE/MODE-4-tx-ok.hir
 MODE/MODE-4-unique-unsendable-content-bad.hir
 MODE/MODE-4-unique-unsendable-content-ok.hir
@@ -512,7 +505,6 @@ MODE/MODE-6-store-scoped-bad.hir
 MODE/MODE-6-store-scoped-ok.hir
 MODE/MODE-6-test-return-bad.hir
 MODE/MODE-6-test-return-ok.hir
-MODE/MODE-6-tx-return-bad.hir
 MODE/MODE-6-tx-return-ok.hir
 OWN/OWN-6-counted-child-borrow-bad.hir
 OWN/OWN-6-counted-child-borrow-ok.hir

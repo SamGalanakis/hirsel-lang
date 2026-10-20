@@ -1,0 +1,10 @@
+// rule: STORE-3
+// expect: accept
+// A Tx cannot leave its transaction: a closure that keeps it is called
+// inside the body's helper instead.
+fn reader(tx: store.Tx) -> bool {
+  let read = fn() {
+    store.tx_get(tx, b"k") != None()
+  }
+  read()
+}

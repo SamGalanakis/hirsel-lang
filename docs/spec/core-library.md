@@ -1445,10 +1445,8 @@ O(n) movement on successful removal; no second ordered container is introduced.
 ## Overview definitions
 
 The [first look](index.md#a-first-look) declares its own `Sku` and `StockError` and uses
-the planned store operations of [storage](storage.md); there are no application fixtures.
-`core@1` still declares the scoped capability `Tx` and `TxFailure[E] = Aborted(E) |
-Canceled(CancelCause)` (serializable when `E` is), without operations, until `std@1/store`
-declares its own. The overview's `CliError` is
+the store operations of [storage](storage.md); there are no application fixtures. `Tx`
+and `TxFailure` are `std@1/store`'s. The overview's `CliError` is
 `Usage(ArgError) | Files(FileError) | Output(OutputError)`.
 
 `type_shape.info` reads a compile-time `TypeShape[T]` as the `ShapeInfo` data of

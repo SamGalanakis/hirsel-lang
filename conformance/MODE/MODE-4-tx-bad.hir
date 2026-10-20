@@ -5,6 +5,6 @@ fn cross[T: sendable](take x: T) -> () {
   ()
 }
 
-fn example(take x: Tx) -> () {
+fn example(take x: store.Tx) -> () {
   cross(take x)
 }

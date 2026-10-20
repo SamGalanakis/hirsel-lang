@@ -1,11 +1,15 @@
 # Storage
 
-**Status: planned.** Nothing in this part is declared yet: the operations and types below
-belong to the source package `std@1/store`, which does not exist yet, so a program that
-names them does not resolve, and no conformance program cites a STORE rule. The part is
-recorded so that implementations build to one contract; the [standard
-library](std-library.md) lists each operation when it ships. Items marked **Reserved** are
-designed here but have no implementation owner yet.
+**Status: partly shipped.** `std@1/store` ships the engine and its storage seam
+(STORE-1, STORE-11), transactions and the output gate (STORE-2, STORE-3), the key encoding
+(STORE-6, `std@1/keys`), recording (STORE-10), the store's side of call streams
+(STORE-12, `store.call`) and the failure types (STORE-13); the [standard
+library](std-library.md#stores) lists each shipped operation. Until typed tables ship, a
+body reads and writes byte keys with `store.tx_get`, `store.tx_put`, `store.tx_delete` and
+`store.tx_range`. Typed tables, rows, snapshot views, schema history and migrations
+(STORE-5, STORE-7 to STORE-9), read-only opening and `store.for_test` are planned: a
+program that names them does not resolve yet. Items marked **Reserved** are designed here
+but have no implementation owner yet.
 
 A **store** is an embedded, transactional, ordered key-value database kept in a directory.
 It is ordinary Hirsel code in `std@1/store`: a log-structured engine that writes immutable,
@@ -20,10 +24,7 @@ every commit it observed is durable.
 
 No core operation, TIR or LIR construct is added for stores. `Tx` is the scoped capability
 of [MODE-6](ownership.md#mode-6-scoped-capabilities); `std@1/store` declares it, together
-with `Store`, `Snapshot`, `Table`, `TxFailure` and the other types below. Until then,
-`core@1` declares a `Tx` and a two-variant `TxFailure[E] = Aborted(E) | Canceled(CancelCause)`
-with no operations, which the conformance corpus uses to test scope and codec rules; the
-store's declarations replace them.
+with `Store`, `Snapshot`, `Table`, `TxFailure` and the other types below.
 
 ### STORE-1: Stores
 
@@ -42,8 +43,9 @@ writer in its run, and a second opener of the same directory, in this process or
 other, fences the first: the first's next write fails and it closes with `Fenced()`. Other
 runs and hosts reach a store only through its holder.
 
-A `Dir` granted `read` opens a store read-only: recovery runs, no epoch is claimed, and
-every write returns `ReadOnly()`. Holding a `Store` grants nothing outside its directory.
+A `Dir` granted `read` opens a store read-only (planned): recovery runs, no epoch is
+claimed, and every write returns `ReadOnly()`; until then such an open fails with the
+`Dir`'s own `Storage(..)` error. Holding a `Store` grants nothing outside its directory.
 `store.close` waits until every commit is durable and releases the in-memory state; a
 store that is dropped without `close` loses only commits that were not yet durable.
 
@@ -54,7 +56,7 @@ store that is dropped without `close` loses only commits that were not yet durab
 ### STORE-2: Transactions
 
 ```text
-fn store.transact[R: inert, E: inert](mut s: Store, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
+fn store.transact[R: inert, E: inert](mut s: Store, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
 ```
 
 `store.transact` runs `body` once against `s` and commits its writes atomically when the
@@ -72,8 +74,10 @@ body returns `Ok`:
 Because the `Store` is taken `mut`, transactions on one store are serial: there are no
 conflicts and no retries. Concurrent tasks share a store by sending requests to the task
 that holds it, or, across runs, through a runner ([STORE-12](#store-12-transactions-at-a-runner)).
-Cancellation is checked before the body starts ([CONC-3](concurrency.md#conc-3-cancellation));
-a cancelled scope returns `Canceled(cause)` with no effect. A commit that exceeds a
+`store.transact` performs no cancellation check
+([CONC-3](concurrency.md#conc-3-cancellation)): a transaction started from a cancellable
+scope is checked by its caller. Only the runner form returns `Canceled(cause)`, before its
+body starts and with no effect ([STORE-12](#store-12-transactions-at-a-runner)). A commit that exceeds a
 configured limit returns `Limit(..)` with no effect. A commit whose durability cannot be
 decided ([STORE-11](#store-11-engine-and-storage-seam)) returns `Unknown(..)`: the store
 closes, and whether the commit survived is decided when the store is next opened, never
@@ -99,7 +103,9 @@ durable. `D` never decreases and never exceeds `V`.
 ### STORE-3: Transaction scope
 
 `Tx` is a scoped capability ([MODE-6](ownership.md#mode-6-scoped-capabilities)): it cannot
-be returned, stored, captured by an escaping closure or sent to another task. The body is
+be returned, stored, captured by an escaping closure or sent to another task. The body
+receives it `mut`: reads borrow a `Tx` and writes take it `mut`, because a borrowed value
+cannot collect a write set without a core primitive. The body is
 `uses {}` and its result `inert` ([CAP-3](capabilities.md#cap-3-restriction)), so the body
 holds only its `Tx` and data, keeps nothing, returns no authority, performs no effect
 outside the store and cannot open a nested transaction. A capture the body's `uses {}`
@@ -158,11 +164,11 @@ carries no authority, and every operation on it takes a `Tx`. Every operation re
 
 ```text
 fn table.named[K: key + serializable, V: serializable](name: String) -> Table[K, V]
-fn table.create[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V]) -> Result[(), TxError]
-fn table.drop[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V]) -> Result[(), TxError]
+fn table.create[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V]) -> Result[(), TxError]
+fn table.drop[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V]) -> Result[(), TxError]
 fn table.get[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K) -> Result[Option[V], TxError]
-fn table.put[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K, value: V) -> Result[(), TxError]
-fn table.delete[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K) -> Result[bool, TxError]
+fn table.put[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V], key: K, value: V) -> Result[(), TxError]
+fn table.delete[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V], key: K) -> Result[bool, TxError]
 fn table.range[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], from: RangeBound[K], to: RangeBound[K], limit: u64, order: ScanOrder) -> Result[List[(K, V)], TxError]
 fn table.history(tx: Tx, name: String) -> Result[List[SchemaEntry], TxError]
 ```
@@ -207,19 +213,19 @@ fn reserved() -> Table[Sku, u32] {
   table.named("reserved")
 }
 
-pub fn take_stock(tx: Tx, req: Reservation) -> Result[Reservation, StockError] {
+pub fn take_stock(mut tx: Tx, req: Reservation) -> Result[Reservation, StockError] {
   let stocked = table.get(tx, stock(), req.sku) ? Db
   let have = match stocked { Some(v) => v, None => 0 }
   if have < req.count { return Error(OutOfStock(req.sku)) }
-  table.put(tx, stock(), req.sku, have - req.count) ? Db
+  table.put(mut tx, stock(), req.sku, have - req.count) ? Db
   let held = table.get(tx, reserved(), req.sku) ? Db
   let prior = match held { Some(v) => v, None => 0 }
-  table.put(tx, reserved(), req.sku, prior + req.count) ? Db
+  table.put(mut tx, reserved(), req.sku, prior + req.count) ? Db
   Ok(req)
 }
 
 pub fn reserve(mut s: Store, req: Reservation) -> Result[Reservation, TxFailure[StockError]] {
-  store.transact(mut s, fn(tx: Tx) { take_stock(tx, req) })
+  store.transact(mut s, fn(mut tx: Tx) { take_stock(mut tx, req) })
 }
 ```
 
@@ -299,7 +305,7 @@ fails either check is `Storage(Corrupt())`.
 
 ```text
 fn store.snapshot(s: Store) -> Snapshot
-fn store.view[R: inert, E: inert](snap: Snapshot, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
+fn store.view[R: inert, E: inert](snap: Snapshot, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
 ```
 
 `Snapshot` is a persistent, immutable view of a store's tables at its durable version `D`
@@ -318,7 +324,7 @@ SchemaEntry     = { epoch: u32, key_schema: String, value_schema: String, change
 SchemaChange    = Created() | Renamed(from: String, to: String) | Migrated(definition: String, code: String)
 MigrateError[E] = Failed(E) | Collision() | Table(TxError) | Canceled(CancelCause)
 
-fn table.rename(tx: Tx, name: String, from: String, to: String) -> Result[(), TxError]
+fn table.rename(mut tx: Tx, name: String, from: String, to: String) -> Result[(), TxError]
 fn table.migrate[J: key + serializable, A: serializable, K: key + serializable, B: serializable, E: serializable](mut s: Store, from: Table[J, A], to: Table[K, B], f: Entry[fn(key: J, old: A) -> Result[(K, B), E]], batch: u64) -> Result[u64, MigrateError[E]]
 ```
 
@@ -468,8 +474,28 @@ library that releases an outcome before `durable` returns breaks the output gate
 
 ### STORE-12: Transactions at a runner
 
-**Reserved.** A transaction body can run at the place that holds a store, as the transact
-form of a runner call ([RUN-4](runners.md#run-4-calls)):
+The store's side of a call stream ships as `store.call`; the runner form is **Reserved**.
+
+```text
+CallRequest    = { stream: Bytes, epoch: u64, position: u64, digest: Bytes, acknowledged: u64 }
+CallFailure[E] = Tx(TxFailure[E]) | Denied() | Rejected()
+fn store.call[R: inert + serializable, E: inert + serializable](mut s: Store, req: CallRequest, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, CallFailure[E]]
+```
+
+`store.call` is `store.transact` as one request on a call stream, decided as the contract
+below says. The stream's row is kept under the reserved key `hirsel.streams/` followed by
+the stream identity, as the canonical codec payload of its epoch, `applied` and
+`acknowledged` positions and, for each retained position, its request digest and the codec
+bytes of its outcome (`Ok`, `Aborted` or `Limit`). A request whose epoch exceeds the row's
+raises it in the commit that decides the request, including a duplicate's, which then
+commits the row alone. `Denied()` and `Rejected()` are the runner's `NotRun(Denied())` and
+`NotRun(Rejected())`; `Tx(..)` is the transaction's own outcome. Every key beginning with
+`hirsel.` is the store's: `store.tx_put` and `store.tx_delete` require a key outside it
+([FACT-1](contracts.md#fact-1-contracts)). Command records and the verifier below remain
+Reserved.
+
+A transaction body can run at the place that holds a store, as the transact form of a
+runner call ([RUN-4](runners.md#run-4-calls)):
 
 ```text
 fn runner.transact[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(tx: Tx, call: CallInfo, a: A) -> Result[R, E]], a: A) -> Result[R, RunError[TxFailure[E]]]
@@ -522,13 +548,12 @@ the `db@1` provider built on it are not yet designed. The contract they must mee
 ### STORE-13: Failures
 
 ```text
-TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StorageError) | Limit(TxLimit)
-             | Unknown(StorageError)
+TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StoreError) | Limit(TxLimit)
+             | Unknown(StoreError)
 TxError      = NoTable() | TableExists() | Schema(SchemaError) | Migrating() | ReadOnly()
-             | InvalidInput() | Limit(TxLimit) | Storage(StorageError)
+             | InvalidInput() | Limit(TxLimit) | Storage(StoreError)
 SchemaError  = KeyMismatch() | ValueMismatch() | Renamed(stored: String, expected: String)
-StorageError = Corrupt() | Full() | Fenced() | Closed() | File(FileError)
-StoreError   = Conflict() | ReadOnly() | Storage(StorageError)
+StoreError   = Storage(FileError) | Corrupt(String) | Fenced() | Conflict() | Injected() | Closed()
 TxLimit      = KeyBytes() | ValueBytes() | TransactionBytes() | RangeRows()
 ```
 
@@ -537,10 +562,13 @@ Variant ordinals in the order written, `serializable` (`TxFailure[E]` when `E` i
 `Error(e)`; `Canceled(cause)` before the body started; `Storage(..)` and `Limit(..)` when
 the commit could not be made, with no effect; and `Unknown(..)` when the commit was
 attempted and its durability could not be decided (STORE-11), which never claims an
-effect or its absence. `TxError` is the outcome of one table operation inside a body.
-`Corrupt()` means a checksum, decoding or structural check failed; `Full()` that the medium
-has no room; `Fenced()` that a later writer claimed the store; `Closed()` that the store
-closed earlier; `File(e)` another file error from the medium. Conflicts and retry
+effect or its absence: a create that failed with a file error, which may have happened,
+is `Unknown(Storage(e))`, and the store's other errors prove the commit did not happen.
+`TxError` is the outcome of one table operation inside a body. `Storage(e)` is a file error
+from the medium, a full one included; `Corrupt(name)` that the named object failed a
+checksum, decoding or structural check; `Fenced()` that a later writer claimed the store;
+`Injected()` that the `StopAfterWrites` test seam refused a storage write; `Closed()` that
+the store closed earlier. Every one but `Conflict()` closes the store. Conflicts and retry
 exhaustion do not occur in `store.transact`, whose writer is serial; `Conflict()` is the
 engine-level `store.commit`'s alone.
 
@@ -550,9 +578,14 @@ engine-level `store.commit`'s alone.
 // std@1/store; STORE-1..13, CAP-3/5, MODE-6, CONC-3, DET-1
 fn store.open(d: Dir, config: StoreConfig) -> Result[Store, StoreError]
 fn store.close(take s: Store) -> Result[(), StoreError]
-fn store.transact[R: inert, E: inert](mut s: Store, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
+fn store.transact[R: inert, E: inert](mut s: Store, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
+fn store.call[R: inert + serializable, E: inert + serializable](mut s: Store, req: CallRequest, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, CallFailure[E]]
+fn store.tx_get(tx: Tx, key: Bytes) -> Option[Bytes] in tx
+fn store.tx_put(mut tx: Tx, take key: Bytes, take value: Bytes) -> ()
+fn store.tx_delete(mut tx: Tx, take key: Bytes) -> ()
+fn store.tx_range(tx: Tx, from: Bound[Bytes], to: Bound[Bytes], direction: Direction, limit: u64) -> List[(Bytes, Bytes)]
 fn store.snapshot(s: Store) -> Snapshot
-fn store.view[R: inert, E: inert](snap: Snapshot, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
+fn store.view[R: inert, E: inert](snap: Snapshot, body: fn(mut tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
 fn store.begin(s: Store) -> Txn
 fn txn.get(t: Txn, key: Bytes) -> Option[Bytes]
 fn txn.put(mut t: Txn, key: Bytes, value: Bytes) -> ()
@@ -561,14 +594,14 @@ fn store.commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError]
 fn store.durable(mut s: Store, ticket: Ticket) -> Result[(), StoreError]
 fn store.compact(mut s: Store) -> Result[(), StoreError]
 fn table.named[K: key + serializable, V: serializable](name: String) -> Table[K, V]
-fn table.create[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V]) -> Result[(), TxError]
-fn table.drop[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V]) -> Result[(), TxError]
+fn table.create[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V]) -> Result[(), TxError]
+fn table.drop[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V]) -> Result[(), TxError]
 fn table.get[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K) -> Result[Option[V], TxError]
-fn table.put[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K, value: V) -> Result[(), TxError]
-fn table.delete[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], key: K) -> Result[bool, TxError]
+fn table.put[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V], key: K, value: V) -> Result[(), TxError]
+fn table.delete[K: key + serializable, V: serializable](mut tx: Tx, t: Table[K, V], key: K) -> Result[bool, TxError]
 fn table.range[K: key + serializable, V: serializable](tx: Tx, t: Table[K, V], from: RangeBound[K], to: RangeBound[K], limit: u64, order: ScanOrder) -> Result[List[(K, V)], TxError]
 fn table.history(tx: Tx, name: String) -> Result[List[SchemaEntry], TxError]
-fn table.rename(tx: Tx, name: String, from: String, to: String) -> Result[(), TxError]
+fn table.rename(mut tx: Tx, name: String, from: String, to: String) -> Result[(), TxError]
 fn table.migrate[J: key + serializable, A: serializable, K: key + serializable, B: serializable, E: serializable](mut s: Store, from: Table[J, A], to: Table[K, B], f: Entry[fn(key: J, old: A) -> Result[(K, B), E]], batch: u64) -> Result[u64, MigrateError[E]]
 fn store.for_test(t: Test) -> Store
 // Reserved (STORE-4, STORE-12)

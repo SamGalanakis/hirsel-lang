@@ -105,10 +105,6 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
       cause: Some(box inner)
     )
   )?
-  let aborted: TxFailure[FileError] = Aborted(NotFound())
-  round(t, aborted)?
-  let tx_canceled: TxFailure[String] = Canceled(Parent())
-  round(t, tx_canceled)?
   let finished: Bounded[Result[u8, NetError]] = Finished(Ok(3))
   round(t, finished)?
   let expired: Bounded[Result[u8, NetError]] = Expired(Error(TimedOut()))

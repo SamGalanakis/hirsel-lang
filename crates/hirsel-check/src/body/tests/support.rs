@@ -224,7 +224,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             )),
         );
     }
-    for name in ["Test", "Scope", "Arena", "Tx"] {
+    for name in ["Test", "Scope", "Arena"] {
         registry.signatures.insert(
             core(name),
             Arc::new(type_signature(

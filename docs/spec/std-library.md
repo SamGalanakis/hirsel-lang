@@ -2739,10 +2739,22 @@ entries, and all subsequent lookups retain the existing Dir confinement.
 ## Stores
 
 ```text
-StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults }
+StoreConfig { durability: Durability, group_limit: u64, faults: StoreFaults, limits: StoreLimits }
+StoreLimits { key_bytes: u64, value_bytes: u64, transaction_bytes: u64 }
 StoreFaults = NoFaults | StopAfterWrites(u64)
 StoreError = Storage(FileError) | Corrupt(String) | Fenced | Conflict | Injected | Closed
+TxFailure[E] = Aborted(E) | Canceled(CancelCause) | Storage(StoreError) | Limit(TxLimit) | Unknown(StoreError)
+TxLimit = KeyBytes | ValueBytes | TransactionBytes | RangeRows
+CallRequest { stream: Bytes, epoch: u64, position: u64, digest: Bytes, acknowledged: u64 }
+CallFailure[E] = Tx(TxFailure[E]) | Denied | Rejected
 fn store.default_config() -> store.StoreConfig uses {}
+fn store.transact[R: inert, E: inert](mut s: store.Store, body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.TxFailure[E]]
+fn store.call[R: inert + serializable, E: inert + serializable](mut s: store.Store, req: store.CallRequest, body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.CallFailure[E]]
+fn store.tx_get(tx: store.Tx, key: Bytes) -> Option[Bytes] in tx uses {}
+fn store.tx_put(mut tx: store.Tx, take key: Bytes, take value: Bytes) -> () uses {} requires !store.reserved(key)
+fn store.tx_delete(mut tx: store.Tx, take key: Bytes) -> () uses {} requires !store.reserved(key)
+fn store.tx_range(tx: store.Tx, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
+fn store.reserved(key: Bytes) -> bool uses {}
 fn store.open(d: Dir, config: store.StoreConfig) -> Result[store.Store, store.StoreError]
 fn store.snapshot(mut s: store.Store) -> store.Snapshot uses {}
 fn store.snapshot_sequence(snap: store.Snapshot) -> u64 uses {}
@@ -2778,6 +2790,34 @@ return at most `limit` entries between the bounds in `direction` order as fresh 
 `prefix_bounds(p)` gives the bounds of exactly the keys starting with `p`. A `Snapshot`
 reflects every commit up to `snapshot_sequence`, durable or not, and later commits never
 change it: holding one never holds up the writer.
+
+**Transactions with a body.** `transact` runs `body` once with a fresh `Tx`, the scoped
+capability ([MODE-6](ownership.md#mode-6-scoped-capabilities)) of a transaction begun at
+the latest commit; `tx_get`, `tx_put`, `tx_delete` and `tx_range` read and write through it
+as the `txn` operations do. `Ok(v)` commits the writes as one commit (none when the body
+wrote nothing) and returns `v`; `Error(e)` discards them and returns `Aborted(e)`; a
+failure in the body discards them and propagates. Every outcome is released only once
+every commit the body could see, and its own, is durable: `transact` calls `durable`
+itself. A commit with a key over `limits.key_bytes`, a value over `limits.value_bytes`, or
+keys and values over `limits.transaction_bytes` in total returns `Limit(..)` with no
+effect. A failed storage write before the commit is `Storage(e)`; a create that failed
+with a file error leaves the commit's durability to the next `open` and is `Unknown(e)`.
+`transact` checks no cancellation; `Canceled` is the runner form's. Keys beginning with
+`hirsel.` (`reserved`) are the store's own: `tx_put` and `tx_delete` require a key outside
+them.
+
+**Call streams.** `call` is `transact` as one exactly-once request on an ordered call
+stream ([STORE-12](storage.md#store-12-transactions-at-a-runner)). The stream's row, under
+`hirsel.streams/` and the stream bytes, holds its executor epoch, the last applied and
+acknowledged positions, and the digest and encoded outcome of each position between them.
+An epoch below the row's is `Denied()`. A position at or below the acknowledged one, past
+the next one, retained under another digest, or with `acknowledged` not below it is
+`Rejected()`. A retained position with an equal digest returns its recorded outcome
+without running `body`. The next position runs `body`; the same commit stores the outcome,
+sets `applied`, raises `acknowledged` and drops the outcomes at or below it, and an
+outcome that writes nothing (`Aborted`, `Limit`) is recorded by a commit of the row alone.
+A request with a higher epoch raises the row's, a duplicate's included. A storage failure
+records nothing, so the caller resends the same position.
 
 **Output gate and group commit.** Commits queue in memory until `durable` is awaited or
 `group_limit` of them are pending; the group is then written as one log object, the

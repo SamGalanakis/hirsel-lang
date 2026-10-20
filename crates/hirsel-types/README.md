@@ -472,8 +472,8 @@ snapshots; V independently replays admission rather than trusting this descripto
 Serializable generic evidence implies Inert and supplies no crossing proof.
 A nominal instantiation reached again, by recursion or along another path,
 references its first node. A declaration marked serializable whose authority is
-only its type parameters (core `Option`, `Result`, `TxFailure`, `Bounded`; std
-`ReadError[E]`) is admitted with unbounded parameters; each use proves its arguments. A core `Path` is a
+only its type parameters (core `Option`, `Result`, `Bounded`; std
+`ReadError[E]`, `store.TxFailure[E]`) is admitted with unbounded parameters; each use proves its arguments. A core `Path` is a
 nominal node over `String`, its text; it has no representation of its own.
 
 `wire` implements SER-2 version 1 over concrete `serialization` schema graphs.
