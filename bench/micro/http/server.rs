@@ -1,4 +1,6 @@
-//! Single thread, one persistent connection, 1024 parsed HTTP/1.1 requests.
+//! Single thread, one persistent connection, 1024 fixed HTTP/1.1 requests.
+//! Based on std/net/tcp.rs:904-915 (TcpListener::accept example).
+//! The fixed request recognizer is a TCP cost floor, not a general HTTP parser.
 use std::io::{Read, Write};
 use std::net::TcpListener;
 

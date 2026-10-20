@@ -19,3 +19,9 @@ cover only each fresh server process; the client is outside its process tree.
 The harness holds the CPU31 session lock and records CPU15 activity. The client
 makes twenty connections, one per participant per round. Its port identifies
 the participant. Do not run two such sessions concurrently.
+
+The Rust accept/read/write structure follows Rust std's
+`library/std/src/net/tcp.rs:904-915` (`TcpListener::accept` example). The sole
+deliberate deviation is recognizing the fixed fixture request and returning a
+fixed response, so this comparator measures a TCP cost floor rather than
+implementing the general HTTP protocol.

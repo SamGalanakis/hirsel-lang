@@ -129,3 +129,6 @@ The additional JSON and upsert programs live in `programs/extended/`; the existi
 Cachegrind budget set remains the eight top-level programs. `build` discovers
 both directories. The serde_json reference has its own sibling Buck2 package,
 [../micro-json-reference](../micro-json-reference/README.md).
+
+The [post-perf remeasurement](reports/perf-remeasure-2026-10-19.md) records
+all native pairs and these micros, with current instruction gaps and limits.
