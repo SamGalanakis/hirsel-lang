@@ -87,7 +87,25 @@ pub fn declared_cleanup(
         .and_then(|r| types.get(r))
         .map(|r| &r.drop_allocation);
     match effect {
-        Some(DropAllocation::DependsOn(ps)) => ps.iter().fold(DropAllocation::NoAlloc, |a, p| {
+        Some(effect) => specialized_cleanup(effect, arguments, component),
+        None if declaration.bounds.contains(&Bound::NoallocDrop)
+            || declaration.bounds.contains(&Bound::Plain) =>
+        {
+            DropAllocation::NoAlloc
+        }
+        None => DropAllocation::MayAllocate,
+    }
+}
+
+/// A declaration's cleanup effect over its own parameters, specialized by a
+/// use's owned actuals. Missing actuals prove nothing.
+pub fn specialized_cleanup(
+    effect: &DropAllocation,
+    arguments: &[GenericArgument],
+    mut component: impl FnMut(TypeId) -> DropAllocation,
+) -> DropAllocation {
+    match effect {
+        DropAllocation::DependsOn(ps) => ps.iter().fold(DropAllocation::NoAlloc, |a, p| {
             a.join(
                 match (p.binder() == GenericBinder::Bound(0))
                     .then(|| arguments.get(p.parameter().0 as usize))
@@ -98,13 +116,7 @@ pub fn declared_cleanup(
                 },
             )
         }),
-        Some(effect) => effect.clone(),
-        None if declaration.bounds.contains(&Bound::NoallocDrop)
-            || declaration.bounds.contains(&Bound::Plain) =>
-        {
-            DropAllocation::NoAlloc
-        }
-        None => DropAllocation::MayAllocate,
+        effect => effect.clone(),
     }
 }
 
