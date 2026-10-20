@@ -133,14 +133,17 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn net_io(
         &mut self,
-        request: &Request,
+        token: u64,
+        net: u64,
+        stream: u64,
+        inline: bool,
         buffer: &mut crate::io::NetBuffer<'_>,
-    ) -> Option<Result<Completion, AdapterError>> {
-        self.0.borrow_mut().net_io(request, buffer)
+    ) -> Option<Result<crate::io::NetResult, AdapterError>> {
+        self.0
+            .borrow_mut()
+            .net_io(token, net, stream, inline, buffer)
     }
-    fn wait_current_net(&mut self) -> Result<bool, AdapterError> {
-        self.0.borrow_mut().wait_current_net()
-    }
+
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
     }

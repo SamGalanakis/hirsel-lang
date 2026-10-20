@@ -147,7 +147,11 @@ impl Readiness {
     /// Rust a7c37f9f socket/unix.rs:180-229 supplies the poll/deadline/EINTR loop.
     pub(crate) fn wait_current(&self) -> Result<bool, AdapterError> {
         let state = self.0.borrow();
-        if state.shared || state.virtual_time.is_some() || state.pending.len() != 1 {
+        if state.shared
+            || !state.wakes.is_empty()
+            || state.virtual_time.is_some()
+            || state.pending.len() != 1
+        {
             return Ok(false);
         }
         let Some(pending) = state.pending.get(&state.current) else {
@@ -844,6 +848,14 @@ mod tests {
         peer.write_all(b"ready").unwrap();
         assert_eq!(readiness.wait_current(), Ok(true));
         assert!(readiness.0.borrow().epoll.is_none());
+        let (wake, _sender) = pair();
+        readiness.wake_on(wake.as_raw_fd()).unwrap();
+        assert_eq!(readiness.wait_current(), Ok(false));
+        readiness
+            .0
+            .borrow_mut()
+            .wakes
+            .remove(&(wake.as_raw_fd() as u64));
         readiness.tagged(0);
         assert_eq!(readiness.wait_current(), Ok(false));
         readiness.finish(7);
@@ -862,7 +874,6 @@ mod tests {
         assert_eq!(readiness.wait_current(), Ok(false));
         readiness.finish(8);
         readiness.finish(7);
-
     }
 
     /// mio tests/poll.rs:120 readiness_is_reregistered_after_would_block.

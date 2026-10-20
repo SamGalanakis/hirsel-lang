@@ -233,11 +233,12 @@ pub(crate) unsafe fn call_recording(ctx: *mut TaskCtx, request: Request) -> Opti
 }
 unsafe fn borrowed_call(
     ctx: *mut TaskCtx,
-    request: &Request,
+    net: u64,
+    stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
-) -> Option<Result<Completion, ()>> {
+) -> Option<Result<Result<u64, NetError>, ()>> {
     let result =
-        unsafe { crate::stop::check(ctx, crate::host_waits::issue_net(ctx, request, buffer)) }?;
+        unsafe { crate::stop::check(ctx, crate::host_waits::issue_net(ctx, net, stream, buffer)) }?;
     let (result, parked) = result;
     let completion = match result {
         Ok(value) => Ok(value),
@@ -432,29 +433,39 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
         stream: unsafe { s.read() },
         max,
     };
-    // An exclusive ordinary list can lend its spare capacity directly. Tracked
-    // arena lists retain append_byte_list's MEM-6 growth/charging semantics.
+    // Lend existing unique spare capacity. Do not reserve or detach before policy
+    // validation: denied, canceled and recorded calls retain ordinary append behavior.
+    // Tracked lists keep append_byte_list's MEM-6 growth/charging semantics.
     let block = unsafe { buffer.read() };
-    if !unsafe { crate::region::is_tracked(block) } && max != 0 {
-        let count = unsafe { crate::alloc::payload(block).cast::<u64>().read() };
-        let room = max.min(crate::net_host::READ_CHUNK);
-        let total = count
-            .checked_add(room)
-            .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
-        let block = unsafe { crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total) };
-        unsafe { buffer.write(block) };
+    let room = max.min(crate::net_host::READ_CHUNK);
+    let payload = crate::alloc::payload(block);
+    let count = unsafe { payload.cast::<u64>().read() };
+    let slots = unsafe {
+        payload
+            .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+            .cast::<u64>()
+            .read()
+    };
+    if !unsafe { crate::region::is_tracked(block) }
+        && unsafe { (*block).count == 1 && (*block).domain() == crate::alloc::DOMAIN_HEAP }
+        && room != 0
+        && slots.saturating_sub(count) >= room
+    {
         let payload = crate::alloc::payload(block);
         let at = unsafe {
             payload.add(crate::alloc::sequence_elements_offset(1) as usize + count as usize)
         };
         let storage = unsafe { std::slice::from_raw_parts_mut(at.cast(), room as usize) };
-        if let Some(result) =
-            unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Read(storage)) }
-        {
+        if let Some(result) = unsafe {
+            borrowed_call(
+                ctx,
+                n.read(),
+                s.read(),
+                &mut crate::io::NetBuffer::Read(storage),
+            )
+        } {
             let value = match result {
-                Ok(Completion::Count(value)) => value,
-                Ok(Completion::NetBytes(Err(error))) => Err(error),
-                Ok(_) => mismatch(),
+                Ok(value) => value,
                 Err(()) => return STATUS_FAILURE,
             };
             if let Ok(n) = value {
@@ -491,26 +502,29 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
     buffer: *mut u8,
     capacity: u64,
 ) -> u8 {
-    let request = Request::NetRead {
-        net: unsafe { n.read() },
-        stream: unsafe { s.read() },
-        max: capacity,
-    };
     // SAFETY: the caller grants capacity writable bytes; MaybeUninit preserves
     // the suffix and permits the same helper to fill a List's spare capacity.
     let storage = unsafe { std::slice::from_raw_parts_mut(buffer.cast(), capacity as usize) };
-    if let Some(result) =
-        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Read(storage)) }
-    {
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            n.read(),
+            s.read(),
+            &mut crate::io::NetBuffer::Read(storage),
+        )
+    } {
         let value = match result {
-            Ok(Completion::Count(value)) => value,
-            Ok(Completion::NetBytes(Err(error))) => Err(error),
-            Ok(_) => mismatch(),
+            Ok(value) => value,
             Err(()) => return STATUS_FAILURE,
         };
         unsafe { out.write(NetWordResult::of(value)) };
         return STATUS_OK;
     }
+    let request = Request::NetRead {
+        net: unsafe { n.read() },
+        stream: unsafe { s.read() },
+        max: capacity,
+    };
     let Some(Completion::NetBytes(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -538,29 +552,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
     len: u64,
 ) -> u8 {
     let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
-    let mut request = Request::NetWrite {
-        net: unsafe { n.read() },
-        stream: unsafe { s.read() },
-        bytes: Vec::new(),
-    };
-    if let Some(result) =
-        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::Write(bytes)) }
-    {
+
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            n.read(),
+            s.read(),
+            &mut crate::io::NetBuffer::Write(bytes),
+        )
+    } {
         match result {
-            Ok(Completion::Count(value)) => {
+            Ok(value) => {
                 unsafe { out.write(NetWordResult::of(value)) };
                 return STATUS_OK;
             }
-            Ok(_) => mismatch(),
             Err(()) => {
                 crate::failure::record_runtime(ctx, "CAP-2", 0, 0);
                 return STATUS_FAILURE;
             }
         }
     }
-    if let Request::NetWrite { bytes: payload, .. } = &mut request {
-        *payload = bytes.to_vec();
-    }
+    let request = Request::NetWrite {
+        net: unsafe { n.read() },
+        stream: unsafe { s.read() },
+        bytes: bytes.to_vec(),
+    };
     let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -586,29 +602,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
     len: u64,
 ) -> u8 {
     let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
-    let mut request = Request::NetWriteAll {
-        net: unsafe { n.read() },
-        stream: unsafe { s.read() },
-        bytes: Vec::new(),
-    };
-    if let Some(result) =
-        unsafe { borrowed_call(ctx, &request, &mut crate::io::NetBuffer::WriteAll(bytes)) }
-    {
+
+    if let Some(result) = unsafe {
+        borrowed_call(
+            ctx,
+            n.read(),
+            s.read(),
+            &mut crate::io::NetBuffer::WriteAll(bytes),
+        )
+    } {
         match result {
-            Ok(Completion::NetUnit(value)) => {
-                unsafe { out.write(NetUnitResult::of(value)) };
+            Ok(value) => {
+                unsafe { out.write(NetUnitResult::of(value.map(|_| ()))) };
                 return STATUS_OK;
             }
-            Ok(_) => mismatch(),
             Err(()) => {
                 crate::failure::record_runtime(ctx, "CAP-2", 0, 0);
                 return STATUS_FAILURE;
             }
         }
     }
-    if let Request::NetWriteAll { bytes: payload, .. } = &mut request {
-        *payload = bytes.to_vec();
-    }
+    let request = Request::NetWriteAll {
+        net: unsafe { n.read() },
+        stream: unsafe { s.read() },
+        bytes: bytes.to_vec(),
+    };
     let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
     };
@@ -1084,9 +1102,12 @@ mod borrowed_wait_tests {
         }
         fn net_io(
             &mut self,
-            _: &Request,
+            _: u64,
+            _: u64,
+            _: u64,
+            _: bool,
             buffer: &mut NetBuffer<'_>,
-        ) -> Option<Result<Completion, AdapterError>> {
+        ) -> Option<Result<Result<u64, crate::net::NetError>, AdapterError>> {
             let issued = self.0.get();
             self.0.set(issued + 1);
             if issued == 0 {
@@ -1098,7 +1119,7 @@ mod borrowed_wait_tests {
             for (slot, byte) in bytes.iter_mut().zip(b"ready") {
                 slot.write(*byte);
             }
-            Some(Ok(Completion::Count(Ok(5))))
+            Some(Ok(Ok(5)))
         }
     }
 

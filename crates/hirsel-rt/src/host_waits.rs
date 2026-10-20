@@ -252,9 +252,10 @@ pub(crate) unsafe fn is_runner_call(ctx: *mut TaskCtx, token: u64) -> bool {
 /// Same context/binding contract as issue; buffer's storage lives through the call.
 pub(crate) unsafe fn issue_net(
     ctx: *mut TaskCtx,
-    request: &Request,
+    net: u64,
+    stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
-) -> Stopped<Option<(Result<Completion, AdapterError>, bool)>> {
+) -> Stopped<Option<(Result<crate::io::NetResult, AdapterError>, bool)>> {
     // Use the ordinary cancellation path, including its preflight checks.
     if unsafe { crate::tasks::canceled(ctx) }.is_some() {
         return Ok(None);
@@ -263,25 +264,12 @@ pub(crate) unsafe fn issue_net(
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;
     binding.waits.next += 1;
-    binding.adapter.enter(token);
-    loop {
-        match binding.adapter.net_io(request, buffer) {
-            None => {
-                binding.adapter.finish(token);
-                return Ok(None);
-            }
-            Some(Err(AdapterError::Blocked)) => {
-                if inline && binding.adapter.wait_current_net().map_err(Stop::refusal)? {
-                    continue;
-                }
-                break;
-            }
-            Some(result) => {
-                binding.adapter.finish(token);
-                return Ok(Some((result, false)));
-            }
-        }
+    match binding.adapter.net_io(token, net, stream, inline, buffer) {
+        None => return Ok(None),
+        Some(Err(AdapterError::Blocked)) => {}
+        Some(result) => return Ok(Some((result, false))),
     }
+    let request = buffer.request(net, stream);
     binding.waits.parked.insert(
         token,
         Parked {
@@ -301,7 +289,7 @@ pub(crate) unsafe fn issue_net(
         .remove(&token)
         .and_then(|p| p.completion)
         .unwrap_or_else(|| crate::fault("a borrowed host wait resumed without completion"));
-    Ok(Some((completion, true)))
+    Ok(Some((completion.map(|c| net_result(&request, c)), true)))
 }
 
 /// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
@@ -525,15 +513,34 @@ pub(crate) unsafe fn poll(
             }
         }
         None => {
-            binding.adapter.enter(token);
             let borrowed = binding.waits.parked.get(&token).and_then(|p| p.borrowed);
             let result = match borrowed {
                 // SAFETY: issue_net holds this stack buffer exclusively until removal.
                 Some(buffer) => binding
                     .adapter
-                    .net_io(&request, unsafe { &mut *buffer })
-                    .unwrap_or_else(|| crate::fault("borrowed network adapter changed")),
-                None => binding.adapter.call(request),
+                    .net_io(
+                        token,
+                        match &request {
+                            Request::NetRead { net, .. }
+                            | Request::NetWrite { net, .. }
+                            | Request::NetWriteAll { net, .. } => *net,
+                            _ => unreachable!(),
+                        },
+                        match &request {
+                            Request::NetRead { stream, .. }
+                            | Request::NetWrite { stream, .. }
+                            | Request::NetWriteAll { stream, .. } => *stream,
+                            _ => unreachable!(),
+                        },
+                        false,
+                        unsafe { &mut *buffer },
+                    )
+                    .unwrap_or_else(|| crate::fault("borrowed network adapter changed"))
+                    .map(|value| net_completion(&request, value)),
+                None => {
+                    binding.adapter.enter(token);
+                    binding.adapter.call(request)
+                }
             };
             match result {
                 Err(AdapterError::Blocked) => return Ok(false),
@@ -567,4 +574,22 @@ pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
         return Ok(false);
     }
     binding.adapter.wait().map_err(Stop::refusal)
+}
+
+// Only parked calls need the generic protocol's result storage.
+fn net_completion(request: &Request, value: Result<u64, crate::net::NetError>) -> Completion {
+    match request {
+        Request::NetWriteAll { .. } => Completion::NetUnit(value.map(|_| ())),
+        _ => Completion::Count(value),
+    }
+}
+fn net_result(request: &Request, value: Completion) -> Result<u64, crate::net::NetError> {
+    match value {
+        Completion::Count(value) => value,
+        Completion::NetBytes(Err(error)) => Err(error),
+        Completion::NetUnit(value) if matches!(request, Request::NetWriteAll { .. }) => {
+            value.map(|()| 0)
+        }
+        _ => crate::fault("borrowed network result changed"),
+    }
 }

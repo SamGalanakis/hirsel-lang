@@ -739,18 +739,48 @@ impl crate::io::State {
     }
     pub(crate) fn host_stream(
         &self,
-        request: &crate::io::Request,
         net: u64,
         stream: u64,
+        write: bool,
+        empty: bool,
     ) -> Result<Option<Result<u64, NetError>>, AdapterError> {
         let grant = self.stream_grant(net, stream)?;
         if !matches!(grant.world, NetWorld::Host) {
             return Ok(None);
         }
-        Ok(Some(match self.stream_error(request, stream, &grant)? {
-            Some(error) => Err(error),
-            None => Ok(grant.id),
-        }))
+        Ok(Some(
+            match self.stream_io_error(stream, &grant, write, empty)? {
+                Some(error) => Err(error),
+                None => Ok(grant.id),
+            },
+        ))
+    }
+    fn stream_io_error(
+        &self,
+        stream: u64,
+        grant: &StreamGrant<'_>,
+        write: bool,
+        empty: bool,
+    ) -> Result<Option<NetError>, AdapterError> {
+        if let Some(crate::handles::Grant::Half {
+            write: direction, ..
+        }) = self.handles.rows.get(&stream)
+            && *direction != write
+        {
+            return Err(AdapterError::InvalidHandle(stream));
+        }
+        Ok(if !write && empty {
+            Some(NetError::InvalidInput)
+        } else if !grant.tls
+            && matches!(
+                grant.operation,
+                NetOperation::ConnectTls | NetOperation::ListenTls
+            )
+        {
+            Some(NetError::NotGranted)
+        } else {
+            None
+        })
     }
     /// Select the provider serving a world. Scripted worlds (`test.net`, `net.script@2`)
     /// attach here.
@@ -935,6 +965,13 @@ impl crate::io::State {
         grant: &StreamGrant<'_>,
     ) -> Result<Option<NetError>, AdapterError> {
         use crate::io::Request as R;
+        match request {
+            R::NetRead { max, .. } => return self.stream_io_error(stream, grant, false, *max == 0),
+            R::NetWrite { .. } | R::NetWriteAll { .. } => {
+                return self.stream_io_error(stream, grant, true, false);
+            }
+            _ => {}
+        }
         if !self.half_serves(request, stream) {
             return Err(AdapterError::InvalidHandle(stream));
         }

@@ -495,60 +495,60 @@ impl RealIo {
 impl Adapter for RealIo {
     fn net_io(
         &mut self,
-        request: &Request,
+        token: u64,
+        net: u64,
+        stream: u64,
+        inline: bool,
         buffer: &mut NetBuffer<'_>,
-    ) -> Option<Result<Completion, AdapterError>> {
+    ) -> Option<Result<crate::io::NetResult, AdapterError>> {
         if self.retain_history || self.journal.records() || self.fault.is_some() {
             return None;
         }
-        let (net, stream) = match request {
-            Request::NetRead { net, stream, .. }
-            | Request::NetWrite { net, stream, .. }
-            | Request::NetWriteAll { net, stream, .. } => (*net, *stream),
-            _ => return None,
+        let (write, empty) = match buffer {
+            NetBuffer::Read(bytes) => (false, bytes.is_empty()),
+            _ => (true, false),
         };
-        let id = match self.state.host_stream(request, net, stream) {
+        let id = match self.state.host_stream(net, stream, write, empty) {
             Ok(Some(Ok(id))) => id,
-            Ok(Some(Err(error))) => {
-                return Some(Ok(crate::io_checks::net_completion(request, error)));
-            }
+            Ok(Some(Err(error))) => return Some(Ok(Err(error))),
             Ok(None) => return None,
             Err(error) => return Some(Err(error)),
         };
+        if let Some((readiness, _)) = &self.cooperative {
+            readiness.enter(token);
+        }
         Some((|| {
             let provider = self
                 .net
                 .as_mut()
                 .ok_or_else(|| AdapterError::Unsupported("network provider missing".into()))?;
-            let result = match buffer {
-                NetBuffer::Read(bytes) => provider
-                    .read_uninit(id, bytes)
-                    .map(|value| Completion::Count(value.map(|n| n as u64))),
-                NetBuffer::Write(bytes) => provider.write(id, bytes).map(Completion::Count),
-                NetBuffer::WriteAll(bytes) => {
-                    provider.write_all(id, bytes).map(Completion::NetUnit)
+            loop {
+                let result = match buffer {
+                    NetBuffer::Read(bytes) => provider
+                        .read_uninit(id, bytes)
+                        .map(|value| value.map(|n| n as u64)),
+                    NetBuffer::Write(bytes) => provider.write(id, bytes),
+                    NetBuffer::WriteAll(bytes) => {
+                        provider.write_all(id, bytes).map(|value| value.map(|()| 0))
+                    }
+                };
+                if let Some((readiness, _)) = &self.cooperative {
+                    if matches!(result, Err(AdapterError::Blocked)) {
+                        // Authority and arguments cannot change while this sole root waits.
+                        // Retry the provider directly, without rebuilding the host protocol.
+                        if inline && readiness.wait_current()? {
+                            continue;
+                        }
+                    } else {
+                        readiness.progressed();
+                        readiness.finish(token);
+                    }
                 }
-            };
-            if !matches!(result, Err(AdapterError::Blocked))
-                && let Some((readiness, _)) = &self.cooperative
-            {
-                // The live path needs readiness, never the tape's wait ordinals.
-                // A re-issued borrowed request keeps Pending::parked until finish.
-                readiness.progressed();
+                return result;
             }
-            result
         })())
     }
 
-    fn wait_current_net(&mut self) -> Result<bool, AdapterError> {
-        if self.retain_history || self.journal.records() {
-            return Ok(false);
-        }
-        match &self.cooperative {
-            Some((readiness, _)) => readiness.wait_current(),
-            None => Ok(false),
-        }
-    }
     fn print(
         &mut self,
         handle: u64,
@@ -2506,32 +2506,22 @@ pub(crate) mod borrowed_net_tests {
     #[test]
     fn borrowed_network_preserves_tail_and_checks_brands_and_half_direction() {
         let (mut io, net, stream, mut peer) = connection();
-        let request = Request::NetRead {
-            net,
-            stream,
-            max: 16,
-        };
         let mut bytes = [MaybeUninit::new(0xa5); 16];
         assert!(
-            io.net_io(&request, &mut NetBuffer::Read(&mut bytes))
+            io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut bytes))
                 .is_none()
         );
         io.discard_history();
         peer.write_all(b"abc").unwrap();
         assert_eq!(
-            io.net_io(&request, &mut NetBuffer::Read(&mut bytes)),
-            Some(Ok(Completion::Count(Ok(3))))
+            io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut bytes)),
+            Some(Ok(Ok(3)))
         );
         let initialized = bytes.map(|b| unsafe { b.assume_init() });
         assert_eq!(&initialized[..3], b"abc");
         assert_eq!(&initialized[3..], &[0xa5; 13]);
-        let foreign = Request::NetRead {
-            net: 999,
-            stream,
-            max: 16,
-        };
         assert!(matches!(
-            io.net_io(&foreign, &mut NetBuffer::Read(&mut bytes)),
+            io.net_io(1, 999, stream, false, &mut NetBuffer::Read(&mut bytes)),
             Some(Err(AdapterError::InvalidHandle(999)))
         ));
         let half = io.state.handles.insert(crate::handles::Grant::Half {
@@ -2539,24 +2529,14 @@ pub(crate) mod borrowed_net_tests {
             stream,
             write: true,
         });
-        let wrong_direction = Request::NetRead {
-            net,
-            stream: half,
-            max: 16,
-        };
         assert!(matches!(
-            io.net_io(&wrong_direction, &mut NetBuffer::Read(&mut bytes)),
+            io.net_io(1, net, half, false, &mut NetBuffer::Read(&mut bytes)),
             Some(Err(AdapterError::InvalidHandle(_)))
         ));
         assert!(io.tape.is_empty());
-        let write = Request::NetWriteAll {
-            net,
-            stream,
-            bytes: vec![],
-        };
         assert_eq!(
-            io.net_io(&write, &mut NetBuffer::WriteAll(b"response")),
-            Some(Ok(Completion::NetUnit(Ok(()))))
+            io.net_io(1, net, stream, false, &mut NetBuffer::WriteAll(b"response")),
+            Some(Ok(Ok(0)))
         );
         let mut response = [0; 8];
         peer.read_exact(&mut response).unwrap();
@@ -2572,24 +2552,14 @@ pub(crate) mod borrowed_net_tests {
         {
             *operation = NetOperation::ConnectTls;
         }
-        let request = Request::NetRead {
-            net,
-            stream,
-            max: 8,
-        };
         let mut bytes = [MaybeUninit::uninit(); 8];
         assert_eq!(
-            io.net_io(&request, &mut NetBuffer::Read(&mut bytes)),
-            Some(Ok(Completion::NetBytes(Err(NetError::NotGranted))))
+            io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut bytes)),
+            Some(Ok(Err(NetError::NotGranted)))
         );
-        let request = Request::NetRead {
-            net,
-            stream,
-            max: 0,
-        };
         assert_eq!(
-            io.net_io(&request, &mut NetBuffer::Read(&mut [])),
-            Some(Ok(Completion::NetBytes(Err(NetError::InvalidInput))))
+            io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut [])),
+            Some(Ok(Err(NetError::InvalidInput)))
         );
     }
 }

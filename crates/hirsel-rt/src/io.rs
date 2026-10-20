@@ -2314,6 +2314,30 @@ pub enum NetBuffer<'a> {
     WriteAll(&'a [u8]),
 }
 
+impl NetBuffer<'_> {
+    pub(crate) fn request(&self, net: u64, stream: u64) -> Request {
+        match self {
+            Self::Read(bytes) => Request::NetRead {
+                net,
+                stream,
+                max: bytes.len() as u64,
+            },
+            Self::Write(_) => Request::NetWrite {
+                net,
+                stream,
+                bytes: Vec::new(),
+            },
+            Self::WriteAll(_) => Request::NetWriteAll {
+                net,
+                stream,
+                bytes: Vec::new(),
+            },
+        }
+    }
+}
+/// Live network operations return a count (zero for write_all), never a tape value.
+pub type NetResult = Result<u64, crate::net::NetError>;
+
 pub trait Adapter {
     /// Check argument validity and authority without an effect or tape event.
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
@@ -2374,16 +2398,15 @@ pub trait Adapter {
     /// any effect; record/replay and scripted adapters use ordinary owned requests.
     fn net_io(
         &mut self,
-        _request: &Request,
+        _token: u64,
+        _net: u64,
+        _stream: u64,
+        _inline: bool,
         _buffer: &mut NetBuffer<'_>,
-    ) -> Option<Result<Completion, AdapterError>> {
+    ) -> Option<Result<NetResult, AdapterError>> {
         None
     }
-    /// Wait for the entered borrowed operation, only when the scheduler confirmed
-    /// this is its sole root and no peer or deadline needs the driver. False declines.
-    fn wait_current_net(&mut self) -> Result<bool, AdapterError> {
-        Ok(false)
-    }
+
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
     /// Whether the adapter records who issues each request (a durable journal).
     fn wants_issuer(&self) -> bool {
