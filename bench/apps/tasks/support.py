@@ -86,4 +86,3 @@ class Server:
         self.log.close()
         if check and self.process.returncode:
             raise RuntimeError(f'server failed: exit {self.process.returncode}')
-

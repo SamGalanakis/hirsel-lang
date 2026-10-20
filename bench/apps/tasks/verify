@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Differential rendering, Unicode and persistence-failure checks over HTTP."""
+import http.client
+import json
+import os
+from pathlib import Path
+import signal
+import tempfile
+from support import APP, Server, free_port
+
+
+def exchange(port, method, target, body=None, media='application/json'):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=30)
+    connection.request(method, target, body, {'content-type': media})
+    response = connection.getresponse()
+    result = (response.status, response.read())
+    connection.close()
+    return result
+
+
+def draft(title, tags='', due=''):
+    return json.dumps({'draft': {'title': title, 'description': 'detail <&>',
+        'priority': 'high', 'due': due, 'tags': tags}})
+
+
+with tempfile.TemporaryDirectory(prefix='tasks-verify-') as scratch:
+    root = Path(scratch)
+    answers = {}
+    for kind in ('hirsel', 'rust'):
+        data = root / kind
+        data.mkdir()
+        server = Server(kind, data, free_port(), APP / 'build/tasks-hirsel', root / f'{kind}.log')
+        port = server.port
+        try:
+            outputs = []
+            for title, tags, due in [('Straße <&> {{STATS}} @LIST@', 'ΟΣ, Farm, farm', '2028-02-29'),
+                                      ('İSTANBUL', '²', ''), ('Bad leap', '', '2026-02-29'),
+                                      ('Year zero', '', '0000-01-01'), ('Adlam', '𞤀', '')]:
+                outputs.append(exchange(port, 'POST', '/tasks', draft(title, tags, due)))
+            for target in ('/', '/?q=STRASSE', '/?tag=farm', '/?q=%C4%B0STANBUL', '/tasks/1', '/?sort=title'):
+                outputs.append(exchange(port, 'GET', target))
+            answers[kind] = outputs
+        finally:
+            server.stop()
+        # Force a save error without relying on uid-specific permission checks.
+        (data / 'board-00000000000000000003.json').write_text('invalid collision')
+        server = Server(kind, data, free_port(), APP / 'build/tasks-hirsel', root / f'{kind}-failure.log')
+        try:
+            # Loading quarantines invalid newer snapshots and resumes revision 2.
+            assert (data / 'board-00000000000000000003.json.corrupt').exists()
+            (data / 'board-00000000000000000003.json').write_text('collision')
+            assert exchange(server.port, 'POST', '/tasks', draft('Fail save'))[0] == 500
+        finally:
+            server.stop()
+    for n, (hirsel, rust) in enumerate(zip(answers['hirsel'], answers['rust'])):
+        assert hirsel == rust, (n, hirsel, rust)
+    data = root / 'signal'
+    data.mkdir()
+    server = Server('rust', data, free_port(), APP / 'build/tasks-hirsel', root / 'signal.log')
+    pid = json.loads(server.marker.read_text())['pid']
+    os.kill(pid, signal.SIGTERM)
+    assert server.process.wait(10) == 0, 'SIGTERM must exit while stdin stays open'
+    server.stop()
+    print('ok: 11 differential HTTP/HTML checks, 4 corrupt/save-failure checks, 1 SIGTERM check')

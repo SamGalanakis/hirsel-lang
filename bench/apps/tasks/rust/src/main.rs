@@ -17,10 +17,7 @@ use std::{
     collections::HashMap, convert::Infallible, env, net::IpAddr, path::PathBuf, sync::Arc,
     time::Duration,
 };
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    sync::{Mutex, RwLock, mpsc, oneshot, watch},
-};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot, watch};
 
 #[derive(Clone)]
 struct Logger {
@@ -412,11 +409,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
+        let (flag, inline) = match flag.split_once('=') {
+            Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
+            None => (flag, None),
+        };
         let flag = if flag == "-p" { "--port".into() } else { flag };
         if !["--host", "--port", "--durability", "--log-level"].contains(&flag.as_str()) {
             return Err(format!("unknown option {flag}").into());
         }
-        args.push((flag, input.next().ok_or("missing flag value")?));
+        args.push((
+            flag,
+            inline
+                .or_else(|| input.next())
+                .ok_or("missing flag value")?,
+        ));
     }
     let host: IpAddr = setting(&args, "--host", "TASKS_HOST", "127.0.0.1").parse()?;
     let port: u16 = setting(&args, "--port", "TASKS_PORT", "8080").parse()?;
@@ -506,9 +512,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             assets,
             logger: logger.clone(),
         });
+        let writer_logger = Logger {
+            wall: false,
+            ..logger.clone()
+        };
         let writer = tokio::task::spawn_blocking(move || {
             while let Some(job) = jobs.blocking_recv() {
-                let _ = job.reply.send(store.save(&job.board).is_ok());
+                let saved = store.save(&job.board).is_ok();
+                if !saved {
+                    writer_logger.note(
+                        3,
+                        "save failed",
+                        serde_json::json!({"revision":job.board.revision.to_string()}),
+                    );
+                }
+                let _ = job.reply.send(saved);
             }
         });
         let listener = tokio::net::TcpListener::bind((host, port)).await?;
@@ -520,17 +538,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             serde_json::json!({"address":address.to_string()}),
         );
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let shutdown = async move {
-            let stdin = async {
-                let mut lines = BufReader::new(tokio::io::stdin()).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if line == "quit" {
-                        break;
-                    }
+        let (stdin_done, stdin_end) = oneshot::channel();
+        // Tokio stdin uses an uncancellable runtime blocking job. A detached OS
+        // reader lets signal shutdown finish even when the terminal stays open.
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::stdin().lock().lines() {
+                if !matches!(line, Ok(ref line) if line != "quit") {
+                    break;
                 }
-            };
-            tokio::select! {_=stdin=>(),_=tokio::signal::ctrl_c()=>(),_=term.recv()=>()}
-            logger.note(1, "stopping", serde_json::json!({"reason":"shutdown"}));
+            }
+            let _ = stdin_done.send(());
+        });
+        let shutdown = async move {
+            tokio::select! {_=stdin_end=>(),_=tokio::signal::ctrl_c()=>(),_=term.recv()=>()}
+            logger.note(1, "stopping", serde_json::json!({"reason":"asked to stop"}));
             stop.send_replace(true);
         };
         let result = axum::serve(
