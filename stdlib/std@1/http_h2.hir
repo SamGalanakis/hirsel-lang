@@ -45,6 +45,8 @@ resource type HttpTransport: noalloc_drop uses {Net} {
   pending_limit: u64,
   closed: bool,
   draining: bool,
+  // The stream whose last Reset event this endpoint generated, 0 for none.
+  local_reset: u32,
 }
 @noalloc drop(self) {}
 
@@ -74,7 +76,8 @@ fn http_transport(
     pending_bytes: 0,
     pending_limit: config.max_body_bytes,
     closed: false,
-    draining: false
+    draining: false,
+    local_reset: 0
   )
 }
 
@@ -222,12 +225,16 @@ fn http_h2_next_until(
         continue
       }
     } else {
-      match http2_wire.parse(data, 0, 16384) {
-        Error(error) => {
-          let code = match error {
-            ConnectionError(code) => code,
-            StreamError(_, code) => code,
-          }
+      let parsed: Option[(http2_wire.Frame, u64)] = match http2_wire.parse(
+        data,
+        0,
+        16384
+      ) {
+        // A complete frame that fails validation as a stream error resets only
+        // its stream: http2.receive validates it again and sends RST_STREAM, as
+        // Go's processFrameFromReader does (net/http/internal/http2/server.go:1659).
+        Error(StreamError(_, _)) => Some(http_h2_raw_frame(data)),
+        Error(ConnectionError(code)) => {
           let _ = http_h2_endpoint(
             mut t,
             fn(mut endpoint: http2.Session) -> () uses {} {
@@ -238,27 +245,35 @@ fn http_h2_next_until(
           t.closed = true
           return Error(Malformed(HeaderValue()))
         },
-        Ok(Some((frame, end))) => {
-          http_input_consume(mut t.input, end)
-          let outcome = http_h2_endpoint(
-            mut t,
-            fn(mut endpoint: http2.Session) -> Result[http2.Event, http2.Error] uses {} {
-              http2.receive(mut endpoint, frame)
-            }
-          )?
-          let flushed = http_h2_flush(mut t)
-          if let Error(Wire(ConnectionError(_))) = outcome {
-            t.closed = true
+        Ok(Some((frame, end))) => Some((frame, end)),
+        Ok(None()) => None(),
+      }
+      if let Some((frame, end)) = parsed {
+        http_input_consume(mut t.input, end)
+        let outcome = http_h2_endpoint(
+          mut t,
+          fn(mut endpoint: http2.Session) -> Result[http2.Event, http2.Error] uses {} {
+            http2.receive(mut endpoint, frame)
           }
-          match take outcome {
-            Ok(event) => {
-              flushed?
-              return Ok(take event)
-            },
-            Error(error) => return Error(http_h2_error(error)),
-          }
-        },
-        Ok(None()) => (),
+        )?
+        let flushed = http_h2_flush(mut t)
+        if let Error(Wire(ConnectionError(_))) = outcome {
+          t.closed = true
+        }
+        match take outcome {
+          Ok(event) => {
+            flushed?
+            return Ok(take event)
+          },
+          Error(Wire(StreamError(id, code))) => {
+            // The session already queued RST_STREAM: the stream ends and the
+            // connection continues (Go server.go:1659, resetStream).
+            flushed?
+            t.local_reset = id
+            return Ok(Reset(id, http2_wire.code_number(code)))
+          },
+          Error(error) => return Error(http_h2_error(error)),
+        }
       }
     }
     let have = http_input_buffered(t.input)
@@ -285,6 +300,21 @@ fn http_h2_next_until(
     }
   }
   Error(Truncated())
+}
+
+// The frame at the start of `data`, whose header and payload are complete,
+// without validation.
+fn http_h2_raw_frame(data: Bytes) -> (http2_wire.Frame, u64) uses {} {
+  let size: u64 = core@1/int.widen(data[0]) * 65536u64 + core@1/int.widen(data[1]) * 256u64 + core@1/int.widen(
+    data[2]
+  )
+  let frame = http2_wire.Frame(
+    kind: data[3],
+    flags: data[4],
+    stream: http2_wire.read_u32(data, 5) & 2147483647u32,
+    payload: unique core@1/bytes.slice(data, 9, 9 + size)
+  )
+  (frame, 9 + size)
 }
 
 @noalloc
@@ -372,8 +402,10 @@ fn http_h2_for_until(
   Error(Closed())
 }
 
-fn http_h2_body_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> Result[
-  (),
+// Write DATA under flow control: false when the peer resets the stream first,
+// which ends only this stream.
+fn http_h2_stream_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> Result[
+  bool,
   HttpError
 ] {
   let mut offset: u64 = 0
@@ -389,13 +421,13 @@ fn http_h2_body_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> 
     http_h2_flush(mut t)?
     offset += count
     if offset == core@1/bytes.len(data) {
-      return Ok(())
+      return Ok(true)
     }
     if count == 0 {
       let event = http_h2_next(mut t)?
       match event {
         Reset(stream, _) => if stream == id {
-          return Error(Closed())
+          return Ok(false)
         },
         Goaway(last, _) => {
           t.draining = true
@@ -410,7 +442,18 @@ fn http_h2_body_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> 
       }
     }
   }
-  Ok(())
+  Ok(true)
+}
+
+fn http_h2_body_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> Result[
+  (),
+  HttpError
+] {
+  if http_h2_stream_write(mut t, id, data, end)? {
+    Ok(())
+  } else {
+    Error(Closed())
+  }
 }
 
 fn http_h2_field(name: String, value: String) -> hpack.Field uses {} {
@@ -628,15 +671,28 @@ fn http_h2_request_end(mut r: Request, request_trailers: List[Header]) -> Result
   Ok(())
 }
 
+// A stream this endpoint reset for malformed input reports Malformed; a peer
+// reset or any other event ends the response as Truncated.
+fn http_h2_unexpected(t: HttpTransport, event: http2.Event) -> HttpError uses {} {
+  match event {
+    Reset(id, _) => if t.local_reset == id {
+      Malformed(HeaderValue())
+    } else {
+      Truncated()
+    },
+    _ => Truncated(),
+  }
+}
+
 fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   if r.state != 2 {
     return Error(OutOfOrder())
   }
   r.state = 5
   while true {
-    let event = http_h2_for(mut r.transport, r.stream_id)?
-    let Headers(_, fields, end) = event else {
-      return Error(Truncated())
+    let (fields, end) = match http_h2_for(mut r.transport, r.stream_id)? {
+      Headers(_, fields, end) => (unique fields, end),
+      event => return Error(http_h2_unexpected(r.transport, event)),
     }
     let status_text = http_h2_value(fields, b":status")?
     let status = match u16.parse(status_text) {
@@ -724,9 +780,9 @@ fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
         r.response_trailers = http_h2_headers(fields, r.config.max_headers)?
         r.body_end = true
       },
-      _ => {
+      event => {
         r.state = 5
-        return Error(Truncated())
+        return Error(http_h2_unexpected(r.transport, event))
       },
     }
   }
@@ -771,73 +827,101 @@ fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -
   }
   c.state = 3
   let deadline = http_server_deadline(clock, c.config.read_timeout)?
-  http_transport_read_timeout(mut c.transport, http_server_remaining(clock, deadline)?)?
-  let event = http_h2_for_until(mut c.transport, 0, clock, deadline)?
-  let Headers(id, fields, end) = event else {
-    return Error(Malformed(HeaderValue()))
-  }
-  c.stream_id = id
-  let headers = http_h2_headers(fields, c.config.max_headers)?
-  let method = http_h2_value(fields, b":method")?
-  let mut incoming = ServerRequest(
-    method: unique method,
-    target: http_h2_value(fields, b":path")?,
-    version: Http2(),
-    headers: unique headers,
-    body: b"",
-    trailers: [],
-    keep_alive: true
-  )
-  // Expose :authority using the ordinary Host lookup, as Go's Request.Host mapping.
-  let authority = http_h2_value(fields, b":authority")?
-  if authority != "" && option.is_none(header(incoming.headers, "host")) {
-    core@1/list.push(mut incoming.headers, Header(name: "host", value: authority))
-  }
-  let mut ended = end
-  let mut body: List[u8] = []
-  while !ended {
+  // Between requests, Go's server drops frames of finished or reset streams
+  // and ends a request whose stream is reset, keeping the connection
+  // (net/http/internal/http2/server.go processFrameFromReader, processResetStream).
+  while true {
     http_transport_read_timeout(
       mut c.transport,
       http_server_remaining(clock, deadline)?
     )?
-    match http_h2_for_until(mut c.transport, id, clock, deadline)? {
-      Data(_, data, credit, done) => {
-        if core@1/bytes.len(data) > c.config.max_body_bytes - core@1/list.len(body) {
-          let _ = http_h2_endpoint(
-            mut c.transport,
-            fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
-              http2.reset(mut endpoint, id, Cancel())
-            }
-          )?
-          let _ = http_h2_flush(mut c.transport)
-          return Error(BodyTooLarge())
-        }
-        for byte in data {
-          core@1/list.push(mut body, byte)
-        }
-        http_h2_endpoint(
+    let (id, fields, end) = match http_h2_for_until(mut c.transport, 0, clock, deadline)? {
+      Headers(id, fields, end) => (id, unique fields, end),
+      Data(stream, _, credit, _) => {
+        let _ = http_h2_endpoint(
           mut c.transport,
           fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
-            http2.consumed(mut endpoint, id, credit)
+            http2.consumed(mut endpoint, stream, credit)
           }
-        )? ? http_h2_error
+        )?
         http_h2_flush(mut c.transport)?
-        ended = done
+        continue
       },
-      Headers(_, trailer_fields, true) => {
-        incoming.trailers = http_h2_headers(trailer_fields, c.config.max_headers)?
-        ended = true
-      },
-      _ => return Error(Truncated()),
+      _ => continue,
     }
+    c.stream_id = id
+    let headers = http_h2_headers(fields, c.config.max_headers)?
+    let method = http_h2_value(fields, b":method")?
+    let mut incoming = ServerRequest(
+      method: unique method,
+      target: http_h2_value(fields, b":path")?,
+      version: Http2(),
+      headers: unique headers,
+      body: b"",
+      trailers: [],
+      keep_alive: true
+    )
+    // Expose :authority using the ordinary Host lookup, as Go's Request.Host mapping.
+    let authority = http_h2_value(fields, b":authority")?
+    if authority != "" && option.is_none(header(incoming.headers, "host")) {
+      core@1/list.push(mut incoming.headers, Header(name: "host", value: authority))
+    }
+    let mut ended = end
+    let mut reset = false
+    let mut body: List[u8] = []
+    while !ended {
+      http_transport_read_timeout(
+        mut c.transport,
+        http_server_remaining(clock, deadline)?
+      )?
+      match http_h2_for_until(mut c.transport, id, clock, deadline)? {
+        Data(_, data, credit, done) => {
+          if core@1/bytes.len(data) > c.config.max_body_bytes - core@1/list.len(body) {
+            let _ = http_h2_endpoint(
+              mut c.transport,
+              fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+                http2.reset(mut endpoint, id, Cancel())
+              }
+            )?
+            let _ = http_h2_flush(mut c.transport)
+            return Error(BodyTooLarge())
+          }
+          for byte in data {
+            core@1/list.push(mut body, byte)
+          }
+          http_h2_endpoint(
+            mut c.transport,
+            fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+              http2.consumed(mut endpoint, id, credit)
+            }
+          )? ? http_h2_error
+          http_h2_flush(mut c.transport)?
+          ended = done
+        },
+        Headers(_, trailer_fields, true) => {
+          incoming.trailers = http_h2_headers(trailer_fields, c.config.max_headers)?
+          ended = true
+        },
+        Reset(_, _) => {
+          reset = true
+          ended = true
+        },
+        _ => return Error(Truncated()),
+      }
+    }
+    if reset {
+      c.stream_id = 0
+      continue
+    }
+    let _ = http_server_remaining(clock, deadline)?
+    incoming.body = core@1/bytes.from_list(take body)
+    c.version = Http2()
+    c.head_request = method == "HEAD"
+    c.keep_alive = true
+    c.state = 1
+    return Ok(take incoming)
   }
-  let _ = http_server_remaining(clock, deadline)?
-  incoming.body = core@1/bytes.from_list(take body)
-  c.version = Http2()
-  c.head_request = method == "HEAD"
-  c.keep_alive = true
-  c.state = 1
-  Ok(take incoming)
+  Error(Closed())
 }
 
 fn http_h2_respond_head(mut c: HttpExchange, status: u16, headers: List[Header]) -> Result[
@@ -889,9 +973,20 @@ fn http_h2_response_write(mut c: HttpExchange, bytes: Bytes) -> Result[(), HttpE
     return Ok(())
   }
   c.state = 2
-  http_h2_body_write(mut c.transport, c.stream_id, bytes, false)?
+  if !http_h2_stream_write(mut c.transport, c.stream_id, bytes, false)? {
+    return http_h2_peer_reset(mut c)
+  }
   c.state = 4
   Ok(())
+}
+
+// The peer reset the response's stream: the exchange ends, but its connection
+// stays usable for later requests, as Go's server closes only that stream
+// (net/http/internal/http2/server.go processResetStream).
+fn http_h2_peer_reset(mut c: HttpExchange) -> Result[(), HttpError] uses {} {
+  c.served = true
+  c.state = 0
+  Error(Closed())
 }
 
 fn http_h2_response_end(mut c: HttpExchange) -> Result[(), HttpError] {
@@ -899,7 +994,9 @@ fn http_h2_response_end(mut c: HttpExchange) -> Result[(), HttpError] {
     return Error(OutOfOrder())
   }
   c.state = 2
-  http_h2_body_write(mut c.transport, c.stream_id, b"", true)?
+  if !http_h2_stream_write(mut c.transport, c.stream_id, b"", true)? {
+    return http_h2_peer_reset(mut c)
+  }
   c.served = true
   if c.keep_alive {
     c.state = 0
@@ -966,6 +1063,50 @@ fn http_h2_respond(
     c.state = 2
   }
   Ok(())
+}
+
+// The input a closing HTTP/2 server connection reads and discards at most.
+const HTTP_H2_LINGER_BYTES: u64 = 65536
+
+// Close an HTTP/2 connection as Go's server does after GOAWAY
+// (net/http/internal/http2/server.go:1574-1591, goAwayTimeout): send GOAWAY
+// unless the connection already failed, then keep reading for up to a second
+// per read, so that closing sends FIN rather than an RST over unread input
+// that could destroy the GOAWAY in flight. Go answers frames meanwhile; this
+// half-closes first and discards them, so the peer sees GOAWAY then EOF.
+fn http_h2_linger(mut t: HttpTransport) -> () {
+  if !http_is_h2(t) {
+    return ()
+  }
+  if !t.closed {
+    let _ = http_h2_endpoint(
+      mut t,
+      fn(mut endpoint: http2.Session) -> () uses {} {
+        http2.goaway(mut endpoint, NoError())
+      }
+    )
+    let _ = http_h2_flush(mut t)
+  }
+  t.closed = true
+  if core@1/net.shutdown(t.net, mut t.stream, Write()) != Ok(()) {
+    return ()
+  }
+  if core@1/net.set_read_timeout(t.net, mut t.stream, Nanos(1000000000)) != Ok(()) {
+    return ()
+  }
+  let mut drained: u64 = 0
+  while drained < HTTP_H2_LINGER_BYTES {
+    let mut sink: List[u8] = []
+    match core@1/net.read(t.net, mut t.stream, mut sink, 4096) {
+      Ok(count) => {
+        if count == 0 {
+          return ()
+        }
+        drained += count
+      },
+      Error(_) => return (),
+    }
+  }
 }
 
 /// Protocol selected for this request's transport, before sending its headers.
@@ -1051,9 +1192,13 @@ pub fn next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Re
   }
   let incoming_request = match http_receive_request(mut exchange, clock) {
     Ok(incoming) => take incoming,
-    Error(Closed()) => return Ok(None()),
+    Error(Closed()) => {
+      http_h2_linger(mut exchange.transport)
+      return Ok(None())
+    },
     Error(error) => {
       http_server_reject(mut exchange, error)?
+      http_h2_linger(mut exchange.transport)
       return Error(error)
     },
   }
@@ -1114,8 +1259,27 @@ pub fn respond(
     return Error(OutOfOrder())
   }
   let mut exchange = http_exchange_from_transfer(take current)?
-  http_respond(mut exchange, status, headers, body, close)?
-  http_stream_return(mut s, take exchange)
+  let outcome = http_respond(mut exchange, status, headers, body, close)
+  http_stream_finish(mut s, take exchange, outcome)
+}
+
+// Return the transport after a completed response, or after an HTTP/2 stream
+// the peer reset, which leaves the connection usable; otherwise dropping the
+// exchange closes the connection.
+fn http_stream_finish(
+  mut s: ServerStream,
+  take exchange: HttpExchange,
+  outcome: Result[(), HttpError]
+) -> Result[(), HttpError] {
+  match outcome {
+    Ok(()) => http_stream_return(mut s, take exchange),
+    Error(error) => {
+      if http_is_h2(exchange.transport) && exchange.state == 0 {
+        http_stream_return(mut s, take exchange)?
+      }
+      Error(error)
+    },
+  }
 }
 
 /// Begin a streaming reply. The stream remains checked out until completion.
@@ -1146,7 +1310,10 @@ pub fn write_response_body(mut s: ServerStream, bytes: Bytes) -> Result[(), Http
     return Error(OutOfOrder())
   }
   let mut exchange = http_exchange_from_transfer(take current)?
-  http_write_response_body(mut exchange, bytes)?
+  let outcome = http_write_response_body(mut exchange, bytes)
+  if outcome != Ok(()) {
+    return http_stream_finish(mut s, take exchange, outcome)
+  }
   s.exchange = Some(http_exchange_transfer(take exchange))
   Ok(())
 }
@@ -1161,8 +1328,8 @@ pub fn end_response_body(mut s: ServerStream) -> Result[(), HttpError] {
     return Error(OutOfOrder())
   }
   let mut exchange = http_exchange_from_transfer(take current)?
-  http_end_response_body(mut exchange)?
-  http_stream_return(mut s, take exchange)
+  let outcome = http_end_response_body(mut exchange)
+  http_stream_finish(mut s, take exchange, outcome)
 }
 
 // Parse failures belong to the protocol endpoint, before application dispatch.
@@ -1235,6 +1402,7 @@ type HttpExchangeData {
   pending_limit: u64,
   closed: bool,
   draining: bool,
+  local_reset: u32,
 }
 
 resource type HttpTransfer: noalloc_drop uses {Net, Tasks} {
@@ -1272,7 +1440,8 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
     pending_bytes: pending_bytes,
     pending_limit: pending_limit,
     closed: closed,
-    draining: draining
+    draining: draining,
+    local_reset: local_reset
   ) = take transport
   if transport_version != Http2() {
     return HttpTransfer(
@@ -1310,7 +1479,8 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
     pending_bytes: pending_bytes,
     pending_limit: pending_limit,
     closed: closed,
-    draining: draining
+    draining: draining,
+    local_reset: local_reset
   )
   HttpTransfer(
     tasks: unique tasks,
@@ -1361,7 +1531,8 @@ fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
             pending_bytes: 0,
             pending_limit: pending_limit,
             closed: closed,
-            draining: false
+            draining: false,
+            local_reset: 0
           )
         )
       )
@@ -1391,7 +1562,8 @@ fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
     pending_bytes: pending_bytes,
     pending_limit: pending_limit,
     closed: closed,
-    draining: draining
+    draining: draining,
+    local_reset: local_reset
   ) = take snapshot
   let transport = HttpTransport(
     net: net,
@@ -1404,7 +1576,8 @@ fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
     pending_bytes: pending_bytes,
     pending_limit: pending_limit,
     closed: closed,
-    draining: draining
+    draining: draining,
+    local_reset: local_reset
   )
   Ok(
     HttpExchange(

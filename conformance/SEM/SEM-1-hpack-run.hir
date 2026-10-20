@@ -234,3 +234,107 @@ fn responses(t: Test) {
   )
   test.check(t, true)
 }
+
+// Go x/net/http2/hpack hpack_test.go TestHuffmanDecode and TestHuffmanFuzzCrash (7e56200).
+@test
+fn go_huffman_decode(t: Test) {
+  let rows: List[(Bytes, Bytes)] = [
+    (b"\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", b"www.example.com"),
+    (b"\xa8\xeb\x10\x64\x9c\xbf", b"no-cache"),
+    (b"\x25\xa8\x49\xe9\x5b\xa9\x7d\x7f", b"custom-key"),
+    (b"\x25\xa8\x49\xe9\x5b\xb8\xe8\xb4\xbf", b"custom-value"),
+    (b"\x64\x02", b"302"),
+    (b"\xae\xc3\x77\x1a\x4b", b"private"),
+    (
+      b"\xd0\x7a\xbe\x94\x10\x54\xd4\x44\xa8\x20\x05\x95\x04\x0b\x81\x66\xe0\x82\xa6\x2d\x1b\xff",
+      b"Mon, 21 Oct 2013 20:13:21 GMT"
+    ),
+    (
+      b"\x9d\x29\xad\x17\x18\x63\xc7\x8f\x0b\x97\xc8\xe9\xae\x82\xae\x43\xd3",
+      b"https://www.example.com"
+    ),
+    (b"\x9b\xd9\xab", b"gzip"),
+    (
+      b"\x94\xe7\x82\x1d\xd7\xf2\xe6\xc7\xb3\x35\xdf\xdf\xcd\x5b\x39\x60\xd5\xaf\x27\x08\x7f\x36\x72\xc1\xab\x27\x0f\xb5\x29\x1f\x95\x87\x31\x60\x65\xc0\x03\xed\x4e\xe5\xb1\x06\x3d\x50\x07",
+      b"foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1"
+    )
+  ]
+  for (encoded, decoded) in rows {
+    test.check(t, std@1/hpack.huffman_decode(encoded, 65536) == Ok(copy decoded))
+    test.check(t, std@1/hpack.huffman_encode(decoded) == encoded)
+  }
+  test.check(
+    t,
+    std@1/hpack.huffman_decode(b"00\x91\xff\xff\xff\xff\xc8", 65536) == Error(
+      InvalidHuffman()
+    )
+  )
+}
+
+// Go hpack_test.go TestReadVarInt, through the representations whose prefix
+// has each width: n = 7 indexed, 6 incremental literal, 5 table size update,
+// 4 literal without indexing. The bits above a prefix select the
+// representation, so Go's "ignoring top bits" rows are the size-update rows.
+@test
+fn go_read_var_int(t: Test) {
+  let rows: List[(Bytes, Result[List[std@1/hpack.Field], std@1/hpack.Error])] = [
+    // Fits in the prefix: n = 5 value 30; n = 4 value 14 (:status) with a value.
+    (b"\x3e", Ok([])),
+    (b"\x0e\x015", Ok([field(b":status", b"5")])),
+    // All prefix bits set and nothing after: needs more.
+    (b"\xff", Error(Truncated())),
+    (b"\x7f", Error(Truncated())),
+    (b"\x3f", Error(Truncated())),
+    (b"\x0f", Error(Truncated())),
+    // 1337 in a 5-bit prefix; then a following representation; then short a byte.
+    (b"\x3f\x9a\x0a", Ok([])),
+    (b"\x3f\x9a\x0a\x82", Ok([field(b":method", b"GET")])),
+    (b"\x3f\x9a", Error(Truncated())),
+    // Overflow.
+    (
+      b"\xff\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80",
+      Error(IntegerOverflow())
+    )
+  ]
+  for (encoded, expected) in rows {
+    let mut d = std@1/hpack.decoder(4096)
+    test.check(t, std@1/hpack.decode(mut d, encoded, 65536) == expected)
+  }
+}
+
+// Encode `f` after the table holds foo: bar then blake: miz (indexes 63 and
+// 62): the block starts with `prefix` and decodes to `f`.
+fn search(t: Test, f: std@1/hpack.Field, prefix: Bytes) {
+  let mut e = std@1/hpack.encoder(4096)
+  let mut d = std@1/hpack.decoder(4096)
+  let seed = std@1/hpack.encode(mut e, [field(b"foo", b"bar"), field(b"blake", b"miz")])
+  let _ = std@1/hpack.decode(mut d, seed, 65536)
+  let out = std@1/hpack.encode(mut e, [f])
+  test.check(t, bytes.len(out) >= bytes.len(prefix))
+  test.check(t, bytes.slice(out, 0, bytes.len(prefix)) == prefix)
+  test.check(t, std@1/hpack.decode(mut d, out, 65536) == Ok([f]))
+}
+
+// Go encode_test.go TestEncoderSearchTable. Go seeds its dynamic table with
+// :method: GET directly; an encoder only inserts fields without a static
+// match, so that entry is left out. Go permits any :method entry for a name
+// match and picks index 3; this encoder picks the first, 2.
+@test
+fn go_encoder_search_table(t: Test) {
+  // Name and value match: indexed.
+  search(t, field(b"foo", b"bar"), b"\xbf")
+  search(t, field(b"blake", b"miz"), b"\xbe")
+  search(t, field(b":method", b"GET"), b"\x82")
+  // A sensitive field matches only by name: never indexed.
+  search(
+    t,
+    std@1/hpack.Field(name: b":method", value: b"GET", sensitive: true),
+    b"\x12"
+  )
+  // Only the name matches: an incremental literal with an indexed name.
+  search(t, field(b"foo", b"..."), b"\x7f\x00")
+  search(t, field(b"blake", b"..."), b"\x7e")
+  search(t, field(b":method", b"..."), b"\x42")
+  // No match: a literal name.
+  search(t, field(b"foo-", b"bar"), b"\x40")
+}

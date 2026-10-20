@@ -417,7 +417,7 @@ fn scripted_server(t: Test) -> Result[(), std@1/http2.Error] {
         connections: [
           Open(
             [
-              Expect(b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"),
+              Expect(b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa"),
               Send(b"PRI * HTTP/2.0\r\n\r\nSM\r"),
               Send(
                 b"\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x03\x01\x05\x00\x00\x00\x01\x82\x86\x84"
@@ -462,7 +462,13 @@ fn bad_preface(t: Test) -> Result[(), std@1/http2.Error] {
         resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
         tls: Plain(),
         connections: [
-          Open([Expect(b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"), Send(b"X"), Close()])
+          Open(
+            [
+              Expect(b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa"),
+              Send(b"X"),
+              Close()
+            ]
+          )
         ]
       )
     ],
@@ -505,7 +511,10 @@ fn concurrency_limit_excludes_closed_bodies(t: Test) {
 }
 
 @test
-fn retired_stream_preserves_compression(t: Test) {
+fn retired_stream_frames(t: Test) {
+  // A server treats HEADERS on a retired stream as a stream that went down,
+  // a connection error (Go server.go:2167 "stream_went_down"); late DATA only
+  // closes its stream and returns the connection credit.
   let mut server = std@1/http2.session(Server(), 65536)
   let mut encoder = std@1/hpack.encoder(4096)
   let _ = std@1/http2.receive(
@@ -527,32 +536,6 @@ fn retired_stream_preserves_compression(t: Test) {
     std@1/http2.headers(mut server, 1, [field(b":status", b"200")], true) == Ok(())
   )
   let _ = std@1/http2.output(mut server)
-  let closed = std@1/http2_wire.Frame(
-    kind: 1,
-    flags: 5,
-    stream: 1,
-    payload: std@1/hpack.encode(mut encoder, [field(b"x", b"new")])
-  )
-  test.check(
-    t,
-    std@1/http2.receive(mut server, closed) == Error(
-      Wire(StreamError(1, StreamClosed()))
-    )
-  )
-  let (prefix, resets) = std@1/http2.drain_frames(mut server)
-  test.check(t, prefix == b"" && list.len(resets) == 1 && resets[0].kind == 3)
-  let mut fields = request_fields()
-  list.push(mut fields, field(b"x", b"new"))
-  let next = std@1/http2_wire.Frame(
-    kind: 1,
-    flags: 5,
-    stream: 3,
-    payload: std@1/hpack.encode(mut encoder, fields)
-  )
-  test.check(
-    t,
-    std@1/http2.receive(mut server, next) == Ok(Headers(3, take fields, true))
-  )
   let late = std@1/http2_wire.Frame(kind: 0, flags: 1, stream: 1, payload: b"x")
   test.check(
     t,
@@ -563,6 +546,29 @@ fn retired_stream_preserves_compression(t: Test) {
     t,
     list.len(credit) == 2 && credit[0].kind == 8 && credit[0].stream == 0 && credit[1].kind == 3
   )
+  let closed = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, [field(b"x", b"new")])
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, closed) == Error(Wire(ConnectionError(Protocol())))
+  )
+  let (_, goaway) = std@1/http2.drain_frames(mut server)
+  test.check(
+    t,
+    list.len(goaway) == 1 && goaway[0].kind == 7 && std@1/http2_wire.read_u32(
+      goaway[0].payload,
+      4
+    ) == 1
+  )
+  let mut fresh = std@1/http2.session(Server(), 65536)
+  let _ = std@1/http2.receive(
+    mut fresh,
+    std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  )
   let idle = std@1/http2_wire.Frame(
     kind: 8,
     flags: 0,
@@ -571,7 +577,54 @@ fn retired_stream_preserves_compression(t: Test) {
   )
   test.check(
     t,
-    std@1/http2.receive(mut server, idle) == Error(Wire(ConnectionError(Protocol())))
+    std@1/http2.receive(mut fresh, idle) == Error(Wire(ConnectionError(Protocol())))
+  )
+}
+
+@test
+fn forgotten_stream_preserves_compression(t: Test) {
+  // A client may have forgotten a stream it finished, so late response HEADERS
+  // close only that stream (h2 proto/streams/streams.rs:500), and still update
+  // HPACK, since the next response may refer to the new dynamic entry.
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(1))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  test.check(
+    t,
+    std@1/http2.headers(mut server, 1, [field(b":status", b"204")], true) == Ok(())
+  )
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  let mut encoder = std@1/hpack.encoder(4096)
+  let _ = std@1/hpack.encode(mut encoder, [field(b":status", b"204")])
+  let late = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(
+      mut encoder,
+      [field(b":status", b"200"), field(b"x", b"new")]
+    )
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut client, late) == Error(Wire(StreamError(1, StreamClosed())))
+  )
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(3))
+  let response: List[std@1/hpack.Field] = [
+    field(b":status", b"200"),
+    field(b"x", b"new")
+  ]
+  let next = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 3,
+    payload: std@1/hpack.encode(mut encoder, response)
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut client, next) == Ok(Headers(3, take response, true))
   )
 }
 
@@ -628,5 +681,111 @@ fn goaway_refuses_new_requests(t: Test) {
       final[0].payload,
       0
     ) == 1
+  )
+}
+
+// Feed `frames` to a server session after SETTINGS: the first `good` succeed
+// and, when that is not all of them, the next is a PROTOCOL_ERROR connection error.
+fn frame_order(t: Test, frames: List[std@1/http2_wire.Frame], good: u64) {
+  let mut server = std@1/http2.session(Server(), 65536)
+  let _ = std@1/http2.receive(
+    mut server,
+    std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  )
+  let mut i: u64 = 0
+  while i < list.len(frames) {
+    let outcome = std@1/http2.receive(mut server, frames[i])
+    if i < good {
+      test.check(
+        t,
+        match outcome {
+          Ok(_) => true,
+          Error(_) => false,
+        }
+      )
+    } else {
+      test.check(t, outcome == Error(Wire(ConnectionError(Protocol()))))
+      return ()
+    }
+    i += 1
+  }
+  test.check(t, good == list.len(frames))
+}
+
+@test
+fn go_read_frame_order(t: Test) {
+  // Go frame_test.go TestReadFrameOrder (ebe2feef): HEADERS and CONTINUATION
+  // of one block are never interleaved with other frames. Go checks this in
+  // its Framer with any fragment; here the session checks it, so the fragments
+  // are pieces of one valid HPACK block, and stream 3 replaces Go's even
+  // stream 2, which a server rejects as a client stream. Each row ends with
+  // Go's trailing DATA on stream 1.
+  let mut encoder = std@1/hpack.encoder(4096)
+  let block = std@1/hpack.encode(mut encoder, request_fields())
+  let size = bytes.len(block)
+  let head = fn(id: u32, end: bool, part: Bytes) -> std@1/http2_wire.Frame {
+    std@1/http2_wire.Frame(
+      kind: 1,
+      flags: if end {
+        4u8
+      } else {
+        0u8
+      },
+      stream: id,
+      payload: unique part
+    )
+  }
+  let cont = fn(id: u32, end: bool, part: Bytes) -> std@1/http2_wire.Frame {
+    std@1/http2_wire.Frame(
+      kind: 9,
+      flags: if end {
+        4u8
+      } else {
+        0u8
+      },
+      stream: id,
+      payload: unique part
+    )
+  }
+  let data = std@1/http2_wire.Frame(kind: 0, flags: 1, stream: 1, payload: b"")
+  let first = bytes.slice(block, 0, 1)
+  let rest = bytes.slice(block, 1, size)
+  // 0, 1: complete blocks.
+  frame_order(t, [head(1, true, block), copy data], 2)
+  frame_order(t, [head(1, true, block), head(3, true, block), copy data], 3)
+  // 2, 3: HEADERS or DATA where CONTINUATION of stream 1 must follow.
+  frame_order(t, [head(1, false, first), head(3, true, block), copy data], 1)
+  frame_order(t, [head(1, false, first), copy data], 1)
+  // 4: a finished CONTINUATION allows the next block.
+  frame_order(
+    t,
+    [head(1, false, first), cont(1, true, rest), head(3, true, block), copy data],
+    4
+  )
+  // 5: CONTINUATION on another stream.
+  frame_order(
+    t,
+    [head(1, false, first), cont(3, true, rest), head(3, true, block), copy data],
+    1
+  )
+  // 6, 7: CONTINUATION with no open block.
+  frame_order(t, [cont(1, true, block), copy data], 0)
+  frame_order(t, [cont(1, false, block), copy data], 0)
+  // 8, 9: stream 0.
+  frame_order(t, [head(0, true, block), copy data], 0)
+  frame_order(t, [cont(0, true, block), copy data], 0)
+  // 10: CONTINUATION after the block ended, following five good frames.
+  frame_order(
+    t,
+    [
+      head(1, false, bytes.slice(block, 0, 1)),
+      cont(1, false, bytes.slice(block, 1, 2)),
+      cont(1, false, bytes.slice(block, 2, 3)),
+      cont(1, false, bytes.slice(block, 3, 4)),
+      cont(1, true, bytes.slice(block, 4, size)),
+      cont(1, false, block),
+      copy data
+    ],
+    5
   )
 }

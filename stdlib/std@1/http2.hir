@@ -4,6 +4,10 @@
 // third-party/NOTICES.md.
 pub type Role = Client | Server
 
+// The concurrent streams a server advertises and enforces: Go's
+// defaultMaxStreams (net/http/internal/http2/server.go:53).
+const MAX_PEER_STREAMS: u64 = 250
+
 pub type Event = Idle | Headers(u32, List[hpack.Field], bool) | Data(
   u32,
   Bytes,
@@ -102,7 +106,8 @@ pub fn session(role: Role, header_limit: u64) -> Session uses {} {
       payload: if role == Client() {
         b"\x00\x02\x00\x00\x00\x00"
       } else {
-        b""
+        // SETTINGS_MAX_CONCURRENT_STREAMS = MAX_PEER_STREAMS.
+        b"\x00\x03\x00\x00\x00\xfa"
       }
     )
   )
@@ -186,6 +191,18 @@ fn add_stream(mut s: Session, id: u32) uses {} {
 }
 
 fn retire(mut s: Session) uses {} {
+  // Rebuild the list only when a stream has finished: with many open streams,
+  // copying it on every frame is quadratic.
+  let mut finished = false
+  for state in s.streams {
+    if state.sent_end && state.received_end && state.unconsumed == 0 {
+      finished = true
+      break
+    }
+  }
+  if !finished {
+    return ()
+  }
   let mut active: List[StreamState] = []
   for state in s.streams {
     if !state.sent_end || !state.received_end || state.unconsumed != 0 {
@@ -583,7 +600,19 @@ fn complete_headers(mut s: Session) -> Result[Event, Error] uses {} {
     Error(_) => return Error(Wire(ConnectionError(Compression()))),
   }
   let Some(index) = stream_index(s, id) else {
-    return Error(Wire(StreamError(id, StreamClosed())))
+    // A server sees a retired stream ID as a stream that went down, a
+    // connection error (Go net/http/internal/http2/server.go:2167, h2
+    // proto/streams/recv.rs:138). A client may have forgotten a stream it
+    // reset, so only that stream is closed (h2 proto/streams/streams.rs:500).
+    return Error(
+      Wire(
+        if s.role == Server() {
+          ConnectionError(Protocol())
+        } else {
+          StreamError(id, StreamClosed())
+        }
+      )
+    )
   }
   if s.streams[index].received_end {
     return Error(Wire(StreamError(id, StreamClosed())))
@@ -594,6 +623,23 @@ fn complete_headers(mut s: Session) -> Result[Event, Error] uses {} {
     return Error(Wire(StreamError(id, RefusedStream())))
   }
   let trailers = s.streams[index].received_headers
+  if s.role == Server() && !trailers && active_streams(s) > MAX_PEER_STREAMS {
+    // Exceeding the advertised limit is PROTOCOL_ERROR once the peer has
+    // acknowledged it, else REFUSED_STREAM (Go server.go:2182). The block is
+    // decoded first, as for every refused stream.
+    return Error(
+      Wire(
+        StreamError(
+          id,
+          if s.settings_pending {
+            RefusedStream()
+          } else {
+            Protocol()
+          }
+        )
+      )
+    )
+  }
   if !valid_headers(fields, s.role, trailers) || trailers && !s.header_end {
     return Error(Wire(StreamError(id, Protocol())))
   }
@@ -756,8 +802,8 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
           s.last_peer = id
           add_stream(mut s, id)
         }
-      // Retired streams still decode the block to keep the connection's
-      // compression state synchronized before reporting STREAM_CLOSED.
+      // Retired streams still decode the block, keeping a client's compression
+      // state synchronized before it reports STREAM_CLOSED.
       }
       s.continuation = id
       s.header_end = frame.flags & 1 != 0

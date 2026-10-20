@@ -40,7 +40,7 @@ fn streamed(t: Test) -> Result[(), std@1/http.HttpError] {
     [
       Send(request()),
       Expect(
-        b"\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x04\x01\x00\x00\x00\x00"
+        b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa\x00\x00\x00\x04\x01\x00\x00\x00\x00"
       ),
       Expect(
         b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x00\x00\x00\x00\x01ok\x00\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -109,7 +109,7 @@ fn flow_credit_and_queued_request(t: Test) -> Result[(), std@1/http.HttpError] {
         b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x10\x01\x05\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com"
       ),
       Expect(
-        b"\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x04\x01\x00\x00\x00\x00\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x01\x00\x00\x00\x00\x00\x01a"
+        b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa\x00\x00\x00\x04\x01\x00\x00\x00\x00\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x01\x00\x00\x00\x00\x00\x01a"
       ),
       Send(
         b"\x00\x00\x10\x01\x05\x00\x00\x00\x03\x82\x86\x84\x01\x0bexample.com\x00\x00\x04\x08\x00\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -156,6 +156,156 @@ fn abandoned_exchange_closes(t: Test) -> Result[(), std@1/http.HttpError] {
     }
     let unused = take owned
   }
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}
+
+// The server's SETTINGS (SETTINGS_MAX_CONCURRENT_STREAMS 250) and its ACK of
+// the client's empty SETTINGS.
+fn server_settings() -> Bytes {
+  b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa\x00\x00\x00\x04\x01\x00\x00\x00\x00"
+}
+
+// GET / for example.com on stream 3, ending the stream.
+fn second_request() -> Bytes {
+  b"\x00\x00\x10\x01\x05\x00\x00\x00\x03\x82\x86\x84\x01\x0bexample.com"
+}
+
+// A 200 response with an empty body on stream 3.
+fn second_response() -> Bytes {
+  b"\x00\x00\x01\x01\x04\x00\x00\x00\x03\x88\x00\x00\x00\x00\x01\x00\x00\x00\x03"
+}
+
+fn serve_second(t: Test, mut c: std@1/http.ServerConnection) -> Result[
+  (),
+  std@1/http.HttpError
+] {
+  let Some(exchange) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let (owned, incoming) = take exchange
+  let mut stream = take owned
+  test.check(t, incoming.method == "GET" && incoming.target == "/")
+  std@1/http.respond_head(mut stream, 200u16, [])?
+  std@1/http.end_response_body(mut stream)?
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}
+
+@test
+fn peer_reset_keeps_connection(t: Test) -> Result[(), std@1/http.HttpError] {
+  // A request reset before its body ends is dropped; the connection still
+  // answers PING and serves the next stream (Go server.go processResetStream).
+  let n = peer(
+    t,
+    [
+      Send(
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x10\x01\x04\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08\x00\x00\x08\x06\x00\x00\x00\x00\x00pingpong"
+      ),
+      Expect(server_settings()),
+      Expect(b"\x00\x00\x08\x06\x01\x00\x00\x00\x00pingpong"),
+      Send(second_request()),
+      Expect(second_response()),
+      Close()
+    ]
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  serve_second(t, mut c)
+}
+
+@test
+fn malformed_stream_keeps_connection(t: Test) {
+  // An uppercase field name is a stream error: RST_STREAM PROTOCOL_ERROR, and
+  // the next stream is served on the same connection.
+  let n = peer(
+    t,
+    [
+      Send(
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x15\x01\x05\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com\x00\x01X\x01y"
+      ),
+      Expect(server_settings()),
+      Expect(b"\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x01"),
+      Send(second_request()),
+      Expect(second_response()),
+      Close()
+    ]
+  )
+  let Ok(socket) = net.connect(n, "example.com", 80u16, Unbounded()) else {
+    test.check(t, false)
+    return ()
+  }
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  test.check(t, serve_second(t, mut c) == Ok(()))
+}
+
+@test
+fn peer_reset_mid_response(t: Test) -> Result[(), std@1/http.HttpError] {
+  // The peer resets a response waiting for flow credit: the write reports
+  // Closed, and the connection returns for the next request.
+  let n = peer(
+    t,
+    [
+      Send(
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x10\x01\x05\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com"
+      ),
+      Expect(server_settings()),
+      Expect(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x01\x00\x00\x00\x00\x00\x01a"
+      ),
+      Send(b"\x00\x00\x04\x03\x00\x00\x00\x00\x01\x00\x00\x00\x08"),
+      Send(second_request()),
+      Expect(second_response()),
+      Close()
+    ]
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  let Some(exchange) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let (owned, _) = take exchange
+  let mut stream = take owned
+  std@1/http.respond_head(mut stream, 200u16, [])?
+  test.check(t, std@1/http.write_response_body(mut stream, b"abc") == Error(Closed()))
+  serve_second(t, mut c)
+}
+
+@test
+fn peer_goaway_closes_gracefully(t: Test) -> Result[(), std@1/http.HttpError] {
+  // After the peer's GOAWAY the server answers GOAWAY NO_ERROR before closing
+  // (Go server.go processGoAway, goAwayTimeout). An accepted client checks
+  // its Expect steps when the connection closes.
+  let home = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 8080u16,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40001u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x08\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\x06\x00\x00\x00\x00\x00pingpong"
+              ),
+              Expect(server_settings()),
+              Expect(
+                b"\x00\x00\x08\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home) ? network
+  let (socket, _) = net.accept(n, mut listener) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
   test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
   Ok(())
 }

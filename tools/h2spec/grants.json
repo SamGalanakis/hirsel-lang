@@ -1,0 +1,1 @@
+{"io":{"tasks":"tasks.cooperative@1","stdout":"stdout.bytes@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}

@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""HTTP/2 conformance: h2spec against std http's prior-knowledge server (run by //:gate-h2spec).
+
+Builds tools/h2spec/server.hir natively, serves it on a loopback port, runs the pinned
+h2spec release (summerwind/h2spec, every case including --strict) against it, and
+compares the cases that pass with tools/h2spec/passing.txt. A case that stops passing
+fails the test, and so does one that starts passing: record it with --update-passing.
+"""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+import tempfile
+import xml.etree.ElementTree as ElementTree
+
+ROOT = Path(__file__).resolve().parents[2]
+HERE = ROOT / 'tools/h2spec'
+PASSING = HERE / 'passing.txt'
+HEADER = ('# h2spec 2.6.0 cases (h2spec --strict) that std http passes; one per line: id, then description.\n'
+          '# Regenerate with tools/h2spec/run --update-passing.\n')
+
+
+def h2spec_binary(scratch, args):
+    if args.h2spec:
+        return Path(args.h2spec)
+    archive = os.environ.get('H2SPEC_ARCHIVE')
+    if not archive:
+        raise SystemExit('run: pass --h2spec or set H2SPEC_ARCHIVE to the h2spec release archive')
+    with tarfile.open(archive) as release:
+        member = release.getmember('h2spec')
+        release.extract(member, scratch, filter='data')
+    binary = scratch / 'h2spec'
+    binary.chmod(0o755)
+    return binary
+
+
+def hirsel_binary(args):
+    if args.hirsel:
+        return Path(args.hirsel)
+    # Where the test launcher links the gate target's CLI (tools/buck2/defs.bzl BIN_EXE_DIR).
+    linked = ROOT / 'buck-out/tmp/cargo-bin-exe/gate-h2spec/hirsel'
+    if not linked.exists():
+        raise SystemExit('run: pass --hirsel or run under //:gate-h2spec')
+    return linked.resolve()
+
+
+def results(report):
+    """(id, description, passed) per case, in h2spec's order. An id is the case's
+    group and its 1-based position there, the form h2spec takes as a selector."""
+    cases = []
+    for suite in ElementTree.parse(report).getroot().iter('testsuite'):
+        for position, case in enumerate(suite.iter('testcase'), start=1):
+            outcome = {child.tag for child in case}
+            cases.append((f"{suite.get('package')}/{position}", case.get('classname'),
+                          not outcome & {'failure', 'error', 'skipped'}))
+    return cases
+
+
+def recorded():
+    rows = {}
+    for line in PASSING.read_text().splitlines():
+        if line and not line.startswith('#'):
+            case, description = line.split('\t', 1)
+            rows[case] = description
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--hirsel', help='the hirsel CLI (default: the gate target\'s)')
+    parser.add_argument('--h2spec', help='an h2spec 2.6.0 binary (default: extract H2SPEC_ARCHIVE)')
+    parser.add_argument('--update-passing', action='store_true', help='rewrite passing.txt from this run')
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='hirsel-h2spec-') as directory:
+        scratch = Path(directory)
+        h2spec = h2spec_binary(scratch, args)
+        server = scratch / 'server'
+        subprocess.run([hirsel_binary(args), 'build', HERE / 'server.hir', '-o', server], check=True)
+        process = subprocess.Popen([server, '--hirsel-grants', HERE / 'grants.json'], cwd=HERE,
+                                   stdout=subprocess.PIPE, text=True)
+        try:
+            port = process.stdout.readline().strip()
+            if not port.isdigit():
+                raise SystemExit(f'run: the server printed {port!r}, not its port')
+            report = scratch / 'report.xml'
+            # h2spec exits nonzero when a case fails; the report decides.
+            subprocess.run([h2spec, '--strict', '-h', '127.0.0.1', '-p', port, '-o', '5', '-j', report],
+                           stdout=sys.stdout, stderr=sys.stderr)
+            cases = results(report)
+        finally:
+            process.kill()
+            process.wait()
+    passing = {case: description for case, description, passed in cases if passed}
+    print(f'h2spec: {len(passing)} of {len(cases)} cases pass')
+    if args.update_passing:
+        PASSING.write_text(HEADER + ''.join(f'{case}\t{passing[case]}\n' for case in passing))
+        return 0
+    expected = recorded()
+    lost = [case for case in expected if case not in passing]
+    gained = [case for case in passing if case not in expected]
+    for case in lost:
+        print(f'h2spec: {case} ({expected[case]}) no longer passes')
+    for case in gained:
+        print(f'h2spec: {case} ({passing[case]}) now passes; record it with tools/h2spec/run --update-passing')
+    return 1 if lost or gained or not cases else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -469,8 +469,9 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, precheck = None, production = False):
-    """A script harness with the same hermetic inputs as native Rust tests."""
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, precheck = None, production = False, files_env = {}):
+    """A script harness with the same hermetic inputs as native Rust tests.
+    `files_env` names further input files as environment variables."""
     if full and not FULL_GATE:
         return
     binary = name + "-script"
@@ -478,7 +479,7 @@ def hirsel_script_test(name, script, data, runtime_archives = None, full = True,
     _rust_test(
         name = name, harness = ":" + binary, args = args, data = data, cwd = ".",
         bin_exes = {} if production else bin_exes, release_bin_exes = bin_exes if production else {},
-        bin_exe_dir = BIN_EXE_DIR + "/" + name, precheck = precheck,
+        bin_exe_dir = BIN_EXE_DIR + "/" + name, precheck = precheck, files_env = files_env,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],

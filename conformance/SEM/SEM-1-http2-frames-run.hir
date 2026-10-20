@@ -143,3 +143,224 @@ fn settings(t: Test) {
     _ => test.check(t, false),
   }
 }
+
+// Go net/http/internal/http2/frame_test.go (ebe2feef): each Framer.Write*
+// vector's literal bytes. Hirsel frames carry a raw payload, so a vector gives
+// the payload Go's writer builds; encoding must give Go's bytes and parsing
+// them must give the frame back, with the same DATA or header fragment.
+fn literal(t: Test, wire: Bytes, frame: std@1/http2_wire.Frame, fragment: Bytes) {
+  test.check(t, std@1/http2_wire.encode(frame, 16384) == Ok(copy wire))
+  test.check(
+    t,
+    std@1/http2_wire.parse(wire, 0, 16384) == Ok(Some((frame, bytes.len(wire))))
+  )
+  test.check(t, std@1/http2_wire.fragment(frame) == fragment)
+}
+
+fn go_frame(kind: u8, flags: u8, stream: u32, payload: Bytes) -> std@1/http2_wire.Frame {
+  std@1/http2_wire.Frame(
+    kind: kind,
+    flags: flags,
+    stream: stream,
+    payload: unique payload
+  )
+}
+
+@test
+fn go_write_vectors(t: Test) {
+  // TestWriteRST, TestWriteData.
+  literal(
+    t,
+    b"\x00\x00\x04\x03\x00\x01\x02\x03\x04\x07\x06\x05\x04",
+    go_frame(3, 0, 16909060, b"\x07\x06\x05\x04"),
+    b"\x07\x06\x05\x04"
+  )
+  literal(
+    t,
+    b"\x00\x00\x03\x00\x01\x01\x02\x03\x04ABC",
+    go_frame(0, 1, 16909060, b"ABC"),
+    b"ABC"
+  )
+  // TestWriteDataPadded: unpadded; PADDED with no padding; three octets of padding.
+  literal(
+    t,
+    b"\x00\x00\x03\x00\x01\x00\x00\x00\x01foo",
+    go_frame(0, 1, 1, b"foo"),
+    b"foo"
+  )
+  literal(
+    t,
+    b"\x00\x00\x04\x00\x09\x00\x00\x00\x01\x00foo",
+    go_frame(0, 9, 1, b"\x00foo"),
+    b"foo"
+  )
+  literal(
+    t,
+    b"\x00\x00\x07\x00\x08\x00\x00\x00\x01\x03foo\x00\x00\x00",
+    go_frame(0, 8, 1, b"\x03foo\x00\x00\x00"),
+    b"foo"
+  )
+  // TestWriteHeaders: basic, end flags, padding, priority, priority on stream 0, zero length.
+  literal(
+    t,
+    b"\x00\x00\x03\x01\x00\x00\x00\x00*abc",
+    go_frame(1, 0, 42, b"abc"),
+    b"abc"
+  )
+  literal(
+    t,
+    b"\x00\x00\x03\x01\x05\x00\x00\x00*abc",
+    go_frame(1, 5, 42, b"abc"),
+    b"abc"
+  )
+  literal(
+    t,
+    b"\x00\x00\x09\x01\x0d\x00\x00\x00*\x05abc\x00\x00\x00\x00\x00",
+    go_frame(1, 13, 42, b"\x05abc\x00\x00\x00\x00\x00"),
+    b"abc"
+  )
+  literal(
+    t,
+    b"\x00\x00\x0b\x01-\x00\x00\x00*\x02\x80\x00\x00\x0f\x7fabc\x00\x00",
+    go_frame(1, 45, 42, b"\x02\x80\x00\x00\x0f\x7fabc\x00\x00"),
+    b"abc"
+  )
+  literal(
+    t,
+    b"\x00\x00\x0b\x01-\x00\x00\x00*\x02\x80\x00\x00\x00\x7fabc\x00\x00",
+    go_frame(1, 45, 42, b"\x02\x80\x00\x00\x00\x7fabc\x00\x00"),
+    b"abc"
+  )
+  literal(t, b"\x00\x00\x00\x01\x00\x00\x00\x00*", go_frame(1, 0, 42, b""), b"")
+  // TestWriteContinuation: not end, end.
+  literal(
+    t,
+    b"\x00\x00\x03\x09\x00\x00\x00\x00*abc",
+    go_frame(9, 0, 42, b"abc"),
+    b"abc"
+  )
+  literal(
+    t,
+    b"\x00\x00\x03\x09\x04\x00\x00\x00*def",
+    go_frame(9, 4, 42, b"def"),
+    b"def"
+  )
+  // TestWritePriority: not exclusive (dependency 2, weight 127); exclusive (3, 77).
+  literal(
+    t,
+    b"\x00\x00\x05\x02\x00\x00\x00\x00*\x00\x00\x00\x02\x7f",
+    go_frame(2, 0, 42, b"\x00\x00\x00\x02\x7f"),
+    b"\x00\x00\x00\x02\x7f"
+  )
+  literal(
+    t,
+    b"\x00\x00\x05\x02\x00\x00\x00\x00*\x80\x00\x00\x03\x4d",
+    go_frame(2, 0, 42, b"\x80\x00\x00\x03\x4d"),
+    b"\x80\x00\x00\x03\x4d"
+  )
+  // TestWriteSettings ({1, 2}, {3, 4}), TestWriteSettingsAck.
+  literal(
+    t,
+    b"\x00\x00\x0c\x04\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x03\x00\x00\x00\x04",
+    go_frame(4, 0, 0, b"\x00\x01\x00\x00\x00\x02\x00\x03\x00\x00\x00\x04"),
+    b"\x00\x01\x00\x00\x00\x02\x00\x03\x00\x00\x00\x04"
+  )
+  literal(t, b"\x00\x00\x00\x04\x01\x00\x00\x00\x00", go_frame(4, 1, 0, b""), b"")
+  // TestWriteWindowUpdate.
+  literal(
+    t,
+    b"\x00\x00\x04\x08\x00\x01\x02\x03\x04\x07\x06\x05\x04",
+    go_frame(8, 0, 16909060, b"\x07\x06\x05\x04"),
+    b"\x07\x06\x05\x04"
+  )
+  // TestWritePing, TestWritePingAck.
+  literal(
+    t,
+    b"\x00\x00\x08\x06\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08",
+    go_frame(6, 0, 0, b"\x01\x02\x03\x04\x05\x06\x07\x08"),
+    b"\x01\x02\x03\x04\x05\x06\x07\x08"
+  )
+  literal(
+    t,
+    b"\x00\x00\x08\x06\x01\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08",
+    go_frame(6, 1, 0, b"\x01\x02\x03\x04\x05\x06\x07\x08"),
+    b"\x01\x02\x03\x04\x05\x06\x07\x08"
+  )
+  // TestWriteGoAway (last stream 0x01020304, code 0x05060708, debug "foo").
+  literal(
+    t,
+    b"\x00\x00\x0b\x07\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08foo",
+    go_frame(7, 0, 0, b"\x01\x02\x03\x04\x05\x06\x07\x08foo"),
+    b"\x01\x02\x03\x04\x05\x06\x07\x08foo"
+  )
+  // TestWritePushPromise (promised stream 42).
+  literal(
+    t,
+    b"\x00\x00\x07\x05\x00\x00\x00\x00*\x00\x00\x00*abc",
+    go_frame(5, 0, 42, b"\x00\x00\x00*abc"),
+    b"abc"
+  )
+}
+
+@test
+fn go_frame_headers(t: Test) {
+  // TestReadWriteFrameHeader rows within the local frame limit: the header's
+  // length, type, flags and stream survive a round trip.
+  let ids: List[u32] = [0u32, 1u32, 255u32, 256u32, 65535u32, 65536u32]
+  for id in ids {
+    let frame = go_frame(255, 1, id, b"")
+    let Ok(wire) = std@1/http2_wire.encode(frame, 16384) else {
+      test.check(t, false)
+      return ()
+    }
+    test.check(t, std@1/http2_wire.parse(wire, 0, 16384) == Ok(Some((frame, 9u64))))
+  }
+  let sizes: List[u64] = [255u64, 256u64]
+  for size in sizes {
+    let mut zeros: List[u8] = []
+    for _ in 0u64..size {
+      list.push(mut zeros, 0u8)
+    }
+    let frame = go_frame(1, 255, 1, bytes.from_list(take zeros))
+    let Ok(wire) = std@1/http2_wire.encode(frame, 16384) else {
+      test.check(t, false)
+      return ()
+    }
+    test.check(
+      t,
+      bytes.slice(wire, 0, 9) == bytes.from_list(
+        [
+          0u8,
+          int.narrow(size / 256),
+          int.narrow(size % 256),
+          1u8,
+          255u8,
+          0u8,
+          0u8,
+          0u8,
+          1u8
+        ]
+      )
+    )
+    test.check(t, std@1/http2_wire.parse(wire, 0, 16384) == Ok(Some((frame, size + 9))))
+  }
+  // TestReadFrameHeader: the reserved bit is ignored on read.
+  match std@1/http2_wire.parse(b"\x00\x00\x00\xff\xff\xff\xff\xff\xff", 0, 16384) {
+    Ok(Some((frame, _))) => test.check(
+      t,
+      frame.stream == 2147483647 && frame.kind == 255
+    ),
+    _ => test.check(t, false),
+  }
+  // TestWriteTooLargeFrame, against the local limit rather than 2^24 octets.
+  let mut big: List[u8] = []
+  for _ in 0u64..16385 {
+    list.push(mut big, 0u8)
+  }
+  test.check(
+    t,
+    std@1/http2_wire.encode(go_frame(0, 1, 1, bytes.from_list(take big)), 16384) == Error(
+      ConnectionError(FrameSize())
+    )
+  )
+}

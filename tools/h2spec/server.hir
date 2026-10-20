@@ -1,0 +1,53 @@
+// The h2spec testee: an HTTP/2 prior-knowledge (h2c) server over std http that
+// answers every request with 200 and a short body. It prints its bound port,
+// then serves each accepted connection in its own task until stopped.
+
+pub type ServerError = Grant(GrantError) | Network(NetError) | Output(OutputError)
+
+const BODY: Bytes = b"Hello from the Hirsel h2spec testee.\n"
+
+fn serve(tasks: Tasks, n: Net, clock: MonotonicClock, take stream: Stream of n) -> () {
+  let mut config = http.default_config()
+  config.http2_prior_knowledge = true
+  config.read_timeout = Some(duration.from_parts(30, 0))
+  let mut connection = http.server_connection(tasks, n, take stream, config)
+  while true {
+    // GAP: `Ok(Some((owned, _)))` fails MEM-13 natively when next_stream
+    // returns Ok(None()) or an error; bind the pair whole instead.
+    let Ok(Some(exchange)) = http.next_stream(mut connection, Some(clock)) else {
+      return ()
+    }
+    let (owned, _) = take exchange
+    let mut responding = take owned
+    if http.respond(mut responding, 200u16, [], BODY, false) != Ok(()) {
+      return ()
+    }
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let tasks = io.tasks(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)) ? Network
+  let bound = net.local_addr(n, listener) ? Network
+  out.print(output, f"{bound.port}\n") ? Output
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), ServerError] {
+      let mut accepting = take listener
+      while true {
+        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let child = task.async(
+          s,
+          fn() -> () {
+            serve(tasks, n, clock, take stream)
+          }
+        )
+        task.detach(s, take child)
+      }
+      Ok(())
+    }
+  )
+}

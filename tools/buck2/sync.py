@@ -939,6 +939,15 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             precheck=PRECHECK, runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
+    # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
+    out.append("\n" + call("http_file", name="h2spec-release",
+                            urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],
+                            sha256="157ee0de702e01ad40e752dbf074b366027e550c8e7504f9450da2809e279318",
+                            size_bytes=5207004))
+    out.append("\n" + call("hirsel_script_test", name="gate-h2spec", script="tools/h2spec/run", full=False, production=True,
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, precheck=PRECHECK,
+                            runtime_archives=RUNTIME_ARCHIVES, files_env={"H2SPEC_ARCHIVE": ":h2spec-release"},
+                            data=Raw(f"glob({starlark(['tools/h2spec/**', 'stdlib/std@1/**'], 4)})")))
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),
