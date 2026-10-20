@@ -514,6 +514,12 @@ impl Adapter for RealIo {
             Ok(None) => return None,
             Err(error) => return Some(Err(error)),
         };
+        if inline
+            && let Some(provider) = &mut self.net
+            && let Some(result) = provider.net_io_inline(id, buffer)
+        {
+            return Some(result);
+        }
         if let Some((readiness, _)) = &self.cooperative {
             readiness.enter(token);
         }

@@ -142,6 +142,15 @@ impl Readiness {
         self.0.borrow_mut().shared = true;
     }
 
+    /// No other host source or external stop descriptor needs this driver.
+    pub(crate) fn exclusive_socket(&self) -> bool {
+        let state = self.0.borrow();
+        !state.shared
+            && state.wakes.is_empty()
+            && state.virtual_time.is_none()
+            && state.pending.is_empty()
+    }
+
     /// A sole native root may wait on its entered socket without parking a fiber.
     /// Shared execution drivers always decline: another run may need to progress.
     /// Rust a7c37f9f socket/unix.rs:180-229 supplies the poll/deadline/EINTR loop.
@@ -267,13 +276,15 @@ impl Readiness {
     pub fn finish(&self, token: u64) {
         let token = self.tag(token);
         let mut state = self.0.borrow_mut();
+        // Every side index names a Pending row. A ready syscall creates none.
+        let Some(pending) = state.pending.remove(&token) else {
+            return;
+        };
         state.touched.remove(&token);
         state.always.remove(&token);
         state.scripted.remove(&token);
         state.woken.remove(&token);
-        if let Some(pending) = state.pending.remove(&token)
-            && let Some((fd, _)) = pending.registered
-        {
+        if let Some((fd, _)) = pending.registered {
             state.unregister(token, fd);
         }
     }

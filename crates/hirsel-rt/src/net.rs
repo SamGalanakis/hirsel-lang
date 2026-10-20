@@ -306,6 +306,15 @@ pub trait NetProvider {
     fn resolve(&mut self, host: &str, port: u16) -> Provided<Vec<SocketAddr>>;
     fn connect(&mut self, id: u64, host: &str, port: u16, timeout: NetTimeout) -> Provided<()>;
     fn connect_addr(&mut self, id: u64, addr: SocketAddr, timeout: NetTimeout) -> Provided<()>;
+    /// A sole native root can finish on one socket without readiness bookkeeping.
+    /// Decline for shared drivers, TLS or any external wake/stop source.
+    fn net_io_inline(
+        &mut self,
+        _stream: u64,
+        _buffer: &mut crate::io::NetBuffer<'_>,
+    ) -> Option<Provided<u64>> {
+        None
+    }
     fn read(&mut self, stream: u64, max: u64) -> Provided<Vec<u8>>;
     /// Fill spare capacity, initializing only the returned prefix. Like Rust's
     /// BorrowedBuf, the unwritten suffix need not be initialized or zeroed.

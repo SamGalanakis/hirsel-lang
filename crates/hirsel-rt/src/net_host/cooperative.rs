@@ -383,6 +383,110 @@ impl NetProvider for CooperativeNet {
             }
         }
     }
+    fn net_io_inline(
+        &mut self,
+        stream: u64,
+        buffer: &mut crate::io::NetBuffer<'_>,
+    ) -> Option<Provided<u64>> {
+        if !self.readiness.exclusive_socket() || self.host.tls.contains_key(&stream) {
+            return None;
+        }
+        if matches!(buffer, crate::io::NetBuffer::WriteAll(bytes) if bytes.is_empty()) {
+            return Some(Ok(Ok(0)));
+        }
+        let fd = match self.host.socket(stream) {
+            Ok(fd) => fd,
+            Err(error) => return Some(Ok(Err(error))),
+        };
+        let write = !matches!(buffer, crate::io::NetBuffer::Read(_));
+        let mut offset = 0;
+        let mut deadline = None;
+        Some(loop {
+            let (n, wanted) = match buffer {
+                crate::io::NetBuffer::Read(bytes) => {
+                    // SAFETY: recv initializes its returned prefix in the live borrow.
+                    (
+                        unsafe {
+                            libc::recv(
+                                fd,
+                                bytes.as_mut_ptr().cast(),
+                                bytes.len().min(READ_CHUNK as usize),
+                                0,
+                            )
+                        },
+                        libc::POLLIN,
+                    )
+                }
+                crate::io::NetBuffer::Write(bytes) | crate::io::NetBuffer::WriteAll(bytes) => {
+                    // SAFETY: send reads the uncommitted suffix of the live borrow.
+                    (
+                        unsafe {
+                            libc::send(
+                                fd,
+                                bytes[offset..].as_ptr().cast(),
+                                bytes.len() - offset,
+                                libc::MSG_NOSIGNAL,
+                            )
+                        },
+                        libc::POLLOUT,
+                    )
+                }
+            };
+            if n >= 0 {
+                match buffer {
+                    crate::io::NetBuffer::WriteAll(bytes) => {
+                        offset += n as usize;
+                        if offset == bytes.len() {
+                            break Ok(Ok(0));
+                        }
+                        if n == 0 {
+                            break Ok(Err(NetError::BrokenPipe));
+                        }
+                        continue;
+                    }
+                    _ => break Ok(Ok(n as u64)),
+                }
+            }
+            match errno() {
+                libc::EINTR => continue,
+                libc::EAGAIN => {}
+                code => break Ok(Err(error(code))),
+            }
+            // Rust a7c37f9f socket/unix.rs:180-229: syscall first, then poll
+            // the same fd with one absolute deadline and EINTR retry. Unlike
+            // a parked Hirsel task this root has no competing task or wake source.
+            let end = *deadline.get_or_insert_with(|| {
+                duration(self.timeout(stream, write)).and_then(|d| Instant::now().checked_add(d))
+            });
+            loop {
+                let timeout = end.map_or(-1, |end| {
+                    let left = end.saturating_duration_since(Instant::now());
+                    left.as_millis()
+                        .saturating_add(u128::from(left.subsec_nanos() % 1_000_000 != 0))
+                        .min(i32::MAX as u128) as i32
+                });
+                let mut row = libc::pollfd {
+                    fd,
+                    events: wanted,
+                    revents: 0,
+                };
+                // SAFETY: fd is live for this call and row is writable.
+                let ready = unsafe { libc::poll(&mut row, 1, timeout) };
+                if ready > 0 {
+                    break;
+                }
+                if ready == 0 {
+                    if end.is_some_and(|end| Instant::now() >= end) {
+                        return Some(Ok(Err(NetError::TimedOut)));
+                    }
+                    continue;
+                }
+                if errno() != libc::EINTR {
+                    return Some(Ok(Err(error(errno()))));
+                }
+            }
+        })
+    }
     fn read_uninit(
         &mut self,
         stream: u64,
@@ -626,6 +730,76 @@ mod borrowed_buffer_tests {
         let mut provider = CooperativeNet::new(readiness.clone());
         provider.host.sockets.insert(1, socket.into());
         (provider, peer, readiness)
+    }
+
+    #[test]
+    fn inline_socket_waits_for_the_prefix_without_creating_a_pending_row() {
+        let (mut provider, mut peer, readiness) = pair();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            peer.write_all(b"abc").unwrap();
+        });
+        let mut bytes = [MaybeUninit::new(0xa5); 32];
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::Read(&mut bytes)),
+            Some(Ok(Ok(3)))
+        );
+        sender.join().unwrap();
+        assert!(
+            readiness.exclusive_socket(),
+            "no Pending row after WouldBlock"
+        );
+        let bytes = bytes.map(|v| unsafe { v.assume_init() });
+        assert_eq!(&bytes[..3], b"abc");
+        assert_eq!(&bytes[3..], &[0xa5; 29]);
+    }
+
+    #[test]
+    fn inline_socket_honors_timeouts_and_external_wake_sources() {
+        let (mut provider, _peer, readiness) = pair();
+        provider
+            .set_timeout(1, TimeoutKind::Read, NetTimeout::Nanos(1))
+            .unwrap()
+            .unwrap();
+        let mut bytes = [MaybeUninit::uninit(); 8];
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::Read(&mut bytes)),
+            Some(Ok(Err(NetError::TimedOut)))
+        );
+        assert!(readiness.exclusive_socket());
+        readiness.tagged(0);
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::Read(&mut bytes)),
+            None
+        );
+        let (mut provider, peer, readiness) = pair();
+        readiness.wake_on(peer.as_raw_fd()).unwrap();
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::Read(&mut bytes)),
+            None
+        );
+    }
+
+    #[test]
+    fn inline_write_all_retains_the_partial_offset_and_empty_write_is_an_identity() {
+        let (mut provider, mut peer, readiness) = pair();
+        peer.set_nonblocking(false).unwrap();
+        let bytes: Vec<u8> = (0..1024 * 1024).map(|n| (n % 251) as u8).collect();
+        let reader = std::thread::spawn(move || {
+            let mut received = vec![0; 1024 * 1024];
+            peer.read_exact(&mut received).unwrap();
+            received
+        });
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::WriteAll(&bytes)),
+            Some(Ok(Ok(0)))
+        );
+        assert_eq!(reader.join().unwrap(), bytes);
+        assert!(readiness.exclusive_socket());
+        assert_eq!(
+            provider.net_io_inline(1, &mut crate::io::NetBuffer::WriteAll(&[])),
+            Some(Ok(Ok(0)))
+        );
     }
 
     #[test]
