@@ -540,6 +540,7 @@ dependencies = [
  "hirsel-run-schema",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-types",
  "serde_json",
 ]
 
@@ -922,7 +923,9 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-diag",
+ "hirsel-graph",
  "hirsel-guard",
+ "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",

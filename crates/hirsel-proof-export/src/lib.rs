@@ -31,14 +31,17 @@ use hirsel_diag::RuleId;
 use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::{Definition, DefinitionRef, Materialized, TIR_VERSION};
 use hirsel_types::encoding::{canonical_encoding, fingerprint, sealed};
-use hirsel_types::{Signature, SignatureDependency};
+use hirsel_types::{Signature, SignatureDependency, TypeInterner};
 use hirsel_validate::SignatureMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// PS-8 format; bumped on TIR_VERSION or a ruled change, never on LIR churn.
-pub const FORMAT: &str = "hirsel.tir.export.v6";
+/// v7: each definition, signature and materialized value carries its
+/// canonical type table (first-encounter closure), not its producer's store.
+pub const FORMAT: &str = "hirsel.tir.export.v7";
 /// PS-5.
 pub const TIR_DIGEST_DOMAIN: &str = "hirsel.tir.digest.v1";
 /// PS-6.
@@ -140,9 +143,10 @@ pub struct ConstantSection {
 
 /// The decoded export. Spans in imported TIR are location handles:
 /// `file` is the definition section ordinal and `start == end` indexes its
-/// location table.
+/// location table. Its TypeIds are rows of `types`.
 #[derive(Clone, Debug)]
 pub struct Export {
+    pub types: Arc<TypeInterner>,
     pub header: Header,
     pub definitions: Vec<DefinitionSection>,
     pub signatures: Vec<SignatureSection>,
@@ -155,6 +159,7 @@ pub struct Export {
 
 /// What a producer hands to [`export`].
 pub struct ExportInput {
+    pub types: Arc<TypeInterner>,
     pub header: Header,
     pub definitions: BTreeMap<DefPath, DefinitionRef>,
     pub signatures: BTreeMap<DefPath, SignatureSection>,
@@ -201,7 +206,8 @@ impl Observe for Cx {
 /// to emit with the finished section tables.
 pub(crate) fn collect(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
     let locator = w.context.locator.clone();
-    let mut cx = std::mem::replace(&mut w.context, Cx::new(locator));
+    let types = w.context.types.clone();
+    let mut cx = std::mem::replace(&mut w.context, Cx::new(locator, types));
     cx.begin_collect();
     let mut scratch = Writer::with_context(cx);
     write(&mut scratch);
@@ -306,15 +312,34 @@ impl Snapshot<Cx> for ConstantSection {
     }
 }
 
-snapshot_struct!(Export {
-    header,
-    definitions,
-    signatures,
-    constants,
-    skipped,
-    annotations,
-    annotation_digest
-} in Cx);
+impl Snapshot<Cx> for Export {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("Export");
+        self.header.write(w);
+        self.definitions.write(w);
+        self.signatures.write(w);
+        self.constants.write(w);
+        self.skipped.write(w);
+        self.annotations.write(w);
+        self.annotation_digest.write(w);
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("Export")?;
+        let value = Export {
+            types: r.context.types.clone(),
+            header: Snapshot::read(r)?,
+            definitions: Snapshot::read(r)?,
+            signatures: Snapshot::read(r)?,
+            constants: Snapshot::read(r)?,
+            skipped: Snapshot::read(r)?,
+            annotations: Snapshot::read(r)?,
+            annotation_digest: Snapshot::read(r)?,
+        };
+        r.close()?;
+        Ok(value)
+    }
+}
 
 /// PS-5: the definition's TIR text under its own tables, the signature
 /// fingerprints of every definition its TIR names (PS-6), and its callees.
@@ -325,11 +350,12 @@ struct Digested {
 }
 
 fn digest_definition(
+    types: &Arc<TypeInterner>,
     definition: &Definition,
     locator: &Locator,
     signatures: &BTreeMap<DefPath, SignatureSection>,
 ) -> Result<Digested, String> {
-    let mut w = Writer::with_context(Cx::new(locator.clone()));
+    let mut w = Writer::with_context(Cx::new(locator.clone(), types.clone()));
     collect(&mut w, |w| definition.write(w));
     definition.write(&mut w);
     let (text, cx) = w.finish();
@@ -380,13 +406,16 @@ pub fn checksum(
 /// `bodies` names every definition with a body, exported or skipped; a callee
 /// outside it with an exported signature is a registry operation.
 fn section(
+    types: &Arc<TypeInterner>,
     definition: &Definition,
     locator: &Locator,
     signatures: &BTreeMap<DefPath, SignatureSection>,
     bodies: &BTreeSet<&DefPath>,
 ) -> Result<DefinitionSection, String> {
-    let digested = digest_definition(definition, locator, signatures)?;
-    let table = obligations::table(definition, |path| signatures.get(path).map(|s| &s.public));
+    let digested = digest_definition(types, definition, locator, signatures)?;
+    let table = obligations::table(types, definition, |path| {
+        signatures.get(path).map(|s| &s.public)
+    });
     let obligations = table
         .obligations
         .into_iter()
@@ -398,7 +427,7 @@ fn section(
         })
         .collect();
     Ok(DefinitionSection {
-        path: definition.path.clone(),
+        path: definition.path.path().clone(),
         locations: digested.locations,
         tir: definition.clone(),
         tir_digest: digested.tir_digest,
@@ -423,7 +452,13 @@ pub fn build(input: &ExportInput) -> Export {
     let mut skipped = input.skipped.clone();
     let mut definitions = vec![];
     for (path, definition) in &input.definitions {
-        match section(definition, &input.locator, &input.signatures, &bodies) {
+        match section(
+            &input.types,
+            definition,
+            &input.locator,
+            &input.signatures,
+            &bodies,
+        ) {
             Ok(section) => definitions.push(section),
             Err(reason) => skipped.push(Skipped {
                 name: path.clone(),
@@ -433,6 +468,7 @@ pub fn build(input: &ExportInput) -> Export {
     }
     skipped.sort_by(|a, b| a.name.cmp(&b.name));
     Export {
+        types: input.types.clone(),
         header: input.header.clone(),
         definitions,
         signatures: input.signatures.values().cloned().collect(),
@@ -451,7 +487,7 @@ pub fn build(input: &ExportInput) -> Export {
 }
 
 fn encode_body(export: &Export, locator: &Locator) -> String {
-    let mut w = Writer::with_context(Cx::new(locator.clone()));
+    let mut w = Writer::with_context(Cx::new(locator.clone(), export.types.clone()));
     export.write(&mut w);
     w.finish().0
 }
@@ -501,6 +537,7 @@ impl Export {
     /// The producer input that re-exports this export.
     pub fn to_input(&self) -> ExportInput {
         ExportInput {
+            types: self.types.clone(),
             header: self.header.clone(),
             definitions: self
                 .definitions
@@ -567,7 +604,7 @@ fn located(text: &str, error: DecodeError) -> ImportError {
 /// compiler before importing (PS-7): `import(text, &header.environment)`.
 pub fn read_header(text: &str) -> Result<Header, ImportError> {
     let unlocated: Locator = Rc::new(|_| Location::unknown());
-    let mut r = Reader::with_context(text, Cx::new(unlocated));
+    let mut r = Reader::with_context(text, Cx::new(unlocated, TypeInterner::new(None)));
     r.open("Export")
         .and_then(|()| Header::read(&mut r))
         .map_err(|e| located(text, e))
@@ -575,10 +612,14 @@ pub fn read_header(text: &str) -> Result<Header, ImportError> {
 
 /// PS-10: decode, check versions, re-derive every fingerprint and check its
 /// uses, recompute every digest, obligation table and checksum, V, canonical
-/// form and the export digest.
-pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError> {
+/// form and the export digest. Imported rows are interned into `types`.
+pub fn import(
+    text: &str,
+    expected: &Environment,
+    types: &Arc<TypeInterner>,
+) -> Result<Export, ImportError> {
     let unlocated: Locator = Rc::new(|_| Location::unknown());
-    let mut r = Reader::with_context(text, Cx::new(unlocated));
+    let mut r = Reader::with_context(text, Cx::new(unlocated, types.clone()));
     let export = Export::read(&mut r).map_err(|e| located(text, e))?;
     let body_end = r.offset();
     let digest = (|| -> Result<ContentHash, DecodeError> {
@@ -626,7 +667,7 @@ pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError>
         .collect();
     for stored in &export.definitions {
         let at = stored.path.to_string();
-        let rebuilt = section(&stored.tir, &locator, &signatures, &bodies)
+        let rebuilt = section(types, &stored.tir, &locator, &signatures, &bodies)
             .map_err(|reason| refuse(&at, reason))?;
         if rebuilt.tir_digest != stored.tir_digest {
             return Err(refuse(format!("{at}.tir_digest"), "does not match its TIR"));
@@ -663,7 +704,7 @@ pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError>
 /// serializable opt-in publishes its representation graph (SER-1); the owner's copy
 /// of that graph has its own row provenance, so the two compare by their canonical
 /// encoding, the identity the fingerprint covers.
-fn seals_to(view: &Signature, section: &SignatureSection) -> bool {
+fn seals_to(types: &TypeInterner, view: &Signature, section: &SignatureSection) -> bool {
     let sealed = sealed(view);
     let public = &section.public;
     if sealed == *public {
@@ -675,10 +716,10 @@ fn seals_to(view: &Signature, section: &SignatureSection) -> bool {
         && sealed.definition == public.definition
         && sealed.metadata == public.metadata
         && sealed.fingerprint == public.fingerprint
-        && canonical_encoding(&sealed, &section.dependencies)
+        && canonical_encoding(types, &sealed, &section.dependencies)
             .ok()
             .is_some_and(|bytes| {
-                canonical_encoding(public, &section.dependencies).ok() == Some(bytes)
+                canonical_encoding(types, public, &section.dependencies).ok() == Some(bytes)
             })
 }
 
@@ -694,10 +735,10 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
         .collect();
     for section in &export.signatures {
         let at = section.path.to_string();
-        if section.public.definition != section.path {
+        if *section.public.definition.path() != section.path {
             return Err(refuse(format!("{at}.public"), "names another definition"));
         }
-        if fingerprint(&section.public, &section.dependencies).as_ref()
+        if fingerprint(&export.types, &section.public, &section.dependencies).as_ref()
             != Ok(&section.public.fingerprint)
         {
             return Err(refuse(
@@ -716,7 +757,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
             }
         }
         if let Some(view) = &section.owner_view
-            && (view == &section.public || !seals_to(view, section))
+            && (view == &section.public || !seals_to(&export.types, view, section))
         {
             return Err(refuse(
                 format!("{at}.owner_view"),
@@ -726,7 +767,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
     }
     for definition in &export.definitions {
         let at = definition.path.to_string();
-        if definition.tir.path != definition.path {
+        if *definition.tir.path.path() != definition.path {
             return Err(refuse(format!("{at}.tir"), "names another definition"));
         }
         if fingerprints.get(&definition.path) != Some(&definition.tir.signature_hash) {
@@ -745,20 +786,19 @@ fn validate(export: &Export) -> Result<(), ImportError> {
     for definition in &export.definitions {
         let package = &definition.path.0.package;
         let view = views.entry(package).or_insert_with(|| {
-            export
-                .signatures
-                .iter()
-                .map(|s| {
-                    let owner = &s.path.0.package == package;
-                    let signature = match (&s.owner_view, owner) {
-                        (Some(view), true) => view,
-                        _ => &s.public,
-                    };
-                    (s.path.clone(), signature.clone())
-                })
-                .collect()
+            let mut signatures = SignatureMap::new(export.types.clone());
+            signatures.extend(export.signatures.iter().map(|s| {
+                let owner = &s.path.0.package == package;
+                let signature = match (&s.owner_view, owner) {
+                    (Some(view), true) => view,
+                    _ => &s.public,
+                };
+                (&s.path, signature.clone())
+            }));
+            signatures
         });
-        let validation = hirsel_validate::validate(&definition.tir, view, &mut vec![]);
+        let validation =
+            hirsel_validate::validate(&definition.tir, &export.types, view, &mut vec![]);
         if let Some(violation) = validation.violations.first() {
             return Err(refuse(
                 definition.path.to_string(),

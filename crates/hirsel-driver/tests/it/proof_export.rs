@@ -175,7 +175,7 @@ fn a_version_mismatch_is_refused_at_the_header() {
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
         expected.compiler_version.push_str("-other");
-        let error = hirsel_proof_export::import(&text, &expected).unwrap_err();
+        let error = hirsel_proof_export::import(&text, &expected, &hirsel_types::TypeInterner::new(None)).unwrap_err();
         assert_eq!(error.at, "header.environment", "{error}");
     });
 }

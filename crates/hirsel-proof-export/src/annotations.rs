@@ -48,7 +48,11 @@ snapshot_struct!(Annotation {
 
 /// `H("hirsel.analysis.annotations.v1", section text)`.
 pub fn annotation_digest(annotations: &[Annotation]) -> ContentHash {
-    let mut w = Writer::with_context(Cx::new(std::rc::Rc::new(|_| Location::unknown())));
+    // Annotations name no types.
+    let mut w = Writer::with_context(Cx::new(
+        std::rc::Rc::new(|_| Location::unknown()),
+        hirsel_types::TypeInterner::new(None),
+    ));
     annotations.to_vec().write(&mut w);
     ContentHash::of_parts(ANNOTATION_DIGEST_DOMAIN, [w.finish().0.as_bytes()])
 }

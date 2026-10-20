@@ -203,7 +203,11 @@ fn observe(path: &Path, expect: &Expect, native: bool) -> Artifacts {
 fn split_export(text: &str) -> Result<(String, String, Vec<DefPath>), String> {
     let refused = |e: hirsel_proof_export::ImportError| format!("import: {e:?}");
     let header = hirsel_proof_export::read_header(text).map_err(refused)?;
-    let export = hirsel_proof_export::import(text, &header.environment).map_err(refused)?;
+    let export = hirsel_proof_export::import(
+        text,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    ).map_err(refused)?;
     let mut input = export.to_input();
     let annotations = std::mem::take(&mut input.annotations);
     let roots = export

@@ -17,7 +17,11 @@ pub mod units;
 pub fn load(path: &str) -> Result<Export, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     let header = hirsel_proof_export::read_header(&text).map_err(|e| format!("{path}: {e}"))?;
-    hirsel_proof_export::import(&text, &header.environment).map_err(|e| format!("{path}: {e}"))
+    hirsel_proof_export::import(
+        &text,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    ).map_err(|e| format!("{path}: {e}"))
 }
 
 /// The local a place is rooted at.
@@ -39,11 +43,11 @@ pub fn location(section: &DefinitionSection, span: hirsel_span::Span) -> Locatio
 }
 
 /// Whether `operand` is a `core@1/Stdout` value.
-pub fn is_stdout(section: &DefinitionSection, body: &Body, operand: &Operand) -> bool {
+pub fn is_stdout(export: &Export, body: &Body, operand: &Operand) -> bool {
     let ty = body.places[operand.place.0 as usize].ty;
-    section.tir.types.get(ty).is_some_and(|t| {
+    export.types.get(ty).is_some_and(|t| {
         matches!(&t.kind, TypeKind::Named { definition, .. }
-            if definition.0.package.name == "core" && definition.0.name == "Stdout")
+            if definition.path().0.package.name == "core" && definition.path().0.name == "Stdout")
     })
 }
 

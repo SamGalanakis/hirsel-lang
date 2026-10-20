@@ -249,7 +249,7 @@ fn closure(engine: &mut QueryEngine, roots: &[DefPath]) -> BTreeMap<DefPath, Def
                 tir: Some(tir),
             }
         };
-        pending.extend(hirsel_proof_export::references(&content));
+        pending.extend(hirsel_proof_export::references(engine.types(), &content));
         contents.insert(path, content);
     }
     contents
@@ -261,7 +261,7 @@ fn an_edit_to_a_core_type_moves_the_definitions_that_use_it_and_no_other() {
         let mut engine = engine(&[("program.hir", &[], CORE_USERS)]);
         let roots: Vec<_> = ["f", "tried", "matched", "launch"].map(named).to_vec();
         let contents = closure(&mut engine, &roots);
-        let base = hirsel_proof_export::definition_hashes(&contents).unwrap();
+        let base = hirsel_proof_export::definition_hashes(engine.types(), &contents).unwrap();
         for (core, users) in [
             ("Result", &["tried", "matched"][..]),
             ("Scope", &["launch"]),
@@ -282,7 +282,7 @@ fn an_edit_to_a_core_type_moves_the_definitions_that_use_it_and_no_other() {
             };
             t.serializable = !t.serializable;
             *signature = Arc::new(signature_edit);
-            let moved = hirsel_proof_export::definition_hashes(&edited).unwrap();
+            let moved = hirsel_proof_export::definition_hashes(engine.types(), &edited).unwrap();
             for user in users {
                 assert_ne!(base[&named(user)], moved[&named(user)], "{core}: {user}");
             }

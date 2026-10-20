@@ -39,7 +39,8 @@ impl QueryEngine {
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<DefinitionHashes, QueryError> {
         let contents = self.closure_contents(roots)?;
-        let hashes = hirsel_proof_export::definition_hashes(&contents).map_err(operational)?;
+        let hashes = hirsel_proof_export::definition_hashes(self.types(), &contents)
+            .map_err(operational)?;
         let mut call_sites = BTreeMap::new();
         for (path, content) in &contents {
             if let DefinitionContent::Body { tir: Some(tir), .. } = content {
@@ -59,7 +60,7 @@ impl QueryEngine {
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<Vec<DefinitionGroup>, QueryError> {
         let contents = self.closure_contents(roots)?;
-        hirsel_proof_export::definition_groups(&contents).map_err(operational)
+        hirsel_proof_export::definition_groups(self.types(), &contents).map_err(operational)
     }
 
     /// The content of every definition `roots` reach.
@@ -75,7 +76,7 @@ impl QueryEngine {
             }
             let content = self.definition_content(&path)?;
             pending.extend(
-                hirsel_proof_export::references(&content)
+                hirsel_proof_export::references(self.types(), &content)
                     .into_iter()
                     .filter(|p| !contents.contains_key(p)),
             );

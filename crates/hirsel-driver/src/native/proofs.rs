@@ -168,7 +168,7 @@ impl Proofs {
                 Err(keep) => Err(keep.to_string()),
                 Ok(_) => {
                     let places = projections.entry(path.clone()).or_insert_with(|| {
-                        hirsel_proof_export::projected_places(&assessed.section.tir)
+                        hirsel_proof_export::projected_places(&export.types, &assessed.section.tir)
                     });
                     forms(
                         assessed.section,

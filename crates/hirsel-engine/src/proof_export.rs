@@ -205,6 +205,7 @@ impl QueryEngine {
             })
             .collect();
         Ok(ExportInput {
+            types: self.types().clone(),
             header: Header {
                 format: hirsel_proof_export::FORMAT.into(),
                 tir_version: hirsel_tir::TIR_VERSION,
@@ -231,6 +232,6 @@ impl QueryEngine {
     /// Import an export made by this compiler: refuses unless every digest,
     /// table and V validation recomputes (PS-10).
     pub fn import_tir(&self, text: &str) -> Result<Export, ImportError> {
-        hirsel_proof_export::import(text, &self.proof_environment())
+        hirsel_proof_export::import(text, &self.proof_environment(), self.types())
     }
 }

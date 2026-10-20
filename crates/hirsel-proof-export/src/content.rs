@@ -12,15 +12,14 @@ use hirsel_tir::TIR_VERSION;
 use hirsel_tir::{
     BlockId, BodyId, Callee, Definition, DefinitionRef, Rvalue, RvalueId, Terminator,
 };
-use hirsel_types::SignatureRef;
+use hirsel_types::{SignatureRef, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
-/// The domain of a definition's hash.
-pub const DEFINITION_HASH_DOMAIN: &str = "hirsel.definition.hash.v1";
-const CONTENT_DOMAIN: &str = "hirsel.definition.content.v1";
-const ROUND_DOMAIN: &str = "hirsel.definition.round.v1";
-const GROUP_DOMAIN: &str = "hirsel.definition.group.v1";
+/// The domain of a definition's hash: v2 keys recursive groups with
+/// `hirsel_graph::scc_keys` over canonical type tables.
+pub const DEFINITION_HASH_DOMAIN: &str = "hirsel.definition.hash.v2";
 
 /// What one definition's hash covers.
 #[derive(Clone, Debug)]
@@ -104,7 +103,7 @@ fn write_content(content: &DefinitionContent, w: &mut Writer<Cx>) {
             reads,
         } => {
             w.open("Named");
-            w.text(&signature.definition.to_string());
+            w.text(&signature.definition.path().to_string());
             signature.write(w);
             w.open("list");
             for field in source {
@@ -117,8 +116,8 @@ fn write_content(content: &DefinitionContent, w: &mut Writer<Cx>) {
     w.close();
 }
 
-fn encode(content: &DefinitionContent, naming: Naming) -> (String, Naming) {
-    let mut w = Writer::with_context(Cx::new(Rc::new(|_| Location::unknown())));
+fn encode(types: &Arc<TypeInterner>, content: &DefinitionContent, naming: Naming) -> (String, Naming) {
+    let mut w = Writer::with_context(Cx::new(Rc::new(|_| Location::unknown()), types.clone()));
     w.context.content = Some(naming);
     collect(&mut w, |w| write_content(content, w));
     write_content(content, &mut w);
@@ -127,8 +126,8 @@ fn encode(content: &DefinitionContent, naming: Naming) -> (String, Naming) {
 }
 
 /// Every definition `content` names, first occurrence first.
-pub fn references(content: &DefinitionContent) -> Vec<DefPath> {
-    encode(content, Naming::default()).1.named
+pub fn references(types: &Arc<TypeInterner>, content: &DefinitionContent) -> Vec<DefPath> {
+    encode(types, content, Naming::default()).1.named
 }
 
 /// One recursive group's hash preimage (LANG-6): what a code store keeps
@@ -148,11 +147,10 @@ pub struct DefinitionGroup {
 }
 
 /// The definition hashes of a recursive group's members from their content
-/// texts and group references. Each member's color is its text's hash; a
-/// round rehashes each color with the colors of the members it references
-/// until the partition into equal colors is stable, and each member's hash
-/// binds the group's sorted colors and its own. An error names a reference
-/// outside the group.
+/// texts and group references: `hirsel_graph::scc_keys` over the group, each
+/// member's local content its text and its edges its group references in text
+/// order. References outside the group are already hashes in the texts. An
+/// error names a reference outside the group.
 pub fn group_hashes(texts: &[String], uses: &[Vec<usize>]) -> Result<Vec<ContentHash>, String> {
     if texts.len() != uses.len() {
         return Err(format!(
@@ -167,43 +165,18 @@ pub fn group_hashes(texts: &[String], uses: &[Vec<usize>]) -> Result<Vec<Content
             texts.len()
         ));
     }
-    let mut colors: Vec<ContentHash> = texts
+    let members: Vec<usize> = (0..texts.len()).collect();
+    let keys = hirsel_graph::scc_keys(
+        &members,
+        |i| uses[i].clone(),
+        |i, w| {
+            w.bytes(&TIR_VERSION.to_le_bytes());
+            w.bytes(texts[i].as_bytes());
+        },
+    );
+    Ok(members
         .iter()
-        .map(|text| {
-            ContentHash::of_parts(
-                CONTENT_DOMAIN,
-                [TIR_VERSION.to_le_bytes().as_slice(), text.as_bytes()],
-            )
-        })
-        .collect();
-    let distinct = |colors: &[ContentHash]| colors.iter().collect::<BTreeSet<_>>().len();
-    loop {
-        let refined: Vec<ContentHash> = uses
-            .iter()
-            .enumerate()
-            .map(|(i, used)| {
-                let parts = std::iter::once(colors[i].0.as_slice())
-                    .chain(used.iter().map(|&j| colors[j].0.as_slice()));
-                ContentHash::of_parts(ROUND_DOMAIN, parts)
-            })
-            .collect();
-        let stable = distinct(&refined) == distinct(&colors);
-        colors = refined;
-        if stable {
-            break;
-        }
-    }
-    let mut sorted = colors.clone();
-    sorted.sort();
-    let group_hash = ContentHash::of_parts(GROUP_DOMAIN, sorted.iter().map(|c| c.0.as_slice()));
-    Ok(colors
-        .iter()
-        .map(|color| {
-            ContentHash::of_parts(
-                DEFINITION_HASH_DOMAIN,
-                [group_hash.0.as_slice(), color.0.as_slice()],
-            )
-        })
+        .map(|i| ContentHash::of_parts(DEFINITION_HASH_DOMAIN, [keys[i].0.as_slice()]))
         .collect())
 }
 
@@ -213,6 +186,7 @@ pub fn group_hashes(texts: &[String], uses: &[Vec<usize>]) -> Result<Vec<Content
 /// into the member's own group is written as a group marker; no name or
 /// iteration order enters a hash.
 pub fn definition_groups(
+    types: &Arc<TypeInterner>,
     contents: &BTreeMap<DefPath, DefinitionContent>,
 ) -> Result<Vec<DefinitionGroup>, String> {
     let paths: Vec<&DefPath> = contents.keys().collect();
@@ -220,7 +194,7 @@ pub fn definition_groups(
     let mut edges = Vec::with_capacity(paths.len());
     for (path, content) in contents {
         let mut targets = vec![];
-        for reference in references(content) {
+        for reference in references(types, content) {
             match index.get(&reference) {
                 Some(&target) => targets.push(target),
                 None => return Err(format!("{path} names {reference}, which has no content")),
@@ -245,7 +219,7 @@ pub fn definition_groups(
                 group: members.clone(),
                 ..Naming::default()
             };
-            let (text, naming) = encode(&contents[path], naming);
+            let (text, naming) = encode(types, &contents[path], naming);
             if let Some(missing) = naming.missing {
                 return Err(format!("{path} names {missing} before its hash"));
             }
@@ -283,9 +257,10 @@ pub fn definition_groups(
 /// The hash of every definition in `contents`, which must hold every
 /// definition they name ([`definition_groups`]).
 pub fn definition_hashes(
+    types: &Arc<TypeInterner>,
     contents: &BTreeMap<DefPath, DefinitionContent>,
 ) -> Result<BTreeMap<DefPath, ContentHash>, String> {
-    Ok(definition_groups(contents)?
+    Ok(definition_groups(types, contents)?
         .into_iter()
         .flat_map(|group| group.members.into_iter().zip(group.hashes))
         .collect())

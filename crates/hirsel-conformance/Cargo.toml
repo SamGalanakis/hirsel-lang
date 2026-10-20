@@ -18,6 +18,7 @@ hirsel-proof-export = { path = "../hirsel-proof-export" }
 serde_json = "1"
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }
 
 # Binaries without tests: no unit-test harness, which would relink the whole
 # compiler on every edit. `native` keeps its tests.
