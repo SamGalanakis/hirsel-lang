@@ -229,6 +229,7 @@ mod tests {
             test_seed: 0,
             binding: Some(RecordedRun {
                 canonical: run.canonical().to_vec(),
+                placement: None,
                 admitted_at: 0,
                 revocation: None,
                 instance: None,

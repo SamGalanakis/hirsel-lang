@@ -205,10 +205,11 @@ fn normalized(tape: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_run_without_budgets_records_the_tape_it_recorded_before_budgets_existed() {
+fn a_run_without_budgets_keeps_historical_identity_and_events_with_placement_provenance() {
     // A tape recorded before this change cannot replay after it: the program digest binds
     // the runtime's sources (hirsel-engine's build script), and those changed. Everything
-    // else, the record's canonical bytes with no `budgets` member included, is unchanged.
+    // else, including canonical bytes without `budgets`, stays unchanged; placement now
+    // has its own diagnostic metadata line outside those canonical bytes.
     let path = super::file(MAIN_RECORDED);
     let tape = std::env::temp_dir().join(format!("hirsel-budget-main-tape-{}", std::process::id()));
     let recorded = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -223,7 +224,20 @@ fn a_run_without_budgets_records_the_tape_it_recorded_before_budgets_existed() {
     assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
     assert_eq!(recorded.stdout, b"recorded on main\n");
     let written = std::fs::read_to_string(&tape).unwrap();
-    assert_eq!(normalized(&written), normalized(MAIN_TAPE));
+    let mut expected = normalized(MAIN_TAPE);
+    // Exact default placement provenance; all historical semantic bytes and events match.
+    expected.insert(
+        6,
+        concat!(
+            "placement ",
+            "7b22636f726573223a312c2263707573223a6e756c6c2c2270696e223a226e6f6e65222c",
+            "22636f6d6d6974223a6e756c6c2c2272756e5f6168656164223a6e756c6c2c2272656f72",
+            "646572223a6e756c6c2c2273706563756c6174696f6e5f6279746573223a6e756c6c2c226d",
+            "657472696373223a6e756c6c2c22636f6e74726f6c223a6e756c6c7d"
+        )
+        .into(),
+    );
+    assert_eq!(normalized(&written), expected);
     let replayed = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
         .arg(&path)

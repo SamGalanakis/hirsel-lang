@@ -322,6 +322,7 @@ fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
     recording.arguments = vec!["a".into()];
     recording.binding = Some(RecordedRun {
         canonical: run.canonical().to_vec(),
+        placement: None,
         admitted_at: -5,
         revocation: None,
         instance: None,
@@ -431,4 +432,45 @@ fn mapping_views_and_an_outside_truncation_replay_from_the_tape() {
     }
     sim.finish().unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn placement_header_is_diagnostic_validated_and_not_replayed() {
+    use hirsel_rt::launch::{RecordedRun, render_recording};
+    use hirsel_run_config::{Cores, Placement, RunConfig};
+    use hirsel_run_schema::LaunchKind;
+    let run = RunConfig::empty([1; 32], "placement@1/main".into(), LaunchKind::Main)
+        .validated()
+        .unwrap();
+    let mut recording = header();
+    recording.run_identity = run.identity();
+    recording.hash_seed = 0;
+    recording.random_seed = 0;
+    recording.test_seed = 0;
+    recording.arguments.clear();
+    recording.binding = Some(RecordedRun {
+        canonical: run.canonical().to_vec(),
+        admitted_at: 0,
+        revocation: None,
+        instance: None,
+        placement: Some(Placement {
+            cores: Cores::Fixed(8),
+            metrics: Some("/missing/metrics".into()),
+            control: Some("/missing/control".into()),
+            ..Default::default()
+        }),
+    });
+    let text = render_recording(&recording).unwrap();
+    let parsed = parse_recording(&text).unwrap();
+    assert_eq!(parsed, recording);
+    assert_eq!(parsed.bound_run().unwrap(), run);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("placement "))
+        .unwrap();
+    assert!(parse_recording(&text.replace(line, &format!("{line}\n{line}"))).is_err());
+    for json in [r#"{"cores":0}"#, r#"{"unknown":1}"#, r#"{"cores":1.0}"#] {
+        let hex: String = json.bytes().map(|b| format!("{b:02x}")).collect();
+        assert!(parse_recording(&text.replace(line, &format!("placement {hex}"))).is_err());
+    }
 }

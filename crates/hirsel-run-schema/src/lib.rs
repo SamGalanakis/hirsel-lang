@@ -58,6 +58,7 @@ pub use process::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderContract {
     TasksCooperative,
+    TasksFree,
     StdinBytes,
     StderrBytes,
     StdoutBytes,
@@ -96,10 +97,12 @@ impl ProviderContract {
         Self::StdinBytes,
         Self::StdoutBytes,
         Self::TasksCooperative,
+        Self::TasksFree,
     ];
     pub const fn name(self) -> &'static str {
         match self {
             Self::TasksCooperative => "tasks.cooperative@1",
+            Self::TasksFree => "tasks.free@1",
             Self::StdinBytes => "stdin.bytes@1",
             Self::StderrBytes => "stderr.bytes@1",
             Self::StdoutBytes => "stdout.bytes@1",

@@ -78,6 +78,7 @@ fn header(
         test_seed: config.test_seed(),
         binding: Some(RecordedRun {
             canonical: run.canonical().to_vec(),
+            placement: Some(run.record().placement.clone().unwrap_or_default()),
             admitted_at: admitted.evidence().at,
             revocation: admitted.evidence().revocation.clone(),
             instance: admitted.instance(),

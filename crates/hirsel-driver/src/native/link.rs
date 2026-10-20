@@ -1297,7 +1297,7 @@ done:
     run.check_revision(revision, launch)
         .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     if !standalone {
-        std::fs::write(dir.join("run.json"), run.canonical())
+        std::fs::write(dir.join("run.json"), run.launch_bytes())
             .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
     }
     // A launched executable binds the one run it was built for; a standalone one takes fresh

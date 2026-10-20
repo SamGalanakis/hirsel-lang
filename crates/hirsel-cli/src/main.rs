@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
 
 mod allocator;
 mod execution_policy;
@@ -106,6 +106,7 @@ enum Command {
 enum Launch {
     Live {
         grants: bool,
+        cores: Option<u64>,
         config: OsString,
         record: Option<OsString>,
         revocations: Option<OsString>,
@@ -117,11 +118,19 @@ impl Launch {
         match self {
             Self::Live {
                 grants,
+                cores,
                 config,
                 record,
                 revocations,
             } => hirsel_driver::HostLaunch::Live {
-                config: if *grants {
+                config: if let Some(cores) = cores {
+                    hirsel_driver::LaunchConfig::Cores {
+                        input: config,
+                        grants: *grants,
+                        arguments,
+                        cores: *cores,
+                    }
+                } else if *grants {
                     hirsel_driver::LaunchConfig::Grants {
                         input: config,
                         arguments,
@@ -526,6 +535,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             };
             if name == "run" {
                 let mut config = None;
+                let mut cores = None;
                 let mut record = None;
                 let mut revocations = None;
                 let mut replay = None;
@@ -559,6 +569,19 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         Long("run" | "grants") if config.is_none() => {
                             config = Some((matches!(arg, Long("grants")), args.value()?));
                         }
+                        Long("cores") if cores.is_none() => {
+                            let value = args.value()?;
+                            cores = Some(
+                                value
+                                    .to_str()
+                                    .and_then(|s| {
+                                        s.parse::<u64>()
+                                            .ok()
+                                            .filter(|n| *n > 0 && n.to_string() == s)
+                                    })
+                                    .ok_or("--cores requires a positive integer")?,
+                            );
+                        }
                         Long("record") if record.is_none() => record = Some(args.value()?),
                         Long("revocations") if revocations.is_none() => {
                             revocations = Some(args.value()?)
@@ -579,6 +602,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     }
                 }
                 let file = file.ok_or("missing source path")?;
+                if cores.is_some() && simulation.is_some() {
+                    return Err("--cores cannot combine with --simulation".into());
+                }
                 if native && max_steps.is_some() {
                     return Err("--max-steps is only supported for interpreted run".into());
                 }
@@ -619,6 +645,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     (None, None, None) => None,
                     (Some((grants, config)), record, None) => Some(Launch::Live {
                         grants,
+                        cores,
                         config,
                         record,
                         revocations,

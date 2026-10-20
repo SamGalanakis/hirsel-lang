@@ -915,6 +915,9 @@ pub struct Recording {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordedRun {
     pub canonical: Vec<u8>,
+    /// Diagnostic placement provenance. Replay validates syntax, then discards it.
+    /// Absent in historical recordings; never an input to semantic identity.
+    pub placement: Option<hirsel_run_config::Placement>,
     pub admitted_at: i64,
     pub revocation: Option<hirsel_run_config::RevocationEvidence>,
     /// The run instance fixed at admission (RUN-11), for a run that calls runners or
@@ -978,6 +981,10 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
     }
     if let Some(instance) = record.binding.as_ref().and_then(|b| b.instance) {
         let _ = writeln!(text, "run_instance {}", hex(&instance));
+    }
+    if let Some(placement) = record.binding.as_ref().and_then(|b| b.placement.as_ref()) {
+        placement.validate().map_err(|e| e.to_string())?;
+        let _ = writeln!(text, "placement {}", hex(&placement.to_json()));
     }
     if let Some(proof) = record.binding.as_ref().and_then(|b| b.revocation.as_ref()) {
         let _ = writeln!(
@@ -1064,6 +1071,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
     let (mut run, mut admitted_at) = (None, None);
     let mut revocation = None;
     let mut instance = None;
+    let mut placement = None;
     let mut arguments = vec![];
     let mut files = std::collections::BTreeMap::new();
     let mut links = std::collections::BTreeMap::new();
@@ -1095,6 +1103,12 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             }
             ["test_seed", value] if test_seed.is_none() => {
                 test_seed = Some(value.parse().map_err(|_| "bad recorded test seed")?)
+            }
+            ["placement", value] if placement.is_none() => {
+                let parsed: hirsel_run_config::Placement =
+                    hirsel_run_config::Placement::from_json(&bytes(value)?)
+                        .map_err(|e| e.to_string())?;
+                placement = Some(parsed);
             }
             ["run", value] if run.is_none() => run = Some(bytes(value)?),
             ["admitted_at", value] if admitted_at.is_none() => {
@@ -1229,11 +1243,16 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             binding: match (run, admitted_at) {
                 (Some(canonical), Some(admitted_at)) => Some(RecordedRun {
                     canonical,
+                    placement,
                     admitted_at,
                     revocation,
                     instance,
                 }),
-                (None, None) if revocation.is_none() && instance.is_none() => None,
+                (None, None)
+                    if revocation.is_none() && instance.is_none() && placement.is_none() =>
+                {
+                    None
+                }
                 _ => return Err("a run record without its admission time".into()),
             },
             tree,

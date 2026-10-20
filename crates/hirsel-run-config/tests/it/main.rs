@@ -5,6 +5,7 @@ hirsel_guard::install!();
 mod grants;
 mod net;
 mod object_stores;
+mod placement;
 mod process;
 mod program;
 mod record;

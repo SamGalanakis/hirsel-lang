@@ -227,6 +227,17 @@ domain-separated, length-prefixed SHA-256. A parser for human input may normaliz
 order and whitespace before validation. Hash values bind bytes; they do not authenticate a
 grant, establish type identity or replace host authorization.
 
+`placement` accepts only `cores` (default 1: a positive integer, `"auto"`, or
+`{"min": m, "max": n}` with 1 ≤ m ≤ n), `cpus` (a cpulist or null), `pin`
+(`"none"`, `"compact"`, `"spread"`), `commit` (`"shared"`, `"dedicated"`),
+`run_ahead` (0..64), `reorder` (`"auto"`, the default, or `"off"`),
+`speculation_bytes` (bytes or null), and `metrics` / `control` (paths or null).
+Unknown members refuse. `commit`, `run_ahead`, `reorder` and `speculation_bytes`
+are ordered-mode admission policy; E1, the ordered executor, sets the
+`run_ahead` default. `reorder` applies to fifo@1 only. `hirsel run --cores N`
+overrides `placement.cores` without changing identity. `tasks.free@1` together
+with `inputs.scheduler` refuses.
+
 **Program identity.** The semantic program revision is a rooted dependency graph: stable
 component names, ordered length-framed content and sorted unique edges identify the
 transitive private implementations, constants, core and runtime selection, cycles

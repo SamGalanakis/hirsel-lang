@@ -9,6 +9,8 @@ use hirsel_run_schema::{
     call_key, callee_instance, hash_parts, hex,
 };
 use serde::{Deserialize, Serialize};
+mod placement;
+pub use placement::{AutoCores, Commit, CoreRange, Cores, Pin, Placement, Reorder};
 mod calls;
 mod object_stores;
 pub use object_stores::{CredentialsReference, ObjectStore};
@@ -107,6 +109,9 @@ pub struct RunConfig {
         deserialize_with = "object_stores::unique"
     )]
     pub object_stores: BTreeMap<String, ObjectStore>,
+    /// Validated execution policy, always removed from canonical identity bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
 }
 
 fn invalid(field: &str, detail: &str) -> RunRefusal {
@@ -202,6 +207,7 @@ impl RunConfig {
             recording: Option<RecordingLevel>,
             #[serde(default, deserialize_with = "object_stores::unique")]
             object_stores: BTreeMap<String, ObjectStore>,
+            placement: Option<Placement>,
         }
         integer_tokens(bytes)?;
         let mut grants: Grants =
@@ -233,6 +239,7 @@ impl RunConfig {
         record.budgets = grants.budgets;
         record.recording = grants.recording;
         record.object_stores = grants.object_stores;
+        record.placement = grants.placement;
         Ok(record)
     }
 
@@ -335,6 +342,7 @@ impl RunConfig {
             budgets: None,
             recording: None,
             object_stores: BTreeMap::new(),
+            placement: None,
         }
     }
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.
@@ -414,6 +422,18 @@ impl RunConfig {
                 }
             }
         }
+        if let Some(placement) = &record.placement {
+            placement.validate()?;
+        }
+        if record.inputs.scheduler.is_some()
+            && record.io.as_ref().and_then(|io| io.tasks.as_deref())
+                == Some(ProviderContract::TasksFree.name())
+        {
+            return Err(invalid(
+                "inputs.scheduler",
+                "tasks.free@1 takes no scheduler",
+            ));
+        }
         supported_providers(&record)?;
         let canonical = canonical_bytes(&record);
         let identity = hash_parts(IDENTITY_DOMAIN, [&canonical[..]]);
@@ -437,6 +457,16 @@ impl RunConfig {
     }
 }
 impl ValidatedRun {
+    /// Override only placement.cores, then pass through ordinary validation.
+    pub fn with_cores(&self, cores: u64) -> Result<Self, RunRefusal> {
+        let mut record = self.record.clone();
+        record.placement.get_or_insert_default().cores = Cores::Fixed(cores);
+        record.validated()
+    }
+    /// The complete validated launch record, retaining non-identity placement.
+    pub fn launch_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.record).expect("run serialization")
+    }
     /// Acquisition policy for both real and simulated adapters. Io presence alone
     /// grants no projections; clocks retain their independent grant booleans.
     pub fn io_projections(&self) -> BTreeSet<String> {
@@ -900,11 +930,6 @@ fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
             Some(ProviderContract::StdoutBytes),
         ),
         (
-            at("tasks"),
-            &io.tasks,
-            Some(ProviderContract::TasksCooperative),
-        ),
-        (
             at("monotonic_clock"),
             &io.monotonic_clock,
             Some(ProviderContract::MonotonicNanoseconds),
@@ -920,6 +945,14 @@ fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
         {
             return Err(unsupported(&field));
         }
+    }
+    if let Some(tasks) = &io.tasks
+        && !matches!(
+            ProviderContract::parse(tasks),
+            Some(ProviderContract::TasksCooperative | ProviderContract::TasksFree)
+        )
+    {
+        return Err(unsupported(&at("tasks")));
     }
     if let Some(random) = &io.random
         && !matches!(
@@ -1132,8 +1165,11 @@ fn canonical_bytes(record: &RunConfig) -> Vec<u8> {
             }
         }
     }
+    // Placement is validated before this point, but never contributes to identity.
+    let mut semantic = record.clone();
+    semantic.placement = None;
     let mut bytes = vec![];
-    record
+    semantic
         .serialize(&mut serde_json::Serializer::with_formatter(
             &mut bytes, Canonical,
         ))

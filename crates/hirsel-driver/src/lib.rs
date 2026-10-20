@@ -290,6 +290,13 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
 /// Explicit production launch input. Templates bind to the code selected by this launch.
 #[derive(Clone, Copy)]
 pub enum LaunchConfig<'a> {
+    /// CLI placement override, applied to the validated record or grants template.
+    Cores {
+        input: &'a std::ffi::OsStr,
+        grants: bool,
+        arguments: Option<&'a [std::ffi::OsString]>,
+        cores: u64,
+    },
     Record(&'a std::ffi::OsStr),
     Grants {
         input: &'a std::ffi::OsStr,
@@ -303,6 +310,19 @@ impl LaunchConfig<'_> {
         launch: hirsel_run_schema::LaunchKind,
     ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_schema::RunRefusal> {
         match self {
+            Self::Cores {
+                input,
+                grants,
+                arguments,
+                cores,
+            } => {
+                let config = if grants {
+                    Self::Grants { input, arguments }
+                } else {
+                    Self::Record(input)
+                };
+                config.read(revision, launch)?.with_cores(cores)
+            }
             Self::Record(input) => hirsel_run_config::RunConfig::record_input(input),
             Self::Grants { input, arguments } => {
                 let run = hirsel_run_config::RunConfig::grants_input(
