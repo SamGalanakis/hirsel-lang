@@ -9,7 +9,7 @@
 //! completes the operation. A task that must wait parks with what it waits for
 //! ([`Park`]); parked tasks are polled in park order at every yield and
 //! whenever the running task stops, as the runtime polls them, and a task due
-//! to park after its operation's yield parks when it reaches the front. What the runtime keeps per task in `RunCtx` H
+//! to park after its operation's yield parks when it reaches the front. What the runtime keeps per task in `TaskCtx` H
 //! keeps per task here: its failure chain, with the spawn path of each
 //! failure a child contributed. A child's closure is a harness root while the
 //! scheduler holds it, and its environment is released after its frame

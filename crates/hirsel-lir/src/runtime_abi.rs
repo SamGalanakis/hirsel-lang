@@ -314,8 +314,9 @@ pub enum CName {
     U8,
     U32,
     U64,
-    /// `RunCtx`: task heap domain, data stack, release worklist, failure state,
-    /// semantic configuration and Io adapter. Not a source capability.
+    /// `TaskCtx`: one task's context (its view of its worker's heap words, release worklist and
+    /// failure state, its worker and its run's configuration and Io adapter). Not a source
+    /// capability.
     Ctx,
     Layout,
     Header,

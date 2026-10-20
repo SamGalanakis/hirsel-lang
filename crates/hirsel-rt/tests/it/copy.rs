@@ -14,10 +14,10 @@ use hirsel_rt::copy::{
 };
 use hirsel_rt::count::hirsel_rt_v2_dup;
 use hirsel_rt::release::hirsel_rt_v2_release;
-use hirsel_rt::{COUNT_IMMORTAL, Config, Header, Layout, RunCtx, Step, WHOLE_VALUE};
+use hirsel_rt::{COUNT_IMMORTAL, Config, Header, Layout, Step, TaskCtx, WHOLE_VALUE};
 use support::*;
 
-fn copy(ctx: *mut RunCtx, block: *mut Header) -> *mut Header {
+fn copy(ctx: *mut TaskCtx, block: *mut Header) -> *mut Header {
     let mut out = ptr::null_mut();
     assert_eq!(
         unsafe { hirsel_rt_v2_unique_copy(ctx, block, ptr::null_mut(), 0, 0, &mut out) },
@@ -26,7 +26,7 @@ fn copy(ctx: *mut RunCtx, block: *mut Header) -> *mut Header {
     out
 }
 
-fn release(ctx: *mut RunCtx, block: *mut Header) {
+fn release(ctx: *mut TaskCtx, block: *mut Header) {
     let status = unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0, 0) };
     assert_eq!(status, 0);
 }
@@ -238,7 +238,7 @@ fn tags_and_element_loops_select_the_holders_copied() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
-unsafe extern "C" fn no_drop(_: *mut RunCtx, _: *mut u8, _: u64, _: u64) -> u8 {
+unsafe extern "C" fn no_drop(_: *mut TaskCtx, _: *mut u8, _: u64, _: u64) -> u8 {
     0
 }
 

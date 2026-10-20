@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::Instant;
 
-use crate::RunCtx;
+use crate::TaskCtx;
 
 #[derive(Default)]
 pub(crate) struct Profile {
@@ -61,8 +61,8 @@ impl Profile {
     }
 }
 
-fn path(ctx: &RunCtx) -> Vec<u32> {
-    ctx.tasks.as_ref().map_or_else(Vec::new, |s| {
+fn path(ctx: &TaskCtx) -> Vec<u32> {
+    ctx.run_ref().tasks.as_ref().map_or_else(Vec::new, |s| {
         s.tasks
             .get(s.current as usize)
             .and_then(Option::as_ref)
@@ -71,9 +71,9 @@ fn path(ctx: &RunCtx) -> Vec<u32> {
 }
 
 /// Begin the next pure segment after a runtime operation, or at task entry.
-pub(crate) fn resume(ctx: *mut RunCtx) {
+pub(crate) fn resume(ctx: *mut TaskCtx) {
     // SAFETY: callers have a live context and retain no borrow across a switch.
-    if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+    if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
         profile.active = Some(Instant::now());
     }
 }
@@ -81,17 +81,18 @@ pub(crate) fn resume(ctx: *mut RunCtx) {
 /// A runtime operation may suspend its fiber; this guard owns no runtime borrow.
 /// Nested helpers do not introduce additional commits or restart the segment.
 pub(crate) struct Operation {
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     resume: bool,
 }
 impl Operation {
-    pub(crate) fn new(ctx: *mut RunCtx, operation: &'static str) -> Self {
+    pub(crate) fn new(ctx: *mut TaskCtx, operation: &'static str) -> Self {
         // SAFETY: every caller is a runtime entry with a live context.
         let context = unsafe { &mut *ctx };
-        let resume = if context.mc_profile.is_some() {
+        let resume = if context.run_ref().mc_profile.is_some() {
             let end = Instant::now();
             let path = path(context);
             context
+                .run()
                 .mc_profile
                 .as_mut()
                 .unwrap()
@@ -110,11 +111,15 @@ impl Drop for Operation {
     }
 }
 
-pub(crate) fn finish(ctx: &mut RunCtx) {
-    if ctx.mc_profile.is_some() {
+pub(crate) fn finish(ctx: &mut TaskCtx) {
+    if ctx.run_ref().mc_profile.is_some() {
         let end = Instant::now();
         let path = path(ctx);
-        ctx.mc_profile.as_mut().unwrap().end(path, "run.end", end);
+        ctx.run()
+            .mc_profile
+            .as_mut()
+            .unwrap()
+            .end(path, "run.end", end);
     }
 }
 

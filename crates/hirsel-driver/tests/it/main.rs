@@ -77,5 +77,6 @@ mod source_profile;
 #[path = "../support/source_std.rs"]
 mod source_std;
 mod tail_calls;
+mod tls_audit;
 mod value_transport;
 mod waits;

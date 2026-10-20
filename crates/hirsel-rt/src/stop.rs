@@ -15,7 +15,7 @@
 //! foreign call, whose C frames cannot be abandoned.
 use hirsel_run_config::{BudgetKind, Environmental};
 
-use crate::RunCtx;
+use crate::TaskCtx;
 use crate::fiber;
 use crate::io::AdapterError;
 
@@ -59,13 +59,21 @@ impl Stop {
 }
 
 thread_local! {
-    /// The run executing on this thread, for reports raised without a context argument.
-    static RUNNING: std::cell::Cell<*mut RunCtx> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// The task running on this thread, for reports raised without a context argument.
+    static RUNNING: std::cell::Cell<*mut TaskCtx> = const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
-/// The context of the run executing on this thread, or null.
-pub(crate) fn running() -> *mut RunCtx {
+/// The context of the task running on this thread, or null. Like every thread-local access,
+/// it is out of line, so no caller keeps a thread's address across a suspension.
+#[inline(never)]
+pub(crate) fn running() -> *mut TaskCtx {
     RUNNING.with(std::cell::Cell::get)
+}
+
+/// `ctx`'s task runs on this thread from here on (`TaskCtx::switch_in`).
+#[inline(never)]
+pub(crate) fn set_running(ctx: *mut TaskCtx) {
+    RUNNING.with(|r| r.set(ctx));
 }
 
 /// A runtime result that may stop the run.
@@ -92,7 +100,7 @@ impl Default for Driver {
 /// `ctx` is live and the caller is an entry compiled code called, holding no value that needs
 /// dropping.
 #[inline]
-pub(crate) unsafe fn check<T>(ctx: *mut RunCtx, result: Stopped<T>) -> T {
+pub(crate) unsafe fn check<T>(ctx: *mut TaskCtx, result: Stopped<T>) -> T {
     match result {
         Ok(value) => value,
         // SAFETY: caller contract.
@@ -106,13 +114,13 @@ pub(crate) unsafe fn check<T>(ctx: *mut RunCtx, result: Stopped<T>) -> T {
 /// # Safety
 /// As [`check`].
 #[cold]
-pub(crate) unsafe fn raise(ctx: *mut RunCtx, stop: Stop) -> ! {
+pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
     if crate::foreign::active() {
         eprintln!("hirsel-rt: a run stopped inside a foreign call ({stop:?}); the process ends");
         std::process::abort();
     }
     // SAFETY: the context is live.
-    let driver = unsafe { &mut (*ctx).driver };
+    let driver = unsafe { &mut (*ctx).run().driver };
     if driver.sp.is_null() {
         crate::environmental(&format!("a run stopped without a launcher: {stop:?}"));
     }
@@ -130,13 +138,13 @@ struct Root<'a> {
 }
 
 unsafe extern "C" fn root_entry(ctx: *mut u8, root: *mut u8) -> ! {
-    let ctx = ctx.cast::<RunCtx>();
+    let ctx = ctx.cast::<TaskCtx>();
     // SAFETY: `run_root` keeps the frame live until this fiber switches back for the last time.
     unsafe {
         let root = &mut *root.cast::<Root<'_>>();
         root.status = (root.call)();
         let mut finished = std::ptr::null_mut();
-        fiber::switch(&raw mut finished, (*ctx).driver.sp);
+        fiber::switch(&raw mut finished, (*ctx).run().driver.sp);
     }
     crate::fault("a finished root task was resumed")
 }
@@ -146,20 +154,23 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, root: *mut u8) -> ! {
 ///
 /// # Safety
 /// `ctx` is live, bound for the whole call, and drives no other run.
-pub(crate) unsafe fn run_root(ctx: *mut RunCtx, call: &mut dyn FnMut() -> u8) -> Stopped<u8> {
+pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, call: &mut dyn FnMut() -> u8) -> Stopped<u8> {
     let stack = fiber::Stack::new();
     let mut root = Root { call, status: 0 };
     let sp = stack.prepare(root_entry, ctx.cast(), (&raw mut root).cast());
     // SAFETY: the context is live; the root fiber returns here when it finishes or stops.
     unsafe {
-        if !(*ctx).driver.sp.is_null() {
+        let run = (*ctx).run_ptr();
+        if !(*run).driver.sp.is_null() {
             crate::fault("a run context driven twice");
         }
         let enclosing = RUNNING.with(|r| r.replace(ctx));
-        fiber::switch(&raw mut (*ctx).driver.sp, sp);
+        fiber::switch(&raw mut (*run).driver.sp, sp);
+        // A stop may leave any task of the run bound to the worker.
+        (*ctx).rebind();
         RUNNING.with(|r| r.set(enclosing));
-        (*ctx).driver.sp = std::ptr::null_mut();
-        match (*ctx).driver.stop.take() {
+        (*run).driver.sp = std::ptr::null_mut();
+        match (*run).driver.stop.take() {
             Some(stop) => Err(stop),
             None => Ok(root.status),
         }

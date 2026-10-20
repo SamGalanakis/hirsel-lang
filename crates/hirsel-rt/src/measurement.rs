@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write;
 
-use crate::{CLASS_COUNT, CLASS_SIZES, RunCtx};
+use crate::{CLASS_COUNT, CLASS_SIZES, TaskCtx};
 
 /// The last bin holds capacities outside the small class schedule, regardless of storage kind.
 pub(crate) const BIN_COUNT: usize = CLASS_COUNT + 1;
@@ -104,17 +104,17 @@ impl Counters {
     }
 }
 
-impl RunCtx {
+impl TaskCtx {
     /// Retain the output descriptor pinned and checked by the host adapter before
     /// entry. Only instrumented archives have this method; no path is reopened.
     pub fn set_measurement_output(&mut self, file: std::fs::File) {
-        self.measurement_output = Some(file);
+        self.run().measurement_output = Some(file);
     }
     pub fn set_profile_output(&mut self, file: std::fs::File) {
-        self.profile_output = Some(file);
+        self.run().profile_output = Some(file);
     }
     pub fn measurements(&self) -> &Counters {
-        &self.heap.measurement.totals
+        &self.heap_ref().measurement.totals
     }
 }
 
@@ -124,12 +124,12 @@ impl RunCtx {
 /// `ctx` is a live context. `block` is the live block whose credit will be consumed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_measure_release(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _block: *mut crate::Header,
 ) {
     unsafe {
-        (*ctx).heap.measurement.record("count_decrements", 1);
-        (&mut (*ctx).heap.measurement).count_decrements += 1;
+        (*ctx).heap().measurement.record("count_decrements", 1);
+        (&mut (*ctx).heap().measurement).count_decrements += 1;
     }
 }
 
@@ -159,13 +159,13 @@ pub(crate) struct SiteCounts {
 /// `ctx` is live and `site` and each of its strings are immutable for the run.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_profile_enter(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     site: *const ProfileSite,
 ) -> u64 {
     // SAFETY: emitted constants obey ProfileSite's layout and lifetime contract.
     unsafe {
         let site = &*site;
-        let counters = &mut (*ctx).heap.measurement;
+        let counters = &mut (*ctx).heap().measurement;
         counters.sites.entry(site.id).or_insert_with(|| {
             let text = |p| {
                 CStr::from_ptr(p)
@@ -190,9 +190,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_profile_enter(
 /// # Safety
 /// `ctx` is live and `previous` is an id returned by profile_enter on this context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_profile_leave(ctx: *mut RunCtx, previous: u64) {
+pub unsafe extern "C" fn hirsel_rt_v2_profile_leave(ctx: *mut TaskCtx, previous: u64) {
     unsafe {
-        (*ctx).heap.measurement.active_site = previous;
+        (*ctx).heap().measurement.active_site = previous;
     }
 }
 

@@ -356,7 +356,7 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
     assert!(!all_symbols.contains("hirsel_rt_v2_measure_"));
     assert!(!all_symbols.contains("record_backing_allocation"));
     assert!(!all_symbols.contains("hirsel_rt::alloc::Heap::live"));
-    assert!(!all_symbols.contains("hirsel_rt::context::RunCtx::exit_audit"));
+    assert!(!all_symbols.contains("hirsel_rt::context::TaskCtx::exit_audit"));
     assert!(!all_symbols.contains("hirsel_rt_v2_ctx_stats"));
     let bytes = std::fs::read(&archive).unwrap();
     for forbidden in [
@@ -487,7 +487,7 @@ fn file_walk_step_matches_the_derived_iter_next_abi_on_both_targets() {
     // This assignment checks the actual exported Rust/C function signature;
     // the pre-fix four-argument thunk cannot type-check here.
     let _: unsafe extern "C" fn(
-        *mut RunCtx,
+        *mut TaskCtx,
         *mut Header,
         u64,
         u64,

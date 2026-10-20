@@ -19,7 +19,7 @@
 //! completion waits here for the task to resume. With no runnable task the scheduler sleeps
 //! in [`wait`] on every interest and the earliest deadline. Without cooperative admission a
 //! host request blocks the thread, as it always did.
-use crate::RunCtx;
+use crate::TaskCtx;
 use crate::id_map::IdMap;
 use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
@@ -46,7 +46,11 @@ struct Parked {
 ///
 /// # Safety
 /// `ctx` is live and its Binding bound.
-unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Stopped<Option<Completion>> {
+unsafe fn canceled(
+    ctx: *mut TaskCtx,
+    request: &Request,
+    cause: u32,
+) -> Stopped<Option<Completion>> {
     let binding = unsafe { Binding::get(ctx) };
     crate::io_checks::cancel(binding.adapter.as_mut(), request, cause).map_err(Stop::refusal)
 }
@@ -54,7 +58,7 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Stopped<O
 /// The name of a parked request for host test reporting.
 /// # Safety
 /// The context and its binding are live.
-pub(crate) unsafe fn kind(ctx: *mut RunCtx, token: u64) -> &'static str {
+pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
     let binding = unsafe { Binding::get(ctx) };
     match binding.waits.parked.get(&token).map(|p| &p.request) {
         Some(Request::SleepUntil { .. }) => "clock.sleep_until",
@@ -108,7 +112,7 @@ pub(crate) fn may_park(request: &Request) -> bool {
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
 pub(crate) unsafe fn issue(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
     if let Some(cause) = unsafe { crate::tasks::canceled(ctx) }
@@ -147,7 +151,7 @@ pub(crate) unsafe fn issue(
         },
     );
     // SAFETY: the context is live and nothing is borrowed across the park.
-    unsafe { crate::tasks::park_host(ctx, token, yielded) }?;
+    unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
     let binding = unsafe { Binding::get(ctx) };
     let completion = binding
         .waits
@@ -165,7 +169,7 @@ pub(crate) unsafe fn issue(
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
 pub(crate) unsafe fn arm(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     scope: u32,
     clock: u64,
     at: u64,
@@ -204,7 +208,7 @@ pub(crate) unsafe fn arm(
 ///
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is armed.
-pub(crate) unsafe fn expired(ctx: *mut RunCtx, ready: &Ready) -> Stopped<Vec<u32>> {
+pub(crate) unsafe fn expired(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Vec::new());
@@ -246,7 +250,7 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx, ready: &Ready) -> Stopped<Vec<u32
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` armed.
-pub(crate) unsafe fn disarm(ctx: *mut RunCtx, token: u64) {
+pub(crate) unsafe fn disarm(ctx: *mut TaskCtx, token: u64) {
     let binding = unsafe { Binding::get(ctx) };
     binding.adapter.finish(token);
     binding.waits.armed.remove(&token);
@@ -256,7 +260,7 @@ pub(crate) unsafe fn disarm(ctx: *mut RunCtx, token: u64) {
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
-pub(crate) unsafe fn deadline(ctx: *mut RunCtx, token: u64) -> Option<u64> {
+pub(crate) unsafe fn deadline(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
     let binding = unsafe { Binding::get(ctx) };
     match &binding.waits.parked.get(&token)?.request {
         Request::SleepUntil { deadline, .. } => Some(*deadline),
@@ -268,7 +272,7 @@ pub(crate) unsafe fn deadline(ctx: *mut RunCtx, token: u64) -> Option<u64> {
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` blocked.
-pub(crate) unsafe fn park(ctx: *mut RunCtx, token: u64, task: u32) {
+pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
     let binding = unsafe { Binding::get(ctx) };
     match binding.waits.parked.get_mut(&token) {
         Some(parked) => parked.task = Some(task),
@@ -282,7 +286,7 @@ pub(crate) unsafe fn park(ctx: *mut RunCtx, token: u64, task: u32) {
 ///
 /// # Safety
 /// `ctx` is live and no borrow of the Binding is held.
-pub(crate) unsafe fn ready(ctx: *mut RunCtx) -> Stopped<Ready> {
+pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Ready::Tokens(Vec::new()));
@@ -299,7 +303,7 @@ pub(crate) unsafe fn ready(ctx: *mut RunCtx) -> Stopped<Ready> {
 ///
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is parked.
-pub(crate) unsafe fn woken(ctx: *mut RunCtx, ready: &Ready) -> Vec<u32> {
+pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Vec::new();
@@ -325,7 +329,7 @@ pub(crate) unsafe fn woken(ctx: *mut RunCtx, ready: &Ready) -> Vec<u32> {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
 pub(crate) unsafe fn poll(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     token: u64,
     cause: Option<u32>,
     ready: bool,
@@ -373,7 +377,7 @@ pub(crate) unsafe fn poll(
 ///
 /// # Safety
 /// `ctx` is live and its Binding bound.
-pub(crate) unsafe fn wait(ctx: *mut RunCtx) -> Stopped<bool> {
+pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
     if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
         return Ok(false);

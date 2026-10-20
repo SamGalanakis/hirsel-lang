@@ -6,7 +6,7 @@
 //! allocation exhaustion is environmental, never a language failure. Each task has its own state
 //! (the scheduler swaps it in with the task); a joined child's failures keep its spawn path.
 
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::{STATUS_FAILURE, STATUS_OK};
 
 /// One recorded failure. `kind` and `rule` are compiler-assigned codes (the failure category
@@ -142,7 +142,7 @@ impl FailureState {
 /// `ctx` is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_failure_begin(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     kind: u32,
     rule: u32,
     site: u64,
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_begin(
 /// Record a failure the runtime raises itself, at its fixed runtime code
 /// (`hirsel_core_contract::RUNTIME_RULES`). Site 0 is anchored by the caller's
 /// failure edge. The kind is FAIL-1's `bug`, the one category.
-pub(crate) fn record_runtime(ctx: *mut RunCtx, rule: &str, site: u64, operation_site: u64) {
+pub(crate) fn record_runtime(ctx: *mut TaskCtx, rule: &str, site: u64, operation_site: u64) {
     let rule = hirsel_core_contract::runtime_rule_code(rule)
         .unwrap_or_else(|| crate::fault("a rule the runtime does not record"));
     unsafe {
@@ -182,7 +182,7 @@ pub(crate) fn record_runtime(ctx: *mut RunCtx, rule: &str, site: u64, operation_
 /// `ctx` is live and `failure` readable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_failure_append(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     failure: *const FailureRecord,
 ) -> u8 {
     unsafe { (*ctx).failure.record(*failure) };
@@ -194,7 +194,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_append(
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_failure_active(ctx: *mut RunCtx) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_failure_active(ctx: *mut TaskCtx) -> u8 {
     unsafe { (*ctx).failure.active() as u8 }
 }
 
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_active(ctx: *mut RunCtx) -> u8 {
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_failure_primary(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut FailureRecord,
 ) -> u8 {
     match unsafe { (*ctx).failure.primary } {
@@ -221,7 +221,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_primary(
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_failure_cause_count(ctx: *mut RunCtx) -> u64 {
+pub unsafe extern "C" fn hirsel_rt_v2_failure_cause_count(ctx: *mut TaskCtx) -> u64 {
     unsafe { (*ctx).failure.causes.len() as u64 }
 }
 
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_cause_count(ctx: *mut RunCtx) -> u
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_failure_cause(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u64,
     out: *mut FailureRecord,
 ) -> u8 {
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_cause(
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_failure_clear(ctx: *mut RunCtx) {
+pub unsafe extern "C" fn hirsel_rt_v2_failure_clear(ctx: *mut TaskCtx) {
     unsafe { (*ctx).failure.clear() };
 }
 
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_clear(ctx: *mut RunCtx) {
 /// `ctx` is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_failure_reanchor(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     site: u64,
     operation_site: u64,
 ) {

@@ -12,7 +12,7 @@
 //! sticky. Releases ignore both, and neither tests unique; finite counts stay below them.
 
 use crate::alloc::{Header, STATE_LIVE};
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::fault;
 
 /// The sticky immortal sentinel.
@@ -35,7 +35,7 @@ pub const fn finite_count_max(max: u64) -> u32 {
 }
 
 /// Reject an operation on a block that is not a live counted block (diagnostic mode).
-pub(crate) unsafe fn check_live_block(ctx: &RunCtx, block: *mut Header) {
+pub(crate) unsafe fn check_live_block(ctx: &TaskCtx, block: *mut Header) {
     if block.is_null() {
         fault("a null block reference");
     }
@@ -59,16 +59,16 @@ pub(crate) unsafe fn check_live_block(ctx: &RunCtx, block: *mut Header) {
 /// # Safety
 /// `ctx` is live and the caller holds a credit of the live block `block`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut RunCtx, block: *mut Header) {
+pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut TaskCtx, block: *mut Header) {
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("count_increments", 1);
-            ctx.heap.measurement.count_increments += 1;
+            ctx.heap().measurement.record("count_increments", 1);
+            ctx.heap().measurement.count_increments += 1;
         }
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(ctx, block);
             if (*ctx.descriptor((*block).index())).finalizer.is_some() {
                 fault("a dup of a block whose layout has a finalizer: resources are noncopyable");
@@ -82,11 +82,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut RunCtx, block: *mut Header) 
             (*block).count = COUNT_ARENA_SHARED;
             return;
         }
-        if count >= ctx.count_max {
+        if count >= ctx.run().count_max {
             (*block).count = COUNT_IMMORTAL;
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             {
-                ctx.immortalized += 1;
+                ctx.worker().immortalized += 1;
             }
         } else {
             (*block).count = count + 1;

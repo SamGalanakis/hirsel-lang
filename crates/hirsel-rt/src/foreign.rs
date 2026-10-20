@@ -1,14 +1,24 @@
 //! PROG-4 callbacks: C calls a callback on the thread of the extern call that handed it
-//! over, so each extern call records its run context for that thread's callback thunks.
-use crate::context::RunCtx;
+//! over, so each extern call records its task context for that thread's callback thunks. The
+//! thread's scope belongs to the running task: a task switch saves it into the task's context
+//! and restores the next task's (`TaskCtx::switch_in`).
+use crate::context::TaskCtx;
 use std::cell::Cell;
 use std::ffi::c_void;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ForeignScope {
-    context: *mut RunCtx,
+pub(crate) struct ForeignScope {
+    context: *mut TaskCtx,
     site: u64,
+}
+
+impl ForeignScope {
+    /// No extern call is active.
+    pub(crate) const NONE: ForeignScope = ForeignScope {
+        context: std::ptr::null_mut(),
+        site: 0,
+    };
 }
 
 // Caller-owned storage in hirsel_rt_v2.h, transcribed in runtime_abi.
@@ -16,15 +26,26 @@ const _: () = assert!(std::mem::size_of::<ForeignScope>() == 16);
 const _: () = assert!(std::mem::align_of::<ForeignScope>() == 8);
 
 thread_local! {
-    static CURRENT: Cell<ForeignScope> = const { Cell::new(ForeignScope {
-        context: std::ptr::null_mut(), site: 0,
-    }) };
+    static CURRENT: Cell<ForeignScope> = const { Cell::new(ForeignScope::NONE) };
 }
 
 /// Whether an extern call is active on this thread: C frames sit between the running Hirsel
 /// code and its run's launcher.
+#[inline(never)]
 pub(crate) fn active() -> bool {
     CURRENT.with(|c| !c.get().context.is_null())
+}
+
+/// The thread's scope, which the task switched out keeps.
+#[inline(never)]
+pub(crate) fn save() -> ForeignScope {
+    CURRENT.with(Cell::get)
+}
+
+/// Make `scope`, the task switched in's own, the thread's scope.
+#[inline(never)]
+pub(crate) fn restore(scope: ForeignScope) {
+    CURRENT.with(|c| c.set(scope));
 }
 
 /// Record this call's context and site, saving its enclosing scope without allocating.
@@ -33,7 +54,7 @@ pub(crate) fn active() -> bool {
 /// `previous` is writable for 16 bytes at alignment 8 until foreign_leave returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     site: u64,
     previous: *mut c_void,
 ) {
@@ -73,7 +94,7 @@ pub extern "C" fn hirsel_rt_v2_foreign_violation(site: u64) -> ! {
 /// The run context of this thread's extern call. A callback reached on a thread without one
 /// (C called it after the call or from another thread) breaks its contract: the process ends.
 #[unsafe(no_mangle)]
-pub extern "C" fn hirsel_rt_v2_callback_context() -> *mut RunCtx {
+pub extern "C" fn hirsel_rt_v2_callback_context() -> *mut TaskCtx {
     let ctx = CURRENT.with(|c| c.get().context);
     if ctx.is_null() {
         eprintln!(
@@ -87,7 +108,7 @@ pub extern "C" fn hirsel_rt_v2_callback_context() -> *mut RunCtx {
 /// PROG-4: a language failure inside a callback ends the process, since the C frames
 /// between it and the extern call cannot run cleanup.
 #[unsafe(no_mangle)]
-pub extern "C" fn hirsel_rt_v2_callback_failed(_ctx: *mut RunCtx) {
+pub extern "C" fn hirsel_rt_v2_callback_failed(_ctx: *mut TaskCtx) {
     eprintln!("hirsel-rt: PROG-4: a callback failed; the process ends");
     std::process::abort()
 }

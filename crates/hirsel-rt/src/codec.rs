@@ -11,7 +11,7 @@ use crate::alloc::{
     allocate_sequence, hirsel_rt_v2_alloc, payload, sequence_elements_offset, sequence_slice_start,
 };
 use crate::stop::{Stop, Stopped};
-use crate::{DOMAIN_HEAP, Header, RunCtx, fault};
+use crate::{DOMAIN_HEAP, Header, TaskCtx, fault};
 use std::collections::BTreeSet;
 use std::ffi::c_void;
 
@@ -500,7 +500,7 @@ unsafe fn text_bytes<'a>(text: &Text, at: *const u8) -> &'a [u8] {
 }
 
 /// A fresh byte sequence holding `bytes`, written as a whole slice at `at`.
-unsafe fn write_text(ctx: *mut RunCtx, text: &Text, at: *mut u8, bytes: &[u8]) {
+unsafe fn write_text(ctx: *mut TaskCtx, text: &Text, at: *mut u8, bytes: &[u8]) {
     unsafe {
         let owner = allocate_sequence(ctx, text.index, bytes.len() as u64, 1, 1);
         write(
@@ -790,7 +790,7 @@ enum Put {
 
 /// The SER-2 payload of the value at `value`.
 unsafe fn encode_payload(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     program: &Program,
     value: *const u8,
 ) -> Stopped<Vec<u8>> {
@@ -921,7 +921,7 @@ unsafe fn encode_payload(
 }
 
 unsafe fn encode_node(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     program: &Program,
     node: usize,
     at: *const u8,
@@ -1120,7 +1120,7 @@ unsafe fn encode_node(
 /// root node's layout and `out` writable storage of its Bytes layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_codec_encode(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     codec: *const Codec,
     value: *const c_void,
     out: *mut c_void,
@@ -1130,7 +1130,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_encode(
 }
 
 unsafe fn encode(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     codec: *const Codec,
     value: *const c_void,
     out: *mut c_void,
@@ -1431,7 +1431,7 @@ enum Build {
 }
 
 /// A fresh zeroed heap block for `size` payload bytes.
-unsafe fn block(ctx: *mut RunCtx, index: u32, size: u64, align: u64) -> *mut Header {
+unsafe fn block(ctx: *mut TaskCtx, index: u32, size: u64, align: u64) -> *mut Header {
     unsafe {
         let block = hirsel_rt_v2_alloc(ctx, index, size, align.max(8), DOMAIN_HEAP, 0);
         std::ptr::write_bytes(payload(block), 0, size as usize);
@@ -1440,7 +1440,7 @@ unsafe fn block(ctx: *mut RunCtx, index: u32, size: u64, align: u64) -> *mut Hea
 }
 
 /// A fresh sequence block of `count` zeroed elements.
-unsafe fn sequence(ctx: *mut RunCtx, e: &Elements, count: u64) -> *mut Header {
+unsafe fn sequence(ctx: *mut TaskCtx, e: &Elements, count: u64) -> *mut Header {
     unsafe {
         let block = allocate_sequence(ctx, e.index, count, e.stride, e.align);
         std::ptr::write_bytes(
@@ -1454,7 +1454,7 @@ unsafe fn sequence(ctx: *mut RunCtx, e: &Elements, count: u64) -> *mut Header {
 
 /// Build the validated payload's value at `out` (zeroed storage of the root node's layout).
 /// Validation has succeeded, so every read succeeds.
-unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *mut u8) {
+unsafe fn materialize(ctx: *mut TaskCtx, program: &Program, bytes: &[u8], out: *mut u8) {
     let mut input = Input { bytes, at: 0 };
     let checked = |r: Result<u128, DecodeError>| r.unwrap_or_else(|_| fault("codec reread"));
     let mut work = vec![Build::Visit(program.root, out)];
@@ -1700,7 +1700,7 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
 /// its Bytes node's layout and `out` writable storage of its result layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     codec: *const Codec,
     bytes: *const c_void,
     out: *mut c_void,
@@ -1710,7 +1710,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
 }
 
 unsafe fn decode(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     codec: *const Codec,
     bytes: *const c_void,
     out: *mut c_void,

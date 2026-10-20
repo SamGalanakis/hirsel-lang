@@ -720,30 +720,30 @@ fn interleaved_page_exhaustion_preserves_live_payloads_in_every_class() {
 mod compiled {
     use hirsel_rt::{
         CTX_DUP_MAX_OFFSET, CTX_FREE_INLINE_OFFSET, CTX_IDLE_SLABS_OFFSET, CTX_PAGES_OFFSET,
-        Header, PAGE_FREE_OFFSET, PAGE_LIVE_OFFSET, PAGE_LOCAL_FREE_OFFSET, RunCtx, SLAB_SIZE,
+        Header, PAGE_FREE_OFFSET, PAGE_LIVE_OFFSET, PAGE_LOCAL_FREE_OFFSET, SLAB_SIZE, TaskCtx,
     };
 
     unsafe fn at<T>(base: *mut u8, offset: usize) -> *mut T {
         unsafe { base.add(offset).cast() }
     }
 
-    pub fn dup_max(ctx: *mut RunCtx) -> u32 {
+    pub fn dup_max(ctx: *mut TaskCtx) -> u32 {
         unsafe { *at::<u32>(ctx.cast(), CTX_DUP_MAX_OFFSET) }
     }
 
-    pub fn free_inline(ctx: *mut RunCtx) -> u32 {
+    pub fn free_inline(ctx: *mut TaskCtx) -> u32 {
         unsafe { *at::<u32>(ctx.cast(), CTX_FREE_INLINE_OFFSET) }
     }
 
-    pub fn idle(ctx: *mut RunCtx) -> u64 {
+    pub fn idle(ctx: *mut TaskCtx) -> u64 {
         unsafe { *at::<u64>(ctx.cast(), CTX_IDLE_SLABS_OFFSET) }
     }
 
-    pub fn page(ctx: *mut RunCtx, pool: usize) -> *mut u8 {
+    pub fn page(ctx: *mut TaskCtx, pool: usize) -> *mut u8 {
         unsafe { *at::<*mut u8>(ctx.cast(), CTX_PAGES_OFFSET + 8 * pool) }
     }
 
-    pub fn alloc(ctx: *mut RunCtx, pool: usize, index: u32) -> Option<*mut Header> {
+    pub fn alloc(ctx: *mut TaskCtx, pool: usize, index: u32) -> Option<*mut Header> {
         unsafe {
             let page = page(ctx, pool);
             if page.is_null() {
@@ -767,7 +767,7 @@ mod compiled {
         }
     }
 
-    pub fn dup(ctx: *mut RunCtx, block: *mut Header) -> bool {
+    pub fn dup(ctx: *mut TaskCtx, block: *mut Header) -> bool {
         unsafe {
             let below = (*block).count < dup_max(ctx);
             if below {
@@ -777,7 +777,7 @@ mod compiled {
         }
     }
 
-    pub fn free(ctx: *mut RunCtx, block: *mut Header) -> bool {
+    pub fn free(ctx: *mut TaskCtx, block: *mut Header) -> bool {
         unsafe {
             if free_inline(ctx) == 0 || (*block).descriptor >> 29 & 3 != 0 {
                 return false;

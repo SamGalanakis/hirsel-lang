@@ -7,7 +7,7 @@
 //! credited when it goes back. Without a budget the meter's limit is zero and every charge
 //! is one test on a cold path. A spent budget stops the run with
 //! `Stop::BudgetExceeded`, as a Blocked run stops (`crate::stop`).
-use crate::RunCtx;
+use crate::TaskCtx;
 use hirsel_run_config::BudgetKind;
 use std::cell::Cell;
 
@@ -67,7 +67,7 @@ fn exceeded(kind: BudgetKind) -> ! {
 /// # Safety
 /// `ctx` is the running context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_fuel_exhausted(ctx: *mut RunCtx) {
+pub unsafe extern "C" fn hirsel_rt_v2_fuel_exhausted(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     unsafe { crate::stop::raise(ctx, crate::stop::Stop::BudgetExceeded(BudgetKind::Fuel)) }
 }

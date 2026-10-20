@@ -376,6 +376,12 @@ pub fn artifact(
     inputs: &EmitInputs<'_>,
     toolchain: &str,
 ) -> Result<ObjectArtifact, String> {
+    if !file.thread_locals.is_empty() {
+        return Err(format!(
+            "the object uses thread-local storage, which a migrating task cannot: {}",
+            file.thread_locals.join(", ")
+        ));
+    }
     let declared: Vec<&String> = manifested.exports.keys().collect();
     let exported: Vec<&String> = file
         .exports
@@ -586,6 +592,7 @@ mod tests {
             exports: exports.iter().map(|s| s.to_string()).collect(),
             imports: imports.iter().map(|s| s.to_string()).collect(),
             relocations: Vec::new(),
+            thread_locals: Vec::new(),
         }
     }
 
@@ -642,5 +649,14 @@ mod tests {
         ] {
             assert!(check(file, manifested).is_err());
         }
+    }
+
+    #[test]
+    fn an_object_that_uses_thread_local_storage_is_refused() {
+        let mut tls = file(&["f"], &[]);
+        tls.thread_locals
+            .push("TLS relocation type 23 in section 2".into());
+        let refusal = check(tls, manifested(&["f"], &[])).unwrap_err();
+        assert!(refusal.contains("thread-local storage"), "{refusal}");
     }
 }

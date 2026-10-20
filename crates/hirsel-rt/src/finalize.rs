@@ -7,19 +7,19 @@
 //! finalizer of a type declared in an `unsafe ffi` package ends the process instead.
 
 use crate::alloc::Header;
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::release::{LAYOUT_UNSAFE_FFI, Layout, drain, push};
 use crate::{STATUS_FAILURE, STATUS_OK, fault};
 
 /// A user drop body: borrowed `value`, the cleanup `anchor`, and the status protocol. On failure
 /// it records the failure with `hirsel_rt_v2_failure_begin` after cleaning its own locals.
 pub type DropThunk =
-    unsafe extern "C" fn(ctx: *mut RunCtx, value: *mut u8, anchor: u64, operation_site: u64) -> u8;
+    unsafe extern "C" fn(ctx: *mut TaskCtx, value: *mut u8, anchor: u64, operation_site: u64) -> u8;
 
 /// The Io adapter's handle close for a dropped handle: the context, the handle and the cleanup
 /// `anchor`, with the drop thunk's status protocol.
 pub type CloseThunk =
-    unsafe extern "C" fn(ctx: *mut RunCtx, handle: u64, anchor: u64, operation_site: u64) -> u8;
+    unsafe extern "C" fn(ctx: *mut TaskCtx, handle: u64, anchor: u64, operation_site: u64) -> u8;
 
 /// Compiler-reserved cleanup continuation storage for an inline value (a frame or region
 /// resource). It is a worklist item shaped like a dead header, so dropping an inline value uses
@@ -36,7 +36,7 @@ pub struct Cleanup {
 
 /// Run `layout`'s own finalizer on `value`, shielded. Returns the accumulated status.
 pub(crate) unsafe fn run_finalizer(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     layout: *const Layout,
     value: *mut u8,
     anchor: u64,
@@ -61,7 +61,7 @@ pub(crate) unsafe fn run_finalizer(
 /// finalizer; a channel endpoint closes in the task scheduler instead. A handle drop without an
 /// adapter is an invariant fault.
 pub(crate) unsafe fn run_close(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     handle: u64,
     anchor: u64,
     operation_site: u64,
@@ -72,7 +72,7 @@ pub(crate) unsafe fn run_close(
             crate::tasks::close_endpoint(ctx, handle, anchor, operation_site)
         });
     }
-    let Some(close) = ctx.close_handle else {
+    let Some(close) = ctx.run().close_handle else {
         fault("a handle drop in a context without an Io adapter's close_handle");
     };
     // SAFETY: the adapter receives this context and the handle the dropped value owned.
@@ -83,7 +83,7 @@ pub(crate) unsafe fn run_close(
 
 /// Run user or adapter cleanup code shielded (cancellation suppressed) and check its status
 /// protocol: 0, or 1 with a failure recorded; no release work may be left pending.
-fn shielded(ctx: &mut RunCtx, call: impl FnOnce(*mut RunCtx) -> u8) -> u8 {
+fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
     let work = ctx.work;
     ctx.shield += 1;
     let status = call(ctx);
@@ -94,7 +94,7 @@ fn shielded(ctx: &mut RunCtx, call: impl FnOnce(*mut RunCtx) -> u8) -> u8 {
     match status {
         STATUS_OK => STATUS_OK,
         STATUS_FAILURE => {
-            if ctx.heap.diagnostic && !ctx.failure.active() {
+            if ctx.heap().diagnostic && !ctx.failure.active() {
                 fault("a finalizer failed without recording a failure");
             }
             STATUS_FAILURE
@@ -121,7 +121,7 @@ fn terminate_unsafe_ffi() -> ! {
 /// owns, and `continuation` is writable storage that outlives the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_finalize(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u32,
     value: *mut u8,
     live_mask: *const u64,
@@ -167,7 +167,7 @@ pub(crate) unsafe fn finalize_item(
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut RunCtx, _anchor: u64) {
+pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut TaskCtx, _anchor: u64) {
     // SAFETY: caller contract.
     unsafe { (*ctx).shield += 1 }
 }
@@ -179,7 +179,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut RunCtx, _anchor: 
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut RunCtx, _anchor: u64) {
+pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut TaskCtx, _anchor: u64) {
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -198,7 +198,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut RunCtx, _anchor: u6
 /// `ctx` is live and `handle` is a handle the dropped value owned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_close_handle(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     handle: u64,
     anchor: u64,
     operation_site: u64,
@@ -212,6 +212,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_close_handle(
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_shielded(ctx: *mut RunCtx) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_shielded(ctx: *mut TaskCtx) -> u8 {
     unsafe { ((*ctx).shield > 0) as u8 }
 }

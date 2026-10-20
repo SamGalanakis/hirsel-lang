@@ -15,7 +15,7 @@ use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_deal
 use std::ptr;
 
 use crate::alloc::{FREE_POISON, Header, check_request};
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE};
 use crate::finalize::{Cleanup, finalize_item};
 #[cfg(feature = "memcheck")]
@@ -97,7 +97,7 @@ pub(crate) struct OwnerRecord {
 /// `block - 16 .. block + 8 + capacity` is reserved in the named active region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     block: *mut Header,
     index: u32,
@@ -116,8 +116,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
         if (block as usize + 8) % physical as usize != 0 {
             fault("a regional immortal payload has the wrong alignment");
         }
-        if ctx.heap.diagnostic {
-            let mut active = ctx.regions.active;
+        if ctx.heap().diagnostic {
+            let mut active = ctx.region;
             while !active.is_null() && active != region {
                 active = (*active).parent;
             }
@@ -144,8 +144,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
             if !contained {
                 fault("regional owner lies outside its region storage");
             }
-            ctx.heap.forget_foreign_record(block.addr());
-            ctx.region_owners
+            ctx.heap().forget_foreign_record(block.addr());
+            ctx.run()
+                .region_owners
                 .get_or_insert_with(Default::default)
                 .insert(
                     block.addr(),
@@ -185,7 +186,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
 /// `ctx` is live and `region` an active arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     index: u32,
     extent: u64,
@@ -205,7 +206,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         if bare && (extent != layout.size || align != layout.align) {
             fault("a fixed-layout arena block is not its layout's size and alignment");
         }
-        if ctx.heap.diagnostic && layout.size > extent {
+        if ctx.heap().diagnostic && layout.size > extent {
             fault("an arena block extent is smaller than its layout size");
         }
         let physical = align.max(8);
@@ -223,9 +224,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         let payload = start.add(prefix as usize);
         let payload = payload.add(payload.align_offset(physical as usize));
         let block = payload.sub(8).cast::<Header>();
-        if ctx.heap.diagnostic {
-            ctx.heap.forget_foreign_record(block.addr());
-            ctx.region_owners
+        if ctx.heap().diagnostic {
+            ctx.heap().forget_foreign_record(block.addr());
+            ctx.run()
+                .region_owners
                 .get_or_insert_with(Default::default)
                 .insert(
                     block.addr(),
@@ -317,7 +319,7 @@ pub(crate) unsafe fn charge_arena(region: *mut Region, bytes: u64) -> bool {
 ///
 /// # Safety
 /// `block` is a live tracked arena block of `ctx`.
-pub(crate) unsafe fn element_charge(ctx: &RunCtx, block: *const Header) -> u64 {
+pub(crate) unsafe fn element_charge(ctx: &TaskCtx, block: *const Header) -> u64 {
     // SAFETY: caller contract.
     unsafe {
         let layout = &*ctx.descriptor((*block).index());
@@ -342,7 +344,7 @@ pub(crate) unsafe fn element_charge(ctx: &RunCtx, block: *const Header) -> u64 {
 /// `ctx` is live, `slot` holds a live tracked arena sequence block of this element size and
 /// alignment, and `slots` is at least its count.
 pub(crate) unsafe fn tracked_move(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     slot: *mut *mut Header,
     slots: u64,
     element_size: u64,
@@ -412,7 +414,7 @@ pub(crate) unsafe fn tracked_move(
 /// `element_align` of which the caller holds the credit, and `out_block` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_push(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     element_size: u64,
     element_align: u64,
@@ -433,7 +435,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_push(
 /// As [`hirsel_rt_v2_arena_push`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_reserve(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     count: u64,
     element_size: u64,
@@ -453,7 +455,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_reserve(
 /// `ctx` is live and `block` a live tracked arena block of a columns or sequential layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_regrow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     extent: u64,
     align: u64,
@@ -476,7 +478,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_regrow(
 /// # Safety
 /// As [`hirsel_rt_v2_arena_push`].
 unsafe fn prepare(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     count: u64,
     element_size: u64,
@@ -555,7 +557,7 @@ struct Entry {
     cleanup: Cleanup,
 }
 
-/// The task's region segment pool.
+/// The worker's region segment pool.
 pub(crate) struct RegionPool {
     idle: *mut Segment,
     lent: *mut Segment,
@@ -566,8 +568,6 @@ pub(crate) struct RegionPool {
     pub(crate) active_count: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) backing_allocations: u64,
-    /// The innermost entered region of the running task (the scheduler swaps it per task).
-    pub(crate) active: *mut Region,
     /// The run's memory budget, shared with its heap.
     meter: std::rc::Rc<crate::budget::Meter>,
 }
@@ -594,7 +594,6 @@ impl RegionPool {
             active_count: 0,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             backing_allocations: 0,
-            active: ptr::null_mut(),
             meter,
         }
     }
@@ -753,7 +752,6 @@ impl RegionPool {
             }
         }
         self.lent = ptr::null_mut();
-        self.active = ptr::null_mut();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
             self.active_count = 0;
@@ -806,7 +804,7 @@ unsafe fn segment_of(region: &Region, data: *mut u8) -> *mut Segment {
 }
 
 /// Bump-allocate `extent` bytes aligned to `align` in `region`.
-unsafe fn reserve(ctx: &mut RunCtx, region: *mut Region, extent: u64, align: u64) -> *mut u8 {
+unsafe fn reserve(ctx: &mut TaskCtx, region: *mut Region, extent: u64, align: u64) -> *mut u8 {
     unsafe { reserve_in(ctx, region, extent, align, false) }
 }
 
@@ -816,7 +814,7 @@ unsafe fn reserve(ctx: &mut RunCtx, region: *mut Region, extent: u64, align: u64
 /// an arena of `n` bytes takes O(log n) backing allocations
 /// (third-party/NOTICES.md). Compiler-local regions keep standard segments.
 unsafe fn reserve_in(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     region: *mut Region,
     extent: u64,
     align: u64,
@@ -847,7 +845,7 @@ unsafe fn reserve_in(
         } else {
             need
         };
-        let segment = ctx.regions.take(need);
+        let segment = ctx.pool().take(need);
         let cursor = install(ctx, region, segment);
         let start = cursor.wrapping_add(cursor.align_offset(align as usize));
         region.cursor = advance(start, extent);
@@ -860,21 +858,19 @@ unsafe fn reserve_in(
 /// Make the lent `segment` `region`'s newest: its limit is the segment's end (null in
 /// diagnostic mode and the memcheck archive, which keep every allocation in the runtime).
 /// Returns the segment's first data byte, which is word aligned.
-unsafe fn install(ctx: &mut RunCtx, region: &mut Region, segment: *mut Segment) -> *mut u8 {
+unsafe fn install(ctx: &mut TaskCtx, region: &mut Region, segment: *mut Segment) -> *mut u8 {
     #[cfg(feature = "measurement")]
     {
-        ctx.heap.measurement.region_high_water_bytes = ctx
-            .heap
-            .measurement
-            .region_high_water_bytes
-            .max(ctx.regions.active_bytes);
+        let active_bytes = ctx.pool().active_bytes;
+        let measurement = &mut ctx.heap().measurement;
+        measurement.region_high_water_bytes = measurement.region_high_water_bytes.max(active_bytes);
     }
     // SAFETY: caller contract: `segment` is lent to `region`.
     unsafe {
         (*segment).prev = region.segment.cast();
         region.segment = segment.cast();
         let base = segment.cast::<u8>();
-        region.end = if ctx.heap.diagnostic || cfg!(feature = "memcheck") {
+        region.end = if ctx.heap().diagnostic || cfg!(feature = "memcheck") {
             ptr::null_mut()
         } else {
             base.wrapping_add((*segment).size as usize)
@@ -889,7 +885,7 @@ unsafe fn install(ctx: &mut RunCtx, region: &mut Region, segment: *mut Segment) 
 /// # Safety
 /// `ctx` is live and `region` writable storage that outlives the region.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut RunCtx, region: *mut Region) {
+pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut TaskCtx, region: *mut Region) {
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -898,16 +894,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut RunCtx, region: *mu
             cursor: ptr::null_mut(),
             end: ptr::null_mut(),
             cleanup: ptr::null_mut(),
-            parent: ctx.regions.active,
+            parent: ctx.region,
             state: REGION_ACTIVE,
             remaining: u64::MAX,
             bound: 0,
             exhausted: 0,
         });
-        ctx.regions.active = region;
+        ctx.region = region;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            ctx.regions.active_count += 1;
+            ctx.pool().active_count += 1;
         }
     }
 }
@@ -921,12 +917,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut RunCtx, region: *mu
 /// # Safety
 /// `ctx` is live and `region` writable storage that outlives the region.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_arena_enter(ctx: *mut RunCtx, region: *mut Region) {
+pub unsafe extern "C" fn hirsel_rt_v2_arena_enter(ctx: *mut TaskCtx, region: *mut Region) {
     // SAFETY: caller contract.
     unsafe {
         hirsel_rt_v2_region_enter(ctx, region);
         let ctx = &mut *ctx;
-        let segment = ctx.regions.take_idle();
+        let segment = ctx.pool().take_idle();
         if !segment.is_null() {
             let region = &mut *region;
             region.cursor = install(ctx, region, segment);
@@ -941,7 +937,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_enter(ctx: *mut RunCtx, region: *mut
 /// `ctx` is live and `region` an entered arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_bound(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     capacity: u64,
 ) {
@@ -963,7 +959,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_bound(
 /// `ctx` is live and `region` an entered arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_exhausted(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     kind: u32,
     rule: u32,
@@ -985,7 +981,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_exhausted(
 /// # Safety
 /// `ctx` is live and `region` an entered arena record.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_arena_recover(ctx: *mut RunCtx, region: *mut Region) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_arena_recover(ctx: *mut TaskCtx, region: *mut Region) -> u8 {
     // SAFETY: caller contract.
     unsafe {
         check_active(region);
@@ -1019,7 +1015,7 @@ fn failure_index(count: usize) -> u32 {
 /// `ctx` is live, `region` active and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_region_reserve(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     extent: u64,
     align: u64,
@@ -1033,7 +1029,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_reserve(
     STATUS_OK
 }
 
-unsafe fn record(ctx: &mut RunCtx, region: *mut Region, block: *mut Header) -> *mut Entry {
+unsafe fn record(ctx: &mut TaskCtx, region: *mut Region, block: *mut Header) -> *mut Entry {
     // SAFETY: caller checked the region is active.
     unsafe {
         let entry = reserve(
@@ -1056,7 +1052,7 @@ unsafe fn record(ctx: &mut RunCtx, region: *mut Region, block: *mut Header) -> *
 /// `ctx` is live, `region` active, and the caller transfers one credit of the live `block`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_region_hold(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     block: *mut Header,
 ) -> u8 {
@@ -1064,7 +1060,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_hold(
     unsafe {
         check_active(region);
         let ctx = &mut *ctx;
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             crate::count::check_live_block(ctx, block);
         }
         record(ctx, region, block);
@@ -1080,7 +1076,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_hold(
 /// `region` whose finalization obligation transfers to the region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_region_schedule(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     index: u32,
     value: *mut u8,
@@ -1104,7 +1100,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_schedule(
 /// `ctx` is live and `region` is the innermost active region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     anchor: u64,
     operation_site: u64,
@@ -1113,7 +1109,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
     unsafe {
         check_active(region);
         let ctx = &mut *ctx;
-        if ctx.regions.active != region {
+        if ctx.region != region {
             fault("a region exits before a region entered inside it");
         }
         let mut status = STATUS_OK;
@@ -1132,7 +1128,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
             }
             entry = prev;
         }
-        if let Some(owners) = &mut ctx.region_owners {
+        if let Some(owners) = &mut ctx.run().region_owners {
             for owner in owners.values_mut().filter(|owner| owner.region == region) {
                 owner.active = false;
             }
@@ -1140,28 +1136,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
         let mut segment = (*region).segment.cast::<Segment>();
         while !segment.is_null() {
             let prev = (*segment).prev;
-            if ctx.heap.diagnostic {
+            if ctx.heap().diagnostic {
                 let data = segment.cast::<u8>().add(SEGMENT_HEADER);
                 #[cfg(feature = "memcheck")]
                 memcheck::undefined(data, (*segment).size as usize - SEGMENT_HEADER);
                 ptr::write_bytes(data, FREE_POISON, (*segment).size as usize - SEGMENT_HEADER);
             }
-            ctx.regions.give_back(segment);
+            ctx.pool().give_back(segment);
             #[cfg(feature = "measurement")]
             {
-                ctx.heap.measurement.region_pool_high_water_bytes = ctx
-                    .heap
-                    .measurement
-                    .region_pool_high_water_bytes
-                    .max(ctx.regions.idle_bytes);
+                let idle_bytes = ctx.pool().idle_bytes;
+                let measurement = &mut ctx.heap().measurement;
+                measurement.region_pool_high_water_bytes =
+                    measurement.region_pool_high_water_bytes.max(idle_bytes);
             }
             segment = prev;
         }
         (*region).state = REGION_EXITED;
-        ctx.regions.active = (*region).parent;
+        ctx.region = (*region).parent;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            ctx.regions.active_count -= 1;
+            ctx.pool().active_count -= 1;
         }
         ctx.trim();
         status
@@ -1174,7 +1169,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
 /// `ctx` is live, `region` active and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_builder_begin(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     region: *mut Region,
     capacity: u64,
     align: u64,
@@ -1204,7 +1199,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_begin(
 /// `ctx` is live and `builder` a builder of an active region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_builder_grow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     builder: *mut Builder,
     used: u64,
     min_capacity: u64,
@@ -1237,7 +1232,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_grow(
         }
         let data = reserve(ctx, builder.region, capacity, builder.align);
         ptr::copy_nonoverlapping(builder.data, data, used as usize);
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             ptr::write_bytes(builder.data, FREE_POISON, builder.capacity as usize);
         }
         // Nothing has observed the old storage (MEM-10): it is unaddressable once moved.
@@ -1259,7 +1254,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_grow(
 /// `ctx` is live and `builder` an unpublished builder of an active region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_builder_publish(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     builder: *mut Builder,
     used: u64,
 ) {

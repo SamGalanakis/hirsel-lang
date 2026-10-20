@@ -12,7 +12,7 @@
 //! context reaches its own program's table, so runs of different programs share a process.
 
 use crate::alloc::{allocate_sequence, payload, sequence_elements_offset};
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::failure::Chained;
 use crate::text::allocate_bytes;
 use crate::views::Slice;
@@ -130,17 +130,17 @@ impl FailureTable {
 }
 
 /// The failure table of the program `ctx` runs.
-fn table(ctx: *mut RunCtx) -> FailureTable {
+fn table(ctx: *mut TaskCtx) -> FailureTable {
     // SAFETY: the context is live.
-    unsafe { (*ctx).failure_table }
+    unsafe { (*ctx).run().failure_table }
         .unwrap_or_else(|| fault("an isolated failure without the program's failure table"))
 }
 
-fn site(ctx: *mut RunCtx, code: u64) -> Site {
+fn site(ctx: *mut TaskCtx, code: u64) -> Site {
     table(ctx).site(code)
 }
 
-fn rule(ctx: *mut RunCtx, code: u32) -> &'static str {
+fn rule(ctx: *mut TaskCtx, code: u32) -> &'static str {
     table(ctx).rule(code)
 }
 
@@ -155,16 +155,17 @@ pub fn report(failure: &hirsel_run_config::Failure) -> String {
 }
 
 /// Give `ctx` its program's failure table.
-pub(crate) fn attach(ctx: &mut RunCtx, table: FailureTable) {
-    ctx.failure_table = Some(table);
+pub(crate) fn attach(ctx: &mut TaskCtx, table: FailureTable) {
+    ctx.run().failure_table = Some(table);
 }
 
 /// The running task's caught chain.
-fn caught(ctx: *mut RunCtx) -> &'static mut Vec<Chained> {
-    &mut crate::tasks::scheduler(ctx).isolated
+fn caught(ctx: *mut TaskCtx) -> &'static mut Vec<Chained> {
+    // SAFETY: the running task's context outlives its use of the scratch.
+    unsafe { &mut (*ctx).isolated }
 }
 
-fn record(ctx: *mut RunCtx, index: u64) -> &'static Chained {
+fn record(ctx: *mut TaskCtx, index: u64) -> &'static Chained {
     usize::try_from(index)
         .ok()
         .and_then(|i| caught(ctx).get(i))
@@ -178,14 +179,14 @@ fn record(ctx: *mut RunCtx, index: u64) -> &'static Chained {
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
         out.write((*ctx).failure.count() as u64);
-        crate::tasks::yield_now(ctx);
+        crate::tasks::yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -196,7 +197,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
 /// # Safety
 /// `ctx` is live and `start` a record count `hirsel_rt_v2_isolate_begin` returned.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_isolate_catch(ctx: *mut RunCtx, start: u64) {
+pub unsafe extern "C" fn hirsel_rt_v2_isolate_catch(ctx: *mut TaskCtx, start: u64) {
     let path = crate::tasks::current_path(ctx);
     let start = usize::try_from(start).unwrap_or_else(|_| fault("an isolation start overflows"));
     // SAFETY: caller contract.
@@ -213,7 +214,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_catch(ctx: *mut RunCtx, start: u64
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_count(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
@@ -228,7 +229,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_count(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_kind(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u32,
     _tasks: *const u64,
     index: u64,
@@ -245,7 +246,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_kind(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_rule(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut Slice,
     _tasks: *const u64,
@@ -264,7 +265,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_rule(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_definition(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut Slice,
     _tasks: *const u64,
@@ -282,7 +283,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_definition(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_line(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u64,
     _tasks: *const u64,
     index: u64,
@@ -299,7 +300,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_line(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_column(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u64,
     _tasks: *const u64,
     index: u64,
@@ -316,7 +317,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_column(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_spawn(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut *mut crate::Header,
     _tasks: *const u64,
@@ -339,7 +340,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_spawn(
 }
 
 /// Source location of a foreign contract violation, outside the language failure chain.
-pub(crate) fn foreign_location(ctx: *mut RunCtx, code: u64) -> String {
+pub(crate) fn foreign_location(ctx: *mut TaskCtx, code: u64) -> String {
     if ctx.is_null() {
         return format!("site {code:#x}");
     }

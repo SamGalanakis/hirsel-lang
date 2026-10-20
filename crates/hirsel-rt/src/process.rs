@@ -1585,7 +1585,7 @@ const COMMAND_SIZE: usize = 48;
 /// `Option[Dir]` (u32 tag, Dir at 24) at 16, `Option[List[(String, String)]]` at 32, a
 /// null-niche block pointer whose elements are 48-byte name and value Strings, and the
 /// `own_group` bool at 40.
-unsafe fn command(ctx: *mut crate::RunCtx, at: *const u8) -> Command {
+unsafe fn command(ctx: *mut crate::TaskCtx, at: *const u8) -> Command {
     let env = unsafe { at.add(32).cast::<*mut crate::Header>().read() };
     Command {
         program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { at.cast::<u64>().read() }),
@@ -1621,7 +1621,7 @@ unsafe fn deadline_of(at: *const u8) -> Option<Deadline> {
 /// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ProcessResult,
     process: *const u64,
@@ -1688,7 +1688,7 @@ pub struct PipelineResult {
 /// `Option[Deadline]` are borrowed live values; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut PipelineResult,
     process: *const u64,
@@ -1740,7 +1740,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
 /// borrowed live values; out is writable. No borrowed input is retained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_process(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     test: *const u64,
@@ -1829,7 +1829,7 @@ impl ChildPairResult {
 /// Context is bound; the Proc is readable, rules a live List block; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_narrow(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     process: *const u64,
@@ -1858,7 +1858,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_narrow(
 /// Context is bound; Proc and the Command are borrowed live values; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     process: *const u64,
@@ -1884,7 +1884,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
 /// borrowed; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_write(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildPairResult,
     p: *const u64,
@@ -1912,7 +1912,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_write(
 /// Context is bound; p readable; c the exclusive address of a live Child.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_close_stdin(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     p: *const u64,
     c: *mut u64,
 ) -> u8 {
@@ -1929,7 +1929,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_close_stdin(
 
 /// A child read appending to the caller's list, growing it through `hirsel_rt_v2_seq_grow`.
 unsafe fn child_read(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     out: *mut ChildWordResult,
     p: *const u64,
     c: *mut u64,
@@ -1961,7 +1961,7 @@ unsafe fn child_read(
 /// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_read_stdout(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     p: *const u64,
@@ -1977,7 +1977,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_read_stdout(
 /// As [`hirsel_rt_v2_child_read_stdout`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_read_stderr(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     p: *const u64,
@@ -1996,7 +1996,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_read_stderr(
 /// out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildPairResult,
     p: *const u64,
@@ -2025,7 +2025,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
 /// borrowed `Signal` ordinal.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     p: *const u64,
     c: *mut u64,
     signal: *const u32,
@@ -2050,7 +2050,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
 /// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     process: *const u64,
@@ -2085,7 +2085,7 @@ pub struct GroupResult {
 
 /// A fresh `List[ExitStatus]`: pointer-free (u32 tag, i32 at 4), like the runtime address
 /// list.
-unsafe fn status_list(ctx: *mut crate::RunCtx, statuses: &[ExitStatus]) -> *mut crate::Header {
+unsafe fn status_list(ctx: *mut crate::TaskCtx, statuses: &[ExitStatus]) -> *mut crate::Header {
     let block = unsafe { crate::alloc::allocate_sequence(ctx, 0, statuses.len() as u64, 8, 4) };
     let first = crate::alloc::sequence_elements_offset(4) as usize;
     for (index, status) in statuses.iter().enumerate() {
@@ -2110,7 +2110,7 @@ unsafe fn status_list(ctx: *mut crate::RunCtx, statuses: &[ExitStatus]) -> *mut 
 /// `Option[Deadline]` borrowed; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut GroupResult,
     p: *const u64,

@@ -118,7 +118,7 @@ fn a_flush_error_is_recorded_before_the_print_returns() {
     std::fs::remove_dir_all(root).unwrap();
 }
 unsafe extern "C" fn entry(
-    ctx: *mut hirsel_rt::RunCtx,
+    ctx: *mut hirsel_rt::TaskCtx,
     _: *mut u8,
     out: *mut u8,
     io: *const u64,

@@ -3,7 +3,7 @@
 use crate::io::{Binding, Completion, Request};
 use crate::net::{ClientAuth, RootsDigest};
 use crate::net_abi::{NetUnitResult, NetWordResult};
-use crate::{Header, RunCtx, STATUS_FAILURE, STATUS_OK};
+use crate::{Header, STATUS_FAILURE, STATUS_OK, TaskCtx};
 
 /// TlsRoots = WebPki() | Pem(Bytes): the borrowed Pem slice, whose null owner word is
 /// `WebPki` (its niche).
@@ -14,7 +14,7 @@ pub struct TlsRootsAbi {
 
 /// The roots digest of a `TlsRoots` argument, supplying Pem material outside the request.
 /// WebPki's inactive payload need not be initialized.
-unsafe fn roots(ctx: *mut RunCtx, stream: u64, roots: *const TlsRootsAbi) -> RootsDigest {
+unsafe fn roots(ctx: *mut TaskCtx, stream: u64, roots: *const TlsRootsAbi) -> RootsDigest {
     let pem = unsafe { &(*roots).pem };
     if pem.owner.is_null() {
         return RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into());
@@ -27,7 +27,7 @@ unsafe fn roots(ctx: *mut RunCtx, stream: u64, roots: *const TlsRootsAbi) -> Roo
 /// A client handshake request. The taken handle transfers on every outcome; State closes
 /// it on data error.
 unsafe fn connect(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut NetWordResult,
     n: *const u64,
     s: *mut u64,
@@ -70,7 +70,7 @@ unsafe fn connect(
 /// live for the call; out writable for NetWordResult.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
 /// As `hirsel_rt_v2_tls_connect`; identity readable and its slices live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_as(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -195,7 +195,7 @@ impl TlsServerAbi {
 /// live for the call; out writable for NetWordResult.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -237,7 +237,7 @@ pub struct NetChainResult {
 /// ctx bound; n/s readable; out writable for NetChainResult.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetChainResult,
     n: *const u64,
@@ -278,7 +278,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
 /// ctx bound; n readable; s writable and transferred; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_close(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetUnitResult,
     n: *const u64,

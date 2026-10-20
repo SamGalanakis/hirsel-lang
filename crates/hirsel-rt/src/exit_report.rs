@@ -1,5 +1,5 @@
 //! Compiler-described PROG-3 return values. These bytes are host diagnostics, never Io.
-use crate::RunCtx;
+use crate::TaskCtx;
 use std::fmt::Write;
 
 /// Immutable compiler metadata. `fields` offsets are byte offsets, except in a
@@ -59,17 +59,17 @@ pub(crate) struct Returned {
 /// `layout` is its descriptor index and `node` describes its Error payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_exit_report(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     layout: u32,
     payload_offset: u64,
     node: *const Node,
 ) {
     unsafe {
-        if (*ctx).entry_result.is_some() {
+        if (*ctx).run().entry_result.is_some() {
             crate::fault("an entry registered two returned Results");
         }
-        (*ctx).entry_result = Some(Returned {
+        (*ctx).run().entry_result = Some(Returned {
             value,
             layout,
             payload_offset,

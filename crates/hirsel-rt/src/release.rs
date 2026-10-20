@@ -26,7 +26,7 @@ use crate::alloc::{
     DOMAIN_HEAP, Header, STATE_FIELDS_PENDING, STATE_FINALIZE_PENDING, STATE_FINALIZING, STATE_RAW,
     payload,
 };
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::count::{COUNT_IMMORTAL, check_live_block};
 use crate::finalize::{Cleanup, DropThunk, run_close, run_finalizer};
 use crate::{STATUS_OK, fault};
@@ -484,14 +484,14 @@ unsafe fn field_live(mask: *const u64, field: u32) -> bool {
 }
 /// Start one drain invocation; its stopping boundary is in the caller's activation.
 #[inline]
-pub(crate) unsafe fn push(ctx: &mut RunCtx, item: *mut Header, own_finalizer: bool) {
+pub(crate) unsafe fn push(ctx: &mut TaskCtx, item: *mut Header, own_finalizer: bool) {
     unsafe {
         if is_cleanup(item) {
             (*cleanup(item)).parent = ctx.work;
             (*cleanup(item)).phase = own_finalizer as u32;
             (*cleanup(item)).cursor = 0;
         } else {
-            ctx.heap.set_state(
+            ctx.heap().set_state(
                 item,
                 if own_finalizer {
                     STATE_FINALIZE_PENDING
@@ -529,16 +529,16 @@ fn prefetch(address: *const u8) {
 /// T16 DropEdge — consume the credit of one outgoing edge. Returns whether the child died; the
 /// caller then pushes it.
 #[inline]
-unsafe fn consume_edge(ctx: &mut RunCtx, child: *mut Header) -> bool {
+unsafe fn consume_edge(ctx: &mut TaskCtx, child: *mut Header) -> bool {
     // SAFETY: an active reference slot holds a counted block reference.
     unsafe {
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(ctx, child);
         }
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("count_decrements", 1);
-            ctx.heap.measurement.count_decrements += 1;
+            ctx.heap().measurement.record("count_decrements", 1);
+            ctx.heap().measurement.count_decrements += 1;
         }
         let count = (*child).count;
         if count == 1 {
@@ -732,7 +732,7 @@ pub(crate) struct Drained {
 /// in one pass. Any other item is freed after its children (post-order). Compiled drop glue
 /// frees in the same order (`hirsel-llvm`'s `glue`).
 pub(crate) unsafe fn drain(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     base: *mut Header,
     root: *mut Header,
     mask: *const u64,
@@ -756,7 +756,7 @@ pub(crate) unsafe fn drain(
 /// item runs alike: an ordinary release.
 #[inline(always)]
 unsafe fn drain_items<const ROOTED: bool>(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     base: *mut Header,
     root: *mut Header,
     mask: *const u64,
@@ -778,12 +778,12 @@ unsafe fn drain_items<const ROOTED: bool>(
             if fresh {
                 if item != root || mask.is_null() {
                     if !is_cleanup(item) {
-                        ctx.heap.set_state(item, STATE_FINALIZING);
+                        ctx.heap().set_state(item, STATE_FINALIZING);
                     }
                     status |= run_finalizer(ctx, layout, value, anchor, operation_site);
                 }
                 if !is_cleanup(item) {
-                    ctx.heap.set_state(item, STATE_FIELDS_PENDING);
+                    ctx.heap().set_state(item, STATE_FIELDS_PENDING);
                 }
                 fresh = false;
             }
@@ -875,7 +875,7 @@ unsafe fn drain_items<const ROOTED: bool>(
             if child.is_null() {
                 if keep && status == STATUS_OK {
                     (*item).restore_descriptor();
-                    ctx.heap.set_state(item, STATE_RAW);
+                    ctx.heap().set_state(item, STATE_RAW);
                     kept_root = true;
                 } else {
                     finish(ctx, item);
@@ -923,7 +923,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                 }
                 item = child;
                 let child_layout = ctx.descriptor((*child).index());
-                ctx.heap.set_state(child, STATE_FINALIZE_PENDING);
+                ctx.heap().set_state(child, STATE_FINALIZE_PENDING);
                 save_cursor(child, 0, child_layout);
                 ctx.work = item;
                 fresh = true;
@@ -948,7 +948,7 @@ unsafe fn drain_items<const ROOTED: bool>(
             parent = item;
             item = child;
             let child_layout = ctx.descriptor((*child).index());
-            ctx.heap.set_state(child, STATE_FINALIZE_PENDING);
+            ctx.heap().set_state(child, STATE_FINALIZE_PENDING);
             save_cursor(child, 0, child_layout);
             ctx.work = item;
             fresh = true;
@@ -961,7 +961,7 @@ unsafe fn drain_items<const ROOTED: bool>(
 /// span. Returns the child a [`STEP_RELEASE`] killed, or null.
 #[inline(always)]
 unsafe fn run_step(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     step: &Step,
     at: *mut u8,
     pc: &mut usize,
@@ -1007,7 +1007,7 @@ unsafe fn run_step(
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn walk_frames(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     item: *mut Header,
     steps: *const Step,
     mut frame: Frame,
@@ -1073,7 +1073,7 @@ unsafe fn walk_frames(
                         pc += step.span as usize;
                         continue;
                     }
-                    if ctx.heap.diagnostic && step.count_offset != NO_OFFSET {
+                    if ctx.heap().diagnostic && step.count_offset != NO_OFFSET {
                         check_extent(item, &frame, step, count);
                     }
                     let Some(inner) = nest
@@ -1086,7 +1086,7 @@ unsafe fn walk_frames(
                     frame = frame.enter(pc - 1, step, count - 1);
                 }
                 STEP_COLUMN => {
-                    if ctx.heap.diagnostic {
+                    if ctx.heap().diagnostic {
                         let capacity = frame
                             .base
                             .add(step.count_offset as usize)
@@ -1110,13 +1110,13 @@ unsafe fn walk_frames(
 
 /// T16 Free — a drained item's storage is returned (blocks) or its continuation ends.
 #[inline]
-unsafe fn finish(ctx: &mut RunCtx, item: *mut Header) {
+unsafe fn finish(ctx: &mut TaskCtx, item: *mut Header) {
     // SAFETY: `item` is fully drained.
     unsafe {
         if is_cleanup(item) {
             (*cleanup(item)).phase = 0;
         } else if (*item).domain() == DOMAIN_HEAP {
-            ctx.heap.free(item);
+            ctx.heap().free(item);
         } else {
             fault("an immortal block reached the release worklist");
         }
@@ -1132,12 +1132,12 @@ unsafe fn finish(ctx: &mut RunCtx, item: *mut Header) {
 /// `ctx` is live and `block` is a live heap block of this context whose only credit the
 /// caller owns and whose fields hold nothing owned any more.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut RunCtx, block: *mut Header) {
+pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut TaskCtx, block: *mut Header) {
     unsafe {
-        if (*ctx).heap.diagnostic {
+        if (*ctx).heap().diagnostic {
             return free_glue_checked(ctx, block);
         }
-        let heap = &mut (*ctx).heap;
+        let heap = &mut (*ctx).heap();
         let kind = (*block).descriptor & (3 << crate::alloc::KIND_SHIFT);
         if kind == 0 {
             heap.free_small(block);
@@ -1151,7 +1151,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut RunCtx, block: *mut Header)
 
 #[cold]
 #[inline(never)]
-unsafe fn free_glue_checked(ctx: *mut RunCtx, block: *mut Header) {
+unsafe fn free_glue_checked(ctx: *mut TaskCtx, block: *mut Header) {
     unsafe {
         let ctx = &mut *ctx;
         check_live_block(ctx, block);
@@ -1164,14 +1164,14 @@ unsafe fn free_glue_checked(ctx: *mut RunCtx, block: *mut Header) {
         if (*block).domain() != DOMAIN_HEAP {
             fault("an immortal block reached a free");
         }
-        ctx.heap.free(block);
+        ctx.heap().free(block);
     }
 }
 
 /// Validate a root release request, reached only in diagnostic mode.
 #[cold]
 #[inline(never)]
-unsafe fn check_root(ctx: &RunCtx, block: *mut Header, layout: *const Layout, mask: *const u64) {
+unsafe fn check_root(ctx: &TaskCtx, block: *mut Header, layout: *const Layout, mask: *const u64) {
     // SAFETY: caller passes a block reference and descriptor.
     unsafe {
         check_layout(layout);
@@ -1179,7 +1179,7 @@ unsafe fn check_root(ctx: &RunCtx, block: *mut Header, layout: *const Layout, ma
         if ctx.descriptor((*block).index()) != layout {
             fault("header/layout mismatch: the block's header names a different layout");
         }
-        if (*block).domain() == DOMAIN_HEAP && (*layout).size > ctx.heap.capacity(block) {
+        if (*block).domain() == DOMAIN_HEAP && (*layout).size > ctx.heap_ref().capacity(block) {
             fault("header/layout mismatch: the layout is larger than the block's capacity");
         }
         if !mask.is_null() && (*block).count != 1 {
@@ -1190,7 +1190,7 @@ unsafe fn check_root(ctx: &RunCtx, block: *mut Header, layout: *const Layout, ma
 
 /// Consume one holder credit of `block`, draining everything that dies.
 pub(crate) unsafe fn release_block(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     block: *mut Header,
     mask: *const u64,
     anchor: u64,
@@ -1200,8 +1200,8 @@ pub(crate) unsafe fn release_block(
     unsafe {
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("count_decrements", 1);
-            ctx.heap.measurement.count_decrements += 1;
+            ctx.heap().measurement.record("count_decrements", 1);
+            ctx.heap().measurement.count_decrements += 1;
         }
         let count = (*block).count;
         if count >= crate::count::COUNT_ARENA_SHARED {
@@ -1219,7 +1219,7 @@ pub(crate) unsafe fn release_block(
         // drain invocation for an empty program.
         let layout = &*ctx.descriptor((*block).index());
         if layout.finalizer.is_none() && layout.step_count == 0 || masked_inert(layout, mask) {
-            ctx.heap.free(block);
+            ctx.heap().free(block);
             return STATUS_OK;
         }
         // T04 DropLast — Finite(1) -> Dead, then drain.
@@ -1240,7 +1240,7 @@ pub(crate) unsafe fn release_block(
 /// owns one credit of it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_release(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     index: u32,
     live_mask: *const u64,
@@ -1250,7 +1250,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_root(ctx, block, ctx.descriptor(index), live_mask);
         }
         release_block(ctx, block, live_mask, anchor, operation_site)
@@ -1289,7 +1289,7 @@ fn masked_inert(layout: &Layout, mask: *const u64) -> bool {
 /// As `hirsel_rt_v2_release`; `out_token` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_reset(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     index: u32,
     live_mask: *const u64,
@@ -1300,7 +1300,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_root(ctx, block, ctx.descriptor(index), live_mask);
         }
         out_token.write(ptr::null_mut());
@@ -1309,16 +1309,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
         }
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("count_decrements", 1);
-            ctx.heap.measurement.count_decrements += 1;
+            ctx.heap().measurement.record("count_decrements", 1);
+            ctx.heap().measurement.count_decrements += 1;
         }
         // Every field with drop steps has moved out: no walk, the donor is the token.
         if masked_inert(&*ctx.descriptor(index), live_mask) {
-            ctx.heap.set_state(block, STATE_RAW);
+            ctx.heap().set_state(block, STATE_RAW);
             #[cfg(feature = "memcheck")]
             crate::memcheck::noaccess(
                 crate::alloc::payload(block),
-                ctx.heap.capacity(block) as usize,
+                ctx.heap().capacity(block) as usize,
             );
             out_token.write(block);
             return STATUS_OK;
@@ -1331,7 +1331,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
             #[cfg(feature = "memcheck")]
             crate::memcheck::noaccess(
                 crate::alloc::payload(block),
-                ctx.heap.capacity(block) as usize,
+                ctx.heap().capacity(block) as usize,
             );
             out_token.write(block);
         }

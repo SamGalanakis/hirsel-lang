@@ -13,7 +13,7 @@ use hirsel_rt::tasks::{
     hirsel_rt_v2_task_join, hirsel_rt_v2_task_scope_enter, hirsel_rt_v2_task_scope_exit,
     hirsel_rt_v2_task_spawn, yield_now,
 };
-use hirsel_rt::{FailureRecord, Header, RunCtx};
+use hirsel_rt::{FailureRecord, Header, TaskCtx};
 use support::*;
 
 thread_local! { static TRACE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
@@ -36,14 +36,14 @@ const TASKS: u64 = 7;
 /// `Some(id * 100)` after one yield: traces `id1`, `id2` around the yield and `id3` with the
 /// slot's tag once its result left (`id30` delivered, `id31` dropped).
 unsafe extern "C" fn yielding(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     environment: *mut Header,
     _caller_site: u64,
     _operation_site: u64,
 ) -> u8 {
     let id = read_u64(environment, 0);
     trace(id * 10 + 1);
-    unsafe { yield_now(ctx) };
+    unsafe { yield_now(&mut *ctx) };
     trace(id * 10 + 2);
     let mut slot = [1u64, id * 100];
     assert_eq!(
@@ -58,7 +58,7 @@ unsafe extern "C" fn yielding(
 
 /// Fails with rule `id` at once.
 unsafe extern "C" fn failing(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     environment: *mut Header,
     _caller_site: u64,
     _operation_site: u64,
@@ -68,7 +68,7 @@ unsafe extern "C" fn failing(
     unsafe { hirsel_rt_v2_failure_begin(ctx, 0, id as u32, id, id) }
 }
 
-fn spawn(ctx: *mut RunCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64) -> u64 {
+fn spawn(ctx: *mut TaskCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64) -> u64 {
     let environment = alloc_block(ctx, environment(), 8);
     write_u64(environment, 0, id);
     let mut task = 0;
@@ -90,7 +90,7 @@ fn spawn(ctx: *mut RunCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64
     task
 }
 
-fn join(ctx: *mut RunCtx, scope: u64, mut task: u64) -> (u8, [u64; 2]) {
+fn join(ctx: *mut TaskCtx, scope: u64, mut task: u64) -> (u8, [u64; 2]) {
     let mut slot = NONE;
     let status = unsafe {
         hirsel_rt_v2_task_join(ctx, 0, 0, &scope, &mut task, slot.as_mut_ptr().cast(), 16)
@@ -98,7 +98,7 @@ fn join(ctx: *mut RunCtx, scope: u64, mut task: u64) -> (u8, [u64; 2]) {
     (status, slot)
 }
 
-fn enter(ctx: *mut RunCtx) -> u64 {
+fn enter(ctx: *mut TaskCtx) -> u64 {
     let mut scope = 0;
     assert_eq!(
         unsafe { hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &TASKS) },
@@ -107,11 +107,11 @@ fn enter(ctx: *mut RunCtx) -> u64 {
     scope
 }
 
-fn exit(ctx: *mut RunCtx, scope: u64) -> u8 {
+fn exit(ctx: *mut TaskCtx, scope: u64) -> u8 {
     unsafe { hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0) }
 }
 
-fn primary(ctx: *mut RunCtx) -> Option<FailureRecord> {
+fn primary(ctx: *mut TaskCtx) -> Option<FailureRecord> {
     let mut record = MaybeUninit::uninit();
     (unsafe { hirsel_rt_v2_failure_primary(ctx, record.as_mut_ptr()) } == 1)
         .then(|| unsafe { record.assume_init() })
@@ -257,7 +257,7 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
         }
     }
     unsafe extern "C" fn sleeper(
-        ctx: *mut RunCtx,
+        ctx: *mut TaskCtx,
         env: *mut Header,
         _caller_site: u64,
         _operation_site: u64,
@@ -292,7 +292,7 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
     let early = spawn(ctx.0, scope, sleeper, 2);
     let tied = spawn(ctx.0, scope, sleeper, 3);
     // Let the last child reach its timer before making every deadline overdue.
-    unsafe { yield_now(ctx.0) };
+    unsafe { yield_now(&mut *ctx.0) };
     assert!(take_trace().is_empty());
     now.set(100);
     assert_eq!(join(ctx.0, scope, late), (0, [1, 1]));

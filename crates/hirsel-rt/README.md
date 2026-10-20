@@ -535,7 +535,7 @@ schema can express them. PEM events require the original trust bundle and verify
 its SHA256 digest. Certificate names are merged across the entire recording;
 a fixed peer cannot both accept and reject the same name.
 
-Launch owns a stable `io::Binding`, installs `io::hirsel_rt_v2_io_close` as Config.close_handle, and explicitly binds it with RunCtx.bind_io_data. The adapter must stay at its bound address and outlive every release on that context. Close-handle runs only while it is bound, with exclusive adapter access; unbind before dropping it. There is no global/thread-local fallback. This private RunCtx field changes no Config or C ABI.
+Launch owns a stable `io::Binding`, installs `io::hirsel_rt_v2_io_close` as Config.close_handle, and explicitly binds it with TaskCtx.bind_io_data. The adapter must stay at its bound address and outlive every release on that context. Close-handle runs only while it is bound, with exclusive adapter access; unbind before dropping it. There is no global/thread-local fallback. This private TaskCtx field changes no Config or C ABI.
 
 `Map` and `Set` are native LIR bodies in `hirsel-rc::library::map`. A Map's public length is its live count, while its private optional entries may include tombstones. Removal clears one entry and index bucket; insertion compacts lazily in insertion order, reusing cached hashes. Metadata is neither charged nor tracked. Descriptor version 12 adds an optional five-word live-count program for private Map entry Lists, so deep copy and detach charge only live key/value pairs and exclude private tags. The compiled seed law in `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` replaces the Rust Map model. Sequence consumption uses compiled library bodies in `hirsel-rc`; their C and H checks, native target tests and resource failure campaigns replace the Rust Cursor model. The six consuming open/next manifest rows are Body.
 
@@ -583,17 +583,30 @@ happen at the poll, and the resumed operation does not yield again. With nothing
 the scheduler sleeps in the adapter's `wait` on every parked descriptor and the earliest
 deadline, then polls again.
 
-All tasks of a run share its one heap. A value crossing tasks moves by copying its root, and
-the checker's sendability rules keep each counted value owned by one task. What is a task's own
-in `RunCtx` is swapped at each switch:
+Every started task has its own `TaskCtx`, the pointer its compiled frames receive: the root's
+is the context `hirsel_rt_v2_ctx_create` returns, a child's lies at the top of its fiber stack.
+The context splits three ways:
 
-- its failure chain with spawn paths;
-- its finalizer shield;
-- its release worklist;
-- its innermost region;
-- its measurement site.
+- **`TaskCtx`, the task's own:** at offset 0 its view of the worker's compiled words (pages,
+  idle slabs, dup bound, fuel) with the worker and heap epoch the pages were copied at; its
+  failure chain with spawn paths and isolate scratch; its finalizer shield; its release
+  worklist; its innermost region; its freeze/thaw stack; its foreign scope while switched out.
+- **`Worker`, one per thread that runs Hirsel code:** the heap (size classes, large blocks,
+  slabs), the region pool, idle fiber stacks and measurement. Runtime code reaches it only
+  through `TaskCtx::worker` and `TaskCtx::heap`, which borrow the context; the suspending
+  scheduler entries take `&mut TaskCtx`, so no worker borrow lives across a suspension.
+- **`RunShared`:** the scheduler, channels and synchronizers, the Io binding, the launcher's
+  driver, the failure table, the count bound, the hash seed and the scheduler policy.
 
-A threaded scheduler must reintroduce per-thread heaps and transfer moved graphs between them.
+A switch moves the worker from one task to the next: switch-out folds the view's idle-slab and
+fuel counters back into the worker and saves the thread's foreign scope; switch-in copies the
+worker's 512 bytes of pages into the view only when its stamp is stale (another worker, or a
+page change since), hands it the counters, and sets the thread's running context and foreign
+scope. A runtime slow path that changes a current page updates the worker's words and the
+running view under a new epoch. Compiled code reads no thread-local storage: every emitted
+object is refused if it has a TLS section, symbol or relocation. One worker runs every task
+of a run today; a value crossing tasks moves by copying its root, and the checker's sendability
+rules keep each counted value owned by one task.
 
 The compiled bodies of `task.scope`, `task.async` and `task.await` (`hirsel-rc::library::tasks`)
 call the `$intrinsic.Task*` entries (`hirsel_rt_v2_task_*`). A result crosses as a whole
@@ -880,7 +893,7 @@ Cargo features are independent link-time choices, all off by default:
 - `measurement`: builds Stats/auditing plus the counters below. Direct launch
   reads `HIRSEL_RT_MEASUREMENT` once to open its report before entry; this is a
   measurement-tool output and is outside semantic RunConfig and recorded tapes.
-  Rust callers pass an admitted file to `RunCtx::set_measurement_output(file)`.
+  Rust callers pass an admitted file to `TaskCtx::set_measurement_output(file)`.
 
 Production exports no Stats function, records no backing-call/saturation counts
 and never scans live storage at exit. Its observation says `audit unavailable`.

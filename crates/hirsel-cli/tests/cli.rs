@@ -28,6 +28,8 @@ mod ready_together;
 mod replay;
 #[path = "cli/select_race.rs"]
 mod select_race;
+#[path = "cli/tape_identity.rs"]
+mod tape_identity;
 #[path = "cli/testing.rs"]
 mod testing;
 #[path = "cli/timings.rs"]

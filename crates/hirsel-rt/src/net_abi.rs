@@ -10,7 +10,7 @@ use crate::io::{Completion, Request};
 use crate::net::{
     NetError, NetOperation, NetRule, NetTimeout, ShutdownHow, SocketAddr, TimeoutKind, TlsFailure,
 };
-use crate::{Header, RunCtx, STATUS_FAILURE, STATUS_OK};
+use crate::{Header, STATUS_FAILURE, STATUS_OK, TaskCtx};
 
 /// `NetError` (docs/spec/core-library.md variant order): tag, then the payload words of Canceled(CancelCause),
 /// Tls(TlsFailure) (its tag, then the alert byte) or Fault(u32).
@@ -207,7 +207,7 @@ impl NetTimeoutAbi {
 
 /// Run `request` through the bound adapter's `State`; `None` after a CAP-2 refusal.
 /// Shared with the TLS exports (net-t4).
-pub(crate) unsafe fn call(ctx: *mut RunCtx, request: Request) -> Option<Completion> {
+pub(crate) unsafe fn call(ctx: *mut TaskCtx, request: Request) -> Option<Completion> {
     unsafe { crate::io::capability_call(ctx, request) }.ok()
 }
 pub(crate) unsafe fn text(owner: *mut Header, start: u64, len: u64) -> String {
@@ -218,7 +218,7 @@ pub(crate) unsafe fn text(owner: *mut Header, start: u64, len: u64) -> String {
 /// A call whose manifest row names no failure rule: the runtime records its own,
 /// CAP-2 for a refused handle and LANG-9 for a scripted client's Test failure, at
 /// site 0 for the caller's failure edge to anchor.
-pub(crate) unsafe fn call_recording(ctx: *mut RunCtx, request: Request) -> Option<Completion> {
+pub(crate) unsafe fn call_recording(ctx: *mut TaskCtx, request: Request) -> Option<Completion> {
     match unsafe { crate::io::capability_call(ctx, request) } {
         Ok(Completion::Checked(false)) => {
             crate::failure::record_runtime(ctx, "LANG-9", 0, 0);
@@ -241,7 +241,7 @@ pub(crate) fn mismatch() -> ! {
 /// Context bound; n readable; rules a live List[NetRule] block; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -295,7 +295,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
 /// Context bound; n and timeout readable; the host slice borrowed; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_connect(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -324,7 +324,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect(
 /// Context bound; n, addr and timeout readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_connect_addr(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -351,7 +351,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect_addr(
 /// Context bound; n readable; the host slice borrowed; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -377,7 +377,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
 /// A fresh `List[SocketAddr]` block holding `addresses`.
 /// # Safety
 /// `ctx` is a live run context.
-pub unsafe fn address_list(ctx: *mut RunCtx, addresses: &[SocketAddr]) -> *mut Header {
+pub unsafe fn address_list(ctx: *mut TaskCtx, addresses: &[SocketAddr]) -> *mut Header {
     let size = std::mem::size_of::<SocketAddrAbi>();
     // The pointer-free byte storage descriptor's extent fits any pointer-free list.
     let block =
@@ -401,7 +401,7 @@ pub unsafe fn address_list(ctx: *mut RunCtx, addresses: &[SocketAddr]) -> *mut H
 /// Context bound; n readable; s and buffer exclusive addresses of live values; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_read(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -432,7 +432,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
 /// Context bound; n readable; s exclusive; buffer exclusive for `capacity` bytes; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -462,7 +462,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
 /// Context bound; n readable; s exclusive; the slice borrowed; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_write(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -491,7 +491,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
 /// As for `hirsel_rt_v2_net_write`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetUnitResult,
     n: *const u64,
@@ -520,7 +520,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
 /// Context bound; n and how readable; s exclusive; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_shutdown(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetUnitResult,
     n: *const u64,
@@ -552,7 +552,7 @@ macro_rules! timeout_export {
         /// Context bound; n and timeout readable; s exclusive; out writable.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
-            ctx: *mut RunCtx,
+            ctx: *mut TaskCtx,
             _destination: *mut u8,
             out: *mut NetUnitResult,
             n: *const u64,
@@ -581,7 +581,7 @@ timeout_export!(hirsel_rt_v2_net_set_write_timeout, TimeoutKind::Write);
 /// Context bound; n and s readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_peer_addr(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetAddrResult,
     n: *const u64,
@@ -603,7 +603,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_peer_addr(
 /// Context bound; n readable; s the address of a live Stream ID the call consumes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_close(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     n: *const u64,
     s: *mut u64,
 ) -> u8 {
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
     unsafe { s.write(0) };
     let completion = unsafe { call_recording(ctx, Request::Close { handle }) };
     // An explicit close is an operation, so it yields where an implicit one does not.
-    unsafe { crate::tasks::yield_now(ctx) };
+    unsafe { crate::tasks::yield_now(&mut *ctx) };
     match completion {
         Some(Completion::Unit(Ok(()))) => STATUS_OK,
         Some(_) => mismatch(),
@@ -628,7 +628,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
 /// Context bound; n and addr readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
 /// Context bound; n and the Path handle readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -673,7 +673,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
 /// Context bound; n and the Path handle readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -695,7 +695,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
 /// Context bound; n and listener readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_local_addr(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetAddrResult,
     n: *const u64,
@@ -725,7 +725,7 @@ pub struct NetAcceptedResult {
 /// Context bound; n and listener readable; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_accept(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetAcceptedResult,
     n: *const u64,
@@ -765,7 +765,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_accept(
 /// Bound context, readable Net/address and writable result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -787,7 +787,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
 /// Bound context; readable Net, exclusive socket, bytes readable for len, writable result/address.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_udp_send_to(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut NetWordResult,
     n: *const u64,
@@ -825,7 +825,7 @@ pub struct UdpReceivedResult {
 /// Bound context; readable Net, exclusive socket/list and writable result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_udp_recv_from(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut UdpReceivedResult,
     n: *const u64,
@@ -870,7 +870,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_recv_from(
 /// Same context and handle requirements as net.close.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_udp_close(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     n: *const u64,
     s: *mut u64,
 ) -> u8 {

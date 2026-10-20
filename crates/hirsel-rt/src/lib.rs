@@ -81,7 +81,7 @@ pub use alloc::{
 };
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
 pub use context::Stats;
-pub use context::{Audit, Config, RunCtx};
+pub use context::{Audit, Config, TaskCtx};
 pub use count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_IMMORTAL, finite_count_max};
 pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
@@ -132,9 +132,9 @@ pub extern "C" fn hirsel_rt_v2_diag_panic() {
 /// # Safety
 /// `ctx` is a live run context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_hash_begin(ctx: *mut RunCtx) -> u64 {
+pub unsafe extern "C" fn hirsel_rt_v2_hash_begin(ctx: *mut TaskCtx) -> u64 {
     // SAFETY: caller contract.
-    unsafe { (*ctx).hash_seed }
+    unsafe { (*ctx).run().hash_seed }
 }
 
 /// SipHash-1-3 of a single scalar leaf, keyed by the run seed. Composite

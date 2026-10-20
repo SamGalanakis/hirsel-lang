@@ -42,7 +42,7 @@ fn layout(size: u64, steps: &[Step], flags: u32) -> Layout {
         logical_count: std::ptr::null(),
     }
 }
-struct Ctx(*mut RunCtx);
+struct Ctx(*mut TaskCtx);
 impl Ctx {
     fn new(layouts: &[&Layout], diagnostic: bool) -> Self {
         let table: Vec<_> = layouts.iter().map(|l| *l as *const Layout).collect();
@@ -312,7 +312,7 @@ fn packed_consumed_slots_and_live_bit_guards_survive_reversal() {
 
 thread_local! { static EVENTS: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) }; }
 unsafe extern "C" fn finalizer(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,

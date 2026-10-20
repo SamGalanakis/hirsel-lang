@@ -1985,7 +1985,7 @@ impl Ready {
     }
 }
 
-/// Stable address owned by launch, bound explicitly to RunCtx for generated thunks.
+/// Stable address owned by launch, bound explicitly to TaskCtx for generated thunks.
 /// The binding outlives every release and cannot be accessed while a thunk runs.
 pub struct Binding {
     pub(crate) adapter: Box<dyn Adapter>,
@@ -2058,12 +2058,12 @@ impl Binding {
     /// # Safety
     /// This binding remains at its current address until it is unbound, and outlives
     /// every release on ctx. Close may run only while bound; access is exclusive.
-    pub unsafe fn bind(&mut self, ctx: &mut crate::RunCtx) {
+    pub unsafe fn bind(&mut self, ctx: &mut crate::TaskCtx) {
         unsafe { ctx.bind_io_data((self as *mut Self).cast()) };
     }
     /// # Safety
     /// ctx is live and holds this adapter's Binding with exclusive access.
-    pub(crate) unsafe fn get<'a>(ctx: *mut crate::RunCtx) -> &'a mut Self {
+    pub(crate) unsafe fn get<'a>(ctx: *mut crate::TaskCtx) -> &'a mut Self {
         let p = unsafe { (*ctx).io_data() }.cast::<Self>();
         if p.is_null() {
             crate::fault("Io call without an explicitly bound adapter");
@@ -2076,7 +2076,7 @@ impl Binding {
 /// ctx is live; its bound Binding has exclusive access and outlives every release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_io_close(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     handle: u64,
     anchor: u64,
     operation_site: u64,
@@ -2142,7 +2142,7 @@ impl UnitResult {
 /// `start + len` bytes past its count, and out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_out_print(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     s: *const u64,
@@ -2169,7 +2169,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
 /// Context and borrowed Stderr/String are live; out is writable Result storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_err_print(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     s: *const u64,
@@ -2233,7 +2233,7 @@ fn error_word(error: IoError) -> u64 {
 // Prints cannot park. Keep their borrowed bytes out of the owned wait protocol,
 // while retaining the same cancellation checks and post-effect scheduling point.
 unsafe fn native_print(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     handle: u64,
     stderr: bool,
     bytes: &[u8],
@@ -2263,11 +2263,11 @@ unsafe fn native_print(
         .adapter
         .print(handle, stderr, bytes);
     let completion = unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) };
-    unsafe { crate::tasks::yield_now(ctx) };
+    unsafe { crate::tasks::yield_now(&mut *ctx) };
     completion
 }
 
-unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
+unsafe fn native_call(ctx: *mut crate::TaskCtx, request: Request) -> Completion {
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, crate::tasks::profile::request_kind(&request));
@@ -2282,7 +2282,7 @@ unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
         )
     };
     if operation && !parked {
-        unsafe { crate::tasks::yield_now(ctx) };
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
     }
     completion
 }
@@ -2292,7 +2292,7 @@ unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
 /// task yields to the runnable queue. A request that parked yielded or parked there instead
 /// (`crate::host_waits`). A handle's implicit close at its drop is not one.
 pub(crate) unsafe fn capability_call(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     request: Request,
 ) -> Result<Completion, ()> {
     #[cfg(feature = "measurement")]
@@ -2314,7 +2314,7 @@ pub(crate) unsafe fn capability_call(
         )
     };
     if operation && !parked {
-        unsafe { crate::tasks::yield_now(ctx) };
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
     }
     completion
 }
@@ -2347,7 +2347,7 @@ macro_rules! path_export {
         /// The bound context, borrowed ID addresses and writable result are live.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
-            ctx: *mut crate::RunCtx,
+            ctx: *mut crate::TaskCtx,
             _destination: *mut u8,
             out: *mut $result,
             parent: *const u64,
@@ -2389,7 +2389,7 @@ path_export!(
 /// The bound context, borrowed directory address and writable result are live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_dir_read_only(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     directory: *const u64,
@@ -2452,7 +2452,7 @@ path_export!(
 /// The live File ID transfers at entry; the directory address is borrowed, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_narrow(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     directory: *const u64,
@@ -2495,7 +2495,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_narrow(
 /// The live AtomicFile ID transfers at entry; directory is borrowed and out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_commit(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2533,7 +2533,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_commit(
 /// Context bound, directory/file live, buffer exclusive and out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_read(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     directory: *const u64,
@@ -2560,7 +2560,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read(
 /// Context bound, directory/file live, out writable; file is exclusively borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_seek(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2582,7 +2582,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_seek(
 /// Context bound, directory/file live, Bytes borrowed, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_write(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     directory: *const u64,
@@ -2606,7 +2606,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write(
 /// Context bound, directory/file live, Bytes borrowed, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_append(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2631,7 +2631,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_append(
 /// Directory/Path are borrowed, the slice transfers one owner credit, out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2662,7 +2662,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
 /// Context bound, directory/file live, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_sync(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2683,7 +2683,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_sync(
 /// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_put_new(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2721,7 +2721,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_put_new(
 /// Directory is borrowed, file is an exclusive address, the slice is borrowed, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_write_all(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -2748,7 +2748,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_all(
 /// The String slice is borrowed, context bound and result writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_path_of(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     owner: *mut crate::Header,
@@ -2766,7 +2766,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_of(
 /// The Path belongs to the bound context; output is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_path_text(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut crate::views::Slice,
     path: *const u64,
@@ -2782,7 +2782,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_text(
 /// Args is the borrowed launch handle and the output is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     args: *const u64,
@@ -2807,7 +2807,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
         },
     };
     unsafe { out.write(value) };
-    unsafe { crate::tasks::yield_now(ctx) };
+    unsafe { crate::tasks::yield_now(&mut *ctx) };
     crate::STATUS_OK
 }
 
@@ -2815,7 +2815,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
 /// Args names the launch snapshot and out is writable scalar storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     out: *mut u64,
     args: *const u64,
 ) -> u8 {
@@ -2825,7 +2825,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
         return crate::STATUS_FAILURE;
     }
     unsafe { out.write(Binding::get(ctx).arguments.len() as u64) };
-    unsafe { crate::tasks::yield_now(ctx) };
+    unsafe { crate::tasks::yield_now(&mut *ctx) };
     crate::STATUS_OK
 }
 
@@ -2833,7 +2833,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
 /// Args names the launch snapshot and out is writable Result[String, ArgError] storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut crate::text::StringResult,
     args: *const u64,
@@ -2855,7 +2855,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
         None => result.tag = 1,
     }
     unsafe { out.write(result) };
-    unsafe { crate::tasks::yield_now(ctx) };
+    unsafe { crate::tasks::yield_now(&mut *ctx) };
     crate::STATUS_OK
 }
 
@@ -2890,7 +2890,7 @@ macro_rules! grant_projection_export {
         /// The context, borrowed Io address and writable Result output are live.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
-            ctx: *mut crate::RunCtx,
+            ctx: *mut crate::TaskCtx,
             _destination: *mut u8,
             out: *mut GrantResult,
             io: *const u64,
@@ -2949,7 +2949,7 @@ macro_rules! clock_export {
         /// Context is exclusively bound, the grant readable and the result writable.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
-            ctx: *mut crate::RunCtx,
+            ctx: *mut crate::TaskCtx,
             _destination: *mut u8,
             out: *mut ClockResult,
             grant: *const u64,
@@ -3011,7 +3011,7 @@ pub struct InstantOption {
 /// The clock and Instant words are readable and the result writable. Pure: no request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_instant_checked_add(
-    _ctx: *mut crate::RunCtx,
+    _ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut InstantOption,
     _clock: *const u64,
@@ -3038,7 +3038,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_instant_checked_add(
 /// writable. Without a cooperative scheduler the thread blocks until the deadline.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     clock: *const u64,
@@ -3084,7 +3084,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
 /// returns empty Bytes without a request, as the reference does.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut BytesResult,
     random: *const u64,
@@ -3120,7 +3120,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
 /// The sampled Instant word is readable and the scalar result writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_instant_ticks(
-    _ctx: *mut crate::RunCtx,
+    _ctx: *mut crate::TaskCtx,
     out: *mut u64,
     instant: *const u64,
 ) -> u8 {
@@ -3132,7 +3132,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_instant_ticks(
 /// A live Test grant is borrowed. The boolean is the ABI's zero-extended byte.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_check(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     test: *const u64,
     condition: u8,
 ) -> u8 {
@@ -3160,7 +3160,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_check(
 /// A live Test grant is borrowed; the boolean is a zero-extended byte.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_check_case(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     test: *const u64,
     condition: u8,
     case: u64,
@@ -3191,7 +3191,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_check_case(
 /// A live Test grant is borrowed. The callee result is Never: the only status
 /// it returns is failure, along the diverging call's failure edge.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::RunCtx, test: *const u64) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::TaskCtx, test: *const u64) -> u8 {
     let Ok(completion) = (unsafe { capability_call(ctx, Request::TestFail { test: test.read() }) })
     else {
         return crate::STATUS_FAILURE;
@@ -3206,7 +3206,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::RunCtx, test: *
 /// A live Test grant and Dir are borrowed. A Dir that `test.dir` did not make fails LANG-9.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_crash(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     test: *const u64,
     directory: *const u64,
     seed: u64,
@@ -3232,7 +3232,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_crash(
 /// A live Test grant is borrowed and out is writable scalar storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_seed(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     out: *mut u64,
     test: *const u64,
 ) -> u8 {
@@ -3251,7 +3251,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_seed(
 /// A live Test grant is borrowed and out is writable handle storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_tasks(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     test: *const u64,
@@ -3272,7 +3272,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_tasks(
 /// A live Test grant is borrowed; out is writable capability storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_clock(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     test: *const u64,
@@ -3300,7 +3300,7 @@ unsafe fn borrowed_text(owner: *mut crate::Header, start: u64, len: u64) -> Stri
 /// A live Test grant and String are borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_log(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     test: *const u64,
     owner: *mut crate::Header,
     start: u64,
@@ -3328,7 +3328,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_log(
 /// A live Test grant and both Strings are borrowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_expect_snapshot(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     test: *const u64,
     name_owner: *mut crate::Header,
     name_start: u64,
@@ -3365,7 +3365,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_expect_snapshot(
 /// Test and entries are borrowed; entries is a live List[(Path, Bytes)] block.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_dir(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     test: *const u64,
@@ -3417,7 +3417,7 @@ pub struct BytesResult {
 /// Context is bound, directory/Path borrowed, and output writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_read_bytes(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut BytesResult,
     directory: *const u64,
@@ -3497,7 +3497,7 @@ pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(cr
 /// # Safety
 /// Context live; each item contains only a run-context Path or FileError.
 pub unsafe fn walk_environment(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     items: &[HandleResult],
 ) -> *mut crate::Header {
     let size = (items.len() as u64)
@@ -3522,7 +3522,7 @@ pub unsafe fn walk_environment(
 /// Context bound; directory borrowed and result writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut WalkResult,
     directory: *const u64,
@@ -3577,7 +3577,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
 /// The environment is an exclusive live walk environment and out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
-    _ctx: *mut crate::RunCtx,
+    _ctx: *mut crate::TaskCtx,
     environment: *mut crate::Header,
     _caller_site: u64,
     _operation_site: u64,
@@ -3611,7 +3611,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
 /// # Safety
 /// The context is bound and both IDs were interned in it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_path_compare(ctx: *mut crate::RunCtx, a: u64, b: u64) -> i32 {
+pub unsafe extern "C" fn hirsel_rt_v2_path_compare(
+    ctx: *mut crate::TaskCtx,
+    a: u64,
+    b: u64,
+) -> i32 {
     use std::cmp::Ordering;
     let binding = unsafe { Binding::get(ctx) };
     match binding
@@ -3629,7 +3633,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_compare(ctx: *mut crate::RunCtx, a: u
 /// Context is bound; Stdin and list addresses are live, list exclusive; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     stdin: *const u64,
@@ -3683,7 +3687,7 @@ pub struct EnvResult {
 /// Context and borrowed Env/String are live; out is writable nested Result storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_env_get(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut EnvResult,
     env: *const u64,
@@ -3735,7 +3739,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
 /// Context bound; env readable; names a live List[String] block; out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_env_narrow(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut GrantResult,
     env: *const u64,
@@ -3759,7 +3763,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_narrow(
 /// # Safety
 /// Context is live; buffer is an exclusive address of a live List[u8].
 pub(crate) unsafe fn append_byte_list(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     buffer: *mut *mut crate::Header,
     bytes: &[u8],
 ) {
@@ -3841,7 +3845,7 @@ path_export!(
 /// Context bound, directory and path borrowed, out writable for UnitResult.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_set_permissions(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -3864,7 +3868,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_set_permissions(
 /// The bound context and borrowed handles/paths are live; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_rename(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,
     directory: *const u64,
@@ -3892,7 +3896,7 @@ pub struct MetadataResult {
 /// Context bound; directory/Path borrowed and out writable for 80 aligned bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut MetadataResult,
     directory: *const u64,
@@ -3929,7 +3933,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
 /// Context bound, directory and path borrowed, out writable for Result[List[DirEntry],FileError].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
-    ctx: *mut crate::RunCtx,
+    ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut HandleResult,
     directory: *const u64,

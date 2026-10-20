@@ -499,7 +499,7 @@ fn bind_mount_aliases_are_checked_when_private_mount_namespaces_are_available() 
 }
 
 unsafe extern "C" fn entry(
-    _: *mut hirsel_rt::RunCtx,
+    _: *mut hirsel_rt::TaskCtx,
     _: *mut u8,
     out: *mut u8,
     _: *const u64,

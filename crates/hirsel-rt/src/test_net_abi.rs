@@ -6,7 +6,7 @@
 //! SocketAddr, PeerTls at 24, steps at 72).
 //! Native campaign programs exercise these layouts.
 use crate::{
-    Header, RunCtx,
+    Header, TaskCtx,
     io::{Completion, Request},
 };
 use hirsel_run_config::{
@@ -154,7 +154,7 @@ unsafe fn listener(at: *const u8) -> NetListener {
 /// values; out is writable. No borrowed input is retained by the adapter.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_net(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     test: *const u64,

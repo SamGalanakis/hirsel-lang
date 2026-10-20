@@ -10,15 +10,20 @@
 //!
 //! Stacks are anonymous mappings reserved at [`STACK_BYTES`] without committing memory, with an
 //! inaccessible guard of [`GUARD_BYTES`] below, so running out of stack faults like the main
-//! thread's: environmental termination, never a language failure. Valgrind is told about each
+//! thread's: environmental termination, never a language failure. The top of each mapping
+//! holds the context of the task that runs on it ([`Stack::context`]). Valgrind is told about each
 //! stack (`STACK_REGISTER`) so a switch is not mistaken for a huge frame.
 
+use crate::context::TaskCtx;
 use crate::environmental;
 
 /// Usable bytes of a fiber stack: the default main-thread limit, reserved lazily.
 pub(crate) const STACK_BYTES: usize = 8 << 20;
 /// Inaccessible bytes below each stack, so a frame larger than a page still lands in them.
 pub(crate) const GUARD_BYTES: usize = 64 << 10;
+
+/// Bytes at the top of each mapping for its task's context.
+const CONTEXT_BYTES: usize = size_of::<TaskCtx>().next_multiple_of(64);
 
 /// The entry a fresh fiber starts in, with the two words [`Stack::prepare`] stored.
 pub(crate) type Entry = unsafe extern "C" fn(*mut u8, *mut u8) -> !;
@@ -57,9 +62,16 @@ impl Stack {
         Stack { base, valgrind }
     }
 
-    /// One past the highest usable byte, 16-aligned.
+    /// The slot of the context of the task that runs on this stack, at the mapping's top.
+    pub(crate) fn context(&self) -> *mut TaskCtx {
+        self.base
+            .wrapping_add(GUARD_BYTES + STACK_BYTES - CONTEXT_BYTES)
+            .cast()
+    }
+
+    /// One past the highest usable byte, 16-aligned: below the context slot.
     fn top(&self) -> *mut u8 {
-        self.base.wrapping_add(GUARD_BYTES + STACK_BYTES)
+        self.context().cast()
     }
 
     /// The stack pointer of a fiber that, when switched to, calls `entry(first, second)`.

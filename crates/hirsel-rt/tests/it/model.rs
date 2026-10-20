@@ -30,8 +30,8 @@ use hirsel_rt::region::{
 };
 use hirsel_rt::release::{hirsel_rt_v2_release, hirsel_rt_v2_reset};
 use hirsel_rt::{
-    COUNT_IMMORTAL, Config, DOMAIN_HEAP, Header, Layout, Region, RunCtx, STATE_FREE, STATE_LIVE,
-    STATE_RAW,
+    COUNT_IMMORTAL, Config, DOMAIN_HEAP, Header, Layout, Region, STATE_FREE, STATE_LIVE, STATE_RAW,
+    TaskCtx,
 };
 use support::*;
 
@@ -258,7 +258,7 @@ thread_local! {
 }
 
 unsafe extern "C" fn model_finalizer(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,

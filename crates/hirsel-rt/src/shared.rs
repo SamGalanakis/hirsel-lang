@@ -16,7 +16,7 @@
 //! whatever the graph's depth (MEM-3).
 
 use crate::alloc::{DOMAIN_HEAP, Header, payload};
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::copy::holders;
 use crate::count::{COUNT_IMMORTAL, check_live_block};
 use crate::fault;
@@ -26,14 +26,14 @@ use crate::release::{LAYOUT_FROZEN, Layout, STEP_THAW};
 ///
 /// # Safety
 /// `block` is a live headered block of `ctx`.
-pub(crate) unsafe fn is_root(ctx: &RunCtx, block: *mut Header) -> bool {
+pub(crate) unsafe fn is_root(ctx: &TaskCtx, block: *mut Header) -> bool {
     // SAFETY: caller contract.
     unsafe { (*ctx.descriptor((*block).index())).flags & LAYOUT_FROZEN != 0 }
 }
 
 /// The layout of the value a root block freezes: its program's leading `STEP_THAW` names it.
 /// A root whose value holds no counted block has no such step and nothing to walk.
-unsafe fn frozen_value(ctx: &RunCtx, root: *mut Header) -> Option<*const Layout> {
+unsafe fn frozen_value(ctx: &TaskCtx, root: *mut Header) -> Option<*const Layout> {
     // SAFETY: `root` is a live root block.
     unsafe {
         let layout = &*ctx.descriptor((*root).index());
@@ -47,12 +47,12 @@ unsafe fn frozen_value(ctx: &RunCtx, root: *mut Header) -> Option<*const Layout>
 /// Visit each counted heap block of the frozen graph of the value at `value` of `layout`
 /// (static and region blocks and nested roots excluded) once, parents first, setting its count
 /// from `from` to `to`. A block whose count is not `from` breaks the tree invariant.
-unsafe fn recount(ctx: &mut RunCtx, layout: *const Layout, value: *mut u8, from: u32, to: u32) {
+unsafe fn recount(ctx: &mut TaskCtx, layout: *const Layout, value: *mut u8, from: u32, to: u32) {
     // SAFETY: `value` is a live value of `layout` whose counted slots name live blocks.
     unsafe {
         let mut stack = std::mem::take(&mut ctx.frozen);
-        let shared: &RunCtx = ctx;
-        let diagnostic = shared.heap.diagnostic;
+        let shared: &TaskCtx = ctx;
+        let diagnostic = shared.heap_ref().diagnostic;
         let visit = |stack: &mut Vec<*mut Header>, slot: *mut u8| {
             let child = slot.cast::<*mut Header>().read_unaligned();
             if diagnostic {
@@ -86,7 +86,7 @@ unsafe fn recount(ctx: &mut RunCtx, layout: *const Layout, value: *mut u8, from:
 ///
 /// # Safety
 /// `value` is the frozen value of a root block whose last credit was just consumed.
-pub(crate) unsafe fn thaw_value(ctx: &mut RunCtx, layout: *const Layout, value: *mut u8) {
+pub(crate) unsafe fn thaw_value(ctx: &mut TaskCtx, layout: *const Layout, value: *mut u8) {
     // SAFETY: caller contract.
     unsafe {
         recount(
@@ -105,11 +105,11 @@ pub(crate) unsafe fn thaw_value(ctx: &mut RunCtx, layout: *const Layout, value: 
 /// # Safety
 /// `ctx` is live and `block` a live root block of it whose value the caller owned uniquely.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_freeze(ctx: *mut RunCtx, block: *mut Header) {
+pub unsafe extern "C" fn hirsel_rt_v2_freeze(ctx: *mut TaskCtx, block: *mut Header) {
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(ctx, block);
             if (*block).count != 1 {
                 fault("a freeze of a root block with more than one root");
@@ -133,11 +133,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_freeze(ctx: *mut RunCtx, block: *mut Heade
 /// # Safety
 /// `ctx` is live and `block` a live root block of it with exactly one root, the caller's.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut RunCtx, block: *mut Header) {
+pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut TaskCtx, block: *mut Header) {
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(ctx, block);
         }
         if (*block).count != 1 {

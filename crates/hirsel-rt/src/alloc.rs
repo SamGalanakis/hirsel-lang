@@ -33,7 +33,7 @@
 use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_dealloc};
 use std::ptr;
 
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 #[cfg(feature = "memcheck")]
 use crate::memcheck;
 use crate::memcheck::SLAB_REDZONE;
@@ -354,7 +354,7 @@ pub(crate) unsafe fn set_sequence_capacity(block: *mut Header, slots: u64) {
 /// # Safety
 /// `ctx` is a live run context and `index` names a sequence descriptor of this element.
 pub(crate) unsafe fn allocate_sequence(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u32,
     count: u64,
     element_size: u64,
@@ -444,8 +444,8 @@ pub(crate) struct Slab {
 }
 
 const SLAB_HEADER: usize = 128;
-/// Run-context and page words compiled fast paths read and write (runtime ABI 4,
-/// [`Compiled`]); the context begins with its heap, and the heap with them.
+/// Task-context and page words compiled fast paths read and write (runtime ABI 4,
+/// [`Compiled`]); a task context begins with its [`View`], and the view with them.
 pub const CTX_DUP_MAX_OFFSET: usize = std::mem::offset_of!(Compiled, dup_max);
 pub const CTX_FREE_INLINE_OFFSET: usize = std::mem::offset_of!(Compiled, free_inline);
 pub const CTX_IDLE_SLABS_OFFSET: usize = std::mem::offset_of!(Compiled, idle_slabs);
@@ -454,7 +454,7 @@ pub const CTX_FUEL_OFFSET: usize = std::mem::offset_of!(Compiled, fuel);
 pub const PAGE_FREE_OFFSET: usize = std::mem::offset_of!(Slab, free);
 pub const PAGE_LIVE_OFFSET: usize = std::mem::offset_of!(Slab, live);
 pub const PAGE_LOCAL_FREE_OFFSET: usize = std::mem::offset_of!(Slab, local_free);
-const _: () = assert!(std::mem::offset_of!(Heap, compiled) == 0);
+const _: () = assert!(std::mem::offset_of!(View, compiled) == 0);
 /// Size-class pools: each class at 8-byte and at 16-byte alignment.
 pub const POOL_COUNT: usize = CLASS_COUNT * 2;
 const _: () = assert!(size_of::<Slab>() <= SLAB_HEADER);
@@ -503,8 +503,8 @@ struct SlabRecord {
     slots: u32,
 }
 
-/// The words compiled code reads at fixed offsets from the run context (runtime ABI 4,
-/// `hirsel_rt_v2.h`; the context begins with its heap and the heap with these). Each is the
+/// The words compiled code reads at fixed offsets from the task context (runtime ABI 4,
+/// `hirsel_rt_v2.h`; the context begins with its [`View`] and the view with these). Each is the
 /// state behind one inline fast path, or a value that sends every operation to its entry:
 /// diagnostic mode and measurement builds count or check every allocation, free and dup, and
 /// the system allocator has no pages.
@@ -528,11 +528,45 @@ pub(crate) struct Compiled {
     pub(crate) fuel: i64,
 }
 
-/// One task's heap domain.
+/// A task's copy of its worker's [`Compiled`] words, at the start of its context, and the
+/// worker and heap epoch whose pages it holds. Switching a task in on a worker ([`Heap::bind`])
+/// copies the pages only when that stamp differs, and always hands over the counters; switching
+/// it out ([`Heap::unbind`]) folds them back. Only the bound view changes while its task runs:
+/// a slow path that moves a current page updates the worker's words and the view together.
 #[repr(C)]
-pub(crate) struct Heap {
-    /// First, at context offset 0: see [`Compiled`].
+pub(crate) struct View {
     pub(crate) compiled: Compiled,
+    worker: u32,
+    epoch: u64,
+}
+
+impl View {
+    /// A view no worker has bound yet: its first binding copies every word.
+    pub(crate) fn new() -> View {
+        View {
+            compiled: Compiled {
+                dup_max: 0,
+                free_inline: 0,
+                idle_slabs: 0,
+                pages: [ptr::null_mut(); POOL_COUNT],
+                fuel: 0,
+            },
+            worker: u32::MAX,
+            epoch: 0,
+        }
+    }
+}
+
+/// One worker's heap domain.
+pub(crate) struct Heap {
+    /// The worker's own [`Compiled`] words. While a task runs its bound view holds the live
+    /// counters (`idle_slabs`, `fuel`); these hold them between tasks, and the pages always.
+    compiled: Compiled,
+    /// The worker these pages belong to and their epoch, which every page change bumps.
+    worker: u32,
+    epoch: u64,
+    /// The running task's view ([`Heap::bind`]).
+    view: *mut View,
     /// The linked program's layout descriptors, by index.
     layouts: Box<[*const crate::Layout]>,
     /// Each layout's bare blocks, by index, so a bare allocation reads one entry.
@@ -651,6 +685,9 @@ impl Heap {
                 pages: [ptr::null_mut(); POOL_COUNT],
                 fuel: i64::MAX,
             },
+            worker: 0,
+            epoch: 0,
+            view: ptr::null_mut(),
             // SAFETY: the run context validated every descriptor.
             #[cfg(feature = "system-allocator")]
             bare_layouts: layouts
@@ -681,6 +718,74 @@ impl Heap {
         }
     }
 
+    /// The running task's compiled words.
+    #[inline(always)]
+    pub(crate) fn view(&mut self) -> &mut Compiled {
+        // SAFETY: a task's view is bound before any heap operation runs on its behalf, and its
+        // context outlives the binding.
+        unsafe { &mut (*self.view).compiled }
+    }
+
+    /// Switch-in: `view`'s task runs on this heap's worker. Its pages are refreshed when they
+    /// were copied from another worker or before a page change, and it takes the counters.
+    ///
+    /// # Safety
+    /// `view` is a live task context's view that stays live while bound.
+    #[inline]
+    pub(crate) unsafe fn bind(&mut self, view: *mut View) {
+        // SAFETY: caller contract.
+        let v = unsafe { &mut *view };
+        if v.worker != self.worker || v.epoch != self.epoch {
+            v.compiled.pages = self.compiled.pages;
+            v.compiled.dup_max = self.compiled.dup_max;
+            v.compiled.free_inline = self.compiled.free_inline;
+            v.worker = self.worker;
+            v.epoch = self.epoch;
+        }
+        v.compiled.idle_slabs = self.compiled.idle_slabs;
+        v.compiled.fuel = self.compiled.fuel;
+        self.view = view;
+    }
+
+    /// Switch-out: fold the running view's counters, which compiled code changed inline, back
+    /// into the worker's words.
+    #[inline]
+    pub(crate) fn unbind(&mut self) {
+        let v = self.view();
+        let (idle_slabs, fuel) = (v.idle_slabs, v.fuel);
+        self.compiled.idle_slabs = idle_slabs;
+        self.compiled.fuel = fuel;
+    }
+
+    /// The bound view.
+    pub(crate) fn bound(&self) -> *mut View {
+        self.view
+    }
+
+    /// The inline dup bound every view of this heap starts with.
+    pub(crate) fn set_dup_max(&mut self, dup_max: u32) {
+        self.compiled.dup_max = dup_max;
+        self.epoch += 1;
+    }
+
+    /// Set the running task's fuel, which it hands on at its switch-out.
+    pub(crate) fn set_fuel(&mut self, fuel: i64) {
+        self.compiled.fuel = fuel;
+        self.view().fuel = fuel;
+    }
+
+    /// Change the page compiled code allocates `pool` from: in the worker's words and the bound
+    /// view, under a new epoch, so every other view refreshes when it is next bound.
+    #[inline]
+    fn set_page(&mut self, pool: usize, slab: *mut Slab) {
+        self.compiled.pages[pool] = slab;
+        self.epoch += 1;
+        // SAFETY: as for `view`.
+        let v = unsafe { &mut *self.view };
+        v.compiled.pages[pool] = slab;
+        v.epoch = self.epoch;
+    }
+
     /// The number of descriptors in this heap's registry.
     pub(crate) fn layout_count(&self) -> u32 {
         self.layouts.len() as u32
@@ -690,7 +795,7 @@ impl Heap {
     /// they do not fit, idle slabs go back first, as at a trim point with no idle cap.
     #[inline]
     fn hold(&mut self, bytes: u64) {
-        if !self.meter.fits(bytes) && self.compiled.idle_slabs > 0 {
+        if !self.meter.fits(bytes) && self.view().idle_slabs > 0 {
             let cap = std::mem::replace(&mut self.idle_cap, 0);
             self.trim();
             self.idle_cap = cap;
@@ -769,7 +874,7 @@ impl Heap {
     fn set_current(&mut self, class: usize, slab: *mut Slab) {
         self.classes[class].current = slab;
         if self.compiled.free_inline != 0 {
-            self.compiled.pages[class] = slab;
+            self.set_page(class, slab);
         }
     }
 
@@ -1036,7 +1141,7 @@ impl Heap {
             // As in mimalloc's page-used accounting, allocation updates the
             // page counter. Global idle accounting changes only at zero.
             if live == 0 {
-                self.compiled.idle_slabs -= 1;
+                self.view().idle_slabs -= 1;
             }
             #[cfg(feature = "measurement")]
             self.measurement
@@ -1149,7 +1254,7 @@ impl Heap {
         {
             self.slab_count += 1;
         }
-        self.compiled.idle_slabs += 1;
+        self.view().idle_slabs += 1;
     }
 
     #[cold]
@@ -1296,7 +1401,7 @@ impl Heap {
             (*slab).local_free = block;
             (*slab).live -= 1;
             if (*slab).live == 0 {
-                self.compiled.idle_slabs += 1;
+                self.view().idle_slabs += 1;
             }
             if head.is_null() {
                 let state = self.classes.get_unchecked_mut((*slab).pool as usize);
@@ -1339,10 +1444,11 @@ impl Heap {
     /// slabs leave their class free lists; no other free block moves.
     pub(crate) fn trim(&mut self) {
         let keep = self.idle_cap / SLAB_SIZE as u64;
-        if self.compiled.idle_slabs <= keep {
+        let idle_slabs = self.view().idle_slabs;
+        if idle_slabs <= keep {
             return;
         }
-        let mut excess = self.compiled.idle_slabs - keep;
+        let mut excess = idle_slabs - keep;
         for class in 0..POOL_COUNT {
             if excess == 0 {
                 break;
@@ -1402,7 +1508,7 @@ impl Heap {
                     {
                         self.slab_count -= 1;
                     }
-                    self.compiled.idle_slabs -= 1;
+                    self.view().idle_slabs -= 1;
                 } else {
                     link = &mut (*slab).next;
                 }
@@ -1455,7 +1561,9 @@ impl Heap {
                 }
             }
             self.classes[class] = EMPTY_CLASS;
-            self.compiled.pages[class] = ptr::null_mut();
+            if !self.compiled.pages[class].is_null() {
+                self.set_page(class, ptr::null_mut());
+            }
         }
         let mut prefix = self.large;
         while !prefix.is_null() {
@@ -1481,7 +1589,7 @@ impl Heap {
         {
             self.slab_count = 0;
         }
-        self.compiled.idle_slabs = 0;
+        self.view().idle_slabs = 0;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
             self.large_bytes = 0;
@@ -1589,7 +1697,7 @@ pub(crate) fn check_request(extent: u64, align: u64) {
 /// `ctx` is a live run context and `layout` a valid descriptor whose size is at most `extent`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_alloc(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u32,
     extent: u64,
     align: u64,
@@ -1597,7 +1705,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
     site: u64,
 ) -> *mut Header {
     unsafe {
-        let heap = &mut (*ctx).heap;
+        let heap = &mut (*ctx).heap();
         // A bare system block needs its layout's bare entry, so the index is checked.
         #[cfg(feature = "system-allocator")]
         if !heap.diagnostic
@@ -1647,7 +1755,7 @@ unsafe fn alloc_refilled(heap: &mut Heap, pool: usize, index: u32) -> *mut Heade
 #[cold]
 #[inline(never)]
 unsafe fn alloc_checked(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u32,
     extent: u64,
     align: u64,
@@ -1661,14 +1769,14 @@ unsafe fn alloc_checked(
         }
         let ctx = &mut *ctx;
         let layout = ctx.descriptor(index);
-        if ctx.heap.diagnostic && (*layout).size > extent {
+        if ctx.heap().diagnostic && (*layout).size > extent {
             fault("an allocation extent is smaller than its layout size");
         }
-        let (block, capacity) = ctx.heap.allocate(index, extent, align);
-        if let Some(owners) = &mut ctx.region_owners {
+        let (block, capacity) = ctx.heap().allocate(index, extent, align);
+        if let Some(owners) = &mut ctx.run().region_owners {
             owners.remove(&block.addr());
         }
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_poison(block);
             ptr::write_bytes(payload(block), UNINIT_POISON, capacity as usize);
         }
@@ -1682,17 +1790,17 @@ unsafe fn alloc_checked(
 /// # Safety
 /// `token` is null or a token produced by `hirsel_rt_v2_reset` and not yet consumed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_dispose(ctx: *mut RunCtx, token: *mut Header) {
+pub unsafe extern "C" fn hirsel_rt_v2_dispose(ctx: *mut TaskCtx, token: *mut Header) {
     if token.is_null() {
         return;
     }
     let ctx = unsafe { &mut *ctx };
     // SAFETY: caller contract.
     unsafe {
-        if ctx.heap.diagnostic && ctx.heap.state(token) != STATE_RAW {
+        if ctx.heap().diagnostic && ctx.heap().state(token) != STATE_RAW {
             fault("dispose of storage that is not a raw reuse token");
         }
-        ctx.heap.free(token);
+        ctx.heap().free(token);
     }
 }
 
@@ -1704,7 +1812,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_dispose(ctx: *mut RunCtx, token: *mut Head
 /// As `hirsel_rt_v2_alloc`; `token` is null or an unconsumed reuse token.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_reuse(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     token: *mut Header,
     index: u32,
     extent: u64,
@@ -1714,8 +1822,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
     if token.is_null() {
         #[cfg(feature = "measurement")]
         unsafe {
-            (*ctx).heap.measurement.record("reuse_misses", 1);
-            (&mut (*ctx).heap.measurement).reuse_misses += 1;
+            (*ctx).heap().measurement.record("reuse_misses", 1);
+            (&mut (*ctx).heap().measurement).reuse_misses += 1;
         }
         unsafe {
             out_block.write(hirsel_rt_v2_alloc(
@@ -1738,38 +1846,40 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
         // The payload keeps the donor's bytes (`Reuse.kept` below), whose definedness the reset
         // forgot.
         #[cfg(feature = "memcheck")]
-        memcheck::defined(payload(token), ctx.heap.capacity(token) as usize);
-        if ctx.heap.diagnostic {
+        memcheck::defined(payload(token), ctx.heap().capacity(token) as usize);
+        if ctx.heap().diagnostic {
             check_layout(layout);
-            if ctx.heap.state(token) != STATE_RAW {
+            if ctx.heap().state(token) != STATE_RAW {
                 fault("reuse of storage that is not a raw reuse token");
             }
             if (*layout).size > extent {
                 fault("a reuse extent is smaller than its layout size");
             }
         }
-        if (*token).domain() != DOMAIN_HEAP || ctx.heap.usable(token) != (capacity, physical_align)
+        if (*token).domain() != DOMAIN_HEAP
+            || ctx.heap().usable(token) != (capacity, physical_align)
         {
             fault("a reuse token's (capacity, alignment, domain) key does not match the request");
         }
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("reuse_hits", 1);
-            ctx.heap.measurement.reuse_hits += 1;
+            ctx.heap().measurement.record("reuse_hits", 1);
+            ctx.heap().measurement.reuse_hits += 1;
         }
         // A bare token's capacity is its layout's, so a request that cannot be bare moves the
         // token's bytes into a prefixed block of the same capacity.
         #[cfg(feature = "system-allocator")]
-        if (*token).kind() == KIND_SMALL && ctx.heap.bare_capacity(index, extent, align).is_none() {
-            let (block, _) = ctx.heap.allocate(index, extent, align);
+        if (*token).kind() == KIND_SMALL && ctx.heap().bare_capacity(index, extent, align).is_none()
+        {
+            let (block, _) = ctx.heap().allocate(index, extent, align);
             ptr::copy_nonoverlapping(payload(token), payload(block), capacity as usize);
-            ctx.heap.free(token);
+            ctx.heap().free(token);
             out_block.write(block);
             return STATUS_OK;
         }
         (*token).count = 1;
         (*token).descriptor = index | (*token).kind() << KIND_SHIFT;
-        ctx.heap.set_state(token, STATE_LIVE);
+        ctx.heap().set_state(token, STATE_LIVE);
         // The payload keeps its bytes: a reuse may skip the stores of fields whose bits the
         // donor's moved-out children left in place (LIR schema revision 5, `Reuse.kept`).
         out_block.write(token);
@@ -1802,7 +1912,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
 /// payload layout has this element size and alignment, of which the caller holds one credit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     element_size: u64,
     element_align: u64,
@@ -1820,7 +1930,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
         let elements = sequence_elements_offset(element_align);
         // A block that already holds them is left alone, its capacity word made exact.
         // Zero-sized elements need no storage: every capacity is already held.
-        let slots = sequence_slots(&(*ctx).heap, block, elements, element_size);
+        let slots = sequence_slots((*ctx).heap_ref(), block, elements, element_size);
         if slots >= capacity {
             set_sequence_capacity(block, slots);
             return block;
@@ -1863,7 +1973,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
 /// alignment and whose first `keep` payload bytes are initialized.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     keep: u64,
     extent: u64,
@@ -1877,7 +1987,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
             if align == 0 || !align.is_power_of_two() {
                 fault("a sequence element alignment is not a power of two");
             }
-            let (capacity, _) = (*ctx).heap.usable(block);
+            let (capacity, _) = (*ctx).heap().usable(block);
             if capacity >= extent {
                 return block;
             }
@@ -1890,7 +2000,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
             return grown;
         }
         unique_heap_block(ctx, block, align);
-        if (*ctx).heap.capacity(block) >= extent {
+        if (*ctx).heap().capacity(block) >= extent {
             return block;
         }
         grow(ctx, block, keep, extent, align).0
@@ -1902,7 +2012,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
 /// # Safety
 /// As `hirsel_rt_v2_seq_grow`.
 unsafe fn detach_reserved(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     element_size: u64,
     element_align: u64,
@@ -1910,7 +2020,7 @@ unsafe fn detach_reserved(
 ) -> *mut Header {
     // SAFETY: caller contract.
     unsafe {
-        let heap = &(*ctx).heap;
+        let heap = (*ctx).heap_ref();
         if (*block).count == 0
             || ((*block).domain() == DOMAIN_HEAP
                 && heap.diagnostic
@@ -1933,8 +2043,8 @@ unsafe fn detach_reserved(
                 .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
             let align = element_align.max(8);
             check_request(extent, align);
-            let (fresh, bytes) = (*ctx).heap.allocate((*block).index(), extent, align);
-            if (*ctx).heap.diagnostic {
+            let (fresh, bytes) = (*ctx).heap().allocate((*block).index(), extent, align);
+            if (*ctx).heap().diagnostic {
                 ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
             }
             payload(fresh).cast::<u64>().write(0);
@@ -1963,10 +2073,10 @@ unsafe fn detach_reserved(
 }
 
 /// Fault unless `block` is a live, unique heap block and `align` a power of two.
-unsafe fn unique_heap_block(ctx: *mut RunCtx, block: *mut Header, align: u64) {
+unsafe fn unique_heap_block(ctx: *mut TaskCtx, block: *mut Header, align: u64) {
     // SAFETY: the caller's block is a live or freed header.
     unsafe {
-        let heap = &(*ctx).heap;
+        let heap = (*ctx).heap_ref();
         if (heap.diagnostic && heap.state(block) != STATE_LIVE)
             || (*block).domain() != DOMAIN_HEAP
             || (*block).count != 1
@@ -1982,7 +2092,7 @@ unsafe fn unique_heap_block(ctx: *mut RunCtx, block: *mut Header, align: u64) {
 /// Move the first `keep` payload bytes of `old` into fresh storage holding `extent` bytes,
 /// returning the block and its exact usable bytes from the allocation's chosen class.
 unsafe fn grow(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     old: *mut Header,
     keep: u64,
     extent: u64,
@@ -1990,7 +2100,7 @@ unsafe fn grow(
 ) -> (*mut Header, u64) {
     // SAFETY: `old` is a live unique heap block (`unique_heap_block`).
     unsafe {
-        let heap = &mut (*ctx).heap;
+        let heap = &mut (*ctx).heap();
         let align = align.max(8);
         check_request(extent, align);
         if keep > heap.capacity(old) || keep > extent {
@@ -2036,6 +2146,9 @@ mod sequence_tests {
         for diagnostic in [false, true] {
             let layout = &crate::text::hirsel_rt_v2_bytes_descriptor.0 as *const crate::Layout;
             let mut heap = Heap::new(Box::new([layout]), diagnostic, 0);
+            let mut view = View::new();
+            // SAFETY: the view outlives the heap's use in this test.
+            unsafe { heap.bind(&mut view) };
             let mut lower = 0;
             for upper in CLASS_SIZES.map(u64::from).into_iter().chain([4097, 8193]) {
                 for extent in [lower, upper] {
@@ -2098,6 +2211,9 @@ mod page_tests {
     fn page_lists_partition_reserved_storage_through_exhaustion_and_trim() {
         for pool in 0..POOL_COUNT {
             let mut heap = Heap::new(Box::new([]), false, 0);
+            let mut view = View::new();
+            // SAFETY: the view outlives the heap's use in this test.
+            unsafe { heap.bind(&mut view) };
             let align = pool_align(pool) as u64;
             let extent = CLASS_SIZES[pool % CLASS_COUNT] as u64;
             unsafe {

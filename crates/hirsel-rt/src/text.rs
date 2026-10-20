@@ -1,8 +1,8 @@
 //! SEM-3 text leaves at the declaration's Hirsel ABI v2.
 use crate::views::Slice;
 use crate::{
-    DOMAIN_HEAP, Header, LAYOUT_DYNAMIC, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx,
-    STATUS_FAILURE, STATUS_OK,
+    DOMAIN_HEAP, Header, LAYOUT_DYNAMIC, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, STATUS_FAILURE,
+    STATUS_OK, TaskCtx,
     alloc::{
         allocate_sequence, hirsel_rt_v2_alloc, payload, sequence_elements_offset,
         sequence_slice_start,
@@ -90,14 +90,14 @@ pub static BYTES_LIST_DESCRIPTOR: BytesListDescriptor = BytesListDescriptor(Layo
 /// linked program's descriptors.
 /// # Safety
 /// `ctx` is a live run context.
-pub unsafe fn bytes_list_index(ctx: *mut RunCtx) -> u32 {
-    unsafe { (*ctx).heap.layout_count() - 1 }
+pub unsafe fn bytes_list_index(ctx: *mut TaskCtx) -> u32 {
+    unsafe { (*ctx).heap().layout_count() - 1 }
 }
 
 /// A fresh `List[Bytes]` holding a fresh Bytes of each of `items`, in order.
 /// # Safety
 /// `ctx` is a live run context.
-pub unsafe fn allocate_bytes_list(ctx: *mut RunCtx, items: &[Vec<u8>]) -> *mut Header {
+pub unsafe fn allocate_bytes_list(ctx: *mut TaskCtx, items: &[Vec<u8>]) -> *mut Header {
     let count = u64::try_from(items.len()).unwrap_or_else(|_| fault("list length overflow"));
     unsafe {
         let block = allocate_sequence(ctx, bytes_list_index(ctx), count, 24, 8);
@@ -116,7 +116,7 @@ pub unsafe fn allocate_bytes_list(ctx: *mut RunCtx, items: &[Vec<u8>]) -> *mut H
 /// as a whole slice of it.
 /// # Safety
 /// `ctx` is a live run context.
-pub unsafe fn allocate_bytes(ctx: *mut RunCtx, bytes: &[u8]) -> Slice {
+pub unsafe fn allocate_bytes(ctx: *mut TaskCtx, bytes: &[u8]) -> Slice {
     let length = u64::try_from(bytes.len()).unwrap_or_else(|_| fault("byte length overflow"));
     let owner = unsafe { allocate_sequence(ctx, 0, length, 1, 1) };
     unsafe {
@@ -162,7 +162,7 @@ pub struct StringResult {
 /// The context and output are live; the input transfers one Slice owner credit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_string_from_bytes(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _destination: *mut c_void,
     out: *mut StringResult,
     owner: *mut Header,
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_from_bytes(
 /// Context/output and borrowed slice and position addresses are live and correctly typed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_string_slice(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut c_void,
     out: *mut Slice,
     owner: *mut Header,
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_slice(
 /// Context, exclusive builder slot and borrowed source interval are live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     builder: *mut *mut Header,
     owner: *mut Header,
     start: u64,
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
 /// The borrowed source is live and out names writable Slice storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_bytes_slice(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut c_void,
     out: *mut Slice,
     owner: *mut Header,
@@ -288,7 +288,7 @@ pub struct PositionOption {
 /// The borrowed source is valid UTF-8; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_string_position(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _destination: *mut c_void,
     out: *mut PositionOption,
     owner: *mut Header,
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_position(
 /// The declared matching StrPos is live and out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_string_byte_offset(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     out: *mut u64,
     _owner: *mut Header,
     _start: u64,

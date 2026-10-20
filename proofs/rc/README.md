@@ -160,7 +160,7 @@ These claims are outside the proof domain. Nothing here should be read as eviden
   lists, slabs and the idle pool cap. Runtime correspondence is tested against these vectors,
   not proved.
 - **LLVM** and everything P7 and P8 do.
-- **The C ABI** (`hirsel_rt_v2`): status codes, record layouts, u64 conversion, `RunCtx`.
+- **The C ABI** (`hirsel_rt_v2`): status codes, record layouts, u64 conversion, `TaskCtx`.
 - **OS behaviour.** Backing allocation, out-of-memory, stack depth, signals, process exit, Io.
 - **Weak memory and concurrency.** The model is sequential. Shared roots, atomic counts,
   freeze and thaw, task transfer, channels, mutexes and explicit arenas are M2, and no

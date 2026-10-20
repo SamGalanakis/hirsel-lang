@@ -1,13 +1,14 @@
 //! Structured tasks on one thread (CONC-1, CONC-2, CONC-3, FAIL-2).
 //!
 //! The scheduler is cooperative and single-threaded: every task is a [`fiber`](crate::fiber)
-//! of the run's one context, and a switch happens only at a capability operation, a join or a
-//! completion. All tasks share the run's heap: no second thread exists, and the checker's
+//! with a [`TaskCtx`] of its own at the top of its stack (the root's is the run's first
+//! context), and a switch happens only at a capability operation, a join or a completion. A
+//! switch moves the worker from one task's context to the next (`TaskCtx::switch_out`,
+//! `TaskCtx::switch_in`): what is a task's own (its failure chain, finalizer shield, release
+//! worklist, innermost region, isolate scratch and foreign scope) stays in its context. All
+//! tasks share the run's one worker and its heap: no second thread exists, and the checker's
 //! sendability rules (MODE-4, OWN-6) already keep every counted value owned by one task, so a
-//! value crossing tasks is moved by copying its root. A threaded scheduler must reintroduce
-//! per-thread heaps and a transfer of the moved graphs. What is a task's own is swapped with it
-//! ([`Saved`]): its failure chain, finalizer shield, release worklist, innermost region and
-//! measurement site.
+//! value crossing tasks is moved by copying its root.
 //!
 //! The schedule is the reference interpreter's, so both observe the same interleaving:
 //!
@@ -51,15 +52,14 @@ use std::ptr::NonNull;
 
 use hirsel_kernels::schedule::{Algorithm, Schedule};
 
-use crate::context::RunCtx;
-use crate::failure::{Chained, FailureState};
+use crate::context::TaskCtx;
+use crate::failure::Chained;
 use crate::fiber::{self, Stack};
-use crate::region::Region;
 use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
 
 /// A spawned task's entry: compiled closure code taking its environment.
-pub type TaskCode = unsafe extern "C" fn(*mut RunCtx, *mut Header, u64, u64) -> u8;
+pub type TaskCode = unsafe extern "C" fn(*mut TaskCtx, *mut Header, u64, u64) -> u8;
 
 /// `CancelCause` ordinals (core library).
 pub(crate) const CANCEL_REQUESTED: u32 = 0;
@@ -69,43 +69,6 @@ pub(crate) const CANCEL_DEADLINE: u32 = 3;
 
 /// The root task: the entry, on the thread's own stack.
 const ROOT: u32 = 0;
-
-/// What a suspended task keeps of the context while another runs.
-#[derive(Default)]
-struct Saved {
-    failure: FailureState,
-    shield: u32,
-    work: Option<std::ptr::NonNull<Header>>,
-    region: Option<std::ptr::NonNull<Region>>,
-    #[cfg(feature = "measurement")]
-    site: u64,
-}
-
-impl Saved {
-    fn take(ctx: &mut RunCtx) -> Saved {
-        Saved {
-            failure: std::mem::take(&mut ctx.failure),
-            shield: std::mem::take(&mut ctx.shield),
-            work: std::ptr::NonNull::new(std::mem::replace(&mut ctx.work, std::ptr::null_mut())),
-            region: std::ptr::NonNull::new(std::mem::replace(
-                &mut ctx.regions.active,
-                std::ptr::null_mut(),
-            )),
-            #[cfg(feature = "measurement")]
-            site: std::mem::take(&mut ctx.heap.measurement.active_site),
-        }
-    }
-    fn restore(self, ctx: &mut RunCtx) {
-        ctx.failure = self.failure;
-        ctx.shield = self.shield;
-        ctx.work = self.work.map_or(std::ptr::null_mut(), |p| p.as_ptr());
-        ctx.regions.active = self.region.map_or(std::ptr::null_mut(), |p| p.as_ptr());
-        #[cfg(feature = "measurement")]
-        {
-            ctx.heap.measurement.active_site = self.site;
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum State {
@@ -154,6 +117,8 @@ struct Slot {
 
 struct Task {
     generation: u32,
+    /// Its context: the root's is the run's first, a child's lies at the top of its stack.
+    ctx: *mut TaskCtx,
     sp: *mut u8,
     stack: Option<Stack>,
     state: State,
@@ -164,7 +129,6 @@ struct Task {
     canceled: Option<u32>,
     /// Scopes this task has entered and not yet exited, innermost last.
     scopes: Vec<u32>,
-    saved: Saved,
     code: Option<(TaskCode, *mut Header, u64)>,
     slot: Option<Slot>,
     /// What the task waits for while parked.
@@ -234,11 +198,6 @@ pub(crate) struct Scheduler {
     set_waiters: Vec<u32>,
     pub(crate) channels: crate::channels::Channels,
     sync: crate::sync::Synchronizers,
-    /// The chain the last `task.isolate` caught, which its body reads (`isolate.rs`).
-    pub(crate) isolated: Vec<crate::failure::Chained>,
-    idle_stacks: Vec<Stack>,
-    /// The stack of a task that completed; the next task to run recycles it.
-    retired: Option<Stack>,
     sets: Vec<Option<TaskSet>>,
     vacant_sets: Vec<u32>,
     /// Children that held their result or failed so far: the next one's completion order.
@@ -252,8 +211,8 @@ fn handle(index: u32, generation: u32) -> u64 {
 }
 
 impl Scheduler {
-    fn new(mut schedule: Schedule) -> Scheduler {
-        let mut root = Task::new(1, None, Vec::new(), None);
+    fn new(mut schedule: Schedule, root_ctx: *mut TaskCtx) -> Scheduler {
+        let mut root = Task::new(1, root_ctx, None, Vec::new(), None);
         root.priority = schedule.admit();
         Scheduler {
             tasks: vec![Some(root)],
@@ -376,9 +335,7 @@ impl Scheduler {
                 if !closed && served == queued {
                     break;
                 }
-                let shield = self.tasks[task as usize]
-                    .as_ref()
-                    .map_or(0, |t| t.saved.shield);
+                let shield = self.tasks[task as usize].as_ref().map_or(0, |t| t.shield());
                 if canceled_in(&self.tasks, &self.scopes, task, shield).is_none() {
                     served += 1;
                 }
@@ -540,17 +497,24 @@ impl Scheduler {
         let task = self.tasks[index as usize]
             .take()
             .unwrap_or_else(|| fault("a task completed twice"));
-        if let Some(stack) = task.stack {
-            self.idle_stacks.push(stack);
+        if task.stack.is_some() {
+            fault("a task left its rows before it completed");
         }
         self.vacant_tasks.push(index);
     }
 }
 
 impl Task {
-    fn new(generation: u32, scope: Option<u32>, path: Vec<u32>, canceled: Option<u32>) -> Task {
+    fn new(
+        generation: u32,
+        ctx: *mut TaskCtx,
+        scope: Option<u32>,
+        path: Vec<u32>,
+        canceled: Option<u32>,
+    ) -> Task {
         Task {
             generation,
+            ctx,
             sp: std::ptr::null_mut(),
             stack: None,
             state: State::Ready,
@@ -559,7 +523,6 @@ impl Task {
             spawned: 0,
             canceled,
             scopes: Vec::new(),
-            saved: Saved::default(),
             code: None,
             slot: None,
             wait: None,
@@ -573,6 +536,25 @@ impl Task {
             woken: false,
             awaited_by: None,
             priority: 0,
+        }
+    }
+}
+
+impl Task {
+    /// Its finalizer shield, which its context keeps.
+    fn shield(&self) -> u32 {
+        // SAFETY: a task's context lives as long as its row.
+        unsafe { (*self.ctx).shield }
+    }
+}
+
+impl Drop for Task {
+    /// A task that still has its stack (it never completed: its run stopped or ended) drops the
+    /// context lying in it; a completed task's context gave up its contents at its departure.
+    fn drop(&mut self) {
+        if self.stack.is_some() {
+            // SAFETY: the context lies in this task's stack, which it outlives no longer.
+            unsafe { std::ptr::drop_in_place(self.ctx) };
         }
     }
 }
@@ -600,20 +582,22 @@ fn canceled_in(
         .find_map(|&s| scopes[s as usize].as_ref().and_then(|s| s.canceled))
 }
 
-/// The run's scheduler, created with the root task at the first scope.
-pub(crate) fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
-    // SAFETY: the context is live for the whole run, and the scheduler is only reached
-    // through it, by the one running task; no reference is kept across a switch.
+/// The run's scheduler, created with the root task at the first scope, which the root reaches
+/// first.
+pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
+    // SAFETY: the context and its run are live for the whole run, and the scheduler is only
+    // reached through them, by the one running task; no reference is kept across a switch.
     unsafe {
-        (*ctx).tasks.get_or_insert_with(|| {
-            let schedule = std::mem::take(&mut (*ctx).schedule);
-            Box::new(Scheduler::new(schedule))
+        let run = (*ctx).run_ptr();
+        (*run).tasks.get_or_insert_with(|| {
+            let schedule = std::mem::take(&mut (*run).schedule);
+            Box::new(Scheduler::new(schedule, ctx))
         })
     }
 }
 
 /// Outstanding waits for the test runner. This is host reporting, outside program Io.
-pub(crate) fn test_waits(ctx: *mut RunCtx) -> String {
+pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
     let s = scheduler(ctx);
     let mut waits: Vec<_> = s
         .parked()
@@ -639,54 +623,56 @@ pub(crate) fn test_waits(ctx: *mut RunCtx) -> String {
 }
 
 /// The running task's spawn path.
-pub(crate) fn current_path(ctx: *mut RunCtx) -> Vec<u32> {
+pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
     let s = scheduler(ctx);
     let current = s.current;
     s.task(current).path.clone()
 }
 
 /// Suspend the running task and run `next`. The running task must already be queued, parked
-/// or holding; it returns from here when something resumes it.
+/// or holding; it returns from here when something resumes it, on whichever worker that is.
 ///
 /// # Safety
-/// `ctx` is live and `next` is a suspended or prepared task.
-unsafe fn switch_to(ctx: *mut RunCtx, next: u32) {
+/// `ctx` is the running task's and `next` is a suspended or prepared task.
+#[inline(never)]
+unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     let s = scheduler(ctx);
     let from = s.current;
     if from == next {
         return;
     }
-    // SAFETY: the context is live; neither borrow survives the switch.
-    let (save, to) = unsafe {
-        s.task(from).saved = Saved::take(&mut *ctx);
-        std::mem::take(&mut s.task(next).saved).restore(&mut *ctx);
-        s.current = next;
-        let save = &raw mut s.task(from).sp;
-        (save, s.task(next).sp)
-    };
+    let to_ctx = s.task(next).ctx;
+    ctx.switch_out();
+    // SAFETY: `next`'s context is live and nothing else runs on this worker.
+    unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
+    s.current = next;
+    let save = &raw mut s.task(from).sp;
+    let to = s.task(next).sp;
     // SAFETY: `to` is the suspended or prepared stack pointer of `next`.
     unsafe { fiber::switch(save, to) };
     recycle(ctx);
 }
 
 /// Leave a completed task for good and run `next`. The completed task's row may already be
-/// vacant, so nothing of it is saved; its context state is empty.
+/// vacant, so nothing of it is saved; its context state is empty, and it gives up what it
+/// holds, since the context lies in a stack the next spawn reuses.
 ///
 /// # Safety
-/// `ctx` is live, `next` is suspended and the running fiber is never resumed.
-unsafe fn depart_to(ctx: *mut RunCtx, next: u32) -> ! {
+/// `ctx` is the running task's, `next` is suspended and the running fiber is never resumed.
+#[inline(never)]
+unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     let s = scheduler(ctx);
-    // SAFETY: the context is live.
-    unsafe {
-        let left = Saved::take(&mut *ctx);
-        if left.failure.active() || left.shield != 0 || left.work.is_some() || left.region.is_some()
-        {
-            fault("a task completed with context state left");
-        }
-        // Nothing on this abandoned stack may own storage at the switch.
-        drop(left);
-        std::mem::take(&mut s.task(next).saved).restore(&mut *ctx);
+    if ctx.failure.active() || ctx.shield != 0 || !ctx.work.is_null() || !ctx.region.is_null() {
+        fault("a task completed with context state left");
     }
+    // Nothing on this abandoned stack may own storage at the switch.
+    drop(std::mem::take(&mut ctx.failure));
+    drop(std::mem::take(&mut ctx.frozen));
+    drop(std::mem::take(&mut ctx.isolated));
+    let to_ctx = s.task(next).ctx;
+    ctx.switch_out();
+    // SAFETY: `next`'s context is live and nothing else runs on this worker.
+    unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
     s.current = next;
     s.task(next).state = State::Ready;
     let mut abandoned = std::ptr::null_mut();
@@ -696,10 +682,10 @@ unsafe fn depart_to(ctx: *mut RunCtx, next: u32) -> ! {
 }
 
 /// A task resumed: the stack of the task that completed before it is free again.
-fn recycle(ctx: *mut RunCtx) {
-    let s = scheduler(ctx);
-    if let Some(stack) = s.retired.take() {
-        s.idle_stacks.push(stack);
+fn recycle(ctx: &mut TaskCtx) {
+    let worker = ctx.worker();
+    if let Some(stack) = worker.retired.take() {
+        worker.idle_stacks.push(stack);
     }
 }
 
@@ -710,7 +696,7 @@ fn recycle(ctx: *mut RunCtx) {
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
+unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     // SAFETY: the context is live.
     let ready = unsafe { crate::host_waits::ready(ctx) }?;
     // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
@@ -742,7 +728,7 @@ unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
         // SAFETY: the context is live and `task` is parked.
         if unsafe { poll(ctx, task, &ready) }? {
             #[cfg(feature = "measurement")]
-            if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+            if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
                 profile.ready(scheduler(ctx).task(task).path.clone());
             }
             scheduler(ctx).unpark(task);
@@ -756,7 +742,7 @@ unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
 ///
 /// # Safety
 /// `ctx` is live and `task` is parked; a join's slot is in its frame.
-unsafe fn poll(ctx: *mut RunCtx, task: u32, ready: &crate::io::Ready) -> Stopped<bool> {
+unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stopped<bool> {
     let s = scheduler(ctx);
     Ok(match s.task(task).wait {
         Some(Wait::Join { child, slot, size }) => match s.task(child).state {
@@ -771,7 +757,7 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32, ready: &crate::io::Ready) -> Stopped
         },
         Some(Wait::Exit { scope }) => s.settled(scope),
         Some(Wait::Receive { channel, slot }) => {
-            let shield = s.task(task).saved.shield;
+            let shield = s.task(task).shield();
             // SAFETY: the slot is in the parked task's frame.
             match unsafe { receive_ready(s, task, shield, channel, slot) } {
                 Some(status) => {
@@ -782,7 +768,7 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32, ready: &crate::io::Ready) -> Stopped
             }
         }
         Some(Wait::Host { token }) => {
-            let shield = s.task(task).saved.shield;
+            let shield = s.task(task).shield();
             let cause = s.canceled_task(task, shield);
             // SAFETY: the context is live and `token` is this task's parked request.
             unsafe { crate::host_waits::poll(ctx, token, cause, ready.contains(token)) }?
@@ -799,7 +785,7 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32, ready: &crate::io::Ready) -> Stopped
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn run_next(ctx: *mut RunCtx) -> Stopped<()> {
+unsafe fn run_next(ctx: &mut TaskCtx) -> Stopped<()> {
     // SAFETY: the context is live.
     let next = unsafe { next_task(ctx) }?;
     unsafe { switch_to(ctx, next) };
@@ -814,7 +800,7 @@ unsafe fn run_next(ctx: *mut RunCtx) -> Stopped<()> {
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
-unsafe fn pick(ctx: *mut RunCtx) -> Stopped<Option<u32>> {
+unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
     let s = scheduler(ctx);
     if s.schedule.algorithm() == Algorithm::Fifo || s.runnable.is_empty() {
         return Ok(s.runnable.pop_front());
@@ -847,7 +833,7 @@ unsafe fn pick(ctx: *mut RunCtx) -> Stopped<Option<u32>> {
 ///
 /// # Safety
 /// `ctx` is live.
-unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
+unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) }?;
     // With nothing runnable, sleep until a parked host request may complete, then poll again.
@@ -865,8 +851,8 @@ unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
 ///
 /// # Safety
 /// `ctx` is live and no task can run.
-unsafe fn blocked_waits(ctx: *mut RunCtx) -> Vec<hirsel_run_config::Wait> {
-    let table = unsafe { (*ctx).failure_table };
+unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_config::Wait> {
+    let table = unsafe { (*ctx).run().failure_table };
     let s = scheduler(ctx);
     let mut waits = Vec::new();
     for (index, wait) in s.parked() {
@@ -925,7 +911,7 @@ unsafe fn blocked_waits(ctx: *mut RunCtx) -> Vec<hirsel_run_config::Wait> {
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
-pub unsafe fn yield_now(ctx: *mut RunCtx) {
+pub unsafe fn yield_now(ctx: &mut TaskCtx) {
     // SAFETY: the context is live; the caller holds nothing a stop must drop.
     unsafe { crate::stop::check(ctx, try_yield(ctx)) }
 }
@@ -934,9 +920,8 @@ pub unsafe fn yield_now(ctx: *mut RunCtx) {
 ///
 /// # Safety
 /// As for [`yield_now`].
-pub(crate) unsafe fn try_yield(ctx: *mut RunCtx) -> Stopped<()> {
-    // SAFETY: the context is live.
-    if unsafe { (*ctx).tasks.is_none() } {
+pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    if ctx.run().tasks.is_none() {
         return Ok(());
     }
     // SAFETY: the context is live.
@@ -958,7 +943,7 @@ pub(crate) unsafe fn try_yield(ctx: *mut RunCtx) -> Stopped<()> {
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait; the caller holds nothing a stop
 /// must drop.
-unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) {
+unsafe fn block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) {
     // SAFETY: caller contract.
     unsafe { crate::stop::check(ctx, try_block(ctx, wait, yielded, site)) }
 }
@@ -967,7 +952,7 @@ unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) {
 ///
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait.
-unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
+unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
@@ -997,7 +982,7 @@ unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool, site: u64) -> S
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
-pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) -> Stopped<()> {
+pub(crate) unsafe fn park_host(ctx: &mut TaskCtx, token: u64, yielded: bool) -> Stopped<()> {
     // SAFETY: the context is live; the request outlives the wait.
     unsafe { try_block(ctx, Wait::Host { token }, yielded, 0) }
 }
@@ -1007,7 +992,7 @@ pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) -> S
 ///
 /// # Safety
 /// `ctx` is live and `child` is holding.
-unsafe fn hand_off(ctx: *mut RunCtx, child: u32) {
+unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
     let s = scheduler(ctx);
     let current = s.current;
     s.task(current).state = State::Parked;
@@ -1015,17 +1000,18 @@ unsafe fn hand_off(ctx: *mut RunCtx, child: u32) {
     row.state = State::Ready;
     row.handoff = Some(current);
     #[cfg(feature = "measurement")]
-    if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+    if let Some(profile) = &mut ctx.run().mc_profile {
         profile.ready(row.path.clone());
     }
     unsafe { switch_to(ctx, child) };
 }
 
-/// The fiber entry of every spawned task.
+/// The fiber entry of every spawned task, with its own context.
 unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
-    let ctx = ctx.cast::<RunCtx>();
+    let ctx = ctx.cast::<TaskCtx>();
     let index = task as usize as u32;
-    recycle(ctx);
+    // SAFETY: the task's context lies at the top of this stack and is bound to its worker.
+    recycle(unsafe { &mut *ctx });
     let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
         fault("a task started without code");
     };
@@ -1043,7 +1029,7 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
             operation_site,
         )
     };
-    unsafe { complete(ctx, index, status) }
+    unsafe { complete(&mut *ctx, index, status) }
 }
 
 /// The running child finished its frame (and its environment): record its outcome and run
@@ -1051,7 +1037,7 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
 ///
 /// # Safety
 /// `ctx` is live and `index` is the running child.
-unsafe fn complete(ctx: *mut RunCtx, index: u32, status: u8) -> ! {
+unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     // This fiber is abandoned at the departure, so nothing it owns may still be live then.
     let next = unsafe { crate::stop::check(ctx, completed(ctx, index, status)) };
     // SAFETY: the context is live; this fiber is never resumed.
@@ -1062,13 +1048,12 @@ unsafe fn complete(ctx: *mut RunCtx, index: u32, status: u8) -> ! {
 ///
 /// # Safety
 /// `ctx` is live and `index` is the running child.
-unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
+unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     #[cfg(feature = "measurement")]
     std::mem::forget(profile::Operation::new(ctx, "task.complete"));
     let s = scheduler(ctx);
     let path = s.task(index).path.clone();
-    // SAFETY: the context is live.
-    let chain = unsafe { (*ctx).failure.take_chain(&path) };
+    let chain = ctx.failure.take_chain(&path);
     let failed = status != STATUS_OK;
     if failed != !chain.is_empty() {
         fault("a task's status disagrees with its failure state");
@@ -1095,17 +1080,16 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
         }
     }
     s.settle(index);
+    let worker = ctx.worker();
+    worker.retired = s.task(index).stack.take();
     if detached && !failed {
         // A detached child's result is gone at its completion; only live children stay rows.
         s.scope(scope).children.retain(|&c| c != index);
-        s.retired = s.task(index).stack.take();
         s.vacate_task(index);
-    } else {
-        s.retired = s.task(index).stack.take();
     }
     #[cfg(feature = "measurement")]
     if let Some(next) = handoff
-        && let Some(profile) = unsafe { &mut (*ctx).mc_profile }
+        && let Some(profile) = &mut ctx.run().mc_profile
     {
         profile.ready(s.task(next).path.clone());
     }
@@ -1138,7 +1122,7 @@ unsafe fn deliver(slot: Slot, out: *mut u8, size: u64) {
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     _tasks: *const u64,
@@ -1149,13 +1133,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
 
 /// A fresh scope of the running task, its row and generation.
-fn open_scope(ctx: *mut RunCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) {
+fn open_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) {
     let s = scheduler(ctx);
     let generation = s.fresh_generation();
     let current = s.current;
@@ -1189,7 +1173,7 @@ fn open_scope(ctx: *mut RunCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) {
 /// `ctx` is live with its Io bound, `out` writable and `deadline` two readable words.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     _tasks: *const u64,
@@ -1218,7 +1202,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1233,7 +1217,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
 /// `ctx` is live and `scope` names a scope the running task entered last.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     scope: *const u64,
@@ -1242,7 +1226,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
     // SAFETY: caller contract.
-    unsafe { exit_scope(ctx, scope, error, caller_site) }.0
+    unsafe { exit_scope(&mut *ctx, scope, error, caller_site) }.0
 }
 
 /// `$intrinsic.TaskScopeExitUntil(s, error) -> bool`: the exit of a `task.scope_until` scope,
@@ -1253,7 +1237,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
 /// As for [`hirsel_rt_v2_task_scope_exit`]; `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     out: *mut u8,
@@ -1263,7 +1247,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit_until");
     // SAFETY: caller contract.
-    let (status, expired) = unsafe { exit_scope(ctx, scope, error, caller_site) };
+    let (status, expired) = unsafe { exit_scope(&mut *ctx, scope, error, caller_site) };
     // SAFETY: caller contract.
     unsafe { out.write(u8::from(expired)) };
     status
@@ -1274,7 +1258,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
 /// # Safety
 /// As for [`hirsel_rt_v2_task_scope_exit`].
 unsafe fn exit_scope(
-    ctx: *mut RunCtx,
+    ctx: &mut TaskCtx,
     scope: *const u64,
     error: u8,
     caller_site: u64,
@@ -1286,8 +1270,7 @@ unsafe fn exit_scope(
     if s.task(current).scopes.pop() != Some(index) {
         fault("a scope exits before a scope entered inside it");
     }
-    // SAFETY: the context is live.
-    let failing = unsafe { (*ctx).failure.active() };
+    let failing = ctx.failure.active();
     if failing || error != 0 {
         for child in s.scope(index).children.clone() {
             s.cancel(child, CANCEL_PARENT);
@@ -1310,8 +1293,7 @@ unsafe fn exit_scope(
     let own = s.task(current).path.clone();
     for &child in &children {
         if let Some(chain) = s.task(child).failure.take() {
-            // SAFETY: the context is live.
-            unsafe { (*ctx).failure.merge_chain(&own, chain) };
+            ctx.failure.merge_chain(&own, chain);
         }
         s.vacate_task(child);
     }
@@ -1327,8 +1309,7 @@ unsafe fn exit_scope(
         unsafe { crate::host_waits::disarm(ctx, token) };
     }
     let expired = deadline.is_some_and(|d| d.expired);
-    // SAFETY: the context is live.
-    let status = if unsafe { (*ctx).failure.active() } {
+    let status = if ctx.failure.active() {
         STATUS_FAILURE
     } else {
         STATUS_OK
@@ -1345,7 +1326,7 @@ unsafe fn exit_scope(
 /// owned once closure of `fn() -> ()`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _caller_site: u64,
     operation_site: u64,
     _destination: *mut u8,
@@ -1368,7 +1349,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     path.push(parent.spawned);
     parent.spawned += 1;
     let generation = s.fresh_generation();
-    let mut task = Task::new(generation, Some(scope), path, canceled);
+    // SAFETY: the context is live.
+    let (worker, run) = unsafe { ((*ctx).worker_ptr(), (*ctx).run_ptr()) };
+    let stack = unsafe { (*ctx).worker() }
+        .idle_stacks
+        .pop()
+        .unwrap_or_else(Stack::new);
+    let child = stack.context();
+    // SAFETY: the slot lies in this stack, whose previous task's context gave up its contents.
+    unsafe { child.write(TaskCtx::new(worker, run)) };
+    let mut task = Task::new(generation, child, Some(scope), path, canceled);
     task.code = Some((code, environment, operation_site));
     task.priority = s.schedule.admit();
     let index = match s.vacant_tasks.pop() {
@@ -1378,20 +1368,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
             (s.tasks.len() - 1) as u32
         }
     };
-    let stack = s.idle_stacks.pop().unwrap_or_else(Stack::new);
-    task.sp = stack.prepare(task_entry, ctx.cast(), index as usize as *mut u8);
+    task.sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
     task.stack = Some(stack);
     s.tasks[index as usize] = Some(task);
     s.scope(scope).children.push(index);
     s.runnable.push_back(index);
     #[cfg(feature = "measurement")]
-    if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+    if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
         profile.ready(s.task(index).path.clone());
     }
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1405,7 +1394,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
 /// running child's frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     slot: *mut u8,
     none: *const u8,
     size: u64,
@@ -1431,7 +1420,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     s.order(current);
     s.settle(current);
     // SAFETY: the context is live; a join or a discard hands control back here.
-    unsafe { crate::stop::check(ctx, run_next(ctx)) };
+    unsafe { crate::stop::check(ctx, run_next(&mut *ctx)) };
     STATUS_OK
 }
 
@@ -1444,7 +1433,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
 /// of `size` bytes in the running task's frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_join(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     scope: *const u64,
@@ -1459,7 +1448,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
     // SAFETY: caller contract.
-    unsafe { join(ctx, scope, child, slot, size, caller_site) }
+    unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) }
 }
 
 /// Join `child` of `scope`, as [`hirsel_rt_v2_task_join`] does.
@@ -1467,7 +1456,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
 /// # Safety
 /// As for [`hirsel_rt_v2_task_join`].
 unsafe fn join(
-    ctx: *mut RunCtx,
+    ctx: &mut TaskCtx,
     scope: u32,
     child: u32,
     slot: *mut u8,
@@ -1501,8 +1490,7 @@ unsafe fn join(
     s.vacate_task(child);
     match chain {
         Some(chain) => {
-            // SAFETY: the context is live.
-            unsafe { (*ctx).failure.append_chain(chain) };
+            ctx.failure.append_chain(chain);
             STATUS_FAILURE
         }
         None => STATUS_OK,
@@ -1515,7 +1503,7 @@ unsafe fn join(
 /// `ctx` is live and `scope`, `task` name a child of a live scope.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     scope: *const u64,
     task: *const u64,
 ) -> u8 {
@@ -1527,7 +1515,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     let child = s.task_handle(unsafe { task.read() }, scope);
     s.cancel(child, CANCEL_REQUESTED);
     // SAFETY: the context is live.
-    unsafe { yield_now(ctx) };
+    unsafe { yield_now(&mut *ctx) };
     STATUS_OK
 }
 
@@ -1538,7 +1526,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
 /// `ctx` is live and `scope`, `task` name a child of a live scope.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     scope: *const u64,
     task: *mut u64,
 ) -> u8 {
@@ -1550,8 +1538,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     let child = s.task_handle(unsafe { task.read() }, scope);
     // SAFETY: the context is live.
     unsafe {
-        detach(ctx, scope, child);
-        yield_now(ctx);
+        detach(&mut *ctx, scope, child);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1561,7 +1549,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
 ///
 /// # Safety
 /// `ctx` is live and `child` a child of live `scope`.
-unsafe fn detach(ctx: *mut RunCtx, scope: u32, child: u32) {
+unsafe fn detach(ctx: &mut TaskCtx, scope: u32, child: u32) {
     let s = scheduler(ctx);
     s.task(child).detached = true;
     if s.task(child).state == State::Holding {
@@ -1585,7 +1573,7 @@ unsafe fn detach(ctx: *mut RunCtx, scope: u32, child: u32) {
 /// `ctx` is live, `out` writable and `scope` names a live scope.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_set(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     scope: *const u64,
@@ -1616,7 +1604,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
         out.write(
             crate::channels::ENDPOINT | TASK_SET | u64::from(generation) << 32 | u64::from(index),
         );
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1627,7 +1615,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
 /// `ctx` is live and `set`, `task` name a task set and a child of live `scope`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_add(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     scope: *const u64,
     set: *mut u64,
     task: *mut u64,
@@ -1641,7 +1629,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     let set = s.set_handle(set, scope);
     s.set(set).members.push(Some(word));
     // SAFETY: the context is live.
-    unsafe { yield_now(ctx) };
+    unsafe { yield_now(&mut *ctx) };
     STATUS_OK
 }
 
@@ -1661,7 +1649,7 @@ pub struct IndexOption {
 /// `ctx` is live, `out` writable and `set` names a task set of live `scope`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     _destination: *mut u8,
@@ -1678,10 +1666,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     let waiting = s.set(set).members.iter().any(Option::is_some);
     if waiting && s.first_completed(set).is_none() {
         // SAFETY: the set outlives the wait: the caller borrows it.
-        unsafe { block(ctx, Wait::Any { set }, true, caller_site) };
+        unsafe { block(&mut *ctx, Wait::Any { set }, true, caller_site) };
     } else {
         // SAFETY: the context is live.
-        unsafe { yield_now(ctx) };
+        unsafe { yield_now(&mut *ctx) };
     }
     let index = if waiting {
         scheduler(ctx).first_completed(set)
@@ -1706,7 +1694,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
 /// `ctx` is live, `out` writable and `set` names a task set of live `scope`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u8,
     scope: *const u64,
     set: *const u64,
@@ -1735,7 +1723,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
 /// `index` is unawaited.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     scope: *const u64,
@@ -1766,7 +1754,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
 /// `ctx` is live and `set` names a task set of live `scope`, which the call takes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     scope: *const u64,
@@ -1779,9 +1767,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     let s = scheduler(ctx);
     // SAFETY: the context is live; the set row stays until the drain is over.
     if unsafe { poll_drained(s, set) } {
-        unsafe { yield_now(ctx) };
+        unsafe { yield_now(&mut *ctx) };
     } else {
-        unsafe { block(ctx, Wait::Drain { set }, true, caller_site) };
+        unsafe { block(&mut *ctx, Wait::Drain { set }, true, caller_site) };
     }
     scheduler(ctx).close_set(set);
     STATUS_OK
@@ -1793,7 +1781,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
 /// `ctx` is live and `set` names a task set of live `scope`, which the call takes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
@@ -1803,7 +1791,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
     let set = unsafe { release_members(ctx, scope, set, false) };
     scheduler(ctx).close_set(set);
     // SAFETY: the context is live.
-    unsafe { yield_now(ctx) };
+    unsafe { yield_now(&mut *ctx) };
     STATUS_OK
 }
 
@@ -1811,7 +1799,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
 ///
 /// # Safety
 /// As for [`hirsel_rt_v2_task_cancel_all`].
-unsafe fn release_members(ctx: *mut RunCtx, scope: *const u64, set: *mut u64, cancel: bool) -> u32 {
+unsafe fn release_members(
+    ctx: *mut TaskCtx,
+    scope: *const u64,
+    set: *mut u64,
+    cancel: bool,
+) -> u32 {
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1823,7 +1816,7 @@ unsafe fn release_members(ctx: *mut RunCtx, scope: *const u64, set: *mut u64, ca
             scheduler(ctx).cancel(child, CANCEL_REQUESTED);
         }
         // SAFETY: caller contract.
-        unsafe { detach(ctx, scope, child) };
+        unsafe { detach(&mut *ctx, scope, child) };
     }
     set
 }
@@ -1847,7 +1840,7 @@ unsafe fn poll_drained(s: &mut Scheduler, set: u32) -> bool {
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u32,
     _scope: *const u64,
 ) -> u8 {
@@ -1856,7 +1849,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     // SAFETY: caller contract.
     unsafe {
         out.write(canceled(ctx).map_or(0, |cause| cause + 1));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1866,10 +1859,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
 ///
 /// # Safety
 /// `ctx` is live.
-pub(crate) unsafe fn canceled(ctx: *mut RunCtx) -> Option<u32> {
+pub(crate) unsafe fn canceled(ctx: *mut TaskCtx) -> Option<u32> {
     // SAFETY: the context is live.
     let shield = unsafe { (*ctx).shield };
-    unsafe { (*ctx).tasks.as_deref_mut() }.and_then(|s| s.canceled(shield))
+    unsafe { (*ctx).run().tasks.as_deref_mut() }.and_then(|s| s.canceled(shield))
 }
 
 /// A receive's outcome for `task`, unless it must wait: canceled, else the oldest message
@@ -1904,7 +1897,7 @@ unsafe fn receive_ready(
 /// `ctx` is live and `out` writable for two words.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     _tasks: *const u64,
@@ -1916,7 +1909,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     unsafe {
         out.write(sender);
         out.add(1).write(receiver);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1927,7 +1920,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
 /// `ctx` is live, `out` writable and `sender` an open Sender word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     _tasks: *const u64,
@@ -1939,7 +1932,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     let word = scheduler(ctx).channels.dup(unsafe { sender.read() });
     unsafe {
         out.write(word);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1952,7 +1945,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
 /// `ctx` is live, `out` writable, `sender` an open Sender word and `message` a `Some` slot.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u32,
     sender: *mut u64,
     message: *mut *mut Header,
@@ -1972,7 +1965,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     // SAFETY: caller contract.
     unsafe {
         out.write(status);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -1985,7 +1978,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
 /// in the running task's frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     caller_site: u64,
     _operation_site: u64,
     out: *mut u32,
@@ -2003,14 +1996,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     let status = match unsafe { receive_ready(s, current, shield, channel, message) } {
         Some(status) => {
             // SAFETY: the context is live.
-            unsafe { yield_now(ctx) };
+            unsafe { yield_now(&mut *ctx) };
             status
         }
         None => {
             // SAFETY: the slot is in this task's frame, parked with it.
             unsafe {
                 block(
-                    ctx,
+                    &mut *ctx,
                     Wait::Receive {
                         channel,
                         slot: message,
@@ -2033,7 +2026,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
 /// # Safety
 /// `ctx` is live and `word` an open endpoint of its run.
 pub(crate) unsafe fn close_endpoint(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     word: u64,
     anchor: u64,
     operation_site: u64,
@@ -2089,7 +2082,7 @@ unsafe fn carried(payload: *mut *mut Header) -> NonNull<Header> {
 /// `ctx` is live, `out` writable and `payload` a `Some` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     payload: *mut *mut Header,
@@ -2100,7 +2093,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     unsafe {
         let block = carried(payload);
         out.write(scheduler(ctx).sync.create_block(block));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -2112,7 +2105,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
 /// `ctx` is live, `out` writable, `m` a Mutex word and `payload` a writable `None` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     out: *mut u32,
     m: *const u64,
     payload: *mut *mut Header,
@@ -2141,7 +2134,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
 /// `ctx` is live, `m` a Mutex word and `payload` a `Some` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     m: *const u64,
     payload: *mut *mut Header,
 ) -> u8 {
@@ -2151,15 +2144,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     unsafe {
         let block = carried(payload);
         scheduler(ctx).sync.put(m.read(), block);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
 
 /// The run ended: release the payload blocks its mutexes still hold. Their payloads are
 /// copyable, so the release runs no user code and cannot fail.
-pub(crate) fn end_run(ctx: &mut RunCtx) {
-    let Some(s) = ctx.tasks.as_deref_mut() else {
+pub(crate) fn end_run(ctx: &mut TaskCtx) {
+    let Some(s) = ctx.run().tasks.as_deref_mut() else {
         return;
     };
     for block in s.sync.end() {
@@ -2178,7 +2171,7 @@ pub(crate) fn end_run(ctx: &mut RunCtx) {
 /// # Safety
 /// `ctx` is live, its failure active, and `m` a Mutex word.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_kill");
     let s = scheduler(ctx);
@@ -2189,7 +2182,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64
     // SAFETY: caller contract.
     unsafe {
         scheduler(ctx).sync.kill(m.read(), chain);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -2200,7 +2193,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64
 /// # Safety
 /// `ctx` is live and `m` a dead Mutex's word.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut RunCtx, m: *const u64) -> u8 {
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_cause");
     // SAFETY: caller contract.
@@ -2220,7 +2213,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut RunCtx, m: *const u6
 /// `ctx` is live, `out` writable and `value` readable for `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
     value: *const u8,
@@ -2231,7 +2224,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     // SAFETY: caller contract.
     unsafe {
         out.write(scheduler(ctx).sync.create_image(value, size));
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -2242,7 +2235,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
 /// `ctx` is live, `a` an Atomic word and `slot` writable for `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     a: *const u64,
     slot: *mut u8,
     size: u64,
@@ -2252,7 +2245,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     // SAFETY: caller contract.
     unsafe {
         scheduler(ctx).sync.read(a.read(), slot, size);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }
@@ -2263,7 +2256,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
 /// `ctx` is live, `a` an Atomic word and `value` readable for `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     a: *const u64,
     value: *const u8,
     size: u64,
@@ -2273,7 +2266,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     // SAFETY: caller contract.
     unsafe {
         scheduler(ctx).sync.write(a.read(), value, size);
-        yield_now(ctx);
+        yield_now(&mut *ctx);
     }
     STATUS_OK
 }

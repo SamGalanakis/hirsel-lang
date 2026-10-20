@@ -16,8 +16,8 @@ use hirsel_rt::context::{
 };
 use hirsel_rt::failure::hirsel_rt_v2_failure_begin;
 use hirsel_rt::{
-    Config, DropThunk, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, NO_OFFSET, RunCtx,
-    STEP_FINALIZE, STEP_LOOP, STEP_RELEASE, STEP_TAG, Stats, Step, WHOLE_VALUE,
+    Config, DropThunk, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, NO_OFFSET, STEP_FINALIZE,
+    STEP_LOOP, STEP_RELEASE, STEP_TAG, Stats, Step, TaskCtx, WHOLE_VALUE,
 };
 
 // Test fixtures construct their complete descriptors before the first indexed operation.
@@ -57,7 +57,7 @@ pub fn register_fixture(layout: *const Layout) {
     });
 }
 
-pub fn index(ctx: *mut RunCtx, layout: *const Layout) -> u32 {
+pub fn index(ctx: *mut TaskCtx, layout: *const Layout) -> u32 {
     BINDINGS.with(|bindings| {
         let mut bindings = bindings.borrow_mut();
         let binding = bindings.get_mut(&(ctx as usize)).expect("fixture context");
@@ -86,6 +86,8 @@ pub fn index(ctx: *mut RunCtx, layout: *const Layout) -> u32 {
             );
             unsafe {
                 ptr::swap(ctx, replacement);
+                TaskCtx::moved(ctx);
+                TaskCtx::moved(replacement);
                 hirsel_rt_v2_ctx_destroy(replacement);
             }
             binding.layouts = Some(layouts);
@@ -133,7 +135,7 @@ pub fn host_calls() -> u64 {
 }
 
 /// A run context destroyed on drop.
-pub struct Ctx(pub *mut RunCtx);
+pub struct Ctx(pub *mut TaskCtx);
 
 impl Ctx {
     pub fn with(config: Config) -> Ctx {
@@ -275,7 +277,7 @@ pub fn with_flags(layout: &'static Layout, flags: u32) -> &'static Layout {
 }
 
 /// A fresh heap block of `extent` bytes, aligned to 8, whose header names `layout`.
-pub fn alloc_block(ctx: *mut RunCtx, layout: &Layout, extent: u64) -> *mut Header {
+pub fn alloc_block(ctx: *mut TaskCtx, layout: &Layout, extent: u64) -> *mut Header {
     unsafe {
         hirsel_rt::alloc::hirsel_rt_v2_alloc(
             ctx,
@@ -314,7 +316,7 @@ pub fn write_ref(block: *mut Header, offset: usize, child: *mut Header) {
     };
 }
 
-pub fn state(ctx: *mut RunCtx, block: *mut Header) -> u8 {
+pub fn state(ctx: *mut TaskCtx, block: *mut Header) -> u8 {
     unsafe { (*ctx).diagnostic_state(block) }
 }
 
@@ -333,7 +335,7 @@ pub fn take_events() -> Vec<(u64, u64)> {
 
 /// A finalizer that logs the `u64` id at the start of its value.
 pub unsafe extern "C" fn log_drop(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,
@@ -345,7 +347,7 @@ pub unsafe extern "C" fn log_drop(
 
 /// A finalizer that logs its id and then fails with rule code = id.
 pub unsafe extern "C" fn failing_drop(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,

@@ -1,13 +1,14 @@
-//! The run context `RunCtx`: one task's heap domain, release worklist, region pool,
-//! failure state and semantic configuration, passed explicitly to every entry. It is not a source
-//! capability and conveys no authority. Contexts share nothing (OWN-6). The Io adapter belongs to
-//! the library; the context holds only its handle close, which handle drops call.
+//! The task context `TaskCtx`, passed explicitly to every entry: one task's own state, its
+//! worker (heap and region pool) and its run's shared state (configuration, scheduler, Io
+//! binding). It is not a source capability and conveys no authority. Runs share nothing
+//! (OWN-6). The Io adapter belongs to the library; the run holds only its handle close, which
+//! handle drops call.
 
 use std::ptr;
 
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
 use crate::alloc::SLAB_SIZE;
-use crate::alloc::{Header, Heap};
+use crate::alloc::{Header, Heap, View};
 use crate::count::finite_count_max;
 use crate::failure::FailureState;
 use crate::finalize::CloseThunk;
@@ -108,27 +109,63 @@ pub struct Audit {
     pub retained_bytes: u64,
 }
 
-/// One task's run context. Opaque to C, except for the words compiled fast paths read at its
-/// start (`crate::alloc::Compiled`, runtime ABI 4), which is why it is `repr(C)` with the heap
-/// first.
+/// One task's context: the pointer compiled code receives, one per started task. Opaque to C,
+/// except for the words compiled fast paths read at its start (its [`View`] of the worker's
+/// `crate::alloc::Compiled` words, runtime ABI 4), which is why it is `repr(C)` with the view
+/// first. Behind it: what is the task's own (its failure chain and isolate scratch, finalizer
+/// shield, release worklist, innermost region, freeze/thaw stack and foreign scope), the
+/// [`Worker`] running it and the run's [`RunShared`] state.
+///
+/// A compiled frame's context names its task, never its worker, so it stays valid wherever the
+/// task runs. Runtime code reaches the worker only through [`TaskCtx::worker`] (and
+/// [`TaskCtx::heap`]), which borrows the context: every entry that can suspend the task takes
+/// `&mut TaskCtx`, so no worker borrow lives across a suspension.
 #[repr(C)]
-pub struct RunCtx {
-    pub(crate) heap: Heap,
+pub struct TaskCtx {
+    pub(crate) view: View,
+    worker: *mut Worker,
+    run: *mut RunShared,
     /// Top of the release worklist (an intrusive stack of dead headers and continuations).
     pub(crate) work: *mut Header,
-    pub(crate) count_max: u32,
     pub(crate) shield: u32,
+    pub(crate) failure: FailureState,
+    /// The innermost region this task entered and has not exited.
+    pub(crate) region: *mut crate::region::Region,
+    /// The freeze and thaw walks' block stack, kept between walks (MEM-11).
+    pub(crate) frozen: Vec<*mut Header>,
+    /// The chain the task's last `task.isolate` caught, which its body reads (`isolate.rs`).
+    pub(crate) isolated: Vec<crate::failure::Chained>,
+    /// The task's innermost extern call while it is switched out (`crate::foreign`).
+    foreign: crate::foreign::ForeignScope,
+    /// The task's measurement site while it is switched out.
+    #[cfg(feature = "measurement")]
+    site: u64,
+}
+
+const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
+
+/// One OS thread that runs Hirsel code, and what is its own: its heap, region pool and idle
+/// fiber stacks.
+pub(crate) struct Worker {
+    pub(crate) heap: Heap,
+    pub(crate) regions: RegionPool,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) immortalized: u64,
-    pub(crate) failure: FailureState,
-    pub(crate) entry_result: Option<crate::exit_report::Returned>,
-    pub(crate) regions: RegionPool,
+    /// Stacks of completed tasks, for the next spawns.
+    pub(crate) idle_stacks: Vec<crate::fiber::Stack>,
+    /// The stack of a task that completed; the next task to run recycles it.
+    pub(crate) retired: Option<crate::fiber::Stack>,
+}
+
+/// What every task of a run shares: its configuration, scheduler, Io binding, failure table and
+/// launcher.
+pub(crate) struct RunShared {
+    pub(crate) count_max: u32,
     pub(crate) close_handle: Option<CloseThunk>,
     pub(crate) hash_seed: u64,
     io_data: *mut std::ffi::c_void,
     pub(crate) region_owners: Option<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
-    /// The freeze and thaw walks' block stack, kept between walks (MEM-11).
-    pub(crate) frozen: Vec<*mut Header>,
+    pub(crate) entry_result: Option<crate::exit_report::Returned>,
     /// The run's tasks, from its first scope (CONC-2).
     pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
     /// Where a stop of the run returns (`crate::stop`).
@@ -145,39 +182,177 @@ pub struct RunCtx {
     pub(crate) profile_output: Option<std::fs::File>,
 }
 
-const _: () = assert!(std::mem::offset_of!(RunCtx, heap) == 0);
-
-impl RunCtx {
-    #[inline]
-    pub(crate) unsafe fn descriptor(&self, index: u32) -> *const crate::Layout {
-        unsafe { self.heap.descriptor(index) }
+impl TaskCtx {
+    /// A fresh task's context on `worker`, in `run`; nothing binds it yet.
+    pub(crate) fn new(worker: *mut Worker, run: *mut RunShared) -> TaskCtx {
+        TaskCtx {
+            view: View::new(),
+            worker,
+            run,
+            work: ptr::null_mut(),
+            shield: 0,
+            failure: FailureState::default(),
+            region: ptr::null_mut(),
+            frozen: Vec::new(),
+            isolated: Vec::new(),
+            foreign: crate::foreign::ForeignScope::NONE,
+            #[cfg(feature = "measurement")]
+            site: 0,
+        }
     }
-    /// Bind one explicit adapter to this context; null unbinds it.
+
+    /// The worker running this task.
+    #[inline(always)]
+    pub(crate) fn worker(&mut self) -> &mut Worker {
+        // SAFETY: a task's worker outlives its run on that worker, and only the task it runs
+        // reaches it through this borrow of the task's context.
+        unsafe { &mut *self.worker }
+    }
+    /// The running worker's heap.
+    #[inline(always)]
+    pub(crate) fn heap(&mut self) -> &mut Heap {
+        &mut self.worker().heap
+    }
+    /// The running worker's heap, read only.
+    #[inline(always)]
+    pub(crate) fn heap_ref(&self) -> &Heap {
+        // SAFETY: as for `worker`.
+        unsafe { &(*self.worker).heap }
+    }
+    /// The running worker's region pool.
+    #[inline(always)]
+    pub(crate) fn pool(&mut self) -> &mut RegionPool {
+        &mut self.worker().regions
+    }
+    /// The run this task belongs to.
+    #[inline(always)]
+    pub(crate) fn run(&mut self) -> &mut RunShared {
+        // SAFETY: the run outlives each of its tasks.
+        unsafe { &mut *self.run }
+    }
+    /// The run this task belongs to, read only.
+    #[inline(always)]
+    pub(crate) fn run_ref(&self) -> &RunShared {
+        // SAFETY: as for `run`.
+        unsafe { &*self.run }
+    }
+    /// The run's state, without borrowing the task's context.
+    pub(crate) fn run_ptr(&self) -> *mut RunShared {
+        self.run
+    }
+    /// The worker running this task, without borrowing the task's context: what a switch
+    /// hands to the next task.
+    pub(crate) fn worker_ptr(&self) -> *mut Worker {
+        self.worker
+    }
+
+    /// Switch-in: this task runs on `worker` from here on. Its view takes the worker's pages
+    /// (when stale) and counters, and the thread's running context and foreign scope become
+    /// its own.
     ///
     /// # Safety
-    /// The adapter outlives every release on this context. Close-handle may run only
+    /// `ctx` and `worker` are live; no other task is bound to `worker`.
+    #[inline(never)]
+    pub(crate) unsafe fn switch_in(ctx: *mut TaskCtx, worker: *mut Worker) {
+        // SAFETY: caller contract.
+        unsafe {
+            TaskCtx::attach(ctx, worker);
+            crate::stop::set_running(ctx);
+            crate::foreign::restore((*ctx).foreign);
+        }
+    }
+
+    /// Bind `ctx` to `worker`'s heap, as [`TaskCtx::switch_in`] does, leaving the thread's
+    /// running context and foreign scope alone: a context created outside its run's launcher.
+    ///
+    /// # Safety
+    /// As for [`TaskCtx::switch_in`].
+    unsafe fn attach(ctx: *mut TaskCtx, worker: *mut Worker) {
+        // SAFETY: caller contract.
+        unsafe {
+            (*ctx).worker = worker;
+            (*worker).heap.bind(&raw mut (*ctx).view);
+            #[cfg(feature = "measurement")]
+            {
+                (*worker).heap.measurement.active_site = (*ctx).site;
+            }
+        }
+    }
+
+    /// Switch-out: the running task leaves its worker. Its view's counters fold back into the
+    /// worker, and it keeps the thread's foreign scope until it is switched in again.
+    #[inline(never)]
+    pub(crate) fn switch_out(&mut self) {
+        self.heap().unbind();
+        #[cfg(feature = "measurement")]
+        {
+            self.site = std::mem::take(&mut self.heap().measurement.active_site);
+        }
+        self.foreign = crate::foreign::save();
+    }
+
+    /// Rebind a root context whose bytes a harness moved (swapped with another context's)
+    /// before its run started: its worker's binding names the old place.
+    ///
+    /// # Safety
+    /// `ctx` is a live root context of no started run.
+    #[doc(hidden)]
+    pub unsafe fn moved(ctx: *mut TaskCtx) {
+        // SAFETY: caller contract.
+        unsafe { TaskCtx::attach(ctx, (*ctx).worker) };
+    }
+
+    /// The task bound to this task's worker: the running one.
+    pub(crate) fn running(&self) -> *mut TaskCtx {
+        self.heap_ref().bound().cast()
+    }
+
+    /// Make this task the running one on its worker again, after a stop left another bound.
+    pub(crate) fn rebind(&mut self) {
+        let running = self.running();
+        if !std::ptr::eq(running, self) {
+            // SAFETY: the bound task's context is live until the run's tasks are dropped, and
+            // this one is the run's root.
+            unsafe {
+                (*running).switch_out();
+                let worker = self.worker;
+                TaskCtx::switch_in(self, worker);
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) unsafe fn descriptor(&self, index: u32) -> *const crate::Layout {
+        unsafe { self.heap_ref().descriptor(index) }
+    }
+    /// Bind one explicit adapter to this context's run; null unbinds it.
+    ///
+    /// # Safety
+    /// The adapter outlives every release on this run. Close-handle may run only
     /// while the adapter is bound. No simultaneous access to the adapter is allowed.
     pub unsafe fn bind_io_data(&mut self, data: *mut std::ffi::c_void) {
-        self.io_data = data;
+        self.run().io_data = data;
     }
     /// Apply the run's budgets (`budgets.limits@1`) before its entry runs.
     pub(crate) fn set_budgets(&mut self, fuel: Option<u64>, memory_bytes: Option<u64>) {
-        self.heap.compiled.fuel = fuel.map_or(i64::MAX, |f| i64::try_from(f).unwrap_or(i64::MAX));
-        self.heap.meter.set_limit(memory_bytes.unwrap_or(0));
+        let fuel = fuel.map_or(i64::MAX, |f| i64::try_from(f).unwrap_or(i64::MAX));
+        self.heap().set_fuel(fuel);
+        self.heap().meter.set_limit(memory_bytes.unwrap_or(0));
     }
     /// Retrieve the explicitly bound adapter; there is no ambient fallback.
     pub(crate) fn io_data(&self) -> *mut std::ffi::c_void {
-        self.io_data
+        self.run_ref().io_data
     }
 
     /// Read the diagnostic side state of a block owned by this context.
     /// # Safety
     /// The pointer names storage of this live diagnostic context (including free storage).
     pub unsafe fn diagnostic_state(&self, block: *mut crate::Header) -> u8 {
-        if !self.heap.diagnostic {
+        if !self.heap_ref().diagnostic {
             crate::fault("state inspection requires diagnostic mode");
         }
         if let Some(owner) = self
+            .run_ref()
             .region_owners
             .as_ref()
             .and_then(|owners| owners.get(&block.addr()))
@@ -187,33 +362,37 @@ impl RunCtx {
             }
             return crate::STATE_LIVE;
         }
-        unsafe { self.heap.state(block) }
+        unsafe { self.heap_ref().state(block) }
     }
 
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-    pub(crate) fn stats(&self) -> Stats {
-        let (live_blocks, live_bytes) = self.heap.live();
+    pub(crate) fn stats(&mut self) -> Stats {
+        let worker = self.worker();
+        let (live_blocks, live_bytes) = worker.heap.live();
+        let idle_slabs = worker.heap.view().idle_slabs;
         Stats {
-            backing_bytes: self.heap.backing_bytes()
-                + self.regions.active_bytes
-                + self.regions.idle_bytes,
-            backing_allocations: self.heap.backing_allocations + self.regions.backing_allocations,
-            slab_bytes: self.heap.slab_count * SLAB_SIZE as u64,
-            idle_slab_bytes: self.heap.compiled.idle_slabs * SLAB_SIZE as u64,
-            large_bytes: self.heap.large_bytes,
+            backing_bytes: worker.heap.backing_bytes()
+                + worker.regions.active_bytes
+                + worker.regions.idle_bytes,
+            backing_allocations: worker.heap.backing_allocations
+                + worker.regions.backing_allocations,
+            slab_bytes: worker.heap.slab_count * SLAB_SIZE as u64,
+            idle_slab_bytes: idle_slabs * SLAB_SIZE as u64,
+            large_bytes: worker.heap.large_bytes,
             live_blocks,
             live_bytes,
-            region_active_bytes: self.regions.active_bytes,
-            region_pool_bytes: self.regions.idle_bytes,
-            active_regions: self.regions.active_count,
-            immortalized_blocks: self.immortalized,
+            region_active_bytes: worker.regions.active_bytes,
+            region_pool_bytes: worker.regions.idle_bytes,
+            active_regions: worker.regions.active_count,
+            immortalized_blocks: worker.immortalized,
         }
     }
 
     /// A trim point: idle slabs and pooled region segments above their caps go back.
     pub(crate) fn trim(&mut self) {
-        self.regions.trim(REGION_POOL_IDLE_CAP);
-        self.heap.trim();
+        let worker = self.worker();
+        worker.regions.trim(REGION_POOL_IDLE_CAP);
+        worker.heap.trim();
     }
 
     /// Task exit: return all storage, live or idle, and report what was still held.
@@ -229,40 +408,43 @@ impl RunCtx {
         #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]
         let audit = Audit::default();
         #[cfg(feature = "measurement")]
-        if let Some(mut output) = self.measurement_output.take() {
+        if let Some(mut output) = self.run().measurement_output.take() {
             // Snapshot before forced teardown, so leaks remain visible in the counters.
-            self.heap
+            self.heap()
                 .measurement
                 .write(&mut output)
                 .unwrap_or_else(|_| crate::environmental("could not write the measurement report"));
-            if let Some(profile) = &self.mc_profile {
+            if let Some(profile) = &self.run_ref().mc_profile {
                 profile.write(output).unwrap_or_else(|_| {
                     crate::environmental("could not write the segment profile")
                 });
             }
         }
         #[cfg(feature = "measurement")]
-        if let Some(output) = self.profile_output.take() {
-            self.heap
+        if let Some(output) = self.run().profile_output.take() {
+            self.heap()
                 .measurement
                 .write_sites(output)
                 .unwrap_or_else(|_| crate::environmental("could not write the source profile"));
         }
-        if let Some(owners) = &mut self.region_owners {
+        if let Some(owners) = &mut self.run().region_owners {
             for owner in owners.values_mut() {
                 owner.active = false;
             }
         }
-        self.regions.release_all();
-        self.heap.release_all();
+        self.region = ptr::null_mut();
+        let worker = self.worker();
+        worker.regions.release_all();
+        worker.heap.release_all();
         self.failure.clear();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
-            self.immortalized = 0;
+            let worker = self.worker();
+            worker.immortalized = 0;
             return Audit {
-                retained_bytes: self.heap.backing_bytes()
-                    + self.regions.active_bytes
-                    + self.regions.idle_bytes,
+                retained_bytes: worker.heap.backing_bytes()
+                    + worker.regions.active_bytes
+                    + worker.regions.idle_bytes,
                 ..audit
             };
         }
@@ -272,24 +454,28 @@ impl RunCtx {
 
     /// A stopped run (`crate::stop`): forget its pending release work, failure chain, shield
     /// and active region, which belonged to frames that never resume, so the exit returns all
-    /// of its storage without running anything of the program.
+    /// of its storage without running anything of the program. The root becomes the running
+    /// task again, whichever task the stop left bound.
     pub(crate) fn abandon(&mut self) {
+        self.rebind();
         self.work = ptr::null_mut();
         self.shield = 0;
         self.failure.clear();
-        self.regions.active = ptr::null_mut();
+        self.region = ptr::null_mut();
     }
 
     /// Separately built correctness runtimes audit before forced storage reclamation.
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     #[inline(never)]
     pub(crate) fn exit_audit(&self) -> Audit {
-        let (live_blocks, live_bytes) = self.heap.live();
+        // SAFETY: as for `worker`.
+        let worker = unsafe { &*self.worker };
+        let (live_blocks, live_bytes) = worker.heap.live();
         Audit {
             live_blocks,
             live_bytes,
-            immortalized_blocks: self.immortalized,
-            active_regions: self.regions.active_count,
+            immortalized_blocks: worker.immortalized,
+            active_regions: worker.regions.active_count,
             retained_bytes: 0,
         }
     }
@@ -302,7 +488,7 @@ impl RunCtx {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
     config: *const Config,
-    out: *mut *mut RunCtx,
+    out: *mut *mut TaskCtx,
 ) -> u8 {
     // SAFETY: caller contract.
     let config = unsafe { *config };
@@ -344,24 +530,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
     let mut heap = Heap::new(layouts.into_boxed_slice(), diagnostic, idle_cap);
     // Diagnostic mode checks every dup and measurement counts it, so neither adds holders inline.
     if !diagnostic && !cfg!(feature = "measurement") {
-        heap.compiled.dup_max = count_max;
+        heap.set_dup_max(count_max);
     }
     let meter = heap.meter.clone();
-    let ctx = Box::new(RunCtx {
+    let worker = Box::into_raw(Box::new(Worker {
         heap,
-        work: ptr::null_mut(),
-        count_max,
-        shield: 0,
+        regions: RegionPool::new(meter),
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         immortalized: 0,
-        failure: FailureState::default(),
-        entry_result: None,
-        regions: RegionPool::new(meter),
+        idle_stacks: Vec::new(),
+        retired: None,
+    }));
+    let run = Box::into_raw(Box::new(RunShared {
+        count_max,
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,
         io_data: ptr::null_mut(),
         region_owners: None,
-        frozen: Vec::new(),
+        entry_result: None,
         tasks: None,
         driver: crate::stop::Driver::default(),
         failure_table: None,
@@ -372,8 +558,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         mc_profile: None,
         #[cfg(feature = "measurement")]
         profile_output: None,
-    });
-    unsafe { out.write(Box::into_raw(ctx)) };
+    }));
+    // The root task's context, which owns the worker and the run.
+    let ctx = Box::into_raw(Box::new(TaskCtx::new(worker, run)));
+    // SAFETY: both were just created, and the root is the worker's first task.
+    unsafe { TaskCtx::attach(ctx, worker) };
+    unsafe { out.write(ctx) };
     LAUNCH_OK
 }
 
@@ -383,7 +573,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
 /// `ctx` is live and `out` writable.
 #[unsafe(no_mangle)]
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-pub unsafe extern "C" fn hirsel_rt_v2_ctx_stats(ctx: *mut RunCtx, out: *mut Stats) {
+pub unsafe extern "C" fn hirsel_rt_v2_ctx_stats(ctx: *mut TaskCtx, out: *mut Stats) {
     unsafe { out.write((*ctx).stats()) };
 }
 
@@ -392,7 +582,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_stats(ctx: *mut RunCtx, out: *mut Stat
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_trim(ctx: *mut RunCtx) {
+pub unsafe extern "C" fn hirsel_rt_v2_trim(ctx: *mut TaskCtx) {
     unsafe { (*ctx).trim() };
 }
 
@@ -402,7 +592,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_trim(ctx: *mut RunCtx) {
 /// # Safety
 /// `ctx` is live with no release in progress; `out` is null or writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_task_exit(ctx: *mut RunCtx, out: *mut Audit) {
+pub unsafe extern "C" fn hirsel_rt_v2_task_exit(ctx: *mut TaskCtx, out: *mut Audit) {
     let audit = unsafe { (*ctx).exit() };
     if !out.is_null() {
         unsafe { out.write(audit) };
@@ -414,8 +604,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_exit(ctx: *mut RunCtx, out: *mut Audi
 /// # Safety
 /// `ctx` was created by `hirsel_rt_v2_ctx_create` and is not used again.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_ctx_destroy(ctx: *mut RunCtx) {
+pub unsafe extern "C" fn hirsel_rt_v2_ctx_destroy(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     let mut ctx = unsafe { Box::from_raw(ctx) };
     ctx.exit();
+    // SAFETY: the root context owns its run and worker, which nothing else uses any more. The
+    // run goes first: its tasks' contexts lie in the worker's stacks.
+    unsafe {
+        drop(Box::from_raw(ctx.run));
+        drop(Box::from_raw(ctx.worker));
+    }
 }

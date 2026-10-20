@@ -119,7 +119,7 @@ pub struct FnAbi {
     pub key: FnAbiKey,
     pub shape: CallableShape,
     pub multiplicity: CallMultiplicity,
-    /// Hidden `RunCtx*`; always present on Hirsel entries.
+    /// Hidden `TaskCtx*`; always present on Hirsel entries.
     pub context: bool,
     pub environment: bool,
     /// Two hidden inert u64 codes: inherited attribution and actual source invocation.

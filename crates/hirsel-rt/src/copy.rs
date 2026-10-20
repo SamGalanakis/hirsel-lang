@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::ptr;
 
 use crate::alloc::{DOMAIN_HEAP, Header, payload};
-use crate::context::RunCtx;
+use crate::context::TaskCtx;
 use crate::count::check_live_block;
 use crate::region::{ALLOC_TRACKED, Region, is_tracked, tracked_region};
 use crate::release::{
@@ -53,7 +53,7 @@ use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 /// A new block of `original`'s layout, capacity and alignment holding its bytes, with one
 /// holder: in `destination`, a tracked arena block when `tracked`.
 unsafe fn clone_block(
-    ctx: &mut RunCtx,
+    ctx: &mut TaskCtx,
     original: *mut Header,
     destination: *mut Region,
     tracked: bool,
@@ -63,7 +63,7 @@ unsafe fn clone_block(
         if (*ctx.descriptor((*original).index())).finalizer.is_some() {
             fault("a unique copy reached a resource, which is noncopyable");
         }
-        let (capacity, mut align) = ctx.heap.usable(original);
+        let (capacity, mut align) = ctx.heap().usable(original);
         // Fixed arena blocks omit extent metadata and use exactly the descriptor size.
         let layout = &*ctx.descriptor((*original).index());
         let capacity = if !destination.is_null() && layout.flags & crate::LAYOUT_NO_EXTENT != 0 {
@@ -74,10 +74,10 @@ unsafe fn clone_block(
         };
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("copied_blocks", 1);
-            ctx.heap.measurement.copied_blocks += 1;
-            ctx.heap.measurement.record("copied_bytes", capacity);
-            ctx.heap.measurement.copied_bytes += capacity;
+            ctx.heap().measurement.record("copied_blocks", 1);
+            ctx.heap().measurement.copied_blocks += 1;
+            ctx.heap().measurement.record("copied_bytes", capacity);
+            ctx.heap().measurement.copied_bytes += capacity;
         }
         let copy = if destination.is_null() {
             crate::alloc::hirsel_rt_v2_alloc(
@@ -248,7 +248,7 @@ impl Copies {
 /// directly or not, or `track` is false for the root's. A tracked copy whose layout has a drop
 /// program is scheduled for the arena's exit, since pushes may move heap credits into it.
 unsafe fn copy_graph(
-    raw: *mut RunCtx,
+    raw: *mut TaskCtx,
     destination: *mut Region,
     first: Option<bool>,
     track: bool,
@@ -259,10 +259,10 @@ unsafe fn copy_graph(
         let ctx = &mut *raw;
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("deep_copies", 1);
-            ctx.heap.measurement.deep_copies += 1;
+            ctx.heap().measurement.record("deep_copies", 1);
+            ctx.heap().measurement.deep_copies += 1;
         }
-        let diagnostic = ctx.heap.diagnostic;
+        let diagnostic = ctx.heap().diagnostic;
         let mut copies = Copies::default();
         // Each copy with holders still to walk, and whether the sequences below it are tracked.
         let pending: RefCell<Vec<(*mut Header, bool)>> = RefCell::new(Vec::new());
@@ -368,7 +368,7 @@ unsafe fn logical_count(layout: &Layout, at: *const u8) -> u64 {
 }
 
 /// The MEM-6 charge of one block: its descriptor's logical size, per element times its count.
-pub(crate) unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
+pub(crate) unsafe fn block_charge(ctx: &TaskCtx, block: *mut Header) -> u64 {
     // SAFETY: `block` is a live block of a descriptor of `ctx`.
     unsafe {
         let layout = &*ctx.descriptor((*block).index());
@@ -386,7 +386,7 @@ pub(crate) unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
 
 /// The MEM-6 charge of the tree whose holder slots `root` visits: every block once per
 /// reference to it, each block's subtree charged once and memoized, without recursion.
-unsafe fn tree_charge(ctx: &RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) -> u64 {
+unsafe fn tree_charge(ctx: &TaskCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) -> u64 {
     // SAFETY: caller contract of the entries below.
     unsafe {
         let child = |slot: *mut u8| slot.cast::<*mut Header>().read_unaligned();
@@ -433,7 +433,7 @@ unsafe fn tree_charge(ctx: &RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) 
 
 /// Take a deep copy's charge from a bounded destination; false when it exceeds the budget.
 unsafe fn charge_copy(
-    ctx: &RunCtx,
+    ctx: &TaskCtx,
     destination: *mut Region,
     root: impl FnOnce(&mut dyn FnMut(*mut u8)),
 ) -> bool {
@@ -466,7 +466,7 @@ unsafe fn charge_copy(
 /// `out_block` writable; `destination` is null or an active arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     destination: *mut Region,
     flags: u32,
@@ -475,7 +475,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
-        if (*ctx).heap.diagnostic {
+        if (*ctx).heap().diagnostic {
             check_live_block(&*ctx, block);
         }
         let charged = charge_copy(&*ctx, destination, |visit| {
@@ -497,7 +497,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
         {
             #[cfg(feature = "measurement")]
             {
-                let measurement = &mut (*ctx).heap.measurement;
+                let measurement = &mut (*ctx).heap().measurement;
                 measurement.record("deep_copies", 1);
                 measurement.deep_copies += 1;
             }
@@ -534,7 +534,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
 /// `destination` is null (heap) or an active arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     index: u32,
     value: *mut u8,
     destination: *mut Region,
@@ -564,7 +564,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
 /// `ctx` is live, `block` a live sequence block that is not unique, of which the caller holds
 /// one credit, with `used` initialized payload bytes; `extent` is at least `used`.
 pub(crate) unsafe fn detach_sized(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     used: u64,
     extent: u64,
@@ -576,21 +576,21 @@ pub(crate) unsafe fn detach_sized(
         let ctx = &mut *ctx;
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("cow_detaches", 1);
-            ctx.heap.measurement.cow_detaches += 1;
-            ctx.heap.measurement.record("copied_blocks", 1);
-            ctx.heap.measurement.copied_blocks += 1;
-            ctx.heap.measurement.record("copied_bytes", used);
-            ctx.heap.measurement.copied_bytes += used;
+            ctx.heap().measurement.record("cow_detaches", 1);
+            ctx.heap().measurement.cow_detaches += 1;
+            ctx.heap().measurement.record("copied_blocks", 1);
+            ctx.heap().measurement.copied_blocks += 1;
+            ctx.heap().measurement.record("copied_bytes", used);
+            ctx.heap().measurement.copied_bytes += used;
         }
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(&*ctx, block);
         }
         if (*ctx.descriptor((*block).index())).finalizer.is_some() {
             fault("a detach reached a resource, which is noncopyable");
         }
-        let (copy, capacity) = ctx.heap.allocate((*block).index(), extent, align);
-        if ctx.heap.diagnostic {
+        let (copy, capacity) = ctx.heap().allocate((*block).index(), extent, align);
+        if ctx.heap().diagnostic {
             ptr::write_bytes(
                 payload(copy),
                 crate::alloc::UNINIT_POISON,
@@ -598,7 +598,7 @@ pub(crate) unsafe fn detach_sized(
             );
         }
         ptr::copy_nonoverlapping(payload(block), payload(copy), used as usize);
-        let diagnostic = ctx.heap.diagnostic;
+        let diagnostic = ctx.heap().diagnostic;
         holders(
             ctx.descriptor((*copy).index()),
             payload(copy),
@@ -630,7 +630,7 @@ pub(crate) unsafe fn detach_sized(
 /// `out_block` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_detach(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     block: *mut Header,
     _site: u64,
     out_block: *mut *mut Header,
@@ -641,10 +641,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_detach(
         let ctx = &mut *ctx;
         #[cfg(feature = "measurement")]
         {
-            ctx.heap.measurement.record("cow_detaches", 1);
-            ctx.heap.measurement.cow_detaches += 1;
+            ctx.heap().measurement.record("cow_detaches", 1);
+            ctx.heap().measurement.cow_detaches += 1;
         }
-        if ctx.heap.diagnostic {
+        if ctx.heap().diagnostic {
             check_live_block(&*ctx, block);
         }
         let tracked = is_tracked(block);
@@ -667,7 +667,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_detach(
 /// # Safety
 /// As [`hirsel_rt_v2_detach`]; `region` is `block`'s tracked arena when `tracked`.
 pub(crate) unsafe fn copy_held(
-    raw: *mut RunCtx,
+    raw: *mut TaskCtx,
     block: *mut Header,
     region: *mut Region,
     tracked: bool,
@@ -676,7 +676,7 @@ pub(crate) unsafe fn copy_held(
     unsafe {
         let ctx = &mut *raw;
         let copy = clone_block(ctx, block, region, tracked);
-        let diagnostic = ctx.heap.diagnostic;
+        let diagnostic = ctx.heap().diagnostic;
         holders(
             ctx.descriptor((*copy).index()),
             payload(copy),

@@ -18,17 +18,17 @@ use hirsel_rt::finalize::{
     hirsel_rt_v2_finalize_end, hirsel_rt_v2_shielded,
 };
 use hirsel_rt::release::hirsel_rt_v2_release;
-use hirsel_rt::{Cleanup, DOMAIN_HEAP, FailureRecord, Header, LAYOUT_UNSAFE_FFI, Layout, RunCtx};
+use hirsel_rt::{Cleanup, DOMAIN_HEAP, FailureRecord, Header, LAYOUT_UNSAFE_FFI, Layout, TaskCtx};
 use support::*;
 
-fn node(ctx: *mut RunCtx, layout: &Layout, id: u64) -> *mut Header {
+fn node(ctx: *mut TaskCtx, layout: &Layout, id: u64) -> *mut Header {
     let block =
         unsafe { hirsel_rt_v2_alloc(ctx, index(ctx, layout), layout.size, 8, DOMAIN_HEAP, 0) };
     write_u64(block, 0, id);
     block
 }
 
-fn release(ctx: *mut RunCtx, block: *mut Header) -> u8 {
+fn release(ctx: *mut TaskCtx, block: *mut Header) -> u8 {
     unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0, 0) }
 }
 
@@ -160,7 +160,7 @@ thread_local! {
 }
 
 unsafe extern "C" fn shield_probe(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     _value: *mut u8,
     _anchor: u64,
     _operation_site: u64,
@@ -211,7 +211,7 @@ thread_local! {
 /// An Io adapter's close thunk: handle 13 fails, recording rule 77 at the anchor; any other
 /// handle closes. It notes the handle, the anchor and whether it ran shielded.
 unsafe extern "C" fn close_probe(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     handle: u64,
     anchor: u64,
     _operation_site: u64,
@@ -259,7 +259,7 @@ thread_local! {
 
 /// A finalizer whose body releases a block it owns, as user drop code may.
 unsafe extern "C" fn releasing_drop(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,
@@ -391,7 +391,7 @@ fn a_failing_unsafe_ffi_field_ends_the_process_even_inside_a_safe_value() {
 }
 
 unsafe extern "C" fn bad_status_drop(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _value: *mut u8,
     _anchor: u64,
     _operation_site: u64,
@@ -413,7 +413,7 @@ fn a_finalizer_status_other_than_zero_or_one_is_an_invariant_fault() {
 }
 
 unsafe extern "C" fn silent_failure_drop(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _value: *mut u8,
     _anchor: u64,
     _operation_site: u64,

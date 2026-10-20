@@ -40,7 +40,7 @@ use crate::io_real::RealIo;
 use crate::io_sim::SimIo;
 use crate::net::NetRule;
 use crate::program::{Code, Program, ProgramDescriptor};
-use crate::{ABI_VERSION, Layout, RunCtx, STATUS_FAILURE, STATUS_OK};
+use crate::{ABI_VERSION, Layout, STATUS_FAILURE, STATUS_OK, TaskCtx};
 use hirsel_run_config::{RunOutcome, hex};
 use std::cell::RefCell;
 use std::fmt::Write as _;
@@ -56,17 +56,17 @@ pub const IO_HANDLE: u64 = 1;
 pub const ARGS_HANDLE: u64 = 0;
 /// Sole root of a Test launch; its recorded seed is an explicit launcher input.
 pub(crate) const TEST_HANDLE: u64 = 1;
-pub type TestEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *const u64) -> u8;
+pub type TestEntry = unsafe extern "C" fn(*mut TaskCtx, *mut u8, *mut u8, *const u64) -> u8;
 /// A root-free entry, with only the ordinary hidden context and result addresses.
-pub type ZeroEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8) -> u8;
+pub type ZeroEntry = unsafe extern "C" fn(*mut TaskCtx, *mut u8, *mut u8) -> u8;
 /// Uniform compiler-generated adapter: roots are [Io, Args, Env, Unsafe, Test].
-pub type RootsEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *mut u64) -> u8;
+pub type RootsEntry = unsafe extern "C" fn(*mut TaskCtx, *mut u8, *mut u8, *mut u64) -> u8;
 /// The largest inline result an entry may return.
 pub const RESULT_MAX: u64 = 64;
 
 /// A compiled entry at the Hirsel ABI v2 (module documentation).
 pub type Entry = unsafe extern "C" fn(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     destination: *mut u8,
     out: *mut u8,
     rt: *const u64,
@@ -1782,7 +1782,7 @@ pub(crate) unsafe fn execute(
             .code()
             .and_then(hirsel_kernels::schedule::Algorithm::from_code)
             .unwrap_or_else(|| crate::fault("an unsupported validated scheduler"));
-        unsafe { &mut *ctx }.schedule =
+        unsafe { &mut *ctx }.run().schedule =
             hirsel_kernels::schedule::Schedule::new(algorithm, scheduler.seed);
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
@@ -1822,7 +1822,7 @@ pub(crate) unsafe fn execute(
             #[cfg(feature = "measurement")]
             {
                 if measurement_segments {
-                    (*ctx).mc_profile = Some(Default::default());
+                    (*ctx).run().mc_profile = Some(Default::default());
                     crate::tasks::profile::resume(ctx);
                 }
             }
@@ -1849,7 +1849,7 @@ pub(crate) unsafe fn execute(
                 ),
             };
             if status == STATUS_OK
-                && let Some(returned) = (*ctx).entry_result.take()
+                && let Some(returned) = (*ctx).run().entry_result.take()
             {
                 let report = (|| -> Result<(), String> {
                     echo_replay()?;

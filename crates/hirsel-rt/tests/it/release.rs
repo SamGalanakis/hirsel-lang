@@ -10,17 +10,17 @@ use hirsel_rt::count::hirsel_rt_v2_dup;
 use hirsel_rt::failure::{hirsel_rt_v2_failure_active, hirsel_rt_v2_failure_clear};
 use hirsel_rt::release::{hirsel_rt_v2_release, hirsel_rt_v2_reset};
 use hirsel_rt::{
-    COUNT_IMMORTAL, DOMAIN_HEAP, Header, Layout, RunCtx, STATE_LIVE, STATE_RAW, STEP_NONNULL,
-    STEP_RELEASE_LAST, Step, WHOLE_VALUE,
+    COUNT_IMMORTAL, DOMAIN_HEAP, Header, Layout, STATE_LIVE, STATE_RAW, STEP_NONNULL,
+    STEP_RELEASE_LAST, Step, TaskCtx, WHOLE_VALUE,
 };
 use support::*;
 
-fn alloc(ctx: *mut RunCtx, layout: &Layout, extent: u64) -> *mut Header {
+fn alloc(ctx: *mut TaskCtx, layout: &Layout, extent: u64) -> *mut Header {
     let block = unsafe { hirsel_rt_v2_alloc(ctx, index(ctx, layout), extent, 8, DOMAIN_HEAP, 0) };
     block
 }
 
-fn release(ctx: *mut RunCtx, block: *mut Header, mask: Option<&[u64]>) -> u8 {
+fn release(ctx: *mut TaskCtx, block: *mut Header, mask: Option<&[u64]>) -> u8 {
     let layout = unsafe { (*block).index() };
     let mask = mask.map_or(ptr::null(), <[u64]>::as_ptr);
     unsafe { hirsel_rt_v2_release(ctx, block, layout, mask, 77, 77) }
@@ -43,13 +43,13 @@ fn logged_pair() -> &'static Layout {
     )
 }
 
-fn node(ctx: *mut RunCtx, layout: &Layout, id: u64) -> *mut Header {
+fn node(ctx: *mut TaskCtx, layout: &Layout, id: u64) -> *mut Header {
     let block = alloc(ctx, layout, layout.size);
     write_u64(block, 0, id);
     block
 }
 
-struct SendCtx(*mut RunCtx, *mut Header);
+struct SendCtx(*mut TaskCtx, *mut Header);
 unsafe impl Send for SendCtx {}
 
 #[test]
@@ -192,7 +192,7 @@ fn a_released_tree_returns_its_storage_in_the_order_it_is_built() {
         vec![tag_step(0, 1, 2), release_step(1, 16), release_step(0, 8)],
     );
     fn build(
-        ctx: *mut RunCtx,
+        ctx: *mut TaskCtx,
         node: &Layout,
         depth: u32,
         order: &mut Vec<*mut Header>,

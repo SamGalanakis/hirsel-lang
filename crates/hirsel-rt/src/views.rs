@@ -2,7 +2,7 @@
 //!
 //! The cursor retains the complete borrowed slice. Its relative byte position
 //! preserves StrPos provenance even when the slice starts inside another slice.
-use crate::{Header, RunCtx, STATUS_OK, alloc::payload, fault};
+use crate::{Header, STATUS_OK, TaskCtx, alloc::payload, fault};
 
 /// The physical String/Bytes/view value; the owner credit is held by the caller.
 #[repr(C)]
@@ -63,7 +63,7 @@ macro_rules! open {
         /// until the cursor's last use. The destination is the unused ABI word.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(
-            _ctx: *mut RunCtx,
+            _ctx: *mut TaskCtx,
             _destination: *mut std::ffi::c_void,
             out: *mut ViewCursor,
             owner: *mut Header,
@@ -91,7 +91,7 @@ open!(hirsel_rt_v2_scalar_positions_open);
 /// Context, output and exclusive cursor address are live; its borrowed view is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_unicode_scalars_next(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _destination: *mut std::ffi::c_void,
     out: *mut ScalarOption,
     cursor: *mut ViewCursor,
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unicode_scalars_next(
 /// Context, output and exclusive cursor address are live; its borrowed view is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_scalar_positions_next(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     _destination: *mut std::ffi::c_void,
     out: *mut PositionOption,
     cursor: *mut ViewCursor,

@@ -14,7 +14,7 @@ use hirsel_lir::layout_types::{
 };
 use hirsel_lir::layout_validate::validate_table;
 use hirsel_lir::rt_program::{self, Descriptor, StepKind};
-use hirsel_rt::{Config, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx, Step};
+use hirsel_rt::{Config, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, Step, TaskCtx};
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{Layout as Promises, TypeId, TypeStore};
@@ -121,7 +121,7 @@ pub fn fail_at(addresses: Vec<u64>) {
 /// The finalizer of every derived resource and of leaf blocks: logs the value's address and,
 /// when told to, fails with rule 100 + its position in the [`fail_at`] list.
 pub unsafe extern "C" fn log_address(
-    ctx: *mut RunCtx,
+    ctx: *mut TaskCtx,
     value: *mut u8,
     anchor: u64,
     _operation_site: u64,
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn log_address(
 
 /// The Io adapter's handle close: logs the handle.
 pub unsafe extern "C" fn log_close(
-    _ctx: *mut RunCtx,
+    _ctx: *mut TaskCtx,
     handle: u64,
     _anchor: u64,
     _operation_site: u64,

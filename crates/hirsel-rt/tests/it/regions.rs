@@ -16,7 +16,8 @@ use hirsel_rt::region::{
     hirsel_rt_v2_region_reserve, hirsel_rt_v2_region_schedule,
 };
 use hirsel_rt::{
-    Audit, Builder, DOMAIN_HEAP, Header, Layout, REGION_POOL_IDLE_CAP, Region, RunCtx, SEGMENT_SIZE,
+    Audit, Builder, DOMAIN_HEAP, Header, Layout, REGION_POOL_IDLE_CAP, Region, SEGMENT_SIZE,
+    TaskCtx,
 };
 use support::*;
 
@@ -39,7 +40,7 @@ fn exit(ctx: &Ctx, region: &mut Region) -> u8 {
     unsafe { hirsel_rt_v2_region_exit(ctx.0, region, 0, 0) }
 }
 
-fn node(ctx: *mut RunCtx, layout: &Layout, id: u64) -> *mut Header {
+fn node(ctx: *mut TaskCtx, layout: &Layout, id: u64) -> *mut Header {
     let block =
         unsafe { hirsel_rt_v2_alloc(ctx, index(ctx, layout), layout.size, 8, DOMAIN_HEAP, 0) };
     write_u64(block, 0, id);
