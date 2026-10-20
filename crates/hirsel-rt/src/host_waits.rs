@@ -272,7 +272,15 @@ pub(crate) unsafe fn issue_net(
     match binding.adapter.net_io(token, net, stream, inline, buffer) {
         None => return Ok(None),
         Some(Err(AdapterError::Blocked)) => {}
-        Some(result) => return Ok(Some((result, false))),
+        Some(result) => {
+            // The root already proved no peer, host wait, deadline or free-mode
+            // point needs a yield. Keep the diagnostic point without redoing it.
+            #[cfg(feature = "diagnostic")]
+            if inline {
+                unsafe { crate::root_trace::point(&mut *ctx) };
+            }
+            return Ok(Some((result, inline)));
+        }
     }
     let request = buffer.request(net, stream);
     binding.waits.parked.insert(

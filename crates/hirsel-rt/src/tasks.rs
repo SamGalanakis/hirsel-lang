@@ -1254,7 +1254,7 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
 /// with multiple compute workers or forced migration must disable this helper.
 /// Free-mode points must always reach their recording policy.
 unsafe fn single_worker_fast_path(ctx: *mut TaskCtx) -> bool {
-    !crate::pool::on_pool() && unsafe { (*ctx).run().free.is_none() }
+    unsafe { (*ctx).run().free.is_none() }
 }
 
 /// Whether the running root is the run's only possible runnable task. The
@@ -1298,7 +1298,7 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
-    if unsafe { single_worker_fast_path(ctx) } {
+    if !crate::pool::on_pool() && unsafe { single_worker_fast_path(ctx) } {
         let s = scheduler(ctx);
         if s.tasks.len() == 1
             && s.runnable.is_empty()

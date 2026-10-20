@@ -802,6 +802,9 @@ struct Ticket {
 /// and group commit of `Prepared` records for requests that may park.
 pub struct Journaled {
     journal: Box<dyn Journal>,
+    /// The default has no destination. An installed journal retains its dynamic
+    /// records() contract, even when that contract changes during a run.
+    absent: bool,
     next: u64,
     issues: BTreeMap<Vec<u32>, u64>,
     issuer: Vec<u32>,
@@ -817,13 +820,16 @@ pub struct Journaled {
 }
 impl Default for Journaled {
     fn default() -> Self {
-        Self::new(Box::new(NoJournal))
+        let mut gate = Self::new(Box::new(NoJournal));
+        gate.absent = true;
+        gate
     }
 }
 impl Journaled {
     pub fn new(journal: Box<dyn Journal>) -> Self {
         Self {
             journal,
+            absent: false,
             next: 0,
             issues: BTreeMap::new(),
             issuer: vec![],
@@ -839,7 +845,7 @@ impl Journaled {
         self.failed.get_or_insert(error);
     }
     pub fn records(&self) -> bool {
-        self.journal.records()
+        !self.absent && self.journal.records()
     }
     pub fn durable(&self) -> bool {
         self.journal.durable()
