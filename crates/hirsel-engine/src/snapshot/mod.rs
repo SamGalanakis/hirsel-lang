@@ -7,13 +7,15 @@
 use crate::memo::Revision;
 use crate::*;
 use hirsel_syntax::{DefId, DefMap, PackageId};
-use hirsel_types::{SignatureRef, TypeInterner};
+use hirsel_types::{LookupOutput, SignatureRef, TypeInterner};
 use hirsel_validate::{SignatureLookup, ValidatedSignatures, ValidationDigest};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod declarations;
+mod provider;
 mod views;
+pub use provider::FrozenProvider;
 pub(crate) use declarations::header_hash;
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
 
@@ -31,6 +33,18 @@ pub struct SignatureSnapshot {
     /// Each package with private views, as its bodies see the universe.
     packages: BTreeMap<PackageId, PackageViews>,
     validated: ValidatedSignatures,
+    /// What lookups resolve against, frozen with the signatures.
+    lookup: LookupInput,
+}
+/// A snapshot's lookup input: the provider manifest hash every lookup
+/// observes, the registry a bare name falls back to, the source builtins and
+/// each definition's `DeclarationCandidates`.
+#[derive(Clone, Default)]
+pub(crate) struct LookupInput {
+    pub manifest: ContentHash,
+    pub registry: crate::registry::BuiltinRegistry,
+    pub builtins: std::collections::BTreeSet<DefId>,
+    pub candidates: DefMap<ContentHash>,
 }
 const _: () = {
     const fn shared<T: Send + Sync>() {}
@@ -89,7 +103,45 @@ impl SignatureSnapshot {
             views,
             packages,
             validated,
+            lookup: LookupInput::default(),
         }
+    }
+    pub(crate) fn with_lookup(mut self, lookup: LookupInput) -> Self {
+        self.lookup = lookup;
+        self
+    }
+    /// Resolve a provider lookup as the engine's provider does: a path naming
+    /// a definition this snapshot holds (or a source builtin), else a bare
+    /// registry name. The output carries the manifest hash it was read under.
+    pub fn lookup(&self, context: &FileContext, path: &hirsel_syntax::Path) -> LookupOutput {
+        let result = (|| {
+            if path
+                .segments
+                .iter()
+                .any(|segment| segment.as_str().starts_with('$'))
+            {
+                return Err(QueryError::NotImplemented);
+            }
+            let definition =
+                crate::queries::lookup_path(context, path).ok_or(QueryError::NotImplemented)?;
+            let d = DefId::intern(&definition);
+            if self.signatures.contains_key(&d) || self.lookup.builtins.contains(&d) {
+                Ok(definition)
+            } else {
+                self.lookup
+                    .registry
+                    .lookup_name(path)
+                    .ok_or(QueryError::NotImplemented)
+            }
+        })();
+        LookupOutput {
+            manifest: self.lookup.manifest,
+            result,
+        }
+    }
+    /// `DeclarationCandidates(d)` at this snapshot's revision.
+    pub fn declaration_candidates(&self, d: DefId) -> Option<ContentHash> {
+        self.lookup.candidates.get(&d).copied()
     }
     pub fn epoch(&self) -> Revision {
         self.epoch
@@ -197,13 +249,31 @@ impl QueryEngine {
         }
         self.snapshot_epoch = self.snapshot_epoch.next();
         let previous = self.snapshot.as_ref().map(|(_, s)| s.clone());
+        let lookup = LookupInput {
+            manifest: ContentHash::of_parts(
+                "hirsel.provider.registry.v1",
+                [
+                    self.manifest_revision().0.as_slice(),
+                    self.registry.revision().0.as_slice(),
+                ],
+            ),
+            registry: self.registry.clone(),
+            builtins: self.builtins.keys().map(DefId::intern).collect(),
+            candidates: self
+                .items
+                .keys()
+                .filter_map(|path| {
+                    Some((DefId::intern(path), self.declarations.candidates(path)?))
+                })
+                .collect(),
+        };
         let snapshot = Arc::new(SignatureSnapshot::new(
             self.snapshot_epoch,
             self.types.clone(),
             signatures,
             private,
             previous.as_deref(),
-        ));
+        ).with_lookup(lookup));
         if complete {
             self.snapshot = Some((stamp, snapshot.clone()));
         }
@@ -272,4 +342,91 @@ pub(crate) struct SnapshotStamp {
     environment: QueryEnvironment,
     manifest: Option<ContentHash>,
     unavailable: Option<QueryKind>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memo::{ReadKey, ReadsBuilder};
+    use hirsel_types::{SignatureKind, SignatureProvider, Type, TypeKind};
+
+    fn constant(t: &TypeInterner, name: &str, primitive: hirsel_types::Primitive) -> SignatureRef {
+        let mut path = DefPath::core("snapshot_test");
+        path.0.name = name.into();
+        Arc::new(hirsel_types::Signature {
+            metadata: Default::default(),
+            definition: DefId::intern(&path),
+            kind: SignatureKind::Const {
+                ty: t.intern(Type::with_kind(TypeKind::Primitive(primitive))),
+                generics: Default::default(),
+            },
+            fingerprint: ContentHash::of_bytes(name.as_bytes()),
+        })
+    }
+
+    /// Eight workers read one snapshot through their own `FrozenProvider`s
+    /// with no lock, each recording the same typed reads.
+    #[test]
+    fn eight_workers_read_one_snapshot_and_record_the_same_reads() {
+        let types = TypeInterner::new(None);
+        let signatures: Vec<SignatureRef> = (0..64)
+            .map(|i| constant(&types, &format!("c{i}"), hirsel_types::Primitive::U64))
+            .collect();
+        let snapshot = Arc::new(SignatureSnapshot::new(
+            Revision::from_u64(1),
+            types.clone(),
+            signatures.iter().map(|s| (s.definition, Ok(s.clone()))),
+            [],
+            None,
+        ));
+        let owner = signatures[0].definition.path().0.package.clone();
+        let reads = hirsel_intern::jobs::map(
+            hirsel_intern::jobs::Jobs::new(8),
+            (0..8).collect::<Vec<usize>>(),
+            |_| 1,
+            |_| {
+                let mut reads = ReadsBuilder::new();
+                let mut provider = FrozenProvider::new(&snapshot, owner.clone(), &mut reads);
+                for signature in &signatures {
+                    let read = provider.signature(signature.definition).unwrap();
+                    assert!(Arc::ptr_eq(&read, signature));
+                    provider.validation_view(signature.definition).unwrap();
+                }
+                provider.universe_errors();
+                reads.finish().unwrap()
+            },
+        );
+        assert_eq!(reads.len(), 8);
+        assert!(reads.iter().all(|r| r == &reads[0]));
+        assert!(reads[0].iter().any(|(key, value)| {
+            *key == ReadKey::Signature(signatures[3].definition)
+                && *value == signatures[3].fingerprint
+        }));
+    }
+
+    /// A missing signature is a recorded negative read, so a later
+    /// revision that adds the definition invalidates the reader.
+    #[test]
+    fn a_missing_signature_is_a_recorded_failed_read() {
+        let types = TypeInterner::new(None);
+        let present = constant(&types, "present", hirsel_types::Primitive::U32);
+        let absent = constant(&types, "absent", hirsel_types::Primitive::U32);
+        let snapshot = SignatureSnapshot::new(
+            Revision::from_u64(1),
+            types,
+            [(present.definition, Ok(present.clone()))],
+            [],
+            None,
+        );
+        let mut reads = ReadsBuilder::new();
+        let package = present.definition.path().0.package.clone();
+        let mut provider = FrozenProvider::new(&snapshot, package, &mut reads);
+        assert!(provider.signature(absent.definition).is_err());
+        let reads = reads.finish().unwrap();
+        assert!(
+            reads
+                .iter()
+                .any(|(key, _)| *key == ReadKey::FailedSignature(absent.definition))
+        );
+    }
 }

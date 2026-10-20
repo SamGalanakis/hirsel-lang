@@ -152,7 +152,7 @@ pub struct QueryEngine {
     detached: Vec<Arc<ItemSyntax>>,
     parsed: Layered<FileId, ParsedFile>,
     pub(crate) registry: crate::registry::BuiltinRegistry,
-    builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
+    pub(crate) builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: Layered<(DefPath, QueryKind), DefinitionKey>,
     signatures: Layered<DefPath, Arc<Cached<hirsel_types::SignatureRef>>>,
     resolutions: Layered<DefPath, Arc<Cached<Resolution>>>,
@@ -1954,7 +1954,7 @@ impl SignatureProvider for Recorder<'_> {
         self.group_at(definition, stage)
     }
 }
-fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
+pub(crate) fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
     let mut segments: Vec<_> = path
         .segments
         .iter()
