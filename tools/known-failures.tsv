@@ -7,3 +7,7 @@ hirsel-modes-unittest::ownership::tests::corpus::source_corpus_ratchets_rule_and
 hirsel-pipeline-tests-test-rc::rc_library_sorted::sorted_map_corpus_controls_agree_and_pass_terminal_failure_audits	c24c7b38 rewrote DROP-2-sorted-map-replaced-value to the unresolved u32_maps facade spelling	facade-controls	2026-10-20
 hirsel-conformance-test-spec_links::every_relative_spec_link_resolves	c7901859 added docs/concurrent-agents.md without adding it to the test data	spec-links-docs	2026-10-20
 gate-perf-counts	native micro counts improved 1-7% beyond the symmetric 1% baseline tolerance after runtime landings; baseline re-bless pending	perf-rebless	2026-10-20
+conformance/SEM/SEM-3-yaml-edit-crlf-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
+conformance/SEM/SEM-3-yaml-edit-explicit-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
+conformance/SEM/SEM-3-yaml-edit-merge-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
+conformance/FAIL/FAIL-4-mutex-payload-drop-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
