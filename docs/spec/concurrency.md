@@ -18,16 +18,19 @@ implementation's choice.
 
 ### CONC-2: Tasks
 
-The core operations are `task.scope(tasks, body)`, `task.async(s, take f) -> Task[R] of s`,
-`task.await(s, take h)`, `task.cancel(s, h)` and `task.detach(s, take h)`. The scope body is
-once and may take owned values; children cannot outlive it. A normal exit waits for
-unawaited children; an error or failure exit cancels them, then joins. A child may start
-inline, but then runs only until its first suspension. Every task handle is awaited or
-explicitly detached; detaching discards the result but never lets the child outlive its
-scope. Detached completion releases its result and scheduling metadata without waiting
-for scope exit; an already-completed result is discarded by `detach`. A detached child's
+The core operations are `task.scope(tasks, body)`, `task.async(s, take f) -> Task[R] of
+s`, `task.await(s, take h)`, `task.cancel(s, h)` and `task.detach(s, take h)`. The scope
+body is once and may take owned values; children cannot outlive it. A normal exit waits
+for unawaited children; an error or failure exit cancels them, then joins. A child may
+start inline, but then runs only until its first suspension. Every task handle is awaited
+or explicitly detached; detaching discards the result but never lets the child outlive its
+scope. Detached completion releases its result and scheduling metadata without waiting for
+scope exit; an already-completed result is discarded by `detach`. A detached child's
 failure still belongs to the scope and is ordered with other child failures by spawn
-order. Foreign functions declared `@blocking` run on a bounded synchronous pool.
+order. Foreign functions declared `@blocking` run on a bounded synchronous pool, except a
+call to a `home` package, which runs on the admission thread, and a nested call, which
+runs on its enclosing call's thread. See [PROG-4](programs.md#prog-4-interop) for the
+trusted package threading declaration.
 
 A task set collects handles of one scope: `task.set(s)` creates an empty `TaskSet[R] of s`,
 and `task.add(s, mut set, take h)` moves `h` in as its next member. `task.await_any(s, set)`
@@ -90,39 +93,44 @@ and only then observes deadlines and provider outcomes (including resets, I/O er
 Nonblocking grant projections and clock sampling introduce no cancellation check and use
 their stated grant or source error variants. Joins (`task.await`, `task.await_any`,
 `task.await_at`, `task.cancel_all`) and mutex acquisition are not cancellation points: a
-cancelled scope cancels its children, so a join waits only for them. `Canceled` is returned only when the operation had no effect. A runner call (planned) is
-a cancellation point only until its request is sent; after that its scope's cancellation
-is forwarded to the place and the call waits for the acknowledgement
-([RUN-9](runners.md#run-9-cancellation)). A store transaction (planned) checks
-cancellation before its body starts; a body, once started, is not cancellable
-([STORE-3](storage.md#store-3-transaction-scope)). Pure code
-is not cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature
-states what it owns on success and on failure; a borrow or `mut` loan lasts until the call
+cancelled scope cancels its children, so a join waits only for them. `channel.send` is not
+a cancellation point: it succeeds or returns `Closed` with its value whatever its scope's
+cancellation; `task.check_canceled` marks producer loops. `Canceled` is returned only when
+the operation had no effect. A runner call (planned) is a cancellation point only until
+its request is sent; after that its scope's cancellation is forwarded to the place and the
+call waits for the acknowledgement ([RUN-9](runners.md#run-9-cancellation)). A store
+transaction (planned) checks cancellation before its body starts; a body, once started, is
+not cancellable ([STORE-3](storage.md#store-3-transaction-scope)). Pure code is not
+cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature states
+what it owns on success and on failure; a borrow or `mut` loan lasts until the call
 completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:
 `task.scope_until(tasks, deadline, body)` runs `body` in a fresh scope as `task.scope`
-does, and when `deadline.clock` reaches `deadline.at` before that scope has exited, cancels
-the scope with cause `DeadlineExceeded`. From then every blocking `Io` call the body makes
-in the scope returns `Canceled(DeadlineExceeded())`, each child of the scope is cancelled
-with that cause and the children of scopes nested in the body with `Parent`, and the exit
-joins them as an error exit does. The call returns `Expired(r)` when the deadline cancelled
-the scope and `Finished(r)` otherwise, where `r` is the body's result. A deadline already
-reached at entry, or whose clock cannot be read, cancels the scope before the body runs.
-Nothing polls for a deadline: each scope arms one timer on its deadline's clock and removes
-it at exit. A pending scope deadline is an outstanding event source
+does, and when `deadline.clock` reaches `deadline.at` before that scope has exited,
+cancels the scope with cause `DeadlineExceeded`. From then every blocking `Io` call the
+body makes in the scope returns `Canceled(DeadlineExceeded())`, each child of the scope is
+cancelled with that cause and the children of scopes nested in the body with `Parent`, and
+the exit joins them as an error exit does. The call returns `Expired(r)` when the deadline
+cancelled the scope and `Finished(r)` otherwise, where `r` is the body's result. A
+deadline already reached at entry, or whose clock cannot be read, cancels the scope before
+the body runs. Nothing polls for a deadline: each scope arms one timer on its deadline's
+clock and removes it at exit. A pending scope deadline is an outstanding event source
 ([CONC-8](#conc-8-global-quiescence)), so a body waiting for a message nobody will send is
-cancelled at its deadline, never Blocked. A network timeout (`NetTimeout`) is
-not a deadline: it is a relative bound measured by the network provider, observed only as
-the outcome `TimedOut()`, and needs no clock grant. Drops run shielded. An operation
+cancelled at its deadline, never Blocked. A network timeout (`NetTimeout`) is not a
+deadline: it is a relative bound measured by the network provider, observed only as the
+outcome `TimedOut()`, and needs no clock grant. Drops run shielded. An operation
 interrupted by environmental termination is never described as `Canceled` unless no effect
 was established under its contract; an unknown outcome is not a cancellation result.
 
 ### CONC-4: Memory model
 
 Programs are data-race-free by construction: tasks share no mutable or counted memory
-except mutex payloads (under the lock), `Shared` roots (atomic) and atomics. Every execution
+except mutex payloads (under the lock), `Shared` root counts and atomics. Every execution
 is explained by a sequentially consistent order of synchronising events: spawn before the
 child starts; child completion before its join and the scope's exit; send before receive;
-mutex release before the next acquire; atomic operations; suspend before resume.
+mutex release before the next acquire; atomic operations; suspend before resume; and the
+releases of a root that a `shared.thaw` of it observes, before that thaw. The outermost
+entry of a `serial` package's foreign gate is also a synchronising event
+([PROG-4](programs.md#prog-4-interop)); nested re-entry is not.
 
 ### CONC-5: Mutexes
 

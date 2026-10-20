@@ -11,9 +11,10 @@ and is never observable.
 Global values use Perceus-style reference counting: compile-time insertion of increments
 and decrements with elision, drop specialisation and size-keyed in-place reuse. Counts are
 plain ([OWN-6](ownership.md#own-6-crossing-tasks)). A block is freed when its last holder
-drops it. A count about to overflow makes the block immortal. A projection out of a
-borrowed value is counted before the storage it points into is mutated or moved, and an
-uncounted projection is never reused or mutated in place.
+drops it. A count about to overflow makes the block immortal, except a `Shared` root
+count, which is exact (MEM-11). A projection out of a borrowed value is counted before the
+storage it points into is mutated or moved, and an uncounted projection is never reused or
+mutated in place.
 
 ### MEM-2: Acyclic
 
@@ -209,9 +210,10 @@ environmental. **Publishing** means exposing a value or projection to another li
 or call; published blocks never relocate or mutate. Further growth builds a replacement
 while preserving live views.
 
-A pool retains at most 8 MiB of idle backing storage per task at each region exit; larger
-excess is released, and task exit releases everything retained. Active storage is not
-capped. This is an implementation cost bound, not a language-visible allocation budget.
+A pool retains at most 8 MiB of idle backing storage per region pool (one per worker) at
+each region exit; larger excess is released, and the run's end releases everything
+retained. Active storage is not capped. This is an implementation cost bound, not a
+language-visible allocation budget.
 
 A region is freed at its scope's exit by resetting pointers and releasing the heap blocks
 its values hold. A result with a relation is built directly in the caller's destination:
@@ -223,18 +225,18 @@ observable.
 ### MEM-11: Shared
 
 Layer 1. `shared.freeze(take x: unique T) -> Shared[T]`, for `T` inert and holding no
-resources, freezes a value deeply: its inner blocks become immortal and uncounted, and only
-the root carries a count updated without data races under the run's scheduler. The current
-single-threaded scheduler uses plain counts; a threaded scheduler makes them atomic.
-`Shared[T]` is copyable (a root-count increment), sendable
-and read by borrowing: `shared.with(s, body)` calls `body` with the frozen value as a
-borrowed parameter ([OWN-1](ownership.md#own-1-borrow)), changing no count, while the
-call's read loan on `s` keeps the root alive and unmoved. `body`'s result is global, so
-frozen content leaves it only as plain values, `unique` copies or copied nested roots.
-Dropping the last root frees the whole value.
-`shared.thaw(take s) -> Result[unique T, Shared[T]]` returns the value with ordinary counts
-restored when `s` is the last root, and gives `s` back otherwise. Freeze and thaw each walk
-the value and are allocation sites.
+resources, freezes a value deeply: its inner blocks become immortal and uncounted, and
+only the root carries a count updated without data races at every execution width. A root
+count is exact: it never saturates. `thaw`'s sole-holder test is a synchronising event
+(CONC-4). `Shared[T]` is copyable (a root-count increment), sendable and read by
+borrowing: `shared.with(s, body)` calls `body` with the frozen value as a borrowed
+parameter ([OWN-1](ownership.md#own-1-borrow)), changing no count, while the call's read
+loan on `s` keeps the root alive and unmoved. `body`'s result is global, so frozen content
+leaves it only as plain values, `unique` copies or copied nested roots. Dropping the last
+root frees the whole value. A value's roots are held until its cleanup point, as specified
+by [DROP-2](failure.md#drop-2-resources) (S-14). `shared.thaw(take s) -> Result[unique T,
+Shared[T]]` returns the value with ordinary counts restored when `s` is the last root, and
+gives `s` back otherwise. Freeze and thaw each walk the value and are allocation sites.
 
 A copied `Shared` root acquires an independent share and is global everywhere,
 including when read from a borrowed parameter, capture or field. An uncopied borrowed root

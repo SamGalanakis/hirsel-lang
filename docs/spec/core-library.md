@@ -625,9 +625,9 @@ host clock authority. A blocked test fails with its outstanding waits in the run
 
 `channel.open` creates an unbounded FIFO. `send` never waits for buffer space; success
 transfers the value into the buffer, while `Closed` returns it unchanged. `receive` waits
-only while the buffer is empty and senders are live; cancellation returns `Canceled` without
-dequeuing. A nonblocking send does not check cancellation (its `ChannelError` type is shared
-with `receive`).
+only while the buffer is empty and senders are live; cancellation returns `Canceled`
+without dequeuing. `send` never checks cancellation; `Canceled` is an outcome of `receive`
+only (the error type is shared).
 
 Each nested `task.scope` inherits cancellation from its containing task. A child uses a
 captured global `Tasks` value to open its own scope and obtain its own `Scope` for

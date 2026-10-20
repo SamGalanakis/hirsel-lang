@@ -453,6 +453,7 @@ only through a named implementation whose contract says so.
 | Code store, fetch and signatures | runner and host `code` | `code.none@1` | `code.sim@1` |
 | Limits (queues, request bytes, per-call budgets) | provider settings | each provider's stated defaults | the same |
 | Scheduling | `inputs.scheduler` | the cooperative FIFO | seeded schedules |
+| Execution width | `placement.cores` | 1 | simulators run on one thread |
 | Fault injection | `faults` | none | `sim@1`, the simulated `Dir` |
 | Store medium | the `dirs` mount a store is opened over ([STORE-11](storage.md#store-11-engine-and-storage-seam)) | a host directory | a simulated `Dir` |
 | Store settings | the store provider's own configuration ([STORE-11](storage.md#store-11-engine-and-storage-seam)) | the provider's defaults | the same |

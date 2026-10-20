@@ -531,7 +531,8 @@ Tasks never share counted blocks, except the root of a `Shared[T]`. Only sendabl
 cross ([MODE-4](#mode-4-sendable)): plain and flat values are copied; unique values move,
 and their blocks become the receiving task's; a `Shared` root is counted atomically. A
 child task borrows nothing counted from its parent. Every other count operation is plain
-and task-local, and there is no marking walk.
+and task-local, and there is no marking walk. A block's storage may return to another
+thread's allocator; this is unobservable (DET-1).
 
 ### OWN-7: Uniqueness test
 

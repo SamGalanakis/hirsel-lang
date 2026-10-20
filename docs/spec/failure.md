@@ -80,6 +80,11 @@ order (fields in reverse order, sequences from high index to low), on every exit
 normal exit, `?`, `return`, cancellation and failure. Taking a resource moves it; it does
 not drop it.
 
+A value whose destruction releases a `Shared` root, directly or through any component,
+holds that root until its cleanup point (its scope's cleanup or its consumption, on normal
+and failure paths). No implementation releases such a value earlier, so the holders of
+every root at every synchronising operation are the same in every engine.
+
 ```hirsel
 resource type Temp { dir: Dir, path: Path }
   drop(t) { let _ = file.remove(t.dir, t.path) }

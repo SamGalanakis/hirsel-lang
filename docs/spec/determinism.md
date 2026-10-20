@@ -8,13 +8,16 @@ replayed, or executed under a deterministic simulation of `Io`.
 ### DET-1: Contract
 
 Given the same inputs from every capability (including the scheduling decisions made
-through `Io`: task interleaving, atomic order, mutex acquisition order) and the same run
-configuration (selected program revision, entry and launch kind, validated grants and
-provider contracts, snapshots, independent seeds and the selected simulation model), a
-program's observable behaviour is identical. Nothing else is nondeterministic: there are no
-observable addresses, pointer order, thread or task ids, wall time or environment; freeing
-order, placement and allocator state are unobservable; float, integer and map-order rules
-are fixed. Any program can run under a deterministic simulation of `Io`.
+through `Io`: task interleaving, atomic order, mutex acquisition order, the acquisition
+order of each `serial` package's foreign gate (S-13), the sole-holder outcome of each
+`shared.thaw`, each task's observed cancellation at each check, and each deadline scope's
+expiry-versus-exit outcome) and the same run configuration (selected program revision,
+entry and launch kind, validated grants and provider contracts, snapshots, independent
+seeds and the selected simulation model), a program's observable behaviour is identical.
+Nothing else is nondeterministic: there are no observable addresses, pointer order, thread
+or task ids, wall time or environment; freeing order, placement and allocator state are
+unobservable; float, integer and map-order rules are fixed. Any program can run under a
+deterministic simulation of `Io`.
 
 For a closed simulated or replayed execution, the observable outcome distinguishes
 completion, language failure and Blocked, after its effect prefix. A Blocked report records
@@ -71,6 +74,7 @@ zero. Process snapshots contribute to the admitted run identity like any other i
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
 | `admission` | Optional launch-only constraints: not-before, expiry, an external revocation reference and the code policy `code`, `admit.any@1` (the default when absent) or `admit.safe@1` ([CAP-6](capabilities.md#cap-6-safe-code)). The resolved decision and its evidence are captured in the validated record. |
+| `placement` | Execution placement, outside identity: core width and host placement settings; validated and reported as provenance, then stripped from canonical bytes. |
 | `budgets` | Absent (`budgets.none@1`), or the host's resource budgets for the run (**Budgets** below). |
 | `recording` | Run-policy member: `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels), [Recording levels](#recording-levels)); absent, the host's launcher chooses and the validated record states the choice. |
 
@@ -99,20 +103,38 @@ that the program's children may receive, passed through from the launcher's envi
 or set by a `Command`; `env` may be omitted for none. For example
 `{"provider": "process.spawn@1", "rules": [{"program": "/usr/bin/git", "env": ["HOME"]}]}`.
 
-**Providers** name versioned observable contracts, identical for real hosts, simulation and
-replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1`,
-`clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1`, `net.script@2`,
-`process.spawn@1`, `process.script@1`, `budgets.none@1` and `budgets.limits@1`.
-Planned: the runner providers `local.threads@1`, `local.process@1`, `sim@1` and
-`remote.tls@1` and the code stores `code.none@1`, `code.dir@1`, `code.object@1` and
-`code.sim@1`. Each is a seam under
+**Providers** name versioned observable contracts, identical for real hosts, simulation
+and replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`,
+`clock.monotonic.ns@1`, `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `tasks.free@1`,
+`net.stream@1`, `net.script@2`, `process.spawn@1`, `process.script@1`, `budgets.none@1`
+and `budgets.limits@2`. Planned: the runner providers `local.threads@1`,
+`local.process@1`, `sim@1` and `remote.tls@1` and the code stores `code.none@1`,
+`code.dir@1`, `code.object@1` and `code.sim@1`. Each is a seam under
 [RUN-13](runners.md#run-13-provider-seams): its choice changes cost, latency and crash
-survival, never meaning.
-`tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
-suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
-suspend only their task; the provider waits for external readiness only when no task
-is runnable. Cancellation is checked before blocking effects and when an effect-free
-wait resumes, with destruction shielded as required by CONC-3. `random.splitmix64@1` is a deterministic simulation of randomness
+survival, never meaning. `tasks.cooperative@1` supplies structured tasks with cooperative
+scheduling at the suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host
+readiness waits suspend only their task; the provider waits for external readiness only
+when no task is runnable. Cancellation is checked before blocking effects and when an
+effect-free wait resumes, with destruction shielded as required by CONC-3. Its
+observations are those of one cooperative scheduler at every execution width. An
+implementation may run several tasks' code between scheduling points at once on several
+threads. Scheduling points, synchronising operations, host requests, `shared.thaw` tests,
+failures, stops and budget charges take effect in the order the selected scheduler gives.
+Execution width is a placement member and never part of identity.
+
+`tasks.free@1` supplies structured tasks with free scheduling. Suspension at a point
+CONC-1 permits is allowed, not required; a task yields at least every 128 operations, and
+a spawned child may run at once. A `Shared` release that leaves other holders takes effect
+when the releasing task next enters an operation, or at its end; both engines release a
+value's roots at its cleanup point (S-14), in DROP-2 order. Runs record the per-object
+order of synchronising operations (each `serial` package's foreign gate included), atomic
+load values and the scheduling inputs of DET-1 (S-3), keyed by (task spawn path, operation
+ordinal). Host requests are ordered per logical host resource in shared and exclusive
+epochs, and host handles are named by (creating task path, its handle ordinal). A replay
+re-executes the recorded cut, which is causally closed. A record naming both
+`tasks.free@1` and `inputs.scheduler` refuses.
+
+`random.splitmix64@1` is a deterministic simulation of randomness
 on every host: a draw of `n` bytes takes successive SplitMix64 outputs (state starting at
 `inputs.random_seed`, advanced by `0x9e3779b97f4a7c15` per output), each little-endian,
 concatenated and cut to `n`, consuming one output per started eight bytes. It is
@@ -155,47 +177,55 @@ no authority beyond the explicit rules.
 
 **Budgets.** A host bounds the resources one run may use, for example to host untrusted
 code, by choosing a budget implementation in the record; budgets are host policy and grant
-nothing. `budgets.none@1`, the default, bounds nothing; its canonical spelling omits the `budgets`
-member.
-`budgets.limits@1` takes `fuel` and `memory_bytes`, each a positive `u64` or null for
-unbounded, at least one present, for example
-`{"provider": "budgets.limits@1", "fuel": 100000000, "memory_bytes": null}`. **Fuel** is
-charged once at every function entry and at least once per iteration of every loop; each
-engine places its loop charges (the interpreter at every jump to the same or an earlier
-block, native code at the targets of the control-flow graph's feedback edges), so counts
-differ between engines. A run whose next charge would exceed `fuel` stops before it.
-Native code charges fuel only when compiled with fuel checks (`hirsel build --fuel`, or
-`hirsel run --native` with a fuel budget); an executable without them refuses a fuel budget
-and costs nothing when it has none. **Memory** is the storage the engine's allocator holds
-for the run: natively the heap's backing slabs, large blocks and region segments, with idle
-slabs returned before a stop; in the interpreter its value model, 16 bytes per value
-node plus the bytes of every `String` and `Bytes`, measured over every value the run
-holds at fuel charge points no less often than once per sixteenth of the budget it estimates
-was newly allocated. A run whose storage would exceed `memory_bytes` stops. A stopped run's outcome is
-**BudgetExceeded** with the budget's kind, `fuel` or `memory`: like Blocked, it runs no
-user code, cancellation or destruction after the stop, keeps the output it produced, and
-is a tooling outcome whose position is comparable only within one engine and compilation
-([the reference interpreter](implementation.md#the-reference-interpreter)). A native
-executable records `budget_exceeded <kind>` and exits with status 5. A budget
-changes no other outcome ([DET-3](#det-3-no-switches)). The budgets are part of the
-validated record, so a replay applies them again and stops where the recorded run
-stopped. An engine that cannot enforce a requested budget refuses the launch.
+nothing. `budgets.none@1`, the default, bounds nothing; its canonical spelling omits the
+`budgets` member. `budgets.limits@2`, which retires `budgets.limits@1`, takes `fuel` and
+`memory_bytes`, each a positive `u64` or null for unbounded, at least one present, for
+example `{"provider": "budgets.limits@2", "fuel": 100000000, "memory_bytes": null}`.
+**Fuel** is charged once at every function entry and at least once per iteration of every
+loop; each engine places its loop charges (the interpreter at every jump to the same or an
+earlier block, native code at the targets of the control-flow graph's feedback edges), so
+counts differ between engines. A run whose next charge would exceed `fuel` stops before
+it. Native code charges fuel only when compiled with fuel checks (`hirsel build --fuel`,
+or `hirsel run --native` with a fuel budget); an executable without them refuses a fuel
+budget and costs nothing when it has none. **Memory** is the run's logical storage: for
+each live counted block, its size class; for each live large block, its request rounded up
+to 4 KiB; for each open region, the canonical segment sequence its own requests would take
+from an empty pool. A charge happens when a task allocates and a credit when a logical
+lifetime ends, in the order the run's scheduler gives. The first charge, in that order,
+that exceeds its budget decides the stop and its kind. The interpreter charges the same
+quantities from its value model. A stopped run's outcome is **BudgetExceeded** with the
+budget's kind, `fuel` or `memory`: like Blocked, it runs no user code, cancellation or
+destruction after the stop, keeps the output it produced, and is a tooling outcome whose
+position is comparable only within one engine and compilation ([the reference
+interpreter](implementation.md#the-reference-interpreter)). A native executable records
+`budget_exceeded <kind>` and exits with status 5. A budget changes no other outcome
+([DET-3](#det-3-no-switches)). The budgets are part of the validated record. In ordered
+mode a replay applies them again and stops where the recorded run stopped. Under
+`tasks.free@1`: Fuel is apportioned to running tasks in chunks, returned when a task stops
+running. The run stops when a charge finds no fuel left in its chunk or the run's pool, so
+up to one chunk per running task may remain unspent. A replay does not re-enforce budgets;
+it stops at the recorded cut. An engine that cannot enforce a requested budget refuses the
+launch.
 
-**Canonical form.** The record has one strict canonical representation: schema-order object
-members; arrays ordered as specified (`args` order preserved, grant sets sorted by
+**Canonical form.** The record has one strict canonical representation: schema-order
+object members; arrays ordered as specified (`args` order preserved, grant sets sorted by
 normalized UTF-8 key); no duplicate or unknown fields; canonical unsigned decimal integers
 without leading zeros; canonical JSON strings (escape quote and backslash, encode
 U+0000–U+001F as lowercase `\u00xx`, emit other scalar values as UTF-8 without
-normalization); explicit `null` for absence, except run-policy members; no whitespace.
-A run-policy member (the recording level, budgets, the admission code policy, and any later
+normalization); explicit `null` for absence, except run-policy members; no whitespace. A
+run-policy member (the recording level, budgets, the admission code policy, and any later
 member that chooses how a run is executed rather than what it may do) is absent from the
-canonical bytes when it equals its default: validation normalizes a default value to absence,
-so adding a default policy changes neither record identity nor a recorded tape's header.
-Digests are 64 lowercase hexadecimal SHA-256 digits; admission timestamps are signed decimal `i64` Unix nanoseconds,
-zero spelled `0`. The record's identity hashes these bytes with a domain-separated,
-length-prefixed SHA-256. A parser for human input may normalize member order and whitespace
-before validation. Hash values bind bytes; they do not authenticate a grant, establish type
-identity or replace host authorization.
+canonical bytes when it equals its default: validation normalizes a default value to
+absence, so adding a default policy changes neither record identity nor a recorded tape's
+header. A **placement member** (`placement`) chooses where and how fast a run executes and
+nothing it observes. Validation checks it, then removes it from the canonical bytes
+whatever its value. The validated header states the resolved placement as diagnostic
+provenance. Replay ignores it and never opens a path it names. Digests are 64 lowercase
+hexadecimal SHA-256 digits; admission timestamps are signed decimal `i64` Unix
+nanoseconds, zero spelled `0`. The record's identity hashes these bytes with a
+domain-separated, length-prefixed SHA-256. A parser for human input may normalize member
+order and whitespace before validation. Hash values bind bytes; they do not authenticate a
+grant, establish type identity or replace host authorization.
 
 **Program identity.** The semantic program revision is a rooted dependency graph: stable
 component names, ordered length-framed content and sorted unique edges identify the

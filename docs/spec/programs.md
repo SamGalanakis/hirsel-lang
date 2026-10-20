@@ -209,18 +209,33 @@ Foreign declarations are monomorphic and state an explicit aliasing contract. An
 `extern` outside a package marked `unsafe ffi` is PROG-4.
 
 **Package metadata.** A package manifest marks its package `unsafe ffi` with one more
-field, `"unsafe_ffi": {"link": [...], "headers_checked": false, "wrappers": [...]}`. `link`
-lists the native libraries its externs resolve against, in link order: a library name
-(`"z"`, linked as `-lz`) or a manifest-relative path to a `.a`, `.o` or `.so` file.
-`headers_checked` states whether the declarations were checked against the C headers; it
-is trusted and reported, never verified. Only the root launch manifest may select a package
-marked `unsafe ffi`, as itself or as a dependency; a dependency manifest selecting one is a
-tool-input error, so every foreign library of a program is chosen at its root.
-`hirsel check` reports each `unsafe ffi` package in the selected closure with its link
-inputs and `headers_checked`.
+field, `"unsafe_ffi": {"link": [...], "headers_checked": false, "threads": "home",
+"wrappers": [...]}`. `link` lists the native libraries its externs resolve against, in
+link order: a library name (`"z"`, linked as `-lz`) or a manifest-relative path to a `.a`,
+`.o` or `.so` file. `headers_checked` states whether the declarations were checked against
+the C headers; it is trusted and reported, never verified. Only the root launch manifest
+may select a package marked `unsafe ffi`, as itself or as a dependency; a dependency
+manifest selecting one is a tool-input error, so every foreign library of a program is
+chosen at its root. `hirsel check` reports each `unsafe ffi` package in the selected
+closure with its link inputs, `headers_checked` and the effective `threads` declaration.
+
+The `unsafe_ffi` object gains the trusted member `threads`: `"home"` (default; the run's
+admission thread), `"serial"` (any thread, one call chain at a time per package; a
+callback's nested call to the same package re-enters) or `"any"` (any thread,
+concurrently).
+
+**Dispatch precedence:** a call inside an active foreign interval runs on that interval's
+thread; otherwise a call to a `home` package runs on the admission thread, `@blocking` or
+not, and occupies it until it returns; otherwise a `@blocking` call runs on the bounded
+pool; otherwise it runs on the calling thread. A callback that can reach a `home` package
+may be handed only to an extern whose effective thread is the admission thread, that is, a
+`home` package's extern; otherwise the build refuses, naming both. Callbacks still run on
+the calling thread during the call. The outermost entry of a `serial` package's gate is a
+synchronising operation (CONC-4) and its order a scheduling input (S-3); nested re-entry
+is not.
 
 ```json
-"unsafe_ffi": {"link": ["z"], "headers_checked": false,
+"unsafe_ffi": {"link": ["z"], "headers_checked": false, "threads": "home",
                "wrappers": [{"module": ["zlib"], "name": "crc32", "kind": "pure",
                              "model": "deterministic"}]}
 ```
