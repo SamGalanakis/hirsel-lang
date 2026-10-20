@@ -569,11 +569,6 @@ impl State {
         self.views.join(&other.views, |a, b| *a = a.join(*b));
     }
     fn live(&mut self, slot: SlotId) {
-        // A saved branch state may predate a scratch slot allocated on
-        // another path. Newly encountered slots are dead until this point.
-        if self.slots.len() <= slot.index() {
-            self.slots.resize(slot.index() + 1, SlotState::DEAD);
-        }
         self.slots[slot.index()] = SlotState {
             live: Tri::Yes,
             init: Tri::No,
