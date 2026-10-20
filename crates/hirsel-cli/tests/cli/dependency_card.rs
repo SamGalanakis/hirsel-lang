@@ -3,7 +3,10 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
 }
 fn card(manifest: &str, arguments: &[&str]) -> std::process::Output {
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
