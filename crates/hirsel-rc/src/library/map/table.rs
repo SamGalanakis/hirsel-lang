@@ -228,9 +228,11 @@ pub(super) fn advance(b: &mut Body<'_, '_>, entries: AddressId, first: ValueId) 
     // Preserve that layout through the scan and the final cursor write.
     let word = b.layout_of(first);
     let converted = b.fresh(word);
-    b.push(Inst::Recast {
+    b.push(Inst::Convert {
         result: converted,
-        value: count,
+        flag: None,
+        operand: count,
+        mode: ConvertMode::Truncate,
     });
     let count = converted;
     let i = b.fresh(word);
