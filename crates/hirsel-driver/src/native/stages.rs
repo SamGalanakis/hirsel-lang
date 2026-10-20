@@ -241,6 +241,19 @@ impl ReadyProgram {
     }
 }
 
+/// Workers for the per-unit stages: `HIRSEL_JOBS` when it is a positive count, else the
+/// host's available parallelism. Nothing a build produces depends on the count.
+fn unit_jobs() -> hirsel_intern::jobs::Jobs {
+    std::env::var("HIRSEL_JOBS")
+        .ok()
+        .and_then(|jobs| jobs.parse::<usize>().ok())
+        .filter(|&jobs| jobs > 0)
+        .map_or_else(
+            hirsel_intern::jobs::Jobs::available,
+            hirsel_intern::jobs::Jobs::new,
+        )
+}
+
 /// Run `work` as `phase`.
 fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
     let _timing = timings::phase(phase);
@@ -349,51 +362,71 @@ pub fn build_program(
     };
     let instances = &lowered.instances;
     let statics = lowered.statics;
-    let mut rc = Vec::with_capacity(lowered.units.len());
-    for (index, unit) in lowered.units.into_iter().enumerate() {
-        let id = lowered.unit_origins[index];
-        let definition = unit.header.definition.clone();
-        let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-        timings::count(Count::Units);
-        let value = seal(StageName::Import, || validate_value(unit, &inputs))?.into_raw();
-        let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
-        let placed = timed(Phase::Place, || {
-            hirsel_rc::placement::place(value, table, &placement)
-        })
-        .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-        let placed = seal(StageName::Placement, || validate_placed(placed, &inputs))?.into_raw();
-        let proofs = Proofs::for_instance(instances, id);
-        let mut unit = timed(Phase::Rc, || {
-            hirsel_rc::insert::insert(placed, table, &proofs)
-        })
-        .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-        // Elision only cancels a copy against the release after it, so one
-        // validation of its output also judges insertion's.
-        if options.elide {
-            unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
-                .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-        }
-        rc.push(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw());
-    }
+    let unit_origins = &lowered.unit_origins;
+    let jobs = unit_jobs();
+    // Each unit's stages read only the shared table, instances and inputs, so units run
+    // on `jobs` workers; results come back in unit order, and the first error in that
+    // order is the one a serial build would have stopped at.
+    let tasks: Vec<_> = lowered.units.into_iter().enumerate().collect();
+    let rc = hirsel_intern::jobs::map(
+        jobs,
+        tasks,
+        |(_, unit)| unit.instructions.len() as u64,
+        |(index, unit)| -> Result<_, NativeError> {
+            let id = unit_origins[index];
+            let definition = unit.header.definition.clone();
+            let fail = |stage, message: String| NativeError::of(stage, &definition, message);
+            timings::count(Count::Units);
+            let value = seal(StageName::Import, || validate_value(unit, &inputs))?.into_raw();
+            let placement =
+                hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
+            let placed = timed(Phase::Place, || {
+                hirsel_rc::placement::place(value, table, &placement)
+            })
+            .map_err(|e| fail(StageName::Placement, e.to_string()))?;
+            let placed =
+                seal(StageName::Placement, || validate_placed(placed, &inputs))?.into_raw();
+            let proofs = Proofs::for_instance(instances, id);
+            let mut unit = timed(Phase::Rc, || {
+                hirsel_rc::insert::insert(placed, table, &proofs)
+            })
+            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+            // Elision only cancels a copy against the release after it, so one
+            // validation of its output also judges insertion's.
+            if options.elide {
+                unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
+                    .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+            }
+            Ok(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw())
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
     let finalizers = timed(Phase::Rc, || Finalizers::new(instances, &rc));
-    let mut units = Vec::with_capacity(rc.len());
-    for unit in rc {
-        let definition = unit.header.definition.clone();
-        let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-        let reuse = hirsel_rc::reuse::Options {
-            reuse: options.reuse,
-        };
-        let reused = timed(Phase::Reuse, || {
-            hirsel_rc::reuse::reuse(unit, table, &reuse)
-        })
-        .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-        let reused = seal(StageName::Reuse, || validate_reuse(reused, &inputs))?.into_raw();
-        let ready = timed(Phase::Ready, || {
-            hirsel_rc::ready::ready(reused, table, &finalizers)
-        })
-        .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-        units.push(seal(StageName::Ready, || validate_ready(ready, &inputs))?);
-    }
+    let reuse = hirsel_rc::reuse::Options {
+        reuse: options.reuse,
+    };
+    let units = hirsel_intern::jobs::map(
+        jobs,
+        rc,
+        |unit| unit.instructions.len() as u64,
+        |unit| {
+            let definition = unit.header.definition.clone();
+            let fail = |stage, message: String| NativeError::of(stage, &definition, message);
+            let reused = timed(Phase::Reuse, || {
+                hirsel_rc::reuse::reuse(unit, table, &reuse)
+            })
+            .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
+            let reused = seal(StageName::Reuse, || validate_reuse(reused, &inputs))?.into_raw();
+            let ready = timed(Phase::Ready, || {
+                hirsel_rc::ready::ready(reused, table, &finalizers)
+            })
+            .map_err(|e| fail(StageName::Ready, e.to_string()))?;
+            seal(StageName::Ready, || validate_ready(ready, &inputs))
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
     let functions = instances
         .ids()
         .filter(|id| instances.roles[id.index()] == InstanceRole::Function)

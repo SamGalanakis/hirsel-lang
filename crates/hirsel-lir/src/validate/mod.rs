@@ -73,7 +73,8 @@ pub struct Inputs<'a> {
     pub target: &'a TargetSpec,
     pub layouts: &'a LayoutTable,
     pub manifest: &'a Manifest,
-    pub operations: &'a dyn crate::operation::OperationDeclarations,
+    /// `Sync` so that one `Inputs` serves units validated on several threads.
+    pub operations: &'a (dyn crate::operation::OperationDeclarations + Sync),
     pub discharge: Option<&'a crate::discharge::Discharge>,
     /// The program-wide facts every unit's check and receipt read, computed once per
     /// `Inputs` rather than once per unit. Sound because the inputs are borrowed:
