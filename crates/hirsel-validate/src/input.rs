@@ -51,7 +51,7 @@ pub trait SignatureLookup: Sync {
 /// number, so the digest is the same in every session. It follows the shapes
 /// without a hand-kept field list.
 pub fn digest(t: &TypeInterner, signature: &Signature) -> ValidationDigest {
-    let order = hirsel_types::closure(t, hirsel_types::signature_types(signature));
+    let order = hirsel_types::closure(t, hirsel_types::signature_types(t, signature));
     let ordinals: HashMap<u32, usize> = order
         .iter()
         .enumerate()
