@@ -28,22 +28,7 @@ pub fn format_inline[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[
       mut buffer
     )
   }
-  let mantissa = fraction + if raw_exponent == 0 {
-    0
-  } else {
-    1u64 << 52
-  }
-  let biased: i32 = core@1/int.narrow(raw_exponent)
-  let exponent = if raw_exponent == 0 {
-    1i32
-  } else {
-    biased
-  } - 1075
-  let (digits, scale) = internal.float_decimal.shortest(
-    mantissa,
-    exponent,
-    fraction == 0 && raw_exponent > 1
-  )
+  let (digits, scale) = internal.float_decimal.shortest64(fraction, raw_exponent)
   internal.float_decimal.render(digits, scale, negative, mut buffer)
 }
 

@@ -2,49 +2,40 @@
 // expect: run
 // Rust coretests/tests/num/flt2dec/mod.rs, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
 // MIT; third-party/NOTICES.md. Original check_exact/check_exact_one row lines below.
+// The rounded value in units of 10^cutoff, digit by digit against `expected`.
+fn same_digits(d: std@1/internal.decimal_seq.DecimalSeq, expected: String, cutoff: i32) -> bool {
+  let point: i64 = core@1/int.widen(d.decimal_point)
+  let limit: i64 = core@1/int.widen(cutoff)
+  let text = core@1/string.as_bytes(expected)
+  let length = core@1/bytes.len(text)
+  if point - limit <= 0 {
+    return length == 1 && text[0] == 48
+  }
+  let count: u64 = core@1/int.narrow(point - limit)
+  if count != length {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < count {
+    let digit: u8 = if i < d.num_digits {
+      d.digits[i]
+    } else {
+      0
+    }
+    if text[i] != digit + 48 {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
 fn exact(t: Test, mantissa: u64, exponent: i32, expected: String, cutoff: i32) -> () {
-  let mut actual = std@1/internal.big.big_from_word(mantissa)
-  let scale: u64 = if exponent < 0 {
-    core@1/int.narrow(-exponent)
-  } else {
-    0u64
-  }
-  std@1/internal.big.big_power(
-    mut actual,
-    if exponent < 0 {
-      5u64
-    } else {
-      2u64
-    },
-    if exponent < 0 {
-      scale
-    } else {
-      core@1/int.narrow(exponent)
-    }
-  )
-  let decimal_scale: i32 = core@1/int.narrow(scale)
-  let places = decimal_scale + cutoff
-  if places >= 0 {
-    std@1/internal.format.round_decimal(mut actual, core@1/int.narrow(places))
-  } else {
-    std@1/internal.big.big_power(mut actual, 10, core@1/int.narrow(-places))
-  }
-  let mut wanted = std@1/internal.big.big_from_word(0)
-  let mut chunk: u64 = 0
-  let mut power: u64 = 1
-  for digit in core@1/string.as_bytes(expected) {
-    chunk = chunk * 10 + core@1/int.widen(digit - 48u8)
-    power *= 10
-    if power == 1000000000 {
-      std@1/internal.big.big_mul_word(mut wanted, power)
-      std@1/internal.big.big_add_small(mut wanted, chunk)
-      chunk = 0
-      power = 1
-    }
-  }
-  std@1/internal.big.big_mul_word(mut wanted, power)
-  std@1/internal.big.big_add_small(mut wanted, chunk)
-  test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)
+  let limit: i64 = core@1/int.widen(cutoff)
+  let mut d = std@1/internal.decimal_seq.exact(mantissa, exponent, -limit)
+  let point: i64 = core@1/int.widen(d.decimal_point)
+  std@1/internal.format.round_decimal(mut d, point - limit)
+  test.check(t, same_digits(d, expected, cutoff))
 }
 
 pub fn main(t: Test) -> Result[(), ()] {

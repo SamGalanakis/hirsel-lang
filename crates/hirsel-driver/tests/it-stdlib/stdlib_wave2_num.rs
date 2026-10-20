@@ -86,6 +86,104 @@ fn source_parser_rounds_midpoints_and_unbounded_decimal_suffixes_like_rust() {
     });
 }
 
+/// Ryū's scientific text (`d.dddE-x`) respelled in std's ECMAScript Number::toString
+/// layout, without a `+` in the exponent.
+fn ecmascript_from_ryu(ryu: &str) -> String {
+    match ryu {
+        "NaN" => return "NaN".into(),
+        "Infinity" => return "inf".into(),
+        "-Infinity" => return "-inf".into(),
+        "0E0" => return "0".into(),
+        "-0E0" => return "-0".into(),
+        _ => {}
+    }
+    let (sign, rest) = ryu.strip_prefix('-').map_or(("", ryu), |rest| ("-", rest));
+    let (mantissa, exponent) = rest.split_once('E').unwrap();
+    let digits = mantissa.replace('.', "");
+    let exponent: i32 = exponent.parse().unwrap();
+    let count = digits.len() as i32;
+    let body = if !(-6..21).contains(&exponent) {
+        let tail = if count > 1 {
+            format!(".{}", &digits[1..])
+        } else {
+            String::new()
+        };
+        format!("{}{tail}e{exponent}", &digits[..1])
+    } else if exponent < 0 {
+        format!("0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    } else if count <= exponent + 1 {
+        format!("{digits}{}", "0".repeat((exponent + 1 - count) as usize))
+    } else {
+        let point = (exponent + 1) as usize;
+        format!("{}.{}", &digits[..point], &digits[point..])
+    };
+    format!("{sign}{body}")
+}
+
+/// The significant digits and scientific exponent of `1.25e-3` or `1.25E-3`.
+fn scientific_parts(text: &str) -> (String, i32) {
+    let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap();
+    (mantissa.replace(['.', '-'], ""), exponent.parse().unwrap())
+}
+
+/// Every d2s_test.cc and f2s_test.cc assertion of Ryū (192 vectors): std prints the
+/// shortest text Ryū expects, Rust's LowerExp agrees on its digits except on exact
+/// ties, and std parses both spellings back to the same bits.
+#[test]
+fn shortest_text_matches_ryu_d2s_and_f2s_vectors() {
+    with_compiler_stack(|| {
+        let rows: Vec<_> = include_str!("../../../../native-tests/library/ryu-vectors.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect();
+        assert_eq!(rows.len(), 192);
+        let mut source = String::from("pub fn main(t: Test) -> Result[(), ()] {\n");
+        for row in rows {
+            let fields: Vec<_> = row.split(' ').collect();
+            let [test, hex, ryu, _line] = fields[..] else {
+                panic!("{row}");
+            };
+            let bits = u64::from_str_radix(hex, 16).unwrap();
+            let (family, uint, lower, exact) = if test == "d2s" {
+                let value = f64::from_bits(bits);
+                ("f64", "u64", format!("{value:e}"), format!("{value:.800e}"))
+            } else {
+                let value = f32::from_bits(bits as u32);
+                ("f32", "u32", format!("{value:e}"), format!("{value:.200e}"))
+            };
+            if ryu.contains('E') && !ryu.ends_with("0E0") {
+                let (digits, exponent) = scientific_parts(ryu);
+                if scientific_parts(&lower) != (digits.clone(), exponent) {
+                    // The value is exactly halfway between two shortest candidates:
+                    // Rust takes the upper one, Ryū and std the even one.
+                    let (expansion, _) = scientific_parts(&exact);
+                    let tail = expansion.strip_prefix(&format!("{digits}5"));
+                    let last = digits.as_bytes()[digits.len() - 1] - b'0';
+                    assert!(
+                        last % 2 == 0 && tail.is_some_and(|tail| tail.bytes().all(|b| b == b'0')),
+                        "{row}: Rust {lower}"
+                    );
+                }
+            }
+            let expected = ecmascript_from_ryu(ryu);
+            source += &format!(
+                "core@1/test.check(t, std@1/{family}.to_string(core@1/{family}.from_bits({bits}{uint})) == \"{expected}\")\n"
+            );
+            let mut texts = vec![expected.clone()];
+            if ryu.contains('E') {
+                texts.push(ryu.into());
+            }
+            for text in texts {
+                source += &format!(
+                    "match std@1/{family}.parse(\"{text}\") {{ Ok(value) => core@1/test.check(t, core@1/{family}.bits(value) == {bits}{uint}), Error(_) => core@1/test.check(t, false) }}\n"
+                );
+            }
+        }
+        source += "Ok(())\n}\n";
+        execute(&source);
+    });
+}
+
 /// Rows `first .. first + 32` of the 256 independent rational vectors, each summed in both
 /// orders; eight cases cover them all, so shards run them in parallel.
 fn source_exact_sum_matches_rational_vectors_in_both_orders(first: usize) {
@@ -312,7 +410,10 @@ fn parse_steps(texts: &[&str]) -> Vec<u64> {
                     &sources,
                     &configuration,
                     vec![hirsel_interp::Value::String((*text).into())],
-                    Default::default(),
+                    hirsel_interp::Limits {
+                        steps: Some(100_000_000),
+                        call_depth: 256,
+                    },
                     &mut library,
                     &runtime,
                 )
@@ -334,10 +435,9 @@ fn parse_steps(texts: &[&str]) -> Vec<u64> {
     })
 }
 
-// Scaling by 10^e shifts whole decimal limbs and the significand comes from
-// word quotients, so the cost follows the decimal size of the scaled values
-// (significant digits plus |e|), not e repeated multiplications or one bignum
-// pass per significand bit (formerly 559k steps for 1e300).
+// Eisel-Lemire decides each of these from the leading digits and a table
+// product, well inside a bound linear in the decimal size (significant digits
+// plus |e|); one bignum pass per significand bit once took 559k steps for 1e300.
 #[test]
 fn f64_parse_steps_grow_linearly_with_the_decimal_exponent() {
     let cases = [
@@ -358,6 +458,93 @@ fn f64_parse_steps_grow_linearly_with_the_decimal_exponent() {
         assert!(
             *steps <= 10_000 + 400 * size,
             "{text} took {steps} steps; all: {all:?}"
+        );
+    }
+}
+
+/// `{x:.p}` against Rust's exact fixed formatting (ties to even) at the binary64 and
+/// binary32 extremes and on exact ties.
+#[test]
+fn fixed_precision_matches_rust_at_the_extremes() {
+    with_compiler_stack(|| {
+        let mut source = String::from("pub fn main(t: Test) -> Result[(), ()] {\n");
+        let wide: [(u64, usize); 12] = [
+            (1, 324),
+            (1, 1074),
+            (f64::MAX.to_bits(), 0),
+            (f64::MAX.to_bits(), 3),
+            (f64::MIN_POSITIVE.to_bits(), 1022),
+            ((f64::MIN_POSITIVE.to_bits() - 1) | 1 << 63, 1080),
+            (0.5f64.to_bits(), 0),
+            (1.5f64.to_bits(), 0),
+            (2.5f64.to_bits(), 0),
+            (0.125f64.to_bits(), 2),
+            (9.995f64.to_bits(), 2),
+            ((-0.0f64).to_bits(), 1),
+        ];
+        for (bits, precision) in wide {
+            let expected = format!("{:.precision$}", f64::from_bits(bits));
+            source += &format!(
+                "core@1/test.check(t, f\"{{core@1/f64.from_bits({bits}u64):.{precision}}}\" == \"{expected}\")\n"
+            );
+        }
+        let narrow: [(u32, usize); 4] = [
+            (1, 149),
+            (f32::MAX.to_bits(), 0),
+            (f32::MIN_POSITIVE.to_bits(), 126),
+            (0.375f32.to_bits(), 2),
+        ];
+        for (bits, precision) in narrow {
+            let expected = format!("{:.precision$}", f32::from_bits(bits));
+            source += &format!(
+                "core@1/test.check(t, f\"{{core@1/f32.from_bits({bits}u32):.{precision}}}\" == \"{expected}\")\n"
+            );
+        }
+        source += "Ok(())\n}\n";
+        execute(&source);
+    });
+}
+
+/// `text / 2`, exactly: one more fractional digit.
+fn half(text: &str) -> String {
+    let mut out = String::new();
+    let mut carry = 0;
+    for c in format!("{text}0").chars() {
+        if c == '.' {
+            out.push('.');
+            continue;
+        }
+        let digit = carry * 10 + c.to_digit(10).unwrap();
+        out.push(char::from_digit(digit / 2, 10).unwrap());
+        carry = digit % 2;
+    }
+    out
+}
+
+// Eisel-Lemire cannot round an exact midpoint between two floats, so these take
+// the DecimalSeq path, whose binary shifts each make one pass over at most 768
+// digits. The 1 KiB bignum it replaced took about 69k, 5.1M, 5.1M and 5.2M.
+#[test]
+fn f64_parse_slow_path_steps_stay_bounded() {
+    // Between the largest subnormal and the smallest normal: 768 significant digits.
+    let normal = half(&format!(
+        "{:.1074}",
+        f64::from_bits(1) * ((1u64 << 53) - 1) as f64
+    ));
+    let tie = "1.00000000000000011102230246251565404236316680908203125".to_string();
+    let cases = [
+        (tie.clone(), 80_000u64),
+        (format!("{tie}{}1", "0".repeat(1000)), 800_000),
+        (normal.clone(), 2_500_000),
+        (format!("{normal}1"), 2_500_000),
+    ];
+    let texts: Vec<_> = cases.iter().map(|(text, _)| text.as_str()).collect();
+    let all = parse_steps(&texts);
+    for ((text, limit), steps) in cases.iter().zip(&all) {
+        assert!(
+            *steps <= *limit,
+            "{} digits took {steps} steps; all: {all:?}",
+            text.len()
         );
     }
 }

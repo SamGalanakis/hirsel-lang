@@ -10,10 +10,10 @@
   },
   "sources": [
     {
-      "path": "../../stdlib/std@1/big.hir",
+      "path": "../../stdlib/std@1/decimal_seq.hir",
       "module": [
         "internal",
-        "big"
+        "decimal_seq"
       ]
     },
     {

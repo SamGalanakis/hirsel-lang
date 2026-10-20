@@ -2,7 +2,7 @@
 // Gigabyte per Second", arXiv:2101.11408, sections 5 and 6), adapted from Rust
 // core library/core/src/num/imp/dec2flt/{lemire,table}.rs (rust-lang/rust
 // f6c1107f8be13e48465e12c0fd26e6a39fe18e4f, MIT). It decides almost every input
-// with one or two 64x64-bit products; the callers keep the exact bignum path for
+// with one or two 64x64-bit products; the callers keep the exact slow path for
 // the rest. Helpers live below internal/ and have no external package visibility.
 // The 128-bit truncations of 5^q for q in [-342, 308], normalized so the top bit
 // is set: high word, then low word.
@@ -1357,8 +1357,9 @@ fn product(q: i64, w: u64, precision: u64) -> (u64, u64) uses {} {
 
 // The IEEE fields (biased exponent and stored fraction, without the sign) of the
 // float nearest w * 10^q, for a format with `fraction` stored bits and exponent
-// bias `bias` (binary64 or binary32), or None when the product cannot decide the
-// rounding or the result is zero or infinite: the caller decides those exactly.
+// bias `bias` (binary64 or binary32): 0 for zero and the all-ones exponent for
+// infinity, as Rust's fp_zero and fp_inf. None when the product cannot decide the
+// rounding (Rust's fp_error); the caller decides those exactly.
 @noalloc
 pub fn compute(q: i64, w: u64, fraction: u64, bias: i32) -> Option[u64] uses {} {
   let binary64 = bias == 1023
@@ -1372,8 +1373,17 @@ pub fn compute(q: i64, w: u64, fraction: u64, bias: i32) -> Option[u64] uses {} 
   } else {
     38
   }
-  if w == 0 || q < smallest || q > largest {
-    return None
+  let infinite: i64 = if binary64 {
+    2047
+  } else {
+    255
+  }
+  let infinity: u64 = core@1/int.narrow(infinite)
+  if w == 0 || q < smallest {
+    return Some(0)
+  }
+  if q > largest {
+    return Some(infinity << fraction)
   }
   let zeros = leading_zeros(w)
   let (high, low) = product(q, w << zeros, fraction + 3)
@@ -1388,16 +1398,13 @@ pub fn compute(q: i64, w: u64, fraction: u64, bias: i32) -> Option[u64] uses {} 
   let mut exponent = power(q) + core@1/int.narrow(upper) - core@1/int.narrow(zeros) - minimum + 1
   if exponent <= 0 {
     if -exponent + 1 >= 64 {
-      return None
+      return Some(0)
     }
     // Subnormal: the rounding carry may reach the smallest normal exponent.
     let subnormal: u64 = core@1/int.narrow(-exponent + 1)
     mantissa >>= subnormal
     mantissa += mantissa & 1
     mantissa >>= 1
-    if mantissa == 0 {
-      return None
-    }
     let biased: u64 = if mantissa >= 1u64 << fraction {
       1
     } else {
@@ -1426,13 +1433,8 @@ pub fn compute(q: i64, w: u64, fraction: u64, bias: i32) -> Option[u64] uses {} 
     mantissa = 1u64 << fraction
     exponent += 1
   }
-  let infinite: i64 = if binary64 {
-    2047
-  } else {
-    255
-  }
   if exponent >= infinite {
-    return None
+    return Some(infinity << fraction)
   }
   let biased: u64 = core@1/int.narrow(exponent)
   Some(biased << fraction | mantissa & (1u64 << fraction) - 1)

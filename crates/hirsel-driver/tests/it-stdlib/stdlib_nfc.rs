@@ -1096,8 +1096,8 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
             .replace("fn exact(t: Test, ", "pub fn probe(")
             .replace("-> () {", "-> bool {")
             .replace(
-                "test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)",
-                "std@1/internal.big.big_compare(actual, wanted, false) == 0",
+                "test.check(t, same_digits(d, expected, cutoff))",
+                "same_digits(d, expected, cutoff)",
             )
             + "\npub fn main(t: Test) -> Result[(), ()] { Ok(()) }\n";
         let mut loaded = load_program_source(

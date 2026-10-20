@@ -1,27 +1,36 @@
 // Decimal cutoff rounding shared by fixed formatting and the Rust flt2dec
-// significant-digit vectors. The sticky bit distinguishes an exact half tie.
+// significant-digit vectors: keep the exact digits before index `cut_at`, rounded
+// half to even. A carry out of the first digit moves the decimal point.
 @noalloc
-pub fn round_decimal(mut digits: internal.big.Big, discarded_places: u64) -> () uses {} {
-  let mut discarded = discarded_places
-  let mut sticky = false
-  let mut last: u64 = 0
-  while discarded > 0 {
-    sticky = sticky || last != 0
-    let places: u64 = if discarded >= 9 {
-      9
-    } else {
-      1
-    }
-    let remainder = internal.big.big_divide(mut digits, places)
-    if places == 9 {
-      last = remainder / 100000000
-      sticky = sticky || remainder % 100000000 != 0
-    } else {
-      last = remainder
-    }
-    discarded -= places
+pub fn round_decimal(mut d: internal.decimal_seq.DecimalSeq, cut_at: i64) -> () uses {} {
+  if cut_at < 0 {
+    // The first kept place is above every digit: below half a unit.
+    d.num_digits = 0
+    return
   }
-  if last > 5 || last == 5 && (sticky || internal.big.big_digit(digits, 0) % 2 != 0) {
-    internal.big.big_add_small(mut digits, 1)
+  let count: i64 = core@1/int.narrow(d.num_digits)
+  if cut_at >= count {
+    return
   }
+  let cut: u64 = core@1/int.narrow(cut_at)
+  // The digits are trimmed, so a digit after the cut, or a truncated one, is a
+  // nonzero tail.
+  let first = d.digits[cut]
+  let up = first > 5 || first == 5 && (cut + 1 < d.num_digits || d.truncated || cut > 0 && d.digits[cut - 1] % 2 != 0)
+  d.num_digits = cut
+  if !up {
+    return
+  }
+  let mut i = cut
+  while i > 0 {
+    i -= 1
+    if d.digits[i] < 9 {
+      d.digits[i] += 1
+      d.num_digits = i + 1
+      return
+    }
+  }
+  d.digits[0] = 1
+  d.num_digits = 1
+  d.decimal_point += 1
 }

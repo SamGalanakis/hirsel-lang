@@ -327,8 +327,8 @@ pub fn integer(
   repeat(mut out, fill, right)
 }
 
-// Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest.
-// Divide discarded decimal digits with a sticky bit; ties select an even digit.
+// The exact decimal expansion (the parser's DecimalSeq, every digit kept) rounded
+// half to even at `precision` fractional digits (format_round.hir).
 @preserves_unique(out)
 pub fn fixed(
   mantissa: u64,
@@ -342,66 +342,14 @@ pub fn fixed(
   kind: u64,
   mut out: List[u8]
 ) -> () uses {} {
-  let mut significand = mantissa
-  let mut binary_power = if mantissa == 0 {
-    0i32
+  let places: i64 = core@1/int.narrow(precision)
+  let mut d = internal.decimal_seq.exact(mantissa, exponent, places)
+  let point: i64 = core@1/int.widen(d.decimal_point)
+  round_decimal(mut d, point + places)
+  let whole: u64 = if d.decimal_point > 0 {
+    core@1/int.narrow(d.decimal_point)
   } else {
-    exponent
-  }
-  while binary_power < 0 && significand % 2 == 0 {
-    significand /= 2
-    binary_power += 1
-  }
-  let mut digits = internal.big.big_from_word(significand)
-  let scale: u64 = if binary_power < 0 {
-    core@1/int.narrow(-binary_power)
-  } else {
-    0
-  }
-  internal.big.big_power(
-    mut digits,
-    if binary_power < 0 {
-      5
-    } else {
-      2
-    },
-    if binary_power < 0 {
-      scale
-    } else {
-      core@1/int.narrow(binary_power)
-    }
-  )
-  round_decimal(
-    mut digits,
-    if scale > precision {
-      scale - precision
-    } else {
-      0u64
-    }
-  )
-  let trailing = if precision > scale {
-    precision - scale
-  } else {
-    0u64
-  }
-  let mut count: u64 = if digits.used == 0 {
     1
-  } else {
-    (digits.used - 1) * 9 + 1
-  }
-  let mut top = if digits.used == 0 {
-    0u64
-  } else {
-    internal.big.big_digit(digits, digits.used - 1)
-  }
-  while top >= 10 {
-    top /= 10
-    count += 1
-  }
-  let whole = if count + trailing > precision {
-    count + trailing - precision
-  } else {
-    1u64
   }
   let right = begin(
     whole + if precision > 0 {
@@ -417,25 +365,26 @@ pub fn fixed(
     flags,
     mut out
   )
-  let leading = whole + precision - count - trailing
+  // Digit k of the integer and fraction places is d.digits[k] for the integer
+  // places, offset by the decimal point; places past the kept digits are zeros.
+  let first_place: i64 = if d.decimal_point > 0 {
+    0
+  } else {
+    core@1/int.widen(d.decimal_point) - 1
+  }
   let mut at: u64 = 0
   while at < whole + precision {
     if at == whole && precision > 0 {
       core@1/list.push(mut out, 46u8)
     }
-    let mut digit: u64 = 0
-    if at >= leading && at - leading < count {
-      let index = count - 1 - (at - leading)
-      let limb = internal.big.big_digit(digits, index / 9)
-      let mut divisor: u64 = 1
-      let mut power = index % 9
-      while power > 0 {
-        divisor *= 10
-        power -= 1
-      }
-      digit = limb / divisor % 10
+    let place_offset: i64 = core@1/int.narrow(at)
+    let index = first_place + place_offset
+    let mut digit: u8 = 0
+    if index >= 0 && index < core@1/int.narrow(d.num_digits) {
+      let position: u64 = core@1/int.narrow(index)
+      digit = d.digits[position]
     }
-    core@1/list.push(mut out, core@1/int.narrow(48u64 + digit))
+    core@1/list.push(mut out, 48u8 + digit)
     at += 1
   }
   repeat(mut out, fill, right)

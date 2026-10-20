@@ -381,13 +381,6 @@
       ]
     },
     {
-      "path": "big.hir",
-      "module": [
-        "internal",
-        "big"
-      ]
-    },
-    {
       "path": "float_decimal.hir",
       "module": [
         "internal",
@@ -1068,6 +1061,13 @@
       "module": [
         "internal",
         "http1_parse"
+      ]
+    },
+    {
+      "path": "decimal_seq.hir",
+      "module": [
+        "internal",
+        "decimal_seq"
       ]
     }
   ],
