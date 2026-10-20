@@ -5,7 +5,7 @@
 //! user-visible destruction is a use on every exit path; writing a new value
 //! into a holder is not a use of its old value.
 use super::cfg::{Context, Graph, Op, binders, place};
-use super::properties::Properties;
+use super::properties::PropertyTable;
 use super::source_rows::SourceRows;
 use super::*;
 use hirsel_syntax::StmtKind;
@@ -21,10 +21,11 @@ pub(super) enum Holder {
 }
 
 pub(super) struct Liveness<'a> {
+    pub t: &'a TypeInterner,
     pub tree: &'a SyntaxTree,
     pub body: &'a CheckedBody,
     pub rows: &'a SourceRows,
-    pub properties: &'a [Properties],
+    pub properties: &'a PropertyTable,
     pub graph: &'a Graph,
     /// Temporaries that hold nothing and are never released (`constant_temporaries`).
     pub constants: &'a BTreeSet<ExprId>,
@@ -86,15 +87,15 @@ impl Liveness<'_> {
     /// A binding can hold a loan unless it is Plain (Plain values hold only
     /// identity loans, which PROV-1 tracks separately).
     fn holder(&self, binding: usize) -> Option<Holder> {
-        (!self.properties[self.body.bindings[binding].ty.index()].plain)
+        (!self.properties[self.body.bindings[binding].ty].plain)
             .then_some(Holder::Binding(binding))
     }
     /// Destroying a value that may contain a resource runs user code (DROP-2);
     /// copyable values have no user-visible destruction (DROP-1).
     fn destroyed(&self, binding: usize) -> bool {
         let ty = self.body.bindings[binding].ty;
-        !self.properties[ty.index()].copyable
-            || self.body.types.get(ty).unwrap().modes.multiplicity == Multiplicity::Once
+        !self.properties[ty].copyable
+            || self.t.get(ty).unwrap().modes.multiplicity == Multiplicity::Once
     }
     fn captures(&self, closure: ExprId, uses: &mut Vec<Holder>) {
         let Some(index) = self.rows.closure(closure) else {

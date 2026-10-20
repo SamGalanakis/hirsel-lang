@@ -1,9 +1,9 @@
 use super::cfg::{Context, Graph, Op, expression_type, place};
 use super::liveness::Holder;
-use super::properties::Properties;
+use super::properties::{Properties, PropertyTable};
 use super::*;
 use hirsel_diag::{Obligation, RuleId};
-use hirsel_syntax::{ExprKind, PassingMode, UnaryOp};
+use hirsel_syntax::{DefId, ExprKind, PassingMode, UnaryOp};
 use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, unique_rows};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -900,9 +900,10 @@ impl BindingKey {
 }
 impl InitialStorage {
     pub(super) fn new(
+        t: &TypeInterner,
         tree: &hirsel_syntax::SyntaxTree,
         body: &CheckedBody,
-        properties: &[Properties],
+        properties: &PropertyTable,
     ) -> Self {
         let count = body.bindings.len();
         let mut storage = Self {
@@ -944,19 +945,19 @@ impl InitialStorage {
                 .entry((binding.owner, BindingKey::of(&binding.binding)))
                 .or_default()
                 .push(index);
-            storage.refresh(index, body, properties);
+            storage.refresh(t, index, body, properties);
         }
         for (index, closure) in body.closures.iter().enumerate() {
             storage.closures.entry(closure.expression).or_insert(index);
         }
         storage
     }
-    fn refresh(&mut self, index: usize, body: &CheckedBody, properties: &[Properties]) {
+    fn refresh(&mut self, t: &TypeInterner, index: usize, body: &CheckedBody, properties: &PropertyTable) {
         work::count(Counter::OwnershipInitializedRows);
         let binding = &body.bindings[index];
-        let declared = body.types.get(binding.ty).unwrap().modes.relation.clone();
-        let plain = properties[binding.ty.index()].plain;
-        let mut value = Value::new(body.types.get(binding.ty).unwrap().modes.clone());
+        let declared = t.get(binding.ty).unwrap().modes.relation.clone();
+        let plain = properties[binding.ty].plain;
+        let mut value = Value::new(t.get(binding.ty).unwrap().modes.clone());
         if plain {
             value.modes.relation = Relation::global();
         }
@@ -990,11 +991,11 @@ impl InitialStorage {
         );
     }
     pub(super) fn postcondition_inputs(
-        &mut self,
+        &mut self, t: &TypeInterner,
         syntax: &ItemSyntax,
         owner: NameSite,
         body: &mut CheckedBody,
-        properties: &mut Vec<Properties>,
+        properties: &mut PropertyTable,
         uniqueness: &BTreeMap<ParamId, bool>,
         sendability: &BTreeMap<ParamId, bool>,
     ) {
@@ -1034,7 +1035,7 @@ impl InitialStorage {
                         .and_then(|indices| indices.first())
                     {
                         let old = body.bindings[index].ty;
-                        let mut row = body.types.get(old).unwrap().clone();
+                        let mut row = t.get(old).unwrap().clone();
                         row.modes.uniqueness = if unique {
                             Uniqueness::Unique
                         } else {
@@ -1050,10 +1051,10 @@ impl InitialStorage {
                                 row.sendability_requirement = SendabilityRequirement::None;
                             }
                         }
-                        if &row != body.types.get(old).unwrap() {
-                            body.bindings[index].ty = body.types.push(row);
-                            properties.push(properties[old.index()]);
-                            self.refresh(index, body, properties);
+                        if &row != t.get(old).unwrap() {
+                            body.bindings[index].ty = t.intern(row);
+                            properties.inherit(body.bindings[index].ty, old);
+                            self.refresh(t, index, body, properties);
                         }
                     }
                 }
@@ -1064,7 +1065,7 @@ impl InitialStorage {
     pub(super) fn environment_frames(&self) -> &BTreeSet<ExprId> {
         &self.environment_frames
     }
-    fn initial(&self, checker: &Checker<'_>) -> State {
+    fn initial(&self, checker: &Checker<'_, '_>) -> State {
         let mut slots = if matches!(checker.graph.owner, NameSite::Item) {
             self.inactive.clone()
         } else if checker.graph.scoped {
@@ -1081,8 +1082,8 @@ impl InitialStorage {
                 slot.value.envelope = checker
                     .creation_selectors()
                     .map(|_| BTreeSet::from([index]));
-                let row = checker.body.types.get(binding.ty).unwrap();
-                let property = checker.properties[binding.ty.index()];
+                let row = checker.t.get(binding.ty).unwrap();
+                let property = checker.properties[binding.ty];
                 let bound = matches!(row.kind, TypeKind::Parameter(p) if checker.body.resolution.generic_declarations.bounds(p).contains(&hirsel_syntax::Bound::Sendable));
                 let passing = checker.parameter_passing(&binding.owner, parameter);
                 // MODE-4: a taken noncopyable root has no other holder, since
@@ -1102,7 +1103,7 @@ impl InitialStorage {
                 {
                     slot.value.modes.sendability = Sendability::NotSendable;
                 }
-                if passing != PassingMode::Take && !checker.properties[binding.ty.index()].plain {
+                if passing != PassingMode::Take && !checker.properties[binding.ty].plain {
                     slot.value.set_alias(Some((index, Site::Binding(index))));
                     // A borrowed parameter is local to itself, and a written
                     // relation adds to that root (MODE-1, S2).
@@ -1119,7 +1120,7 @@ impl InitialStorage {
                         .loans
                         .insert(Kind::Bound, On::Binding(index), Site::Binding(index));
                 }
-                if checker.properties[binding.ty.index()].function && passing != PassingMode::Take {
+                if checker.properties[binding.ty].function && passing != PassingMode::Take {
                     slot.value
                         .loans
                         .insert(Kind::Bound, On::Environment, Site::Binding(index));
@@ -1130,7 +1131,7 @@ impl InitialStorage {
                 slot.value.set_alias(Some((index, Site::Binding(index))));
                 slot.value.modes.relation = Relation::environment();
             }
-            if checker.properties[binding.ty.index()].plain {
+            if checker.properties[binding.ty].plain {
                 slot.value.modes.relation = Relation::global();
             }
             slots.set(index, slot);
@@ -1167,7 +1168,7 @@ impl InitialStorage {
                 };
                 let mut slot = slots[index].clone();
                 slot.available = LIVE;
-                slot.value.modes = checker.body.types.get(capture.ty).unwrap().modes.clone();
+                slot.value.modes = checker.t.get(capture.ty).unwrap().modes.clone();
                 if let Some(dependencies) =
                     expression.and_then(|e| self.crossing_captures.get(&(e, *ordinal)))
                 {
@@ -1178,7 +1179,7 @@ impl InitialStorage {
                     (checker.graph.scoped && capture.usage != UseKind::Take)
                         .then_some((index, Site::Binding(index))),
                 );
-                if checker.properties[checker.body.bindings[index].ty.index()].plain {
+                if checker.properties[checker.body.bindings[index].ty].plain {
                     slot.value.modes.relation = Relation::global();
                 }
                 // CLO-1: this capture holds a closure local to its environment.
@@ -1202,7 +1203,8 @@ impl InitialStorage {
     }
 }
 
-struct Checker<'a> {
+struct Checker<'a, 's> {
+    t: &'a TypeInterner,
     proof_error: std::cell::RefCell<Option<QueryError>>,
     syntax: &'a ItemSyntax,
     tree: &'a hirsel_syntax::SyntaxTree,
@@ -1215,9 +1217,9 @@ struct Checker<'a> {
     own: &'a Signature,
     body: &'a mut CheckedBody,
     /// Signatures the property passes read, for proofs over flow modes.
-    signatures: &'a super::properties::Signatures,
+    signatures: &'a super::properties::Signatures<'s>,
     source_rows: &'a super::source_rows::SourceRows,
-    properties: &'a mut Vec<Properties>,
+    properties: &'a mut PropertyTable,
     result_sharing: &'a BTreeSet<ExprId>,
     projection_lifetimes: &'a BTreeMap<ExprId, super::properties::ProjectionLifetime>,
     pattern_declarations: &'a BTreeMap<hirsel_syntax::PatternId, TypeId>,
@@ -1321,16 +1323,17 @@ fn retention_depth(body: &CheckedBody) -> usize {
 /// CLO-1: a closure type whose global result only a global environment would
 /// justify, over an environment that is not, promises a local result.
 fn environment_result(
-    body: &mut CheckedBody,
-    properties: &mut Vec<Properties>,
+    t: &TypeInterner,
+    properties: &mut PropertyTable,
     ty: &mut hirsel_types::Type,
     arenas: &crate::arenas::Arenas,
 ) {
     if let TypeKind::Function(f) = &mut ty.kind {
-        let mut result = body.types.get(f.result).unwrap().clone();
+        let mut result = t.get(f.result).unwrap().clone();
         result.modes.relation = arenas.relocate(&result.modes.relation, &Relation::environment());
-        properties.push(properties[f.result.index()]);
-        f.result = body.types.push(result);
+        let old = f.result;
+        f.result = t.intern(result);
+        properties.inherit(f.result, old);
     }
 }
 /// The crossing mode of an environment holding both captures (MODE-4), as
@@ -1350,49 +1353,51 @@ fn join_sendability(current: Sendability, actual: Sendability) -> Sendability {
     }
 }
 /// Flow refines a row's lifetime; its placement stays the row's own.
-fn publish_row(
+fn publish_row(t: &TypeInterner, 
     body: &mut CheckedBody,
-    properties: &mut Vec<Properties>,
+    properties: &mut PropertyTable,
     root: TypeId,
     mut modes: Modes,
     environment: bool,
     arenas: &crate::arenas::Arenas,
 ) -> TypeId {
-    let mut ty = body.types.get(root).unwrap().clone();
+    let mut ty = t.get(root).unwrap().clone();
     modes.relation = arenas.relocate(&ty.modes.relation, &modes.relation);
     if environment {
-        environment_result(body, properties, &mut ty, arenas);
+        environment_result(t, properties, &mut ty, arenas);
     }
     if ty.modes == modes && !environment {
         return root;
     }
     ty.modes = modes;
-    properties.push(properties[root.index()]);
-    body.types.push(ty)
+    let id = t.intern(ty);
+    properties.inherit(id, root);
+    id
 }
 
 /// MODE-2: `root`'s row with each of `parts` aliased where the row claims
 /// it unique, as an inferred construction's row may.
 fn shared_parts_row(
+    t: &TypeInterner,
     body: &mut CheckedBody,
-    properties: &mut Vec<Properties>,
+    properties: &mut PropertyTable,
     root: TypeId,
     parts: &SharedParts,
 ) -> TypeId {
     parts.paths().fold(root, |root, path| {
-        shared_part_row(body, properties, root, path)
+        shared_part_row(t, body, properties, root, path)
     })
 }
-fn shared_part_row(
+fn shared_part_row(t: &TypeInterner, 
     body: &mut CheckedBody,
-    properties: &mut Vec<Properties>,
+    properties: &mut PropertyTable,
     ty: TypeId,
     path: &[Projection],
 ) -> TypeId {
-    let Some(mut row) = body.types.get(ty).cloned() else {
+    let Some(mut row) = t.get(ty).cloned() else {
         return ty;
     };
-    let Some(property) = properties.get(ty.index()).copied() else {
+    let Some(property) = properties.get(ty).copied() else {
         return ty;
     };
     match path.split_first() {
@@ -1409,7 +1414,7 @@ fn shared_part_row(
             let index = *index as usize;
             match &row.kind {
                 TypeKind::Tuple(parts) if index < parts.len() => {
-                    let part = shared_part_row(body, properties, parts[index], rest);
+                    let part = shared_part_row(t, body, properties, parts[index], rest);
                     if part == parts[index] {
                         return ty;
                     }
@@ -1419,7 +1424,7 @@ fn shared_part_row(
                 }
                 TypeKind::Box(part) if index == 0 => {
                     let part = *part;
-                    let weakened = shared_part_row(body, properties, part, rest);
+                    let weakened = shared_part_row(t, body, properties, part, rest);
                     if weakened == part {
                         return ty;
                     }
@@ -1430,8 +1435,9 @@ fn shared_part_row(
         }
         Some(_) => return ty,
     }
-    properties.push(property);
-    body.types.push(row)
+    let id = t.intern(row);
+    properties.insert(id, property);
+    id
 }
 
 fn fold_part_locality(
@@ -1452,18 +1458,14 @@ fn fold_part_locality(
 
 /// Borrowed frame inputs whose proof is consumed at a qualified call. This is
 /// private capture validation, separate from generic signature admissibility.
-pub(super) fn capture_crossing_uses(
+pub(super) fn capture_crossing_uses(t: &TypeInterner, 
     body: &CheckedBody,
     graphs: &[Graph],
     rows: &super::source_rows::SourceRows,
     own: &Signature,
-    signatures: &super::properties::Signatures,
+    signatures: &super::properties::Signatures<'_>,
 ) -> Result<BTreeMap<ExprId, Vec<(usize, Vec<Projection>)>>, QueryError> {
     let mut result = BTreeMap::new();
-    // Receiving views are scratch rows over the body's own: one detached copy
-    // serves every argument, never a copy of the store per argument.
-    let mut store = body.types.clone();
-    let mark = store.mark();
     for graph in graphs {
         let NameSite::Expression(expression) = graph.owner else {
             continue;
@@ -1494,7 +1496,6 @@ pub(super) fn capture_crossing_uses(
                 else {
                     continue;
                 };
-                store.truncate_to(mark);
                 let mut expected = requirement.ty;
                 if let Some(call) = rows.call(*expression).map(|index| &body.calls[index]) {
                     if let Some(Type {
@@ -1502,13 +1503,13 @@ pub(super) fn capture_crossing_uses(
                         ..
                     }) = rows
                         .expression(*callee)
-                        .and_then(|index| body.types.get(body.expressions[index].ty))
+                        .and_then(|index| t.get(body.expressions[index].ty))
                     {
                         if let Some(qualified) = generic_crossing_parameter(
-                            &body.types,
+                            t,
+                            signatures.m,
                             function,
                             requirement.parameter as usize,
-                            &mut store,
                             &call.generic_arguments,
                             &own.metadata.roles,
                         )
@@ -1523,16 +1524,10 @@ pub(super) fn capture_crossing_uses(
                     }
                 }
                 let mut paths = owned_crossing_receipts(
-                    &store,
+                    t,
                     expected,
                     &body.resolution.generic_declarations,
-                    &mut |path| {
-                        Ok(if path == &own.definition {
-                            Some(Arc::new(own.clone()))
-                        } else {
-                            signatures.cached(path)
-                        })
-                    },
+                    &mut |d| Ok(signatures.cached(d)),
                 )?
                 .into_iter()
                 .filter(|(_, stable)| !stable)
@@ -1570,12 +1565,12 @@ pub(super) fn capture_crossing_uses(
     Ok(result)
 }
 
-pub(super) fn check(
+pub(super) fn check(t: &TypeInterner, 
     syntax: &ItemSyntax,
     own: &Signature,
     body: &mut CheckedBody,
-    signatures: &super::properties::Signatures,
-    properties: &mut Vec<Properties>,
+    signatures: &super::properties::Signatures<'_>,
+    properties: &mut PropertyTable,
     initial_storage: &mut InitialStorage,
     source_rows: &super::source_rows::SourceRows,
     result_sharing: &BTreeSet<ExprId>,
@@ -1594,6 +1589,7 @@ pub(super) fn check(
     let constants =
         constant_temporaries(&graph, body, source_rows, properties, projection_lifetimes);
     let live = super::liveness::Liveness {
+        t,
         tree,
         body,
         rows: source_rows,
@@ -1632,13 +1628,14 @@ pub(super) fn check(
             if let Some(capture) = capture_layout.and_then(|c| c.captures.get(*ordinal)) {
                 capture_physical_modes
                     .entry(*index)
-                    .or_insert_with(|| body.types.get(capture.ty).unwrap().modes.clone());
+                    .or_insert_with(|| t.get(capture.ty).unwrap().modes.clone());
             }
         }
     }
-    let arenas = crate::arenas::Arenas::new(body, own);
+    let arenas = crate::arenas::Arenas::new(t, body, own);
     let parameter_parts = parameter_parts::ParameterParts::new(body, &graph, source_rows);
     let mut checker = Checker {
+        t,
         arenas,
         source_rows,
         syntax,
@@ -1727,7 +1724,7 @@ pub(super) fn check(
                 UseKind::Mut
             } else if initial.slots[index].value.aliased().is_some() {
                 UseKind::Borrow
-            } else if checker.properties[b.ty.index()].plain {
+            } else if checker.properties[b.ty].plain {
                 UseKind::Copy
             } else {
                 UseKind::Take
@@ -1767,7 +1764,7 @@ pub(super) fn check(
     for (expression, modes) in checker.modes {
         if let Some(index) = checker.source_rows.expression(expression) {
             let ty = publish_row(
-                checker.body,
+                t, checker.body,
                 checker.properties,
                 checker.body.expressions[index].ty,
                 modes,
@@ -1775,19 +1772,19 @@ pub(super) fn check(
                 &checker.arenas,
             );
             let ty = match checker.shared_parts.get(&expression) {
-                Some(parts) => shared_parts_row(checker.body, checker.properties, ty, parts),
+                Some(parts) => shared_parts_row(t, checker.body, checker.properties, ty, parts),
                 None => ty,
             };
             // An expression publishes current evidence. Its source's written
             // root requirement belongs to that storage, not to a new receipt.
             // Owned part contracts remain in the graph.
-            let ty = if checker.body.types.get(ty).unwrap().sendability_requirement
+            let ty = if checker.t.get(ty).unwrap().sendability_requirement
                 != SendabilityRequirement::None
             {
-                let mut row = checker.body.types.get(ty).unwrap().clone();
+                let mut row = checker.t.get(ty).unwrap().clone();
                 row.sendability_requirement = SendabilityRequirement::None;
-                let root = checker.body.types.push(row);
-                checker.properties.push(checker.properties[ty.index()]);
+                let root = checker.t.intern(row);
+                checker.properties.inherit(root, ty);
                 root
             } else {
                 ty
@@ -1806,14 +1803,12 @@ pub(super) fn check(
     }
     for (expression, modes) in checker.physical_modes {
         let plan = &checker.projection_lifetimes[&expression];
-        let mut ty = checker.body.types.get(plan.physical).unwrap().clone();
+        let mut ty = checker.t.get(plan.physical).unwrap().clone();
         let relation = checker.arenas.relocate(&ty.modes.relation, &modes.relation);
         ty.modes = modes;
         ty.modes.relation = relation;
-        let physical = checker.body.types.push(ty);
-        checker
-            .properties
-            .push(checker.properties[plan.physical.index()]);
+        let physical = checker.t.intern(ty);
+        checker.properties.inherit(physical, plan.physical);
         checker
             .facts
             .physical_projections
@@ -1822,13 +1817,13 @@ pub(super) fn check(
     for pattern in checker.environment_patterns.clone() {
         checker.pattern_modes.entry(pattern).or_insert_with(|| {
             let row = &checker.body.patterns[checker.pattern_indices[&pattern]];
-            checker.body.types.get(row.ty).unwrap().modes.clone()
+            checker.t.get(row.ty).unwrap().modes.clone()
         });
     }
     for (pattern, modes) in checker.pattern_modes {
         let index = checker.pattern_indices[&pattern];
         checker.body.patterns[index].ty = publish_row(
-            checker.body,
+            t, checker.body,
             checker.properties,
             checker.body.patterns[index].ty,
             modes,
@@ -1840,7 +1835,7 @@ pub(super) fn check(
     for (binding, modes) in checker.binding_modes {
         let previous = checker.body.bindings[binding].ty;
         let ty = publish_row(
-            checker.body,
+            t, checker.body,
             checker.properties,
             previous,
             modes,
@@ -1848,7 +1843,7 @@ pub(super) fn check(
             &checker.arenas,
         );
         let ty = match checker.binding_parts.get(&binding) {
-            Some(parts) => shared_parts_row(checker.body, checker.properties, ty, parts),
+            Some(parts) => shared_parts_row(t, checker.body, checker.properties, ty, parts),
             None => ty,
         };
         let row = &mut checker.body.bindings[binding];
@@ -1870,7 +1865,7 @@ pub(super) fn check(
         }
     }
     for binding in updated_bindings {
-        initial_storage.refresh(binding, checker.body, checker.properties);
+        initial_storage.refresh(t, binding, checker.body, checker.properties);
     }
     initial_storage
         .environment_captures
@@ -1899,7 +1894,7 @@ fn constant_temporaries(
     graph: &Graph,
     body: &CheckedBody,
     rows: &super::source_rows::SourceRows,
-    properties: &[Properties],
+    properties: &PropertyTable,
     projection_lifetimes: &BTreeMap<ExprId, super::properties::ProjectionLifetime>,
 ) -> BTreeSet<ExprId> {
     graph
@@ -1918,14 +1913,14 @@ fn constant_temporaries(
         })
         .filter(|expression| {
             expression_type(body, *expression, rows)
-                .and_then(|ty| properties.get(ty.index()))
+                .and_then(|ty| properties.get(ty))
                 .is_some_and(|p| p.valid && p.plain)
         })
         .collect()
 }
 /// The converged input of every node.
 fn solve(
-    checker: &mut Checker<'_>,
+    checker: &mut Checker<'_, '_>,
     initial: State,
     live: &[BTreeSet<Holder>],
 ) -> Vec<Option<State>> {
@@ -1972,7 +1967,7 @@ fn solve(
     }
     inputs
 }
-impl Checker<'_> {
+impl Checker<'_, '_> {
     fn finalizer_self(&self, index: usize) -> bool {
         let binding = &self.body.bindings[index];
         binding.site == binding.owner
@@ -2007,6 +2002,9 @@ impl Checker<'_> {
             .and_then(|s| s.parameters.get(parameter.0 as usize))
             .map_or(PassingMode::Borrow, |p| p.passing)
     }
+    fn intern(&self, row: hirsel_types::Type) -> TypeId {
+        self.t.intern(row)
+    }
     fn ty(&self, expression: ExprId) -> Option<TypeId> {
         expression_type(self.body, expression, self.source_rows)
     }
@@ -2024,28 +2022,15 @@ impl Checker<'_> {
         let Some(root) = self.ty(expression) else {
             return;
         };
-        let mut row = self.body.types.get(root).unwrap().clone();
+        let mut row = self.t.get(root).unwrap().clone();
         if self.arenas.placed(&row.modes.relation) {
             value.modes.sendability = Sendability::NotSendable;
             return;
         }
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::NotSendable;
-        let mut store = self.body.types.clone();
-        let root = store.push(row);
-        let own = self.own;
-        value.modes.sendability = content_sendability(
-            &store,
-            root,
-            &self.body.resolution.generic_declarations,
-            &mut |path| {
-                Ok::<_, QueryError>(if path == &own.definition {
-                    Some(Arc::new(own.clone()))
-                } else {
-                    self.signatures.cached(path)
-                })
-            },
-        )
+        let root = self.intern(row);
+        value.modes.sendability = self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
         .unwrap_or_else(|error| {
             *self.proof_error.borrow_mut() = Some(error);
             Sendability::NotSendable
@@ -2053,7 +2038,7 @@ impl Checker<'_> {
     }
     fn may_capture(&self, expression: ExprId) -> bool {
         self.ty(expression)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| matches!(row.kind, TypeKind::Function(_) | TypeKind::Parameter(_)))
     }
     /// The captures a closure call's result may share (#80), when each is
@@ -2114,8 +2099,8 @@ impl Checker<'_> {
                 .arenas
                 .definition
                 .as_ref()
-                .is_some_and(|arena| hirsel_types::is_arena_type(&self.body.types, ty, arena));
-            if arena || self.properties[ty.index()].plain {
+                .is_some_and(|arena| hirsel_types::is_arena_type(self.t, ty, arena));
+            if arena || self.properties[ty].plain {
                 continue;
             }
             taken |= !named && self.taken_storage(state, binding);
@@ -2222,7 +2207,7 @@ impl Checker<'_> {
     }
     fn property(&self, expression: ExprId) -> Option<Properties> {
         self.ty(expression)
-            .and_then(|id| self.properties.get(id.index()).copied())
+            .and_then(|id| self.properties.get(id).copied())
             .filter(|p| p.valid)
     }
     /// MODE-4, SEM-4: an erased environment captures an argument's current
@@ -2258,7 +2243,7 @@ impl Checker<'_> {
             && value.sources().any(|source| {
                 let binding = &self.body.bindings[source];
                 matches!(binding.binding, ResolvedName::Parameter(p) if self.parameter_passing(&binding.owner, p) == PassingMode::Take)
-                    && !self.arenas.global(&self.body.types.get(binding.ty).unwrap().modes.relation)
+                    && !self.arenas.global(&self.t.get(binding.ty).unwrap().modes.relation)
             }) {
             return Sendability::NotSendable;
         }
@@ -2271,7 +2256,7 @@ impl Checker<'_> {
         let Some(root) = expression_type(self.body, expression, self.source_rows) else {
             return Sendability::NotSendable;
         };
-        let mut row = self.body.types.get(root).unwrap().clone();
+        let mut row = self.t.get(root).unwrap().clone();
         if value.modes.sendability == Sendability::NotSendable
             && row.modes.relation.named_parameters().is_some()
         {
@@ -2282,26 +2267,13 @@ impl Checker<'_> {
         }
         let mut modes = value.modes.clone();
         modes.relation = self.arenas.relocate(&row.modes.relation, &modes.relation);
-        let mut store = std::borrow::Cow::Borrowed(&self.body.types);
         let root = if row.modes == modes {
             root
         } else {
             row.modes = modes;
-            store.to_mut().push(row)
+            self.intern(row)
         };
-        let own = self.own;
-        content_sendability(
-            &store,
-            root,
-            &self.body.resolution.generic_declarations,
-            &mut |path| {
-                Ok::<_, QueryError>(if path == &own.definition {
-                    Some(Arc::new(own.clone()))
-                } else {
-                    self.signatures.cached(path)
-                })
-            },
-        )
+        self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
         .unwrap_or(Sendability::NotSendable)
     }
     /// MODE-4: a global construction whose every part currently crosses
@@ -2322,7 +2294,7 @@ impl Checker<'_> {
         if !self.arenas.global(&value.modes.relation)
             || self
                 .arenas
-                .placed(&self.body.types.get(root).unwrap().modes.relation)
+                .placed(&self.t.get(root).unwrap().modes.relation)
         {
             return false;
         }
@@ -2341,7 +2313,7 @@ impl Checker<'_> {
             .unwrap_or_else(|| {
                 Value::new(
                     self.ty(expression)
-                        .and_then(|id| self.body.types.get(id))
+                        .and_then(|id| self.t.get(id))
                         .map_or_else(Modes::global, |t| t.modes.clone()),
                 )
             })
@@ -2392,7 +2364,7 @@ impl Checker<'_> {
                 state.slots[root].value.modes.relation.clone()
             }
             super::properties::ProjectionRoot::Constant(root) => {
-                self.body.types.get(root).unwrap().modes.relation.clone()
+                self.t.get(root).unwrap().modes.relation.clone()
             }
         };
         fold_part_locality(&self.arenas, root, &projection.parts)
@@ -2424,7 +2396,7 @@ impl Checker<'_> {
                 .is_some_and(|written| {
                     written.function
                         || matches!(
-                            self.body.types.get(row.ty).unwrap().kind,
+                            self.t.get(row.ty).unwrap().kind,
                             TypeKind::Builtin {
                                 kind: BuiltinType::Iter,
                                 ..
@@ -2466,7 +2438,7 @@ impl Checker<'_> {
             ProjectionRoot::Value(expression) => self
                 .tail_root_modes(state, expression)
                 .unwrap_or_else(|| self.value(state, expression).modes),
-            ProjectionRoot::Constant(root) => self.body.types.get(root).unwrap().modes.clone(),
+            ProjectionRoot::Constant(root) => self.t.get(root).unwrap().modes.clone(),
             ProjectionRoot::Binding(index) => {
                 let binding = &self.body.bindings[index];
                 if let Some(modes) = self.capture_physical_modes.get(&index) {
@@ -2483,7 +2455,7 @@ impl Checker<'_> {
                 }
                 // Ordinary storage keeps its receiving lifetime. Owned
                 // acquisition publishes stronger current content separately.
-                let mut modes = self.body.types.get(binding.ty).unwrap().modes.clone();
+                let mut modes = self.t.get(binding.ty).unwrap().modes.clone();
                 modes.relation = state.slots[index].declared.clone();
                 modes
             }
@@ -2599,7 +2571,7 @@ impl Checker<'_> {
                     if let Some(row) = self.body.patterns.iter_mut().find(|p| p.pattern == pattern)
                     {
                         pending.extend(row.subpatterns());
-                        let plain = self.properties[row.ty.index()].plain;
+                        let plain = self.properties[row.ty].plain;
                         let commit = if plain {
                             UseKind::Copy
                         } else if borrowed {
@@ -2650,10 +2622,7 @@ impl Checker<'_> {
         if self.property(expression).is_some_and(|p| p.plain) {
             // Plain reads copy a value, not an owner's blocks (MODE-1/OWN-8).
             // Freshness and container modes cannot change that scalar evidence.
-            let declared = &self
-                .body
-                .types
-                .get(self.ty(expression).unwrap())
+            let declared = &self.t.get(self.ty(expression).unwrap())
                 .unwrap()
                 .modes;
             value.modes.relation = Relation::global();
@@ -2741,7 +2710,7 @@ impl Checker<'_> {
     fn loaned(&self, state: &State, place: &Place) -> bool {
         self.lender(state, place).is_some()
             || self.iterated(state, place)
-            || (!self.properties[self.body.bindings[place.binding].ty.index()].plain
+            || (!self.properties[self.body.bindings[place.binding].ty].plain
                 && self.capturer(state, place.binding).is_some())
     }
     /// The values live after this operation, which keep their loans (LANG-3),
@@ -2850,7 +2819,7 @@ impl Checker<'_> {
     }
     fn callee_preserves_state(&self, callee: ExprId, ordinal: usize, advance: bool) -> bool {
         self.ty(callee)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| {
                 let TypeKind::Function(function) = &row.kind else {
                     return false;
@@ -2885,7 +2854,7 @@ impl Checker<'_> {
                 };
                 let passing = self.parameter_passing(&binding.owner, parameter);
                 if (parameter == selected || passing == PassingMode::Take)
-                    && !self.properties[binding.ty.index()].plain
+                    && !self.properties[binding.ty].plain
                 {
                     state.slots[index].value.modes.uniqueness = Uniqueness::Unique;
                 }
@@ -2898,7 +2867,7 @@ impl Checker<'_> {
     fn callee_preserves_unique(&self, callee: ExprId, ordinal: usize) -> bool {
         let promised = self
             .ty(callee)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| {
                 let TypeKind::Function(function) = &row.kind else {
                     return false;
@@ -2909,7 +2878,7 @@ impl Checker<'_> {
                 }) || ordinal == 1
                     && self.callee_definition(callee).is_some_and(|path| {
                         super::properties::format_association(
-                            &self.body.types,
+                            self.t,
                             function,
                             path,
                             self.signatures,
@@ -2925,13 +2894,13 @@ impl Checker<'_> {
         self.property(expression).is_some_and(|p| !p.copyable)
             || self
                 .ty(expression)
-                .and_then(|ty| self.body.types.get(ty))
+                .and_then(|ty| self.t.get(ty))
                 .is_some_and(|row| row.modes.multiplicity == Multiplicity::Once)
     }
     fn binding_destroyed(&self, binding: usize) -> bool {
         let ty = self.body.bindings[binding].ty;
-        !self.properties[ty.index()].copyable
-            || self.body.types.get(ty).unwrap().modes.multiplicity == Multiplicity::Once
+        !self.properties[ty].copyable
+            || self.t.get(ty).unwrap().modes.multiplicity == Multiplicity::Once
     }
     /// MODE-2: a direct generic call whose result holds only values of type
     /// parameters it cannot copy returns a unique result when every argument
@@ -2948,15 +2917,15 @@ impl Checker<'_> {
         };
         let Some(TypeKind::Function(function)) = self
             .ty(callee)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .map(|row| &row.kind)
         else {
             return false;
         };
-        let mut lookup = |path: &hirsel_syntax::DefPath| Ok(self.signatures.cached(path));
+        let mut lookup = |d: DefId| Ok(self.signatures.cached(d));
         // A bodyless core declaration has no checked body.
         let checked = !path.package_is("core", "1");
-        let Some(inputs) = parametric_inputs(&self.body.types, function, checked, &mut lookup)
+        let Some(inputs) = parametric_inputs(self.t, function, checked, &mut lookup)
         else {
             return false;
         };
@@ -2975,13 +2944,13 @@ impl Checker<'_> {
                     }
                     Some(ParametricInput::UniqueResult) => self
                         .ty(argument.value)
-                        .and_then(|ty| match &self.body.types.get(ty)?.kind {
+                        .and_then(|ty| match &self.t.get(ty)?.kind {
                             TypeKind::Function(f) => Some(f.result),
                             _ => None,
                         })
                         .is_some_and(|result| {
                             unique_rows(
-                                &self.body.types,
+                                self.t,
                                 result,
                                 &self.body.resolution.generic_declarations,
                                 &mut |path| Ok(self.signatures.cached(path)),
@@ -2994,7 +2963,7 @@ impl Checker<'_> {
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.
     fn callee_unretained(&self, callee: ExprId, ordinal: usize) -> bool {
         self.ty(callee)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| {
                 let TypeKind::Function(function) = &row.kind else {
                     return false;
@@ -3039,7 +3008,7 @@ impl Checker<'_> {
         else {
             return;
         };
-        let Some(signature) = self.signatures.cached(&path) else {
+        let Some(signature) = self.signatures.cached(DefId::intern(&path)) else {
             return;
         };
         let SignatureKind::Function(function) = &signature.kind else {
@@ -3048,9 +3017,7 @@ impl Checker<'_> {
         let [parameter] = function.parameters.as_slice() else {
             return;
         };
-        if signature
-            .types
-            .get(parameter.ty)
+        if self.t.get(parameter.ty)
             .map(|row| row.modes.uniqueness)
             != Some(Uniqueness::Unique)
         {
@@ -3058,7 +3025,7 @@ impl Checker<'_> {
         }
         let Some(TypeKind::Named { arguments, .. }) = self
             .ty(value)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .map(|row| &row.kind)
         else {
             return;
@@ -3068,7 +3035,7 @@ impl Checker<'_> {
         };
         if self
             .properties
-            .get(error.index())
+            .get(*error)
             .is_some_and(|p| p.plain || p.shared)
             || self.value(state, value).modes.uniqueness == Uniqueness::Unique
         {
@@ -3150,7 +3117,7 @@ impl Checker<'_> {
         let mut held = BTreeSet::new();
         for (index, slot) in state.slots.entries() {
             if slot.available & LIVE != 0
-                && !self.properties[self.body.bindings[index].ty.index()].plain
+                && !self.properties[self.body.bindings[index].ty].plain
             {
                 held.extend(
                     self.reached_bindings(state, &slot.value)
@@ -3191,12 +3158,12 @@ impl Checker<'_> {
                 && state.slots[index].available == LIVE
                 && (promised
                     || self.unique_proof.is_none()
-                        && self.body.types.get(binding.ty).unwrap().modes.uniqueness
+                        && self.t.get(binding.ty).unwrap().modes.uniqueness
                             == Uniqueness::Unique)
                 && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
                 && !(state.slots[index].value.borrow_only && !held.contains(&index))
-                && !self.properties[binding.ty.index()].plain
-                && !self.properties[binding.ty.index()].shared
+                && !self.properties[binding.ty].plain
+                && !self.properties[binding.ty].shared
                 && self.lost_handbacks.insert(index)
             {
                 self.report(
@@ -3231,7 +3198,7 @@ impl Checker<'_> {
                     });
             if state.slots[index].available == LIVE
                 && (nested_lost
-                    || crossing_requirement(self.body.types.get(binding.ty).unwrap())
+                    || crossing_requirement(self.t.get(binding.ty).unwrap())
                         == Sendability::Sendable
                         && state.slots[index].value.modes.sendability != Sendability::Sendable)
             {
@@ -3359,9 +3326,9 @@ impl Checker<'_> {
         }
         if !place.projections.is_empty() {
             let ty = self.body.bindings[place.binding].ty;
-            if self.properties[ty.index()].shared
+            if self.properties[ty].shared
                 || matches!(
-                    self.body.types.get(ty).unwrap().kind,
+                    self.t.get(ty).unwrap().kind,
                     TypeKind::Builtin {
                         kind: BuiltinType::Region,
                         ..
@@ -3495,7 +3462,7 @@ impl Checker<'_> {
                 &part,
                 matches!(capture.usage, UseKind::Borrow | UseKind::Mut),
             );
-            let plain = self.properties[ty.index()].plain;
+            let plain = self.properties[ty].plain;
             if !plain
                 && matches!(capture.usage, UseKind::Borrow | UseKind::Mut)
                 && !self.arenas.global(&part.modes.relation)
@@ -3510,9 +3477,9 @@ impl Checker<'_> {
                     value.bound_by(scope, Site::Expression(expression));
                 }
             }
-            let flat = self.properties[ty.index()].flat;
+            let flat = self.properties[ty].flat;
             let specialized = metadata.is_some_and(|m| m.context == CaptureContext::Task)
-                || self.properties[ty.index()].scoped_capability;
+                || self.properties[ty].scoped_capability;
             let closure = self.span_of(expression);
             if state.slots[index].available != LIVE {
                 self.report(
@@ -3585,7 +3552,7 @@ impl Checker<'_> {
             // J judges the captured type; whether a share since made it
             // unsendable is I's.
             let receiver = matches!(
-                self.body.types.get(ty).map(|row| &row.kind),
+                self.t.get(ty).map(|row| &row.kind),
                 Some(TypeKind::Builtin {
                     kind: BuiltinType::Receiver,
                     ..
@@ -3596,7 +3563,7 @@ impl Checker<'_> {
                 && !plain
                 && !flat
                 && !receiver
-                && !self.properties[ty.index()].shared
+                && !self.properties[ty].shared
                 && part.modes.sendability == Sendability::NotSendable
             {
                 self.report(
@@ -3618,7 +3585,7 @@ impl Checker<'_> {
             let copied_inline = !take && (escaping || plain) && flat;
             if !plain
                 && !copied_inline
-                && !self.properties[ty.index()].shared
+                && !self.properties[ty].shared
                 && (!take || part.modes.uniqueness != Uniqueness::Unique)
             {
                 value.modes.uniqueness = Uniqueness::Aliased;
@@ -3631,8 +3598,8 @@ impl Checker<'_> {
                 // A task closure copies its other free uses too (CLO-3), so a
                 // noncopyable capture must be taken there as well.
                 let task = metadata.is_some_and(|m| m.context == CaptureContext::Task);
-                if !self.properties[ty.index()].scoped_capability
-                    && !self.properties[ty.index()].copyable
+                if !self.properties[ty].scoped_capability
+                    && !self.properties[ty].copyable
                 {
                     self.report(
                         const { RuleId::of("OWN-5") },
@@ -3661,7 +3628,7 @@ impl Checker<'_> {
                 }
                 if !plain && !flat {
                     state.slots[index].value.share();
-                    if !self.properties[self.body.bindings[index].ty.index()].sendable_aliased {
+                    if !self.properties[self.body.bindings[index].ty].sendable_aliased {
                         state.slots[index].value.modes.sendability = Sendability::NotSendable;
                         state.slots[index]
                             .value
@@ -3697,25 +3664,13 @@ impl Checker<'_> {
             };
             // The environment owns the captured value after extraction.
             // Copying a counted payload cannot retain its source's proof.
-            let mut captured = self.body.types.get(capture.ty).unwrap().clone();
+            let mut captured = self.t.get(capture.ty).unwrap().clone();
             captured.modes = part.modes.clone();
-            let mut store = self.body.types.clone();
-            let captured = store.push(captured);
-            let mut lookup = |path: &hirsel_syntax::DefPath| Ok(self.signatures.cached(path));
+            let captured = self.intern(captured);
             let proof = if usage == UseKind::Copy {
-                sendability_after_sharing(
-                    &store,
-                    captured,
-                    &self.body.resolution.generic_declarations,
-                    &mut lookup,
-                )
+                self.signatures.prove_cached(|memo| hirsel_modes::proofs::sendability_after_sharing(memo, captured))
             } else {
-                content_sendability(
-                    &store,
-                    captured,
-                    &self.body.resolution.generic_declarations,
-                    &mut lookup,
-                )
+                self.signatures.prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, captured))
             }
             .unwrap_or_else(|error| {
                 *self.proof_error.borrow_mut() = Some(error);
@@ -3726,7 +3681,7 @@ impl Checker<'_> {
             // borrowing a resource does not consume it; capturing a
             // once callable still requires Once, even when borrowed.
             if part.modes.multiplicity == Multiplicity::Once
-                || (usage != UseKind::Borrow && !self.properties[ty.index()].copyable)
+                || (usage != UseKind::Borrow && !self.properties[ty].copyable)
             {
                 value.modes.multiplicity = Multiplicity::Once;
             }
@@ -3736,14 +3691,14 @@ impl Checker<'_> {
                 // J selected the capture graph; I owns the source's modes
                 // at creation and the effect of copying or taking it.
                 // Publish that judgment on the capture as well as its use.
-                let mut ty = self.body.types.get(capture.ty).unwrap().clone();
+                let mut ty = self.t.get(capture.ty).unwrap().clone();
                 let row = ty.modes.relation.clone();
                 ty.modes = part.modes.clone();
                 if usage == UseKind::Copy {
                     // A copied Shared root, Mutex or Atomic is an independent
                     // global handle (MEM-11, CONC-2), also inside an aggregate
                     // of handles and plain bits.
-                    if plain || self.properties[capture.ty.index()].copy_detaches {
+                    if plain || self.properties[capture.ty].copy_detaches {
                         ty.modes.relation = Relation::global();
                     }
                     if flat {
@@ -3753,14 +3708,8 @@ impl Checker<'_> {
                     }
                     ty.sendability_requirement = SendabilityRequirement::None;
                     if !plain && !flat {
-                        let mut store = self.body.types.clone();
-                        let root = store.push(ty.clone());
-                        ty.modes.sendability = sendability_after_sharing(
-                            &store,
-                            root,
-                            &self.body.resolution.generic_declarations,
-                            &mut |path| Ok(self.signatures.cached(path)),
-                        )
+                        let root = self.intern(ty.clone());
+                        ty.modes.sendability = self.signatures.prove_cached(|memo| hirsel_modes::proofs::sendability_after_sharing(memo, root))
                         .unwrap_or(Sendability::NotSendable);
                     }
                 }
@@ -3771,14 +3720,13 @@ impl Checker<'_> {
                 }
                 ty.modes.relation = self.arenas.relocate(&row, &ty.modes.relation);
                 if part.environment_local() {
-                    environment_result(self.body, self.properties, &mut ty, &self.arenas);
+                    environment_result(self.t, self.properties, &mut ty, &self.arenas);
                 }
-                let ty = if self.body.types.get(capture.ty) == Some(&ty) {
+                let ty = if self.t.get(capture.ty) == Some(&ty) {
                     capture.ty
                 } else {
-                    let property = self.properties[capture.ty.index()];
-                    let ty = self.body.types.push(ty);
-                    self.properties.push(property);
+                    let ty = self.intern(ty);
+                    self.properties.inherit(ty, capture.ty);
                     ty
                 };
                 if let Some(index) = self.source_rows.closure(expression) {
@@ -3819,7 +3767,7 @@ impl Checker<'_> {
         };
         let Some(TypeKind::Function(f)) = self
             .ty(expression)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .map(|row| &row.kind)
         else {
             return false;
@@ -3827,8 +3775,8 @@ impl Checker<'_> {
         !written
             && self
                 .arenas
-                .global(&self.body.types.get(f.result).unwrap().modes.relation)
-            && !self.properties[f.result.index()].plain
+                .global(&self.t.get(f.result).unwrap().modes.relation)
+            && !self.properties[f.result].plain
     }
     /// Whether the closure's type promises a global result its frame result
     /// does not: the authority pass's environment specialisation.
@@ -3838,16 +3786,16 @@ impl Checker<'_> {
         };
         let Some(TypeKind::Function(f)) = self
             .ty(expression)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .map(|row| &row.kind)
         else {
             return false;
         };
         self.arenas
-            .global(&self.body.types.get(f.result).unwrap().modes.relation)
+            .global(&self.t.get(f.result).unwrap().modes.relation)
             && !self
                 .arenas
-                .global(&self.body.types.get(*frame).unwrap().modes.relation)
+                .global(&self.t.get(*frame).unwrap().modes.relation)
     }
     /// `receiver` is the binding that receives the value, if one does.
     fn receiving_scope(
@@ -3884,7 +3832,7 @@ impl Checker<'_> {
                         explanation: Explanation {
                             required: Some(required),
                             root: Some(hirsel_modes::explain::root_key(
-                                &c.own.definition,
+c.own.definition.path(),
                                 ("locality", (2u8, first)),
                             )),
                             ..Explanation::default()
@@ -3933,7 +3881,7 @@ impl Checker<'_> {
                         message: "share the counted part before its owner's block ends".into(),
                     }),
                     root: Some(hirsel_modes::explain::root_key(
-                        &c.own.definition,
+c.own.definition.path(),
                         ("block part", tail.0),
                     )),
                     ..Explanation::default()
@@ -4062,7 +4010,7 @@ impl Checker<'_> {
                     .map(|(index, binding)| (index, binding.ty))
                     .collect();
                 for (index, ty) in bindings {
-                    let initial = Value::new(self.body.types.get(ty).unwrap().modes.clone());
+                    let initial = Value::new(self.t.get(ty).unwrap().modes.clone());
                     let mut value = self.capture_value(state, expression, false, false, initial);
                     value.usage = UseKind::Take;
                     state.slots[index] = Slot {
@@ -4133,7 +4081,7 @@ impl Checker<'_> {
                 let element_owner = value.element_owner().filter(|o| *o != place.binding);
                 let environment = self
                     .ty(*expression)
-                    .and_then(|t| self.body.types.get(t))
+                    .and_then(|t| self.t.get(t))
                     .is_some_and(|t| {
                         matches!(
                             t.kind,
@@ -4185,10 +4133,7 @@ impl Checker<'_> {
                     // A field's invocation count is its own contract. The
                     // aggregate owner's Many mode cannot make a Once part
                     // repeatable or copyable.
-                    value.modes.multiplicity = self
-                        .body
-                        .types
-                        .get(self.ty(*expression).unwrap())
+                    value.modes.multiplicity = self.t.get(self.ty(*expression).unwrap())
                         .unwrap()
                         .modes
                         .multiplicity;
@@ -4391,9 +4336,7 @@ impl Checker<'_> {
                     && (!property.copyable || value.modes.multiplicity == Multiplicity::Once)
                 {
                     let generic = matches!(
-                        self.body
-                            .types
-                            .get(self.ty(*expression).unwrap())
+                        self.t.get(self.ty(*expression).unwrap())
                             .unwrap()
                             .kind,
                         TypeKind::Parameter(_)
@@ -4472,7 +4415,7 @@ impl Checker<'_> {
                         || value.modes.sendability == Sendability::Sendable
                             && self
                                 .ty(*expression)
-                                .and_then(|t| self.body.types.get(t))
+                                .and_then(|t| self.t.get(t))
                                 .is_some_and(|t| {
                                     matches!(
                                         t.kind,
@@ -4501,10 +4444,7 @@ impl Checker<'_> {
                     // OWN-8 carries locality from the owner, but sendability
                     // belongs to the checked part (a flat owner's counted
                     // field is not itself a flat value).
-                    value.modes.sendability = self
-                        .body
-                        .types
-                        .get(self.ty(*expression).unwrap())
+                    value.modes.sendability = self.t.get(self.ty(*expression).unwrap())
                         .unwrap()
                         .modes
                         .sendability
@@ -4586,9 +4526,9 @@ impl Checker<'_> {
                     // success tag rather than inheriting the whole root's modes.
                     let success = self
                         .ty(*child)
-                        .and_then(|ty| match &self.body.types.get(ty)?.kind {
+                        .and_then(|ty| match &self.t.get(ty)?.kind {
                             TypeKind::Named { definition, .. } => {
-                                self.signatures.cached(definition)
+                                self.signatures.cached(*definition)
                             }
                             _ => None,
                         })
@@ -4597,12 +4537,12 @@ impl Checker<'_> {
                                 return None;
                             };
                             let TypeKind::Variant(variants) =
-                                &signature.types.get(declaration.representation?)?.kind
+                                &self.t.get(declaration.representation?)?.kind
                             else {
                                 return None;
                             };
                             variants.iter().position(|variant| {
-                                variant.name == "Ok" && variant.fields.len() == 1
+                                variant.name.as_str() == "Ok" && variant.fields.len() == 1
                             })
                         });
                     if let Some(variant) = success {
@@ -4621,7 +4561,7 @@ impl Checker<'_> {
                     if value.usage == UseKind::Take
                         && value.fresh_receipt
                         && let Some(ty) = self.ty(*expression)
-                        && self.body.types.get(ty).unwrap().modes.uniqueness == Uniqueness::Unique
+                        && self.t.get(ty).unwrap().modes.uniqueness == Uniqueness::Unique
                     {
                         value.modes.uniqueness = Uniqueness::Unique;
                     }
@@ -4642,7 +4582,7 @@ impl Checker<'_> {
                 if let (Some(joined), Some(source)) = (self.ty(*expression), self.ty(*child)) {
                     if self
                         .arenas
-                        .unplaced_scoped(&self.body.types, joined, source)
+                        .unplaced_scoped(self.t, joined, source)
                     {
                         value.modes.relation = Relation::environment();
                         value.loans.insert(
@@ -4803,7 +4743,7 @@ impl Checker<'_> {
                     {
                         let generic = self
                             .ty(*expression)
-                            .and_then(|ty| self.body.types.get(ty))
+                            .and_then(|ty| self.t.get(ty))
                             .is_some_and(|row| matches!(row.kind, TypeKind::Parameter(_)));
                         let site = self.span_of(*expression);
                         let operand = self.span_of(child);
@@ -4844,7 +4784,7 @@ impl Checker<'_> {
                 } else {
                     let parts = self
                         .ty(*expression)
-                        .and_then(|ty| self.body.types.get(ty))
+                        .and_then(|ty| self.t.get(ty))
                         .map(|row| {
                             match (
                                 &self.tree.expressions[expression.0 as usize].kind,
@@ -4974,7 +4914,7 @@ impl Checker<'_> {
                         }
                         _ => {}
                     }
-                    if let Some(row) = self.ty(*expression).and_then(|ty| self.body.types.get(ty)) {
+                    if let Some(row) = self.ty(*expression).and_then(|ty| self.t.get(ty)) {
                         if !matches!(row.kind, TypeKind::Function(_)) {
                             // MODE-3 describes invocation of the callable itself.
                             // Aggregates retain Once in their field types and are
@@ -5030,7 +4970,7 @@ impl Checker<'_> {
                         } else if !property.shared {
                             if let Some(root) = value.aliased() {
                                 state.slots[root].value.share();
-                                if !self.properties[self.body.bindings[root].ty.index()]
+                                if !self.properties[self.body.bindings[root].ty]
                                     .sendable_aliased
                                 {
                                     state.slots[root].value.modes.sendability =
@@ -5136,7 +5076,7 @@ impl Checker<'_> {
                 let iterator = iteration.is_some()
                     && self.ty(source).is_some_and(|ty| {
                         matches!(
-                            self.body.types.get(ty).unwrap().kind,
+                            self.t.get(ty).unwrap().kind,
                             TypeKind::Builtin {
                                 kind: BuiltinType::Iter,
                                 ..
@@ -5144,9 +5084,9 @@ impl Checker<'_> {
                         )
                     });
                 let associated = iteration.is_some() && self.ty(source)
-                    .and_then(|ty| self.body.types.get(ty))
+                    .and_then(|ty| self.t.get(ty))
                     .and_then(|row| match &row.kind {
-                        TypeKind::Named { definition, .. } => self.signatures.cached(definition),
+                        TypeKind::Named { definition, .. } => self.signatures.cached(*definition),
                         _ => None,
                     })
                     .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.loop_source.is_some()));
@@ -5167,7 +5107,7 @@ impl Checker<'_> {
                     && !associated;
                 let declared_source = self
                     .ty(source)
-                    .map(|ty| self.body.types.get(ty).unwrap().modes.relation.clone());
+                    .map(|ty| self.t.get(ty).unwrap().modes.relation.clone());
                 let annotation = self
                     .pattern_indices
                     .get(pattern)
@@ -5176,7 +5116,7 @@ impl Checker<'_> {
                 if !test {
                     if let Some((written, declared)) = annotation {
                         let annotated = declared;
-                        let row = self.body.types.get(declared).unwrap();
+                        let row = self.t.get(declared).unwrap();
                         let crossing = matches!(
                             row.kind,
                             TypeKind::Builtin {
@@ -5257,7 +5197,7 @@ impl Checker<'_> {
                             PatternDecisionKind::Binding(_) | PatternDecisionKind::Wildcard
                         ) {
                             let mut ty = row.ty;
-                            while let TypeKind::Box(part) = self.body.types.get(ty).unwrap().kind {
+                            while let TypeKind::Box(part) = self.t.get(ty).unwrap().kind {
                                 path.push(Projection::Field(0));
                                 ty = part;
                             }
@@ -5267,9 +5207,7 @@ impl Checker<'_> {
                         .pattern_indices
                         .get(&pattern)
                         .map(|index| {
-                            self.body
-                                .types
-                                .get(self.body.patterns[*index].ty)
+                            self.t.get(self.body.patterns[*index].ty)
                                 .unwrap()
                                 .modes
                                 .clone()
@@ -5294,11 +5232,11 @@ impl Checker<'_> {
                                 physical_modes = parent_modes;
                             }
                         } else if let Some(&declared) = self.pattern_declarations.get(&pattern) {
-                            physical_modes.relation = if self.properties[declared.index()].plain {
+                            physical_modes.relation = if self.properties[declared].plain {
                                 Relation::global()
                             } else {
                                 let locality =
-                                    &self.body.types.get(declared).unwrap().modes.relation;
+                                    &self.t.get(declared).unwrap().modes.relation;
                                 if self.arenas.global(locality) {
                                     parent_modes.relation
                                 } else {
@@ -5329,7 +5267,7 @@ impl Checker<'_> {
                             .find(|p| p.pattern == pattern)
                             .map(|p| p.ty)
                     });
-                    let plain = ty.is_some_and(|ty| self.properties[ty.index()].plain);
+                    let plain = ty.is_some_and(|ty| self.properties[ty].plain);
                     let mut part = value.clone();
                     part.fresh_receipt = fresh_receipt;
                     part.project_content(&path);
@@ -5367,7 +5305,7 @@ impl Checker<'_> {
                         // The element is supplied by its checked projection or
                         // cursor result, not by the container's root promises.
                         if let Some(ty) = ty {
-                            part.modes = self.body.types.get(ty).unwrap().modes.clone();
+                            part.modes = self.t.get(ty).unwrap().modes.clone();
                         }
                         // An owning cursor and its elements are as local as
                         // the collection taken. The checked rows follow the
@@ -5384,10 +5322,7 @@ impl Checker<'_> {
                                 if let Some(&row) =
                                     self.pattern_indices.get(&pattern).filter(|_| self.emit)
                                 {
-                                    let mut modes = self
-                                        .body
-                                        .types
-                                        .get(self.body.patterns[row].ty)
+                                    let mut modes = self.t.get(self.body.patterns[row].ty)
                                         .unwrap()
                                         .modes
                                         .clone();
@@ -5406,19 +5341,19 @@ impl Checker<'_> {
                             // A part is typed as its field is, like a field
                             // read. Physical declaration modes remain on the
                             // pattern; receiving evidence follows the owned graph.
-                            let field = &self.body.types.get(ty).unwrap().modes;
+                            let field = &self.t.get(ty).unwrap().modes;
                             part.modes.multiplicity = field.multiplicity;
                             // MODE-2 is deep: a taken part of the current
                             // unique whole receives that stronger evidence.
                             // Shared roots stop the owned-graph inference.
-                            if self.properties[ty.index()].shared {
+                            if self.properties[ty].shared {
                                 part.modes.uniqueness = field.uniqueness;
                             } else if part.aliased().is_some() {
                                 part.modes.uniqueness = Uniqueness::Aliased;
                             } else if field.uniqueness == Uniqueness::Unique && part.fresh_receipt {
                                 part.modes.uniqueness = Uniqueness::Unique;
                             }
-                            if self.properties[ty.index()].sendable_aliased {
+                            if self.properties[ty].sendable_aliased {
                                 part.modes.sendability = Sendability::Sendable;
                             } else if let Some(proof) = part.crossing_parts.get(&[]) {
                                 part.modes.sendability = proof;
@@ -5441,14 +5376,14 @@ impl Checker<'_> {
                         part.set_alias(alias);
                         part.element_view = true;
                         if let Some(ty) = ty {
-                            part.modes = self.body.types.get(ty).unwrap().modes.clone();
+                            part.modes = self.t.get(ty).unwrap().modes.clone();
                         }
                     }
                     if iterator {
                         part.set_alias(None);
                         part.content = Content::default();
                         if let Some(ty) = ty {
-                            part.modes = self.body.types.get(ty).unwrap().modes.clone();
+                            part.modes = self.t.get(ty).unwrap().modes.clone();
                         }
                     }
                     if associated {
@@ -5457,7 +5392,7 @@ impl Checker<'_> {
                         // retain the source content, never the element's slot.
                         part.set_alias(None);
                         if let Some(ty) = ty {
-                            part.modes = self.body.types.get(ty).unwrap().modes.clone();
+                            part.modes = self.t.get(ty).unwrap().modes.clone();
                             if self.arenas.global(&part.modes.relation) {
                                 part.content = Content::default();
                             }
@@ -5471,7 +5406,7 @@ impl Checker<'_> {
                         // Plain payloads carry their own checked value modes;
                         // the aggregate owner's modes describe different storage.
                         if let Some(ty) = ty {
-                            part.modes = self.body.types.get(ty).unwrap().modes.clone();
+                            part.modes = self.t.get(ty).unwrap().modes.clone();
                         }
                         part.modes.relation = Relation::global();
                         part.set_alias(None);
@@ -5544,7 +5479,7 @@ impl Checker<'_> {
                         storage_modes.uniqueness = Uniqueness::Aliased;
                         if !ty.is_some_and(|ty| {
                             matches!(
-                                self.body.types.get(ty).unwrap().kind,
+                                self.t.get(ty).unwrap().kind,
                                 TypeKind::Function(_)
                                     | TypeKind::Builtin {
                                         kind: BuiltinType::Iter,
@@ -5559,7 +5494,7 @@ impl Checker<'_> {
                                 binding.is_some_and(|i| self.written_crossing_contract(i));
                             storage_modes = annotation_modes(
                                 written,
-                                &ty.and_then(|ty| self.body.types.get(ty))
+                                &ty.and_then(|ty| self.t.get(ty))
                                     .map(|ty| ty.modes.clone())
                                     .unwrap_or_else(|| part.modes.clone()),
                                 &storage_modes,
@@ -5714,10 +5649,7 @@ impl Checker<'_> {
                     .binding_modes
                     .get(&place.binding)
                     .unwrap_or(
-                        &self
-                            .body
-                            .types
-                            .get(self.body.bindings[place.binding].ty)
+                        &self.t.get(self.body.bindings[place.binding].ty)
                             .unwrap()
                             .modes,
                     )
@@ -5746,9 +5678,9 @@ impl Checker<'_> {
                 } else {
                     expression_type(self.body, *expression, self.source_rows)
                 } {
-                    let mut requirement = self.body.types.get(storage).unwrap().modes.clone();
+                    let mut requirement = self.t.get(storage).unwrap().modes.clone();
                     requirement.sendability =
-                        crossing_requirement(self.body.types.get(storage).unwrap());
+                        crossing_requirement(self.t.get(storage).unwrap());
                     requirement.uniqueness = Uniqueness::Aliased;
                     requirement.multiplicity = Multiplicity::Once;
                     if requirement.sendability == Sendability::Sendable {
@@ -5772,7 +5704,7 @@ impl Checker<'_> {
                 };
                 if (!place.projections.is_empty() || !self.once_storage(place.binding))
                     && storage
-                        .and_then(|ty| self.body.types.get(ty))
+                        .and_then(|ty| self.t.get(ty))
                         .is_some_and(|row| row.modes.multiplicity == Multiplicity::Many)
                     && value.modes.multiplicity == Multiplicity::Once
                     && self.property(*rhs).is_some_and(|p| p.function)
@@ -5793,17 +5725,14 @@ impl Checker<'_> {
                     }
                 }
                 if self.emit {
-                    let ty = self
-                        .body
-                        .types
-                        .get(self.body.bindings[place.binding].ty)
+                    let ty = self.t.get(self.body.bindings[place.binding].ty)
                         .unwrap();
                     // Arena and region receivers detach even when uniqueness
                     // alone would update them in place.
                     let arena_or_region = self.arenas.placed(&ty.modes.relation);
                     let allocating = !(expected.modes.uniqueness == Uniqueness::Unique
                         && place.projections.is_empty()
-                        || self.properties[self.body.bindings[place.binding].ty.index()].plain
+                        || self.properties[self.body.bindings[place.binding].ty].plain
                         || !arena_or_region
                             && (expected.modes.uniqueness == Uniqueness::Unique
                                 || self
@@ -5894,7 +5823,7 @@ impl Checker<'_> {
                     // The root now reaches the stored counted aliases. Plain
                     // bits and Shared boundaries do not share its owned graph.
                     state.slots[place.binding].value.share();
-                    if !self.properties[self.body.bindings[place.binding].ty.index()]
+                    if !self.properties[self.body.bindings[place.binding].ty]
                         .sendable_aliased
                     {
                         state.slots[place.binding].value.modes.sendability =
@@ -5941,11 +5870,11 @@ impl Checker<'_> {
                 // Copying an abstract selected callable result duplicates its
                 // opaque environment, not the contents its view borrows. The
                 // declared abstract parameter cannot invoke that callable.
-                let copied_callable_result = self.ty(*expression).is_some_and(|ty| matches!(self.body.types.get(ty).unwrap().kind, TypeKind::Function(_)))
+                let copied_callable_result = self.ty(*expression).is_some_and(|ty| matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_)))
                     && self.ty(*callee).is_some_and(|ty| {
-                        let TypeKind::Function(function) = &self.body.types.get(ty).unwrap().kind else { return false };
-                        let TypeKind::Parameter(result) = self.body.types.get(function.result).unwrap().kind else { return false };
-                        function.parameters.iter().any(|parameter| parameter.passing == PassingMode::Borrow && matches!(self.body.types.get(parameter.ty).unwrap().kind, TypeKind::Parameter(input) if input == result))
+                        let TypeKind::Function(function) = &self.t.get(ty).unwrap().kind else { return false };
+                        let TypeKind::Parameter(result) = self.t.get(function.result).unwrap().kind else { return false };
+                        function.parameters.iter().any(|parameter| parameter.passing == PassingMode::Borrow && matches!(self.t.get(parameter.ty).unwrap().kind, TypeKind::Parameter(input) if input == result))
                     });
                 let argument_inputs_live = *constructor
                     || arguments
@@ -5964,7 +5893,7 @@ impl Checker<'_> {
                                     .ty(*callee)
                                     .and_then(|ty| {
                                         let TypeKind::Function(function) =
-                                            &self.body.types.get(ty)?.kind
+                                            &self.t.get(ty)?.kind
                                         else {
                                             return None;
                                         };
@@ -5972,12 +5901,12 @@ impl Checker<'_> {
                                     })
                                     .is_some_and(|root| {
                                         let mut pending = vec![root];
-                                        let mut seen = BTreeSet::new();
+                                        let mut seen = std::collections::HashSet::new();
                                         while let Some(ty) = pending.pop() {
                                             if !seen.insert(ty) {
                                                 continue;
                                             }
-                                            let row = self.body.types.get(ty).unwrap();
+                                            let row = self.t.get(ty).unwrap();
                                             if matches!(
                                                 row.kind,
                                                 TypeKind::Function(_)
@@ -6330,26 +6259,20 @@ impl Checker<'_> {
                         let mut state_contracts = BTreeMap::new();
                         if let Some(callee_ty) = self.ty(*callee) {
                             if let TypeKind::Function(function) =
-                                &self.body.types.get(callee_ty).unwrap().kind
+                                &self.t.get(callee_ty).unwrap().kind
                             {
                                 for (state, callback, slot) in
-                                    mutable_capture_states(&self.body.types, function)
+                                    mutable_capture_states(self.t, function)
                                 {
                                     if let Some(argument) =
                                         arguments.get(callback).and_then(|a| self.ty(a.value))
                                     {
                                         let proof = mutable_capture_state_sendability(
-                                            &self.body.types,
+                                            self.t,
                                             argument,
                                             slot,
                                             &self.body.resolution.generic_declarations,
-                                            &mut |path| {
-                                                Ok(if path == &self.own.definition {
-                                                    Some(Arc::new(self.own.clone()))
-                                                } else {
-                                                    self.signatures.cached(path)
-                                                })
-                                            },
+                                            &mut |d| Ok(self.signatures.cached(d)),
                                         )
                                         .unwrap_or_else(|error| {
                                             *self.proof_error.borrow_mut() = Some(error);
@@ -6457,10 +6380,7 @@ impl Checker<'_> {
                                         .join_lifetime(&value.modes.relation, &part.modes.relation);
                                 }
                                 if self.arenas.placed(
-                                    &self
-                                        .body
-                                        .types
-                                        .get(self.body.bindings[index].ty)
+                                    &self.t.get(self.body.bindings[index].ty)
                                         .unwrap()
                                         .modes
                                         .relation,
@@ -6472,7 +6392,7 @@ impl Checker<'_> {
                                 value.inherit_crossing_borrows(part);
                                 if self.ty(*expression).is_some_and(|ty| {
                                     matches!(
-                                        self.body.types.get(ty).unwrap().kind,
+                                        self.t.get(ty).unwrap().kind,
                                         TypeKind::Function(_)
                                     )
                                 }) {
@@ -6514,7 +6434,7 @@ impl Checker<'_> {
                             value.inherit_crossing_borrows(&retained);
                             if self.ty(*expression).is_some_and(|ty| {
                                 matches!(
-                                    self.body.types.get(ty).unwrap().kind,
+                                    self.t.get(ty).unwrap().kind,
                                     TypeKind::Function(_)
                                 )
                             }) {
@@ -6526,7 +6446,7 @@ impl Checker<'_> {
                             }
                             let placed = self.ty(arg.value).is_some_and(|ty| {
                                 self.arenas
-                                    .placed(&self.body.types.get(ty).unwrap().modes.relation)
+                                    .placed(&self.t.get(ty).unwrap().modes.relation)
                             });
                             let source = place(self.body, arg.value, self.source_rows);
                             // An arena-only argument, computed, named or
@@ -6679,7 +6599,7 @@ impl Checker<'_> {
                             } else {
                                 state.slots[root].value.share();
                             }
-                            if !self.properties[self.body.bindings[root].ty.index()]
+                            if !self.properties[self.body.bindings[root].ty]
                                 .sendable_aliased
                             {
                                 state.slots[root].value.modes.sendability =
@@ -6740,7 +6660,7 @@ impl Checker<'_> {
                     {
                         for root in value.content.summary().bindings(Kind::Read) {
                             state.slots[root].value.share();
-                            if !self.properties[self.body.bindings[root].ty.index()]
+                            if !self.properties[self.body.bindings[root].ty]
                                 .sendable_aliased
                             {
                                 state.slots[root].value.modes.sendability =
@@ -6766,7 +6686,7 @@ impl Checker<'_> {
                         let owner = state.slots[root].value.element_owner();
                         state.share_element_owners(owner.filter(|owner| *owner != root), None);
                         state.slots[root].value.share();
-                        if !self.properties[self.body.bindings[root].ty.index()].sendable_aliased {
+                        if !self.properties[self.body.bindings[root].ty].sendable_aliased {
                             state.slots[root].value.modes.sendability = Sendability::NotSendable;
                             state.slots[root]
                                 .value
@@ -6813,10 +6733,7 @@ impl Checker<'_> {
                 let parametric =
                     self.parametric_unique(*callee, arguments, requirements, &unique_arguments);
                 for (storage, mutable, argument) in &loans {
-                    let declared = self
-                        .body
-                        .types
-                        .get(self.body.bindings[storage.binding].ty)
+                    let declared = self.t.get(self.body.bindings[storage.binding].ty)
                         .unwrap();
                     let preserves_state = arguments.iter().zip(requirements).any(|(arg, req)| {
                         arg.value == *argument
@@ -6869,7 +6786,7 @@ impl Checker<'_> {
                         // supplies an outgoing proof; fresh input alone does not.
                         let crossing = crossing_requirement(declared);
                         state.slots[storage.binding].value.modes.sendability = if self.properties
-                            [self.body.bindings[storage.binding].ty.index()]
+                            [self.body.bindings[storage.binding].ty]
                         .plain
                         {
                             Sendability::Sendable
@@ -7048,25 +6965,25 @@ impl Checker<'_> {
             let TypeKind::Named {
                 definition,
                 arguments,
-            } = &self.body.types.get(ty)?.kind
+            } = &self.t.get(ty)?.kind
             else {
                 return None;
             };
             let [_, hirsel_types::GenericArgument::Type(payload)] = arguments.as_slice() else {
                 return None;
             };
-            let signature = self.signatures.cached(definition)?;
+            let signature = self.signatures.cached(*definition)?;
             let SignatureKind::Type(declaration) = &signature.kind else {
                 return None;
             };
             let TypeKind::Variant(variants) =
-                &signature.types.get(declaration.representation?)?.kind
+                &self.t.get(declaration.representation?)?.kind
             else {
                 return None;
             };
             let error = variants
                 .iter()
-                .position(|variant| variant.name == "Error" && variant.fields.len() == 1)?;
+                .position(|variant| variant.name.as_str() == "Error" && variant.fields.len() == 1)?;
             Some((error as u32, *payload))
         }) else {
             *self.proof_error.borrow_mut() = Some(QueryError::Operational(OperationalFailure {
@@ -7075,7 +6992,7 @@ impl Checker<'_> {
             }));
             return;
         };
-        let property = self.properties.get(payload.index()).copied();
+        let property = self.properties.get(payload).copied();
         if property.is_some_and(|p| p.plain) || self.mapper_releases(expression) {
             return;
         }
@@ -7112,15 +7029,13 @@ impl Checker<'_> {
         else {
             return false;
         };
-        let Some(signature) = self.signatures.cached(&path) else {
+        let Some(signature) = self.signatures.cached(DefId::intern(&path)) else {
             return false;
         };
         let SignatureKind::Function(function) = &signature.kind else {
             return false;
         };
-        signature
-            .types
-            .get(function.result)
+        self.t.get(function.result)
             .is_some_and(|row| row.modes.relation.is_global())
     }
     /// The locality a returned value needs to leave this frame as `result`
@@ -7388,12 +7303,10 @@ impl Checker<'_> {
                 steps,
             );
             let relation = fold_part_locality(&self.arenas, owner, &field.parts);
-            let mut row = self.body.types.get(field.declared).unwrap().clone();
+            let mut row = self.t.get(field.declared).unwrap().clone();
             row.modes.relation = self.arenas.relocate(&row.modes.relation, &relation);
-            let ty = self.body.types.push(row);
-            debug_assert_eq!(self.properties.len(), ty.index());
-            self.properties
-                .push(self.properties[field.declared.index()]);
+            let ty = self.intern(row);
+            self.properties.inherit(ty, field.declared);
             self.facts.field_loans.push((expression, ty));
         }
         Some(
@@ -7425,7 +7338,7 @@ impl Checker<'_> {
             && (!self.arenas.global(&state.slots[index].value.modes.relation)
                 || self
                     .arenas
-                    .placed(&self.body.types.get(binding.ty).unwrap().modes.relation))
+                    .placed(&self.t.get(binding.ty).unwrap().modes.relation))
     }
 
     /// A part's declared uniqueness and multiplicity are contracts of the
@@ -7433,24 +7346,11 @@ impl Checker<'_> {
     /// aggregate is constructed (MODE-2, MODE-3). Locality is not required of
     /// a part: it lives in its owner's (OWN-8).
     fn crossing_receipts(&self, root: TypeId) -> Vec<(Vec<Projection>, bool)> {
-        self.crossing_receipts_in(&self.body.types, root)
-    }
-    fn crossing_receipts_in(
-        &self,
-        store: &TypeStore,
-        root: TypeId,
-    ) -> Vec<(Vec<Projection>, bool)> {
         owned_crossing_receipts(
-            store,
+            self.t,
             root,
             &self.body.resolution.generic_declarations,
-            &mut |path| {
-                Ok(if path == &self.own.definition {
-                    Some(Arc::new(self.own.clone()))
-                } else {
-                    self.signatures.cached(path)
-                })
-            },
+            &mut |d| Ok(self.signatures.cached(d)),
         )
         .unwrap_or_else(|error| {
             *self.proof_error.borrow_mut() = Some(error);
@@ -7497,7 +7397,7 @@ impl Checker<'_> {
         let Some(Type {
             kind: TypeKind::Function(function),
             ..
-        }) = self.body.types.get(ty)
+        }) = self.t.get(ty)
         else {
             return true;
         };
@@ -7506,18 +7406,15 @@ impl Checker<'_> {
             return true;
         };
         let arguments = call.generic_arguments.clone();
-        // The receiving view's rows are scratch: appended to the body's own
-        // store and discarded, never a copy of the store per call.
-        let mark = self.body.types.mark();
-        let receiving = generic_crossing_parameter_in_place(
-            &mut self.body.types,
+        let receiving = generic_crossing_parameter(
+            self.t,
+            self.signatures.m,
             &function,
             parameter,
             &arguments,
             &NominalRoles::default(),
         )
         .map(|root| root.map(|root| self.crossing_receipts(root)));
-        self.body.types.truncate_to(mark);
         match receiving {
             Ok(Some(receipts)) => self.required_crossing_paths(actual, receipts, expression, site),
             Ok(None) => true,
@@ -7557,11 +7454,11 @@ impl Checker<'_> {
         true
     }
     fn required_part(&mut self, state: &State, part: TypeId, value: ExprId, aggregate: ExprId) {
-        let Some(mut required) = self.body.types.get(part).map(|row| row.modes.clone()) else {
+        let Some(mut required) = self.t.get(part).map(|row| row.modes.clone()) else {
             return;
         };
         required.relation = Relation::environment();
-        required.sendability = crossing_requirement(self.body.types.get(part).unwrap());
+        required.sendability = crossing_requirement(self.t.get(part).unwrap());
         // MODE-2: J types an inferred part by its operand's row, which is
         // evidence, not a contract: the part's current uniqueness is the
         // operand's, kept in `shared_parts`. A part typed by an expected type
@@ -7638,7 +7535,7 @@ impl Checker<'_> {
     fn unique_contract_on(&self, root: TypeId, path: &[Projection]) -> bool {
         let mut ty = root;
         for projection in path {
-            let Some(row) = self.body.types.get(ty) else {
+            let Some(row) = self.t.get(ty) else {
                 return false;
             };
             let child = match (&row.kind, projection) {
@@ -7659,15 +7556,12 @@ impl Checker<'_> {
                 return false;
             };
             ty = child;
-            let unique = self
-                .body
-                .types
-                .get(ty)
+            let unique = self.t.get(ty)
                 .is_some_and(|row| row.modes.uniqueness == Uniqueness::Unique);
             if unique
                 && !self
                     .properties
-                    .get(ty.index())
+                    .get(ty)
                     .is_some_and(|p| p.plain || p.shared)
             {
                 return true;

@@ -100,8 +100,6 @@ impl Checker<'_> {
         let mut row = self.t.get(ty)?.clone();
         row.modes.uniqueness = Uniqueness::Aliased;
         let shared = self.intern(row.clone());
-        let store = self.t;
-        let generics = self.declarations();
         row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
             hirsel_modes::proofs::sendability_after_sharing(memo, shared)
         });

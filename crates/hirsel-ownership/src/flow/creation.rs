@@ -14,7 +14,7 @@ pub(super) fn join(
 
 /// Every selected incoming callback slot that may advance a selected incoming
 /// state. Relaying the exact pair retains the caller's own future receipt.
-fn incoming_relays(types: &TypeStore, function: &FunctionType) -> Vec<(usize, usize, usize)> {
+fn incoming_relays(types: &TypeInterner, function: &FunctionType) -> Vec<(usize, usize, usize)> {
     let Some(ErasedCaptures::FromArguments(retained)) =
         &types.get(function.result).unwrap().erased_captures
     else {
@@ -55,7 +55,7 @@ pub(super) struct Effect {
     writes: Vec<(usize, Option<BTreeSet<usize>>)>,
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     // Mutable callback receipts constrain the future state, not just its
     // creation-time value. An abstract relay must retain that same incoming
     // callback/state pair; a freshly supplied callback needs a nested proof.
@@ -69,20 +69,13 @@ impl Checker<'_> {
         let Some(callee_ty) = self.ty(callee) else {
             return false;
         };
-        let TypeKind::Function(callee) = &self.body.types.get(callee_ty).unwrap().kind else {
+        let TypeKind::Function(callee) = &self.t.get(callee_ty).unwrap().kind else {
             return false;
         };
-        let Some((owner, own)) = self.graph_callable() else {
+        let Some((owner, _)) = self.graph_callable() else {
             return false;
         };
-        let incoming = incoming_relays(
-            if *own {
-                &self.own.types
-            } else {
-                &self.body.types
-            },
-            owner,
-        );
+        let incoming = incoming_relays(self.t, owner);
         let argument = |ordinal| {
             requirements
                 .iter()
@@ -96,7 +89,7 @@ impl Checker<'_> {
                 &ResolvedName::Parameter(ParamId(ordinal as u32)),
             )
         };
-        for (selected, callback, slot) in mutable_capture_states(&self.body.types, callee) {
+        for (selected, callback, slot) in mutable_capture_states(self.t, callee) {
             let (Some(selected), Some(callback)) = (argument(selected), argument(callback)) else {
                 return false;
             };
@@ -105,7 +98,7 @@ impl Checker<'_> {
                 return false;
             };
             let receipt = mutable_capture_state_sendability(
-                &self.body.types,
+                self.t,
                 callback_ty,
                 slot,
                 &self.body.resolution.generic_declarations,
@@ -121,7 +114,7 @@ impl Checker<'_> {
             // A callback promising to preserve its whole state keeps the
             // snapshot on every future invocation; a closed state type
             // determines everything a callback can hand back.
-            let TypeKind::Function(header) = &self.body.types.get(callback_ty).unwrap().kind else {
+            let TypeKind::Function(header) = &self.t.get(callback_ty).unwrap().kind else {
                 return false;
             };
             if header.state_promises.iter().any(|p| {
@@ -144,24 +137,15 @@ impl Checker<'_> {
                 };
                 incoming_slot == slot
                     && match (
-                        &self.body.types.get(selected_ty).unwrap().kind,
-                        &self
-                            .body
-                            .types
-                            .get(self.body.bindings[selected].ty)
+                        &self.t.get(selected_ty).unwrap().kind,
+                        &self.t.get(self.body.bindings[selected].ty)
                             .unwrap()
                             .kind,
                     ) {
                         (TypeKind::Parameter(relayed), TypeKind::Parameter(incoming)) => {
                             relayed == incoming
                         }
-                        _ => semantic_equal(
-                            &self.body.types,
-                            selected_ty,
-                            &self.body.types,
-                            self.body.bindings[selected].ty,
-                        )
-                        .unwrap_or(false),
+                        _ => self.t.semantic_eq(selected_ty, self.body.bindings[selected].ty),
                     }
                     && selected_inputs
                         .as_ref()
@@ -169,13 +153,7 @@ impl Checker<'_> {
                     && callback_inputs
                         .as_ref()
                         .is_some_and(|inputs| inputs.contains(&callback))
-                    && semantic_equal(
-                        &self.body.types,
-                        callback_ty,
-                        &self.body.types,
-                        self.body.bindings[callback].ty,
-                    )
-                    .unwrap_or(false)
+                    && self.t.semantic_eq(callback_ty, self.body.bindings[callback].ty)
             }) {
                 return false;
             }
@@ -183,8 +161,8 @@ impl Checker<'_> {
         true
     }
     pub(super) fn stable_creation_copy(&self, ty: TypeId) -> bool {
-        self.properties[ty.index()].plain
-            || self.inert_creation_input(ty) && self.properties[ty.index()].sendable_aliased
+        self.properties[ty].plain
+            || self.inert_creation_input(ty) && self.properties[ty].sendable_aliased
     }
 
     fn invalidate_creation(&self, state: &mut State, binding: usize) {
@@ -226,7 +204,7 @@ impl Checker<'_> {
             CallTarget::Constructor(ContextualName::Variant { owner, .. }) => owner,
             _ => return false,
         };
-        let Some(signature) = self.signatures.cached(path) else {
+        let Some(signature) = self.signatures.cached(DefId::intern(path)) else {
             return false;
         };
         let SignatureKind::Type(declaration) = &signature.kind else {
@@ -238,34 +216,29 @@ impl Checker<'_> {
     }
     /// The `@captures` selection of the callable this graph implements.
     pub(super) fn creation_selectors(&self) -> Option<Vec<RelationPlace>> {
-        let (function, own) = self.graph_callable()?;
-        let types = if *own {
-            &self.own.types
-        } else {
-            &self.body.types
-        };
-        match &types.get(function.result)?.erased_captures {
+        let (function, _) = self.graph_callable()?;
+        match &self.t.get(function.result)?.erased_captures {
             Some(ErasedCaptures::FromArguments(selectors)) => Some(selectors.to_vec()),
             _ => None,
         }
     }
 
     pub(super) fn inert_creation_input(&self, ty: TypeId) -> bool {
-        let row = self.body.types.get(ty).unwrap();
+        let row = self.t.get(ty).unwrap();
         if row.drop_allocation != DropAllocation::NoAlloc
             || row.modes.multiplicity != Multiplicity::Many
             || row.modes.sendability != Sendability::Sendable
-                && !self.properties[ty.index()].sendable_aliased
+                && !self.properties[ty].sendable_aliased
         {
             return false;
         }
         let mut pending = vec![ty];
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let row = self.body.types.get(ty).unwrap();
+            let row = self.t.get(ty).unwrap();
             if row.brand != Brand::default()
                 || !row.modes.relation.is_global()
                 || row.modes.multiplicity != Multiplicity::Many
@@ -276,19 +249,11 @@ impl Checker<'_> {
             pending.extend(row.kind.value_parts());
         }
         structural_authority(
-            &self.body.types,
+            self.t,
             ty,
             &self.own.metadata.roles,
             &self.body.resolution.generic_declarations,
-            &mut |_, path| {
-                Ok::<_, QueryError>(path.and_then(|path| {
-                    if path == &self.own.definition {
-                        Some(Arc::new(self.own.clone()))
-                    } else {
-                        self.signatures.cached(path)
-                    }
-                }))
-            },
+            &mut |_, d| Ok::<_, QueryError>(d.and_then(|d| self.signatures.cached(d))),
         )
         .map(|authority| authority == AuthoritySummary::inert())
         .unwrap_or_else(|error| {

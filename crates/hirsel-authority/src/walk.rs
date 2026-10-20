@@ -710,7 +710,6 @@ impl<'a> Checker<'a> {
         let mut row = self.t.get(t).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let t = self.intern(row.clone());
-        let declarations = self.declarations();
         row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
             hirsel_modes::proofs::sendability(memo, t)
         });
@@ -1584,8 +1583,6 @@ impl<'a> Checker<'a> {
                                 let mut ty = self.t.get(t).unwrap().clone();
                                 ty.modes.uniqueness = Uniqueness::Aliased;
                                 let root = self.intern(ty.clone());
-                                let store = self.t;
-                                let declarations = self.declarations();
                                 ty.modes.sendability =
                                     self.proof(Sendability::NotSendable, |memo| {
                                         hirsel_modes::proofs::sendability_after_sharing(memo, root)

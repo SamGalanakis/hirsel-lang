@@ -67,7 +67,7 @@ impl Checker<'_> {
     /// H inferred these actuals from the complete receiving header. Rebuild
     /// the declaration with J's authority evidence before checking receipt.
     pub(super) fn instantiate_function_reference(&mut self, e: ExprId) {
-        let (declared, source, arguments) = if let Some(instance) = self
+        let (declared, arguments) = if let Some(instance) = self
             .out
             .body
             .instantiations
@@ -81,7 +81,7 @@ impl Checker<'_> {
             let SignatureKind::Function(declared) = &signature.kind else {
                 return;
             };
-            (declared.clone(), self.t, instance.arguments)
+            (declared.clone(), instance.arguments)
         } else {
             let arguments = self
                 .elaborations
@@ -95,7 +95,7 @@ impl Checker<'_> {
             let TypeKind::Function(declared) = self.t.get(ty).unwrap().kind.clone() else {
                 return;
             };
-            (declared, self.t, arguments)
+            (declared, arguments)
         };
         let Some(ty) = self.ty(e) else { return };
         let authorities: Vec<_> = arguments
@@ -223,8 +223,6 @@ impl Checker<'_> {
             actuals.insert(declared, actual);
             let authority = self.authority(actual);
             authorities.insert(declared, authority.clone());
-            let store = self.t;
-            let generics = self.declarations();
             let sendability = self.proof(Sendability::NotSendable, |memo| {
                 hirsel_modes::proofs::sendability(memo, actual)
             });
@@ -764,8 +762,6 @@ impl Checker<'_> {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let store = self.t;
-                let generics = self.declarations();
                 let sendability = self.proof(Sendability::NotSendable, |memo| {
                     hirsel_modes::proofs::sendability(memo, *t)
                 });
@@ -2785,8 +2781,6 @@ impl Checker<'_> {
                 capture_type.modes.uniqueness = Uniqueness::Aliased;
                 capture_type.sendability_requirement = SendabilityRequirement::None;
                 let root = self.intern(capture_type.clone());
-                let store = self.t;
-                let generics = self.declarations();
                 capture_type.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
                     hirsel_modes::proofs::sendability_after_sharing(memo, root)
                 });
@@ -3136,8 +3130,6 @@ impl Checker<'_> {
                     let mut row = self.t.get(result).unwrap().clone();
                     row.sendability_requirement = SendabilityRequirement::None;
                     let root = self.intern(row.clone());
-                    let store = self.t;
-                    let generics = self.declarations();
                     row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
                         hirsel_modes::proofs::sendability_after_sharing(memo, root)
                     });

@@ -871,7 +871,7 @@ impl Checker<'_> {
         let TypeKind::Named { definition, .. } = &self.t.get(ty).unwrap().kind else {
             return false;
         };
-        let definition = definition.clone();
+        let definition = *definition;
         self.read(definition)
             .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()))
     }
@@ -1597,7 +1597,7 @@ impl Checker<'_> {
                 arguments: syntax_arguments,
                 ..
             } if alias.is_some() => {
-                let (representation, signature) = alias.unwrap();
+                let (representation, _) = alias.unwrap();
                 self.alias_annotation(ty, representation, self.t, &syntax_arguments)
             }
             hirsel_syntax::TypeExprKind::Named {

@@ -3,55 +3,92 @@ use hirsel_type_analysis::representation::{
     RepresentationError, RepresentationFailure, expand_representation,
 };
 use hirsel_types::*;
-use std::collections::BTreeMap;
+use hirsel_modes::reader::Reader;
+use hirsel_syntax::DefId;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 
-#[derive(Default)]
-pub(super) struct Signatures(BTreeMap<DefPath, SignatureRef>);
-impl Signatures {
+/// The signature reads of the ownership query and its contextual memo. Every
+/// read goes through the query's `Reader`; first reads are recorded into the
+/// body's dependency reads by the caller's `reads` table.
+pub(super) struct Signatures<'q> {
+    pub m: &'q TypeMemo,
+    reader: &'q RefCell<Reader<'q>>,
+    memo: ContextMemo<'q>,
+    /// The memo of the flow pass, whose proofs read only signatures an
+    /// earlier read retained.
+    cached_memo: RefCell<ContextMemo<'q>>,
+}
+impl<'q> Signatures<'q> {
+    pub fn new(
+        m: &'q TypeMemo,
+        reader: &'q RefCell<Reader<'q>>,
+        memo: ContextMemo<'q>,
+        cached_memo: ContextMemo<'q>,
+    ) -> Self {
+        Self {
+            m,
+            reader,
+            memo,
+            cached_memo: RefCell::new(cached_memo),
+        }
+    }
+    /// A flow proof: its lookups see only retained signatures.
+    pub fn prove_cached<T>(&self, proof: impl FnOnce(&mut ContextMemo<'q>) -> T) -> T {
+        proof(&mut self.cached_memo.borrow_mut())
+    }
     pub fn read(
         &mut self,
-        path: &DefPath,
-        body: &mut CheckedBody,
-        provider: &mut dyn SignatureProvider,
-    ) -> Result<SignatureRef, QueryError> {
-        self.read_with_reads(path, &mut body.resolution.reads, provider)
-    }
-    fn read_with_reads(
-        &mut self,
-        path: &DefPath,
+        definition: DefId,
         reads: &mut Vec<DependencyRead>,
-        provider: &mut dyn SignatureProvider,
     ) -> Result<SignatureRef, QueryError> {
-        if let Some(signature) = self.0.get(path) {
-            return Ok(signature.clone());
+        let result = self.reader.borrow_mut().read(definition);
+        self.record(reads);
+        result
+    }
+    /// Record the first reads made since the last call, the memo's included.
+    pub fn record(&mut self, reads: &mut Vec<DependencyRead>) {
+        for (definition, result) in self.reader.borrow_mut().take_pending() {
+            reads.push(DependencyRead::Signature {
+                definition: definition.path().clone(),
+                fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
+            });
         }
-        let result = provider.signature(path);
-        reads.push(DependencyRead::Signature {
-            definition: path.clone(),
-            fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
-        });
-        let signature = result?;
-        self.0.insert(path.clone(), signature.clone());
-        Ok(signature)
+    }
+    /// A proof or comparison through the query's memo, its reads recorded.
+    pub fn prove<T>(
+        &mut self,
+        reads: &mut Vec<DependencyRead>,
+        proof: impl FnOnce(&mut ContextMemo<'q>) -> Result<T, QueryError>,
+    ) -> Result<T, QueryError> {
+        let result = proof(&mut self.memo);
+        self.record(reads);
+        result
     }
     /// A signature an earlier read retained; flow makes no new reads.
-    pub fn cached(&self, path: &DefPath) -> Option<SignatureRef> {
-        self.0.get(path).cloned()
+    pub fn cached(&self, definition: DefId) -> Option<SignatureRef> {
+        self.reader.borrow().cached(definition)
     }
     pub fn dependencies(&self) -> Vec<SignatureDependency> {
-        self.0
-            .values()
+        self.reader
+            .borrow()
+            .signatures()
+            .into_iter()
             .map(|s| SignatureDependency {
-                definition: s.definition.clone(),
+                definition: s.definition.path().clone(),
                 fingerprint: s.fingerprint,
             })
             .collect()
+    }
+    /// Memo hits so far, for the lane report.
+    pub fn hits(&self) -> u64 {
+        self.memo.hits() + self.cached_memo.borrow().hits()
     }
 }
 /// SEM-3: naming a function in a nominal receiver's association promises
 /// uniqueness of its builder, including for ordinary direct calls.
 pub(super) fn format_association(
-    types: &TypeStore,
+    types: &TypeInterner,
     function: &FunctionType,
     path: &DefPath,
     signatures: &Signatures,
@@ -60,11 +97,37 @@ pub(super) fn format_association(
     let TypeKind::Named { definition, .. } = &types.get(receiver.ty)?.kind else {
         return None;
     };
-    let signature = signatures.cached(definition)?;
+    let signature = signatures.cached(*definition)?;
     let SignatureKind::Type(nominal) = &signature.kind else {
         return None;
     };
-    (nominal.format.as_ref() == Some(path)).then(|| definition.clone())
+    (nominal.format.as_ref() == Some(path)).then(|| definition.path().clone())
+}
+
+/// The properties of each row the ownership pass reads: every row of the
+/// body's tables when it starts, and each row it derives, which keeps the
+/// structural proof of the row it was derived from.
+#[derive(Clone, Debug, Default)]
+pub(super) struct PropertyTable(HashMap<TypeId, Properties>);
+impl PropertyTable {
+    pub fn get(&self, id: TypeId) -> Option<&Properties> {
+        self.0.get(&id)
+    }
+    /// `id`'s properties, unless the row already has its own.
+    pub fn insert(&mut self, id: TypeId, properties: Properties) {
+        self.0.entry(id).or_insert(properties);
+    }
+    /// A row derived from `from` keeps `from`'s proof.
+    pub fn inherit(&mut self, id: TypeId, from: TypeId) {
+        let properties = self[from];
+        self.insert(id, properties);
+    }
+}
+impl std::ops::Index<TypeId> for PropertyTable {
+    type Output = Properties;
+    fn index(&self, id: TypeId) -> &Properties {
+        self.0.get(&id).expect("a classified row")
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,109 +152,110 @@ pub(super) struct Properties {
     pub scoped_capability: bool,
 }
 
-/// Producer classification uses the shared declaration-based property proof.
+/// Producer classification uses the shared declaration-based property proof,
+/// for every row the body's tables and `roots` reach.
 pub(super) fn classify(
+    t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
+    roots: impl IntoIterator<Item = TypeId>,
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
-) -> Result<Vec<Properties>, QueryError> {
-    let declarations = body.resolution.generic_declarations.clone();
-    let store = body.types.clone();
-    let mut result = vec![];
-    let mut evidence = store.clone();
-    let prefix = evidence.mark();
-    for (root, row) in store.iter() {
-        let mut lookup = |path: &DefPath| {
-            if path == &own.definition {
-                return Ok(Some(std::sync::Arc::new(own.clone())));
-            }
-            signatures.read(path, body, provider).map(Some)
-        };
-        let generics = declarations.clone();
-        let plain = structural_property(
-            &store,
-            root,
-            StructuralProperty::Plain,
-            &generics,
-            &mut lookup,
-        )?;
-        let copyable = structural_property(
-            &store,
-            root,
-            StructuralProperty::Copyable,
-            &generics,
-            &mut lookup,
-        )?;
-        let scoped_capability = if let TypeKind::Named { definition, .. } = &row.kind {
-            lookup(definition)?.is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.capability == Some(CapabilityKind::Scoped)))
-        } else {
-            false
-        };
-        let flat = structural_flat(&store, root, &generics, &mut lookup)?;
-        let copy_detaches = copy_detaches(&store, root, &generics, &mut lookup)?;
-        let data = structural_equality(&store, root, Bound::Data, &generics, &mut lookup)?;
-        // Flow can invalidate the root's uniqueness after J has proved a
-        // generic bound. Cache the same structural proof without that root
-        // evidence; locality is checked separately at the call.
-        let mut aliased = row.clone();
-        aliased.modes.uniqueness = Uniqueness::Aliased;
-        if !matches!(
-            aliased.kind,
-            TypeKind::Function(_)
-                | TypeKind::Builtin {
-                    kind: BuiltinType::Iter,
-                    ..
-                }
-        ) {
-            aliased.modes.sendability = Sendability::NotSendable;
-        }
-        aliased.modes.relation = Relation::global();
-        let aliased = evidence.push(aliased);
-        let sendable_aliased =
-            sendability_after_sharing(&evidence, aliased, &generics, &mut lookup)?
-                == Sendability::Sendable;
-        evidence.truncate_to(prefix);
-        result.push(Properties {
-            plain,
-            flat,
-            data,
-            sendable_aliased,
-            copyable,
-            valid: semantic_equal(&store, root, &store, root).is_ok(),
-            function: matches!(row.kind, TypeKind::Function(_)),
-            shared: matches!(
-                row.kind,
-                TypeKind::Builtin {
-                    kind: BuiltinType::Shared,
-                    ..
-                }
-            ),
-            handle_root: matches!(
-                row.kind,
-                TypeKind::Builtin {
-                    kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
-                    ..
-                }
-            ),
-            copy_detaches,
-            scoped_capability,
-        });
+) -> Result<PropertyTable, QueryError> {
+    let mut rows = hirsel_modes::rows::BodyRows::new(t, body);
+    for root in roots {
+        rows.note(t, root);
     }
-    Ok(result)
+    let mut table = PropertyTable::default();
+    for &root in rows.ids() {
+        let properties = classify_row(t, root, body, signatures)?;
+        table.insert(root, properties);
+    }
+    Ok(table)
+}
+/// The properties of one row; derived rows inherit theirs (`PropertyTable`).
+pub(super) fn classify_row(
+    t: &TypeInterner,
+    root: TypeId,
+    body: &mut CheckedBody,
+    signatures: &mut Signatures,
+) -> Result<Properties, QueryError> {
+    use hirsel_modes::proofs;
+    let row = t.row(root);
+    let reads = &mut body.resolution.reads;
+    let plain = signatures.prove(reads, |memo| {
+        proofs::property(memo, root, StructuralProperty::Plain)
+    })?;
+    let copyable = signatures.prove(reads, |memo| {
+        proofs::property(memo, root, StructuralProperty::Copyable)
+    })?;
+    let scoped_capability = if let TypeKind::Named { definition, .. } = &row.kind {
+        let signature = signatures.read(*definition, reads)?;
+        matches!(&signature.kind, SignatureKind::Type(t) if t.capability == Some(CapabilityKind::Scoped))
+    } else {
+        false
+    };
+    let flat = signatures.prove(reads, |memo| proofs::flat(memo, root))?;
+    let copy_detaches = signatures.prove(reads, |memo| proofs::copy_detaches(memo, root))?;
+    let declarations = body.resolution.generic_declarations.clone();
+    let reads = &mut body.resolution.reads;
+    let data = structural_equality(t, root, Bound::Data, &declarations, &mut |d| {
+        signatures.read(d, reads).map(Some)
+    })?;
+    // Flow can invalidate the root's uniqueness after J has proved a
+    // generic bound. Cache the same structural proof without that root
+    // evidence; locality is checked separately at the call.
+    let mut aliased = row.clone();
+    aliased.modes.uniqueness = Uniqueness::Aliased;
+    if !matches!(
+        aliased.kind,
+        TypeKind::Function(_)
+            | TypeKind::Builtin {
+                kind: BuiltinType::Iter,
+                ..
+            }
+    ) {
+        aliased.modes.sendability = Sendability::NotSendable;
+    }
+    aliased.modes.relation = Relation::global();
+    let aliased = t.intern(aliased);
+    let sendable_aliased = signatures.prove(reads, |memo| {
+        proofs::sendability_after_sharing(memo, aliased)
+    })? == Sendability::Sendable;
+    Ok(Properties {
+        plain,
+        flat,
+        data,
+        sendable_aliased,
+        copyable,
+        valid: t.valid(root),
+        function: matches!(row.kind, TypeKind::Function(_)),
+        shared: matches!(
+            row.kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::Shared,
+                ..
+            }
+        ),
+        handle_root: matches!(
+            row.kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
+                ..
+            }
+        ),
+        copy_detaches,
+        scoped_capability,
+    })
 }
 
 /// The implicit result-read permission is separate from written body bounds.
 pub(super) fn result_sharing(
+    t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
     graphs: &[super::cfg::Graph],
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
     rows: &super::source_rows::SourceRows,
 ) -> Result<std::collections::BTreeSet<hirsel_syntax::ExprId>, QueryError> {
     let declarations = body.resolution.generic_declarations.clone();
-    let store = body.types.clone();
     let mut reads = std::collections::BTreeSet::new();
     for graph in graphs {
         for expression in &graph.expressions {
@@ -199,17 +263,11 @@ pub(super) fn result_sharing(
                 continue;
             };
             if structural_property(
-                &store,
+                t,
                 ty,
                 StructuralProperty::Copyable,
                 &declarations.with_copyable(&graph.result_shareable),
-                &mut |path| {
-                    if path == &own.definition {
-                        Ok(Some(std::sync::Arc::new(own.clone())))
-                    } else {
-                        signatures.read(path, body, provider).map(Some)
-                    }
-                },
+                &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
             )? {
                 reads.insert(*expression);
             }
@@ -221,14 +279,13 @@ pub(super) fn result_sharing(
 /// Flow refines locality and uniqueness. Recompute their derived summaries once
 /// all graphs finish, keeping immutable type rows and every provider read.
 pub(super) fn normalize(
+    t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
     results: &mut [(hirsel_types::NameSite, TypeId)],
     physical: &mut [(hirsel_syntax::ExprId, TypeId)],
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
 ) -> Result<(), QueryError> {
-    let mut normalized = BTreeMap::new();
+    let mut normalized = HashMap::new();
     let mut normalize = |root: &mut TypeId| -> Result<(), QueryError> {
         if let Some(replacement) = normalized.get(root) {
             *root = *replacement;
@@ -239,18 +296,11 @@ pub(super) fn normalize(
         // Canonicalize inert qualifiers without rederiving (and resurrecting)
         // evidence from a declaration or default permission.
         let replacement = canonical_current_type(
-            &mut body.types,
+            t,
             *root,
             &body.resolution.generic_declarations,
-            &mut |path| {
-                if path == &own.definition {
-                    Ok(Some(std::sync::Arc::new(own.clone())))
-                } else {
-                    signatures
-                        .read_with_reads(path, &mut body.resolution.reads, provider)
-                        .map(Some)
-                }
-            },
+            &mut |d| signatures.read(d, &mut body.resolution.reads)
+                        .map(Some),
         )?;
         normalized.insert(*root, replacement);
         *root = replacement;
@@ -303,11 +353,10 @@ pub(super) fn normalize(
 /// and nested callable contracts. K must not publish the earlier Global row
 /// through a binding whose lifetime widened at a loop or branch join.
 pub(super) fn identity_projections(
+    t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
     fields: &mut [(NameSite, NameSite, Origin, Vec<(FieldId, TypeId)>)],
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
 ) -> Result<(), QueryError> {
     if fields.is_empty() {
         return Ok(());
@@ -335,18 +384,13 @@ pub(super) fn identity_projections(
         // binding's final row, which flow may have refined since J recorded it.
         let mut parent = root;
         for (_, part) in projections {
-            let mut lookup = |path: &hirsel_syntax::DefPath| {
-                if path == &own.definition {
-                    Ok(Some(std::sync::Arc::new(own.clone())))
-                } else {
-                    signatures
-                        .read_with_reads(path, &mut body.resolution.reads, provider)
-                        .map(Some)
-                }
-            };
-            let placed =
-                placed_part_type(&mut body.types, parent, *part, &declarations, &mut lookup)?;
-            *part = projected_type(&mut body.types, parent, placed, &declarations, &mut lookup)?;
+            let mut lookup = |d| signatures.read(d, &mut body.resolution.reads)
+                        .map(Some);
+            let placed = placed_part_type(t, parent, *part, &declarations, &mut lookup)?;
+            let m = signatures.m;
+            *part = signatures.prove(&mut body.resolution.reads, |memo| {
+                memo.projected(m, parent, placed)
+            })?;
             parent = *part;
         }
     }
@@ -374,28 +418,24 @@ pub(super) struct ProjectionLifetime {
 /// nominal type again would only push an equal copy of its representation,
 /// once per projection of every field, so a wide record grew the body's type
 /// rows with the square of its fields (GAP 5).
-type Layouts = BTreeMap<TypeId, TypeKind>;
+type Layouts = HashMap<TypeId, TypeKind>;
 fn physical_layout(
     layouts: &mut Layouts,
-    store: &mut TypeStore,
+    t: &TypeInterner,
     ty: TypeId,
-    own: &Signature,
     reads: &mut Vec<DependencyRead>,
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
 ) -> Result<TypeKind, QueryError> {
     if let Some(kind) = layouts.get(&ty) {
         return Ok(kind.clone());
     }
+    let m = signatures.m;
     let root = match expand_representation(
-        store,
+        t,
+        m,
         ty,
         &mut |_, definition, arguments| {
-            let signature = if definition == &own.definition {
-                std::sync::Arc::new(own.clone())
-            } else {
-                signatures.read_with_reads(definition, reads, provider)?
-            };
+            let signature = signatures.read(definition, reads)?;
             Ok(Some((
                 signature,
                 vec![AuthoritySummary::Unknown; arguments.len()],
@@ -412,7 +452,7 @@ fn physical_layout(
         }
         Err(error) => error.root,
     };
-    let kind = store.get(root).unwrap().kind.clone();
+    let kind = t.get(root).unwrap().kind.clone();
     layouts.insert(ty, kind.clone());
     Ok(kind)
 }
@@ -420,10 +460,10 @@ fn physical_layout(
 /// Declared part rows before owner locality is applied. A projected pattern
 /// already carries inherited locality and cannot identify an inferred Local part.
 pub(super) fn pattern_declarations(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     own: &Signature,
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
 ) -> Result<BTreeMap<hirsel_syntax::PatternId, TypeId>, QueryError> {
     let rows: BTreeMap<_, _> = body
         .patterns
@@ -454,17 +494,15 @@ pub(super) fn pattern_declarations(
             continue;
         }
         let mut inspected = ty;
-        while let TypeKind::Box(part) = body.types.get(inspected).unwrap().kind {
+        while let TypeKind::Box(part) = t.get(inspected).unwrap().kind {
             inspected = part;
         }
         let kind = physical_layout(
             &mut layouts,
-            &mut body.types,
+            t,
             inspected,
-            own,
             &mut body.resolution.reads,
             signatures,
-            provider,
         )?;
         for (field, child) in &row.fields {
             let part = match &kind {
@@ -491,19 +529,18 @@ pub(super) fn pattern_declarations(
 }
 
 pub(super) fn projection_lifetimes(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     own: &Signature,
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
 ) -> Result<BTreeMap<hirsel_syntax::ExprId, ProjectionLifetime>, QueryError> {
-    let arenas = crate::arenas::Arenas::new(body, own);
+    let arenas = crate::arenas::Arenas::new(t, body, own);
     let mut result = BTreeMap::new();
     let expression_types: BTreeMap<_, _> = body
         .expressions
         .iter()
         .map(|e| (e.expression, e.ty))
         .collect();
-    let mut store = std::mem::take(&mut body.types);
     let mut layouts = Layouts::new();
     let outcome = (|| {
         for place in &body.places {
@@ -529,11 +566,8 @@ pub(super) fn projection_lifetimes(
                 }
                 SourceRoot::Definition(path) => {
                     let signature =
-                        signatures.read_with_reads(path, &mut body.resolution.reads, provider)?;
+                        signatures.read(DefId::intern(path), &mut body.resolution.reads)?;
                     let SignatureKind::Const { ty: root, .. } = signature.kind else {
-                        continue;
-                    };
-                    let Ok(root) = import_type(&signature.types, root, &mut store) else {
                         continue;
                     };
                     (ProjectionRoot::Constant(root), root)
@@ -544,12 +578,10 @@ pub(super) fn projection_lifetimes(
             for step in &place.projections {
                 let kind = physical_layout(
                     &mut layouts,
-                    &mut store,
+                    t,
                     ty,
-                    own,
                     &mut body.resolution.reads,
                     signatures,
-                    provider,
                 )?;
                 counted_path |= matches!(
                     &kind,
@@ -597,7 +629,7 @@ pub(super) fn projection_lifetimes(
                     (SourceProjectionKind::Index(_), TypeKind::Primitive(Primitive::Bytes)) => {
                         let mut byte = Type::boolean();
                         byte.kind = TypeKind::Primitive(Primitive::U8);
-                        Some(store.push(byte))
+                        Some(t.intern(byte))
                     }
                     _ => None,
                 };
@@ -605,17 +637,16 @@ pub(super) fn projection_lifetimes(
                     break;
                 };
                 let plain = structural_property(
-                    &store,
+                    t,
                     next,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
                     &mut |path| {
-                        signatures
-                            .read_with_reads(path, &mut body.resolution.reads, provider)
+                        signatures.read(path, &mut body.resolution.reads)
                             .map(Some)
                     },
                 )?;
-                parts.push((store.get(next).unwrap().modes.relation.clone(), plain));
+                parts.push((t.get(next).unwrap().modes.relation.clone(), plain));
                 ty = next;
             }
             if parts.len() == place.projections.len() {
@@ -623,13 +654,13 @@ pub(super) fn projection_lifetimes(
                 // nested contract. J has already specialized the occurrence's
                 // owner-relative provenance and placement; keep that transport,
                 // independently of its receiving modes and callable promises.
-                let occurrence = store.get(expression_types[&place.expression]).unwrap();
-                let mut physical = store.get(ty).unwrap().clone();
+                let occurrence = t.get(expression_types[&place.expression]).unwrap();
+                let mut physical = t.get(ty).unwrap().clone();
                 physical.brand = occurrence.brand.clone();
                 physical.modes.relation =
                     arenas.relocate(&occurrence.modes.relation, &physical.modes.relation);
                 physical.allocation_target = occurrence.allocation_target.clone();
-                let physical = store.push(physical);
+                let physical = t.intern(physical);
                 result.insert(
                     place.expression,
                     ProjectionLifetime {
@@ -637,14 +668,13 @@ pub(super) fn projection_lifetimes(
                         parts,
                         physical,
                         counted_path,
-                        declared: store.get(ty).unwrap().modes.clone(),
+                        declared: t.get(ty).unwrap().modes.clone(),
                     },
                 );
             }
         }
         Ok(result)
     })();
-    body.types = store;
     outcome
 }
 
@@ -660,11 +690,11 @@ pub(super) struct FieldPlace {
 /// a field path of its parameter, that field place, read from the declared
 /// layouts (#77).
 pub(super) fn field_loan_places(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     own: &Signature,
     graphs: &[super::cfg::Graph],
     signatures: &mut Signatures,
-    provider: &mut dyn SignatureProvider,
     rows: &super::source_rows::SourceRows,
 ) -> Result<BTreeMap<hirsel_syntax::ExprId, FieldPlace>, QueryError> {
     let mut requests = vec![];
@@ -700,7 +730,6 @@ pub(super) fn field_loan_places(
         }
     }
     let mut result = BTreeMap::new();
-    let mut store = std::mem::take(&mut body.types);
     let mut layouts = Layouts::new();
     let outcome = (|| {
         for (argument, path, mut ty) in requests {
@@ -709,12 +738,10 @@ pub(super) fn field_loan_places(
             for field in &path {
                 let kind = physical_layout(
                     &mut layouts,
-                    &mut store,
+                    t,
                     ty,
-                    own,
                     &mut body.resolution.reads,
                     signatures,
-                    provider,
                 )?;
                 ty = match kind {
                     TypeKind::Box(payload) if *field == 0 => payload,
@@ -730,17 +757,16 @@ pub(super) fn field_loan_places(
                     }
                 };
                 let plain = structural_property(
-                    &store,
+                    t,
                     ty,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
                     &mut |path| {
-                        signatures
-                            .read_with_reads(path, &mut body.resolution.reads, provider)
+                        signatures.read(path, &mut body.resolution.reads)
                             .map(Some)
                     },
                 )?;
-                parts.push((store.get(ty).unwrap().modes.relation.clone(), plain));
+                parts.push((t.get(ty).unwrap().modes.relation.clone(), plain));
             }
             if found {
                 result.insert(
@@ -755,7 +781,6 @@ pub(super) fn field_loan_places(
         }
         Ok(result)
     })();
-    body.types = store;
     outcome
 }
 

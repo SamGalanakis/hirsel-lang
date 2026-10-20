@@ -41,7 +41,7 @@ impl Checker<'_> {
                     let TypeKind::Named { definition, .. } = &row.kind else {
                         return false;
                     };
-                    let definition = definition.clone();
+                    let definition = *definition;
                     self.read(definition)
                         .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.resource))
                 });
@@ -386,7 +386,6 @@ impl Checker<'_> {
         let mut row = row;
         row.modes.uniqueness = Uniqueness::Unique;
         let unique = store.intern(row.clone());
-        let declarations = self.declarations();
         row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
             hirsel_modes::proofs::sendability(memo, unique)
         });
@@ -432,7 +431,6 @@ impl Checker<'_> {
         let mut row = row;
         row.modes.relation = self.placement(&row.modes.relation);
         let actual = store.intern(row);
-        let generics = self.declarations();
         let derived = self.proof(Sendability::NotSendable, |memo| {
             hirsel_modes::proofs::content_sendability(memo, actual)
         });

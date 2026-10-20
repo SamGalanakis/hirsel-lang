@@ -48,6 +48,16 @@ impl<'p> Reader<'p> {
     pub fn take_pending(&mut self) -> Vec<(DefId, Result<SignatureRef, QueryError>)> {
         std::mem::take(&mut self.pending)
     }
+    /// Every signature read successfully, in definition order.
+    pub fn signatures(&self) -> Vec<SignatureRef> {
+        let mut read: Vec<_> = self
+            .cache
+            .iter()
+            .filter_map(|(d, s)| Some((*d, s.as_ref().ok()?.clone())))
+            .collect();
+        read.sort_by(|(a, _), (b, _)| a.path().cmp(b.path()));
+        read.into_iter().map(|(_, s)| s).collect()
+    }
     pub fn provider(&mut self) -> &mut dyn SignatureProvider {
         self.provider
     }
