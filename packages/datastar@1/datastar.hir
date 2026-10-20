@@ -382,8 +382,8 @@ pub fn new_sse(take connection: http.ServerStream) -> Result[
 
 /// Writes `event`, complete event text from one of the `_event` functions. Rendering
 /// once and sending the same text to many generators is how a server broadcasts.
-pub fn send(mut sse: ServerSentEventGenerator, text: String) -> Result[(), SseError] {
-  Ok(http.write_response_body(mut sse.connection, string.as_bytes(text)) ?)
+pub fn send(mut sink: ServerSentEventGenerator, text: String) -> Result[(), SseError] {
+  Ok(http.write_response_body(mut sink.connection, string.as_bytes(text)) ?)
 }
 
 /// Writes `patch_elements_event(elements, options)`.

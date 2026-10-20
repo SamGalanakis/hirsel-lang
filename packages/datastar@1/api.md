@@ -426,7 +426,7 @@ References: [`datastar@1/datastar/ScriptOptions`](#def-datastar_401_2fdatastar_2
 
 <a id="def-datastar_401_2fdatastar_2fsend"></a>
 
-- `pub fn datastar.send(mut sse: ServerSentEventGenerator, text: String) -> Result[(), SseError]`
+- `pub fn datastar.send(mut sink: ServerSentEventGenerator, text: String) -> Result[(), SseError]`
 
 Writes `event`, complete event text from one of the `_event` functions. Rendering
 once and sending the same text to many generators is how a server broadcasts.
