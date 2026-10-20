@@ -2039,26 +2039,32 @@ fn table_alignments(s: String) -> Option[String] uses {} {
   }
   let mut out: List[u8] = []
   for cell in cells {
+    // cmark-gfm extensions/ext_scanners.re:30-35: delimiter spaces
+    // include vertical tab/form feed, while ordinary cell trimming does not.
+    let mut i: u64 = 0
+    while whitespace(byte(cell, i)) {
+      i += 1
+    }
     let left = byte(cell, 0) == 58
     let right = size(cell) > 1 && byte(cell, size(cell) - 1) == 58
-    let mut i: u64 = if left {
-      1
-    } else {
-      0
+    if byte(cell, i) == 58 {
+      i += 1
     }
-    let end = size(cell) - if right {
-      1u64
-    } else {
-      0u64
+    let begin = i
+    while byte(cell, i) == 45 {
+      i += 1
     }
-    if i == end {
+    if i == begin {
       return None()
     }
-    while i < end {
-      if byte(cell, i) != 45 {
-        return None()
-      }
+    if byte(cell, i) == 58 {
       i += 1
+    }
+    while whitespace(byte(cell, i)) {
+      i += 1
+    }
+    if i != size(cell) {
+      return None()
     }
     core@1/list.push(
       mut out,
@@ -2108,7 +2114,10 @@ fn start_table(mut p: Parser, container: u64) -> bool uses {} {
     return false
   }
   let header = unique lines[len - 1]
-  if !string.contains(header, "|") && !string.contains(delimiter, "|") {
+  // Setext headings precede tables; a single aligned column needs no pipe.
+  // cmark-gfm extensions/ext_scanners.re:40-49 and src/blocks.c setext pass.
+  let hyphens = run(delimiter, 0, 45)
+  if hyphens > 0 && size(trim(piece(delimiter, hyphens, size(delimiter)))) == 0 {
     return false
   }
   if core@1/list.len(table_cells(header)) != size(align) {
