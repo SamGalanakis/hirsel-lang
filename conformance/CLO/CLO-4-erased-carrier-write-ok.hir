@@ -1,0 +1,32 @@
+// rule: CLO-4
+// expect: accept
+// Inside its owner, a write into a carrier's selected field stays within the
+// authority the carrier carries: a pure iterator replaces a pure one.
+@captures(inner)
+pub opaque type Pipe: () uses {} {
+  inner: Iter[u64],
+}
+
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+fn print(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+pub fn main(take rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut pipe = Pipe(inner: iter.from(0u64, count))
+  pipe.inner = iter.from(5u64, count)
+  need(take pipe)
+  let _ = iter.from(take stdout, print)
+  Ok(())
+}

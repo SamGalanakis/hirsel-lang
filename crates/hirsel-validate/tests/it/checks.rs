@@ -2117,6 +2117,7 @@ fn type_owned_resource_finalizer_borrows_self() {
         resource: true,
         drop: Some(path("main")),
         fact: None,
+        captures: None,
     });
     f.signatures.insert(path("main"), signature);
     f.valid();
@@ -2652,6 +2653,7 @@ fn generic_variant_equality_fixture(data_payload: bool) -> Fixture {
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
             destructor_allocation: Allocation::NoAlloc,
         }),
         fingerprint: ContentHash::default(),
@@ -2887,6 +2889,7 @@ fn nominal_copy_fixture(payload: TypeKind, resource: bool) -> Fixture {
                 resource,
                 drop: None,
                 fact: None,
+                captures: None,
                 destructor_allocation: Allocation::NoAlloc,
             }),
             fingerprint: ContentHash::default(),
@@ -4906,6 +4909,7 @@ fn erased_capture_results_are_proved_from_actual_parameters() {
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
             destructor_allocation: Allocation::NoAlloc,
         }),
     };
@@ -4983,6 +4987,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     });
     f.signatures.insert(path("Arena"), arena);

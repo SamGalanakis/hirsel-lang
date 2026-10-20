@@ -3925,6 +3925,18 @@ impl Checker<'_> {
                 },
             );
         }
+        if let Some(bound) = self.carrier_bound(destination)
+            && !self
+                .authority(self.place_type(value.place))
+                .is_subset_of(&bound)
+        {
+            self.flow_error(
+                report,
+                ViolationKind::TypeMismatch {
+                    entity: "erased carrier write",
+                },
+            );
+        }
         let incoming_type = self.transferred_type(state, value, &mut store);
         let value_type = super::flow_origins::canonical(
             &mut store,
@@ -6313,6 +6325,7 @@ mod nominal_limit_tests {
                         distinct: false,
                         drop: None,
                         fact: None,
+                        captures: None,
                         destructor_allocation: Allocation::MayAllocate,
                     }),
                 },
@@ -6355,6 +6368,7 @@ mod nominal_limit_tests {
                             distinct: false,
                             drop: None,
                             fact: None,
+                            captures: None,
                             destructor_allocation: Allocation::NoAlloc,
                         }),
                     },

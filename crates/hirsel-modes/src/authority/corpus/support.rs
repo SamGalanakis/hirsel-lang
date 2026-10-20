@@ -120,6 +120,7 @@ fn type_signature(
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
             destructor_allocation: Allocation::NoAlloc,
         }),
     }

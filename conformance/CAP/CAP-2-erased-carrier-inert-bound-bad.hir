@@ -1,0 +1,8 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 5
+// A carrier's authority depends on each value, so its declaration cannot
+// export `inert`.
+@captures(inner)
+pub opaque type Pipe: inert uses {} {
+  inner: Iter[u64],
+}

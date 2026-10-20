@@ -1,0 +1,59 @@
+// rule: CLO-4
+// expect: run
+// stdout: pipe
+// stdout: pipe
+// stdout: pipe
+// stdout: put
+// stdout: get
+// stdout: found
+// Carriers run as their representation: a mapped pipe yields in order and a
+// store of callbacks calls them, under the interpreter and native backends.
+fn count(mut n: u64) -> Option[u64] {
+  if n == 3 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut pipe = carriers.map(
+    carriers.wrap(iter.from(0u64, count)),
+    fn(n: u64) -> u64 {
+      n * 2
+    }
+  )
+  let mut expected: u64 = 2
+  while true {
+    match carriers.next(mut pipe) {
+      Some(n) => {
+        failure.check(n == expected, Bounds())
+        expected += 2
+        let _ = out.print(stdout, "pipe\n")
+      },
+      None => break,
+    }
+  }
+  failure.check(expected == 8, Bounds())
+  let s = carriers.store(
+    fn(key: u64) -> Option[u64] uses {stdout} {
+      failure.check(key == 7, Bounds())
+      let _ = out.print(stdout, "get\n")
+      Some(key + 8)
+    },
+    fn(key: u64, value: u64) -> () uses {stdout} {
+      failure.check(key == 7 && value == 8, Bounds())
+      let _ = out.print(stdout, "put\n")
+    }
+  )
+  carriers.put(s, 7, 8)
+  match carriers.get(s, 7) {
+    Some(v) => {
+      failure.check(v == 15, Bounds())
+      let _ = out.print(stdout, "found\n")
+    },
+    None => (),
+  }
+  Ok(())
+}

@@ -1,0 +1,36 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 33
+// Inside its owner, a carrier's selected field comes back from a `mut` call
+// within the authority the carrier carries, so `reset`, which may install an
+// iterator holding `Stdout`, cannot receive it.
+@captures(inner)
+pub opaque type Pipe: () uses {} {
+  inner: Iter[u64],
+}
+
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+fn print(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn reset(mut it: Iter[u64], take s: Stdout) -> () {
+  it = iter.from(take s, print)
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+pub fn main(take rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut pipe = Pipe(inner: iter.from(0u64, count))
+  reset(mut pipe.inner, take stdout)
+  need(take pipe)
+  Ok(())
+}

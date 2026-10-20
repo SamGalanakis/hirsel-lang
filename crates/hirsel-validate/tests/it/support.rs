@@ -369,6 +369,7 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     });
     f.signatures.insert(path("Arena"), arena);
@@ -415,6 +416,7 @@ pub(crate) fn capability_signature(name: &str) -> Signature {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
     });
     s
 }

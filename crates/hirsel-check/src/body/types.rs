@@ -1308,18 +1308,27 @@ impl Checker<'_, '_> {
             captures.sort();
             captures.dedup();
             let mut row = self.body.types.get(result).unwrap().clone();
-            if !matches!(
-                row.kind,
-                TypeKind::Function(_)
-                    | TypeKind::Builtin {
-                        kind: BuiltinType::Iter,
-                        ..
-                    }
-            ) {
+            let carrier = match &row.kind {
+                TypeKind::Named { definition, .. } => matches!(
+                    self.snapshot(&definition.clone()).map(|s| s.kind.clone()),
+                    Ok(SignatureKind::Type(d)) if d.captures.is_some()
+                ),
+                _ => false,
+            };
+            if !carrier
+                && !matches!(
+                    row.kind,
+                    TypeKind::Function(_)
+                        | TypeKind::Builtin {
+                            kind: BuiltinType::Iter,
+                            ..
+                        }
+                )
+            {
                 return Err(fail(
                     const { RuleId::of("CLO-4") },
                     captures_span.unwrap(),
-                    "@captures requires a callable or erased iterator result",
+                    "@captures requires a callable, erased iterator or erased carrier result",
                 ));
             }
             row.erased_captures = Some(ErasedCaptures::FromArguments(captures.into()));

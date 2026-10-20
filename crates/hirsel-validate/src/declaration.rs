@@ -34,6 +34,16 @@ pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
     {
         return false;
     }
+    if d.captures.is_some()
+        && (d.capability.is_some()
+            || d.resource
+            || d.serializable
+            || d.layout.flat
+            || d.fact.is_some()
+            || d.bounds.contains(&Bound::Inert))
+    {
+        return false;
+    }
     let Some(root) = d.representation else {
         return d.implementation_authority.is_none();
     };
@@ -66,6 +76,24 @@ pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
     if s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque && d.capability.is_none() {
         return true;
     }
+    // CAP-2/CLO-4: a carrier's selected fields are its per-value erased
+    // evidence; only the remaining fields count against the declaration.
+    let roots: Vec<TypeId> = match (&d.captures, s.types.get(root).map(|row| &row.kind)) {
+        (None, _) => vec![root],
+        (Some(selected), Some(TypeKind::Record(parts))) if !d.distinct => {
+            if selected.is_empty() || selected.iter().any(|field| *field as usize >= parts.len()) {
+                return false;
+            }
+            parts
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !selected.contains(&(*i as u32)))
+                .map(|(_, part)| part.ty)
+                .collect()
+        }
+        (Some(selected), _) if d.distinct && selected.as_slice() == [0] => vec![],
+        (Some(_), _) => return false,
+    };
     let mut authority = AuthoritySummary::inert();
     loop {
         let mut own = s.clone();
@@ -75,22 +103,26 @@ pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
         if d.capability.is_none() {
             own_type.authority = authority.clone();
         }
-        let next = structural_authority(
-            &s.types,
-            root,
-            &s.metadata.roles,
-            &declarations,
-            &mut |_, path| {
-                Ok::<_, QueryError>(path.and_then(|path| {
-                    if path == &s.definition {
-                        Some(std::sync::Arc::new(own.clone()))
-                    } else {
-                        signatures.get(path).cloned().map(std::sync::Arc::new)
-                    }
-                }))
-            },
-        )
-        .unwrap_or(AuthoritySummary::Unknown);
+        let next = roots.iter().fold(AuthoritySummary::inert(), |held, root| {
+            held.join(
+                structural_authority(
+                    &s.types,
+                    *root,
+                    &s.metadata.roles,
+                    &declarations,
+                    &mut |_, path| {
+                        Ok::<_, QueryError>(path.and_then(|path| {
+                            if path == &s.definition {
+                                Some(std::sync::Arc::new(own.clone()))
+                            } else {
+                                signatures.get(path).cloned().map(std::sync::Arc::new)
+                            }
+                        }))
+                    },
+                )
+                .unwrap_or(AuthoritySummary::Unknown),
+            )
+        });
         if next == authority {
             break;
         }
@@ -118,7 +150,7 @@ pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
         }
         match bound {
             Bound::Serializable => true, // Independently proved by serialization::declaration.
-            Bound::Inert => d.authority == AuthoritySummary::inert(),
+            Bound::Inert => d.authority == AuthoritySummary::inert() && d.captures.is_none(),
             Bound::Flat if d.layout.flat => true,
             Bound::Flat => {
                 structural_flat(&s.types, root, &declarations, &mut lookup).unwrap_or(false)

@@ -1,0 +1,33 @@
+// rule: CAP-2
+// expect: accept
+// A carrier built from a directory-reading iterator holds that iterator's
+// authority, `Dir`, so a closure restricted to `uses {Dir}` may keep it.
+type Source {
+  dir: Dir,
+  remaining: u64,
+}
+
+fn read(mut s: Source) -> Option[u64] {
+  if s.remaining == 0 {
+    return None
+  }
+  s.remaining -= 1
+  match file.size(s.dir, path.of("data")) {
+    Ok(n) => Some(n),
+    Error(_) => None,
+  }
+}
+
+fn sandbox(take g: once fn() -> () uses {Dir}) -> () {
+  g()
+}
+
+fn probe(d: Dir) -> () uses {d} {
+  let pipe = carriers.wrap(iter.from(Source(dir: d, remaining: 2), read))
+  sandbox(
+    fn() {
+      let mut held = take pipe
+      let _ = carriers.next(mut held)
+    }
+  )
+}

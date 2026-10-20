@@ -361,6 +361,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         resource: true,
         drop: Some(path("main")),
         fact: None,
+        captures: None,
     });
     f.signatures.insert(path("main"), signature);
     f

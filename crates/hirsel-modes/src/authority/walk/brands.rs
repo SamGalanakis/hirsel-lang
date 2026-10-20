@@ -879,6 +879,57 @@ impl Checker<'_> {
         self.out.body.types = store;
         part
     }
+    /// Whether a row is an erased carrier (CAP-2, CLO-4).
+    pub(super) fn erased_carrier(&mut self, ty: TypeId) -> bool {
+        let TypeKind::Named { definition, .. } = &self.out.body.types.get(ty).unwrap().kind else {
+            return false;
+        };
+        let definition = definition.clone();
+        self.read(&definition)
+            .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()))
+    }
+    /// CLO-4: a part of an erased carrier holds no more than the carrier's
+    /// whole authority, so a write through the part must stay within it.
+    /// None when `owner` is no carrier or its evidence is unknown.
+    pub(super) fn carrier_bound(&mut self, owner: TypeId) -> Option<AuthoritySummary> {
+        if !self.erased_carrier(owner) {
+            return None;
+        }
+        Some(self.authority(owner)).filter(|a| *a != AuthoritySummary::Unknown)
+    }
+    /// The carrier bound of a place operand, through its passing operator.
+    pub(super) fn carrier_place(&self, mut e: ExprId) -> Option<AuthoritySummary> {
+        loop {
+            e = self.transparent_value(e);
+            match self.tree.expressions[e.0 as usize].kind {
+                ExprKind::Unary {
+                    op: UnaryOp::Mut | UnaryOp::Take | UnaryOp::Copy | UnaryOp::Unique,
+                    value,
+                } => e = value,
+                _ => return self.carrier_places.get(&e).cloned(),
+            }
+        }
+    }
+    /// CAP-2: a constructed carrier's evidence is the joined authority of
+    /// the values it is built from; unknown when any of them is.
+    pub(super) fn carrier_construction(&mut self, e: ExprId, parts: &[ExprId]) {
+        let Some(root) = self.ty(e) else { return };
+        if !self.erased_carrier(root) {
+            return;
+        }
+        let mut authority = AuthoritySummary::inert();
+        for part in parts {
+            let Some(ty) = self.ty(*part) else { return };
+            authority = authority.join(self.authority(ty));
+        }
+        if authority == AuthoritySummary::Unknown {
+            return;
+        }
+        let mut row = self.out.body.types.get(root).unwrap().clone();
+        row.erased_captures = Some(ErasedCaptures::Known(authority));
+        let root = self.out.body.types.push(row);
+        self.set_ty(e, root);
+    }
     /// A projection used as another field's declared brand is an indivisible owner.
     pub(super) fn protected_field(&mut self, mut e: ExprId) -> bool {
         while let ExprKind::Unary { value, .. } = self.tree.expressions[e.0 as usize].kind {

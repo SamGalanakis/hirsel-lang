@@ -1,0 +1,17 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 15
+// A carrier over an iterator that holds `Stdout` is not inert after it advances.
+fn print(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+fn probe(take rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut pipe = carriers.wrap(iter.from(take stdout, print))
+  let _ = carriers.next(mut pipe)
+  need(take pipe)
+  Ok(())
+}

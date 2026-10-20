@@ -1,0 +1,7 @@
+// rule: CLO-4
+// expect: accept
+// A type's `@captures` names fields of its own representation.
+@captures(inner)
+pub opaque type Pipe: () uses {} {
+  inner: Iter[u64],
+}

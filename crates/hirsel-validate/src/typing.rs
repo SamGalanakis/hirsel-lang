@@ -1483,7 +1483,7 @@ impl<'a> Checker<'a> {
             })
             .collect()
     }
-    fn authority(&self, t: TypeId) -> AuthoritySummary {
+    pub(super) fn authority(&self, t: TypeId) -> AuthoritySummary {
         self.authority_in(&self.definition.types, t)
     }
     fn authority_in(&self, store: &TypeStore, t: TypeId) -> AuthoritySummary {
@@ -1917,6 +1917,15 @@ impl<'a> Checker<'a> {
                 Reception::View,
                 &self.generic_declarations(),
             );
+        if value.usage == UseKind::Mut
+            && !preserves_state
+            && let Some(bound) = self.carrier_bound(place)
+            && !self.authority_in(&target, expected).is_subset_of(&bound)
+        {
+            self.error(ViolationKind::TypeMismatch {
+                entity: "erased carrier hand-back",
+            });
+        }
         let expected = if preserves_state
             && value.usage == UseKind::Mut
             && matches!(
@@ -1924,12 +1933,16 @@ impl<'a> Checker<'a> {
                 TypeKind::Builtin {
                     kind: BuiltinType::Iter,
                     ..
-                }
+                } | TypeKind::Named { .. }
             ) {
+            // An erased carrier's cleanup is its declaration's; only its
+            // evidence is per value.
             let incoming = target.get(actual).unwrap();
             let mut row = target.get(expected).unwrap().clone();
             row.erased_captures = incoming.erased_captures.clone();
-            row.drop_allocation = incoming.drop_allocation.clone();
+            if !matches!(row.kind, TypeKind::Named { .. }) {
+                row.drop_allocation = incoming.drop_allocation.clone();
+            }
             target.push(row)
         } else {
             expected
@@ -3108,6 +3121,25 @@ impl<'a> Checker<'a> {
                         });
                     }
                 }
+                // CAP-2: a constructed carrier's evidence covers every value
+                // it is built from.
+                let row = self.definition.types.get(ty).unwrap();
+                if let (TypeKind::Named { .. }, Some(evidence)) =
+                    (&row.kind, row.erased_captures.clone())
+                {
+                    let held = fields
+                        .iter()
+                        .fold(AuthoritySummary::inert(), |held, field| {
+                            held.join(self.authority(self.place_type(field.value.place)))
+                        });
+                    if !matches!(evidence, ErasedCaptures::Known(_))
+                        || !held.is_subset_of(&evidence.authority())
+                    {
+                        self.error(ViolationKind::TypeMismatch {
+                            entity: "erased carrier evidence",
+                        });
+                    }
+                }
             }
             Rvalue::Closure {
                 body,
@@ -3478,6 +3510,29 @@ impl<'a> Checker<'a> {
             Ok(())
         });
         found
+    }
+    /// CLO-4: the known authority of an erased carrier the place projects
+    /// through; a write or `mut` hand-back there must stay within it.
+    pub(super) fn carrier_bound(&mut self, place: PlaceId) -> Option<AuthoritySummary> {
+        let place = self.body.places.get(place.0 as usize)?.clone();
+        let mut store = self.working_store();
+        let mut bound = None;
+        for depth in 0..place.projection.len() {
+            let mut prefix = place.clone();
+            prefix.projection.truncate(depth);
+            prefix.binding = None;
+            let ty = self.projection_type(&mut store, &prefix, |_, _| None)?;
+            let row = store.get(ty).unwrap();
+            if let (TypeKind::Named { definition, .. }, Some(ErasedCaptures::Known(_))) =
+                (&row.kind, &row.erased_captures)
+                && self.signatures.get(definition).is_some_and(
+                    |s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()),
+                )
+            {
+                bound = Some(self.authority_in(&store, ty));
+            }
+        }
+        bound
     }
     pub(super) fn projection_type(
         &mut self,

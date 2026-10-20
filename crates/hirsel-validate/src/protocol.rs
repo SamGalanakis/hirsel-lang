@@ -423,7 +423,7 @@ fn unproved(store: &TypeStore, f: &FunctionType) -> bool {
     matches!(
         store.get(f.result).and_then(|t| t.erased_captures.as_ref()),
         Some(ErasedCaptures::FromArguments(selectors)) if selectors.iter().any(|selector| !selector.fields.is_empty())
-            || !matches!(store.get(f.result).map(|row| &row.kind), Some(TypeKind::Builtin { kind: BuiltinType::Iter, .. }))
+            || !matches!(store.get(f.result).map(|row| &row.kind), Some(TypeKind::Builtin { kind: BuiltinType::Iter, .. } | TypeKind::Named { .. }))
     )
 }
 /// Selected state of every callable and whole-input Iter creation are proved by

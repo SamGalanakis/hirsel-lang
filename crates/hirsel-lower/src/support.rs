@@ -516,6 +516,7 @@ impl Fixture {
                 resource: false,
                 drop: None,
                 fact: None,
+                captures: None,
             }),
             fingerprint: ContentHash::default(),
         });

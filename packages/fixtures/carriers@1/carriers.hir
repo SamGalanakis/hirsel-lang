@@ -1,0 +1,51 @@
+/// An owned cursor whose authority is its inner iterator's (CAP-2, CLO-4).
+@captures(inner)
+pub opaque type Pipe[T]: () uses {} {
+  inner: Iter[T],
+}
+
+@captures(input)
+pub fn wrap[T](take input: Iter[T]) -> Pipe[T] uses {input} {
+  Pipe(inner: take input)
+}
+
+@captures(input, f)
+pub fn map[T, U](take input: Pipe[T], take f: fn(T) -> U) -> Pipe[U] uses {input, f} {
+  let Pipe(inner: inner) = take input
+  Pipe(inner: iter.map(take inner, take f))
+}
+
+@advance_only(input)
+pub fn next[T](mut input: Pipe[T]) -> Option[T] uses {input} {
+  iter.next(mut input.inner)
+}
+
+@captures(input)
+pub fn unwrap[T](take input: Pipe[T]) -> Iter[T] uses {input} {
+  let Pipe(inner: inner) = take input
+  inner
+}
+
+/// A key-value store as a record of callbacks; each value carries the
+/// authority its callbacks capture.
+@captures(get, put)
+pub opaque type Store: () uses {} {
+  get: fn(key: u64) -> Option[u64],
+  put: fn(key: u64, value: u64) -> (),
+}
+
+@captures(read, write)
+pub fn store(
+  take read: fn(key: u64) -> Option[u64],
+  take write: fn(key: u64, value: u64) -> ()
+) -> Store uses {read, write} {
+  Store(get: take read, put: take write)
+}
+
+pub fn get(s: Store, key: u64) -> Option[u64] uses {s} {
+  s.get(key)
+}
+
+pub fn put(s: Store, key: u64, value: u64) -> () uses {s} {
+  s.put(key, value)
+}

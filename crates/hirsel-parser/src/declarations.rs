@@ -403,9 +403,10 @@ impl Parser<'_> {
         for attr in attrs {
             let valid = match attr.name.as_str() {
                 "test" | "bench" | "track_caller" | "noalloc" | "incomplete" | "advance_only"
-                | "preserves_captures" | "preserves_unique" | "captures" => {
+                | "preserves_captures" | "preserves_unique" => {
                     matches!(kind, ItemKind::Function { .. })
                 }
+                "captures" => matches!(kind, ItemKind::Function { .. } | ItemKind::Type { .. }),
                 "blocking" => matches!(kind, ItemKind::Function { abi: Some(_), .. }),
                 "capability" => opaque_span.is_some() && matches!(kind, ItemKind::Type { .. }),
                 _ => matches!(kind, ItemKind::Type { .. }),

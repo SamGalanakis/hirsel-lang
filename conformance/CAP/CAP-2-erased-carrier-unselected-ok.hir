@@ -1,0 +1,9 @@
+// rule: CAP-2
+// expect: accept
+// A carrier's declared summary covers its unselected fields: `dir` is not
+// selected, so the declaration names `Dir`.
+@captures(inner)
+pub opaque type Listing: () uses {Dir} {
+  inner: Iter[u64],
+  dir: Dir,
+}

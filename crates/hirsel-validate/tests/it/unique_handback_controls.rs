@@ -642,6 +642,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     });
     f.signatures.insert(point.definition.clone(), point);
@@ -936,6 +937,7 @@ fn token_signature() -> Signature {
         resource: true,
         drop: Some(path("Token_drop")),
         fact: None,
+        captures: None,
     });
     signature
 }
@@ -1098,6 +1100,7 @@ fn tagged(thunk: bool) -> Signature {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     });
     tagged

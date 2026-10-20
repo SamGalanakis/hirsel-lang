@@ -1,0 +1,29 @@
+// rule: CAP-2
+// expect: accept
+// An opaque store holding callbacks that capture a database directory holds
+// `Dir`, as each callback does, so a closure restricted to `uses {Dir}` may
+// keep and use it.
+fn sandbox(take g: once fn() -> () uses {Dir}) -> () {
+  g()
+}
+
+fn probe(db: Dir) -> () uses {db} {
+  let s = carriers.store(
+    fn(key: u64) -> Option[u64] uses {db} {
+      match file.size(db, path.of("table")) {
+        Ok(n) => Some(n + key),
+        Error(_) => None,
+      }
+    },
+    fn(key: u64, value: u64) -> () uses {db} {
+      let _ = file.size(db, path.of("table"))
+    }
+  )
+  sandbox(
+    fn() {
+      let held = take s
+      carriers.put(held, 1, 2)
+      let _ = carriers.get(held, 1)
+    }
+  )
+}

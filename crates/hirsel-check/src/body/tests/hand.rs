@@ -400,6 +400,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
                 resource: false,
                 drop: None,
                 fact: None,
+                captures: None,
             }),
             fingerprint: Default::default(),
         }),
@@ -487,6 +488,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
         resource: true,
         drop: Some(f.signature.definition.clone()),
         fact: None,
+        captures: None,
     });
     f.resolution.drop_binding = Some(LocalId(37));
     let (output, _) = f.finish(root);

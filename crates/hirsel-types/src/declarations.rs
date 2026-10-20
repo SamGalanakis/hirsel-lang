@@ -194,6 +194,16 @@ pub fn structural_authority<E>(
                 ) {
                     return Ok(AuthoritySummary::Unknown);
                 }
+                // CAP-2: an erased carrier also holds its value's own erased
+                // evidence, unknown for a written type, as an Iter does.
+                if declaration.captures.is_some() {
+                    summary = summary.join(
+                        row.erased_captures
+                            .as_ref()
+                            .map(ErasedCaptures::authority)
+                            .unwrap_or(AuthoritySummary::Unknown),
+                    );
+                }
             }
             TypeKind::Builtin { kind, arguments } => {
                 if *kind == BuiltinType::Iter {
@@ -314,6 +324,7 @@ pub(crate) mod tests {
                 distinct: false,
                 drop: None,
                 fact: None,
+                captures: None,
                 destructor_allocation: Allocation::NoAlloc,
             }),
         })

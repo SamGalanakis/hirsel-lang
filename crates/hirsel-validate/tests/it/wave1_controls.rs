@@ -340,6 +340,7 @@ fn inactive_payload(present: bool) -> Fixture {
                 resource: false,
                 drop: None,
                 fact: None,
+                captures: None,
                 destructor_allocation: Allocation::NoAlloc,
             }),
             fingerprint: ContentHash::default(),

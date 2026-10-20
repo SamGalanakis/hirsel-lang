@@ -177,6 +177,7 @@ pub fn canonical_encoding(
             resource,
             drop,
             fact,
+            captures,
         }) => {
             let Layout {
                 c,
@@ -222,6 +223,14 @@ pub fn canonical_encoding(
             e.boolean(*destructor_allocation == Allocation::NoAlloc);
             e.option(drop.as_ref(), |e, p| e.path(p));
             e.option(fact.as_ref(), |e, c| e.contract(c));
+            // Absent for ordinary declarations, so existing vectors are unchanged.
+            if let Some(fields) = captures {
+                e.tag("erased-carrier-v1");
+                e.number(fields.len() as u64);
+                for field in fields.iter() {
+                    e.number(*field as u64);
+                }
+            }
         }
         SignatureKind::Const { ty: t, generics } => {
             e.tag("const");

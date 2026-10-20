@@ -677,6 +677,11 @@ pub struct TypeDefinition {
     pub resource: bool,
     pub drop: Option<DefPath>,
     pub fact: Option<Contract>,
+    /// `@captures(fields)`: an erased carrier. Its value authority joins the
+    /// declared summary with each value's own erased evidence (CAP-2, CLO-4).
+    /// The selected representation field ordinals (a distinct type's field is
+    /// 0); empty in a public opaque export, which has no representation.
+    pub captures: Option<SharedSlice<u32>>,
 }
 /// Every definition exposes one signature category (LANG-6).
 #[derive(Clone, Debug, Eq, PartialEq)]

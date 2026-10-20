@@ -1,0 +1,23 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 21
+// A `mut` hand-back keeps a carrier's evidence only under a preservation
+// promise; without one, `touch` may hand back a carrier of any authority.
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+fn touch(mut p: carriers.Pipe[u64]) -> () uses {p} {
+  let _ = carriers.next(mut p)
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+fn probe() -> () uses {} {
+  let mut pipe = carriers.wrap(iter.from(0u64, count))
+  touch(mut pipe)
+  need(take pipe)
+}

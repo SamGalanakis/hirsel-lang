@@ -71,6 +71,7 @@ fn nominal(f: &mut Fixture, name: &str, arity: usize, representation: Option<Typ
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
         }),
     );
 }

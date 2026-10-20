@@ -123,6 +123,28 @@ bounds and authority: `pub opaque type Marker: () uses {}` explicitly exports no
 no authority, while an omitted opaque bound clause is incomplete and rejected under
 [LANG-6](language.md#lang-6-signatures).
 
+**Erased carriers.** A type whose representation holds erased state (an `Iter`, callbacks,
+or other carriers) can carry that state's authority per value, as an `Iter` does. It names
+those fields with `@captures(field, ..)`, either fields of a record or the field of a
+`distinct` type:
+
+```hirsel
+@captures(inner)
+pub opaque type Flow[T, E]: () uses {} { inner: Iter[Result[T, E]] }
+```
+
+A carrier's value-authority summary is its declared summary, specialised to its type
+arguments, joined with the value's own **erased evidence**. A written carrier type has
+unknown evidence, as a written `Iter[T]` does. Constructing a carrier gives it the joined
+authority of the values it is built from. A function result or a callable result declared
+with `@captures` ([CLO-4](closures.md#clo-4-escaping)) has the joined evidence of the
+selected arguments. The declaration's summary must cover the authority of the unselected
+fields; selected fields are exempt because each value carries their authority. Only
+authority is per value: sendability, multiplicity, cleanup and brands are the declaration's
+exported bounds. A carrier cannot export `inert` (CAP-2) and cannot be a sealed
+capability, a resource, `flat`, `serializable` or refined (CLO-4). A selector that names
+no representation field is CLO-4.
+
 ### CAP-3: Restriction
 
 A scope-forming library function (a transaction, [STORE-3](storage.md#store-3-transaction-scope);

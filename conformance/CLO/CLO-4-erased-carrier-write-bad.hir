@@ -1,0 +1,32 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 29
+// Inside its owner, a write into a carrier's selected field stays within the
+// authority the carrier carries, so it cannot install an iterator holding
+// `Stdout` into a pure carrier.
+@captures(inner)
+pub opaque type Pipe: () uses {} {
+  inner: Iter[u64],
+}
+
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+fn print(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+pub fn main(take rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut pipe = Pipe(inner: iter.from(0u64, count))
+  pipe.inner = iter.from(take stdout, print)
+  need(take pipe)
+  Ok(())
+}

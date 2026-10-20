@@ -24,6 +24,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     };
     let mut out = vec![b.signature(
@@ -116,6 +117,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         resource: true,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::NoAlloc,
     };
     out.push(b.signature("$intrinsic.OwnedCursor", SignatureKind::Type(owner), true));
@@ -190,6 +192,7 @@ pub(super) fn signatures() -> Vec<Signature> {
             resource: true,
             drop: None,
             fact: None,
+            captures: None,
             destructor_allocation: Allocation::NoAlloc,
         };
         out.push(b.signature(cursor, SignatureKind::Type(owner), true));

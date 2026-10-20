@@ -1,0 +1,14 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 7
+// A wrapper that selects only its input cannot hide a `Net` closure in the
+// carrier it returns.
+@captures(input)
+fn conceal(take input: carriers.Pipe[u64], net: Net) -> carriers.Pipe[u64] uses {input, net} {
+  carriers.map(
+    take input,
+    fn(n: u64) -> u64 uses {net} {
+      let _ = net
+      n
+    }
+  )
+}

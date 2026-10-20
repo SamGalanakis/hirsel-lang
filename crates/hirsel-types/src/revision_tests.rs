@@ -1298,6 +1298,7 @@ fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
         }),
     };
     (path, std::sync::Arc::new(signature))
@@ -1670,6 +1671,7 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
         resource: false,
         drop: None,
         fact: None,
+        captures: None,
         destructor_allocation: Allocation::MayAllocate,
     };
     let mut public = Signature {

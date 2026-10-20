@@ -69,7 +69,8 @@ another callback's authority.
 **Variance of callable promises.** A `mut` hand-back is exact for the whole value type, at
 its root and at every depth: the callable's `uses` and `@noalloc` promise, erased captures
 and cleanup summary. A type argument of a nominal type or a non-sequence builtin (`Option`,
-user generics, `Map`, `Set`, `Shared`, `Iter`, `Mutex`, …) is exact for those promises.
+user generics, `Map`, `Set`, `Shared`, `Iter`, `Mutex`, …) is exact for those promises,
+and an erased carrier's evidence follows the same variance as an `Iter`'s.
 Sequence elements (`Array`, `List`, `Inline`), tuple, record, variant and box parts, and a
 callable's result and error are read-only positions where a stronger promise serves; a
 callable's non-`mut` parameters are contravariant and its `mut` parameters are exact. The
@@ -119,7 +120,8 @@ state parameter is `mut` (`@preserves_unique` may also select a `take` parameter
   kind and model), and only a direct
   call to that declaration uses it: a call through a function value hands its `mut`
   arguments back shared.
-- `@captures(state, next)` on a callable returning an `Iter` or function value: the
+- `@captures(state, next)` on a callable returning an `Iter`, a function value or an
+  erased carrier ([CAP-2](capabilities.md#cap-2-charged-at-use)): the
   selected parameters (or their field paths) determine the returned environment's
   complete authority, source bounds, brands, multiplicity, sendability and
   destruction-allocation obligations, independently of its yielded item type. At
@@ -162,6 +164,15 @@ meets it whole. Then:
   declares the same promise (`@advance_only` for an advance-only selection) on that
   argument or on a field path leading into the selection;
 - a mutable, taking or copying capture of the selected content is a violation.
+
+An erased carrier is an erased state like `Iter`, so these promises select a carrier
+parameter as they select an `Iter`. A carrier's evidence is exact across a `mut` hand-back
+unless the callee preserves it, and a written carrier type states unknown evidence.
+Inside the carrier's owner, a part read from a carrier with known evidence holds no more
+than the carrier's whole authority. So writing such a part, or handing it back from a
+`mut` argument whose callee does not preserve its captures, must stay within that
+authority (CLO-4). A carrier constructor is transparent to the creation proof: its
+envelope is the join of its arguments'.
 
 A closure literal receives the state promises and the `@captures` selection of its expected
 callable type, as it receives a contextual `@noalloc`, and its body must prove them; a

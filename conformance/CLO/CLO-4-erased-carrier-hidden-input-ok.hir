@@ -1,0 +1,14 @@
+// rule: CLO-4
+// expect: accept
+// A wrapper that maps its input through a `Net` closure selects `net` too, so
+// its result is charged for both.
+@captures(input, net)
+fn reveal(take input: carriers.Pipe[u64], net: Net) -> carriers.Pipe[u64] uses {input, net} {
+  carriers.map(
+    take input,
+    fn(n: u64) -> u64 uses {net} {
+      let _ = net
+      n
+    }
+  )
+}

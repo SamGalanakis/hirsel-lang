@@ -314,6 +314,7 @@ impl Fixture {
                     resource,
                     drop: None,
                     fact: None,
+                    captures: None,
                     destructor_allocation: Allocation::NoAlloc,
                 }),
             }),

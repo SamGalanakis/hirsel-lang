@@ -48,6 +48,7 @@ fn holder(resource: bool) -> Holder {
             resource: true,
             drop: Some(path("guard_drop")),
             fact: None,
+            captures: None,
         });
         f.signatures.insert(path("guard"), signature);
         TypeKind::Named {

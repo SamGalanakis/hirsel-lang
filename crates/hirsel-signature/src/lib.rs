@@ -125,6 +125,9 @@ fn normalize_inner(
         .unsafe_ffi
         .contains_key(&item.definition.0.package);
     let mut implementation_authority = None;
+    // The owner view keeps a carrier's field selection; a public opaque
+    // export says only that the type carries erased evidence.
+    let mut owner_captures = None;
     let mut kind = match &item.kind {
         ast::ItemKind::Function { signature, abi, .. } => {
             if item.visibility == ast::Visibility::PublicOpaque {
@@ -384,7 +387,33 @@ fn normalize_inner(
                     implementation_authority = Some(declared_authority.clone());
                 }
             }
-            let field_authority = n.type_authority(repr);
+            let carrier = n.erased_carrier(item, body, &attrs)?;
+            owner_captures = carrier.as_ref().map(|fields| {
+                fields
+                    .iter()
+                    .map(|f| *f as u32)
+                    .collect::<SharedSlice<u32>>()
+            });
+            // CAP-2/CLO-4: a carrier's selected fields hold erased state whose
+            // authority each value carries; the declaration covers the rest.
+            let field_authority = match (&carrier, repr.and_then(|r| n.types.get(r))) {
+                (
+                    Some(selected),
+                    Some(Type {
+                        kind: TypeKind::Record(parts),
+                        ..
+                    }),
+                ) => parts
+                    .clone()
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !selected.contains(i))
+                    .fold(AuthoritySummary::inert(), |a, (_, part)| {
+                        a.join(n.type_authority(Some(part.ty)))
+                    }),
+                (Some(_), _) => AuthoritySummary::inert(),
+                (None, _) => n.type_authority(repr),
+            };
             // CAP-2: "An explicit summary cannot erase field authority."
             // Opaque clients use only the export; the owner must prove it.
             if opaque && repr.is_some() && !field_authority.is_subset_of(&declared_authority) {
@@ -447,7 +476,7 @@ fn normalize_inner(
             };
             if !opaque || repr.is_some() {
                 inferred.retain(|b| *b != Bound::Inert);
-                if authority == AuthoritySummary::inert() {
+                if authority == AuthoritySummary::inert() && carrier.is_none() {
                     inferred.push(Bound::Inert);
                 }
             }
@@ -494,7 +523,9 @@ fn normalize_inner(
                     return Err(diagnostic(
                         if *bound == Bound::Serializable {
                             const { RuleId::of("SER-1") }
-                        } else if attrs.capability.is_some() && *bound == Bound::Inert {
+                        } else if (attrs.capability.is_some() || carrier.is_some())
+                            && *bound == Bound::Inert
+                        {
                             const { RuleId::of("CAP-2") }
                         } else if attrs.capability.is_some() && *bound == Bound::Sendable {
                             const { RuleId::of("MODE-4") }
@@ -532,6 +563,13 @@ fn normalize_inner(
                 resource: *flavor == ast::TypeFlavor::Resource,
                 drop: drop.as_ref().map(|_| item.definition.clone()),
                 fact,
+                captures: carrier.as_ref().map(|fields| {
+                    if opaque {
+                        SharedSlice::default()
+                    } else {
+                        fields.iter().map(|f| *f as u32).collect()
+                    }
+                }),
             })
         }
     };
@@ -550,6 +588,7 @@ fn normalize_inner(
             declaration: TypeDefinition {
                 representation: Some(root),
                 implementation_authority,
+                captures: owner_captures.clone(),
                 ..declaration.clone()
             },
         }),
@@ -675,6 +714,7 @@ fn provisional(
                     resource: flavor == ast::TypeFlavor::Resource,
                     drop: None,
                     fact: None,
+                    captures: None,
                 }),
                 fingerprint: ast::ContentHash::default(),
             },
@@ -806,7 +846,8 @@ impl Normalizer<'_, '_> {
             let type_ = matches!(kind, ast::ItemKind::Type { .. });
             let valid = match name.as_str() {
                 "test" | "bench" | "noalloc" | "incomplete" | "advance_only"
-                | "preserves_captures" | "preserves_unique" | "captures" => function,
+                | "preserves_captures" | "preserves_unique" => function,
+                "captures" => function || type_,
                 "track_caller" => matches!(kind, ast::ItemKind::Function { abi: None, .. }),
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
                 "layout" | "packed" | "align" | "soa" | "capability" | "loop_source" | "format"
@@ -1246,11 +1287,12 @@ impl Normalizer<'_, '_> {
                         kind: BuiltinType::Iter,
                         ..
                     }
-            ) {
+            ) && !self.erased_carrier_type(result)
+            {
                 return Err(diagnostic(
                     const { RuleId::of("CLO-4") },
                     self.span,
-                    "@captures requires a callable or erased iterator result",
+                    "@captures requires a callable, erased iterator or erased carrier result",
                 ));
             }
             row.erased_captures = Some(ErasedCaptures::FromArguments(captures.into()));
@@ -2313,6 +2355,78 @@ impl Normalizer<'_, '_> {
         }
         Ok(AuthoritySummary::Known(terms.into_iter().collect()))
     }
+    /// `@captures(fields)` on a type: the selected representation fields
+    /// (record field ordinals; the one field of a distinct type) whose erased
+    /// authority each value carries (CAP-2, CLO-4). None for an ordinary type.
+    fn erased_carrier(
+        &self,
+        item: &ast::Item,
+        body: &ast::TypeBody,
+        attrs: &Attributes,
+    ) -> Result<Option<Vec<usize>>, QueryError> {
+        let Some(attribute) = item
+            .attributes
+            .iter()
+            .find(|a| a.name.as_str() == "captures")
+        else {
+            return Ok(None);
+        };
+        let [ast::AttributeArgument::StatePromise(promise)] = attribute.arguments.as_slice() else {
+            unreachable!("attributes() checked the selector list")
+        };
+        let ast::ItemKind::Type { flavor, .. } = &item.kind else {
+            unreachable!("a type declaration")
+        };
+        let reject = |message| {
+            Err(diagnostic(
+                const { RuleId::of("CLO-4") },
+                attribute.origin.span,
+                message,
+            ))
+        };
+        if attrs.capability.is_some()
+            || attrs.serializable
+            || *flavor == ast::TypeFlavor::Resource
+            || *flavor == ast::TypeFlavor::Flat
+            || matches!(body, ast::TypeBody::Distinct { fact: Some(_), .. })
+        {
+            return reject(
+                "an erased carrier cannot be a capability, resource, flat, serializable or refined type",
+            );
+        }
+        let names: Vec<&str> = match body {
+            ast::TypeBody::Record(fields) => fields.iter().map(|f| f.name.as_str()).collect(),
+            ast::TypeBody::Distinct { field, .. } => vec![field.name.as_str()],
+            _ => {
+                return reject(
+                    "@captures on a type selects fields of a record or distinct representation",
+                );
+            }
+        };
+        let mut selected = Vec::new();
+        for path in &promise.selectors {
+            let ordinal = match (path.package.as_ref(), path.segments.as_slice()) {
+                (None, [name]) => names.iter().position(|n| *n == name.as_str()),
+                _ => None,
+            };
+            let Some(ordinal) = ordinal else {
+                return reject("@captures on a type names its own representation fields");
+            };
+            selected.push(ordinal);
+        }
+        selected.sort();
+        selected.dedup();
+        Ok(Some(selected))
+    }
+    fn erased_carrier_type(&self, t: TypeId) -> bool {
+        let Some(TypeKind::Named { definition, .. }) = self.types.get(t).map(|row| &row.kind)
+        else {
+            return false;
+        };
+        self.snapshots
+            .get(definition)
+            .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()))
+    }
     fn capability(&self, t: TypeId) -> Option<CapabilityKind> {
         if let TypeKind::Named { definition, .. } = &self.types.get(t)?.kind {
             if let SignatureKind::Type(d) = &self.snapshots.get(definition)?.kind {
@@ -2495,6 +2609,7 @@ impl Normalizer<'_, '_> {
                 resource: false,
                 drop: None,
                 fact: None,
+                captures: None,
             }),
             fingerprint: Default::default(),
         })
@@ -2746,6 +2861,7 @@ impl Normalizer<'_, '_> {
                     resource: *flavor == ast::TypeFlavor::Resource,
                     drop: None,
                     fact: None,
+                    captures: None,
                     destructor_allocation: Allocation::MayAllocate,
                 }),
                 fingerprint: Default::default(),

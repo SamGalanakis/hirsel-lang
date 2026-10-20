@@ -1,0 +1,31 @@
+// rule: CAP-2
+// expect: reject CLO-4 at line 27
+// A carrier mapped through a closure that captures `Net` holds `Net`, which a
+// closure restricted to `uses {}` cannot keep.
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+fn sandbox(take g: once fn() -> () uses {}) -> () {
+  g()
+}
+
+fn probe(net: Net) -> () uses {net} {
+  let pipe = carriers.map(
+    carriers.wrap(iter.from(0u64, count)),
+    fn(n: u64) -> u64 uses {net} {
+      let _ = net
+      n
+    }
+  )
+  sandbox(
+    fn() {
+      let mut held = take pipe
+      let _ = carriers.next(mut held)
+    }
+  )
+}

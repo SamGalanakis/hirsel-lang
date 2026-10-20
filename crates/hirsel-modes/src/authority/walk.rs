@@ -135,6 +135,9 @@ pub(super) struct Checker<'a> {
     expression_partitions: BTreeMap<ExprId, Identity>,
     /// The arena placement of each part a constructor received.
     part_holdings: BTreeMap<ExprId, BTreeMap<FieldId, Relation>>,
+    /// The known authority of the erased carrier a place projection reads
+    /// through (CAP-2, CLO-4); a write there must stay within it.
+    pub(super) carrier_places: BTreeMap<ExprId, AuthoritySummary>,
     /// Per-field arena holdings of a record binding declared without `mut`
     /// from a constructor; such a binding is never written or lent `mut`, so
     /// each field keeps what it was constructed with (#82).
@@ -380,6 +383,7 @@ impl<'a> Checker<'a> {
             branded_paths,
             expression_partitions: BTreeMap::new(),
             part_holdings: BTreeMap::new(),
+            carrier_places: BTreeMap::new(),
             field_holdings: BTreeMap::new(),
             invalid: BTreeMap::new(),
             brand_inputs: BTreeMap::new(),
@@ -572,7 +576,7 @@ impl<'a> Checker<'a> {
     }
     /// The value a chain of transparent blocks yields (spec #50): the
     /// innermost tail, which the consumer receives as if written directly.
-    fn transparent_value(&self, mut e: ExprId) -> ExprId {
+    pub(super) fn transparent_value(&self, mut e: ExprId) -> ExprId {
         while let ExprKind::Block {
             label: None,
             tail: Some(tail),
@@ -1305,6 +1309,7 @@ impl<'a> Checker<'a> {
                         let projected = !projections.is_empty();
                         let mut complete = true;
                         let mut origin = self.place_root_identity(e);
+                        let mut carried = None;
                         for projection in projections {
                             let Some((fields, index)) =
                                 self.projection_fields(ty, &projection.kind)
@@ -1312,6 +1317,9 @@ impl<'a> Checker<'a> {
                                 complete = false;
                                 break;
                             };
+                            if let Some(bound) = self.carrier_bound(ty) {
+                                carried = Some(bound);
+                            }
                             let replacements = origin
                                 .as_ref()
                                 .map(|o| {
@@ -1340,6 +1348,9 @@ impl<'a> Checker<'a> {
                         } else if complete {
                             self.refine_projection(e, ty);
                             self.localize_view_part(e, Some(binding_key(&b)));
+                            if let Some(bound) = carried {
+                                self.carrier_places.insert(e, bound);
+                            }
                         }
                         if complete {
                             if let Some(o) = origin {
@@ -1672,6 +1683,9 @@ impl<'a> Checker<'a> {
                                 );
                                 let ty = self.projected_item(base_ty, ty);
                                 self.refine_projection(e, ty);
+                                if let Some(bound) = self.carrier_bound(base_ty) {
+                                    self.carrier_places.insert(e, bound);
+                                }
                                 self.localize_view_part(
                                     e,
                                     self.binding(base).map(|b| binding_key(&b)),
@@ -2266,6 +2280,18 @@ impl<'a> Checker<'a> {
                                 )),
                         );
                     }
+                }
+                if let (Some(bound), Some(value_ty)) = (self.carrier_place(place), self.ty(value))
+                    && !self.authority(value_ty).is_subset_of(&bound)
+                {
+                    self.explained(
+                        const { RuleId::of("CLO-4") },
+                        stmt.origin.span,
+                        "a write into an erased carrier must stay within the authority it carries",
+                        Explanation::default()
+                            .provided(Fact::new(Cause::Authority, self.span(value), &[]))
+                            .required(Fact::new(Requirement::Uses, self.span(place), &[])),
+                    );
                 }
                 if self.protected_field(place) {
                     let name = self.value_name(Some(place));

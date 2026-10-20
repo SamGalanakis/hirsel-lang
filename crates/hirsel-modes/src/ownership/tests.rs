@@ -40,6 +40,7 @@ fn resource_signature() -> Signature {
             resource: true,
             drop: None,
             fact: None,
+            captures: None,
         }),
     }
 }

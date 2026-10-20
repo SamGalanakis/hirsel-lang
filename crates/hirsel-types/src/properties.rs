@@ -1421,6 +1421,7 @@ mod flat_tests {
                 resource: false,
                 drop: None,
                 fact: None,
+                captures: None,
             }),
         });
         let mut store = TypeStore::default();
@@ -1721,6 +1722,7 @@ mod seal_cleanup_tests {
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
             destructor_allocation: Allocation::NoAlloc,
         };
         for bounds in [vec![], vec![Bound::Plain], vec![Bound::NoallocDrop]] {

@@ -283,6 +283,7 @@ fn signature_error(
     work::count(Counter::ValidateSignatureRows);
     if path != &signature.definition
         || !typing::signature_valid(signature)
+        || !carrier_rows_valid(&signature.types, signatures)
         || !declaration::valid(signature, signatures)
         || !protocol::declaration(signature, signatures)
         || !protocol::selectors(signature, signatures)
@@ -322,7 +323,7 @@ fn validate_input(
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    if !graph_valid(&definition.types) || definition.types.iter().any(|(_, t)| {
+    if !graph_valid(&definition.types) || !carrier_rows_valid(&definition.types, signatures) || definition.types.iter().any(|(_, t)| {
         t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
     }) {
         errors.push(Violation { body: None, block: None, instruction: None, kind: ViolationKind::InvalidTypeGraph });
@@ -789,6 +790,15 @@ fn owned_type(store: &TypeStore, id: TypeId) -> bool {
     store.id(id.index()) == Some(id)
 }
 
+/// Only an erased carrier declaration gives a nominal row erased evidence (CAP-2).
+fn carrier_rows_valid(store: &TypeStore, signatures: &dyn SignatureLookup) -> bool {
+    store.iter().all(|(_, row)| match (&row.kind, &row.erased_captures) {
+        (TypeKind::Named { definition, .. }, Some(_)) => signatures
+            .get(definition)
+            .is_some_and(|s| matches!(&s.kind, hirsel_types::SignatureKind::Type(d) if d.captures.is_some())),
+        _ => true,
+    })
+}
 // Check provenance before shared helpers (TypeStore::get asserts on foreign IDs).
 // Iterative DFS also bounds recursion before invoking recursive shared importers.
 fn graph_valid(store: &TypeStore) -> bool {
@@ -810,10 +820,13 @@ fn graph_valid(store: &TypeStore) -> bool {
             }
             colour[id.index()] = 1;
             let row = store.get(id).unwrap();
+            // A nominal row's evidence is checked against its declaration by
+            // `carrier_rows_valid`.
             if row.erased_captures.is_some()
                 && !matches!(
                     row.kind,
                     TypeKind::Function(_)
+                        | TypeKind::Named { .. }
                         | TypeKind::Builtin {
                             kind: hirsel_types::BuiltinType::Iter,
                             ..

@@ -226,6 +226,7 @@ pub fn fixture_signatures(
                         resource,
                         drop: nominal.and_then(|n| n.finalizer.as_ref().map(|(p, _)| p.clone())),
                         fact: None,
+                        captures: None,
                     };
                     signatures.insert(
                         path.clone(),
@@ -286,6 +287,7 @@ pub fn fixture_signatures(
                             resource: false,
                             drop: None,
                             fact: None,
+                            captures: None,
                         }),
                     ),
                 );
@@ -380,6 +382,7 @@ pub fn fixture_signatures(
                     resource: false,
                     drop: None,
                     fact: None,
+                    captures: None,
                 }),
             ),
         );
@@ -405,6 +408,7 @@ pub fn fixture_signatures(
             resource: false,
             drop: None,
             fact: None,
+            captures: None,
         };
         signatures.entry(path.clone()).or_insert_with(|| {
             snapshot(path, TypeStore::default(), SignatureKind::Type(declaration))

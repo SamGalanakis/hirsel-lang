@@ -1,0 +1,9 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 5
+// A sealed capability's authority is its own nominal term, so it cannot also
+// carry per-value erased evidence.
+@captures(inner)
+@capability(global)
+pub opaque type Feed: () uses {} {
+  inner: Iter[u64],
+}

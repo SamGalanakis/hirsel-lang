@@ -622,7 +622,8 @@ snapshot_struct!(TypeDefinition {
     distinct,
     resource,
     drop,
-    fact
+    fact,
+    captures
 } in Cx);
 snapshot_enum!(SignatureKind {
     Function(f),

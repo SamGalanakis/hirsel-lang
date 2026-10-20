@@ -44,6 +44,7 @@ fn fixture(mutation: Mutation) -> Fixture {
             Some(path("Token_drop"))
         },
         fact: None,
+        captures: None,
     });
     f.signatures.insert(path("Token"), signature);
     let input = f.slot(TypeKind::Primitive(Primitive::U64), Storage::Temporary);

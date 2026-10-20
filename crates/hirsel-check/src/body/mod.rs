@@ -814,12 +814,12 @@ impl Checker<'_, '_> {
     ) -> usize {
         // Selected mutable state is proved independently by ownership and V
         // flow for every callable. Whole-input
-        // Iter creation is proved from actual operands too; field-selected and
-        // callable creation results stay fail-closed (307297).
+        // Iter and erased carrier creation is proved from actual operands too;
+        // field-selected and callable creation results stay fail-closed (307297).
         if self.body.types.get(f.result).and_then(|t| t.erased_captures.as_ref())
                 .is_some_and(|captures| matches!(captures, ErasedCaptures::FromArguments(selectors)
                     if selectors.iter().any(|selector| !selector.fields.is_empty())
-                        || !matches!(self.body.types.get(f.result).map(|row| &row.kind), Some(TypeKind::Builtin { kind: BuiltinType::Iter, .. })) ))
+                        || !matches!(self.body.types.get(f.result).map(|row| &row.kind), Some(TypeKind::Builtin { kind: BuiltinType::Iter, .. } | TypeKind::Named { .. })) ))
         {
             let attribute = syntax.attributes.iter().find(|a| {
                 matches!(

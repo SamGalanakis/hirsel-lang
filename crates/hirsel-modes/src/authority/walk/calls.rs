@@ -1232,16 +1232,41 @@ impl Checker<'_> {
                         TypeKind::Builtin {
                             kind: BuiltinType::Iter,
                             ..
-                        }
+                        } | TypeKind::Named { .. }
                     ) {
+                    // An erased carrier's cleanup is its declaration's; only
+                    // its evidence is per value.
                     let incoming = self.out.body.types.get(*actual).unwrap();
                     let mut row = self.out.body.types.get(expected).unwrap().clone();
                     row.erased_captures = incoming.erased_captures.clone();
-                    row.drop_allocation = incoming.drop_allocation.clone();
+                    if !matches!(row.kind, TypeKind::Named { .. }) {
+                        row.drop_allocation = incoming.drop_allocation.clone();
+                    }
                     self.out.body.types.push(row)
                 } else {
                     expected
                 };
+                // CLO-4: a `mut` part of an erased carrier comes back within
+                // the authority the carrier carries, unless the callee
+                // preserves the part's whole incoming envelope.
+                if p.passing == PassingMode::Mut
+                    && let Some(bound) = self.carrier_place(arguments[i].value)
+                    && !f.state_promises.iter().any(|promise| {
+                        promise.selector.parameter == ParameterRef::bound(ParamId(i as u32))
+                            && promise.selector.fields.is_empty()
+                            && promise.preserve_captures
+                    })
+                    && !self.authority(receiving_expected).is_subset_of(&bound)
+                {
+                    self.explained(
+                        const { RuleId::of("CLO-4") },
+                        self.span(arguments[i].value),
+                        "a `mut` part of an erased carrier must come back within the authority it carries",
+                        Explanation::default()
+                            .provided(Fact::new(Cause::Authority, self.span(callee), &[]))
+                            .required(Fact::new(Requirement::Uses, self.span(arguments[i].value), &[])),
+                    );
+                }
                 let actual = self.receive_literal_result(arguments[i].value, *actual, expected);
                 let actual = &actual;
                 // A taken value is the callee's to keep, so an unplaced take
@@ -2442,6 +2467,7 @@ impl Checker<'_> {
             self.set_unique(e);
         }
         self.arena_construction(e);
+        self.carrier_construction(e, &parts);
         // Preserve nominal provider attempts and their failure policy.
         let _ = self.authority(root);
         self.facts.insert(e, used);
