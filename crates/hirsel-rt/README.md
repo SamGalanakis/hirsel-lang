@@ -708,6 +708,28 @@ rule records over a string pool that holds each distinct path once, read in plac
 program decodes and allocates nothing, and a lookup binary-searches the site records and
 validates only the strings it returns.
 
+### Free mode at width 1 (lane F0)
+
+`free.rs` runs `tasks.free@1`'s protocol (`hirsel-free`) on this cooperative scheduler at one
+permit, through F0's test channel `HIRSEL_RT_FREE_TEST` (`hirsel_free::session::TestHook`),
+which the launch installs after the schedule and which replaces it with a seeded random one.
+Every synchronising entry is then an op that yields: channel open, dup, send, receive and an
+endpoint's close, mutex create, take, put and kill, the atomics, `thaw_turn`, spawn, join,
+`await_any`, scope entry and exit, the other task and set entries, `task_canceled`, the
+standard-stream prints (host writes on the `stdout`/`stderr` keys) and each task's end (a
+child's when it comes to hold its result, else at its completion; the root's after its entry
+returns). An op that cannot wait publishes (k, done); a waiting op
+publishes (k, entered) when it parks and (k, done) once it acts. A receive and a mutex take
+wait `Wait::Retry`, woken at every publish (a receive also at its cancellation), and act in
+their own call; a join, a scope exit and a drain keep their native waits. A take waits because
+every op yields, so another task's body can hold the mutex across its ops. A phase the cut does
+not admit, or a task at its cut, parks `Wait::Final`. Releases stay immediate (deferral is lane
+R3's): at width 1 an immediate release is by the sole holder or unseen until the releaser's
+next op. `shared.thaw`'s compiled body asks `hirsel_rt_v2_thaw_turn(root) -> bool` (runtime ABI
+24) whether its root is the last: the count test alone outside free mode, and in free mode an
+op whose answer is recorded live and replayed (a replayed `Ok` waits until the root is the
+last). A replay that leaves its tape writes `diverged` to the report and stops Diverged.
+
 ## Launch and the Hirsel-ABI Io entries
 
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds

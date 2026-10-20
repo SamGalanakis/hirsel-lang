@@ -62,6 +62,7 @@ pub mod failure;
 mod fiber;
 pub mod finalize;
 pub mod foreign;
+mod free;
 pub mod host;
 #[cfg(feature = "measurement")]
 pub mod measurement;
@@ -100,7 +101,7 @@ pub use release::{
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 23;
+pub const ABI_VERSION: u32 = 24;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

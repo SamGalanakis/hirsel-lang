@@ -10,6 +10,8 @@ pub(super) struct Synchronizers {
     mutexes: BTreeMap<u64, Mutex>,
     atomics: BTreeMap<u64, Value>,
     pub pending: BTreeMap<u64, u64>,
+    /// Free mode: takes waiting for their mutex, by token (its id, body and site).
+    pub takes: BTreeMap<u64, (u64, Value, hirsel_span::Span)>,
 }
 #[derive(Clone)]
 struct Mutex {
@@ -26,6 +28,26 @@ impl Library {
     ) -> Result<OperationResult, Error> {
         self.simulation.id(arg(call.arguments, 0)?, "Tasks")?;
         self.tasks.yield_now = name != "mutex.with";
+        let first = if name == "mutex.with" {
+            hirsel_free::phase::Phase::Entered
+        } else {
+            hirsel_free::phase::Phase::Done
+        };
+        match self.free_enter(first, context)? {
+            super::free::Enter::Off => {}
+            super::free::Enter::Park(park) => return Ok(park),
+            super::free::Enter::Run => {
+                return self.free_synchronization_call(name, call, context);
+            }
+        }
+        self.synchronization_action(name, call, context)
+    }
+    fn synchronization_action(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
         let a = &*call.arguments;
         let result = match name {
             "mutex.create" => {
@@ -49,54 +71,7 @@ impl Library {
             }
             "mutex.with" => {
                 let id = id(arg(a, 1)?, "Mutex")?;
-                let mutex = self
-                    .synchronizers
-                    .mutexes
-                    .get_mut(&id)
-                    .ok_or_else(|| invalid("expired mutex"))?;
-                if let Some(cause) = &mutex.dead {
-                    let site = call.site;
-                    let failure = crate::Failure {
-                        rule: hirsel_diag::RuleId::of("FAIL-4"),
-                        site,
-                        line: context
-                            .sources
-                            .location(site)
-                            .ok_or_else(|| invalid("mutex source"))?
-                            .line,
-                        kind: "DeadMutex".into(),
-                    };
-                    let mut failures = vec![FailureRecord {
-                        operation: None,
-                        failure,
-                        anchor: context.anchor().unwrap().clone(),
-                        spawn_path: self.tasks.path(),
-                        cause: None,
-                    }];
-                    super::tasks::append_chain(&mut failures, cause.clone());
-                    OperationResult::FailureChain {
-                        failures,
-                        released: vec![],
-                    }
-                } else {
-                    let value = mutex
-                        .value
-                        .take()
-                        .ok_or_else(|| invalid("recursive mutex acquisition"))?;
-                    let continuation = self.next_callback;
-                    self.next_callback += 1;
-                    self.synchronizers.pending.insert(continuation, id);
-                    OperationResult::Call {
-                        callee: arg(a, 2)?.clone(),
-                        arguments: vec![value],
-                        mut_arguments: vec![0],
-                        writebacks: vec![],
-                        updates: vec![],
-                        owned: vec![],
-                        consumed: vec![],
-                        continuation,
-                    }
-                }
+                self.mutex_take(id, arg(a, 2)?.clone(), call.site, context)?
             }
             "atomic.create" => {
                 let value = arg(a, 1)?;
@@ -145,6 +120,159 @@ impl Library {
         )?;
         Ok(result)
     }
+    /// A synchronization op in free mode, its entry applied: the take waits for its mutex
+    /// (and in replay for its version), the put and the atomics cannot wait.
+    fn free_synchronization_call(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        use super::free::MUTEX;
+        let a = &*call.arguments;
+        match name {
+            "mutex.with" => {
+                let id = id(arg(a, 1)?, "Mutex")?;
+                let callee = arg(a, 2)?.clone();
+                let result = if self.mutex_free(id)? && self.free_take_enabled(id)? {
+                    self.free_touch((MUTEX, id), "take")?;
+                    self.mutex_take(id, callee, call.site, context)?
+                } else {
+                    let token = self.next_callback;
+                    self.next_callback += 1;
+                    self.synchronizers
+                        .takes
+                        .insert(token, (id, callee, call.site));
+                    OperationResult::Park {
+                        token,
+                        wait: crate::BlockedWait {
+                            spawn_path: self.tasks.path(),
+                            anchor: context.anchor().unwrap().clone(),
+                            kind: "mutex.with".into(),
+                            targets: vec![id],
+                        },
+                    }
+                };
+                self.free_waiting(result, context)
+            }
+            "mutex.create" => {
+                self.synchronizers.next += 1;
+                let id = self.synchronizers.next;
+                let value = arg(a, 1)?.clone();
+                let drops = needs_drop(&value);
+                self.synchronizers.mutexes.insert(
+                    id,
+                    Mutex {
+                        value: Some(value),
+                        dead: None,
+                        drops,
+                    },
+                );
+                self.free_create((MUTEX, id))?;
+                let result = OperationResult::returned(Value::Handle {
+                    kind: "Mutex".into(),
+                    id,
+                })
+                .transferring([1]);
+                self.free_done(result, context)
+            }
+            "atomic.load" => {
+                let id = id(arg(a, 1)?, "Atomic")?;
+                let cell = self
+                    .synchronizers
+                    .atomics
+                    .get(&id)
+                    .ok_or_else(|| invalid("expired atomic"))?
+                    .clone();
+                let value = self.free_load(&cell)?;
+                self.free_done(OperationResult::returned(value), context)
+            }
+            _ => {
+                // atomic.create and atomic.store record nothing.
+                let result = self.synchronization_action(name, call, context)?;
+                self.free_done(result, context)
+            }
+        }
+    }
+    /// Whether mutex `id` can be taken now: free, or dead (the take then fails).
+    fn mutex_free(&self, id: u64) -> Result<bool, Error> {
+        let mutex = self
+            .synchronizers
+            .mutexes
+            .get(&id)
+            .ok_or_else(|| invalid("expired mutex"))?;
+        Ok(mutex.dead.is_some() || mutex.value.is_some())
+    }
+    /// Free mode: poll a take waiting for its mutex.
+    pub(super) fn poll_take(
+        &mut self,
+        token: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let (id, _, _) = self.synchronizers.takes[&token];
+        if !self.mutex_free(id)? || !self.free_take_enabled(id)? {
+            return Ok(None);
+        }
+        let (id, callee, site) = self.synchronizers.takes.remove(&token).unwrap();
+        self.free_touch((super::free::MUTEX, id), "take")?;
+        self.mutex_take(id, callee, site, context).map(Some)
+    }
+    /// A take of mutex `id` that can act: its body's call, or the dead mutex's failure.
+    fn mutex_take(
+        &mut self,
+        id: u64,
+        callee: Value,
+        site: hirsel_span::Span,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let mutex = self
+            .synchronizers
+            .mutexes
+            .get_mut(&id)
+            .ok_or_else(|| invalid("expired mutex"))?;
+        Ok(if let Some(cause) = &mutex.dead {
+            let failure = crate::Failure {
+                rule: hirsel_diag::RuleId::of("FAIL-4"),
+                site,
+                line: context
+                    .sources
+                    .location(site)
+                    .ok_or_else(|| invalid("mutex source"))?
+                    .line,
+                kind: "DeadMutex".into(),
+            };
+            let mut failures = vec![FailureRecord {
+                operation: None,
+                failure,
+                anchor: context.anchor().unwrap().clone(),
+                spawn_path: self.tasks.path(),
+                cause: None,
+            }];
+            super::tasks::append_chain(&mut failures, cause.clone());
+            OperationResult::FailureChain {
+                failures,
+                released: vec![],
+            }
+        } else {
+            let value = mutex
+                .value
+                .take()
+                .ok_or_else(|| invalid("recursive mutex acquisition"))?;
+            let continuation = self.next_callback;
+            self.next_callback += 1;
+            self.synchronizers.pending.insert(continuation, id);
+            OperationResult::Call {
+                callee,
+                arguments: vec![value],
+                mut_arguments: vec![0],
+                writebacks: vec![],
+                updates: vec![],
+                owned: vec![],
+                consumed: vec![],
+                continuation,
+            }
+        })
+    }
     pub(super) fn synchronization_writeback(
         &mut self,
         token: u64,
@@ -175,6 +303,7 @@ impl Library {
         &mut self,
         token: u64,
         result: OperationResult,
+        context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         self.tasks.yield_now = true;
         let id = self
@@ -182,6 +311,29 @@ impl Library {
             .pending
             .remove(&token)
             .ok_or_else(|| invalid("missing mutex continuation"))?;
+        // Free mode: the put after the body is its own op, a sub-event of the mutex.
+        match self.free_enter(hirsel_free::phase::Phase::Done, context)? {
+            super::free::Enter::Off => self.mutex_put(id, result),
+            super::free::Enter::Park(park) => Ok(park),
+            super::free::Enter::Run => {
+                let handle = (super::free::MUTEX, id);
+                if !self.free_enabled(handle)? {
+                    return Err(invalid(
+                        "free-mode replay diverged: a mutex put before its version",
+                    ));
+                }
+                let outcome = if matches!(result, OperationResult::FailureChain { .. }) {
+                    "kill"
+                } else {
+                    "put"
+                };
+                self.free_touch(handle, outcome)?;
+                let result = self.mutex_put(id, result)?;
+                self.free_done(result, context)
+            }
+        }
+    }
+    fn mutex_put(&mut self, id: u64, result: OperationResult) -> Result<OperationResult, Error> {
         match result {
             OperationResult::Complete { value, .. } => Ok(OperationResult::returned(value)),
             OperationResult::FailureChain {

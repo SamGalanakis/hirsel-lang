@@ -1,0 +1,57 @@
+// A acquires M, then waits for B; B acquires M, then replies.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let m: Mutex[u64] = mutex.create(tasks, 0u64)
+  let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let got = task.scope(
+    tasks,
+    fn(scope: Scope) -> u64 {
+      let b = task.async(
+        scope,
+        fn() -> () {
+          let n = mutex.with(
+            tasks,
+            m,
+            fn(mut n: unique u64) -> u64 uses {} {
+              n += 1
+              n
+            }
+          )
+          let mut sender = take tx
+          let _ = channel.send(tasks, mut sender, n)
+        }
+      )
+      let first = mutex.with(
+        tasks,
+        m,
+        fn(mut n: unique u64) -> u64 uses {} {
+          n += 10
+          n
+        }
+      )
+      let mut receiver = take rx
+      let reply = match channel.receive(tasks, mut receiver) {
+        Ok(n) => n,
+        Error(e) => 0u64,
+      }
+      task.await(scope, take b)
+      first * 100u64 + reply
+    }
+  )
+  let _ = out.print(
+    out,
+    if got == 1011u64 {
+      "a first\n"
+    } else if got == 1101u64 {
+      "b first\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

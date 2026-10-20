@@ -50,6 +50,7 @@ pub(crate) mod profile;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 
+use hirsel_free::phase::Phase;
 use hirsel_kernels::schedule::{Algorithm, Schedule};
 
 use crate::context::TaskCtx;
@@ -101,10 +102,16 @@ enum Wait {
     /// A host request that would block, parked under its readiness token
     /// (`crate::host_waits`); its poll re-issues the request.
     Host { token: u64 },
-    /// `task.await_any`, until a member of task set `set` holds its result or failed.
-    Any { set: u32 },
+    /// `task.await_any`, until a member of task set `set` holds its result or failed; in a
+    /// free-mode replay until the recorded `member` (an add-order index) has.
+    Any { set: u32, member: Option<u64> },
     /// `task.cancel_all`, until every member of task set `set` completed.
     Drain { set: u32 },
+    /// Free mode: parked for good, at its cut or at a phase the cut does not admit.
+    Final,
+    /// Free mode: replay-pending (or a live wait on another task's op), until the next
+    /// publish; a `cancelable` one (a receive) also until its task is canceled.
+    Retry { cancelable: bool },
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -148,6 +155,10 @@ struct Task {
     woken: bool,
     /// The task parked joining it.
     awaited_by: Option<u32>,
+    /// Free mode: a publish since it parked on [`Wait::Retry`].
+    retried: bool,
+    /// Free mode: its end op ran (when it came to hold its result, else at completion).
+    ended: bool,
     /// Its scheduling priority under `pct@1`, drawn when it was created.
     priority: u64,
 }
@@ -312,7 +323,7 @@ impl Scheduler {
         }
         for i in 0..self.set_waiters.len() {
             let waiter = self.set_waiters[i];
-            if let Some(Wait::Any { set } | Wait::Drain { set }) = self.task(waiter).wait
+            if let Some(Wait::Any { set, .. } | Wait::Drain { set }) = self.task(waiter).wait
                 && self.sets[set as usize]
                     .as_ref()
                     .is_some_and(|row| row.scope == scope)
@@ -362,7 +373,7 @@ impl Scheduler {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
             Wait::Receive { channel, .. } => self.channels.wait(channel, at, current),
             Wait::Any { .. } | Wait::Drain { .. } => self.set_waiters.push(current),
-            Wait::Exit { .. } | Wait::Host { .. } => {}
+            Wait::Exit { .. } | Wait::Host { .. } | Wait::Final | Wait::Retry { .. } => {}
         }
     }
     /// The parked tasks (exactly those with a wait) and their waits, in park order. Only
@@ -493,6 +504,14 @@ impl Scheduler {
             .min()
             .map(|(_, i)| i)
     }
+    /// Whether member `index` of `set` is unawaited and holds its result or failed.
+    fn member_completed(&mut self, set: u32, index: u64) -> bool {
+        let word = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.set(set).members.get(i).copied().flatten());
+        word.and_then(|word| self.member(word))
+            .is_some_and(|t| matches!(self.task(t).state, State::Holding | State::Done))
+    }
     fn vacate_task(&mut self, index: u32) {
         let task = self.tasks[index as usize]
             .take()
@@ -535,6 +554,8 @@ impl Task {
             parked_at: 0,
             woken: false,
             awaited_by: None,
+            retried: false,
+            ended: false,
             priority: 0,
         }
     }
@@ -611,6 +632,8 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
                 Wait::Host { token } => unsafe { crate::host_waits::kind(ctx, token) },
                 Wait::Any { .. } => "task.await_any",
                 Wait::Drain { .. } => "task.cancel_all",
+                Wait::Final => "free.final",
+                Wait::Retry { .. } => "free.retry",
             };
             (row.path.clone(), kind)
         })
@@ -620,6 +643,42 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
         .into_iter()
         .map(|(path, kind)| format!("\n  task {path:?}: {kind}"))
         .collect()
+}
+
+/// Free mode: park the running task for good (`crate::free`). The run then ends Blocked
+/// unless other tasks finish it.
+pub(crate) fn park_final(ctx: *mut TaskCtx) -> ! {
+    // SAFETY: the context is live; no poll ends this wait.
+    unsafe { block(&mut *ctx, Wait::Final, false, 0) };
+    fault("a task parked for good was resumed")
+}
+
+/// Free mode: park the running task until the next publish (or, `cancelable`, its
+/// cancellation); the caller checks its condition again.
+pub(crate) fn park_retry(ctx: *mut TaskCtx, cancelable: bool) {
+    let current = scheduler(ctx).current;
+    // SAFETY: the context is live and reached by its running task only.
+    if let Some(free) = unsafe { (*ctx).run().free.as_deref_mut() }
+        && !free.retrying.contains(&current)
+    {
+        free.retrying.push(current);
+    }
+    // SAFETY: the context is live; the caller holds nothing a stop must drop.
+    unsafe { block(&mut *ctx, Wait::Retry { cancelable }, false, 0) };
+}
+
+/// Free mode: a publish happened; `tasks` parked replay-pending are polled at the next
+/// scheduling point.
+pub(crate) fn wake_all(ctx: *mut TaskCtx, tasks: &[u32]) {
+    let s = scheduler(ctx);
+    for &task in tasks {
+        if let Some(Some(row)) = s.tasks.get_mut(task as usize)
+            && matches!(row.wait, Some(Wait::Retry { .. }))
+        {
+            row.retried = true;
+            s.wake(task);
+        }
+    }
 }
 
 /// The running task's spawn path.
@@ -773,9 +832,19 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
             // SAFETY: the context is live and `token` is this task's parked request.
             unsafe { crate::host_waits::poll(ctx, token, cause, ready.contains(token)) }?
         }
-        Some(Wait::Any { set }) => s.first_completed(set).is_some(),
+        Some(Wait::Any { set, member: None }) => s.first_completed(set).is_some(),
+        Some(Wait::Any {
+            set,
+            member: Some(index),
+        }) => s.member_completed(set, index),
         // SAFETY: the parked task holds the set's row.
         Some(Wait::Drain { set }) => unsafe { poll_drained(s, set) },
+        Some(Wait::Final) => false,
+        Some(Wait::Retry { cancelable }) => {
+            let shield = s.task(task).shield();
+            let canceled = cancelable && s.canceled_task(task, shield).is_some();
+            std::mem::take(&mut s.task(task).retried) || canceled
+        }
         None => fault("a parked task without a wait"),
     })
 }
@@ -874,7 +943,7 @@ unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_config::Wait> {
                     .collect(),
             ),
             Wait::Receive { channel, .. } => ("channel.receive", vec![u64::from(channel)]),
-            Wait::Any { set } => (
+            Wait::Any { set, .. } => (
                 "task.await_any",
                 s.set(set)
                     .members
@@ -893,6 +962,8 @@ unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_config::Wait> {
                     .collect(),
             ),
             Wait::Host { token } => ("host request", vec![token]),
+            Wait::Final => ("free.final", vec![]),
+            Wait::Retry { .. } => ("free.retry", vec![]),
         };
         waits.push(hirsel_run_config::Wait {
             spawn_path,
@@ -1063,6 +1134,10 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     std::mem::forget(profile::Operation::new(ctx, "task.complete"));
     let s = scheduler(ctx);
     let path = s.task(index).path.clone();
+    if !std::mem::replace(&mut s.task(index).ended, true) {
+        crate::free::end(ctx, &path);
+    }
+    let s = scheduler(ctx);
     let chain = ctx.failure.take_chain(&path);
     let failed = status != STATUS_OK;
     if failed != !chain.is_empty() {
@@ -1139,7 +1214,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter");
+    crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(ctx, None);
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
@@ -1193,6 +1270,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     let _segment = profile::Operation::new(ctx, "task_scope_enter_until");
     // SAFETY: caller contract.
     let [clock, at] = unsafe { deadline.read() };
+    crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(
         ctx,
         Some(ScopeDeadline {
@@ -1209,6 +1287,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
         }
         None => scheduler(ctx).expire(index),
     }
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
@@ -1273,6 +1352,7 @@ unsafe fn exit_scope(
     error: u8,
     caller_site: u64,
 ) -> (u8, bool) {
+    let free = crate::free::enter(ctx, Phase::Entered);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let index = s.scope_handle(unsafe { scope.read() });
@@ -1286,7 +1366,9 @@ unsafe fn exit_scope(
             s.cancel(child, CANCEL_PARENT);
         }
     }
-    if !s.settled(index) {
+    let waited = !s.settled(index);
+    if waited {
+        crate::free::publish(ctx, Phase::Entered);
         // SAFETY: the context is live; the exit is not a yield.
         unsafe { block(ctx, Wait::Exit { scope: index }, false, caller_site) };
     }
@@ -1319,6 +1401,14 @@ unsafe fn exit_scope(
         unsafe { crate::host_waits::disarm(ctx, token) };
     }
     let expired = deadline.is_some_and(|d| d.expired);
+    if free {
+        // A free op yields, unless it waited.
+        crate::free::done(ctx);
+        if !waited {
+            // SAFETY: the context is live.
+            unsafe { yield_now(&mut *ctx) };
+        }
+    }
     let status = if ctx.failure.active() {
         STATUS_FAILURE
     } else {
@@ -1347,6 +1437,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_spawn");
+    crate::free::enter(ctx, Phase::Done);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1380,13 +1471,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     };
     task.sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
     task.stack = Some(stack);
+    let child = task.path.clone();
     s.tasks[index as usize] = Some(task);
     s.scope(scope).children.push(index);
-    s.runnable.push_back(index);
-    #[cfg(feature = "measurement")]
-    if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
-        profile.ready(s.task(index).path.clone());
+    // A free-mode replay never starts a child its cut lacks.
+    if crate::free::start(ctx, &child) {
+        let s = scheduler(ctx);
+        s.runnable.push_back(index);
+        #[cfg(feature = "measurement")]
+        if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
+            profile.ready(s.task(index).path.clone());
+        }
     }
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
@@ -1425,6 +1522,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     if row.detached {
         return STATUS_OK;
     }
+    // Free mode: a child that holds its result has no op left, so its end op runs now; the
+    // rest of its frame only drops what it holds, once a join or its scope's exit resumes it.
+    row.ended = true;
+    let path = row.path.clone();
+    crate::free::end(ctx, &path);
+    let s = scheduler(ctx);
+    let row = s.task(current);
     row.slot = Some(held);
     row.state = State::Holding;
     s.order(current);
@@ -1457,6 +1561,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
+    crate::free::enter(ctx, Phase::Entered);
     // SAFETY: caller contract.
     unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) }
 }
@@ -1481,17 +1586,23 @@ unsafe fn join(
             unsafe {
                 deliver(held, slot, size);
                 hand_off(ctx, child);
+                crate::free::done(ctx);
                 yield_now(ctx);
             }
         }
-        State::Done => unsafe { yield_now(ctx) },
+        State::Done => unsafe {
+            crate::free::done(ctx);
+            yield_now(ctx)
+        },
         State::Ready | State::Parked => {
+            crate::free::publish(ctx, Phase::Entered);
             // SAFETY: the slot is in this task's frame, parked with it.
             unsafe { block(ctx, Wait::Join { child, slot, size }, true, caller_site) };
             // The poll moved a holding child's result; its frame finishes now.
             if scheduler(ctx).task(child).state == State::Holding {
                 unsafe { hand_off(ctx, child) };
             }
+            crate::free::done(ctx);
         }
     }
     let s = scheduler(ctx);
@@ -1523,7 +1634,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
-    s.cancel(child, CANCEL_REQUESTED);
+    crate::free::enter(ctx, Phase::Done);
+    scheduler(ctx).cancel(child, CANCEL_REQUESTED);
+    crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };
     STATUS_OK
@@ -1546,9 +1659,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
+    crate::free::enter(ctx, Phase::Done);
     // SAFETY: the context is live.
     unsafe {
         detach(&mut *ctx, scope, child);
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -1590,6 +1705,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set");
+    crate::free::enter(ctx, Phase::Done);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1609,6 +1725,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
             (s.sets.len() - 1) as u32
         }
     };
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(
@@ -1637,7 +1754,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
     s.task_handle(word, scope);
     let set = s.set_handle(set, scope);
-    s.set(set).members.push(Some(word));
+    crate::free::enter(ctx, Phase::Done);
+    scheduler(ctx).set(set).members.push(Some(word));
+    crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };
     STATUS_OK
@@ -1674,17 +1793,30 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     let scope = s.scope_handle(unsafe { scope.read() });
     let set = s.set_handle(unsafe { set.read() }, scope);
     let waiting = s.set(set).members.iter().any(Option::is_some);
-    if waiting && s.first_completed(set).is_none() {
+    let index = if crate::free::enter(ctx, Phase::Entered) {
         // SAFETY: the set outlives the wait: the caller borrows it.
-        unsafe { block(&mut *ctx, Wait::Any { set }, true, caller_site) };
+        unsafe { free_await_any(ctx, set, waiting, caller_site) }
     } else {
-        // SAFETY: the context is live.
-        unsafe { yield_now(&mut *ctx) };
-    }
-    let index = if waiting {
-        scheduler(ctx).first_completed(set)
-    } else {
-        None
+        let s = scheduler(ctx);
+        if waiting && s.first_completed(set).is_none() {
+            // SAFETY: the set outlives the wait: the caller borrows it.
+            unsafe {
+                block(
+                    &mut *ctx,
+                    Wait::Any { set, member: None },
+                    true,
+                    caller_site,
+                )
+            };
+        } else {
+            // SAFETY: the context is live.
+            unsafe { yield_now(&mut *ctx) };
+        }
+        if waiting {
+            scheduler(ctx).first_completed(set)
+        } else {
+            None
+        }
     };
     // SAFETY: caller contract.
     unsafe {
@@ -1695,6 +1827,48 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
         })
     };
     STATUS_OK
+}
+
+/// `task.await_any` in free mode: the member is live the first completed and replayed the
+/// recorded one, waited for (k, entered) until it completed; then (k, done).
+///
+/// # Safety
+/// `ctx` is live and `set` a task set row that outlives the wait.
+unsafe fn free_await_any(
+    ctx: *mut TaskCtx,
+    set: u32,
+    waiting: bool,
+    caller_site: u64,
+) -> Option<u64> {
+    let mut entered = false;
+    let index = loop {
+        if !waiting {
+            break None;
+        }
+        let s = scheduler(ctx);
+        let live = s.first_completed(set);
+        let count = s.set(set).members.len() as u64;
+        let finished: Vec<bool> = (0..count).map(|i| s.member_completed(set, i)).collect();
+        let member = crate::free::await_any(ctx, live, |i| {
+            finished.get(i as usize).copied().unwrap_or(false)
+        });
+        if member.is_some() {
+            break member;
+        }
+        if !entered {
+            crate::free::publish(ctx, Phase::Entered);
+            entered = true;
+        }
+        let member = crate::free::await_any_member(ctx);
+        // SAFETY: caller contract.
+        unsafe { block(&mut *ctx, Wait::Any { set, member }, false, caller_site) };
+    };
+    crate::free::done(ctx);
+    if !entered {
+        // SAFETY: the context is live.
+        unsafe { yield_now(&mut *ctx) };
+    }
+    index
 }
 
 /// `$intrinsic.TaskSetHas(s, set, index) -> bool`: whether member `index` is unawaited, which
@@ -1772,14 +1946,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_cancel_all");
+    crate::free::enter(ctx, Phase::Entered);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
     let s = scheduler(ctx);
     // SAFETY: the context is live; the set row stays until the drain is over.
     if unsafe { poll_drained(s, set) } {
+        crate::free::done(ctx);
         unsafe { yield_now(&mut *ctx) };
     } else {
+        crate::free::publish(ctx, Phase::Entered);
         unsafe { block(&mut *ctx, Wait::Drain { set }, true, caller_site) };
+        crate::free::done(ctx);
     }
     scheduler(ctx).close_set(set);
     STATUS_OK
@@ -1797,9 +1975,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach_all");
+    crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, false) };
     scheduler(ctx).close_set(set);
+    crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };
     STATUS_OK
@@ -1856,9 +2036,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_canceled");
+    crate::free::enter(ctx, Phase::Done);
+    // SAFETY: the context is live.
+    let cause = unsafe { observed_cancel(ctx) };
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
-        out.write(canceled(ctx).map_or(0, |cause| cause + 1));
+        out.write(cause.map_or(0, |cause| cause + 1));
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -1873,6 +2057,20 @@ pub(crate) unsafe fn canceled(ctx: *mut TaskCtx) -> Option<u32> {
     // SAFETY: the context is live.
     let shield = unsafe { (*ctx).shield };
     unsafe { (*ctx).run().tasks.as_deref_mut() }.and_then(|s| s.canceled(shield))
+}
+
+/// The running task's cancellation at a check: live its own; in a free-mode replay, unless
+/// shielded, the recorded one.
+///
+/// # Safety
+/// `ctx` is live.
+unsafe fn observed_cancel(ctx: *mut TaskCtx) -> Option<u32> {
+    // SAFETY: the context is live.
+    let live = unsafe { canceled(ctx) };
+    if unsafe { (*ctx).shield } != 0 {
+        return live;
+    }
+    crate::free::cancel_check(ctx, live)
 }
 
 /// A receive's outcome for `task`, unless it must wait: canceled, else the oldest message
@@ -1914,7 +2112,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_open");
+    crate::free::enter(ctx, Phase::Done);
     let (sender, receiver) = scheduler(ctx).channels.open();
+    let channel = scheduler(ctx).channels.channel(sender, true);
+    crate::free::create(ctx, (crate::free::CHANNEL, u64::from(channel)));
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(sender);
@@ -1938,8 +2140,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "sender_dup");
+    crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
-    let word = scheduler(ctx).channels.dup(unsafe { sender.read() });
+    let sender = unsafe { sender.read() };
+    let channel = scheduler(ctx).channels.channel(sender, true);
+    crate::free::touch(ctx, (crate::free::CHANNEL, u64::from(channel)), "dup");
+    let word = scheduler(ctx).channels.dup(sender);
+    crate::free::done(ctx);
     unsafe {
         out.write(word);
         yield_now(&mut *ctx);
@@ -1962,9 +2169,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_send");
-    let s = scheduler(ctx);
+    crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
-    let channel = s.channels.channel(unsafe { sender.read() }, true);
+    let channel = scheduler(ctx)
+        .channels
+        .channel(unsafe { sender.read() }, true);
+    let object = (crate::free::CHANNEL, u64::from(channel));
+    crate::free::wait_until(ctx, |ctx| crate::free::enabled(ctx, object));
+    let s = scheduler(ctx);
     // SAFETY: caller contract.
     let block = NonNull::new(unsafe { message.read() })
         .unwrap_or_else(|| fault("a send of an empty message slot"));
@@ -1972,6 +2184,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     if status == crate::channels::DONE {
         unsafe { message.write(std::ptr::null_mut()) };
     }
+    let outcome = if status == crate::channels::DONE {
+        "send"
+    } else {
+        "send closed"
+    };
+    crate::free::touch(ctx, object, outcome);
+    crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {
         out.write(status);
@@ -2000,6 +2219,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let channel = s.channels.channel(unsafe { receiver.read() }, false);
+    if crate::free::enter(ctx, Phase::Entered) {
+        // SAFETY: caller contract.
+        let status = unsafe { free_receive(ctx, channel, message) };
+        unsafe { out.write(status) };
+        return STATUS_OK;
+    }
+    let s = scheduler(ctx);
     let current = s.current;
     let shield = unsafe { (*ctx).shield };
     // SAFETY: caller contract.
@@ -2030,6 +2256,57 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     STATUS_OK
 }
 
+/// A receive in free mode: it waits (k, entered) replay-pending, live until a send, a
+/// sender's close or a cancellation, for a message, `Closed` or the cancellation its one
+/// check observes; then it acts and publishes (k, done).
+///
+/// # Safety
+/// As for [`hirsel_rt_v2_channel_receive`].
+unsafe fn free_receive(ctx: *mut TaskCtx, channel: u32, message: *mut *mut Header) -> u32 {
+    let mut entered = false;
+    loop {
+        // SAFETY: the context is live.
+        let live = unsafe { canceled(ctx) };
+        let shielded = unsafe { (*ctx).shield } != 0;
+        let cancel = if shielded {
+            live
+        } else {
+            crate::free::cancel_peek(ctx, live)
+        };
+        if cancel.is_some() || scheduler(ctx).channels.ready(channel) {
+            break;
+        }
+        if !entered {
+            crate::free::publish(ctx, Phase::Entered);
+            entered = true;
+        }
+        crate::tasks::park_retry(ctx, true);
+    }
+    // SAFETY: the context is live.
+    let (status, outcome) = match unsafe { observed_cancel(ctx) } {
+        Some(cause) => (
+            crate::channels::CANCELED + cause,
+            format!("canceled {cause}"),
+        ),
+        None => match scheduler(ctx).channels.receive(channel) {
+            Ok(Some(block)) => {
+                // SAFETY: caller contract.
+                unsafe { message.write(block.as_ptr()) };
+                (crate::channels::DONE, "msg".into())
+            }
+            Err(status) => (status, "closed".into()),
+            Ok(None) => fault("a free-mode receive acted on an empty open channel"),
+        },
+    };
+    crate::free::receive(ctx, channel, &outcome);
+    crate::free::done(ctx);
+    if !entered {
+        // SAFETY: the context is live.
+        unsafe { yield_now(&mut *ctx) };
+    }
+    status
+}
+
 /// Close the channel endpoint `word` (a dropped Sender or Receiver); a last receiver releases
 /// the messages nobody received, oldest first. Closing is not a yield.
 ///
@@ -2056,6 +2333,15 @@ pub(crate) unsafe fn close_endpoint(
             }
             _ => fault("a dropped TaskSet handle of a closed set"),
         }
+        return STATUS_OK;
+    }
+    let (channel, sender) = scheduler(ctx).channels.endpoint_of(word);
+    let outcome = if sender {
+        "close sender"
+    } else {
+        "close receiver"
+    };
+    if crate::free::close(ctx, (crate::free::CHANNEL, u64::from(channel)), outcome) == Some(false) {
         return STATUS_OK;
     }
     let left = scheduler(ctx).channels.close(word);
@@ -2100,9 +2386,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_create");
     // SAFETY: caller contract.
+    crate::free::enter(ctx, Phase::Done);
     unsafe {
         let block = carried(payload);
-        out.write(scheduler(ctx).sync.create_block(block));
+        let word = scheduler(ctx).sync.create_block(block);
+        crate::free::create(ctx, (crate::free::MUTEX, word));
+        crate::free::done(ctx);
+        out.write(word);
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -2122,9 +2412,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_take");
-    let sync = &mut scheduler(ctx).sync;
     // SAFETY: caller contract.
     let word = unsafe { m.read() };
+    let free = crate::free::enter(ctx, Phase::Entered);
+    let mut entered = false;
+    if free {
+        // A take waits (k, entered) for its mutex, which another task's body may hold
+        // across that body's ops, and in a replay for its version.
+        let object = (crate::free::MUTEX, word);
+        while !(scheduler(ctx).sync.available(word) && crate::free::enabled(ctx, object)) {
+            if !entered {
+                crate::free::publish(ctx, Phase::Entered);
+                entered = true;
+            }
+            park_retry(ctx, false);
+        }
+        crate::free::touch(ctx, object, "take");
+    }
+    let sync = &mut scheduler(ctx).sync;
     let status = if sync.dead(word).is_some() {
         1
     } else {
@@ -2134,6 +2439,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     };
     // SAFETY: caller contract.
     unsafe { out.write(status) };
+    if free {
+        crate::free::done(ctx);
+        if !entered {
+            // SAFETY: the context is live; the payload is in the caller's carrier.
+            unsafe { yield_now(&mut *ctx) };
+        }
+    }
     STATUS_OK
 }
 
@@ -2152,11 +2464,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     let _segment = profile::Operation::new(ctx, "mutex_put");
     // SAFETY: caller contract.
     unsafe {
+        let word = m.read();
+        mutex_release_op(ctx, word, "put");
         let block = carried(payload);
-        scheduler(ctx).sync.put(m.read(), block);
+        scheduler(ctx).sync.put(word, block);
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK
+}
+
+/// Free mode: a mutex's put or kill after its body is an op on the mutex, enabled at once
+/// (its take held it); then the caller acts and publishes (k, done).
+fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
+    if !crate::free::enter(ctx, Phase::Done) {
+        return;
+    }
+    let object = (crate::free::MUTEX, word);
+    if !crate::free::enabled(ctx, object) {
+        fault("free-mode replay diverged: a mutex put before its version");
+    }
+    crate::free::touch(ctx, object, outcome);
 }
 
 /// The run ended: release the payload blocks its mutexes still hold. Their payloads are
@@ -2191,7 +2519,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
     let chain = unsafe { (*ctx).failure.chain(&path) };
     // SAFETY: caller contract.
     unsafe {
-        scheduler(ctx).sync.kill(m.read(), chain);
+        let word = m.read();
+        mutex_release_op(ctx, word, "kill");
+        scheduler(ctx).sync.kill(word, chain);
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -2232,8 +2563,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_create");
     // SAFETY: caller contract.
+    crate::free::enter(ctx, Phase::Done);
     unsafe {
         out.write(scheduler(ctx).sync.create_image(value, size));
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -2253,8 +2586,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_load");
     // SAFETY: caller contract.
+    crate::free::enter(ctx, Phase::Done);
     unsafe {
         scheduler(ctx).sync.read(a.read(), slot, size);
+        if crate::free::on(ctx) {
+            // The load's image is recorded live and substituted in a replay.
+            let n = usize::try_from(size).unwrap_or(usize::MAX);
+            if n > 16 {
+                fault("a free-mode atomic image wider than 16 bytes");
+            }
+            let mut bits = [0u8; 16];
+            std::ptr::copy_nonoverlapping(slot, bits.as_mut_ptr(), n);
+            let bits = crate::free::load(ctx, u128::from_le_bytes(bits)).to_le_bytes();
+            std::ptr::copy_nonoverlapping(bits.as_ptr(), slot, n);
+        }
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -2274,8 +2620,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_store");
     // SAFETY: caller contract.
+    crate::free::enter(ctx, Phase::Done);
     unsafe {
         scheduler(ctx).sync.write(a.read(), value, size);
+        crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
     STATUS_OK

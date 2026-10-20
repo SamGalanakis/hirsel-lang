@@ -588,6 +588,7 @@ dependencies = [
  "hirsel-cranelift",
  "hirsel-diag",
  "hirsel-engine",
+ "hirsel-free",
  "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",
@@ -701,6 +702,7 @@ name = "hirsel-interp"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-free",
  "hirsel-guard",
  "hirsel-intern",
  "hirsel-kernels",
@@ -950,6 +952,7 @@ name = "hirsel-rt"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
+ "hirsel-free",
  "hirsel-guard",
  "hirsel-kernels",
  "hirsel-layout",

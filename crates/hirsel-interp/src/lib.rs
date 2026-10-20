@@ -370,6 +370,16 @@ operation_boundary! {
     fn simulation_point(&mut self, _point: library::simulation::SchedulePoint) -> bool { false }
     /// A root release has taken effect at its cleanup anchor.
     fn shared_released(&mut self, _root: u64, _context: &mut OperationContext<'_>) {}
+    /// A release of a `Shared` root by the running task: true when the provider took it
+    /// (free mode defers a release that leaves other holders to the task's next op).
+    fn defer_release(&mut self, _root: &value::SharedRoot) -> bool {
+        false
+    }
+    /// The root task's frames ended. True keeps the other tasks running until none can
+    /// proceed (a free-mode replay, whose other tasks still run to their cut).
+    fn root_finished(&mut self) -> Result<bool, Error> {
+        Ok(false)
+    }
     /// Owners displaced by runtime cleanup, in creation order.
     fn take_releases(&mut self) -> Vec<Value> {
         vec![]

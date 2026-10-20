@@ -19,6 +19,7 @@ measurement = ["dep:serde_json"]
 
 [dependencies]
 serde_json = { version = "1", optional = true }
+hirsel-free = { path = "../hirsel-free" }
 hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-run-config = { path = "../hirsel-run-config" }

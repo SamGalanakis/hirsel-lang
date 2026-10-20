@@ -1195,6 +1195,9 @@ pub(crate) fn execute_frames(
                         }
                     }
                     if let Value::Shared(root) = &value {
+                        if operations.defer_release(root) {
+                            continue;
+                        }
                         let checking = frame.check.is_some();
                         let graph = root.release()?;
                         if checking && graph.is_some() {
@@ -1678,7 +1681,8 @@ pub(crate) fn execute_frames(
                     }
                     continue;
                 }
-                execution.outcome = if let Some(limit) = tooling {
+                let root_end = task == 0 && tooling.is_none();
+                execution.outcome = if let Some(limit) = tooling.take() {
                     Outcome::ToolingLimit(limit)
                 } else if let Some(f) = execution.failures.first() {
                     Outcome::Failed(f.failure.clone())
@@ -1698,6 +1702,13 @@ pub(crate) fn execute_frames(
                         _ => return Err(invalid("failed without failure")),
                     }
                 };
+                if root_end
+                    && operations.root_finished()?
+                    && !(runnable.is_empty() && parked.iter().next().is_none())
+                {
+                    // A free-mode replay: the other tasks still run to their cut.
+                    continue;
+                }
                 return Ok(Step::Finished);
             }
             continue;

@@ -1,7 +1,7 @@
 //! Mutexes and atomics of one run (CONC-4, CONC-5, FAIL-4).
 //!
 //! The scheduler is cooperative and a mutex body may not yield, so no task ever observes a
-//! mutex held by another; sequentially consistent atomics are plain loads and stores. Each
+//! mutex held by another, except in free mode, where every op yields and a take waits; sequentially consistent atomics are plain loads and stores. Each
 //! Mutex or Atomic is a run-local handle word naming a cell. An atomic's cell holds its scalar
 //! payload as the `Some` image of the compiled bodies' `Option`, which the runtime copies. A
 //! mutex's cell holds its payload as the block of a one-element list, as a channel message
@@ -111,6 +111,12 @@ impl Synchronizers {
             Some(Payload::Image(_)) => fault("a mutex acquisition of an atomic"),
             None => fault("a mutex acquired while a body holds it"),
         }
+    }
+
+    /// Whether a take of the mutex can act: it holds its payload or is dead.
+    pub(crate) fn available(&mut self, word: u64) -> bool {
+        let cell = self.cell(word);
+        cell.payload.is_some() || cell.dead.is_some()
     }
 
     /// Give the mutex its payload block back.

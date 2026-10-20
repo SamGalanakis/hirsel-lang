@@ -2,8 +2,8 @@
 //! interpreter: op phases and published progress ([`phase`]), op sections and the cutter
 //! ([`section`]), issue ownership ([`claim`]), the compressed records and the tape
 //! ([`record`], [`tape`]), host-key epochs ([`keys`]), pending `Shared` releases
-//! ([`pending`]), the normalised projection ([`projection`]), and the recording and replay
-//! sides an engine drives ([`recorder`], [`replay`]).
+//! ([`pending`]), the normalised projection ([`projection`]), the recording and replay
+//! sides ([`recorder`], [`replay`]), and the width-1 session an engine drives ([`session`]).
 //!
 //! `proofs/free` model-checks the concurrent modules (`sync`, `phase`, `section`, `claim`)
 //! from this same source with loom, and the section handshake and claim protocol in GenMC.
@@ -20,5 +20,6 @@ pub mod record;
 pub mod recorder;
 pub mod replay;
 pub mod section;
+pub mod session;
 pub mod sync;
 pub mod tape;

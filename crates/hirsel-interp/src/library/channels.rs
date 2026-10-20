@@ -49,6 +49,31 @@ impl Channels {
         }
         Ok(*channel)
     }
+    /// The channel of a live endpoint.
+    pub fn endpoint_channel(&self, endpoint: u64) -> Option<u64> {
+        self.endpoints.get(&endpoint).map(|(channel, _)| *channel)
+    }
+    /// A send's result and its outcome in a free-mode projection.
+    pub fn send(&mut self, channel: u64, payload: Value) -> Result<(Value, String), Error> {
+        let state = self
+            .channels
+            .get_mut(&channel)
+            .ok_or_else(|| invalid("missing send channel"))?;
+        Ok(if state.receivers == 0 {
+            (
+                error(Value::Tuple(vec![Some(payload), Some(variant(0, vec![]))])),
+                "send closed".into(),
+            )
+        } else {
+            state.queue.push_back(payload);
+            (ok(Value::Unit), "send".into())
+        })
+    }
+    /// A new Sender of `channel`.
+    pub fn dup(&mut self, channel: u64) -> Value {
+        self.channels.get_mut(&channel).unwrap().senders += 1;
+        self.endpoint(channel, true)
+    }
     pub fn close(&mut self, kind: &str, endpoint: u64) -> Result<(), Error> {
         let (id, sender) = self
             .endpoints
@@ -88,6 +113,16 @@ impl Library {
         self.simulation.id(arg(a, 0)?, "Tasks")?;
         self.tasks.yield_now = true;
         let input = request(self.tasks.current, a);
+        let first = if name == "channel.receive" {
+            hirsel_free::phase::Phase::Entered
+        } else {
+            hirsel_free::phase::Phase::Done
+        };
+        match self.free_enter(first, context)? {
+            super::free::Enter::Off => {}
+            super::free::Enter::Park(park) => return Ok(park),
+            super::free::Enter::Run => return self.free_channel_call(name, a, input, context),
+        }
         let result = match name {
             "channel.open" => {
                 self.channels.next += 1;
@@ -107,19 +142,11 @@ impl Library {
             }
             "sender.dup" => {
                 let channel = self.channels.channel(arg(a, 1)?, true)?;
-                self.channels.channels.get_mut(&channel).unwrap().senders += 1;
-                OperationResult::returned(self.channels.endpoint(channel, true))
+                OperationResult::returned(self.channels.dup(channel))
             }
             "channel.send" => {
                 let channel = self.channels.channel(arg(a, 1)?, true)?;
-                let payload = arg(a, 2)?.clone();
-                let state = self.channels.channels.get_mut(&channel).unwrap();
-                let result = if state.receivers == 0 {
-                    error(Value::Tuple(vec![Some(payload), Some(variant(0, vec![]))]))
-                } else {
-                    state.queue.push_back(payload);
-                    ok(Value::Unit)
-                };
+                let (result, _) = self.channels.send(channel, arg(a, 2)?.clone())?;
                 OperationResult::returned(result).transferring([2])
             }
             "channel.receive" => {
@@ -158,6 +185,98 @@ impl Library {
             .record("Tasks", name, input, output, context)?;
         Ok(result)
     }
+    /// A channel op in free mode, its entry applied.
+    fn free_channel_call(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        input: Vec<u8>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        use super::free::{CHANNEL, Retry};
+        match name {
+            "channel.open" => {
+                self.channels.next += 1;
+                let channel = self.channels.next;
+                self.channels.channels.insert(
+                    channel,
+                    Channel {
+                        queue: VecDeque::new(),
+                        senders: 1,
+                        receivers: 1,
+                    },
+                );
+                self.free_create((CHANNEL, channel))?;
+                let value = Value::Tuple(vec![
+                    Some(self.channels.endpoint(channel, true)),
+                    Some(self.channels.endpoint(channel, false)),
+                ]);
+                self.free_done(OperationResult::returned(value), context)
+            }
+            "sender.dup" => {
+                let channel = self.channels.channel(arg(a, 1)?, true)?;
+                if self.free_enabled((CHANNEL, channel))? {
+                    self.free_dup(channel, context)
+                } else {
+                    Ok(self.free_retry(Retry::Dup { channel }, "dup", context))
+                }
+            }
+            "channel.send" => {
+                let channel = self.channels.channel(arg(a, 1)?, true)?;
+                let payload = arg(a, 2)?.clone();
+                if self.free_enabled((CHANNEL, channel))? {
+                    self.free_send(channel, payload, context)
+                } else {
+                    Ok(self.free_retry(Retry::Send { channel, payload }, "send", context))
+                }
+            }
+            "channel.receive" => {
+                let channel = self.channels.channel(arg(a, 1)?, false)?;
+                let result = match self.free_receive_ready(channel)? {
+                    Some(value) => OperationResult::returned(value),
+                    None => {
+                        let token = self.next_callback;
+                        self.next_callback += 1;
+                        self.channels.waits.insert(token, (channel, input));
+                        OperationResult::Park {
+                            token,
+                            wait: BlockedWait {
+                                spawn_path: self.tasks.path(),
+                                anchor: context.anchor().unwrap().clone(),
+                                kind: "channel.receive".into(),
+                                targets: vec![channel],
+                            },
+                        }
+                    }
+                };
+                self.free_waiting(result, context)
+            }
+            _ => Err(invalid("unknown channel operation")),
+        }
+    }
+    /// A free-mode receive's done phase, when it can act: message k, `Closed`, or the
+    /// cancellation its one check observes.
+    fn free_receive_ready(&mut self, channel: u64) -> Result<Option<Value>, Error> {
+        let state = self
+            .channels
+            .channels
+            .get(&channel)
+            .ok_or_else(|| invalid("missing receive channel"))?;
+        if state.queue.is_empty() && state.senders > 0 && self.free_cancel_peek().is_none() {
+            return Ok(None);
+        }
+        let (value, outcome) = if let Some(cause) = self.free_canceled()? {
+            (Library::canceled_value(cause), format!("canceled {cause}"))
+        } else {
+            let state = self.channels.channels.get_mut(&channel).unwrap();
+            match state.queue.pop_front() {
+                Some(value) => (ok(value), "msg".into()),
+                None => (error(variant(0, vec![])), "closed".into()),
+            }
+        };
+        self.free_receive(channel, &outcome)?;
+        Ok(Some(value))
+    }
     fn receive_ready(&mut self, channel: u64) -> Result<Option<Value>, Error> {
         if let Some(cause) = self.tasks.canceled() {
             return Ok(Some(error(variant(1, vec![variant(cause, vec![])]))));
@@ -181,7 +300,12 @@ impl Library {
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
         let channel = self.channels.waits[&token].0;
-        let Some(value) = self.receive_ready(channel)? else {
+        let value = if self.free.is_some() {
+            self.free_receive_ready(channel)?
+        } else {
+            self.receive_ready(channel)?
+        };
+        let Some(value) = value else {
             return Ok(None);
         };
         let (_, input) = self.channels.waits.remove(&token).unwrap();

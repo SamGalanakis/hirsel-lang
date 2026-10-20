@@ -1,0 +1,31 @@
+// The gap boundary on a fresh object: the child's send and the root's receiver close are
+// each one's first touch of the channel, so whichever comes first is at version 1 (gap 0,
+// no record) and the other has gap 1.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  let sent = task.scope(
+    tasks,
+    fn(s: Scope) -> bool {
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut sender = take tx
+          match channel.send(tasks, mut sender, 7u32) {
+            Ok(done) => true,
+            Error(failed) => false,
+          }
+        }
+      )
+      discard(take rx)
+      task.await(s, take child)
+    }
+  )
+  let _ = out.print(out, if sent { "sent\n" } else { "closed\n" })
+  Ok(())
+}

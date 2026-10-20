@@ -110,6 +110,21 @@ impl Channels {
         }
     }
 
+    /// The channel an open endpoint word names, and whether it is a Sender.
+    pub(crate) fn endpoint_of(&self, word: u64) -> (u32, bool) {
+        match self.lookup(word) {
+            Some((_, endpoint)) => (endpoint.channel, endpoint.sender),
+            None => fault("a channel endpoint closed twice or of another run"),
+        }
+    }
+
+    /// Whether a receive on `channel` can act: a message is queued or no sender is left.
+    pub(crate) fn ready(&self, channel: u32) -> bool {
+        self.channels[channel as usize]
+            .as_ref()
+            .is_some_and(|row| !row.queue.is_empty() || row.senders == 0)
+    }
+
     fn lookup(&self, word: u64) -> Option<(u32, Endpoint)> {
         if word & ENDPOINT == 0 {
             return None;

@@ -2525,7 +2525,27 @@ unsafe fn native_print(
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, if stderr { "PrintStderr" } else { "Print" });
-    if unsafe { crate::tasks::canceled(ctx) }.is_some() {
+    // Free mode: a host write on the `stdout` or `stderr` key, through the session's phases.
+    let canceled = unsafe { crate::tasks::canceled(ctx) };
+    let free = crate::free::print(
+        ctx,
+        stderr,
+        bytes,
+        canceled,
+        || {
+            let result = unsafe { Binding::get(ctx) }
+                .adapter
+                .print(handle, stderr, bytes);
+            unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) }
+        },
+        || Completion::Unit(Ok(())),
+        |cause| Completion::Unit(Err(IoError::Canceled(cause))),
+    );
+    if let Some(completion) = free {
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+        return completion;
+    }
+    if canceled.is_some() {
         return unsafe {
             native_call(
                 ctx,

@@ -31,6 +31,8 @@ pub struct Library {
     /// A scripted client's unmet Expect at the last handle drop (LANG-9).
     pub(super) drop_failure: Option<(String, String)>,
     pub(super) runners: super::runners::Runners,
+    /// Free mode (`tasks.free@1`): the run's session and pending states.
+    pub(super) free: Option<super::free::Free>,
 }
 impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
@@ -59,6 +61,7 @@ impl Library {
             next_shared: 0,
             drop_failure: None,
             runners: Default::default(),
+            free: None,
         })
     }
     /// Whether the last choice among `count` runnable tasks is a scheduling input a recording
@@ -393,31 +396,15 @@ impl Library {
                         "Stdout"
                     },
                 )?;
-                let text = text(arg(a, 1)?)?;
-                let fault = self
-                    .tasks
-                    .canceled()
-                    .map(Fault::Canceled)
-                    .or_else(|| self.simulation.fault(name));
-                let output = if name == "err.print" {
-                    &mut self.simulation.stderr
-                } else {
-                    &mut *context.stdout
-                };
-                match fault {
-                    Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
-                    Some(Fault::Fault { code, partial }) => {
-                        output.extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
-                        error(variant(0, vec![u32_value(code)]))
-                    }
-                    Some(Fault::File { .. }) => {
-                        return Err(invalid("file error supplied to output"));
-                    }
-                    None => {
-                        output.extend_from_slice(text.as_bytes());
-                        ok(Value::Unit)
+                match self.free_print_begin(name, a, context)? {
+                    None => {}
+                    Some(super::free::FreePrint::Done(result)) => return Ok(Some(result)),
+                    Some(super::free::FreePrint::Write(write)) => {
+                        return self.free_print_end(write, name, a, context).map(Some);
                     }
                 }
+                let canceled = self.tasks.canceled();
+                self.print(name, a, canceled, context)?
             }
             "test.check" | "test.check_case" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
@@ -1214,6 +1201,87 @@ impl Library {
         self.drop_failure = Some(("LANG-9".into(), kind.into()));
     }
 }
+impl Library {
+    /// `out.print` or `err.print`'s write, with the cancellation its check observed.
+    pub(super) fn print(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        canceled: Option<u32>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Value, Error> {
+        let text = text(arg(a, 1)?)?;
+        let fault = canceled
+            .map(Fault::Canceled)
+            .or_else(|| self.simulation.fault(name));
+        let output = if name == "err.print" {
+            &mut self.simulation.stderr
+        } else {
+            &mut *context.stdout
+        };
+        Ok(match fault {
+            Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
+            Some(Fault::Fault { code, partial }) => {
+                output.extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
+                error(variant(0, vec![u32_value(code)]))
+            }
+            Some(Fault::File { .. }) => {
+                return Err(invalid("file error supplied to output"));
+            }
+            None => {
+                output.extend_from_slice(text.as_bytes());
+                ok(Value::Unit)
+            }
+        })
+    }
+    fn poll_inner(
+        &mut self,
+        token: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        if self.synchronizers.takes.contains_key(&token) {
+            return self.poll_take(token, context);
+        }
+        if self.network_waits.contains_key(&token) {
+            return self.poll_network(token, context);
+        }
+        if self.runners.waits_on(token) {
+            return self.poll_runner(token, context);
+        }
+        if self.watch_waits.contains_key(&token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+            let result = self.poll_watch(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.simulation = saved;
+            }
+            return result;
+        }
+        if self.timers.contains(token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+            let result = self.poll_timer(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.simulation = saved;
+            }
+            return result;
+        }
+        if self.channels.waits.contains_key(&token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
+            let result = self.poll_channel(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.channels = saved;
+            }
+            result
+        } else {
+            self.poll_task(token, context)
+        }
+    }
+}
 impl Operations for Library {
     fn retained_bytes(&self) -> u64 {
         self.tasks
@@ -1336,7 +1404,15 @@ impl Operations for Library {
             ))],
             context,
         )?;
+        self.free_end(id)?;
         self.tasks.finished(id, result)
+    }
+    fn defer_release(&mut self, root: &crate::value::SharedRoot) -> bool {
+        self.free_defer_release(root)
+    }
+    fn root_finished(&mut self) -> Result<bool, Error> {
+        self.free_end(0)?;
+        Ok(self.free_replay())
     }
     fn wait_deadline(&self, token: u64) -> Option<u64> {
         self.timers.deadline(token)
@@ -1394,44 +1470,11 @@ impl Operations for Library {
         token: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        if self.network_waits.contains_key(&token) {
-            return self.poll_network(token, context);
+        if let Some(result) = self.free_poll(token, context)? {
+            return Ok(result);
         }
-        if self.runners.waits_on(token) {
-            return self.poll_runner(token, context);
-        }
-        if self.watch_waits.contains_key(&token) {
-            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-            let result = self.poll_watch(token, context);
-            if result.is_err()
-                && let Some(saved) = saved
-            {
-                self.simulation = saved;
-            }
-            return result;
-        }
-        if self.timers.contains(token) {
-            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-            let result = self.poll_timer(token, context);
-            if result.is_err()
-                && let Some(saved) = saved
-            {
-                self.simulation = saved;
-            }
-            return result;
-        }
-        if self.channels.waits.contains_key(&token) {
-            let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
-            let result = self.poll_channel(token, context);
-            if result.is_err()
-                && let Some(saved) = saved
-            {
-                self.channels = saved;
-            }
-            result
-        } else {
-            self.poll_task(token, context)
-        }
+        let result = self.poll_inner(token, context)?;
+        self.free_polled(token, result, context)
     }
 
     fn resume(
@@ -1442,7 +1485,7 @@ impl Operations for Library {
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         if self.synchronizers.pending.contains_key(&token) {
-            return self.resume_synchronization(token, result);
+            return self.resume_synchronization(token, result, context);
         }
         if let Some(pending) = self.tasks.pending.remove(&token) {
             self.resume_task(pending, result, context)
@@ -1462,6 +1505,14 @@ impl Operations for Library {
             return Ok(());
         }
         if matches!(kind, "Sender" | "Receiver") {
+            let kind = if kind == "Sender" {
+                "Sender"
+            } else {
+                "Receiver"
+            };
+            if self.free_close(kind, id)? {
+                return Ok(());
+            }
             self.channels.close(kind, id)?;
             return Ok(());
         }
@@ -1666,6 +1717,19 @@ primary_operations! { self, call, context, name, a, value;
         arg(a, 1)?.copied()
     },
     Primitive: "shared.freeze" | "shared.thaw" => {
+        if name == "shared.thaw" {
+            // Free mode: a thaw is an op, its outcome a recorded bit.
+            match self.free_enter(hirsel_free::phase::Phase::Done, context)? {
+                super::free::Enter::Off => {}
+                super::free::Enter::Park(park) => return Ok(Some(park)),
+                super::free::Enter::Run => {
+                    let [Value::Shared(root)] = a else {
+                        return Err(invalid("Shared representation"));
+                    };
+                    return self.free_thaw(root.clone(), context).map(Some);
+                }
+            }
+        }
         let result = super::shared::call(name, a, &mut self.next_shared)?;
         if let (Some(trace), OperationResult::Complete { value: Value::Shared(root), .. }) =
             (&mut self.simulation.root_trace, &result)
@@ -1720,7 +1784,7 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "io.process" | "proc.narrow" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
         return self.network_call(name, &call, context).map(Some);
     },
-    Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.SharedThawTurn" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
     Capability: "watcher.next" | "test.dir_event" => {
         // A rejected replay never publishes effects or consumes an event.
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());

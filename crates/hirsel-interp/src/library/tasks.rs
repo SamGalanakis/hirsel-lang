@@ -206,6 +206,20 @@ impl Tasks {
         );
         Ok(task)
     }
+    /// The spawn path of live child `task`.
+    pub(super) fn child_path(&self, task: u64) -> Option<Vec<u32>> {
+        self.tasks.get(&task).map(|t| t.path.clone())
+    }
+    /// Whether each member of task set `set`, in add order, has finished (an awaited
+    /// member has not).
+    pub(super) fn member_finished(&self, set: u64) -> Vec<bool> {
+        self.sets.get(&set).map_or_else(Vec::new, |row| {
+            row.members
+                .iter()
+                .map(|m| m.is_some_and(|t| self.tasks.get(&t).is_some_and(|c| c.finished)))
+                .collect()
+        })
+    }
     pub fn path(&self) -> Vec<u32> {
         self.tasks
             .get(&self.current)
@@ -512,6 +526,38 @@ impl Library {
             vec![],
             context,
         )?;
+        let waiting = matches!(
+            name,
+            "task.await" | "task.await_at" | "task.await_any" | "task.cancel_all"
+        );
+        let free = match self.free_enter(
+            if waiting {
+                hirsel_free::phase::Phase::Entered
+            } else {
+                hirsel_free::phase::Phase::Done
+            },
+            context,
+        )? {
+            super::free::Enter::Off => false,
+            super::free::Enter::Park(park) => return Ok(park),
+            super::free::Enter::Run => true,
+        };
+        let result = self.task_action(name, call, context)?;
+        if !free {
+            Ok(result)
+        } else if waiting {
+            self.free_waiting(result, context)
+        } else {
+            self.free_done(result, context)
+        }
+    }
+    fn task_action(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let a = &*call.arguments;
         Ok(match name {
             "task.scope" | "task.scope_until" => {
                 self.simulation.id(arg(a, 0)?, "Tasks")?;
@@ -634,11 +680,20 @@ impl Library {
                         priority: self.tasks.schedule.admit(),
                     },
                 );
-                self.tasks.starts.push(TaskStart {
-                    site: context.anchor().map(|anchor| anchor.site),
-                    id: task,
-                    callee: arg(a, 1)?.clone(),
-                });
+                // Free mode: the child registers in this spawn's section; a replay never
+                // starts a child its cut does not hold.
+                let path = self.tasks.tasks[&task].path.clone();
+                let starts = self
+                    .free
+                    .as_mut()
+                    .is_none_or(|free| free.session.start(&path));
+                if starts {
+                    self.tasks.starts.push(TaskStart {
+                        site: context.anchor().map(|anchor| anchor.site),
+                        id: task,
+                        callee: arg(a, 1)?.clone(),
+                    });
+                }
                 OperationResult::returned(handle("Task", task)).transferring([1])
             }
             "task.await" | "task.cancel" | "task.detach" => {
@@ -712,7 +767,10 @@ impl Library {
                     .collect();
                 if waiting.is_empty() {
                     OperationResult::returned(none())
-                } else if let Some(index) = self.tasks.first_completed(set) {
+                } else if let Some(index) = {
+                    let live = self.tasks.first_completed(set);
+                    self.free_any(live, set)?
+                } {
                     self.record_any(index, context)?;
                     OperationResult::returned(some(u64_value(index)))
                 } else {
@@ -773,7 +831,7 @@ impl Library {
             }
             "task.check_canceled" => {
                 id(arg(a, 0)?, "Scope")?;
-                OperationResult::returned(match self.tasks.canceled() {
+                OperationResult::returned(match self.free_canceled()? {
                     Some(cause) => error(variant(0, vec![variant(cause, vec![])])),
                     None => ok(Value::Unit),
                 })
@@ -804,6 +862,12 @@ impl Library {
                 scope,
                 result: is_result,
             } => {
+                // Free mode: a scope exit is a waiting op.
+                let free = match self.free_enter(hirsel_free::phase::Phase::Entered, context)? {
+                    super::free::Enter::Off => false,
+                    super::free::Enter::Park(park) => return Ok(park),
+                    super::free::Enter::Run => true,
+                };
                 let active = self
                     .tasks
                     .active_scopes
@@ -842,7 +906,11 @@ impl Library {
                 {
                     trace.point(self.tasks.path());
                 }
-                joined
+                if free {
+                    self.free_waiting(joined, context)?
+                } else {
+                    joined
+                }
             }
             _ => return Err(invalid("invalid task callback continuation")),
         })
@@ -1026,7 +1094,10 @@ impl Library {
                 Ok(None)
             }
             pending @ Pending::Join { .. } => self.join_scope(pending, context).map(Some),
-            Pending::AwaitAny(set) => match self.tasks.first_completed(set) {
+            Pending::AwaitAny(set) => match {
+                let live = self.tasks.first_completed(set);
+                self.free_any(live, set)?
+            } {
                 Some(index) => {
                     self.record_any(index, context)?;
                     Ok(Some(OperationResult::returned(some(u64_value(index)))))

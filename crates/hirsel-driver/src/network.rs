@@ -595,6 +595,31 @@ impl HostLibrary {
             }
             return Ok(result);
         }
+        // Free mode: the write is a host request whose host call runs between its claim and
+        // its end, and only live.
+        if matches!(name, "err.print" | "out.print") {
+            use hirsel_interp::library::FreePrint;
+            match self.library.free_print_begin(name, a, cx)? {
+                None => {}
+                Some(FreePrint::Done(result)) => return Ok(Some(result)),
+                Some(FreePrint::Write(write)) => {
+                    let request = if name == "err.print" {
+                        R::PrintStderr {
+                            stderr: self.id(&a[0])?,
+                            bytes: bytes(&a[1])?,
+                        }
+                    } else {
+                        R::Print {
+                            stdout: self.id(&a[0])?,
+                            bytes: bytes(&a[1])?,
+                        }
+                    };
+                    let completion = self.host_cancelable(request, None)?;
+                    self.supply(name, completion)?;
+                    return self.library.free_print_end(write, name, a, cx).map(Some);
+                }
+            }
+        }
         // The library validates the handle/schema and returns Canceled without
         // consuming input or publishing output. Destruction's entered task is shielded.
         if matches!(name, "stdin.read" | "err.print" | "out.print")

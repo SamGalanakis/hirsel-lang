@@ -27,6 +27,13 @@ only (`LeafUtility`, enforced by `hirsel-lir/tests/it/dependencies.rs`).
   filtered by a cut.
 - `recorder`, `replay`: the two sides an engine calls at each op: admission, enablement (object
   version = p + gap; key epochs), substitution and validation.
+- `session`: the engine-facing width-1 session over either side (tasks by spawn path, objects
+  by engine handle, host writes as begin, claim and end), and `TestHook`, F0's test channel
+  (`HIRSEL_RT_FREE_TEST=mode=record|replay,tape=PATH,report=PATH[,seed=N][,flush=N][,durable=1]`):
+  a recording writes its tape and a report line `cut <offset> <projection>` per cut, terminal
+  last; a replay writes `replayed <projection>` or `diverged <reason>`. The interpreter
+  (`hirsel-interp`'s `library/free.rs`) and the native runtime (`hirsel-rt`'s `free.rs`) drive
+  it; F1 replaces the channel with the run record's recording.
 
 Invariants:
 
@@ -42,5 +49,6 @@ the parked receive at a durable cut, the nested root at task end, acquire / wait
 reply, and stops at every step with requests in flight. Each live run's tape replays under
 other seeds to the live projection, terminal and durable, and every truncated or torn prefix
 replays to the live projection at its cut. Two mutations (releases applied at once; phase
-walks deferred) must fail. `proofs/free/check.sh` model-checks `sync`, `phase`, `section` and
+walks deferred) must fail. `hirsel-cli`'s `tests/free.rs` runs the same traces
+(`tests/free/*.hir`) through the session on the interpreter and both native backends. `proofs/free/check.sh` model-checks `sync`, `phase`, `section` and
 `claim` with loom (from this source) and the handshake and claim protocol with GenMC.

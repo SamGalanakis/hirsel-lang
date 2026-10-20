@@ -1,0 +1,62 @@
+// The mutex cycle (review-4 finding 2): M's payload holds one root of S, so B holds a root
+// of S while it holds M; A releases its other root of S and then waits for M. A's entered phase (the release) precedes B's thaw
+// inside M's body, and A's take follows B's put.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "s"
+  let s: Shared[String] = shared.freeze(take built)
+  let held = copy s
+  let roots: unique List[Shared[String]] = unique [take s]
+  let m = mutex.create(tasks, take roots)
+  let thawed = task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      let a = task.async(
+        scope,
+        fn() -> u64 {
+          discard(take held)
+          mutex.with(
+            tasks,
+            m,
+            fn(mut rs: unique List[Shared[String]]) -> u64 uses {} {
+              list.len(rs)
+            }
+          )
+        }
+      )
+      let b = task.async(
+        scope,
+        fn() -> bool {
+          mutex.with(
+            tasks,
+            m,
+            fn(mut rs: unique List[Shared[String]]) -> bool uses {} {
+              match list.pop(mut rs) {
+                Some(mine) => match shared.thaw(take mine) {
+                  Ok(text) => {
+                    discard(take text)
+                    true
+                  },
+                  Error(root) => {
+                    list.push(mut rs, take root)
+                    false
+                  },
+                },
+                None => false,
+              }
+            }
+          )
+        }
+      )
+      let total = task.await(scope, take a)
+      task.await(scope, take b)
+    }
+  )
+  let _ = out.print(out, if thawed { "thawed\n" } else { "shared\n" })
+  Ok(())
+}

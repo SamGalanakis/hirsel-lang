@@ -230,7 +230,7 @@ impl Block {
             .unwrap_or_else(|shared| shared.elements.clone())
     }
     /// The elements when this is their only holder.
-    fn take_unique(&mut self) -> Option<Vec<Option<Value>>> {
+    pub(crate) fn take_unique(&mut self) -> Option<Vec<Option<Value>>> {
         let data = std::sync::Arc::get_mut(&mut self.0)?;
         data.index.take();
         Some(std::mem::take(&mut data.elements))

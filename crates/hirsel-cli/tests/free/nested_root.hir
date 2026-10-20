@@ -1,0 +1,40 @@
+// A nested root at task end: the child's last release of OUTER frees a frozen graph that
+// holds a root of INNER, so the child's end gives that root up, and the joiner's thaw of
+// INNER after the join sees count 1.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "inner"
+  let inner: Shared[String] = shared.freeze(take built)
+  let parts: List[Shared[String]] = [copy inner]
+  let outer: Shared[List[Shared[String]]] = shared.freeze(take parts)
+  let x: Atomic[u64] = atomic.create(tasks, 0u64)
+  let ok = task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      let child = task.async(
+        scope,
+        fn() -> () {
+          let mine = take outer
+          atomic.store(tasks, x, 1u64)
+          discard(take mine)
+        }
+      )
+      let seen = atomic.load(tasks, x)
+      task.await(scope, take child)
+      match shared.thaw(take inner) {
+        Ok(text) => text == "inner",
+        Error(root) => {
+          discard(take root)
+          false
+        },
+      }
+    }
+  )
+  let _ = out.print(out, if ok { "thawed\n" } else { "shared\n" })
+  Ok(())
+}

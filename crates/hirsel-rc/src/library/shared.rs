@@ -14,6 +14,7 @@ use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind};
 use hirsel_lir::stage::Value;
+use hirsel_types::GenericArgument;
 type R<T> = Result<T, PassError>;
 pub static FREEZE: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("shared.freeze"),
@@ -87,18 +88,33 @@ fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     Ok(b.finish())
 }
 /// `Ok` with the value when the root is the last, else `Error` with the root.
-/// The root count answers alone: no credit but the roots' own keeps the block.
+/// The root count answers alone: no credit but the roots' own keeps the block. The
+/// runtime's thaw turn reads it (`$intrinsic.SharedThawTurn`), so free mode can record
+/// and replay the answer.
 fn thaw(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let turn = super::tasks::intrinsic(
+        cx,
+        "SharedThawTurn",
+        vec![GenericArgument::Type(cx.type_actual(0)?)],
+    )?;
     let mut b = Body::new(cx)?;
     let result = b.cx.fn_abi().result.unwrap().layout;
+    let value_layout = frozen_value(&b, b.parameters[0].layout, "shared.thaw")?;
+    // The turn borrows the root in place, so a failure's cleanup still releases it.
+    let (view, loan) = b.borrow(b.parameters[0].address, false)?;
+    let failure = b.failure(None);
+    let callee = super::tasks::operation(&mut b, &turn);
+    let last = super::tasks::invoke(
+        &mut b,
+        callee,
+        turn.abi,
+        vec![super::tasks::argument(0, Passing::Borrow, view)],
+        &[loan],
+        failure,
+        BlockKind::Body,
+    )
+    .ok_or_else(|| PassError::Malformed("SharedThawTurn returns a bool".into()))?;
     let root = b.take(b.parameters[0].address)?;
-    let value_layout = frozen_value(&b, b.layout_of(root), "shared.thaw")?;
-    let bool_layout = b.bool_layout()?;
-    let last = b.value(bool_layout, Holding::Plain);
-    b.push(Inst::IsUnique {
-        result: last,
-        value: root,
-    });
     let thawed = b.block(BlockKind::Body, &[]);
     let kept = b.block(BlockKind::Body, &[]);
     b.branch(last, thawed, kept);

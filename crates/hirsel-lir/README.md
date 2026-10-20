@@ -728,3 +728,7 @@ Runtime ABI 22 enables the existing hidden caller-site pair on blocking
 task/channel exports, so native Blocked outcomes can name their parked waits.
 The LIR vocabulary and physical ABI encoding are unchanged; LLVM and Cranelift
 consume the same existing caller-site mechanism.
+
+Runtime ABI 24 adds the `$intrinsic.SharedThawTurn` operation export
+`hirsel_rt_v2_thaw_turn`, which `shared.thaw`'s compiled body calls instead of an inline
+`IsUnique` on its root, so free mode can record and replay the answer.

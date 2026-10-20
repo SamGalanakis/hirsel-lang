@@ -568,6 +568,20 @@ callback. Native cleanup must finish before publishing task completion, and an
 isolate must save/restore the acquiring context's failure chain. Until those ABI
 and lowering changes exist, native concurrency remains explicitly unavailable.
 
+Free mode at width 1 (lane F0, `library/free.rs`): under F0's test channel
+`HIRSEL_RT_FREE_TEST` (`hirsel_free::session::TestHook`), which the driver installs, the
+library drives a `hirsel_free` session under a seeded random schedule. Every synchronising
+operation is an op that yields (channel open, dup, send, receive and an endpoint's close, the
+take and put around a `mutex.with` body, atomic loads and stores, `shared.thaw`, the task and
+set operations, cancellation checks, `out.print`/`err.print` as host writes on the
+`stdout`/`stderr` keys, and each task's end); a waiting op publishes (k, entered) when it parks
+and (k, done) when a poll completes it. A `Shared` release that does not find its root's count
+at 1 is deferred to the releasing task's next op (`Operations::defer_release`); a walk that
+ends an entered phase releases its nested roots at once (Amendment F0-1). In a replay a phase
+the cut does not admit parks its task for good, one waiting for a predecessor parks until a
+publish, a drop's endpoint close whose version is not reached applies later in program order,
+and the root drains the other tasks at its end (`Operations::root_finished`).
+
 `Operations::callback_finished` receives mutable callback snapshots on return,
 failure and tooling abandonment before the continuation resumes. Runtime-managed
 owners such as mutexes use it to retain the final payload without rollback;

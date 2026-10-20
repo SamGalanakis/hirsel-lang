@@ -288,6 +288,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.AtomicCreate" => Some("hirsel_rt_v2_atomic_create".into()),
         "$intrinsic.AtomicLoad" => Some("hirsel_rt_v2_atomic_load".into()),
         "$intrinsic.AtomicStore" => Some("hirsel_rt_v2_atomic_store".into()),
+        // `shared.thaw`'s compiled body asks the runtime whether its root is the last.
+        "$intrinsic.SharedThawTurn" => Some("hirsel_rt_v2_thaw_turn".into()),
         // `task.isolate`'s compiled body reads its caught chain through these (`isolate.rs`).
         "$intrinsic.IsolateBegin" => Some("hirsel_rt_v2_isolate_begin".into()),
         "$intrinsic.IsolateCount" => Some("hirsel_rt_v2_isolate_count".into()),
@@ -702,6 +704,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((8, 8)),
         parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_thaw_turn",
+        destination: false,
+        result: Some((1, 1)),
+        parameters: &[Physical::Pointer],
     },
     AbiExport {
         caller_site: false,
@@ -1914,6 +1923,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.AtomicCreate",
     "$intrinsic.AtomicLoad",
     "$intrinsic.AtomicStore",
+    "$intrinsic.SharedThawTurn",
     "$intrinsic.TaskCanceled",
     "$intrinsic.MappedView",
     "$intrinsic.MappedCheck",

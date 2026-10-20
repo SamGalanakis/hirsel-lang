@@ -152,3 +152,33 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut TaskCtx, block: *mut Header
         crate::root_trace::retired(block);
     }
 }
+
+/// `$intrinsic.SharedThawTurn(root) -> bool`: whether the borrowed root is the last, which
+/// `shared.thaw`'s compiled body tests before it thaws or gives the root back. Outside free
+/// mode it is the count test alone and not a yield. In free mode it is an op: its answer is
+/// recorded live and replayed (a recorded `Ok` waits until the root is the last), and it
+/// yields.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `root` a live root block of it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_thaw_turn(
+    ctx: *mut TaskCtx,
+    out: *mut u8,
+    root: *mut Header,
+) -> u8 {
+    // SAFETY: caller contract; the borrowed root stays live through any wait.
+    let last = || unsafe { (*root).count == 1 };
+    let answer = if crate::free::enter(ctx, hirsel_free::phase::Phase::Done) {
+        let answer = crate::free::thaw(ctx, last);
+        crate::free::done(ctx);
+        // SAFETY: the context is live.
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+        answer
+    } else {
+        last()
+    };
+    // SAFETY: caller contract.
+    unsafe { out.write(u8::from(answer)) };
+    crate::STATUS_OK
+}

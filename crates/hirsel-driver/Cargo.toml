@@ -21,6 +21,7 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-interp = { path = "../hirsel-interp" }
+hirsel-free = { path = "../hirsel-free" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-lir = { path = "../hirsel-lir" }
 hirsel-rc = { path = "../hirsel-rc" }

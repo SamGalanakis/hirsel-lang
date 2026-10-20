@@ -45,6 +45,7 @@ $intrinsic.ScalarPositions_next	65842fd3b1ee1e90075f09a060800870db16dd8515fca3dd
 $intrinsic.ScalarPositions_open	f54e0735899ca3e2482c0e4a2834499607092bae02bc4ebf769938557c9abeb7	0:b:n->n
 $intrinsic.SetElements_next	113e6c1ed4d1b17ca0002aba3d4c68af1b71a58f519c050591b6b681d220da86	0:m:[0]->[0]
 $intrinsic.SetElements_open	96cf8a2bb1e8fe6317c7c19326d5944c6f7346a305c39bb5ec4c4db694c80fcd	0:b:[0]->n
+$intrinsic.SharedThawTurn	5328524fac39e7a77debbe29a5303df810237eb3dbe1fb06336159b6e8556c5f	0:b:[0]->n
 $intrinsic.SortedMapOrder_len	54c06e0f960dd11de502ccd8bb2d2e77dba54c407c0e829a4889d92f1dd3ba35	0:b:a->n
 $intrinsic.SortedMapOrder_next	cbed202a91f98796581c92568c7a899a36d443d4dcf41a5a5453c9aacaccafd7	0:m:[0,1]->[0,1]
 $intrinsic.SortedMapOrder_open	da4012c4089282e7f02bfd71bbad1ff5835525451f4136caabbe3af83aa56d66	0:t:a->[0,1]

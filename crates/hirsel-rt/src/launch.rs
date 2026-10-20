@@ -1915,6 +1915,8 @@ pub(crate) unsafe fn execute(
         unsafe { &mut *ctx }.run().schedule =
             hirsel_kernels::schedule::Schedule::new(algorithm, scheduler.seed);
     }
+    // F0's free-mode test channel, when the environment sets it, replaces the schedule.
+    crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };
     if let Some(table) = program.failure_table {
@@ -1978,6 +1980,9 @@ pub(crate) unsafe fn execute(
                     roots.as_mut_ptr(),
                 ),
             };
+            if status == STATUS_OK {
+                crate::free::root_end(ctx);
+            }
             if status == STATUS_OK
                 && let Some(returned) = (*ctx).run().entry_result.take()
             {
@@ -2072,6 +2077,7 @@ pub(crate) unsafe fn execute(
         Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
         Err(stop) => stop.outcome(),
     };
+    crate::free::finish(unsafe { &mut *ctx }, &outcome);
     let returned = !ended
         && matches!(
             outcome,

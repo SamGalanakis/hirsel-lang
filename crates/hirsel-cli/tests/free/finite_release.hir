@@ -1,0 +1,44 @@
+// Finite release, infinite suffix (design §5): the child releases its root of S after its
+// last op and loops forever, so the release stays pending and the root's thaw sees count 2
+// and records Err; the run stops for fuel, and a replay admits the child only through its
+// last op.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "s"
+  let s: Shared[String] = shared.freeze(take built)
+  let held = copy s
+  let x: Atomic[u64] = atomic.create(tasks, 0u64)
+  let thawed = task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      let child = task.async(
+        scope,
+        fn() -> () {
+          atomic.store(tasks, x, 1u64)
+          discard(take held)
+          let mut i: u64 = 0
+          while true {
+            i += 1
+          }
+        }
+      )
+      let seen = atomic.load(tasks, x)
+      let ok = match shared.thaw(take s) {
+        Ok(text) => true,
+        Error(root) => {
+          discard(take root)
+          false
+        },
+      }
+      let _ = out.print(out, if ok { "thawed\n" } else { "shared\n" })
+      task.await(scope, take child)
+      ok
+    }
+  )
+  Ok(())
+}

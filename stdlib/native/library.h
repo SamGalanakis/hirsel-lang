@@ -213,6 +213,9 @@ uint8_t hirsel_rt_v2_mutex_cause(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_atomic_create(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_load(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_store(hirsel_rt_v2_ctx*, const uint64_t*, const uint8_t*, uint64_t);
+/* shared.thaw (MEM-11): 1 when the borrowed root is the last; in free mode an op whose answer
+   is recorded and replayed. */
+uint8_t hirsel_rt_v2_thaw_turn(hirsel_rt_v2_ctx*, uint8_t*, hirsel_rt_v2_header*);
 /* task.check_canceled (CONC-3): 0, or 1 + the CancelCause ordinal. */
 uint8_t hirsel_rt_v2_task_canceled(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*);
 /* task.isolate (FAIL-2): the caught chain, record by record; the program descriptor carries

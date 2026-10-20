@@ -174,6 +174,8 @@ pub(crate) struct RunShared {
     pub(crate) failure_table: Option<crate::isolate::FailureTable>,
     /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
+    /// Free mode's session and test channel (`crate::free`).
+    pub(crate) free: Option<Box<crate::free::Free>>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -552,6 +554,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         driver: crate::stop::Driver::default(),
         failure_table: None,
         schedule: Default::default(),
+        free: None,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

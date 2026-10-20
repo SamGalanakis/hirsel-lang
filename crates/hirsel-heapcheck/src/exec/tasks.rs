@@ -257,6 +257,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.AtomicCreate",
         "$intrinsic.AtomicLoad",
         "$intrinsic.AtomicStore",
+        "$intrinsic.SharedThawTurn",
         "$intrinsic.IsolateBegin",
         "$intrinsic.IsolateCount",
         "$intrinsic.IsolateKind",
@@ -1158,6 +1159,29 @@ impl<S: Stage> Machine<'_, S> {
                     self.operation_image(f, layout, value, &arguments, &mut Default::default())?;
                 let repr = self.value_type(f.unit, result)?.repr;
                 let val = self.val_from(image, repr, layout)?.0;
+                self.task_return(f, &arguments, Some((result, val)), normal)
+            }
+            // The Lean model's uniqueness test of a `Shared` root, as `Inst::IsUnique` reads
+            // it: the sole root. Not a yield outside free mode.
+            "$intrinsic.SharedThawTurn" => {
+                let root = Self::task_argument(&arguments, 0)?;
+                let ArgumentValue::Value(root) = root.value else {
+                    return fail(V::Malformed, "a thaw turn's root passed by address");
+                };
+                let Val::Ptr(p) = self.read_use(f, root)? else {
+                    return fail(V::TypeConfusion, "a thaw turn of a non-block");
+                };
+                let last = matches!(
+                    self.ledger.check(p)?.count,
+                    Some(Count::Finite(1) | Count::Root(1))
+                );
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "a thaw turn without a result"))?;
+                let val = Val::Bits {
+                    scalar: ScalarKind::Bool,
+                    bits: u128::from(last),
+                };
                 self.task_return(f, &arguments, Some((result, val)), normal)
             }
             "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" => {

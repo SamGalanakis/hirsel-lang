@@ -778,6 +778,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "d: Dir, m: Mapped of d",
             "u32",
         ),
+        // `shared.thaw`'s compiled body asks whether its root is the last; in free mode the
+        // answer is an op's, recorded live and replayed.
+        ("T", "$intrinsic.SharedThawTurn", "root: Shared[T]", "bool"),
         // `task.isolate`'s caught chain, read record by record to build its `Failure` (FAIL-2).
         ("", "$intrinsic.IsolateBegin", "tasks: Tasks", "u64"),
         ("", "$intrinsic.IsolateCount", "tasks: Tasks", "u64"),

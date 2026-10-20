@@ -599,6 +599,12 @@ fn run_path_on_host_observed(
             role: call_schemas.as_ref().map(|(schemas, _)| schemas.clone()),
         });
     }
+    // F0's free-mode test channel (`hirsel_free::session::TestHook`).
+    let free = hirsel_free::session::TestHook::from_env().map_err(ToolError::Runtime)?;
+    if let Some(hook) = &free {
+        let session = hook.session(&run.identity()).map_err(ToolError::Runtime)?;
+        operations.library.enable_free(session, hook.seed);
+    }
     let args = match (&call, &call_schemas) {
         // A callee run enters with its place's Io and the argument its call carries.
         (Some(call), Some((_, argument))) => {
@@ -630,6 +636,15 @@ fn run_path_on_host_observed(
         &mut operations,
         &runtime,
     );
+    if let Some(hook) = &free
+        && let Some(session) = operations.library.take_free()
+    {
+        let outcome = match &execution {
+            Ok(execution) => hirsel_interp::library::free_outcome_name(&execution.outcome),
+            Err(_) => "stopped",
+        };
+        hook.finish(session, outcome).map_err(ToolError::Runtime)?;
+    }
     let replay = matches!(operations.io, network::HostIo::Replay(_));
     if let Some(refusal) = operations.refused.take() {
         return Err(ToolError::Runtime(if replay {

@@ -5,13 +5,13 @@
     (ScalarAlignments 1 2 4 8 16 4 8 8 16)
     (SysV64)
     (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-    (ArtifactVersions 39 5 2 23 0))
-  (LayoutTable #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5 2
+    (ArtifactVersions 39 5 2 24 0))
+  (LayoutTable #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5 2
     (list
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Scalar
           (U64))
         (Fixed 8) 8
@@ -32,7 +32,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Scalar
           (Bool))
         (Fixed 1) 1
@@ -53,7 +53,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -72,7 +72,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Block 2)
         (Fixed 8) 8
         (list)
@@ -92,7 +92,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Aggregate)
         (Fixed 16) 8
         (list
@@ -116,7 +116,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 5)
+          (none) #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 5)
         (Block 4)
         (Fixed 8) 8
         (list)
@@ -148,7 +148,7 @@
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #2aceb6a75f5c833eaa296ab93cfac06cddb8df96d219441593696bc0c1859218 #8f539bc37016811e34590c590b4d3e7a11fcb6f904fde1d9afb26e4c72f76e8c 0)
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #e1751c1635818578fc6328dde00fb8cf7f9f4c60ee1b1fcb2599757b6bfa0814 #bd8831d67ac8e7771b8d7e861a18a4c23b8a491fb481e09dc4d971d7f07fc563 0)
       (list
         (LirType
           (Scalar

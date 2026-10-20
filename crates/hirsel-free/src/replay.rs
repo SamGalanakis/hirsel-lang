@@ -203,6 +203,38 @@ impl Replayer {
         object: &ObjectId,
         outcome: &str,
     ) -> Result<(), Diverged> {
+        let event = self.apply(task, op, sub, object, outcome)?;
+        self.script(task)?.events.push(event);
+        Ok(())
+    }
+
+    /// Apply an enabled sub-event of an op that already published (op, done): an engine
+    /// that cannot hold the op until it is enabled applies it later, stamped with that phase.
+    pub fn touch_stamped(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<(), Diverged> {
+        let event = self.apply(task, op, sub, object, outcome)?;
+        self.events.push(Stamped {
+            task: task.to_vec(),
+            progress: Progress::new(op, crate::phase::Phase::Done),
+            event,
+        });
+        Ok(())
+    }
+
+    fn apply(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<Event, Diverged> {
         if !self.enabled(task, op, sub, object)? {
             return Err(Diverged(format!(
                 "{task:?} op {op} touched {object} before it was enabled"
@@ -215,13 +247,12 @@ impl Replayer {
             matches!(*r, Record::Gap { sub: s, .. } if s == sub).then_some(())
         });
         script.last.insert(object.clone(), version);
-        script.events.push(Event::Versioned {
+        Ok(Event::Versioned {
             object: object.clone(),
             version,
             sub,
             outcome: outcome.into(),
-        });
-        Ok(())
+        })
     }
 
     pub fn receive(
@@ -271,6 +302,14 @@ impl Replayer {
         Ok(index)
     }
 
+    /// Peek ``task.await_any``'s recorded member without consuming it (to wait for it).
+    pub fn await_any_member(&self, task: &[u32], op: u64) -> Option<u64> {
+        self.scripts.get(task)?.peek(op, |r| match *r {
+            Record::AwaitAny { index, .. } => Some(index),
+            _ => None,
+        })
+    }
+
     /// `shared.thaw`'s outcome: `Err` is forced; `Ok` waits for count 1.
     pub fn thaw(&mut self, task: &[u32], op: u64) -> Result<bool, Diverged> {
         let ok = self.substitute(task, op, "thaw", |r| match *r {
@@ -300,6 +339,17 @@ impl Replayer {
             .events
             .push(Event::Observed(Observed::Expired(expired)));
         Ok(expired)
+    }
+
+    /// The cancellation an unshielded check of op `op` will observe, without consuming it.
+    pub fn cancel_outcome(&self, task: &[u32], op: u64) -> Option<u32> {
+        let script = self.scripts.get(task)?;
+        script
+            .peek(op, |r| match *r {
+                Record::Cancel { cause, .. } => Some(cause),
+                _ => None,
+            })
+            .unwrap_or(script.canceled)
     }
 
     /// The cancellation an unshielded check of op `op` observes.

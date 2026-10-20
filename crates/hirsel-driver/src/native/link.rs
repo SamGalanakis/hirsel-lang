@@ -2015,6 +2015,10 @@ fn launch_impl(
     if diagnostic {
         command.env("HIRSEL_RT_DIAGNOSTIC", "1");
     }
+    // F0's free-mode test channel (`hirsel_free::session::TestHook`) reaches the executable.
+    if let Some(hook) = std::env::var_os(hirsel_free::session::TestHook::VAR) {
+        command.env(hirsel_free::session::TestHook::VAR, hook);
+    }
     // A replay reads no host input.
     let stdin = live.as_ref().is_some_and(|live| {
         !matches!(tape, Tape::Replay(_))

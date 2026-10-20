@@ -1,0 +1,40 @@
+// Parked receive, durable cut: A releases its root of S and waits forever on an empty
+// receive; B thaws S and writes a durable output. The output's durable entry cuts while A
+// is at (k, entered), and a replay applies A's release there and finishes. The run ends
+// Blocked.
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "s"
+  let s: Shared[String] = shared.freeze(take built)
+  let held = copy s
+  let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  let _ = task.scope(
+    tasks,
+    fn(scope: Scope) -> () {
+      let a = task.async(
+        scope,
+        fn() -> () {
+          discard(take held)
+          let mut receiver = take rx
+          let _ = channel.receive(tasks, mut receiver)
+        }
+      )
+      let ok = match shared.thaw(take s) {
+        Ok(text) => true,
+        Error(root) => {
+          discard(take root)
+          false
+        },
+      }
+      let _ = out.print(out, if ok { "thawed\n" } else { "shared\n" })
+      task.await(scope, take a)
+      discard(take tx)
+    }
+  )
+  Ok(())
+}

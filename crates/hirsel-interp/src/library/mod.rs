@@ -81,4 +81,6 @@ mod timers;
 mod channels;
 mod watch;
 
+mod free;
+pub use free::{FreePrint, FreeWrite, outcome_name as free_outcome_name};
 mod synchronization;
