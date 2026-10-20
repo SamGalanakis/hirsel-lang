@@ -105,7 +105,7 @@ impl<'a> Decisions<'a> {
             joins: Table::new(&input.ownership.identity_joins, |row| row.0),
         }
     }
-    pub fn formal_result(&self, owner: &NameSite, types: &TypeStore) -> super::Result<TypeId> {
+    pub fn formal_result(&self, owner: &NameSite, types: &TypeInterner) -> super::Result<TypeId> {
         let mut rows = self.results.get(owner).iter().copied();
         let Some((_, result)) = rows.next() else {
             return Err(LowerError {

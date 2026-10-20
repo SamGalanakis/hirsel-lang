@@ -84,6 +84,8 @@ pub enum ErrorMapper {
     },
 }
 pub struct Input<'a> {
+    /// The session interner: checked rows are read and lowered rows interned here.
+    pub types: &'a hirsel_types::TypeInterner,
     pub track_caller: bool,
     pub syntax: &'a ItemSyntax,
     pub checked: &'a CheckedBody,
@@ -121,17 +123,15 @@ pub fn entry_body() -> hirsel_tir::BodyId {
 }
 
 /// Called only after driver mode-stage guards. No source-rule diagnostics are
-/// manufactured here. The returned Definition owns one shared TypeStore for all bodies.
+/// manufactured here. The returned Definition's type table is the closure of its bodies' rows.
 pub fn lower(input: Input<'_>) -> Result<Definition> {
     let decisions = decisions::Decisions::new(&input);
     let mut bodies = vec![None];
-    let mut types = input.checked.types.clone();
     let mut builder = builder::Builder::new(
         &input,
         &decisions,
         input.owner.clone(),
-        decisions.formal_result(&input.owner, &input.checked.types)?,
-        &mut types,
+        decisions.formal_result(&input.owner, input.types)?,
     )?;
     let span = builder.span(input.expression)?;
     builder.entry_checks(&mut bodies)?;
@@ -201,7 +201,7 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
             });
         }
     }
-    let definition = Definition {
+    let mut definition = Definition {
         caller_bodies: if input.track_caller {
             let mut bodies = vec![entry_body()];
             bodies.extend(caller_contracts);
@@ -212,13 +212,14 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
             vec![]
         },
         protocol_associations,
-        types,
-        path: input.path.clone(),
+        types: std::sync::Arc::new([]),
+        path: hirsel_syntax::DefId::intern(&input.path),
         signature_hash: input.signature_hash,
         bodies: bodies.into_iter().map(Option::unwrap).collect(),
         entry: entry_body(),
         contracts,
     };
+    definition.types = hirsel_tir::definition_types(input.types, &definition);
     Ok(definition)
 }
 

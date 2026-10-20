@@ -237,19 +237,21 @@ impl Builder<'_, '_> {
             )));
         }
         if let Some((_, value)) = self.decisions.materialized.get(&id).iter().copied().next() {
-            if !hirsel_types::semantic_equal(&value.types, value.root.ty, &self.types, row.ty)
+            self.types
+                .validate(value.root.ty)
+                .and_then(|()| self.types.validate(row.ty))
                 .map_err(|e| LowerError {
                     site: span,
                     message: format!("materialized type graph: {e:?}"),
-                })?
-            {
+                })?;
+            if !self.types.semantic_eq(value.root.ty, row.ty) {
                 return self.error(
                     span,
                     "materialized root disagrees with checked expression type",
                 );
             }
             return self
-                .materialized_value(&value.types, &value.root, id, span)
+                .materialized_value(&value.root, id, span)
                 .map(Some);
         }
         let kind = self.input.syntax.tree.expressions[id.0 as usize]
@@ -717,6 +719,7 @@ impl Builder<'_, '_> {
             }
             ExprKind::Comptime(_) => {
                 let inputs = hirsel_check_protocol::body::comptime_inputs(
+                    self.types,
                     self.input.syntax,
                     self.input.checked,
                     id,
@@ -790,7 +793,6 @@ impl Builder<'_, '_> {
     }
     fn materialized_value(
         &mut self,
-        types: &hirsel_types::TypeStore,
         node: &ValueNode,
         expression: ExprId,
         span: Span,
@@ -808,12 +810,11 @@ impl Builder<'_, '_> {
         while let Some(next) = work.pop() {
             match next {
                 Work::Enter(node) => {
-                    let ty = hirsel_types::import_type(types, node.ty, &mut self.types).map_err(
-                        |e| LowerError {
-                            site: span,
-                            message: format!("materialized type import: {e:?}"),
-                        },
-                    )?;
+                    let ty = node.ty;
+                    self.types.validate(ty).map_err(|e| LowerError {
+                        site: span,
+                        message: format!("materialized type import: {e:?}"),
+                    })?;
                     match &node.kind {
                         ValueKind::FunctionReference(path) => values.push(self.rvalue(
                             ty,
@@ -1044,7 +1045,7 @@ impl Builder<'_, '_> {
                         .unwrap()
                         .clone();
                     row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-                    let ty = self.types.push(row);
+                    let ty = self.types.intern(row);
                     value.usage = UseKind::Copy;
                     value =
                         self.transport_typed(value, ty, Storage::Temporary, self.span(callee_id)?);
@@ -1600,7 +1601,7 @@ impl Builder<'_, '_> {
         };
         let result = self
             .decisions
-            .formal_result(&owner, &self.input.checked.types)?;
+            .formal_result(&owner, self.types)?;
         let body_id = BodyId(bodies.len() as u32);
         bodies.push(None);
         let mut capture_rows = vec![];
@@ -1633,7 +1634,7 @@ impl Builder<'_, '_> {
             });
             capture_rows.push((owner, capture));
         }
-        let mut child = Builder::new(self.input, self.decisions, owner, result, self.types)?;
+        let mut child = Builder::new(self.input, self.decisions, owner, result)?;
         for (owner, capture) in capture_rows {
             let owned = !matches!(capture.usage, UseKind::Borrow | UseKind::Mut);
             let slot = child.slot(capture.ty, Storage::Capture, span, owned);

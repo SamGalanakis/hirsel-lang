@@ -108,12 +108,7 @@ impl Builder<'_, '_> {
                     return self.error(span, "missing pattern binding row");
                 };
                 if binding.usage != row.usage
-                    || !hirsel_types::shape_equal(
-                        &self.input.checked.types,
-                        binding.ty,
-                        &self.input.checked.types,
-                        row.ty,
-                    )
+                    || !hirsel_types::shape_equal(self.types, binding.ty, row.ty)
                     .unwrap_or(false)
                 {
                     return self.error(span, "binding and pattern decisions disagree");
