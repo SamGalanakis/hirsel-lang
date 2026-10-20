@@ -311,6 +311,61 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
     assert_eq!(e.steps, 100);
 }
 
+// Steps through the resolved form count, trace and stop as general steps do: a run needs
+// exactly as many steps as its full trace has instruction and terminator events, and any
+// smaller budget stops after exactly that many, with the same events up to its limit, at
+// the site of the step it could not take. The corpus never pins step counts.
+#[test]
+fn a_step_budget_stops_after_exactly_its_steps_with_the_unbounded_trace_so_far() {
+    let counted = |e: &hirsel_interp::Execution| {
+        e.trace
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t,
+                    TraceEvent::Instruction { .. } | TraceEvent::Terminator { .. }
+                )
+            })
+            .count() as u64
+    };
+    let limits = |steps| Limits {
+        steps,
+        call_depth: 8,
+    };
+    let unbounded = execute(loop_program(), vec![], limits(None));
+    returned(&unbounded, int(P::U32, 15));
+    let steps = counted(&unbounded);
+    assert_eq!(unbounded.steps, steps);
+    let exact = execute(loop_program(), vec![], limits(Some(steps)));
+    returned(&exact, int(P::U32, 15));
+    assert_eq!(exact.trace, unbounded.trace);
+    for budget in 1..steps {
+        let short = execute(loop_program(), vec![], limits(Some(budget)));
+        let Outcome::ToolingLimit(limit) = &short.outcome else {
+            panic!("budget {budget}: {:?}", short.outcome)
+        };
+        assert_eq!(limit.kind, ToolingLimitKind::Steps);
+        assert_eq!((short.steps, counted(&short)), (budget, budget));
+        let at = short
+            .trace
+            .iter()
+            .position(|t| matches!(t, TraceEvent::ToolingLimit(_)))
+            .unwrap();
+        assert_eq!(short.trace[..at], unbounded.trace[..at]);
+        let next = unbounded
+            .trace
+            .iter()
+            .filter_map(|t| match t {
+                TraceEvent::Instruction { site, .. } | TraceEvent::Terminator { site, .. } => {
+                    Some(*site)
+                }
+                _ => None,
+            })
+            .nth(budget as usize);
+        assert_eq!(limit.site, next, "budget {budget}");
+    }
+}
+
 #[test]
 fn depth_failure_occurs_after_entry_and_cleans_transferred_arguments() {
     // Intentionally incomplete TIR: call-depth guard fires before reachable Unreachable.
