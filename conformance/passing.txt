@@ -133,6 +133,8 @@ conformance/CAP/CAP-2-drop-authority-default-bad.hir
 conformance/CAP/CAP-2-drop-authority-default-ok.hir
 conformance/CAP/CAP-2-drop-authority-explicit-union-bad.hir
 conformance/CAP/CAP-2-drop-authority-explicit-union-ok.hir
+conformance/CAP/CAP-2-erased-carrier-distinct-bad.hir
+conformance/CAP/CAP-2-erased-carrier-distinct-ok.hir
 conformance/CAP/CAP-2-erased-carrier-file-bad.hir
 conformance/CAP/CAP-2-erased-carrier-file-ok.hir
 conformance/CAP/CAP-2-erased-carrier-inert-bad.hir

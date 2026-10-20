@@ -1,0 +1,26 @@
+// rule: CAP-2
+// expect: accept
+// A distinct type can carry its field's erased authority: wrapping a pure
+// iterator, directly or through a selecting function, stays inert.
+@captures(it)
+distinct type Wrapped(it: Iter[u64])
+
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    return None
+  }
+  n += 1
+  Some(n)
+}
+
+@captures(input)
+fn wrap(take input: Iter[u64]) -> Wrapped uses {input} {
+  Wrapped(take input)
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+pub fn main() -> () uses {} {
+  need(wrap(iter.from(0u64, count)))
+  need(Wrapped(iter.from(0u64, count)))
+}

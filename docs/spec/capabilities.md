@@ -138,10 +138,10 @@ arguments, joined with the value's own **erased evidence**. A written carrier ty
 unknown evidence, as a written `Iter[T]` does. Constructing a carrier gives it the joined
 authority of the values it is built from. A function result or a callable result declared
 with `@captures` ([CLO-4](closures.md#clo-4-escaping)) has the joined evidence of the
-selected arguments. The declaration's summary must cover the authority of the unselected
-fields; selected fields are exempt because each value carries their authority. Only
-authority is per value: sendability, multiplicity, cleanup and brands are the declaration's
-exported bounds. A carrier cannot export `inert` (CAP-2) and cannot be a sealed
+selected arguments, and the same call's crossing evidence, as an `Iter` result has. The
+declaration's summary must cover the authority of the unselected fields; selected fields
+are exempt because each value carries their authority. Multiplicity, cleanup and brands
+stay the declaration's. A carrier cannot export `inert` (CAP-2) and cannot be a sealed
 capability, a resource, `flat`, `serializable` or refined (CLO-4). A selector that names
 no representation field is CLO-4.
 

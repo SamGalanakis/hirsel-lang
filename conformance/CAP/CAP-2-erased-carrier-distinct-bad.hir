@@ -1,0 +1,25 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 23
+// A distinct type can carry its field's erased authority: wrapping an iterator
+// that holds `Stdout` is not inert.
+@captures(it)
+distinct type Wrapped(it: Iter[u64])
+
+fn count(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn print(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn need[T: inert](take value: T) -> () uses {} {}
+
+pub fn main(take rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  need(Wrapped(iter.from(0u64, count)))
+  let held = Wrapped(iter.from(take stdout, print))
+  need(take held)
+  Ok(())
+}
