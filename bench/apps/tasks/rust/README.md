@@ -1,7 +1,8 @@
 # Rust task manager baseline
 
 Standalone axum + tokio implementation of `examples/tasks`. Build with
-`cargo build --release --locked --manifest-path bench/apps/tasks/rust/Cargo.toml`.
+`cargo build --release --locked --manifest-path bench/apps/tasks/rust/Cargo.toml
+--target-dir bench/apps/tasks/rust/target`.
 Run from `examples/tasks` (with a `data` directory), or select directories through
 `TASKS_DATA` and `TASKS_STATIC`. The four app flags and environment variables are
 the Hirsel app's, with the same precedence and defaults. Stdin `quit`/EOF or
