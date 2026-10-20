@@ -175,6 +175,8 @@ TOOL_PATHS = (
     'tools/known-failures.tsv',
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',
+    # Memory-guard stops, read only by test_sizes_from_usage.py.
+    'tools/buck2/guard-stops.json',
     'bench/native/**',
     'bench/multicore/**',
 )
@@ -186,7 +188,9 @@ BUILD_WIDE = (
     'tools/buck2/**',
 )
 # Under tools/ but read by particular tests: selected through their owners.
-TOOL_INPUTS = ('tools/buck2/test-costs/**', 'tools/native-toolchain/**')
+# sync.py regenerates workspace-metadata.json beside the manifests and BUCK
+# rules that select a dependency change; hirsel-lir-test-it reads it.
+TOOL_INPUTS = ('tools/buck2/test-costs/**', 'tools/buck2/workspace-metadata.json', 'tools/native-toolchain/**')
 
 # The Lean RC model, the TLA+ ordered-mode model and the free-mode models: no Buck2 target
 # reads them; their own checks run on the host (proof_checks), as do the protocol vectors the

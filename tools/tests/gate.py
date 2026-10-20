@@ -132,9 +132,14 @@ class Classification(unittest.TestCase):
 
     def test_sizing_evidence_and_generator_do_not_select_every_test(self):
         c = self.classify('tools/buck2/test_sizes_from_usage.py', 'tools/buck2/test-sizes.json',
-                          'tools/buck2/test_sizes.bzl')
-        self.assertEqual(len(c.tools), 3)
+                          'tools/buck2/test_sizes.bzl', 'tools/buck2/guard-stops.json')
+        self.assertEqual(len(c.tools), 4)
         self.assertFalse(c.needs_buck2)
+
+    def test_workspace_metadata_selects_its_readers_not_everything(self):
+        c = self.classify('tools/buck2/workspace-metadata.json')
+        self.assertFalse(c.everything)
+        self.assertEqual(c.owned, ['tools/buck2/workspace-metadata.json'])
 
     def test_request_diff_selects_only_changed_added_or_removed_binaries(self):
         old = 'TEST_REQUESTS = {"same": [1, 512, ""], "changed": [2, 512, ""], "gone": [1, 512, ""]}'
