@@ -2733,6 +2733,7 @@ hirsel_test(
         "crates/hirsel-llvm/tests/it/**",
         "crates/hirsel-llvm/tests/support/**",
     ]) + [
+        "crates/hirsel-llvm/tests/ir/mut_addresses.ll",
         "crates/hirsel-llvm/tests/native/abi_harness.c",
         "crates/hirsel-llvm/tests/native/heap_harness.c",
         "tools/native-toolchain/fixtures/smoke.expected",

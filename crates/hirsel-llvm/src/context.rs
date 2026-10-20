@@ -197,8 +197,12 @@ pub(crate) enum Attribute {
     WillReturn,
     CapturesNone,
     Memory(MemoryEffects),
-    /// A return attribute: the pointer aliases no other object live at the call.
+    /// A return or parameter attribute: the pointer has exclusive access to its object.
     NoAlias,
+    /// The parameter addresses at least this many live bytes.
+    Dereferenceable(u64),
+    /// The parameter's address has this byte alignment.
+    Align(u32),
     /// A function attribute: an allocator entry of [`ALLOC_FAMILY`].
     AllocKind(AllocKind),
     /// A parameter attribute: the block a [`AllocKind::Free`] entry returns.
@@ -284,6 +288,8 @@ impl Attribute {
             Attribute::CapturesNone => "captures",
             Attribute::Memory(_) => "memory",
             Attribute::NoAlias => "noalias",
+            Attribute::Dereferenceable(_) => "dereferenceable",
+            Attribute::Align(_) => "align",
             Attribute::AllocKind(_) => "allockind",
             Attribute::AllocPtr => "allocptr",
             Attribute::AllocFamily => "alloc-family",
@@ -766,6 +772,8 @@ impl<'context> Module<'context> {
             assert_ne!(kind, 0, "the pinned LLVM knows {name}");
             let bits = match attribute {
                 Attribute::Memory(effects) => effects.bits(),
+                Attribute::Dereferenceable(bytes) => bytes,
+                Attribute::Align(align) => u64::from(align),
                 Attribute::AllocKind(AllocKind::Alloc) => 1,
                 Attribute::AllocKind(AllocKind::Free) => 1 << 2,
                 _ => 0,

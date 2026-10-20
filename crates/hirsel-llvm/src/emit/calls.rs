@@ -366,9 +366,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             _ => Aliasing::of(self.inputs),
         };
         let function = match &name {
-            Some(name) => {
-                Some(signature.declare(self.module, name, self.definition(), false, aliasing)?)
-            }
+            Some(name) => Some(signature.declare(
+                self.module,
+                self.inputs.layouts,
+                name,
+                self.definition(),
+                false,
+                aliasing,
+            )?),
             None => None,
         };
         let mut args = Vec::new();
@@ -418,7 +423,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
         }
         let mut root_places = Vec::new();
-        let mut column_returns = Vec::new();
+        let mut temporary_returns = Vec::new();
         for (i, parameter) in abi.parameters.iter().enumerate() {
             let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
                 return self.invalid("a call without an argument for a parameter");
@@ -446,9 +451,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         args.push(self.load(Shape::Scalar(ScalarKind::Pointer), place));
                         root_places.push(place);
                     } else {
-                        let passed = self.gather(place)?;
-                        if place.columns.is_some() {
-                            column_returns.push((place, passed));
+                        let passed = if place.columns.is_some() {
+                            self.gather(place)?
+                        } else if place.align < self.layout(parameter.layout)?.align {
+                            // @packed fields can be underaligned. A Hirsel entry's
+                            // address ABI promises the parameter layout's alignment.
+                            let temp = self.stack(parameter.layout)?;
+                            let shape = self.layout_shape(parameter.layout)?;
+                            self.store(shape, self.load(shape, place), temp);
+                            temp
+                        } else {
+                            place
+                        };
+                        if place.columns.is_some() || place.align < passed.align {
+                            temporary_returns.push((place, passed));
                         }
                         args.push(passed.ptr);
                     }
@@ -574,7 +590,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None => self.builder.call_typed(signature.ty, callee, &args),
         };
         signature.attribute_call(self.module, returned);
-        for (destination, temporary) in column_returns {
+        // Publish temporary mutations even when the callee failed.
+        for (destination, temporary) in temporary_returns {
             let shape = self.layout_shape(destination.layout)?;
             self.scatter(destination, shape, self.load(shape, temporary))?;
         }

@@ -338,6 +338,7 @@ fn lower<T>(
             };
             let function = signature.declare(
                 &module,
+                inputs.layouts,
                 &body_name,
                 &unit.header.definition,
                 true,
@@ -348,6 +349,7 @@ fn lower<T>(
             } else {
                 let entry = external.declare(
                     &module,
+                    inputs.layouts,
                     &name,
                     &unit.header.definition,
                     true,

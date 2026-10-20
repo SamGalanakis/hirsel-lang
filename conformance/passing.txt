@@ -2549,6 +2549,8 @@ conformance/MEM/MEM-7-inline-generic.hir
 conformance/MEM/MEM-7-inline-record.hir
 conformance/MEM/MEM-7-json-member-stringify-bad.hir
 conformance/MEM/MEM-7-json-member-stringify-run.hir
+conformance/MEM/MEM-7-mut-packed-field-fail.hir
+conformance/MEM/MEM-7-mut-packed-field-run.hir
 conformance/MEM/MEM-7-mutual-box-group-run.hir
 conformance/MEM/MEM-7-mutual-fn-group-run.hir
 conformance/MEM/MEM-7-mutual-generic-group-run.hir

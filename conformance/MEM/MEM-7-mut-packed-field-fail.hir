@@ -1,0 +1,36 @@
+// rule: MEM-7
+// expect: fail SEM-1 at line 28
+// stdout: 9 42 7
+@packed
+type Wire {
+  tag: u8,
+  value: u64,
+  tail: u8,
+}
+
+resource type Trace {
+  stdout: Stdout,
+  wire: Wire,
+}
+drop(trace) {
+  let _ = out.print(
+    trace.stdout,
+    if trace.wire.tag == 9u8 && trace.wire.value == 42u64 && trace.wire.tail == 7u8 {
+      "9 42 7\n"
+    } else {
+      "bad write-back\n"
+    }
+  )
+}
+
+fn increment_then_fail(mut value: u64) -> () {
+  value = value + 1
+  let _ = 1u8 / 0u8
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut trace = Trace(stdout: stdout, wire: Wire(tag: 9u8, value: 41u64, tail: 7u8))
+  increment_then_fail(mut trace.wire.value)
+  Ok(())
+}

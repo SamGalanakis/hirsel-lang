@@ -375,7 +375,7 @@ impl<'m, 'a> Signature<'m, 'a> {
 
     /// The LLVM parameters that are a `mut` place's address (`ExclusiveAddress`): every
     /// one but a root, which travels as the block pointer the place holds.
-    fn exclusive_addresses(&self) -> impl Iterator<Item = u32> + '_ {
+    fn exclusive_addresses(&self) -> impl Iterator<Item = (u32, LayoutId)> + '_ {
         self.abi
             .parameters
             .iter()
@@ -383,7 +383,7 @@ impl<'m, 'a> Signature<'m, 'a> {
             .filter(|&(i, p)| {
                 p.passing == ParameterPassing::ExclusiveAddress && !self.roots.contains(&i)
             })
-            .map(|(i, _)| self.first[i])
+            .map(|(i, p)| (self.first[i], p.layout))
     }
 
     /// The function `name` with this signature. Emitted code provides argument and status
@@ -394,10 +394,13 @@ impl<'m, 'a> Signature<'m, 'a> {
     /// With `aliasing` (`Aliasing::of`), each `mut` place address is `noalias`: for
     /// the whole call the callee reaches the place's bytes only through it
     /// (`docs/spec/implementation.md`, Aliasing facts). The blocks those bytes point to
-    /// are loaded pointers, which the attribute does not cover.
+    /// are loaded pointers, which the attribute does not cover. The live place also
+    /// grants its layout's extent and alignment (`dereferenceable` and `align`);
+    /// underaligned fields use aligned ABI temporaries through either outcome.
     pub(super) fn declare(
         &self,
         module: &'m Module<'m>,
+        layouts: &LayoutTable,
         name: &str,
         definition: &DefPath,
         defining: bool,
@@ -414,12 +417,46 @@ impl<'m, 'a> Signature<'m, 'a> {
             module.add_attribute(function, AttributeSlot::Return, Attribute::ZeroExt);
         }
         if aliasing == Aliasing::ExclusiveMut {
-            for index in self.exclusive_addresses() {
-                module.add_attribute(
-                    function,
-                    AttributeSlot::Parameter(index),
-                    Attribute::NoAlias,
-                );
+            for (index, layout) in self.exclusive_addresses() {
+                let record = layouts
+                    .layout(layout)
+                    .ok_or_else(|| CodegenError::Invalid {
+                        definition: definition.clone(),
+                        what: format!("no mut place layout {}", layout.0),
+                    })?;
+                // Fixed places have their whole layout's extent. A sequential Packed
+                // element has only its active variant's bytes, so promise the minimum
+                // variant extent, never the maximum used for standalone storage.
+                let size = match &record.size {
+                    SizeSpec::Fixed(size) => Some(*size),
+                    SizeSpec::Dynamic(program) => match program.as_slice() {
+                        [SizeTerm::ByTag { variants, .. }]
+                            if record.kind == LayoutKind::Packed && !variants.is_empty() =>
+                        {
+                            variants
+                                .iter()
+                                .map(|(_, p)| match p.as_slice() {
+                                    [SizeTerm::Constant(size)] => Some(*size),
+                                    _ => None,
+                                })
+                                .try_fold(u64::MAX, |min, size| size.map(|s| min.min(s)))
+                        }
+                        _ => None,
+                    },
+                }
+                .ok_or_else(|| CodegenError::Unsupported {
+                    definition: definition.clone(),
+                    what: "a mut place of variable extent".into(),
+                })?;
+                // Call ownership keeps the place live, and calls normalize packed
+                // field addresses to aligned storage through both status outcomes.
+                let slot = AttributeSlot::Parameter(index);
+                module.add_attribute(function, slot, Attribute::NoAlias);
+                module.add_attribute(function, slot, Attribute::Align(record.align));
+                // LLVM requires a positive extent. A zero-size place grants no bytes.
+                if size != 0 {
+                    module.add_attribute(function, slot, Attribute::Dereferenceable(size));
+                }
             }
         }
         Ok(function)

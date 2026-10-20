@@ -1,0 +1,26 @@
+// rule: MEM-7
+// expect: run
+// stdout: 9 42 7
+@packed
+type Wire {
+  tag: u8,
+  value: u64,
+  tail: u8,
+}
+
+fn increment(mut value: u64) -> () {
+  value = value + 1
+}
+
+fn forward(mut value: u64) -> () {
+  increment(mut value)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut wire = Wire(tag: 9u8, value: 41u64, tail: 7u8)
+  forward(mut wire.value)
+  let output = io.stdout(rt)?
+  failure.check(wire.tag == 9u8 && wire.value == 42u64 && wire.tail == 7u8, Bounds())
+  let _ = out.print(output, "9 42 7\n")
+  Ok(())
+}

@@ -176,7 +176,7 @@ callee's name, and the unit partition never changes it.
 
 | Passing | What is proved | What native code states |
 |---|---|---|
-| `mut x` (an exclusive address) | The source checker gives the argument a write loan from callee entry to return, and every overlapping access conflicts with it ([OWN-3](ownership.md#own-3-exclusive-access); a scoped closure's captures count as arguments). The IR checker re-proves it at every call (`CallAlias`): no other `mut` argument overlaps the place, and no other argument or callee value holds a loan on an overlapping place, whether through its own views, borrowed record fields or a closure's borrowed captures. | LLVM `noalias` on the address. For the whole call, the place's bytes are reached only through pointers derived from it. |
+| `mut x` (an exclusive address) | The source checker gives the argument a write loan from callee entry to return, and every overlapping access conflicts with it ([OWN-3](ownership.md#own-3-exclusive-access); a scoped closure's captures count as arguments). The IR checker re-proves it at every call (`CallAlias`): no other `mut` argument overlaps the place, and no other argument or callee value holds a loan on an overlapping place, whether through its own views, borrowed record fields or a closure's borrowed captures. The place is a live, aligned allocation of its layout for the call's duration, as detailed below. | LLVM `noalias dereferenceable(size) align alignment` on the address, with size and alignment from the place's layout. For the whole call, the place's bytes are reached only through pointers derived from it. |
 | `mut x` where `x` is a Block or Box root of a private library body | The same | Nothing. The root travels by value as the block pointer the place holds, and that block may be shared. |
 | `take x` (an inline aggregate) | The caller passes a fresh copy of the moved value | Nothing |
 | `x` borrowed (an inline aggregate) | The caller passes a fresh read-only copy, and the IR checker rejects writes to borrowed storage | Nothing (no `readonly`). A drop wrapper passes the dying block's payload in place of a copy. |
@@ -187,6 +187,31 @@ callee's name, and the unit partition never changes it.
 fields. It covers nothing reached through a pointer loaded from the place. Such a loaded
 child pointer can be a block that other arguments also reach, because a counted block can
 have several holders until a write detaches it.
+
+**Live extent and alignment.** Every `ExclusiveAddress` names a place, never the
+pointer value it contains. The LIR call check requires the argument's layout to match
+the parameter; ownership requires its storage and contents to be live before the call
+(`still_placed` and `require`), and its write loan prevents the caller or another
+argument from moving or freeing that storage during the call. A forwarding call inherits
+the same lifetime. Callee cleanup owns neither the caller's slot nor its backing
+allocation. Failure writes back before caller cleanup, so the lifetime includes both
+status outcomes. Bounds and tag checks precede projections into live payloads.
+Stack slots, block payloads and ordinary fields/elements use their validated layout's
+alignment. An underaligned `@packed` field is copied into aligned ABI storage and
+written back before either continuation; a SoA row is gathered and scattered the same
+way. Thus the address presented to the callee always has the parameter layout's
+alignment, including through forwarding and indirect calls.
+
+For a fixed layout, `size` is its exact byte extent, not the pointer width: a list root
+is one pointer word, while an inline aggregate includes all its fields and padding.
+For `Packed[T]`, `size` is the minimum of the variant extents, since sequential
+elements reserve only their active extent; standalone storage may be larger. A zero-size
+place grants no readable bytes and only its layout alignment; LLVM requires a positive
+extent, so it receives no `dereferenceable` attribute.
+Variable flat interiors cannot be `mut` arguments (the LIR call check rejects them).
+These guarantees concern valid Hirsel calls; runtime primitives and programs naming a C
+callback retain the exclusions below. Private Block/Box roots are values and receive
+none of these address attributes.
 
 Where the facts stop:
 

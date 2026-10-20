@@ -94,18 +94,26 @@ Invariants:
   (`seq_push`) and a flat walk (`flat_walk`) on both targets at O0 and O3.
 - A call to a `RuntimePrimitive` operation imports the symbol its template resolves to for
   the call's scalar kinds (`hirsel_lir::abi::resolve_call_symbol`); a `Instruction`
-  operation is never a call at Ready. GEPs are not `inbounds`; no `nonnull` or dereferenceability
-  attribute is granted, and `noalias` only on a `mut` place's address.
+  operation is never a call at Ready. GEPs are not `inbounds`. A `mut` place address
+  receives `noalias`, `dereferenceable(size)` and `align alignment` from its layout:
+  the place is live for the call and its ABI storage is aligned. No separate `nonnull`
+  attribute is granted (`dereferenceable` implies it for a nonzero extent).
 - Aliasing (`docs/spec/implementation.md`, Aliasing facts): every Hirsel entry's
   `ExclusiveAddress` parameter (a `mut` place's address, not a by-value root) is
-  `noalias` on its definition and on every declaration a call makes
-  (`Signature::declare`, `Aliasing`). It is derived from the passing mode, never from
+  `noalias`, `dereferenceable(size)` and `align alignment` on its definition and on
+  every declaration a call makes (`Signature::declare`, `Aliasing`). It is derived from the passing mode, never from
   a definition's name. It rests on OWN-3 as both checkers prove it: the IR checker's
   `CallAlias` rejects a call that hands its callee the place through anything but that
   address. It covers the place's own bytes, not the blocks pointers loaded from them
   reach. A runtime primitive's declaration states nothing, and in a program that
   names a C callback (`EmitInputs::callbacks`) no entry states it, since C may hand a
   callback context it holds to a callback nested in an activation that still has it.
+  Fixed layouts promise their exact size, including aggregate extents; zero-size
+  places receive only `noalias` and alignment, since LLVM requires a positive extent.
+  `Packed[T]` promises its smallest variant's extent, since a sequential element
+  occupies only its active variant. Underaligned `@packed` fields use aligned
+  call storage with write-back before either status continuation, as SoA rows already
+  do. Private Block/Box roots travel by value and receive none of these attributes.
   Inlining turns the attribute into scoped alias metadata. Read-only and transfer
   copies, result pointers and roots carry no aliasing attribute.
   `tests/it/noalias.rs` checks the attribute in IR on both targets at O0 and O3,
