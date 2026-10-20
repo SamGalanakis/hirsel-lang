@@ -1,0 +1,16 @@
+// rule: PROV-2
+// expect: accept
+// A generic result's brand reaches an annotated binding and an argument.
+fn empty[V]() -> unique SortedMap[u32, V] of u32.order uses {} {
+  sorted_map.empty(u32.order)
+}
+
+fn size(m: SortedMap[u32, u8] of u32.order) -> u64 uses {} {
+  sorted_map.len(u32.order, m)
+}
+
+fn probe() -> u64 uses {} {
+  let mut m: unique SortedMap[u32, u8] of u32.order = empty()
+  sorted_map.insert(u32.order, mut m, 1, 2)
+  size(m) + size(empty())
+}

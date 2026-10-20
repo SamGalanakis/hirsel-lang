@@ -4043,6 +4043,10 @@ conformance/PROV/PROV-1-alias-branch-match-first-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-match-first-live-bad.hir
 conformance/PROV/PROV-1-alias-branch-match-last-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-match-last-live-bad.hir
+conformance/PROV/PROV-1-annotated-definition-brand-bad.hir
+conformance/PROV/PROV-1-annotated-definition-brand-ok.hir
+conformance/PROV/PROV-1-annotated-tuple-part-bad.hir
+conformance/PROV/PROV-1-annotated-tuple-part-ok.hir
 conformance/PROV/PROV-1-array-index-container-bad.hir
 conformance/PROV/PROV-1-array-index-container-ok.hir
 conformance/PROV/PROV-1-atomic-moved-result.hir
@@ -4272,6 +4276,11 @@ conformance/PROV/PROV-1-wave2-find-take-accept.hir
 conformance/PROV/PROV-1-wave2-find-take-reject.hir
 conformance/PROV/PROV-1-written-field-taken-owner-bad.hir
 conformance/PROV/PROV-1-written-field-taken-owner-ok.hir
+conformance/PROV/PROV-2-annotated-alias-brand-bad.hir
+conformance/PROV/PROV-2-annotated-alias-brand-ok.hir
+conformance/PROV/PROV-2-annotated-definition-brand-bad.hir
+conformance/PROV/PROV-2-annotated-definition-brand-ok.hir
+conformance/PROV/PROV-2-annotated-generic-result-ok.hir
 conformance/PROV/PROV-2-branch-union-bad.hir
 conformance/PROV/PROV-2-branch-union-ok.hir
 conformance/PROV/PROV-2-branded-comparison-bad.hir

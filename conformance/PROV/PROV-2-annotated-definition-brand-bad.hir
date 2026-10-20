@@ -1,0 +1,11 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 9
+// The written brand still cannot certify an unbranded initializer.
+fn other() -> unique SortedMap[u32, u8] uses {} {
+  sorted_map.empty(u32.order)
+}
+
+fn probe() -> u64 uses {} {
+  let m: SortedMap[u32, u8] of u32.order = other()
+  sorted_map.len(u32.order, m)
+}

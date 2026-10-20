@@ -1,0 +1,18 @@
+// rule: PROV-1
+// expect: accept
+fn descending(a: u32, b: u32) -> i32 uses {} {
+  if a > b {
+    -1
+  } else if a < b {
+    1
+  } else {
+    0
+  }
+}
+
+fn probe() -> u64 uses {} {
+  let by = Order(compare: descending)
+  let m: SortedMap[u32, u8] of by = sorted_map.empty(by)
+  let n: SortedMap[u32, u8] of u32.order = sorted_map.empty(u32.order)
+  sorted_map.len(by, m) + sorted_map.len(u32.order, n)
+}

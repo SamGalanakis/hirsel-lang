@@ -1,0 +1,28 @@
+// rule: PROV-2
+// expect: accept
+// A named annotation spelled through a transparent alias keeps the brand the
+// alias writes, at the root and inside a structural representation, and a
+// written argument keeps its own brand.
+type OrderedMap[V] = SortedMap[u32, V] of u32.order
+
+type Counted[V] = (u64, SortedMap[u32, V] of u32.order)
+
+type Tagged[M] = (u8, M)
+
+fn probe() -> u64 uses {} {
+  let by = u32.order
+  let m: OrderedMap[u8] = sorted_map.empty(by)
+  let pair: Counted[u8] = (1, sorted_map.empty(by))
+  let (count, inner) = pair
+  let tagged: Tagged[SortedMap[u32, u8] of by] = (2, sorted_map.empty(by))
+  let (_, named) = tagged
+  let total = sorted_map.len(u32.order, m) + count + sorted_map.len(u32.order, inner)
+  total + sorted_map.len(by, named)
+}
+
+fn tuple_probe() -> u64 uses {} {
+  let by = u32.order
+  let pair: (u8, SortedMap[u32, u8] of by) = (2, sorted_map.empty(by))
+  let (_, m) = pair
+  sorted_map.len(by, m)
+}

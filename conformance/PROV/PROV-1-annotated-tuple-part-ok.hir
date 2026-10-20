@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: accept
+fn descending(a: u32, b: u32) -> i32 uses {} {
+  0
+}
+
+fn probe() -> u64 uses {} {
+  let d = Order(compare: descending)
+  let pair: (u8, SortedMap[u32, u8] of d) = (2, sorted_map.empty(d))
+  let (_, m) = pair
+  sorted_map.len(d, m)
+}

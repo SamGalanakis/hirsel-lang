@@ -48,7 +48,10 @@ is a type error at its first branded use, except for handles, which
 closure. There are no lifetime variables.
 
 Arithmetic, logical and bitwise computation, unary operations included, produces
-unbranded results. An expected annotation cannot certify a brand. A comparison sets aside
+unbranded results. An expected annotation cannot certify a brand, nor erase one: a binding
+or aggregate part written with the brand its value carries keeps it, whether the type is
+spelled directly, through a transparent alias or with a module-qualified definition path
+(`of u32.order`). A comparison sets aside
 root brands, locality and uniqueness while preserving nested types and placement, and
 returns an unbranded `bool`. A comparison only borrows, so an operand of every comparison
 operator (`==`, `!=`, `<`, `<=`, `>`, `>=`) is checked against the type it inherits from the

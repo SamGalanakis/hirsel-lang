@@ -1468,8 +1468,19 @@ impl<'a> Checker<'a> {
                     self.expr(child, contextual);
                     used = used.join(self.used(child));
                     if let (Some((_, parts)), Some(now)) = (&mut refined, self.ty(child)) {
+                        let constructed = self.construction_part_type(child).unwrap_or(now);
                         if parts.get(ordinal).copied() == written {
-                            parts[ordinal] = self.construction_part_type(child).unwrap_or(now);
+                            parts[ordinal] = constructed;
+                        } else if let Some(part) = parts.get(ordinal).copied() {
+                            // A part typed by its expectation still holds the
+                            // operand's identity: the expected row cannot
+                            // give or take a brand (PROV-2).
+                            let mut row = self.out.body.types.get(part).unwrap().clone();
+                            let brand = &self.out.body.types.get(constructed).unwrap().brand;
+                            if row.brand != *brand {
+                                row.brand = brand.clone();
+                                parts[ordinal] = self.out.body.types.push(row);
+                            }
                         }
                     }
                     // Every element of a sequence has the one element type.

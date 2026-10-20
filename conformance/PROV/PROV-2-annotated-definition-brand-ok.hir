@@ -1,0 +1,17 @@
+// rule: PROV-2
+// expect: accept
+// Writing the exact branded type on the receiving binding keeps the brand
+// the call result carries; a module-qualified brand names its definition.
+fn empty() -> unique SortedMap[u32, u8] of u32.order uses {} {
+  sorted_map.empty(u32.order)
+}
+
+fn size(m: SortedMap[u32, u8] of u32.order) -> u64 uses {} {
+  sorted_map.len(u32.order, m)
+}
+
+fn probe() -> u64 uses {} {
+  let mut m: unique SortedMap[u32, u8] of u32.order = empty()
+  sorted_map.insert(u32.order, mut m, 1, 2)
+  size(m) + sorted_map.len(u32.order, m)
+}

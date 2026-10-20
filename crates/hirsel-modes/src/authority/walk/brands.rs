@@ -1474,13 +1474,15 @@ impl Checker<'_> {
                 Some(b.ty),
             )
         } else if let Some(ResolvedName::Definition(d)) = resolved {
-            (
-                Identity::new(Origin {
+            // The resolved definition is the whole path, module segments
+            // included: a definition origin has no fields (PROV-1).
+            return Some((
+                Origin {
                     root: OriginRoot::Definition(d),
                     fields: vec![].into(),
-                }),
+                },
                 None,
-            )
+            ));
         } else {
             return None;
         };
@@ -1499,6 +1501,7 @@ impl Checker<'_> {
         let node = self.tree.types[syntax.0 as usize].kind.clone();
         let mut row = self.out.body.types.get(ty).unwrap().clone();
         row.sendability_requirement = SendabilityRequirement::None;
+        let mut alias = None;
         if matches!(node, hirsel_syntax::TypeExprKind::Named { .. }) {
             let declaration = self
                 .out
@@ -1520,6 +1523,9 @@ impl Checker<'_> {
                             .map_or(SendabilityRequirement::None, |row| {
                                 row.sendability_requirement
                             });
+                        alias = declaration
+                            .representation
+                            .map(|root| (root, signature.clone()));
                     }
                 }
             }
@@ -1581,6 +1587,13 @@ impl Checker<'_> {
                 row.modes.sendability = Sendability::NotSendable;
                 row.kind = TypeKind::Function(function);
                 self.out.body.types.push(row)
+            }
+            hirsel_syntax::TypeExprKind::Named {
+                arguments: syntax_arguments,
+                ..
+            } if alias.is_some() => {
+                let (representation, signature) = alias.unwrap();
+                self.alias_annotation(ty, representation, &signature.types, &syntax_arguments)
             }
             hirsel_syntax::TypeExprKind::Named {
                 arguments: syntax_arguments,
@@ -1698,6 +1711,72 @@ impl Checker<'_> {
             }
             _ => ty,
         }
+    }
+    /// A written alias refines the row its expansion produced. The row
+    /// follows the alias's representation, not the written arguments: an
+    /// occurrence of the alias's own parameter is refined by the argument
+    /// written for it, and every other part keeps the brand the declaration
+    /// writes. An alias body can name only definitions, so that brand is the
+    /// same identity in every body that writes the alias (PROV-1).
+    fn alias_annotation(
+        &mut self,
+        ty: TypeId,
+        declared: TypeId,
+        types: &TypeStore,
+        arguments: &[hirsel_syntax::TypeArgument],
+    ) -> TypeId {
+        let Some(written) = types.get(declared) else {
+            return ty;
+        };
+        if let TypeKind::Parameter(BinderRef::Bound {
+            depth: 0,
+            parameter,
+        }) = written.kind
+        {
+            return match arguments.get(parameter.0 as usize) {
+                Some(hirsel_syntax::TypeArgument::Type(syntax)) => self.annotation(ty, *syntax),
+                _ => ty,
+            };
+        }
+        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        if !written.brand.alternatives.is_empty()
+            && written
+                .brand
+                .alternatives
+                .iter()
+                .all(|o| matches!(o.root, OriginRoot::Definition(_)))
+        {
+            row.brand = written.brand.clone();
+        }
+        let parts = written.kind.value_parts();
+        if !matches!(row.kind, TypeKind::Function(_)) && parts.len() == row.kind.value_parts().len()
+        {
+            let mut parts = parts.into_iter();
+            let mut refine = |this: &mut Self, part: &mut TypeId| {
+                if let Some(declared) = parts.next() {
+                    *part = this.alias_annotation(*part, declared, types, arguments);
+                }
+            };
+            match &mut row.kind {
+                TypeKind::Tuple(ts) => {
+                    let mut refined = ts.iter().copied().collect::<Vec<_>>();
+                    refined.iter_mut().for_each(|t| refine(self, t));
+                    *ts = refined.into();
+                }
+                TypeKind::Box(t) => refine(self, t),
+                TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
+                    let mut refined = arguments.iter().cloned().collect::<Vec<_>>();
+                    for argument in &mut refined {
+                        if let GenericArgument::Type(t) = argument {
+                            refine(self, t);
+                        }
+                    }
+                    *arguments = refined.into();
+                }
+                _ => (),
+            }
+        }
+        self.out.body.types.push(row)
     }
     /// A let annotation's row with the binding places its relation names,
     /// which bound what the binding receives (v22 R3, "within S"). Body rows
