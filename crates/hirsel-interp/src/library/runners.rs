@@ -126,20 +126,17 @@ fn fires(rate: u32, domain: &str, parts: &[&[u8]]) -> bool {
 pub fn failure_schema(
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<SerializableSchema, Error> {
-    let store = hirsel_types::TypeStore::from_graph(1, |_| {
-        vec![hirsel_types::Type::with_kind(
-            hirsel_types::TypeKind::Named {
-                definition: hirsel_syntax::DefPath::core("Failure"),
-                arguments: vec![].into(),
-            },
-        )]
-    });
-    let root = store.iter().next().map(|(id, _)| id).unwrap();
+    let root = runtime.types.intern(hirsel_types::Type::with_kind(
+        hirsel_types::TypeKind::Named {
+            definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Failure")),
+            arguments: vec![].into(),
+        },
+    ));
     hirsel_types::serialization::serializable_schema(
-        &store,
+        &runtime.types,
         root,
         &hirsel_types::GenericDeclarations::default(),
-        &mut |path| Ok(runtime.serialization.get(path).cloned()),
+        &mut |d: hirsel_syntax::DefId| Ok(runtime.serialization.get(d.path()).cloned()),
     )
     .map_err(Error::Query)?
     .ok_or_else(|| invalid("core Failure has no codec schema"))
@@ -416,7 +413,7 @@ impl Library {
                                 .filter(|n| n.distinct)
                                 .cloned()
                                 .collect(),
-                            ..Default::default()
+                            ..crate::aggregate::RuntimeTypes::new(call.runtime.types.clone())
                         },
                         place: runner.entry.name.clone(),
                         key,

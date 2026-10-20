@@ -7,12 +7,13 @@ use hirsel_types::{BuiltinType, Primitive};
 pub type SizeBindings =
     std::collections::BTreeMap<(hirsel_types::SiteRef, hirsel_types::SizeParamId), u64>;
 
-/// A named callable has no environment. Generic type rows retain their owner.
+/// A named callable has no environment. Its generic arguments and type are
+/// rows of `types`, the session interner.
 #[derive(Clone, Debug)]
 pub struct NamedFunction {
     pub definition: DefPath,
     pub arguments: Vec<hirsel_types::GenericArgument>,
-    pub types: std::sync::Arc<hirsel_types::TypeStore>,
+    pub types: std::sync::Arc<hirsel_types::TypeInterner>,
     pub ty: hirsel_types::TypeId,
 }
 impl PartialEq for NamedFunction {
@@ -29,8 +30,7 @@ impl PartialEq for NamedFunction {
                         (
                             hirsel_types::GenericArgument::Type(a),
                             hirsel_types::GenericArgument::Type(b),
-                        ) => hirsel_types::semantic_equal(&self.types, *a, &other.types, *b)
-                            .unwrap_or(false),
+                        ) => self.types.semantic_eq(*a, *b),
                         _ => a == b,
                     },
                 }

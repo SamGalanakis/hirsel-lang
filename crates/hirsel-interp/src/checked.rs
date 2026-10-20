@@ -897,18 +897,18 @@ impl OperationCheck {
 /// partitions. Type arguments of blocks share one lifetime; callback headers
 /// describe future invocations and are never result payloads.
 pub(crate) fn operation_result(
-    types: &hirsel_types::TypeStore,
+    types: &hirsel_types::TypeInterner,
     root: hirsel_types::TypeId,
     inputs: &[Argument],
     inherited: &Bound,
 ) -> Shadow {
     use hirsel_types::{BinderRef, TypeKind};
     fn walk(
-        types: &hirsel_types::TypeStore,
+        types: &hirsel_types::TypeInterner,
         ty: hirsel_types::TypeId,
         inputs: &[Argument],
         inherited: &Bound,
-        active: &mut BTreeSet<hirsel_types::TypeId>,
+        active: &mut std::collections::HashSet<hirsel_types::TypeId>,
     ) -> Shadow {
         let mut bound = inherited.clone();
         let Some(row) = types.get(ty) else {
@@ -957,7 +957,7 @@ pub(crate) fn operation_result(
         active.remove(&ty);
         shadow
     }
-    walk(types, root, inputs, inherited, &mut BTreeSet::new())
+    walk(types, root, inputs, inherited, &mut Default::default())
 }
 /// Recover the shadow of an argument/callee selected from native saved state.
 /// Operations can unwrap containers, but cannot create caller lifetime facts.
@@ -1039,7 +1039,7 @@ impl FrameCheck {
     pub fn unique_parameters(
         &self,
         body: &Body,
-        types: &hirsel_types::TypeStore,
+        types: &hirsel_types::TypeInterner,
     ) -> Result<(), Error> {
         for local in &body.parameters {
             let declared = types
@@ -1067,7 +1067,7 @@ impl FrameCheck {
     pub fn enter(
         state: Shared,
         body: &Body,
-        types: &hirsel_types::TypeStore,
+        types: &hirsel_types::TypeInterner,
         slots: &[Option<Value>],
         arguments: Vec<Argument>,
         callee: Option<Callee>,
@@ -1224,7 +1224,7 @@ impl FrameCheck {
         }
     }
     /// Map the returned shadow into the caller's terms, by the body's declared result.
-    pub fn returned_to_caller(&self, body: &Body, types: &hirsel_types::TypeStore) -> Shadow {
+    pub fn returned_to_caller(&self, body: &Body, types: &hirsel_types::TypeInterner) -> Shadow {
         let mut shadow = self.returned.clone().unwrap_or_default();
         let relation = types.get(body.result).map(|t| &t.modes.relation);
         let map: Vec<(u32, Bound)> = match relation.and_then(|r| r.named_parameters()) {
@@ -1497,6 +1497,7 @@ mod tests {
 /// caller flag cannot change checked lifetime transfer; stale receipts use the
 /// ordinary conservative call path.
 pub(crate) fn protocol_call(
+    types: &hirsel_types::TypeInterner,
     definition: &hirsel_tir::Definition,
     body_id: hirsel_tir::BodyId,
     block_id: hirsel_tir::BlockId,
@@ -1516,9 +1517,9 @@ pub(crate) fn protocol_call(
             let (SignatureKind::Function(open_f), SignatureKind::Function(next_f)) = (&open.kind,&next.kind) else { return None };
             let ([open_parameter],[next_parameter]) = (open_f.parameters.as_slice(),next_f.parameters.as_slice()) else { return None };
             if open_parameter.passing != hirsel_syntax::PassingMode::Borrow || next_parameter.passing != hirsel_syntax::PassingMode::Mut { return None }
-            if !matches!(&open.types.get(open_parameter.ty)?.kind,TypeKind::Named {definition:owner,..} if owner == &receipt.association.source) { return None }
-            if !open.types.get(open_f.result)?.modes.relation.parameter_roots().contains(&ParameterRef::bound(ParamId(0))) { return None }
-            if !matches!(&next.types.get(next_f.result)?.kind,TypeKind::Named {definition:option,arguments} if option == &association.option && matches!(arguments.as_slice(),[GenericArgument::Type(_)])) { return None }
+            if !matches!(&types.get(open_parameter.ty)?.kind,TypeKind::Named {definition:owner,..} if owner.path() == &receipt.association.source) { return None }
+            if !types.get(open_f.result)?.modes.relation.parameter_roots().contains(&ParameterRef::bound(ParamId(0))) { return None }
+            if !matches!(&types.get(next_f.result)?.kind,TypeKind::Named {definition:option,arguments} if option.path() == &association.option && matches!(arguments.as_slice(),[GenericArgument::Type(_)])) { return None }
             let body = definition.bodies.get(body_id.0 as usize)?;
             let Terminator::Call {callee:Callee::Definition {path:open_path,..},arguments:open_args,returns: Some(CallReturn { destination, .. }),..} = &body.blocks.get(receipt.open.0 as usize)?.terminator else { return None };
             let Terminator::Call {callee:Callee::Definition {path:next_path,..},arguments:next_args,..} = &body.blocks.get(receipt.next.0 as usize)?.terminator else { return None };
@@ -1526,7 +1527,7 @@ pub(crate) fn protocol_call(
             let ([receiver],[cursor]) = (open_args.as_slice(),next_args.as_slice()) else { return None };
             if receiver.value.usage != UseKind::Borrow || cursor.value.usage != UseKind::Mut { return None }
             let receiver = body.places.get(receiver.value.place.0 as usize)?;
-            if !matches!(&definition.types.get(receiver.ty)?.kind,TypeKind::Named {definition:owner,..} if owner == &receipt.association.source) { return None }
+            if !matches!(&types.get(receiver.ty)?.kind,TypeKind::Named {definition:owner,..} if owner.path() == &receipt.association.source) { return None }
             let cursor = body.places.get(cursor.value.place.0 as usize)?;
             let destination = body.places.get(destination.0 as usize)?;
             (cursor.root == destination.root && cursor.projection == destination.projection).then_some(())

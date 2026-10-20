@@ -6,11 +6,11 @@ pub use hirsel_types::Actuals;
 pub type Bindings = ActualBindings;
 
 pub(crate) fn concrete(
-    source: &TypeStore,
+    runtime: &crate::aggregate::RuntimeTypes,
     arguments: &[GenericArgument],
     bindings: &Bindings,
 ) -> Result<Actuals, Error> {
-    close_arguments(source, arguments, bindings)
+    close_arguments(&runtime.types, &runtime.memo, arguments, bindings)
         .map_err(|e| invalid(format!("invocation type substitution: {e:?}")))
 }
 

@@ -21,14 +21,14 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
     let signature = call
         .runtime
         .serialization
-        .get(definition)
+        .get(definition.path())
         .ok_or_else(|| invalid("type_shape.info declaration is not loaded"))?;
     let SignatureKind::Type(declaration) = &signature.kind else {
         return Err(invalid("type_shape.info actual is not a type"));
     };
     let representation = declaration
         .representation
-        .and_then(|r| signature.types.get(r))
+        .and_then(|r| call.types.get(r))
         .ok_or_else(|| invalid("type_shape.info representation is hidden"))?;
     let actual = CanonicalSpelling {
         types: call.types,
@@ -36,7 +36,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
         outer: None,
     };
     let declared = CanonicalSpelling {
-        types: &signature.types,
+        types: call.types,
         arguments,
         outer: Some(&actual),
     };
@@ -50,7 +50,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                         record(
                             "FieldShape",
                             vec![
-                                Value::String(f.name.clone()),
+                                Value::String(f.name.as_str().to_owned()),
                                 Value::String(declared.text(f.ty)),
                             ],
                         )
@@ -71,7 +71,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                                 record(
                                     "PayloadShape",
                                     vec![
-                                        label.clone().map_or_else(none, |l| some(Value::String(l))),
+                                        label.map_or_else(none, |l| some(Value::String(l.as_str().to_owned()))),
                                         Value::String(declared.text(*ty)),
                                     ],
                                 )
@@ -79,7 +79,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                             .collect();
                         record(
                             "VariantShape",
-                            vec![Value::String(v.name.clone()), list(payload)],
+                            vec![Value::String(v.name.as_str().to_owned()), list(payload)],
                         )
                     })
                     .collect(),

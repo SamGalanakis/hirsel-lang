@@ -85,7 +85,7 @@ impl CallerSite {
     }
     pub fn anchor(&self) -> crate::observation::Anchor {
         crate::observation::Anchor {
-            definition: self.definition.path.clone(),
+            definition: self.definition.path.path().clone(),
             body: self.body,
             site: self.site,
             cleanup: None,
@@ -95,6 +95,8 @@ impl CallerSite {
 pub(crate) struct Frame {
     pub caller: Option<CallerSite>,
     pub definition: DefinitionRef,
+    /// The session interner the definition's TypeIds are rows of.
+    pub types: std::sync::Arc<hirsel_types::TypeInterner>,
     pub body_id: BodyId,
     pub mut_parameters: Vec<LocalId>,
     pub operation: Option<Box<(crate::OperationResult, crate::resources::OperationState)>>,
@@ -176,12 +178,17 @@ impl Frame {
     }
     /// The entry frame. External inputs are canonicalized here (SEM-2); every
     /// value the evaluator builds afterwards is canonical by construction.
-    pub fn new(definition: DefinitionRef, mut arguments: Vec<Value>) -> Result<Self, Error> {
+    pub fn new(
+        types: std::sync::Arc<hirsel_types::TypeInterner>,
+        definition: DefinitionRef,
+        mut arguments: Vec<Value>,
+    ) -> Result<Self, Error> {
         arguments.iter_mut().for_each(Value::canonicalize);
         let entry = definition.entry;
-        Self::new_body(definition, entry, arguments, vec![], Default::default())
+        Self::new_body(types, definition, entry, arguments, vec![], Default::default())
     }
     pub fn new_body(
+        types: std::sync::Arc<hirsel_types::TypeInterner>,
         definition: DefinitionRef,
         body_id: BodyId,
         arguments: Vec<Value>,
@@ -224,6 +231,7 @@ impl Frame {
             type_arguments: Default::default(),
             sizes,
             definition,
+            types,
             body_id,
             mut_parameters: vec![],
             operation: None,
@@ -631,9 +639,7 @@ impl Frame {
                 .and_then(Option::as_ref);
         }
         if operand.usage == UseKind::Copy {
-            let ty = self
-                .definition
-                .types
+            let ty = self.types
                 .get(self.place(operand.place)?.ty)
                 .ok_or_else(|| invalid("operand type"))?;
             if ty.modes.multiplicity == hirsel_types::Multiplicity::Once {
@@ -756,9 +762,7 @@ impl Frame {
         let place = self.place(id)?;
         if check.noalloc && !place.projection.is_empty() {
             let root = &self.body().locals[place.root.0 as usize];
-            let row = self
-                .definition
-                .types
+            let row = self.types
                 .get(root.ty)
                 .ok_or_else(|| invalid("write root type"))?;
             // Inline fields are independent stores. Traversing a counted block
@@ -888,9 +892,7 @@ impl Frame {
         // live holder shares, whatever either checker proved.
         if holds
             && place.projection.is_empty()
-            && self
-                .definition
-                .types
+            && self.types
                 .get(place.ty)
                 .is_some_and(|r| r.modes.uniqueness == hirsel_types::Uniqueness::Unique)
             && !shadow.sole_owner()
@@ -962,7 +964,7 @@ impl Frame {
     }
     /// The open arena named by a row placed `in a`, read from a's current slot.
     pub fn placed_arena(&self, ty: hirsel_types::TypeId) -> Option<u32> {
-        let row = self.definition.types.get(ty)?;
+        let row = self.types.get(ty)?;
         row.modes.relation.reaches().iter().find_map(|r| match r {
             hirsel_types::Reach::Place(origin) => self.arena_of(origin),
             _ => None,
@@ -970,8 +972,7 @@ impl Frame {
     }
     /// Whether a row's relation places its blocks in an open arena or a region.
     pub fn placed(&self, ty: hirsel_types::TypeId) -> bool {
-        self.definition
-            .types
+        self.types
             .get(ty)
             .is_some_and(|row| row.modes.relation.scoped(|o| self.arena_of(o).is_some()))
     }

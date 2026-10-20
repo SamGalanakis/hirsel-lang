@@ -2,7 +2,8 @@
 use crate::{Error, Value, invalid};
 use hirsel_syntax::DefPath;
 use hirsel_tir::{BodyId, Constructor};
-use hirsel_types::{BuiltinType, TypeKind};
+use hirsel_types::{BuiltinType, TypeInterner, TypeKind, TypeMemo};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Nominal {
@@ -12,12 +13,16 @@ pub struct Nominal {
     /// A resource's owner definition contains its drop body (revision 1).
     pub finalizer: Option<(DefPath, BodyId)>,
     pub fields: usize,
-    /// The private representation's shape in its own store, which a bounded
-    /// arena's logical charge reads (MEM-6); None for an opaque nominal.
-    pub representation: Option<(hirsel_types::TypeStore, hirsel_types::TypeId)>,
+    /// The private representation's shape, which a bounded arena's logical
+    /// charge reads (MEM-6); None for an opaque nominal.
+    pub representation: Option<hirsel_types::TypeId>,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RuntimeTypes {
+    /// The session interner: every TypeId the run reads is one of its rows.
+    pub types: Arc<TypeInterner>,
+    /// Structural substitution memo for closing invocation types.
+    pub memo: Arc<TypeMemo>,
     /// Declared snapshots used to prove and specialize codec schemas.
     pub serialization: std::collections::BTreeMap<DefPath, hirsel_types::SignatureRef>,
     /// Full for diagnostic clients; Effects for ordinary observed execution.
@@ -30,6 +35,19 @@ pub struct RuntimeTypes {
     pub budgets: crate::RunBudgets,
 }
 impl RuntimeTypes {
+    /// Runtime facts over `types` with no nominals, checking or budgets.
+    pub fn new(types: Arc<TypeInterner>) -> Self {
+        Self {
+            types,
+            memo: Arc::new(TypeMemo::new()),
+            serialization: Default::default(),
+            trace_mode: Default::default(),
+            nominals: Vec::new(),
+            forget: None,
+            checked: None,
+            budgets: Default::default(),
+        }
+    }
     pub fn get(&self, path: &DefPath) -> Option<&Nominal> {
         self.nominals.iter().find(|n| n.definition == *path)
     }
@@ -201,7 +219,7 @@ mod tests {
     use super::*;
     #[test]
     fn data_collection_constructors_preserve_order_and_reject_partial_entries() {
-        let runtime = RuntimeTypes::default();
+        let runtime = RuntimeTypes::new(TypeInterner::new(None));
         let map = TypeKind::Builtin {
             kind: BuiltinType::Map,
             arguments: vec![].into(),

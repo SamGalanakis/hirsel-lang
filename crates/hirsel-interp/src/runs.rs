@@ -33,7 +33,7 @@ impl Run {
         let definition = provider
             .definition(&configuration.entry)
             .map_err(Error::Query)?;
-        let mut frame = Frame::new(definition, arguments)?;
+        let mut frame = Frame::new(runtime.types.clone(), definition, arguments)?;
         if let Some(state) = checker {
             frame.check = Some(enter_checked(state, &frame, vec![], None)?);
         }
