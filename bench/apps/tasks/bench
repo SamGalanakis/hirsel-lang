@@ -13,7 +13,7 @@ import statistics
 import subprocess
 import time
 import sys
-from support import APP, CAPPED, ROOT, RUST, TOOLCHAIN, Server, free_port, line
+from support import APP, CAPPED, ROOT, RUST, Server, free_port, line
 
 sys.path.insert(0, str(ROOT / 'bench/micro'))
 from measure import bootstrap_ratio, ratio, schedule, timing_lock, perf_counts

@@ -11,7 +11,16 @@ ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / 'bench/apps/tasks'
 CAPPED = ROOT / 'tools/capped'
 RUST = APP / 'rust/target/release/tasks-rust'
-TOOLCHAIN = ROOT / 'buck-out/v2/art/root/967aa399796c0942/__hirsel-toolchain__/hirsel-toolchain/hirsel'
+
+
+def toolchain():
+    output = subprocess.check_output([str(ROOT / '.buck2/bin/buck2'), 'build',
+        '//:hirsel-toolchain', '--show-full-output'], cwd=ROOT, text=True)
+    for entry in output.splitlines():
+        fields = entry.split()
+        if len(fields) == 2 and fields[0] == 'root//:hirsel-toolchain':
+            return ROOT / fields[1] / 'hirsel'
+    raise RuntimeError('Buck2 did not report the Hirsel toolchain output')
 
 
 def line(process, timeout=30):

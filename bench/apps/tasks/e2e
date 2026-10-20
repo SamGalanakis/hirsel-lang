@@ -5,14 +5,15 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
-from support import CAPPED, ROOT, TOOLCHAIN, Server, free_port, line
+from support import CAPPED, ROOT, Server, free_port, line, toolchain
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--hirsel', type=Path, default=TOOLCHAIN)
+parser.add_argument('--hirsel', type=Path)
 parser.add_argument('--hirsel-server', type=Path, default=Path('/tmp/tasks-rust-hirsel'))
 parser.add_argument('--kind', choices=['rust', 'rust-one-worker', 'hirsel'], default='rust')
 parser.add_argument('--restart-kind', choices=['rust', 'rust-one-worker', 'hirsel'])
 args = parser.parse_args()
+args.hirsel = args.hirsel or toolchain()
 with tempfile.TemporaryDirectory(prefix='tasks-e2e-') as temporary:
     directory = Path(temporary)
     port = free_port()
