@@ -62,7 +62,7 @@ const PHASES: [&str; 17] = [
     "codegen",
     "store lookup",
 ];
-const COUNTS: [&str; 9] = [
+const COUNTS: [&str; 22] = [
     "definitions",
     "units",
     "V runs",
@@ -72,6 +72,19 @@ const COUNTS: [&str; 9] = [
     "object misses",
     "lowered",
     "recomputes",
+    "invalidated by signature",
+    "invalidated by failed signature",
+    "invalidated by lookup",
+    "invalidated by name set",
+    "invalidated by representation",
+    "invalidated by executed body",
+    "invalidated by executed signature",
+    "invalidated by cited text",
+    "invalidated by declaration candidates",
+    "invalidated by validation view",
+    "invalidated by universe errors",
+    "invalidated by first heap",
+    "invalidated by environment",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {

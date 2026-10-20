@@ -582,8 +582,11 @@ The report keeps three measures apart (`hirsel_intern::timings`):
 Counts: `definitions` (bodies checked), `units` (native units built), `V runs`
 (full V runs; a definition V already passed is skipped), `lowered` (bodies
 lowered; under `check`, the bodies lowered at check time), `recomputes`
-(per-definition queries computed rather than reused) and store and object
-hits and misses (0 until those caches exist).
+(per-definition queries computed rather than reused), `invalidated by <read>`
+(memos the engine marked dirty because one input of that read kind changed:
+signature, lookup, name set, representation, executed body, cited text,
+declaration candidates and the rest of the engine's typed reads) and store and
+object hits and misses (0 until those caches exist).
 
 `runner` reports the native runs made as program images in a runner (`image
 runs`), how many of those images were already cached (`cached images`), and each

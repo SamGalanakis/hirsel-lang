@@ -145,11 +145,37 @@ pub enum Count {
     Lowered,
     /// Per-definition queries computed rather than reused.
     Recomputes,
+    /// Memos invalidated by a changed signature read.
+    InvalidatedSignature,
+    /// Memos invalidated by a changed failed signature read.
+    InvalidatedFailedSignature,
+    /// Memos invalidated by a changed lookup read.
+    InvalidatedLookup,
+    /// Memos invalidated by a changed name set read.
+    InvalidatedNameSet,
+    /// Memos invalidated by a changed representation read.
+    InvalidatedRepresentation,
+    /// Memos invalidated by a changed executed body read.
+    InvalidatedExecutedBody,
+    /// Memos invalidated by a changed executed signature read.
+    InvalidatedExecutedSignature,
+    /// Memos invalidated by a changed cited text read.
+    InvalidatedCitedText,
+    /// Memos invalidated by a changed declaration candidates read.
+    InvalidatedDeclarationCandidates,
+    /// Memos invalidated by a changed validation view read.
+    InvalidatedValidationView,
+    /// Memos invalidated by a changed universe errors read.
+    InvalidatedUniverseErrors,
+    /// Memos invalidated by a changed first heap read.
+    InvalidatedFirstHeap,
+    /// Memos invalidated by a changed environment read.
+    InvalidatedEnvironment,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 9] = [
+    pub const ALL: [Count; 22] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -159,6 +185,19 @@ impl Count {
         Count::ObjectMisses,
         Count::Lowered,
         Count::Recomputes,
+        Count::InvalidatedSignature,
+        Count::InvalidatedFailedSignature,
+        Count::InvalidatedLookup,
+        Count::InvalidatedNameSet,
+        Count::InvalidatedRepresentation,
+        Count::InvalidatedExecutedBody,
+        Count::InvalidatedExecutedSignature,
+        Count::InvalidatedCitedText,
+        Count::InvalidatedDeclarationCandidates,
+        Count::InvalidatedValidationView,
+        Count::InvalidatedUniverseErrors,
+        Count::InvalidatedFirstHeap,
+        Count::InvalidatedEnvironment,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -172,6 +211,19 @@ impl Count {
             Count::ObjectMisses => "object misses",
             Count::Lowered => "lowered",
             Count::Recomputes => "recomputes",
+            Count::InvalidatedSignature => "invalidated by signature",
+            Count::InvalidatedFailedSignature => "invalidated by failed signature",
+            Count::InvalidatedLookup => "invalidated by lookup",
+            Count::InvalidatedNameSet => "invalidated by name set",
+            Count::InvalidatedRepresentation => "invalidated by representation",
+            Count::InvalidatedExecutedBody => "invalidated by executed body",
+            Count::InvalidatedExecutedSignature => "invalidated by executed signature",
+            Count::InvalidatedCitedText => "invalidated by cited text",
+            Count::InvalidatedDeclarationCandidates => "invalidated by declaration candidates",
+            Count::InvalidatedValidationView => "invalidated by validation view",
+            Count::InvalidatedUniverseErrors => "invalidated by universe errors",
+            Count::InvalidatedFirstHeap => "invalidated by first heap",
+            Count::InvalidatedEnvironment => "invalidated by environment",
         }
     }
 }
