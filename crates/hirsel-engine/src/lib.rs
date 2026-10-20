@@ -118,7 +118,7 @@ pub enum CheckCompletion {
     },
 }
 /// Cache domains keep outputs of different phases distinct (PROG-5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub enum QueryKind {
     Lex,
     Format,

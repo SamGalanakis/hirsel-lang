@@ -5,3 +5,9 @@ pub use reads::{
     Durability, Inconsistent, LookupKey, ModuleKey, PackageKey, ReadKey, ReadKind, Reads,
     ReadsBuilder, Revision, decode_def_path, encode_def_path,
 };
+mod graph;
+pub use graph::{
+    ChangeSet, Invalidation, Memo, MemoGraph, MemoKey, MemoStats, Verdict, invalidation_count,
+};
+mod depth;
+pub use depth::{DepthEvidence, SiteSpan, dependency_limit};
