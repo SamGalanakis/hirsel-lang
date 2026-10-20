@@ -1,7 +1,8 @@
 //! Cooperative host readiness under several parked requests (DET-1): waits that become ready
 //! at the same scheduling point are recorded there in creation order, before any is re-issued,
 //! and a server whose connections interleave by readiness replays its live output exactly.
-//! Each live run is recorded in both engines, and every tape replays in both.
+//! Each live run is recorded in both engines, and every tape replays in both; under a seeded
+//! scheduler both engines record the same choices among woken tasks.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -245,5 +246,95 @@ fn a_multi_connection_server_replays_its_live_interleaving_in_either_engine() {
         );
         assert!(!ready_lines(&text).is_empty(), "nothing parked: {text}");
         fixture.replay(&tape, &live);
+    }
+}
+
+/// Three producers fan into one channel that the scope's owner drains, then it joins them:
+/// receivers, joiners and senders park and are woken by each other's sends and completions,
+/// so under a seeded scheduler every choice among the woken tasks is a recorded input.
+const FAN_IN: &str = r#"fn produce(tasks: Tasks, id: u64, take sender: Sender[u64]) -> () {
+  let mut tx = take sender
+  let mut i: u64 = 0
+  while i < 3 {
+    let _ = channel.send(tasks, mut tx, id * 10 + i)
+    i += 1
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let second = sender.dup(tasks, sender)
+      let third = sender.dup(tasks, sender)
+      let a = task.async(s, fn() { produce(tasks, 1, take sender) })
+      let b = task.async(s, fn() { produce(tasks, 2, take second) })
+      let c = task.async(s, fn() { produce(tasks, 3, take third) })
+      let mut r = take receiver
+      while true {
+        match channel.receive(tasks, mut r) {
+          Ok(n) => {
+            let _ = out.print(out, f"{n}\n")
+          },
+          Error(_) => break,
+        }
+      }
+      task.await(s, take a)
+      task.await(s, take b)
+      task.await(s, take c)
+    }
+  )
+  Ok(())
+}
+"#;
+
+/// Under seeded random@1 and pct@1 schedules both engines wake the same tasks in the same
+/// order, so they record the same tape (but for its admission instant), and each tape
+/// replays in the other engine.
+#[test]
+fn seeded_schedules_over_woken_tasks_record_identical_tapes_in_either_engine() {
+    for (algorithm, seed) in [("random", 3u64), ("pct", 5)] {
+        let fixture = Fixture::new(
+            &format!("fan-in-{algorithm}"),
+            FAN_IN,
+            serde_json::json!({
+                "inputs": {"hash_seed": 0, "random_seed": 0, "test_seed": 0,
+                    "scheduler": {"algorithm": algorithm, "version": 1, "seed": seed}},
+                "io": {"stdout": "stdout.bytes@1", "tasks": "tasks.cooperative@1", "dirs": []},
+                "args": [],
+            }),
+        );
+        let (interpreted, interpreted_text, interpreted_live) = fixture.record(false);
+        let (native, native_text, native_live) = fixture.record(true);
+        assert!(
+            interpreted_text.lines().any(|l| l.starts_with("schedule ")),
+            "{algorithm}: {interpreted_text}"
+        );
+        // Byte-identical but for the admission instant, the wall time each engine admitted
+        // its run at.
+        let admitted = |text: &str| {
+            text.lines()
+                .filter(|l| !l.starts_with("admitted_at "))
+                .map(|l| format!("{l}\n"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            admitted(&interpreted_text),
+            admitted(&native_text),
+            "{algorithm}"
+        );
+        assert_eq!(interpreted_live, native_live, "{algorithm}");
+        let mut values: Vec<&str> = interpreted_live.lines().collect();
+        values.sort_unstable();
+        assert_eq!(
+            values,
+            ["10", "11", "12", "20", "21", "22", "30", "31", "32"],
+            "{algorithm}"
+        );
+        fixture.replay(&interpreted, &interpreted_live);
+        fixture.replay(&native, &native_live);
     }
 }
