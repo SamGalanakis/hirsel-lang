@@ -119,6 +119,8 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
     )
     .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        // The automatic timing sidecar and the offline view name the same capture.
+        .env("HIRSEL_TIMING_CAPTURE_ID", "fixture")
         .arg("run")
         .arg(&source)
         .args([

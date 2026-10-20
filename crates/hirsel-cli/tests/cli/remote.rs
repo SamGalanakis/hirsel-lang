@@ -260,6 +260,11 @@ fn calls_cross_to_a_host_over_a_unix_socket_and_every_tape_replays_alone() {
     let mut tapes: Vec<PathBuf> = std::fs::read_dir(fixture.0.join("tapes"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        // Diagnostic timing sidecars accompany tapes but are not replay inputs.
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "tape")
+        })
         .collect();
     tapes.sort();
     assert_eq!(tapes.len(), 4, "{tapes:?}");
