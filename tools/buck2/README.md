@@ -30,6 +30,85 @@ pool's workers match. Without a hook an existing `.buckconfig.local` is kept;
 without one `prepare.py` writes `hirsel.execution = local`, which runs every
 action on this host.
 
+## Stale outputs
+
+Each checkout's daemon prunes its own inactive outputs: a six-hour TTL, an
+hourly scan, and a six-minute initial delay. At 10% free disk or less, adaptive
+cleaning promotes the oldest inactive outputs until projected free space
+recovers, keeping anything accessed within one hour. Active artifacts stay
+protected, including under disk pressure. Lanes never delete another lane's
+`buck-out`. The policy is initialized at daemon startup; an existing daemon
+needs a restart. Gate and land stop their own daemon when finished.
+
+The settings were checked against the exact `pins.json` source commit
+[`6507dd157a6f81a810c48583edf1758dd0c337c5`](https://github.com/facebook/buck2/tree/6507dd157a6f81a810c48583edf1758dd0c337c5),
+and the installed executable's SHA-256 matched the pin. Source references below
+are relative to that commit:
+
+- `app/buck2_execute_impl/src/materializers/deferred/clean_stale.rs`,
+  `CleanStaleConfig::from_buck_config`: `clean_stale_enabled` and both adaptive
+  protection switches are booleans; `clean_stale_artifact_ttl_hours`,
+  `clean_stale_period_hours`, `clean_stale_start_offset_hours`, and
+  `clean_stale_low_disk_adaptive_min_ttl_hours` are nonnegative floating-point
+  hours. `clean_stale_low_disk_adaptive_enabled` is a boolean.
+  `clean_stale_low_disk_threshold` is a floating-point **free-space percentage**,
+  so 10 engages at 90% full. `clean_stale_low_disk_artifact_ttl_hours` is an
+  optional floating-point hour value for fixed mode, ignored in adaptive mode;
+  we leave it unset. The two protection switches are
+  `clean_stale_low_disk_adaptive_delete_intermediate_within_min_ttl = false`
+  and `clean_stale_low_disk_adaptive_unmaterialize_active = false`.
+- That file's `create_pending_clean_result` requires SQLite state and deferred
+  writes. `app/buck2_server/src/daemon/state.rs` creates the deferred
+  materializer, but **`defer_write_actions` defaults to false**. We explicitly
+  set it and `sqlite_materializer_state` to `true`; both accept booleans via
+  `RolloutPercentage` (`app/buck2_core/src/rollout_percentage.rs`). SQLite state
+  defaults to true (`app/buck2_server/src/daemon/disk_state.rs`). Changing the
+  deferred-write setting invalidates old persisted materializer state, so the
+  first scan also removes untracked outputs after current outputs are declared.
+- `StaleFinder::visit` and `find_stale_tracked_only` require `active: false`
+  before marking tracked artifacts stale. `apply_adaptive_low_disk` promotes
+  only `TrackedState::Retained`; it returns before considering active artifacts
+  when `unmaterialize_active` is false. Declarations and materialization mark
+  current artifacts active (`deferred/command_processor.rs`); state loaded
+  after a daemon restart begins inactive (`deferred/artifact_tree.rs`).
+  `MaterializerSender::send` cancels a cleaning
+  scan before processing new materializer work (`deferred.rs`).
+- `tools/gate`, `tools/land`, `gating.py`, and `prepare.py` do not override these
+  keys. `--materializations none` controls requested final outputs, not the
+  deferred-write prerequisite. The host remote-config hook writes only
+  `[buck2_re_client]` and `[hirsel]`, leaving this `[buck2]` policy intact.
+
+Six hours preserves recent rebase outputs without retaining days of hashes;
+hourly scans bound the delay, and six minutes gives an initial build time to
+declare its outputs. One hour under disk pressure retains recent reuse while
+reclaiming older inactive outputs. The policy cannot reclaim an active set
+kept alive in one daemon indefinitely.
+
+Validation on 2026-10-20 used a disposable copy of `fs-watch-mmap/buck-out`,
+with a consistent read-only SQLite backup, in `buck-clean-stale`. After building
+`//:hirsel-toolchain` and `//:hirsel-span` and testing `//:hirsel-span-unittest`,
+allocated `buck-out` size (`du -s -B1`) fell from **22,952,734,720 bytes
+(21.376 GiB)** to **3,068,723,200 bytes (2.858 GiB)**, an **86.63%** reduction:
+
+```sh
+.buck2/bin/buck2 clean -c buck2.clean_stale_enabled=false --stale 6h \
+  --adaptive-low-disk-threshold 10 --adaptive-min-ttl 1h
+```
+
+Only the periodic schedule was disabled during measurement to isolate the
+explicit scan. Buck reported 5,292 untracked paths removed (19.6 GiB logical
+size); switching deferred writes had invalidated the copied old database.
+Thus this measures the initial migration cleanup, not steady-state tracked
+TTL eviction. The policy also passed a configured-policy dry run. A zero-TTL
+adaptive dry run found zero stale paths and retained all 544 active/recent
+artifacts. All three current CLI, precheck and library output checksums stayed
+identical. The incremental build and test then used zero build actions; the
+unit test passed before and after (one test each). After restarting the daemon
+with the committed policy, the same build hit 604 cached actions, with zero
+remote executions (172 local preparation actions); the test passed again.
+The copied runtime archives accounted for about 8.16 GiB and toolchain bundles
+3.36 GiB before cleanup; sharing these across worktrees is separate work.
+
 ## Everyday commands
 
 ```sh

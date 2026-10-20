@@ -21,6 +21,19 @@ target_platform_detector_spec = target:root//...->root//tools/buck2:dev target:t
 execution_platforms = root//tools/buck2:platforms
 [buck2]
 digest_algorithms = SHA256
+# Prune inactive outputs hourly after 6 h; below 10% free, adapt down to 1 h.
+# Keep active artifacts and the adaptive minimum TTL protected.
+sqlite_materializer_state = true
+defer_write_actions = true
+clean_stale_enabled = true
+clean_stale_artifact_ttl_hours = 6
+clean_stale_period_hours = 1
+clean_stale_start_offset_hours = 0.1
+clean_stale_low_disk_threshold = 10
+clean_stale_low_disk_adaptive_enabled = true
+clean_stale_low_disk_adaptive_min_ttl_hours = 1
+clean_stale_low_disk_adaptive_delete_intermediate_within_min_ttl = false
+clean_stale_low_disk_adaptive_unmaterialize_active = false
 [project]
 ignore = .git, buck-out, .buck2, target, tools/buck2/bin
 [buck2_re_client]
