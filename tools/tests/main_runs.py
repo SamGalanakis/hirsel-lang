@@ -21,7 +21,7 @@ class NativeCollection(unittest.TestCase):
         commands = {}
         with patch.dict(os.environ), patch('subprocess.run') as run:
             run.return_value.stdout = 'root//:example-unittest'
-            stages(lambda name, command, **kwargs: commands.update({name: command}))
+            stages(lambda name, command, **kwargs: commands.update({name: command}), 'full')
         native = commands['native matrix: both targets and named exclusions']
         at = native.index('hirsel.native_selection=true')
         self.assertEqual(native[at - 1], '-c')

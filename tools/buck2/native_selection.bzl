@@ -8,9 +8,9 @@ native-selection` regenerates it (`-c hirsel.native_selection=derive`).
 
 FROZEN = "native-tests/regressions/native-selection.json"
 
-# Observation shards. A process's memory grows about 270 MB with each program it
-# observes (14 native builds, 68 s): 21 programs took 24 minutes and 5.8 GiB on
-# this host, so 256 shards observe about 10 each within the 4 GiB request.
+# Each observation now owns a process, releasing compiler state between cases.
+# Keep the existing 256 stripes and 4 GiB request for the cost of each program's
+# 14 native builds; isolation does not bound an individual program's cost.
 OBSERVATION_SHARDS = 256
 OBSERVATION_REQUEST = (1, 4194304)  # sync.py adds it to POOL_BUDGETS
 

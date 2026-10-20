@@ -761,7 +761,7 @@ substantial work per program. The former 32 observation shards did not
 finish within their time budget. Each observation now runs in a fresh process;
 only feature strings and errors survive between cases. Compiler panics become
 program errors; a worker crash fails collection. The `inventory` and
-`observations-N` subtargets expose individual derivation stages. Loading it adds, from the current tree, every
+`observations-N` subtargets expose individual derivation stages. Loading the frozen cover adds, from the current tree, every
 historical pin and every program the cover never observed, so new cases run
 until the next derivation. `tools/bless.sh native-selection` derives it again
 on the pool (`-c hirsel.native_selection=derive`: 256 observation shards of
@@ -770,7 +770,6 @@ file for review.
 
 Direct `gate-native-full` and `gate-native-full-shard-N` targets have no
 coverage-artifact dependency unless that setting is enabled, since
-
 Buck2 fixes its build graph before it receives test-runner arguments. Explicit
 `--filter` values are the program selection; an unfiltered whole-target run
 reads the checked-in cover.

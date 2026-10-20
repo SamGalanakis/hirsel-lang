@@ -189,6 +189,7 @@ class NativePoolRouting(unittest.TestCase):
         source = (sync.ROOT / 'tools/buck2/defs.bzl').read_text()
         code = source[source.index('def hirsel_command_test('):source.index('def _script_binary_impl(')]
         for settings, expected in [({}, None), ({'native_selection': 'true'}, '//:native-selection'),
+                                    ({'native_selection': 'derive'}, '//:native-selection'),
                                     ({'native_selection_file': 'frozen.json'}, '//:native-selection')]:
             calls = []
             scope = dict(FULL_GATE=True, TESTS_ON_HOST=False, TEST_SEED='',
