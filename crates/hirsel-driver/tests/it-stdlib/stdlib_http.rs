@@ -647,12 +647,15 @@ fn assert_http_script_replay(relative: &str) {
     program
         .check_for_execution()
         .unwrap_or_else(|e| panic!("{}", details(&e)));
-    let config = RunConfiguration {
-        entry: program.entry.clone(),
-        hash_seed: 0,
-        inputs: vec![],
-    };
     let source = std::fs::read_to_string(&path).unwrap();
+    let entries = if source.lines().any(|line| line == "// expect: test") {
+        let tests = testing::discover(&mut program, &[], None, testing::Selection::Tests)
+            .unwrap_or_else(|e| panic!("{}", details(&e)));
+        assert!(!tests.is_empty(), "{relative}: no tests discovered");
+        tests.into_iter().map(|test| test.entry).collect()
+    } else {
+        vec![program.entry.clone()]
+    };
     let mut simulation = SimulationConfig::default();
     if source.lines().any(|line| line == "// grant: clock") {
         simulation.grants.insert("MonotonicClock".into());
@@ -663,52 +666,60 @@ fn assert_http_script_replay(relative: &str) {
     {
         simulation.net = Some(serde_json::from_str(net).unwrap());
     }
-    let recorded = run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
-    assert!(
-        matches!(
-            recorded.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
-        ),
-        "{:?}",
-        recorded.outcome
-    );
-    let observation = recorded.observation.unwrap();
-    let events: Vec<_> = observation
-        .effects
-        .iter()
-        .filter_map(|effect| match &effect.effect {
-            Effect::CapabilityConsumed(event) => Some(event.clone()),
-            _ => None,
-        })
-        .collect();
-    assert!(events.iter().any(|e| e.operation == "net.connect"));
-    assert!(events.iter().any(|e| e.operation == "net.close"));
-    if relative.ends_with("http-server-stream-drop-run.hir") {
-        assert_eq!(
-            events.iter().filter(|e| e.operation == "net.close").count(),
-            1
+    for entry in entries {
+        let config = RunConfiguration {
+            entry,
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let recorded =
+            run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+        assert!(
+            matches!(
+                recorded.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            ),
+            "{:?}",
+            recorded.outcome
         );
-        assert!(!events.iter().any(|e| e.operation == "net.shutdown"));
-        assert_eq!(events.last().unwrap().operation, "net.close");
+        let observation = recorded.observation.unwrap();
+        let events: Vec<_> = observation
+            .effects
+            .iter()
+            .filter_map(|effect| match &effect.effect {
+                Effect::CapabilityConsumed(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(events.iter().any(|e| e.operation == "net.connect"));
+        assert!(events.iter().any(|e| e.operation == "net.close"));
+        if relative.ends_with("http-server-stream-drop-run.hir") {
+            assert_eq!(
+                events.iter().filter(|e| e.operation == "net.close").count(),
+                1
+            );
+            assert!(!events.iter().any(|e| e.operation == "net.shutdown"));
+            assert_eq!(events.last().unwrap().operation, "net.close");
+        }
+        let replayed = run_observed_snapshot(
+            &mut program.engine,
+            &RunConfiguration {
+                inputs: events,
+                ..config
+            },
+            simulation.clone(),
+        )
+        .unwrap();
+        assert_eq!(replayed.observation.as_ref(), Some(&observation));
+        assert!(
+            matches!(
+                replayed.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            ),
+            "{:?}",
+            replayed.outcome
+        );
     }
-    let replayed = run_observed_snapshot(
-        &mut program.engine,
-        &RunConfiguration {
-            inputs: events,
-            ..config
-        },
-        simulation,
-    )
-    .unwrap();
-    assert_eq!(replayed.observation.as_ref(), Some(&observation));
-    assert!(
-        matches!(
-            replayed.outcome,
-            Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
-        ),
-        "{:?}",
-        replayed.outcome
-    );
 }
 
 #[test]
