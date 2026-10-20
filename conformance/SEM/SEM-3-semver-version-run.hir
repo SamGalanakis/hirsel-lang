@@ -1,0 +1,90 @@
+// rule: SEM-3
+// expect: run
+// dtolnay/semver tests/test_version.rs and tests/test_version_req.rs
+// (280ebcb6; offsets are this module's, and precedence ignores build metadata
+// where semver's Ord does not), and npm/node-semver test/fixtures
+// range-include.js, range-exclude.js, range-parse.js and comparisons.js rows
+// without the loose and includePrerelease options (6e05b763; a leading v is
+// dropped from versions, and ranges past 2^53 are omitted since numbers here
+// are u64). Expected npm spellings are node-semver's, in this module's syntax.
+fn version(spelling: String) -> semver.Version uses {} {
+  match semver.parse(spelling) {
+    Ok(v) => v,
+    Error(_) => semver.Version(
+      major: 999,
+      minor: 999,
+      patch: 999,
+      pre: "unparsed",
+      build: ""
+    ),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), semver.SemverError] {
+  // test_version.rs test_parse.
+  test.equal(t, semver.parse(""), Error(Empty()))
+  test.equal(t, semver.parse("  "), Error(Syntax(0)))
+  test.equal(t, semver.parse("1"), Error(Syntax(1)))
+  test.equal(t, semver.parse("1.2"), Error(Syntax(3)))
+  test.equal(t, semver.parse("1.2.3-"), Error(Syntax(6)))
+  test.equal(t, semver.parse("a.b.c"), Error(Syntax(0)))
+  test.equal(t, semver.parse("1.2.3 abc"), Error(Syntax(5)))
+  test.equal(t, semver.parse("1.2.3-01"), Error(LeadingZero(6)))
+  test.equal(t, semver.parse("1.2.3++"), Error(Syntax(6)))
+  test.equal(t, semver.parse("07"), Error(LeadingZero(0)))
+  test.equal(t, semver.parse("111111111111111111111.0.0"), Error(Overflow(0)))
+  test.equal(t, semver.parse("8\u{0}"), Error(Syntax(1)))
+  test.equal(t, semver.parse("v1.2.3"), Error(Syntax(0)))
+  test.equal(
+    t,
+    semver.parse("18446744073709551615.0.0")?.major,
+    18446744073709551615u64
+  )
+  test.equal(
+    t,
+    semver.parse("1.2.3")?,
+    semver.Version(major: 1, minor: 2, patch: 3, pre: "", build: "")
+  )
+  test.equal(
+    t,
+    semver.parse("1.2.3-alpha1")?,
+    semver.Version(major: 1, minor: 2, patch: 3, pre: "alpha1", build: "")
+  )
+  test.equal(
+    t,
+    semver.parse("1.2.3+build5")?,
+    semver.Version(major: 1, minor: 2, patch: 3, pre: "", build: "build5")
+  )
+  test.equal(t, semver.parse("1.2.3+5build")?.build, "5build")
+  test.equal(
+    t,
+    semver.parse("1.2.3-alpha1+build5")?,
+    semver.Version(major: 1, minor: 2, patch: 3, pre: "alpha1", build: "build5")
+  )
+  let long = semver.parse("1.2.3-1.alpha1.9+build5.7.3aedf")?
+  test.equal(t, (long.pre, long.build), ("1.alpha1.9", "build5.7.3aedf"))
+  let zero = semver.parse("1.2.3-0a.alpha1.9+05build.7.3aedf")?
+  test.equal(t, (zero.pre, zero.build), ("0a.alpha1.9", "05build.7.3aedf"))
+  test.equal(
+    t,
+    semver.parse("0.4.0-beta.1+0851523")?,
+    semver.Version(major: 0, minor: 4, patch: 0, pre: "beta.1", build: "0851523")
+  )
+  test.equal(t, semver.parse("1.1.0-beta-10")?.pre, "beta-10")
+  // test_eq, test_ne and test_display.
+  test.check(t, version("1.2.3+build.42") == version("1.2.3+build.42"))
+  test.check(t, version("1.2.3-alpha") != version("1.2.3-beta"))
+  test.check(t, version("1.2.3+23") != version("1.2.3+42"))
+  let shows: List[String] = [
+    "1.2.3",
+    "1.2.3-alpha1",
+    "1.2.3+build.42",
+    "1.2.3-alpha1+42"
+  ]
+  for spelling in shows {
+    test.equal(t, semver.to_string(version(spelling)), spelling)
+  }
+  let rc = version("1.2.3-rc1")
+  test.equal(t, f"{rc:*^20}", "*****1.2.3-rc1******")
+  Ok(())
+}

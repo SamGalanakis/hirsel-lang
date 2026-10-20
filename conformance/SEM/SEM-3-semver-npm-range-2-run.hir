@@ -1,0 +1,62 @@
+// rule: SEM-3
+// expect: run
+// dtolnay/semver tests/test_version.rs and tests/test_version_req.rs
+// (280ebcb6; offsets are this module's, and precedence ignores build metadata
+// where semver's Ord does not), and npm/node-semver test/fixtures
+// range-include.js, range-exclude.js, range-parse.js and comparisons.js rows
+// without the loose and includePrerelease options (6e05b763; a leading v is
+// dropped from versions, and ranges past 2^53 are omitted since numbers here
+// are u64). Expected npm spellings are node-semver's, in this module's syntax.
+fn shown(r: Result[semver.Req, semver.SemverError]) -> String uses {} {
+  match r {
+    Ok(req) => semver.req_to_string(req),
+    Error(_) => "error",
+  }
+}
+
+fn npm_spellings() -> List[(String, String)] uses {} {
+  [
+    (">=1.x+build <2.x.x+build", ">=1.0.0, <2.0.0-0"),
+    ("1.x.x+build || 2.x.x+build", ">=1.0.0, <2.0.0-0 || >=2.0.0, <3.0.0-0"),
+    ("1.x+build.123", ">=1.0.0, <2.0.0-0"),
+    ("1.x.x+meta-data", ">=1.0.0, <2.0.0-0"),
+    ("1.x.x+build.123 >2.x.x+meta-data", ">=1.0.0, <2.0.0-0, >=3.0.0"),
+    ("1.x.x+build <2.x.x+meta", ">=1.0.0, <2.0.0-0"),
+    (">1.x+build <=2.x.x+meta", ">=2.0.0, <3.0.0-0"),
+    (" 1.x.x+build   >2.x.x+build  ", ">=1.0.0, <2.0.0-0, >=3.0.0"),
+    ("^1.x+build", ">=1.0.0, <2.0.0-0"),
+    ("^1.x.x+build", ">=1.0.0, <2.0.0-0"),
+    ("^1.2.x+build", ">=1.2.0, <2.0.0-0"),
+    ("^1.x+meta-data", ">=1.0.0, <2.0.0-0"),
+    ("^1.x.x+build.123", ">=1.0.0, <2.0.0-0"),
+    ("~1.x+build", ">=1.0.0, <2.0.0-0"),
+    ("~1.x.x+build", ">=1.0.0, <2.0.0-0"),
+    ("~1.2.x+build", ">=1.2.0, <1.3.0-0"),
+    ("~1.x+meta-data", ">=1.0.0, <2.0.0-0"),
+    ("~1.x.x+build.123", ">=1.0.0, <2.0.0-0"),
+    ("^1.x.x+build || ~2.x.x+meta", ">=1.0.0, <2.0.0-0 || >=2.0.0, <3.0.0-0"),
+    ("~1.x.x+build >2.x+meta", ">=1.0.0, <2.0.0-0, >=3.0.0"),
+    ("^1.x+build.123 <2.x.x+meta-data", ">=1.0.0, <2.0.0-0"),
+    ("1.x.x-alpha+build", ">=1.0.0, <2.0.0-0"),
+    (">1.x.x-alpha+build", ">=2.0.0"),
+    (">=1.x.x-alpha+build <2.x.x+build", ">=1.0.0, <2.0.0-0"),
+    ("1.x.x-alpha+build || 2.x.x+build", ">=1.0.0, <2.0.0-0 || >=2.0.0, <3.0.0-0"),
+    (
+      "v1.0+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaax6",
+      ">=1.0.0, <1.1.0-0"
+    ),
+    (
+      "1.2.3+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - 2.0.0",
+      ">=1.2.3, <=2.0.0"
+    )
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), semver.SemverError] {
+  let mut case: u64 = 4078
+  for (range, expected) in npm_spellings() {
+    test.check_case(t, shown(semver.parse_npm(range)) == expected, case)
+    case += 1
+  }
+  Ok(())
+}

@@ -183,6 +183,8 @@ the license named in its row; the license texts follow once each.
 | CPython | `Lib/shlex.py` shlex.read_token in POSIX mode with whitespace_split, quote and join; `Lib/test/test_shlex.py` posix_data and data rows, testQuote, testForceQuote (without force), testJoin and testJoinRoundtrip. Changes from shlex.py: rewritten as a byte scanner of POSIX mode with whitespace_split only (no punctuation_chars, non-POSIX mode or stream input), and an open quote or final backslash is an error value carrying its byte offset where Python raises ValueError | `stdlib/std@1/shlex.hir`, `conformance/SEM/SEM-3-shlex-*` | python/cpython `036d309cf542986a39eeba5ca805b2ec7619731d` | PSF-2.0 |
 | google/uuid | `uuid.go` Parse's four spellings, Version and Variant; `uuid_test.go` tests table and TestFromBytes | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | google/uuid `2d3c2a9cc518326daf99a383f07c4d3c44317e4d` | BSD-3-Clause (google/uuid) |
 | uuid | `src/builder.rs` from_random_bytes and from_unix_timestamp_millis layouts; `src/parser.rs` test_parse_valid and test_parse_invalid inputs; `src/v7.rs` test_new and test_sorting | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | uuid-rs/uuid `276c23628a669ca9fca637f3326c21b114e88049` | MIT |
+| semver | `src/{parse,eval,impls,display}.rs` version and requirement parsing, prerelease precedence, comparator matching and display; `tests/test_version.rs` and `tests/test_version_req.rs` vectors | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | dtolnay/semver `280ebcb6edac3aa4cdc545dbff8a26c5ac4861fe` | MIT |
+| node-semver | `classes/range.js` parseRange, replaceCaret, replaceTilde, replaceXRange, hyphenReplace and testSet; `test/fixtures/{range-include,range-exclude,range-parse,comparisons}.js` rows without loose or includePrerelease | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | npm/node-semver `6e05b7637396ac66522cff8731f07cfe0ef49a29` | ISC |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -238,6 +240,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - google/uuid: Copyright (c) 2009,2014 Google Inc. All rights reserved.
 - uuid: Copyright (c) 2014 The Rust Project Developers; Copyright (c) 2018 Ashley
   Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
+- semver: Copyright (c) David Tolnay and semver contributors
+- node-semver: Copyright (c) Isaac Z. Schlueter and Contributors
 
 ## Zlib License (zlib)
 
@@ -540,6 +544,22 @@ products or services of Licensee, or any third party.
 8. By copying, installing or otherwise using Python, Licensee
 agrees to be bound by the terms and conditions of this License
 Agreement.
+```
+
+## ISC License (node-semver)
+
+```text
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
 ## BSD-3-Clause License (google/uuid)

@@ -243,6 +243,15 @@ fn uuid_v7_reads_the_wall_clock() {
 }
 
 #[test]
+fn semver_is_ordinary_source() {
+    source_codec(
+        "semver-npm-match-1",
+        "semver",
+        &["parse", "parse_npm", "matches"],
+    );
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

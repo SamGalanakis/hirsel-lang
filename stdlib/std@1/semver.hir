@@ -1,0 +1,1051 @@
+// SemVer 2.0 versions and Cargo and npm requirements. Version and Cargo
+// requirement parsing, precedence and matching are ported from dtolnay/semver
+// src/{parse,eval,impls,display}.rs, 280ebcb6edac3aa4cdc545dbff8a26c5ac4861fe
+// (MIT); npm ranges desugar as npm/node-semver classes/range.js
+// replaceCaret/replaceTilde/replaceXRange/hyphenReplace and testSet,
+// 6e05b7637396ac66522cff8731f07cfe0ef49a29 (ISC); third-party/NOTICES.md.
+/// A SemVer 2.0 version. `pre` and `build` are the dot-separated identifiers
+/// after `-` and `+`, empty when absent.
+@format(format_into)
+pub type Version {
+  major: u64,
+  minor: u64,
+  patch: u64,
+  pre: String,
+  build: String,
+}
+
+/// A comparator's operator; `Wildcard` is a requirement such as `1.*`.
+pub type Op = Exact | Greater | GreaterEq | Less | LessEq | Tilde | Caret | Wildcard
+
+/// One comparator of a requirement: an operator and a version whose minor and
+/// patch may be absent (`^1`, `~1.2`, `>=1.*`). `pre` is empty unless the patch
+/// is present.
+pub type Comparator {
+  op: Op,
+  major: u64,
+  minor: Option[u64],
+  patch: Option[u64],
+  pre: String,
+}
+
+/// A requirement: a version matches when it matches every comparator of any
+/// one set. A Cargo requirement has one set; an npm range has one per `||`
+/// alternative. An empty set matches every version without a prerelease.
+@format(format_req_into)
+pub type Req {
+  sets: List[List[Comparator]],
+}
+
+/// Offsets are byte positions in the parsed text.
+pub type SemverError = Empty | Syntax(u64) | LeadingZero(u64) | Overflow(u64)
+
+// --- Precedence -------------------------------------------------------------
+@noalloc
+fn order(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+// The end of the identifier starting at `start`.
+@noalloc
+fn segment_end(data: Bytes, start: u64) -> u64 uses {} {
+  let size = core@1/bytes.len(data)
+  let mut end = start
+  while end < size && data[end] != b'.' {
+    end += 1
+  }
+  end
+}
+
+@noalloc
+fn all_digits(data: Bytes, start: u64, end: u64) -> bool uses {} {
+  let mut i = start
+  while i < end {
+    if !std@1/ascii.is_digit(data[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Bytewise comparison of a[a0..a1] and b[b0..b1].
+@noalloc
+fn compare_bytes(a: Bytes, a0: u64, a1: u64, b: Bytes, b0: u64, b1: u64) -> i32 uses {} {
+  let mut i = a0
+  let mut j = b0
+  while i < a1 && j < b1 {
+    if a[i] != b[j] {
+      return order(core@1/int.widen(a[i]), core@1/int.widen(b[j]))
+    }
+    i += 1
+    j += 1
+  }
+  order(a1 - a0, b1 - b0)
+}
+
+/// Compares prerelease strings by SemVer 2.0 precedence: an empty prerelease
+/// (a release) is greatest; identifiers compare in turn, numeric ones by value
+/// and below alphanumeric ones, which compare in ASCII order; a longer list of
+/// otherwise equal identifiers is greater.
+@noalloc
+pub fn compare_pre(a: String, b: String) -> i32 uses {} {
+  let x = core@1/string.as_bytes(a)
+  let y = core@1/string.as_bytes(b)
+  let xs = core@1/bytes.len(x)
+  let ys = core@1/bytes.len(y)
+  if xs == 0 || ys == 0 {
+    return order(ys, xs)
+  }
+  let mut i: u64 = 0
+  let mut j: u64 = 0
+  while i <= xs {
+    if j > ys {
+      return 1
+    }
+    let i1 = segment_end(x, i)
+    let j1 = segment_end(y, j)
+    let xn = all_digits(x, i, i1)
+    let yn = all_digits(y, j, j1)
+    let step = if xn && yn {
+      let lengths = order(i1 - i, j1 - j)
+      if lengths != 0 {
+        lengths
+      } else {
+        compare_bytes(x, i, i1, y, j, j1)
+      }
+    } else if xn {
+      -1
+    } else if yn {
+      1
+    } else {
+      compare_bytes(x, i, i1, y, j, j1)
+    }
+    if step != 0 {
+      return step
+    }
+    i = i1 + 1
+    j = j1 + 1
+  }
+  if j <= ys {
+    -1
+  } else {
+    0
+  }
+}
+
+/// SemVer 2.0 precedence: -1, 0 or 1. Major, minor and patch compare
+/// numerically, then prereleases by `compare_pre`; build metadata is ignored,
+/// so versions differing only in it compare 0 though `==` tells them apart.
+@noalloc
+pub fn compare(a: Version, b: Version) -> i32 uses {} {
+  if a.major != b.major {
+    return order(a.major, b.major)
+  }
+  if a.minor != b.minor {
+    return order(a.minor, b.minor)
+  }
+  if a.patch != b.patch {
+    return order(a.patch, b.patch)
+  }
+  compare_pre(a.pre, b.pre)
+}
+
+// --- Parsing ----------------------------------------------------------------
+fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+// A numeric identifier of at most `end`: digits without a leading zero.
+fn numeric(data: Bytes, mut at: u64, end: u64) -> Result[u64, SemverError] uses {} {
+  let start = at
+  let mut value: u64 = 0
+  while at < end && std@1/ascii.is_digit(data[at]) {
+    if at > start && value == 0 {
+      return Error(LeadingZero(start))
+    }
+    let digit: u64 = core@1/int.widen(data[at] - b'0')
+    let Some(scaled) = std@1/u64.checked_mul(value, 10) else {
+      return Error(Overflow(start))
+    }
+    let Some(sum) = std@1/u64.checked_add(scaled, digit) else {
+      return Error(Overflow(start))
+    }
+    value = sum
+    at += 1
+  }
+  if at == start {
+    return Error(Syntax(at))
+  }
+  Ok(value)
+}
+
+@noalloc
+fn identifier_byte(byte: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(byte) || byte == b'-'
+}
+
+// Dot-separated nonempty identifiers of [0-9A-Za-z-]; a prerelease's numeric
+// identifiers have no leading zero. Leaves `at` after the last identifier.
+fn identifiers(data: Bytes, mut at: u64, end: u64, pre: bool) -> Result[(), SemverError] uses {} {
+  let mut more = true
+  while more {
+    let start = at
+    while at < end && identifier_byte(data[at]) {
+      at += 1
+    }
+    if at == start {
+      return Error(Syntax(at))
+    }
+    if pre && at - start > 1 && data[start] == b'0' && all_digits(data, start, at) {
+      return Error(LeadingZero(start))
+    }
+    more = at < end && data[at] == b'.'
+    if more {
+      at += 1
+    }
+  }
+  Ok(())
+}
+
+@noalloc
+fn at_byte(data: Bytes, at: u64, end: u64, byte: u8) -> bool uses {} {
+  at < end && data[at] == byte
+}
+
+/// Parses a SemVer 2.0 version, `major.minor.patch` with an optional
+/// `-prerelease` and `+build`, as dtolnay/semver `Version::parse`: no leading
+/// `v`, whitespace, or leading zero in a number or numeric prerelease
+/// identifier; numbers fit in u64.
+pub fn parse(spelling: String) -> Result[Version, SemverError] uses {} {
+  let data = core@1/string.as_bytes(spelling)
+  let size = core@1/bytes.len(data)
+  if size == 0 {
+    return Error(Empty())
+  }
+  let mut at: u64 = 0
+  let major = numeric(data, mut at, size)?
+  if !at_byte(data, at, size, b'.') {
+    return Error(Syntax(at))
+  }
+  at += 1
+  let minor = numeric(data, mut at, size)?
+  if !at_byte(data, at, size, b'.') {
+    return Error(Syntax(at))
+  }
+  at += 1
+  let patch = numeric(data, mut at, size)?
+  let mut pre: String = ""
+  if at_byte(data, at, size, b'-') {
+    at += 1
+    let start = at
+    identifiers(data, mut at, size, true)?
+    pre = piece(data, start, at)
+  }
+  let mut build: String = ""
+  if at_byte(data, at, size, b'+') {
+    at += 1
+    let start = at
+    identifiers(data, mut at, size, false)?
+    build = piece(data, start, at)
+  }
+  if at != size {
+    return Error(Syntax(at))
+  }
+  Ok(
+    Version(major: major, minor: minor, patch: patch, pre: take pre, build: take build)
+  )
+}
+
+@noalloc
+fn wildcard(byte: u8) -> bool uses {} {
+  byte == b'*' || byte == b'x' || byte == b'X'
+}
+
+fn spaces(data: Bytes, mut at: u64, end: u64) -> () uses {} {
+  while at < end && data[at] == b' ' {
+    at += 1
+  }
+}
+
+// One Cargo comparator, as dtolnay/semver parse.rs `comparator`, followed by
+// spaces.
+fn cargo_comparator(data: Bytes, mut at: u64, end: u64) -> Result[
+  Comparator,
+  SemverError
+] uses {} {
+  let mut op: Op = Caret()
+  let mut written = true
+  if at_byte(data, at, end, b'=') {
+    op = Exact()
+    at += 1
+  } else if at_byte(data, at, end, b'>') {
+    op = Greater()
+    at += 1
+    if at_byte(data, at, end, b'=') {
+      op = GreaterEq()
+      at += 1
+    }
+  } else if at_byte(data, at, end, b'<') {
+    op = Less()
+    at += 1
+    if at_byte(data, at, end, b'=') {
+      op = LessEq()
+      at += 1
+    }
+  } else if at_byte(data, at, end, b'~') {
+    op = Tilde()
+    at += 1
+  } else if at_byte(data, at, end, b'^') {
+    at += 1
+  } else {
+    written = false
+  }
+  spaces(data, mut at, end)
+  let major = numeric(data, mut at, end)?
+  let mut minor: Option[u64] = None()
+  let mut patch: Option[u64] = None()
+  let mut starred = false
+  if at_byte(data, at, end, b'.') {
+    at += 1
+    if at < end && wildcard(data[at]) {
+      at += 1
+      starred = true
+      if !written {
+        op = Wildcard()
+      }
+    } else {
+      minor = Some(numeric(data, mut at, end)?)
+    }
+    if at_byte(data, at, end, b'.') {
+      at += 1
+      if at < end && wildcard(data[at]) {
+        at += 1
+        if !written {
+          op = Wildcard()
+        }
+      } else if starred {
+        return Error(Syntax(at))
+      } else {
+        patch = Some(numeric(data, mut at, end)?)
+      }
+    }
+  }
+  let mut pre: String = ""
+  if patch != None() && at_byte(data, at, end, b'-') {
+    at += 1
+    let start = at
+    identifiers(data, mut at, end, true)?
+    pre = piece(data, start, at)
+  }
+  if patch != None() && at_byte(data, at, end, b'+') {
+    at += 1
+    identifiers(data, mut at, end, false)?
+  }
+  spaces(data, mut at, end)
+  Ok(Comparator(op: op, major: major, minor: minor, patch: patch, pre: take pre))
+}
+
+/// Parses a Cargo version requirement, as dtolnay/semver `VersionReq::parse`:
+/// comparators separated by commas, each an optional `=`, `>`, `>=`, `<`, `<=`,
+/// `~` or `^` (the default) and a version whose minor and patch may be omitted
+/// or `*`, `x` or `X`, with spaces allowed around operators and commas. A lone
+/// wildcard is the requirement matching every release, and must be the only
+/// comparator. Build metadata is accepted and ignored.
+pub fn parse_cargo(spelling: String) -> Result[Req, SemverError] uses {} {
+  let data = core@1/string.as_bytes(spelling)
+  let size = core@1/bytes.len(data)
+  let mut at: u64 = 0
+  spaces(data, mut at, size)
+  if at < size && wildcard(data[at]) {
+    let star = at
+    at += 1
+    spaces(data, mut at, size)
+    if at == size {
+      return Ok(Req(sets: [[]]))
+    }
+    return Error(Syntax(star))
+  }
+  let mut set: List[Comparator] = []
+  let mut more = true
+  while more {
+    let start = at
+    match cargo_comparator(data, mut at, size) {
+      Ok(c) => core@1/list.push(mut set, take c),
+      Error(e) => {
+        // A wildcard comparator among others reports the wildcard.
+        if start < size && wildcard(data[start]) {
+          return Error(Syntax(start))
+        }
+        return Error(e)
+      },
+    }
+    if at < size {
+      if data[at] != b',' {
+        return Error(Syntax(at))
+      }
+      at += 1
+      spaces(data, mut at, size)
+    } else {
+      more = false
+    }
+  }
+  Ok(Req(sets: [take set]))
+}
+
+// --- npm ranges -------------------------------------------------------------
+// node-semver's \s, restricted to ASCII.
+@noalloc
+fn blank(byte: u8) -> bool uses {} {
+  byte == b' ' || byte == b'\t' || byte == b'\n' || byte == b'\r' || byte == 0x0b || byte == 0x0c
+}
+
+fn blanks(data: Bytes, mut at: u64, end: u64) -> u64 uses {} {
+  let start = at
+  while at < end && blank(data[at]) {
+    at += 1
+  }
+  at - start
+}
+
+// An x-range version: up to three parts, each a number or x, X or *; a
+// missing part counts as x. `pre` is kept only when all three are numbers.
+type Partial {
+  major: Option[u64],
+  minor: Option[u64],
+  patch: Option[u64],
+  pre: String,
+}
+
+fn xpart(data: Bytes, mut at: u64, end: u64) -> Result[Option[u64], SemverError] uses {} {
+  if at < end && wildcard(data[at]) {
+    at += 1
+    return Ok(None())
+  }
+  Ok(Some(numeric(data, mut at, end)?))
+}
+
+// node-semver XRANGEPLAIN with an optional leading v, ending at a blank or the
+// end of the set. A number after an x part is an error, as in node-semver.
+fn partial(data: Bytes, mut at: u64, end: u64) -> Result[Partial, SemverError] uses {} {
+  if at_byte(data, at, end, b'v') {
+    at += 1
+  }
+  let major = xpart(data, mut at, end)?
+  let mut minor: Option[u64] = None()
+  let mut patch: Option[u64] = None()
+  let mut pre: String = ""
+  if at_byte(data, at, end, b'.') {
+    at += 1
+    let second = at
+    minor = xpart(data, mut at, end)?
+    if major == None() && minor != None() {
+      return Error(Syntax(second))
+    }
+    if at_byte(data, at, end, b'.') {
+      at += 1
+      let third = at
+      patch = xpart(data, mut at, end)?
+      if minor == None() && patch != None() {
+        return Error(Syntax(third))
+      }
+      if at_byte(data, at, end, b'-') {
+        at += 1
+        let start = at
+        identifiers(data, mut at, end, true)?
+        if patch != None() {
+          pre = piece(data, start, at)
+        }
+      }
+      if at_byte(data, at, end, b'+') {
+        at += 1
+        identifiers(data, mut at, end, false)?
+      }
+    }
+  }
+  if at < end && !blank(data[at]) {
+    return Error(Syntax(at))
+  }
+  Ok(Partial(major: major, minor: minor, patch: patch, pre: take pre))
+}
+
+fn full(op: Op, major: u64, minor: u64, patch: u64, pre: String) -> Comparator uses {} {
+  Comparator(
+    op: op,
+    major: major,
+    minor: Some(minor),
+    patch: Some(patch),
+    pre: unique pre
+  )
+}
+
+fn bump(value: u64, at: u64) -> Result[u64, SemverError] uses {} {
+  match std@1/u64.checked_add(value, 1) {
+    Some(next) => Ok(next),
+    None() => Error(Overflow(at)),
+  }
+}
+
+// node-semver's null set, <0.0.0-0, which no version matches.
+fn nothing() -> Comparator uses {} {
+  full(Less(), 0, 0, 0, "0")
+}
+
+// replaceTilde: ~M.m.p allows patch updates, ~M.m minor-level and ~M major-level.
+fn tilde(v: Partial, at: u64, mut out: List[Comparator]) -> Result[(), SemverError] uses {} {
+  let Some(major) = v.major else {
+    return Ok(())
+  }
+  let Some(minor) = v.minor else {
+    core@1/list.push(mut out, full(GreaterEq(), major, 0, 0, ""))
+    core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0"))
+    return Ok(())
+  }
+  let patch = match v.patch {
+    Some(p) => p,
+    None() => 0,
+  }
+  core@1/list.push(mut out, full(GreaterEq(), major, minor, patch, v.pre))
+  core@1/list.push(mut out, full(Less(), major, bump(minor, at)?, 0, "0"))
+  Ok(())
+}
+
+// replaceCaret: changes that keep the leftmost nonzero part.
+fn caret(v: Partial, at: u64, mut out: List[Comparator]) -> Result[(), SemverError] uses {} {
+  let Some(major) = v.major else {
+    return Ok(())
+  }
+  let Some(minor) = v.minor else {
+    core@1/list.push(mut out, full(GreaterEq(), major, 0, 0, ""))
+    core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0"))
+    return Ok(())
+  }
+  let Some(patch) = v.patch else {
+    core@1/list.push(mut out, full(GreaterEq(), major, minor, 0, ""))
+    if major == 0 {
+      core@1/list.push(mut out, full(Less(), 0, bump(minor, at)?, 0, "0"))
+    } else {
+      core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0"))
+    }
+    return Ok(())
+  }
+  core@1/list.push(mut out, full(GreaterEq(), major, minor, patch, v.pre))
+  if major != 0 {
+    core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0"))
+  } else if minor != 0 {
+    core@1/list.push(mut out, full(Less(), 0, bump(minor, at)?, 0, "0"))
+  } else {
+    core@1/list.push(mut out, full(Less(), 0, 0, bump(patch, at)?, "0"))
+  }
+  Ok(())
+}
+
+// replaceXRange for a primitive operator (Exact for none or `=`) and an x-range.
+fn xrange(op: Op, v: Partial, at: u64, mut out: List[Comparator]) -> Result[
+  (),
+  SemverError
+] uses {} {
+  let Some(major) = v.major else {
+    if op == Greater() || op == Less() {
+      core@1/list.push(mut out, nothing())
+    }
+    return Ok(())
+  }
+  if let Some(minor) = v.minor {
+    if let Some(patch) = v.patch {
+      core@1/list.push(mut out, full(op, major, minor, patch, v.pre))
+      return Ok(())
+    }
+  }
+  if op == Exact() {
+    return match v.minor {
+      None() => {
+        core@1/list.push(mut out, full(GreaterEq(), major, 0, 0, ""))
+        core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0"))
+        Ok(())
+      },
+      Some(minor) => {
+        core@1/list.push(mut out, full(GreaterEq(), major, minor, 0, ""))
+        core@1/list.push(mut out, full(Less(), major, bump(minor, at)?, 0, "0"))
+        Ok(())
+      },
+    }
+  }
+  // The patch is x, and so is the minor when absent: >1 is >=2.0.0, >1.2 is
+  // >=1.3.0, <=1 is <2.0.0-0 and <=1.2 is <1.3.0-0.
+  let mut m = 0u64
+  let mut big = major
+  if let Some(minor) = v.minor {
+    m = minor
+  }
+  let upward = op == Greater() || op == LessEq()
+  if upward {
+    if v.minor == None() {
+      big = bump(major, at)?
+    } else {
+      m = bump(m, at)?
+    }
+  }
+  if op == Greater() || op == GreaterEq() {
+    core@1/list.push(mut out, full(GreaterEq(), big, m, 0, ""))
+  } else {
+    core@1/list.push(mut out, full(Less(), big, m, 0, "0"))
+  }
+  Ok(())
+}
+
+// hyphenReplace: `a - b` is >=a <=b, with x parts widening both ends.
+fn hyphen(from: Partial, to: Partial, at: u64, mut out: List[Comparator]) -> Result[
+  (),
+  SemverError
+] uses {} {
+  if let Some(major) = from.major {
+    let minor = match from.minor {
+      Some(m) => m,
+      None() => 0,
+    }
+    let patch = match from.patch {
+      Some(p) => p,
+      None() => 0,
+    }
+    core@1/list.push(mut out, full(GreaterEq(), major, minor, patch, from.pre))
+  }
+  if let Some(major) = to.major {
+    match to.minor {
+      None() => core@1/list.push(mut out, full(Less(), bump(major, at)?, 0, 0, "0")),
+      Some(minor) => match to.patch {
+        None() => core@1/list.push(
+          mut out,
+          full(Less(), major, bump(minor, at)?, 0, "0")
+        ),
+        Some(patch) => core@1/list.push(
+          mut out,
+          full(LessEq(), major, minor, patch, to.pre)
+        ),
+      },
+    }
+  }
+  Ok(())
+}
+
+// node-semver parseRange first deletes every `+` and dot-separated build
+// identifiers from the set's text, wherever they stand. Returns the remaining
+// bytes and, for each, its offset in `data`.
+fn strip_builds(data: Bytes, start: u64, end: u64) -> (Bytes, List[u64]) uses {} {
+  let mut kept: List[u8] = []
+  let mut origin: List[u64] = []
+  let mut i = start
+  while i < end {
+    if data[i] == b'+' && i + 1 < end && identifier_byte(data[i + 1]) {
+      i += 1
+      let mut more = true
+      while more {
+        while i < end && identifier_byte(data[i]) {
+          i += 1
+        }
+        more = i + 1 < end && data[i] == b'.' && identifier_byte(data[i + 1])
+        if more {
+          i += 1
+        }
+      }
+    } else {
+      core@1/list.push(mut kept, data[i])
+      core@1/list.push(mut origin, i)
+      i += 1
+    }
+  }
+  (core@1/bytes.from_list(take kept), take origin)
+}
+
+// An offset in stripped text as an offset in the original; the end of the
+// stripped text is the set's end.
+fn unstripped(origin: List[u64], at: u64, end: u64) -> u64 uses {} {
+  if at < core@1/list.len(origin) {
+    origin[at]
+  } else {
+    end
+  }
+}
+
+fn unstrip(error: SemverError, origin: List[u64], end: u64) -> SemverError uses {} {
+  match error {
+    Empty() => Empty(),
+    Syntax(at) => Syntax(unstripped(origin, at, end)),
+    LeadingZero(at) => LeadingZero(unstripped(origin, at, end)),
+    Overflow(at) => Overflow(unstripped(origin, at, end)),
+  }
+}
+
+fn npm_set(data: Bytes, start: u64, end: u64) -> Result[List[Comparator], SemverError] uses {} {
+  let mut raw: List[Comparator] = []
+  let mut at = start
+  let _ = blanks(data, mut at, end)
+  let mut first = true
+  while at < end {
+    let first_byte = at
+    let mut op: Op = Exact()
+    let mut kind: u8 = 0
+    if at_byte(data, at, end, b'~') {
+      kind = 1
+      at += 1
+      if at_byte(data, at, end, b'>') {
+        at += 1
+      }
+    } else if at_byte(data, at, end, b'^') {
+      kind = 2
+      at += 1
+    } else if at_byte(data, at, end, b'>') {
+      op = Greater()
+      at += 1
+      if at_byte(data, at, end, b'=') {
+        op = GreaterEq()
+        at += 1
+      }
+    } else if at_byte(data, at, end, b'<') {
+      op = Less()
+      at += 1
+      if at_byte(data, at, end, b'=') {
+        op = LessEq()
+        at += 1
+      }
+    } else if at_byte(data, at, end, b'=') {
+      at += 1
+    } else {
+      kind = 3
+    }
+    if kind != 3 {
+      let _ = blanks(data, mut at, end)
+    }
+    let v = partial(data, mut at, end)?
+    let gap = blanks(data, mut at, end)
+    if kind == 3 && first && gap > 0 && at_byte(data, at, end, b'-') && at + 1 < end && blank(
+      data[at + 1]
+    ) {
+      at += 1
+      let _ = blanks(data, mut at, end)
+      let to_start = at
+      let to = partial(data, mut at, end)?
+      let _ = blanks(data, mut at, end)
+      if at < end {
+        return Error(Syntax(at))
+      }
+      hyphen(v, to, to_start, mut raw)?
+    } else if kind == 1 {
+      tilde(v, first_byte, mut raw)?
+    } else if kind == 2 {
+      caret(v, first_byte, mut raw)?
+    } else {
+      xrange(op, v, first_byte, mut raw)?
+    }
+    first = false
+  }
+  // As node-semver parseRange: >=0.0.0 is dropped, a null set replaces the
+  // whole set, and repeated comparators are kept once.
+  let mut set: List[Comparator] = []
+  for c in take raw {
+    if c == nothing() {
+      return Ok([nothing()])
+    }
+    let zero = c.op == GreaterEq() && c.major == 0 && c.minor == Some(0u64) && c.patch == Some(
+      0u64
+    ) && core@1/string.byte_len(c.pre) == 0
+    let mut seen = false
+    for d in set {
+      if d == c {
+        seen = true
+      }
+    }
+    if !zero && !seen {
+      core@1/list.push(mut set, take c)
+    }
+  }
+  Ok(take set)
+}
+
+/// Parses an npm range, as node-semver `new Range(text)` without the loose and
+/// includePrerelease options: `||` separates alternatives, each a hyphen range
+/// `a - b` or blank-separated comparators: `<`, `<=`, `>`, `>=`, `=` or none
+/// before an x-range version (`1`, `1.2`, `1.x`, `*`, `1.2.3-pre`), `~` or `~>`,
+/// or `^`. A version may start with `v`; build metadata is ignored. Each
+/// alternative desugars to primitive comparators exactly as node-semver's do,
+/// and an empty alternative matches every release.
+pub fn parse_npm(spelling: String) -> Result[Req, SemverError] uses {} {
+  let data = core@1/string.as_bytes(spelling)
+  let size = core@1/bytes.len(data)
+  let mut sets: List[List[Comparator]] = []
+  let mut start: u64 = 0
+  let mut more = true
+  while more {
+    let mut end = start
+    while end < size && !(data[end] == b'|' && end + 1 < size && data[end + 1] == b'|') {
+      end += 1
+    }
+    let (stripped, origin) = strip_builds(data, start, end)
+    match npm_set(stripped, 0, core@1/bytes.len(stripped)) {
+      Ok(set) => core@1/list.push(mut sets, take set),
+      Error(e) => return Error(unstrip(e, origin, end)),
+    }
+    more = end < size
+    start = end + 2
+  }
+  // Null sets are dropped when another remains, and a set matching every
+  // release then stands for the whole range.
+  if core@1/list.len(sets) > 1 {
+    let mut kept: List[List[Comparator]] = []
+    for set in sets {
+      if set != [nothing()] {
+        core@1/list.push(mut kept, copy set)
+      }
+    }
+    if core@1/list.len(kept) == 0 {
+      return Ok(Req(sets: [[nothing()]]))
+    }
+    if core@1/list.len(kept) > 1 {
+      for set in kept {
+        if core@1/list.len(set) == 0 {
+          return Ok(Req(sets: [[]]))
+        }
+      }
+    }
+    return Ok(Req(sets: take kept))
+  }
+  Ok(Req(sets: take sets))
+}
+
+// --- Matching ---------------------------------------------------------------
+@noalloc
+fn same_or_absent(part: Option[u64], value: u64) -> bool uses {} {
+  match part {
+    Some(p) => p == value,
+    None() => true,
+  }
+}
+
+fn matches_exact(c: Comparator, v: Version) -> bool uses {} {
+  v.major == c.major && same_or_absent(c.minor, v.minor) && same_or_absent(
+    c.patch,
+    v.patch
+  ) && v.pre == c.pre
+}
+
+// dtolnay/semver matches_greater (sign 1) and matches_less (sign -1).
+fn matches_beyond(c: Comparator, v: Version, sign: i32) -> bool uses {} {
+  if v.major != c.major {
+    return order(v.major, c.major) == sign
+  }
+  let Some(minor) = c.minor else {
+    return false
+  }
+  if v.minor != minor {
+    return order(v.minor, minor) == sign
+  }
+  let Some(patch) = c.patch else {
+    return false
+  }
+  if v.patch != patch {
+    return order(v.patch, patch) == sign
+  }
+  compare_pre(v.pre, c.pre) == sign
+}
+
+fn matches_tilde(c: Comparator, v: Version) -> bool uses {} {
+  if v.major != c.major || !same_or_absent(c.minor, v.minor) {
+    return false
+  }
+  if let Some(patch) = c.patch {
+    if v.patch != patch {
+      return v.patch > patch
+    }
+  }
+  compare_pre(v.pre, c.pre) >= 0
+}
+
+fn matches_caret(c: Comparator, v: Version) -> bool uses {} {
+  if v.major != c.major {
+    return false
+  }
+  let Some(minor) = c.minor else {
+    return true
+  }
+  let Some(patch) = c.patch else {
+    if c.major > 0 {
+      return v.minor >= minor
+    }
+    return v.minor == minor
+  }
+  if c.major > 0 {
+    if v.minor != minor {
+      return v.minor > minor
+    }
+    if v.patch != patch {
+      return v.patch > patch
+    }
+  } else if minor > 0 {
+    if v.minor != minor {
+      return false
+    }
+    if v.patch != patch {
+      return v.patch > patch
+    }
+  } else if v.minor != minor || v.patch != patch {
+    return false
+  }
+  compare_pre(v.pre, c.pre) >= 0
+}
+
+fn matches_comparator(c: Comparator, v: Version) -> bool uses {} {
+  match c.op {
+    Exact() | Wildcard() => matches_exact(c, v),
+    Greater() => matches_beyond(c, v, 1),
+    GreaterEq() => matches_exact(c, v) || matches_beyond(c, v, 1),
+    Less() => matches_beyond(c, v, -1),
+    LessEq() => matches_exact(c, v) || matches_beyond(c, v, -1),
+    Tilde() => matches_tilde(c, v),
+    Caret() => matches_caret(c, v),
+  }
+}
+
+// A prerelease version matches only a set with a prerelease comparator of the
+// same major, minor and patch.
+fn matches_set(set: List[Comparator], v: Version) -> bool uses {} {
+  for c in set {
+    if !matches_comparator(c, v) {
+      return false
+    }
+  }
+  if core@1/string.byte_len(v.pre) == 0 {
+    return true
+  }
+  for c in set {
+    if c.major == v.major && c.minor == Some(v.minor) && c.patch == Some(v.patch) && core@1/string.byte_len(
+      c.pre
+    ) > 0 {
+      return true
+    }
+  }
+  false
+}
+
+/// Whether `v` matches every comparator of some set of `req`. A version with a
+/// prerelease matches a set only when one of its comparators has a prerelease
+/// and the same major, minor and patch, so `^1.2.3` excludes `1.3.0-beta`.
+/// Build metadata is ignored.
+pub fn matches(req: Req, v: Version) -> bool uses {} {
+  for set in req.sets {
+    if matches_set(set, v) {
+      return true
+    }
+  }
+  false
+}
+
+// --- Formatting -------------------------------------------------------------
+/// Appends `major.minor.patch`, then `-pre` and `+build` when present.
+@preserves_unique(out)
+pub fn format_into(v: Version, mut out: List[u8]) -> () uses {} {
+  std@1/u64.format_into(v.major, mut out)
+  core@1/list.push(mut out, b'.')
+  std@1/u64.format_into(v.minor, mut out)
+  core@1/list.push(mut out, b'.')
+  std@1/u64.format_into(v.patch, mut out)
+  if core@1/string.byte_len(v.pre) > 0 {
+    core@1/list.push(mut out, b'-')
+    text.append(mut out, v.pre)
+  }
+  if core@1/string.byte_len(v.build) > 0 {
+    core@1/list.push(mut out, b'+')
+    text.append(mut out, v.build)
+  }
+}
+
+/// The version's spelling.
+pub fn to_string(v: Version) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(v, mut out)
+  text.finish_valid(take out)
+}
+
+@preserves_unique(out)
+fn comparator_into(c: Comparator, mut out: List[u8]) -> () uses {} {
+  let op = match c.op {
+    Exact() => "=",
+    Greater() => ">",
+    GreaterEq() => ">=",
+    Less() => "<",
+    LessEq() => "<=",
+    Tilde() => "~",
+    Caret() => "^",
+    Wildcard() => "",
+  }
+  text.append(mut out, op)
+  std@1/u64.format_into(c.major, mut out)
+  match c.minor {
+    Some(minor) => {
+      core@1/list.push(mut out, b'.')
+      std@1/u64.format_into(minor, mut out)
+      match c.patch {
+        Some(patch) => {
+          core@1/list.push(mut out, b'.')
+          std@1/u64.format_into(patch, mut out)
+          if core@1/string.byte_len(c.pre) > 0 {
+            core@1/list.push(mut out, b'-')
+            text.append(mut out, c.pre)
+          }
+        },
+        None() => {
+          if c.op == Wildcard() {
+            text.append(mut out, ".*")
+          }
+        },
+      }
+    },
+    None() => {
+      if c.op == Wildcard() {
+        text.append(mut out, ".*")
+      }
+    },
+  }
+}
+
+/// Appends the requirement as dtolnay/semver displays one: comparators joined
+/// by `, `, `*` for an empty set, and sets joined by ` || `.
+@preserves_unique(out)
+pub fn format_req_into(req: Req, mut out: List[u8]) -> () uses {} {
+  let mut i: u64 = 0
+  for set in req.sets {
+    if i > 0 {
+      text.append(mut out, " || ")
+    }
+    if core@1/list.len(set) == 0 {
+      core@1/list.push(mut out, b'*')
+    }
+    let mut j: u64 = 0
+    for c in set {
+      if j > 0 {
+        text.append(mut out, ", ")
+      }
+      comparator_into(c, mut out)
+      j += 1
+    }
+    i += 1
+  }
+}
+
+/// The requirement's spelling, as `format_req_into`.
+pub fn req_to_string(req: Req) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_req_into(req, mut out)
+  text.finish_valid(take out)
+}

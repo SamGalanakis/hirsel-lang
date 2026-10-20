@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// dtolnay/semver tests/test_version.rs and tests/test_version_req.rs
+// (280ebcb6; offsets are this module's, and precedence ignores build metadata
+// where semver's Ord does not), and npm/node-semver test/fixtures
+// range-include.js, range-exclude.js, range-parse.js and comparisons.js rows
+// without the loose and includePrerelease options (6e05b763; a leading v is
+// dropped from versions, and ranges past 2^53 are omitted since numbers here
+// are u64). Expected npm spellings are node-semver's, in this module's syntax.
+fn shown(r: Result[semver.Req, semver.SemverError]) -> String uses {} {
+  match r {
+    Ok(req) => semver.req_to_string(req),
+    Error(_) => "error",
+  }
+}
+
+pub fn main(t: Test) -> Result[(), semver.SemverError] {
+  // test_leading_digit_in_pre_and_build.
+  let ops: List[String] = ["=", ">", ">=", "<", "<=", "~", "^"]
+  let tails: List[String] = [
+    "1.2.3-1a",
+    "1.2.3+1a",
+    "1.2.3-01a",
+    "1.2.3+01",
+    "1.2.3-1+1",
+    "1.2.3-1-1+1-1-1",
+    "1.2.3-1a+1a",
+    "1.2.3-1a-1a+1a-1a-1a"
+  ]
+  for op in ops {
+    for tail in tails {
+      test.check(t, results.is_ok(semver.parse_cargo(f"{op} {tail}")))
+    }
+  }
+  // Comparators are not limited to semver's 32.
+  test.equal(
+    t,
+    shown(
+      semver.parse_cargo(
+        ">1, >2, >3, >4, >5, >6, >7, >8, >9, >10, >11, >12, >13, >14, >15, >16, >17, >18, >19, >20, >21, >22, >23, >24, >25, >26, >27, >28, >29, >30, >31, >32, >33"
+      )
+    ),
+    ">1, >2, >3, >4, >5, >6, >7, >8, >9, >10, >11, >12, >13, >14, >15, >16, >17, >18, >19, >20, >21, >22, >23, >24, >25, >26, >27, >28, >29, >30, >31, >32, >33"
+  )
+  Ok(())
+}

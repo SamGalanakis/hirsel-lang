@@ -1,0 +1,103 @@
+// rule: SEM-3
+// expect: run
+// dtolnay/semver tests/test_version.rs and tests/test_version_req.rs
+// (280ebcb6; offsets are this module's, and precedence ignores build metadata
+// where semver's Ord does not), and npm/node-semver test/fixtures
+// range-include.js, range-exclude.js, range-parse.js and comparisons.js rows
+// without the loose and includePrerelease options (6e05b763; a leading v is
+// dropped from versions, and ranges past 2^53 are omitted since numbers here
+// are u64). Expected npm spellings are node-semver's, in this module's syntax.
+fn npm_matches() -> List[(String, String, bool)] uses {} {
+  [
+    (">=1.2.3 >=1.2.1", "1.2.3", true),
+    (">=1.2.1 >=1.2.3", "1.2.3", true),
+    (">=1.2", "1.2.8", true),
+    ("^1.2.3", "1.8.1", true),
+    ("^0.1.2", "0.1.2", true),
+    ("^0.1", "0.1.2", true),
+    ("^0.0.1", "0.0.1", true),
+    ("^1.2", "1.4.2", true),
+    ("^1.2 ^1", "1.4.2", true),
+    ("^1.2.3-alpha", "1.2.3-pre", true),
+    ("^1.2.0-alpha", "1.2.0-pre", true),
+    ("^0.0.1-alpha", "0.0.1-beta", true),
+    ("^0.0.1-alpha", "0.0.1", true),
+    ("^0.1.1-alpha", "0.1.1-beta", true),
+    ("^x", "1.2.3", true),
+    ("x - 1.0.0", "0.9.7", true),
+    ("x - 1.x", "0.9.7", true),
+    ("1.0.0 - x", "1.9.7", true),
+    ("1.x - x", "1.9.7", true),
+    ("<=7.x", "7.9.9", true),
+    ("1.0.0 - 2.0.0", "2.2.3", false),
+    ("1.2.3+asdf - 2.4.3+asdf", "1.2.3-pre.2", false),
+    ("1.2.3+asdf - 2.4.3+asdf", "2.4.3-alpha", false),
+    ("^1.2.3+build", "2.0.0", false),
+    ("^1.2.3+build", "1.2.0", false),
+    ("^1.2.3", "1.2.3-pre", false),
+    ("^1.2", "1.2.0-pre", false),
+    (">1.2", "1.3.0-beta", false),
+    ("<=1.2.3", "1.2.3-beta", false),
+    ("^1.2.3", "1.2.3-beta", false),
+    ("=0.7.x", "0.7.0-asdf", false),
+    (">=0.7.x", "0.7.0-asdf", false),
+    ("<=0.7.x", "0.7.0-asdf", false),
+    ("1.0.0", "1.0.1", false),
+    (">=1.0.0", "0.0.0", false),
+    (">=1.0.0", "0.0.1", false),
+    (">=1.0.0", "0.1.0", false),
+    (">1.0.0", "0.0.1", false),
+    (">1.0.0", "0.1.0", false),
+    ("<=2.0.0", "3.0.0", false),
+    ("<=2.0.0", "2.9999.9999", false),
+    ("<=2.0.0", "2.2.9", false),
+    ("<2.0.0", "2.9999.9999", false),
+    ("<2.0.0", "2.2.9", false),
+    (">=0.1.97", "0.1.93", false),
+    ("0.1.20 || 1.2.4", "1.2.3", false),
+    (">=0.2.3 || <0.0.1", "0.0.3", false),
+    (">=0.2.3 || <0.0.1", "0.2.2", false),
+    ("2.x.x", "1.1.3", false),
+    ("2.x.x", "3.1.3", false),
+    ("1.2.x", "1.3.3", false),
+    ("1.2.x || 2.x", "3.1.3", false),
+    ("1.2.x || 2.x", "1.1.3", false),
+    ("2.*.*", "1.1.3", false),
+    ("2.*.*", "3.1.3", false),
+    ("1.2.*", "1.3.3", false),
+    ("1.2.* || 2.*", "3.1.3", false),
+    ("1.2.* || 2.*", "1.1.3", false),
+    ("2", "1.1.2", false),
+    ("2.3", "2.4.1", false),
+    ("~0.0.1", "0.1.0-alpha", false),
+    ("~0.0.1", "0.1.0", false),
+    ("~2.4", "2.5.0", false),
+    ("~2.4", "2.3.9", false),
+    ("~>3.2.1", "3.3.2", false),
+    ("~>3.2.1", "3.2.0", false),
+    ("~1", "0.2.3", false),
+    ("~>1", "2.2.3", false),
+    ("~1.0", "1.1.0", false),
+    ("<1", "1.0.0", false),
+    (">=1.2", "1.1.1", false),
+    ("~v0.5.4-beta", "0.5.4-alpha", false),
+    ("=0.7.x", "0.8.2", false),
+    (">=0.7.x", "0.6.2", false),
+    ("<0.7.x", "0.7.2", false),
+    ("<1.2.3", "1.2.3-beta", false)
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), semver.SemverError] {
+  let mut case: u64 = 3078
+  for (range, spelling, expected) in npm_matches() {
+    let req = semver.parse_npm(range)?
+    let found = match semver.parse(spelling) {
+      Ok(v) => semver.matches(req, v),
+      Error(_) => false,
+    }
+    test.check_case(t, found == expected, case)
+    case += 1
+  }
+  Ok(())
+}

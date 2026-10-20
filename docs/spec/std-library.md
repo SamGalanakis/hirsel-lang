@@ -3383,3 +3383,60 @@ rounding its nanoseconds down to milliseconds, then draws 10 bytes; a reading
 before 1970 is `BeforeEpoch()`. No state is kept between calls, so two version 7
 UUIDs of one millisecond are unordered (RFC 9562 section 6.2 makes the counter
 optional).
+
+## Semantic versions
+
+`std@1/semver` parses SemVer 2.0 versions and matches them against Cargo
+requirements and npm ranges:
+
+```text
+Version     = { major: u64, minor: u64, patch: u64, pre: String, build: String }
+Op          = Exact | Greater | GreaterEq | Less | LessEq | Tilde | Caret | Wildcard
+Comparator  = { op: Op, major: u64, minor: Option[u64], patch: Option[u64], pre: String }
+Req         = { sets: List[List[Comparator]] }
+SemverError = Empty | Syntax(u64) | LeadingZero(u64) | Overflow(u64)
+fn semver.parse(spelling: String) -> Result[Version, SemverError] uses {}
+fn semver.compare(a: Version, b: Version) -> i32 uses {}
+fn semver.compare_pre(a: String, b: String) -> i32 uses {}
+fn semver.parse_cargo(spelling: String) -> Result[Req, SemverError] uses {}
+fn semver.parse_npm(spelling: String) -> Result[Req, SemverError] uses {}
+fn semver.matches(req: Req, v: Version) -> bool uses {}
+fn semver.to_string(v: Version) -> unique String uses {}
+fn semver.req_to_string(req: Req) -> unique String uses {}
+```
+
+`parse` is strict, as dtolnay/semver: `major.minor.patch` in u64 without
+leading zeros, then an optional `-` prerelease of dot-separated nonempty
+`[0-9A-Za-z-]` identifiers (numeric ones without leading zeros) and an optional
+`+` build of the same identifiers (leading zeros allowed). There is no leading
+`v` or whitespace. Errors carry byte offsets: `Syntax` at the unexpected
+character or the end, `LeadingZero` and `Overflow` at the number's start;
+`Empty()` is the empty string. `compare` is SemVer precedence: numbers, then
+prereleases, where a release is greater than any prerelease and identifiers
+compare in turn, numeric by value and below alphanumeric ones in ASCII order,
+a longer list winning a tie. Build metadata has no precedence, so `compare` can
+be 0 for versions `==` tells apart. `Version` formats through `@format`.
+
+A version matches a `Req` when it matches every comparator of some set; an
+empty set matches every release. Comparators match as dtolnay/semver's do, so a
+missing minor or patch widens them (`>1` is `>=2.0.0`, `~1.2` is `>=1.2.0,
+<1.3.0`, `^0.0` is `>=0.0.0, <0.1.0`). A version with a prerelease matches a set
+only if one of its comparators has a prerelease and the same major, minor and
+patch, so `^1.2.3` rejects `1.3.0-beta` and `>=1.2.3-alpha` accepts `1.2.3-beta`.
+
+`parse_cargo` reads a Cargo requirement into one set: comparators separated by
+commas, each `=`, `>`, `>=`, `<`, `<=`, `~`, `^` or nothing (caret) before a
+version whose minor and patch may be absent or `*`, `x` or `X`; spaces may
+surround operators and commas, build metadata is ignored, and a lone wildcard
+must be the only comparator. `parse_npm` reads a node-semver range without the
+loose and includePrerelease options: `||` separates sets, each a hyphen range
+`a - b` or comparators separated by whitespace (`<`, `<=`, `>`, `>=`, `=` or
+nothing before an x-range such as `1`, `1.x` or `*`, `~`, `~>` or `^`), with an
+optional `v` before versions; as in node-semver, every `+` and build
+identifiers are first deleted from a set's text wherever they stand. Each comparator desugars to Exact, GreaterEq,
+Greater, Less and LessEq comparators of full versions exactly as node-semver's
+`Range` does (`^1.2` is `>=1.2.0, <2.0.0-0`, `>=0.0.0` is dropped, an
+unsatisfiable comparator `<0.0.0-0` stands for its whole set, and so on); numbers
+are u64 rather than JavaScript's 2^53. `req_to_string` spells a `Req` as
+dtolnay/semver displays one: comparators joined by `, `, `*` for an empty set,
+sets joined by ` || `.

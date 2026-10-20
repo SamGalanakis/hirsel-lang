@@ -981,6 +981,12 @@
       "module": [
         "uuid"
       ]
+    },
+    {
+      "path": "semver.hir",
+      "module": [
+        "semver"
+      ]
     }
   ],
   "dependencies": []
