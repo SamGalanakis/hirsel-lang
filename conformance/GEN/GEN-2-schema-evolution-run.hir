@@ -2,6 +2,7 @@
 // expect: run
 // stdout: schema evolution: true
 // Frozen V1/V2 tagged DTOs; incoming identifiers only select written match arms.
+// Variant payloads are arrays of slots, including a single record payload.
 // Default 42 and missing-required vectors port Avro TestSchemaCompatibility:158-184.
 @serializable
 type OrderV1 {
@@ -174,7 +175,7 @@ fn has_issue(
 
 fn vectors() -> bool uses {} {
   // Old id 255 widens exactly; default priority comes from the reviewed upgrade.
-  let Ok(old) = read("{\"V1\":{\"id\":255,\"discount\":80}}") else {
+  let Ok(old) = read("{\"V1\":[{\"id\":255,\"discount\":80}]}") else {
     return false
   }
   let Percent(discount) = old.discount
@@ -202,7 +203,7 @@ fn vectors() -> bool uses {} {
   }
   // Previously accepted 99 must fail before constructing Percent@2.
   if !has_issue(
-    "{\"V1\":{\"id\":1,\"discount\":99}}",
+    "{\"V1\":[{\"id\":1,\"discount\":99}]}",
     "FactViolation",
     Fact,
     [Field("discount")]
@@ -210,7 +211,7 @@ fn vectors() -> bool uses {} {
     return false
   }
   // Current DTO defaults run through the same leaf as present values.
-  let Ok(current) = read("{\"V2\":{\"id\":256,\"discount\":70}}") else {
+  let Ok(current) = read("{\"V2\":[{\"id\":256,\"discount\":70}]}") else {
     return false
   }
   if current.id != 256 || current.priority != 42 {
@@ -222,25 +223,25 @@ fn vectors() -> bool uses {} {
   if loss.items[0].code != "DowngradeLoss" || loss.items[0].stage != Migration {
     return false
   }
-  let Ok(other) = read("{\"V2\":{\"id\":1,\"discount\":70,\"priority\":7}}") else {
+  let Ok(other) = read("{\"V2\":[{\"id\":1,\"discount\":70,\"priority\":7}]}") else {
     return false
   }
   let Error(Invalid(_)) = export_v1(other) else {
     return false
   }
   if !has_issue(
-    "{\"V2\":{\"id\":1,\"discount\":70,\"priority\":200}}",
+    "{\"V2\":[{\"id\":1,\"discount\":70,\"priority\":200}]}",
     "FactViolation",
     Fact,
-    [Variant("V2"), Field("priority")]
+    [Variant("V2"), Index(0), Field("priority")]
   ) {
     return false
   }
   if !has_issue(
-    "{\"V1\":{\"id\":1}}",
+    "{\"V1\":[{\"id\":1}]}",
     "Missing",
     Wire,
-    [Variant("V1"), Field("discount")]
+    [Variant("V1"), Index(0), Field("discount")]
   ) {
     return false
   }
@@ -259,17 +260,17 @@ fn vectors() -> bool uses {} {
   }
   // No package/descriptor/function text is looked up or executed.
   let Error(Invalid(_)) = read(
-    "{\"attacker@1/constructor\":{\"id\":1,\"discount\":70}}"
+    "{\"attacker@1/constructor\":[{\"id\":1,\"discount\":70}]}"
   ) else {
     return false
   }
   let Error(Invalid(_)) = read(
-    "{\"V1\":{\"id\":1,\"discount\":70},\"V2\":{\"id\":1,\"discount\":70}}"
+    "{\"V1\":[{\"id\":1,\"discount\":70}],\"V2\":[{\"id\":1,\"discount\":70}]}"
   ) else {
     return false
   }
   let Error(Invalid(_)) = read(
-    "{\"V1\":{\"id\":1,\"discount\":70,\"constructor\":\"attacker@1/load\"}}"
+    "{\"V1\":[{\"id\":1,\"discount\":70,\"constructor\":\"attacker@1/load\"}]}"
   ) else {
     return false
   }
