@@ -826,12 +826,12 @@ pub struct CaptureMode {
 /// Complete static decisions; cleanup lowering still determines ordered drops.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OwnershipFacts {
-    /// Plain rows in the final checked type store; K omits their cleanup.
-    pub plain_types: std::collections::BTreeSet<TypeId>,
+    /// Plain rows in the session interner; K omits their cleanup.
+    pub plain_types: std::collections::HashSet<TypeId>,
     /// Rows whose values have no user-visible destruction (DROP-1): copyable
     /// and not once. Destroying a holder of any other value, including rows
     /// appended after this pass, is a use of its loans (LANG-3).
-    pub silent_drop_types: std::collections::BTreeSet<TypeId>,
+    pub silent_drop_types: std::collections::HashSet<TypeId>,
     /// Borrowed call arguments whose result relation names only a field path
     /// `F` of their parameter, with the type of the argument place extended
     /// by `F` (#77). Lowering alone reads it, to loan that field place for
