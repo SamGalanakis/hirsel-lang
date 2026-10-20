@@ -606,6 +606,7 @@ dependencies = [
  "hirsel-parser",
  "hirsel-proof-export",
  "hirsel-rc",
+ "hirsel-remote",
  "hirsel-resolve",
  "hirsel-rt",
  "hirsel-rt-operations",
@@ -945,6 +946,20 @@ dependencies = [
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
+]
+
+[[package]]
+name = "hirsel-remote"
+version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+ "hirsel-run-schema",
+ "hirsel-types",
+ "rustls",
+ "rustls-webpki",
+ "sha2",
+ "tempfile",
+ "webpki-roots",
 ]
 
 [[package]]

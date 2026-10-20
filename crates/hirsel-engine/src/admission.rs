@@ -166,6 +166,60 @@ pub fn callee_facts(
     Ok(facts)
 }
 
+/// The facts a runner host checks an arriving call against (RUN-8) for one definition it
+/// holds, `path`, and the call form its signature takes: none when it is not a callee entry.
+pub fn entry_facts(
+    engine: &mut crate::QueryEngine,
+    path: &hirsel_syntax::DefPath,
+) -> Result<Option<(CalleeFacts, hirsel_run_schema::CallForm)>, hirsel_types::QueryError> {
+    let signature = engine.item_signature(path)?.value;
+    let Ok(roots) = callee_roots(&signature) else {
+        return Ok(None);
+    };
+    let hashes = engine.definition_hashes([path.clone()])?;
+    let Some(code) = hashes.hashes.get(path) else {
+        return Ok(None);
+    };
+    let program = engine.semantic_program_revision(path)?.digest();
+    let reach = match engine.unsafe_reach(path)? {
+        None => CodeReach::Safe,
+        Some(reach) => CodeReach::Escapes(reach.spelled()),
+    };
+    let form = if roots.is_empty() {
+        hirsel_run_schema::CallForm::Compute
+    } else {
+        hirsel_run_schema::CallForm::Call
+    };
+    Ok(Some((
+        CalleeFacts {
+            program,
+            code: code.0,
+            fingerprint: signature.fingerprint.0,
+            reach,
+        },
+        form,
+    )))
+}
+
+/// The callee entries a runner host serves from its program: every callee entry the
+/// package of `entry` defines, with the facts an arriving call is checked against.
+pub fn served_entries(
+    engine: &mut crate::QueryEngine,
+    entry: &hirsel_syntax::DefPath,
+) -> Result<BTreeMap<String, (CalleeFacts, hirsel_run_schema::CallForm)>, hirsel_types::QueryError>
+{
+    let mut served = BTreeMap::new();
+    for path in engine.item_paths() {
+        if path.0.package != entry.0.package {
+            continue;
+        }
+        if let Some(facts) = entry_facts(engine, &path)? {
+            served.insert(path.to_string(), facts);
+        }
+    }
+    Ok(served)
+}
+
 /// Select the admission kind from the entry's checked nominal signature.
 pub fn entry_launch_kind(signature: &Signature) -> Result<LaunchKind, RunRefusal> {
     if entry_roots(signature, LaunchKind::Test).is_ok() {

@@ -191,15 +191,6 @@ pub fn callee_instance(key: &[u8; 32]) -> [u8; 16] {
     let hash = hash_parts("hirsel.runner.instance.v1", [&key[..]]);
     hash[..16].try_into().unwrap()
 }
-/// The grant set and allowlist a request carries, in canonical bytes: the closed `io`
-/// schema's canonical JSON, and the sorted list or `null`.
-pub fn request_grants(grants: &crate::IoGrants) -> Vec<u8> {
-    serde_json::to_vec(grants).expect("grant serialization")
-}
-pub fn request_definitions(definitions: Option<&[String]>) -> Vec<u8> {
-    serde_json::to_vec(&definitions).expect("allowlist serialization")
-}
-
 fn unhex(text: &str) -> Option<Vec<u8>> {
     if text.len() % 2 != 0 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         return None;

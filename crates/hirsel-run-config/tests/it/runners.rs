@@ -115,9 +115,10 @@ fn runner_lists_are_sorted_unique_and_named() {
 fn provider_settings_refuse_with_valid_twins() {
     validate(&record(json!([pool()]))).unwrap();
     validate(&record(json!([node()]))).unwrap();
+    // A remote place needs where to reach it and whom to trust there.
     refused(
         with(pool(), "provider", json!("remote.tls@1")),
-        "io.runners.provider",
+        "io.runners.endpoint",
     );
     refused(with(pool(), "node", json!("n")), "io.runners");
     refused(with(pool(), "threads", json!(0)), "io.runners.threads");
@@ -298,4 +299,209 @@ fn a_call_member_is_present_exactly_for_a_call_launch() {
             other => panic!("expected a refusal at {field}, got {other:?}"),
         }
     }
+}
+
+fn remote() -> Value {
+    json!({"name": "far", "provider": "remote.tls@1", "endpoint": {"unix": "/run/h.sock"},
+           "server_name": "localhost", "roots": "webpki"})
+}
+
+#[test]
+fn remote_tls_entries_validate_with_refused_twins() {
+    let run = validate(&record(json!([remote()]))).unwrap();
+    assert!(canonical(&run).contains(
+        r#""endpoint":{"unix":"/run/h.sock"},"server_name":"localhost","roots":"webpki""#
+    ));
+    let tcp = json!({"tcp": {"address": "billing.internal", "service": "7443"}});
+    validate(&record(json!([with(remote(), "endpoint", tcp)]))).unwrap();
+    for service in ["0", "07443", "65536", "https"] {
+        let endpoint = json!({"tcp": {"address": "billing.internal", "service": service}});
+        refused(
+            with(remote(), "endpoint", endpoint),
+            "io.runners.endpoint.tcp",
+        );
+    }
+    refused(
+        with(remote(), "endpoint", json!({"unix": "h.sock"})),
+        "io.runners.endpoint.unix",
+    );
+    refused(
+        with(remote(), "server_name", json!("")),
+        "io.runners.server_name",
+    );
+    let pem = json!({"pem": "/etc/hirsel/ca.pem"});
+    validate(&record(json!([with(remote(), "roots", pem)]))).unwrap();
+    refused(
+        with(remote(), "roots", json!({"pem": "ca.pem"})),
+        "io.runners.roots",
+    );
+    refused(
+        with(remote(), "roots", json!("mozilla")),
+        "io.runners.roots",
+    );
+    let identity = |chain: &str| json!({"chain": chain, "key": "/etc/hirsel/c.key"});
+    validate(&record(json!([with(
+        remote(),
+        "identity",
+        identity("/etc/hirsel/c.pem")
+    )])))
+    .unwrap();
+    refused(
+        with(remote(), "identity", identity("c.pem")),
+        "io.runners.identity",
+    );
+    validate(&record(json!([with(remote(), "timeout_ns", json!(1))]))).unwrap();
+    refused(
+        with(remote(), "timeout_ns", json!(0)),
+        "io.runners.timeout_ns",
+    );
+    // The host chooses its callees' place settings.
+    refused(with(remote(), "threads", json!(2)), "io.runners");
+    refused(
+        with(remote(), "recording", json!("record")),
+        "io.runners.recording",
+    );
+    refused(
+        with(remote(), "admission", json!({"code": "admit.safe@1"})),
+        "io.runners.admission",
+    );
+    // Remote settings belong to remote places.
+    refused(
+        with(pool(), "server_name", json!("localhost")),
+        "io.runners",
+    );
+    refused(with(pool(), "reconcile", json!(true)), "io.runners");
+}
+
+#[test]
+fn remote_tls_defaults_normalize_to_absence() {
+    let plain = validate(&record(json!([remote()]))).unwrap();
+    let defaults = with(
+        with(remote(), "reconnect", json!({"attempts": 1})),
+        "reconcile",
+        json!(false),
+    );
+    let normalized = validate(&record(json!([defaults]))).unwrap();
+    assert_eq!(plain.canonical(), normalized.canonical());
+    assert!(!canonical(&plain).contains("reconnect"));
+    let chosen = with(
+        with(remote(), "reconnect", json!({"attempts": 3})),
+        "reconcile",
+        json!(true),
+    );
+    let chosen = validate(&record(json!([chosen]))).unwrap();
+    assert!(canonical(&chosen).contains(r#""reconnect":{"attempts":3}"#));
+    assert!(canonical(&chosen).contains(r#""reconcile":true"#));
+    assert_ne!(chosen.identity(), plain.identity());
+}
+
+fn host() -> Value {
+    json!({
+        "listen": {"unix": "/run/hirsel/h.sock"},
+        "identity": {"chain": "/etc/hirsel/host.pem", "key": "/etc/hirsel/host.key"},
+        "clients": {"pem": "/etc/hirsel/clients.pem"},
+        "callers": [
+            {"name": "app", "identity": {"subject": "agent-7.hirsel.test"},
+             "grants": {"stdout": "stdout.bytes@1", "dirs": []}, "definitions": null},
+            {"name": "batch", "identity": {"certificate": "ab".repeat(32)},
+             "grants": {"dirs": []}, "definitions": ["billing@3/charges.charge"]},
+        ],
+    })
+}
+fn host_refused(config: Value, field: &str) {
+    match host::HostConfig::validate(&serde_json::to_vec(&config).unwrap()) {
+        Err(RunRefusal::Invalid { field: f, .. } | RunRefusal::Unsupported { field: f })
+            if f == field => {}
+        other => panic!("expected a refusal at {field}, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_host_configuration_validates_with_refused_twins() {
+    let valid = |config: Value| host::HostConfig::validate(&serde_json::to_vec(&config).unwrap());
+    let config = valid(host()).unwrap();
+    assert_eq!((config.runs(), config.queue()), (1, 64));
+    let tcp = json!({"tcp": {"address": "127.0.0.1", "service": "7443"}});
+    valid(with(host(), "listen", tcp)).unwrap();
+    host_refused(
+        with(host(), "listen", json!({"unix": "h.sock"})),
+        "host.listen",
+    );
+    host_refused(
+        with(
+            host(),
+            "identity",
+            json!({"chain": "host.pem", "key": "/k"}),
+        ),
+        "host.identity",
+    );
+    let mut unsorted = host();
+    unsorted["callers"].as_array_mut().unwrap().reverse();
+    host_refused(unsorted, "host.callers");
+    // Anonymous callers are exactly the clients-null configuration.
+    let anonymous = json!([{"name": "any", "identity": "anonymous", "grants": {"dirs": []},
+                            "definitions": null}]);
+    let open = with(
+        with(host(), "clients", Value::Null),
+        "callers",
+        anonymous.clone(),
+    );
+    valid(open).unwrap();
+    host_refused(with(host(), "callers", anonymous), "host.callers.identity");
+    host_refused(
+        with(host(), "clients", Value::Null),
+        "host.callers.identity",
+    );
+    let mut short = host();
+    short["callers"][1]["identity"] = json!({"certificate": "ab"});
+    host_refused(short, "host.callers.identity");
+    let mut stdin = host();
+    stdin["callers"][0]["grants"]["stdin"] = json!("stdin.bytes@1");
+    host_refused(stdin, "host.callers.grants");
+    let journal = json!({"provider": "journal.dir@1", "path": "/var/lib/hirsel"});
+    valid(with(host(), "journal", journal)).unwrap();
+    host_refused(
+        with(
+            host(),
+            "journal",
+            json!({"provider": "journal.dir@1", "path": "j"}),
+        ),
+        "host.journal.path",
+    );
+    host_refused(
+        with(host(), "journal", json!({"provider": "journal.raft@1"})),
+        "host.journal.provider",
+    );
+    let recorded = with(
+        with(host(), "recording", json!("record")),
+        "tapes",
+        json!("/t"),
+    );
+    valid(recorded).unwrap();
+    host_refused(with(host(), "recording", json!("record")), "host.tapes");
+    host_refused(
+        with(host(), "recording", json!("durable")),
+        "host.recording",
+    );
+    host_refused(with(host(), "runs", json!(0)), "host.runs");
+    valid(with(host(), "queue", json!(0))).unwrap();
+    valid(with(host(), "admission", json!({"code": "admit.safe@1"}))).unwrap();
+}
+
+#[test]
+fn a_host_names_each_client_by_certificate_or_subject() {
+    let config = host::HostConfig::validate(&serde_json::to_vec(&host()).unwrap()).unwrap();
+    let named = |digest: Option<&[u8; 32]>, subject: &str| {
+        config
+            .caller(digest, |name| name == subject)
+            .map(|c| c.name.clone())
+    };
+    assert_eq!(
+        named(Some(&[1; 32]), "agent-7.hirsel.test").as_deref(),
+        Some("app")
+    );
+    assert_eq!(named(Some(&[0xab; 32]), "other").as_deref(), Some("batch"));
+    assert_eq!(named(Some(&[1; 32]), "other"), None);
+    // No certificate is the anonymous caller, which this host has none of.
+    assert_eq!(named(None, "agent-7.hirsel.test"), None);
 }

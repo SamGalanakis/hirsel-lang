@@ -19,8 +19,8 @@ use crate::{
     OperationContext, OperationResult, Operations, RunBudgets, Value, invalid,
 };
 use hirsel_run_schema::{
-    Access, CallForm, CallOutcome, CalleeOutcome, Cause, CodeReach, IoGrants, Mount, NetRule,
-    ProcessRule, RunnerCompletion, RunnerEntry, RunnerRequest,
+    Access, CallForm, CallOutcome, CalleeOutcome, Cause, CodeReach, GrantSet, IoGrants,
+    RunnerCompletion, RunnerEntry, RunnerRequest,
 };
 use hirsel_types::serialization::SerializableSchema;
 use hirsel_types::{BuiltinType, GenericArgument};
@@ -61,6 +61,20 @@ pub struct RunnerSend {
     pub sent: Result<u64, RunnerCompletion>,
     /// The call's task is `runner.spawn`'s child, which no task polls.
     pub child: bool,
+    /// For a sent call to another host (`remote.tls@1`), what its request frame carries
+    /// beyond the recorded request; the host provider sends it, and no callee starts here.
+    pub remote: Option<RemoteRequest>,
+}
+/// A remote request's parts the recorded request holds only as digest input: the request
+/// ordinal, the callee's signature fingerprint and code hash, and the requested grant set
+/// and allowlist as data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteRequest {
+    pub ordinal: u64,
+    pub fingerprint: [u8; 32],
+    pub code: [u8; 32],
+    pub grants: GrantSet,
+    pub definitions: Option<Vec<String>>,
 }
 struct Pending {
     /// The waiting task: the caller's own, or `runner.spawn`'s child.
@@ -122,18 +136,14 @@ fn fires(rate: u32, domain: &str, parts: &[&[u8]]) -> bool {
     draw(domain, parts) % 1_000_000 < u64::from(rate)
 }
 
-/// The codec schema of core `Failure`, which a `Faulted` outcome's bytes hold.
-pub fn failure_schema(
+/// The codec schema of a type graph over core types, whose first row is the root; the
+/// program's runtime types declare every core nominal, so these schemas are the registry's.
+fn core_graph_schema(
     runtime: &crate::aggregate::RuntimeTypes,
+    count: usize,
+    rows: impl FnOnce(&[hirsel_types::TypeId]) -> Vec<hirsel_types::Type>,
 ) -> Result<SerializableSchema, Error> {
-    let store = hirsel_types::TypeStore::from_graph(1, |_| {
-        vec![hirsel_types::Type::with_kind(
-            hirsel_types::TypeKind::Named {
-                definition: hirsel_syntax::DefPath::core("Failure"),
-                arguments: vec![].into(),
-            },
-        )]
-    });
+    let store = hirsel_types::TypeStore::from_graph(count, rows);
     let root = store.iter().next().map(|(id, _)| id).unwrap();
     hirsel_types::serialization::serializable_schema(
         &store,
@@ -142,7 +152,71 @@ pub fn failure_schema(
         &mut |path| Ok(runtime.serialization.get(path).cloned()),
     )
     .map_err(Error::Query)?
-    .ok_or_else(|| invalid("core Failure has no codec schema"))
+    .ok_or_else(|| invalid("a core type has no codec schema"))
+}
+fn named(definition: &str, arguments: Vec<GenericArgument>) -> hirsel_types::Type {
+    hirsel_types::Type::with_kind(hirsel_types::TypeKind::Named {
+        definition: hirsel_syntax::DefPath::core(definition),
+        arguments: arguments.into(),
+    })
+}
+/// The codec schema of the non-generic core type `name`.
+pub fn core_schema(
+    runtime: &crate::aggregate::RuntimeTypes,
+    name: &str,
+) -> Result<SerializableSchema, Error> {
+    core_graph_schema(runtime, 1, |_| vec![named(name, vec![])])
+}
+/// The codec schema of core `Failure`, which a `Faulted` outcome's bytes hold.
+pub fn failure_schema(
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<SerializableSchema, Error> {
+    core_schema(runtime, "Failure")
+}
+/// The codec schema of a request's allowlist, `Option[List[String]]` (RUN-11).
+pub fn allowlist_schema(
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<SerializableSchema, Error> {
+    core_graph_schema(runtime, 3, |ids| {
+        vec![
+            named("Option", vec![GenericArgument::Type(ids[1])]),
+            hirsel_types::Type::with_kind(hirsel_types::TypeKind::Builtin {
+                kind: BuiltinType::List,
+                arguments: vec![GenericArgument::Type(ids[2])].into(),
+            }),
+            hirsel_types::Type::with_kind(hirsel_types::TypeKind::Primitive(
+                hirsel_types::Primitive::String,
+            )),
+        ]
+    })
+}
+/// The requested grant set and allowlist in canonical codec bytes, as a request digest
+/// frames them (RUN-11): a remote place recomputes them from the `GrantSet` and list its
+/// request carries.
+fn request_bytes(
+    runtime: &crate::aggregate::RuntimeTypes,
+    grants: &IoGrants,
+    definitions: Option<&[String]>,
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let exact = |bytes: Result<Vec<u8>, _>| {
+        bytes.map_err(|e| invalid(format!("a request's grants exceed the codec: {e:?}")))
+    };
+    let grants = exact(super::codec::encode(
+        &core_schema(runtime, "GrantSet")?,
+        &grant_set(grants)?,
+    )?)?;
+    let list = match definitions {
+        None => variant(0, vec![]),
+        Some(paths) => variant(
+            1,
+            vec![collection::sequence(
+                BuiltinType::List,
+                paths.iter().cloned().map(Value::String).collect::<Vec<_>>(),
+            )],
+        ),
+    };
+    let definitions = exact(super::codec::encode(&allowlist_schema(runtime)?, &list)?)?;
+    Ok((grants, definitions))
 }
 
 /// A callee's own outcome as canonical bytes: its entry's `Ok` or `Err` payload, or its
@@ -238,6 +312,13 @@ impl Library {
                     admission: None,
                     grants: None,
                     definitions: None,
+                    endpoint: None,
+                    server_name: None,
+                    roots: None,
+                    identity: None,
+                    timeout_ns: None,
+                    reconnect: None,
+                    reconcile: false,
                 };
                 self.runner_handle(RunnerGrant {
                     entry,
@@ -324,8 +405,8 @@ impl Library {
         let facts = self.simulation.config.callees.get(&path).cloned();
         // 1. The argument encodes within the request budget.
         let bytes = super::codec::encode(&argument_schema, arg(a, 2)?)?;
-        let grants = hirsel_run_schema::request_grants(&runner.grants);
-        let definitions = hirsel_run_schema::request_definitions(runner.definitions.as_deref());
+        let (grants, definitions) =
+            request_bytes(call.runtime, &runner.grants, runner.definitions.as_deref())?;
         let (fingerprint, code) = facts
             .as_ref()
             .map_or(([0; 32], [0; 32]), |f| (f.fingerprint, f.code));
@@ -390,6 +471,7 @@ impl Library {
                     request,
                     sent: Err(completion.clone()),
                     child: scope.is_some(),
+                    remote: None,
                 });
                 let value = refused_value(&completion);
                 if scope.is_some() {
@@ -426,12 +508,25 @@ impl Library {
                         completion: None,
                     },
                 );
+                let remote = match start {
+                    Some(start) => {
+                        self.runners.starts.push(CalleeStart { token, ..start });
+                        None
+                    }
+                    None => Some(RemoteRequest {
+                        ordinal,
+                        fingerprint,
+                        code,
+                        grants: GrantSet::of(&runner.grants),
+                        definitions: runner.definitions.clone(),
+                    }),
+                };
                 self.runners.sends.push(RunnerSend {
                     request,
                     sent: Ok(token),
                     child: scope.is_some(),
+                    remote,
                 });
-                self.runners.starts.push(CalleeStart { token, ..start });
                 if scope.is_some() {
                     return Ok(OperationResult::returned(task_handle(task)));
                 }
@@ -464,8 +559,13 @@ impl Library {
         argument: SerializableSchema,
         schemas: &CallSchemas,
         call: &OperationCall<'_>,
-    ) -> Result<Result<(CalleeStart, bool), Refused>, Error> {
+    ) -> Result<Result<(Option<CalleeStart>, bool), Refused>, Error> {
         let entry = &runner.entry;
+        // Another host's place is its own: the host provider sends the request, and its
+        // capacity, faults and callee are the host's.
+        if entry.provider == "remote.tls@1" {
+            return Ok(Ok((None, false)));
+        }
         let seed = self.simulation.config.fault_seed.to_le_bytes();
         let ordinal = cause.ordinal;
         let place = self.runners.places.entry(entry.name.clone()).or_default();
@@ -557,7 +657,7 @@ impl Library {
         // The callee receives fresh storage decoded from the request's bytes.
         arguments.push(super::codec::decode(&argument, bytes, call.runtime)?);
         Ok(Ok((
-            CalleeStart {
+            Some(CalleeStart {
                 token: 0,
                 configuration,
                 arguments,
@@ -572,7 +672,7 @@ impl Library {
                     argument: bytes.to_vec(),
                     schemas: schemas.clone(),
                 },
-            },
+            }),
             lose_reply,
         )))
     }
@@ -818,46 +918,41 @@ fn access_value(access: Access) -> Value {
     variant(u32::from(access == Access::ReadWrite), vec![])
 }
 
-/// RUN-2's `GrantSet` of a runner's grant set.
+/// RUN-2's `GrantSet` value of a runner's grant set.
 fn grant_set(grants: &IoGrants) -> Result<Value, Error> {
+    grant_set_value(&GrantSet::of(grants))
+}
+fn grant_set_value(set: &GrantSet) -> Result<Value, Error> {
     let list = |values: Vec<Value>| collection::sequence(BuiltinType::List, values);
     Ok(record(
         "GrantSet",
         vec![
-            boolean(grants.stdout.is_some()),
-            boolean(grants.stderr.is_some()),
-            boolean(grants.tasks.is_some()),
-            boolean(grants.monotonic_clock.is_some()),
-            boolean(grants.wall_clock.is_some()),
-            boolean(grants.random.is_some()),
+            boolean(set.stdout),
+            boolean(set.stderr),
+            boolean(set.tasks),
+            boolean(set.monotonic_clock),
+            boolean(set.wall_clock),
+            boolean(set.random),
             list(
-                grants
-                    .dirs
+                set.dirs
                     .iter()
-                    .map(|mount| {
+                    .map(|(path, access)| {
                         record(
                             "DirGrant",
-                            vec![
-                                Value::String(mount.path.clone()),
-                                access_value(mount.access),
-                            ],
+                            vec![Value::String(path.clone()), access_value(*access)],
                         )
                     })
                     .collect(),
             ),
             list(
-                grants
-                    .net
+                set.net
                     .iter()
-                    .flat_map(|net| &net.rules)
                     .map(super::net::rule_value)
                     .collect::<Result<_, _>>()?,
             ),
             list(
-                grants
-                    .process
+                set.process
                     .iter()
-                    .flat_map(|process| &process.rules)
                     .map(|rule| {
                         record(
                             "ProcessRule",
@@ -873,8 +968,8 @@ fn grant_set(grants: &IoGrants) -> Result<Value, Error> {
     ))
 }
 
-/// The grant set `keep` asks for, when `grants` covers it (RUN-2); None otherwise.
-fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> {
+/// The plain grant set a `GrantSet` value holds.
+fn grant_set_data(keep: &Value) -> Result<GrantSet, Error> {
     let Value::Record { definition, fields } = keep else {
         return Err(invalid("GrantSet representation"));
     };
@@ -890,31 +985,7 @@ fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> 
         Value::Bool(b) => Ok(*b),
         _ => Err(invalid("GrantSet flag")),
     };
-    let kept = |granted: &Option<String>, i: usize| -> Result<Result<Option<String>, ()>, Error> {
-        Ok(match (flag(i)?, granted) {
-            (false, _) => Ok(None),
-            (true, Some(provider)) => Ok(Some(provider.clone())),
-            (true, None) => Err(()),
-        })
-    };
-    let mut narrow = IoGrants::default();
-    for (i, (granted, slot)) in [
-        (&grants.stdout, &mut narrow.stdout),
-        (&grants.stderr, &mut narrow.stderr),
-        (&grants.tasks, &mut narrow.tasks),
-        (&grants.monotonic_clock, &mut narrow.monotonic_clock),
-        (&grants.wall_clock, &mut narrow.wall_clock),
-        (&grants.random, &mut narrow.random),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        match kept(granted, i)? {
-            Ok(provider) => *slot = provider,
-            Err(()) => return Ok(None),
-        }
-    }
-    let mut paths = vec![];
+    let mut dirs = vec![];
     for dir in collection::elements(field(6)?, BuiltinType::List)? {
         let Value::Record { fields, .. } = &dir else {
             return Err(invalid("DirGrant representation"));
@@ -928,63 +999,29 @@ fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> 
         else {
             return Err(invalid("DirGrant representation"));
         };
-        let path = text(path)?.to_owned();
         let access = if *access == 1 {
             Access::ReadWrite
         } else {
             Access::Read
         };
-        // v1 narrows a mount's access, never to a subdirectory.
-        let Some(mount) = grants.dirs.iter().find(|m| m.path == path) else {
-            return Ok(None);
-        };
-        if !access.within(mount.access) {
-            return Ok(None);
-        }
-        paths.push(path.clone());
-        narrow.dirs.push(Mount {
-            path,
-            host: mount.host.clone(),
-            access,
-        });
+        dirs.push((text(path)?.to_owned(), access));
     }
-    if paths.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Ok(None);
-    }
-    let rules: Vec<NetRule> = super::net::rules(field(7)?)?;
-    if !rules.is_empty() {
-        let Some(net) = &grants.net else {
-            return Ok(None);
-        };
-        if !rules.iter().all(|rule| {
-            net.rules
-                .iter()
-                .any(|wide| hirsel_run_schema::net_rule_within(rule, wide))
-        }) {
-            return Ok(None);
-        }
-        let mut net = net.clone();
-        net.rules = rules;
-        narrow.net = Some(net);
-    }
-    let rules: Vec<ProcessRule> = super::process::process_rules(field(8)?)?;
-    if !rules.is_empty() {
-        let Some(process) = &grants.process else {
-            return Ok(None);
-        };
-        if !rules.iter().all(|rule| {
-            process
-                .rules
-                .iter()
-                .any(|wide| hirsel_run_schema::process_rule_within(rule, wide))
-        }) {
-            return Ok(None);
-        }
-        let mut process = process.clone();
-        process.rules = rules;
-        narrow.process = Some(process);
-    }
-    Ok(Some(narrow))
+    Ok(GrantSet {
+        stdout: flag(0)?,
+        stderr: flag(1)?,
+        tasks: flag(2)?,
+        monotonic_clock: flag(3)?,
+        wall_clock: flag(4)?,
+        random: flag(5)?,
+        dirs,
+        net: super::net::rules(field(7)?)?,
+        process: super::process::process_rules(field(8)?)?,
+    })
+}
+
+/// The grant set `keep` asks for, when `grants` covers it (RUN-2); None otherwise.
+fn narrowed(grants: &IoGrants, keep: &Value) -> Result<Option<IoGrants>, Error> {
+    Ok(hirsel_run_schema::narrow(grants, &grant_set_data(keep)?))
 }
 
 /// The value canonical `bytes` of `schema` hold, as fresh storage: a callee run's

@@ -18,6 +18,7 @@ pub use object_stores::{CredentialsReference, ObjectStore};
 
 mod grants;
 pub use grants::grants_within;
+pub mod host;
 mod runners;
 pub use runners::validate_runners;
 mod net;
@@ -1029,7 +1030,11 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
         for runner in &io.runners {
             if !matches!(
                 ProviderContract::parse(&runner.provider),
-                Some(ProviderContract::RunnerLocalThreads | ProviderContract::RunnerSim)
+                Some(
+                    ProviderContract::RunnerLocalThreads
+                        | ProviderContract::RunnerSim
+                        | ProviderContract::RunnerRemoteTls
+                )
             ) {
                 return Err(unsupported("io.runners.provider"));
             }

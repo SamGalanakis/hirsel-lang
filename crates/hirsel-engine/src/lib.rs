@@ -40,7 +40,8 @@ mod proof_export;
 mod queries;
 mod tools;
 pub use admission::{
-    admit_run, bind_run, callee_facts, entry_launch_kind, entry_roots, read_run_record,
+    admit_run, bind_run, callee_facts, entry_facts, entry_launch_kind, entry_roots,
+    read_run_record, served_entries,
 };
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;

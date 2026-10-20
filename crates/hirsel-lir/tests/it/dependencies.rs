@@ -65,6 +65,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-rt", Class::Implementation),
     ("hirsel-heapcheck", Class::Implementation),
     ("hirsel-code-store", Class::Implementation),
+    ("hirsel-remote", Class::Implementation),
     ("hirsel-kernels", Class::LeafKernel),
     ("hirsel-engine", Class::Wiring),
     ("hirsel-driver", Class::Wiring),

@@ -47,6 +47,9 @@ pub struct Readiness(Rc<RefCell<ReadyState>>, u64);
 /// counter, below the host's own token ranges (bits 62 and 63).
 const TAG_SHIFT: u32 = 48;
 const TAG_MASK: u64 = ((1 << 14) - 1) << TAG_SHIFT;
+/// The token a wake descriptor's events carry: no request has it (every tag and host range
+/// bit set), so it only ends a wait and is dropped at the next scheduling point.
+const WAKE_TOKEN: u64 = u64::MAX;
 impl std::fmt::Debug for Readiness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Readiness")
@@ -75,6 +78,9 @@ struct ReadyState {
     always: IdSet,
     /// Tokens the idle wait found ready, for the next scheduling point.
     woken: IdSet,
+    /// The descriptors registered by [`Readiness::wake_on`]: they end an idle wait but are
+    /// no source of progress of their own.
+    wakes: IdSet,
     /// Parked tokens waiting on a scripted world, which no host event readies: each is
     /// ready once a network request completes after it blocked, since that request may
     /// have advanced the script (a write a parked read's peer expects).
@@ -132,6 +138,34 @@ impl Readiness {
     /// The entered request waits for a delivery ([`deliver`](Self::deliver)).
     pub(crate) fn await_delivery(&self) {
         self.pending().delivery = true;
+    }
+    /// The entered request waits for a delivery that another thread announces by making `fd`
+    /// readable (a remote runner call's provider), so the idle wait wakes for it. The
+    /// delivery itself still arrives through [`deliver`](Self::deliver).
+    pub fn await_descriptor(&self, fd: std::os::fd::RawFd) {
+        let mut pending = self.pending();
+        pending.delivery = true;
+        pending.interest = Some((fd, libc::POLLIN));
+    }
+    /// Wake the idle wait whenever `fd` becomes readable, without readying any request: a
+    /// descriptor another thread writes to with news for the run (a runner host cancelling
+    /// a callee run), which the run reads at its next scheduling point. A run whose only
+    /// remaining sources are such descriptors is still Blocked (CONC-8).
+    pub fn wake_on(&self, fd: std::os::fd::RawFd) -> Result<(), AdapterError> {
+        let mut state = self.0.borrow_mut();
+        state.wakes.insert(fd as u64);
+        state
+            .fds
+            .entry(fd as u64)
+            .or_default()
+            .push((WAKE_TOKEN, libc::POLLIN));
+        if state.control(fd, libc::POLLIN)? {
+            Ok(())
+        } else {
+            Err(AdapterError::Unsupported(
+                "an unwatchable wake descriptor".into(),
+            ))
+        }
     }
     /// The delivery `token` waits for arrived: it is ready at the next scheduling point.
     pub fn deliver(&self, token: u64) {
@@ -269,6 +303,7 @@ impl Readiness {
             state.epoll_events(0, &mut ready)?;
         }
         state.due(&mut ready);
+        ready.remove(&WAKE_TOKEN);
         Ok(ready)
     }
     /// A timer wait for CLOCK_MONOTONIC `deadline` nanoseconds under the entered token:
@@ -325,7 +360,11 @@ impl Readiness {
         let deadline = state.next_timer();
         // No descriptor and no timer: nothing external can make progress. With only
         // timers left, the wait below sleeps until the earliest is due.
-        if state.fds.is_empty() && deadline.is_none() {
+        let sources = state
+            .fds
+            .iter_unordered()
+            .any(|(fd, _)| !state.wakes.contains(&fd));
+        if !sources && deadline.is_none() {
             return Ok(false);
         }
         let timeout = deadline.map_or(-1, |d| {
@@ -715,6 +754,27 @@ mod tests {
     }
     fn would_block(mut stream: &UnixStream) -> bool {
         stream.read(&mut [0; 64]).unwrap_err().kind() == std::io::ErrorKind::WouldBlock
+    }
+
+    /// A wake descriptor ends an idle wait but is no source of its own: with nothing else
+    /// to wait on the run is Blocked; a delivery parked on another thread's descriptor is
+    /// ready once that thread writes to it.
+    #[test]
+    fn a_wake_descriptor_wakes_a_wait_without_being_a_source() {
+        let readiness = Readiness::default();
+        let (cancel, mut canceller) = pair();
+        readiness.wake_on(cancel.as_raw_fd()).unwrap();
+        assert!(!readiness.wait().unwrap());
+        canceller.write_all(&[1]).unwrap();
+        assert!(readiness.ready().unwrap().is_empty());
+        let (delivered, mut provider) = pair();
+        readiness.enter(1);
+        readiness.await_descriptor(delivered.as_raw_fd());
+        readiness.parked(1);
+        assert!(readiness.ready().unwrap().is_empty());
+        provider.write_all(&[1]).unwrap();
+        assert!(readiness.wait().unwrap());
+        assert_eq!(readiness.ready().unwrap(), [1]);
     }
 
     /// mio tests/poll.rs:120 readiness_is_reregistered_after_would_block.

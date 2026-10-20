@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
@@ -83,6 +83,11 @@ enum Command {
         file: OsString,
         max_steps: Option<u64>,
         json: bool,
+    },
+    /// A runner host for `remote.tls@1` callers.
+    Serve {
+        file: OsString,
+        host: OsString,
     },
     Run {
         file: OsString,
@@ -522,6 +527,22 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             flag: None,
             file: source_arg(&mut args)?,
         },
+        Some(Value(command)) if command == "serve" => {
+            let (mut file, mut host) = (None, None);
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("host") if host.is_none() => host = Some(args.value()?),
+                    Value(path) if file.is_none() && !path.to_string_lossy().starts_with('-') => {
+                        file = Some(path)
+                    }
+                    arg => return Err(arg.unexpected()),
+                }
+            }
+            match (file, host) {
+                (Some(file), Some(host)) => Command::Serve { file, host },
+                _ => return Err("serve requires a program and --host <json>".into()),
+            }
+        }
         Some(Value(command)) if command == "hash" => Command::Source {
             command: "hash",
             flag: None,
@@ -787,6 +808,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 | Command::Build { .. }
                 | Command::Run { .. }
                 | Command::Simulation { .. }
+                | Command::Serve { .. }
         )
     {
         eprintln!("--no-verify applies only to run, test and build");
@@ -1196,6 +1218,18 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     Ok(()) => 0,
                     Err(error) => tool_error(ToolError::Io(error), false),
                 },
+                Err(error) => tool_error(error, false),
+            };
+        }
+        Command::Serve { file, host } => {
+            let served = hirsel_driver::serve::serve(
+                Path::new(&file),
+                Path::new(&host),
+                verify,
+                &mut |endpoint| eprintln!("hirsel serve: listening on {endpoint}"),
+            );
+            return match served {
+                Ok(()) => 0,
                 Err(error) => tool_error(error, false),
             };
         }

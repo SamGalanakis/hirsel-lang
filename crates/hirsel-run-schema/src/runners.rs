@@ -51,7 +51,52 @@ pub struct RunnerEntry {
     /// The definitions the runner runs, as full versioned paths; null runs any.
     #[serde(default)]
     pub definitions: Option<Vec<String>>,
+    /// `remote.tls@1`: the runner host's endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<Endpoint>,
+    /// `remote.tls@1`: the name the host's certificate must carry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    /// `remote.tls@1`: the trust anchors the host's certificate is verified against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roots: Option<Roots>,
+    /// `remote.tls@1`: the client identity presented when the host asks for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<TlsFiles>,
+    /// `remote.tls@1`: the bound on the wait for an outcome after the commit point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ns: Option<u64>,
+    /// `remote.tls@1`: reconnection attempts after a lost connection (default 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconnect: Option<Retry>,
+    /// `remote.tls@1`: the host must record call keys durably before admitting them, so
+    /// its status answers prove a call never ran (default false, absent).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reconcile: bool,
 }
+/// A runner host's endpoint: `{"tcp": {"address", "service"}}` or `{"unix": path}`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum Endpoint {
+    Tcp { address: String, service: String },
+    Unix(String),
+}
+/// Trust anchors: `"webpki"` (the built-in set) or `{"pem": absolute path}`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Roots {
+    Named(String),
+    Pem { pem: String },
+}
+/// A certificate chain and its key, as absolute paths of PEM files.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsFiles {
+    pub chain: String,
+    pub key: String,
+}
+/// `remote.tls@1`'s default reconnection attempts.
+pub const DEFAULT_RECONNECT: u32 = 1;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlaceAdmission {
@@ -105,6 +150,10 @@ impl RunnerEntry {
     /// Whether the place admits only callees that reach no escape (CAP-6).
     pub fn admits_only_safe(&self) -> bool {
         self.admission.as_ref().is_some_and(|a| a.code.is_some())
+    }
+    /// `remote.tls@1`'s reconnection attempts.
+    pub fn reconnects(&self) -> u32 {
+        self.reconnect.map_or(DEFAULT_RECONNECT, |r| r.attempts)
     }
     /// The contract whose outcomes the runner produces: its own, or a node's model.
     pub fn contract(&self) -> &str {

@@ -8,18 +8,19 @@ both under a simulation fixture and in a host launch. A host launch records link
 (RUN-11): with `--record T` each callee run that starts journals its own tape to
 `T.call-<ordinal>`, every tape replays alone, and `hirsel tapes check` joins a set. The
 arrival check covers the definition allowlists and a runner entry's `admit.safe@1` code
-policy (RUN-8). The native engines report the operations unavailable. Durable callee
-recording (RUN-14), code stores, and the `local.process@1` and `remote.tls@1` providers
-are planned. Items marked **Reserved** are designed here but have no implementation owner
-yet.
+policy (RUN-8). An interpreted host launch calls `remote.tls@1` runners, and `hirsel serve`
+is their runner host (crate `hirsel-remote`). The native engines report the operations
+unavailable. Durable callee recording (RUN-14), fetching code from a code store at
+arrival, and the `local.process@1` provider are planned. Items marked **Reserved** are
+designed here but have no implementation owner yet.
 
-**Interim deviations** of the shipped interpreter, until the codec forms land: the request
-digest frames the requested grant set and the allowlist as their canonical run-record JSON
-rather than codec bytes; a callee's outcome bytes are recorded as its tape's last event,
-`call_return ok|err|failed <bytes>`, rather than in the trailer, so the trailer stays
-`complete N`; and `local.threads@1` interleaves its callee runs with the caller on the
-caller's thread, bounded to `threads` running at once, rather than on operating-system
-threads.
+**Interim deviations** of the shipped interpreter: a callee's outcome bytes are recorded
+as its tape's last event, `call_return ok|err|failed <bytes>`, rather than in the
+trailer, so the trailer stays `complete N`; `local.threads@1` interleaves its callee runs
+with the caller on the caller's thread, bounded to `threads` running at once, rather than
+on operating-system threads; and `hirsel serve` runs one callee at a time (`runs` other
+than 1 is refused), holds only its own revision (`code.none@1`), and refuses `durable`
+callee recording.
 
 A **runner** is a place functions can run. The run configuration decides what each place
 is (threads in this process, a child process, another host, a node of a deterministic
@@ -624,12 +625,98 @@ server name and the root-set identity, never key material.
  "reconcile": true}
 ```
 
+`reconnect` (default 1) is how many times the provider reconnects after losing its
+connection before it gives up on the calls it holds. Without TLS a runner host is not
+reachable; `recording`, `code` and `admission` other than their defaults are refused on a
+`remote.tls@1` entry, since the host chooses them for its callees.
+
 A runner host is a launch of the Hirsel runtime whose configuration maps each admitted
 client identity to a caller name, a grant set and an allowlist. It must perform the
 arrival checks of RUN-8, run every callee as a callee run of RUN-10 admitted under that
 mapping, forward cancellations and acknowledge them, cancel a lost caller's callees, and
-answer status queries. The `RunFrame` type and the host's configuration schema are
-**Reserved**: they are fixed with the first `remote.tls@1` implementation.
+answer status queries.
+
+**Frames.** Every frame is one value of the root core data type `RunFrame`:
+
+```text
+RunFrame      = Open(SessionOpen) | Opened(SessionOpened) | Refused(NotRunReason)
+              | Call(RemoteCall) | Outcome(RemoteOutcome) | Cancel(CallRef, CancelCause)
+              | Acknowledged(CallRef) | Status(CallRef) | Running(CallRef) | Unknown(CallRef)
+              | Close(u64, u64)
+SessionOpen   = { stream: Bytes, instance: Bytes, epoch: u64 }
+SessionOpened = { epoch: u64, incarnation: Bytes, applied: u64, reconciles: bool }
+CallRef       = { epoch: u64, position: u64, key: Bytes }
+RemoteCall    = { epoch: u64, position: u64, ordinal: u64, key: Bytes, form: CallForm,
+                  path: String, fingerprint: Bytes, code: Bytes, grants: GrantSet,
+                  definitions: Option[List[String]], argument: Bytes, acknowledged: u64 }
+RemoteOutcome = { epoch: u64, position: u64, key: Bytes, digest: Bytes, end: CallEnd,
+                  callee: Option[Bytes], missing: List[Bytes] }
+CallForm      = Compute() | Call()
+CallEnd       = Returned(Bytes) | Failed(Bytes) | Faulted(Bytes) | NotRun(NotRunReason)
+              | InDoubt(InDoubtReason) | Canceled(CancelCause)
+```
+
+They are root core types with the `serializable` bound (`CallForm`, a plain enumeration,
+has the bounds of `GrantAccess`), declared so that both ends take the frame schema from
+their own checked core registry. A frame on the wire is a `u64` little-endian length and the canonical codec
+envelope of its value; a frame that does not decode, or is longer than the reader's limit
+(the host's `frame_bytes`), ends the connection. The request digest
+([RUN-11](#run-11-linked-tapes)) frames the `grants` and `definitions` of a `Call` as
+their codec bytes, so caller and host compute it alike.
+
+**Call streams.** Each caller run holds one call stream per `remote.tls@1` runner, named
+by `stream`, the hash of the runner's name and the caller's run instance; a stream belongs
+to the caller identity that opened it. A session opens with `Open` at an epoch at least the
+stream's current one; the host answers `Opened` with its incarnation, the highest decided
+position `applied` and whether it `reconciles`, or `Refused(Denied())` and closes for a
+stale epoch, another instance or an unadmitted client. A higher epoch fences the older
+session. Within an epoch the caller numbers its calls 1, 2, ...; the host decides each
+position exactly once and in order, and every decided position, `NotRun` included, keeps
+its outcome until the caller acknowledges it (`acknowledged` on a later `Call`, or
+`Close`). A `Call` for a decided position with the same digest is answered the stored
+outcome without running; with another digest it is `NotRun(Rejected())`; a position past
+the next one is refused and the stream refuses until the session reopens. The host decides
+the position before the code and authority checks, so a call those refuse still consumes
+its position.
+
+The caller's commit point is the `Call` frame written, and it never sends a call twice.
+After a lost connection it reconnects up to `reconnect` times; positions the host reports
+applied are resolved with `Status` (answered with the stored outcome, `Running` or
+`Unknown`), later ones complete `NotRun(Unreachable())`, which `retry` may resend; when
+the host is another incarnation that does not reconcile, every sent call is
+`InDoubt(Lost())`. A runner entry that claims `reconcile: true` refuses a host that does
+not. `Cancel` of a queued call completes it `Canceled(cause)`; of a running call, the host
+cancels the callee run's root scope with cause `Parent()` and answers `Acknowledged`; a
+lost session cancels its queued calls and forwards cancellation to its running ones.
+
+**Host configuration.** `hirsel serve <program> --host <json>` serves the callee entries
+the program's own package defines:
+
+```json
+{"listen": {"unix": "/run/hirsel/billing.sock"},
+ "identity": {"chain": "/etc/hirsel/host.pem", "key": "/etc/hirsel/host.key"},
+ "clients": {"pem": "/etc/hirsel/client-ca.pem"},
+ "callers": [{"name": "app", "identity": {"subject": "agent-7.hirsel.test"},
+              "grants": {"tasks": "tasks.cooperative@1"}, "definitions": null}],
+ "admission": {"code": "admit.safe@1"},
+ "journal": {"provider": "journal.dir@1", "path": "/var/lib/hirsel/calls"},
+ "recording": "record", "tapes": "/var/lib/hirsel/tapes",
+ "runs": 1, "queue": 64, "frame_bytes": 67108864}
+```
+
+`listen` is an endpoint as in the runner entry. With `clients` trust anchors the host
+requires a client certificate they issued, and a caller's `identity` is
+`{"certificate": "<SHA-256 of its DER, hex>"}` or `{"subject": "<DNS name it names>"}`;
+with `clients` null, the one caller is `"anonymous"`. A caller's `grants` (the `io`
+schema without `stdin` and `runners`) and `definitions` bound what its requests may
+select. `journal` is the stream seam: `journal.none@1` (the default; a restarted host is
+a new incarnation and does not reconcile) or `journal.dir@1`, an append-only checksummed
+file that keeps every stream, admission and decision durably before it is acted on, so a
+restarted host reconciles, and a call it admitted but never decided is
+`InDoubt(Abandoned())`. `recording` is `none` (the default) or `record`, each callee's
+tape written to `tapes` under its call key. `runs` (default 1) bounds callees running at
+once and `queue` (default 64) admitted calls waiting, beyond which a call is
+`NotRun(Overloaded())`.
 
 **`db@1`** (Reserved) runs compute and transact callees inside the writer of a store
 ([STORE-12](storage.md#store-12-transactions-at-a-runner)).

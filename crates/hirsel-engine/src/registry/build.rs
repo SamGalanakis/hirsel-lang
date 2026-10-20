@@ -381,6 +381,42 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "NotRun(NotRunReason)|InDoubt(InDoubtReason)|Failed(E)|Faulted(Failure)|Canceled(CancelCause)",
         &mut out,
     );
+    // RUN-13: the frames a caller's remote.tls@1 provider and a runner host exchange.
+    variant("CallForm", "", "Compute()|Call()", &mut out);
+    variant(
+        "CallEnd",
+        "",
+        "Returned(Bytes)|Failed(Bytes)|Faulted(Bytes)|NotRun(NotRunReason)|InDoubt(InDoubtReason)|Canceled(CancelCause)",
+        &mut out,
+    );
+    for (name, fields) in [
+        ("SessionOpen", "stream: Bytes,instance: Bytes,epoch: u64"),
+        (
+            "SessionOpened",
+            "epoch: u64,incarnation: Bytes,applied: u64,reconciles: bool",
+        ),
+        ("CallRef", "epoch: u64,position: u64,key: Bytes"),
+        (
+            "RemoteCall",
+            "epoch: u64,position: u64,ordinal: u64,key: Bytes,form: CallForm,path: String,fingerprint: Bytes,code: Bytes,grants: GrantSet,definitions: Option[List[String]],argument: Bytes,acknowledged: u64",
+        ),
+        (
+            "RemoteOutcome",
+            "epoch: u64,position: u64,key: Bytes,digest: Bytes,end: CallEnd,callee: Option[Bytes],missing: List[Bytes]",
+        ),
+    ] {
+        let mut b = Builder::new("").with_declarations(&out);
+        let repr = b.record(fields);
+        let mut t = type_definition(vec![], Some(repr));
+        serializable_core(name, &mut t);
+        publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
+    }
+    variant(
+        "RunFrame",
+        "",
+        "Open(SessionOpen)|Opened(SessionOpened)|Refused(NotRunReason)|Call(RemoteCall)|Outcome(RemoteOutcome)|Cancel(CallRef,CancelCause)|Acknowledged(CallRef)|Status(CallRef)|Running(CallRef)|Unknown(CallRef)|Close(u64,u64)",
+        &mut out,
+    );
     for (name, fields) in [
         ("File", ""),
         ("AtomicFile", "dir: Dir,tmp: Path,dst: Path"),
@@ -1014,6 +1050,8 @@ fn variant(name: &str, generic: &str, variants: &str, out: &mut BTreeMap<DefPath
                 | "NetStep"
                 | "ChildStep"
                 | "ShapeBody"
+                | "CallEnd"
+                | "RunFrame"
         )
     {
         t.bounds = vec![
@@ -1099,6 +1137,14 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "NotRunReason"
             | "InDoubtReason"
             | "RunError"
+            | "CallForm"
+            | "CallEnd"
+            | "SessionOpen"
+            | "SessionOpened"
+            | "CallRef"
+            | "RemoteCall"
+            | "RemoteOutcome"
+            | "RunFrame"
     ) {
         t.serializable = true;
         if t.generics.is_empty() {

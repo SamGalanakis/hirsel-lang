@@ -55,6 +55,11 @@ Commands (arguments use the shared lexopt parser):
   RUN-11) without a program: it prints a `checked:` line per link whose ends are both in
   the set, an `unchecked:` line per link with one end missing, and a count (exit 0), or
   refuses the set on the first set of mismatches (`hirsel: tapes check: ...`, exit 1).
+- `hirsel serve <program> --host <json>` is a runner host for `remote.tls@1` callers
+  (docs/spec/runners.md, RUN-13): it listens at the host configuration's endpoint, prints
+  `hirsel serve: listening on <endpoint>` on stderr once it accepts connections, and runs
+  each admitted call to one of the program's callee entries as its own callee run, until
+  the process ends.
 - `--timings`, `--timings=json` and `--mem-usage`, anywhere before `--` on
   check, build, run and test, print the compile timings and heap report on
   stderr after the command (docs/building.md, "Compile timings"). Heap bytes

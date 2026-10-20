@@ -33,6 +33,11 @@ pub(crate) struct HostRunners {
     role: Option<CallSchemas>,
     /// The execution's next readiness tag, shared by all its runs.
     tags: Rc<Cell<u64>>,
+    /// The run's `remote.tls@1` providers, and the runner of each parked remote call.
+    remote: Option<super::remote::RemoteRunners>,
+    remote_calls: BTreeMap<u64, String>,
+    /// A runner host's cancellation of this run, when a host serves it.
+    external: Option<super::remote::ExternalCancel>,
 }
 
 /// Where a host run's runner calls lead: what the launcher found about the program and
@@ -43,6 +48,8 @@ pub(crate) struct RunnerContext {
     pub tape: Option<PathBuf>,
     /// A callee run's schemas (a `call` launch).
     pub role: Option<CallSchemas>,
+    /// The providers of the run's `remote.tls@1` runners (live runs only).
+    pub remote: Option<super::remote::RemoteRunners>,
 }
 
 impl HostLibrary {
@@ -55,6 +62,7 @@ impl HostLibrary {
         config.callees = context.callees;
         self.runners.tape = context.tape;
         self.runners.role = context.role;
+        self.runners.remote = context.remote;
     }
     fn adapter_error(&mut self, error: hirsel_rt::io::AdapterError) -> Error {
         let message = format!("{error:?}");
@@ -97,6 +105,7 @@ impl HostLibrary {
             request,
             sent,
             child,
+            remote,
         } in self.library.take_runner_sends()
         {
             match sent {
@@ -113,7 +122,7 @@ impl HostLibrary {
                         );
                     }
                 }
-                Ok(token) => match self.runner_issue(token, request.clone())? {
+                Ok(token) => match self.remote_issue(token, request.clone(), remote)? {
                     None => {
                         self.runners.waits.insert(token, (request, child));
                         // No task parks for a spawned call: its child waits from now.
@@ -129,6 +138,68 @@ impl HostLibrary {
             }
         }
         Ok(())
+    }
+    /// Issue a sent call's request; a call to another host is first handed to its runner's
+    /// provider, and its wait watches the provider's wake descriptor.
+    fn remote_issue(
+        &mut self,
+        token: u64,
+        request: RunnerRequest,
+        remote: Option<hirsel_interp::library::runners::RemoteRequest>,
+    ) -> Result<Option<RunnerCompletion>, Error> {
+        let fd = match (remote, &self.runners.remote, &self.io) {
+            (Some(parts), Some(remote), HostIo::Live(_)) if remote.serves(&request.runner) => {
+                remote.submit(
+                    &request.runner,
+                    token,
+                    super::remote::call(&request, parts),
+                    request.digest,
+                );
+                self.runners
+                    .remote_calls
+                    .insert(token, request.runner.clone());
+                Some(remote.wake_fd())
+            }
+            _ => None,
+        };
+        let issued = self.runner_issue(token, request)?;
+        if let (None, Some(fd), HostIo::Live(io)) = (&issued, fd, &self.io)
+            && let Some(readiness) = io.readiness()
+        {
+            readiness.await_descriptor(fd);
+        }
+        Ok(issued)
+    }
+    /// A runner host serves this run: its cancellation wakes the run's idle wait.
+    pub(crate) fn set_external_cancel(
+        &mut self,
+        cancel: super::remote::ExternalCancel,
+    ) -> Result<(), String> {
+        if let HostIo::Live(io) = &self.io
+            && let Some(readiness) = io.readiness()
+        {
+            readiness
+                .wake_on(cancel.wake_fd())
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        self.runners.external = Some(cancel);
+        Ok(())
+    }
+    /// A scheduling point: a host's cancellation of this run cancels its root scope, and
+    /// the remote calls whose completion arrived are delivered.
+    pub(super) fn remote_deliveries(&mut self) {
+        if let Some(external) = &mut self.runners.external
+            && external.take()
+        {
+            hirsel_interp::Operations::cancel_run(&mut self.library);
+        }
+        let (Some(remote), HostIo::Live(io)) = (&self.runners.remote, &mut self.io) else {
+            return;
+        };
+        for (token, completion) in remote.take() {
+            self.runners.remote_calls.remove(&token);
+            io.deliver(token, completion);
+        }
     }
     pub(super) fn runner_waits(&self) -> bool {
         !self.runners.waits.is_empty()
@@ -204,6 +275,11 @@ impl HostLibrary {
             let Some((key, cause)) = self.library.runner_cancel(token) else {
                 continue;
             };
+            if let (Some(remote), Some(runner)) =
+                (&self.runners.remote, self.runners.remote_calls.get(&token))
+            {
+                remote.cancel(runner, token, cause);
+            }
             match self.io.call(R::RunnerCancel { key, cause }) {
                 Ok(C::Ready) => {}
                 Ok(_) => {
@@ -235,16 +311,18 @@ impl HostLibrary {
         Ok(())
     }
     /// This run, a callee, ended: record its own outcome's bytes, then end its tape.
+    /// A callee run's own outcome, recorded (RUN-11); none when it produced none.
     pub(crate) fn callee_return(
         &mut self,
         end: &CalleeEnd,
         cx: &mut OperationContext<'_>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<hirsel_run_schema::CalleeOutcome>, Error> {
         let Some(schemas) = &self.runners.role else {
-            return Ok(());
+            return Ok(None);
         };
-        if let Some(outcome) = callee_outcome(end, schemas, cx)? {
-            match self.io.call(R::CallReturn(outcome)) {
+        let outcome = callee_outcome(end, schemas, cx)?;
+        if let Some(outcome) = &outcome {
+            match self.io.call(R::CallReturn(outcome.clone())) {
                 Ok(C::Ready) => {}
                 Ok(_) => {
                     return Err(self.adapter_error(hirsel_rt::io::AdapterError::InvalidCompletion));
@@ -252,7 +330,7 @@ impl HostLibrary {
                 Err(error) => return Err(self.adapter_error(error)),
             }
         }
-        Ok(())
+        Ok(outcome)
     }
     /// A live callee run's end: its own outcome, then its tape's trailer.
     pub(super) fn callee_finished(
@@ -376,6 +454,7 @@ impl HostLibrary {
             callees: self.library.simulation.config.callees.clone(),
             tape,
             role: Some(call.schemas.clone()),
+            remote: None,
         });
         callee.runners.tags = self.runners.tags.clone();
         // The callee receives its own root Io and the argument decoded from the request.

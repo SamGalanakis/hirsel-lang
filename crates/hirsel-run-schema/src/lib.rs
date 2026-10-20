@@ -16,15 +16,15 @@ mod grants;
 mod runners;
 pub use calls::{
     CallCause, CallForm, CallOutcome, CallRecord, CalleeFacts, CalleeOutcome, Cause,
-    RunnerCompletion, RunnerRequest, call_key, callee_instance, callee_seed, request_definitions,
-    request_digest, request_grants,
+    RunnerCompletion, RunnerRequest, call_key, callee_instance, callee_seed, request_digest,
 };
 pub use grants::{
-    env_within, io_within, mount_within, net_operation_within, net_rule_within, process_rule_within,
+    GrantSet, NET_OPERATIONS, env_within, io_within, mount_within, narrow, net_operation_within,
+    net_rule_within, process_rule_within,
 };
 pub use runners::{
-    DEFAULT_QUEUE, DEFAULT_THREADS, FaultRate, PlaceAdmission, Retry, RunnerEntry, SIM_FAULT_SITES,
-    sim_model_sites,
+    DEFAULT_QUEUE, DEFAULT_RECONNECT, DEFAULT_THREADS, Endpoint, FaultRate, PlaceAdmission, Retry,
+    Roots, RunnerEntry, SIM_FAULT_SITES, TlsFiles, sim_model_sites,
 };
 mod outcome;
 pub use outcome::{
@@ -76,6 +76,7 @@ pub enum ProviderContract {
     BudgetsLimits,
     RunnerLocalThreads,
     RunnerSim,
+    RunnerRemoteTls,
     TelemetryCapture,
     TelemetryNull,
 }
@@ -94,6 +95,7 @@ impl ProviderContract {
         Self::ProcessSpawn,
         Self::RandomSplitMix64,
         Self::RandomSystem,
+        Self::RunnerRemoteTls,
         Self::RunnerSim,
         Self::StderrBytes,
         Self::StdinBytes,
@@ -124,6 +126,7 @@ impl ProviderContract {
             Self::BudgetsLimits => "budgets.limits@2",
             Self::RunnerLocalThreads => "local.threads@1",
             Self::RunnerSim => "sim@1",
+            Self::RunnerRemoteTls => "remote.tls@1",
             Self::TelemetryCapture => "telemetry.capture@1",
             Self::TelemetryNull => "telemetry.null@1",
         }

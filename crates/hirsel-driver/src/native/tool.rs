@@ -122,6 +122,11 @@ pub fn run_path_native_backend(
             };
             (run, super::link::Tape::Replay(tape))
         }
+        crate::HostLaunch::Callee { .. } => {
+            return Err(ToolError::Runtime(
+                "launch: a runner host runs its callees interpreted".into(),
+            ));
+        }
     };
     let entry = loaded.entry;
     let mut engine = loaded.engine;

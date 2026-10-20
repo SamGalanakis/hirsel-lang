@@ -14,7 +14,9 @@ use hirsel_rt::{
 use hirsel_syntax::DefPath;
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
+mod remote;
 mod runners;
+pub(crate) use remote::{CancelHandle, ExternalCancel, RemoteRunners, wire as remote_wire};
 pub(crate) use runners::RunnerContext;
 
 fn invalid() -> Error {
@@ -2172,6 +2174,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     /// request is parked or a deadline armed), and the due scope deadlines expire by
     /// deadline, ties in entry order.
     fn expire_deadlines(&mut self, cx: &mut OperationContext<'_>) -> Result<(), Error> {
+        self.remote_deliveries();
         let mut armed = std::mem::take(&mut self.armed);
         armed.retain(|(token, scope, _)| {
             let live = self.library.deadline_pending(*scope);
@@ -2214,12 +2217,14 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         self.runner_children(cx)
     }
     fn wait(&mut self) -> Result<bool, Error> {
+        self.remote_deliveries();
         self.io
             .adapter()
             .wait()
             .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
     }
     fn ready_now(&mut self) -> Result<bool, Error> {
+        self.remote_deliveries();
         self.io
             .adapter()
             .has_ready()

@@ -18,6 +18,7 @@ hirsel-authority = { path = "../hirsel-authority" }
 hirsel-ownership = { path = "../hirsel-ownership" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-run-schema = { path = "../hirsel-run-schema" }
+hirsel-remote = { path = "../hirsel-remote" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }

@@ -108,3 +108,120 @@ pub fn env_within(
 ) -> bool {
     a.iter().all(|(name, value)| b.get(name) == Some(value))
 }
+
+/// `NetOperation`'s variants in ordinal order, as the run configuration spells them.
+pub const NET_OPERATIONS: [&str; 9] = [
+    "connect",
+    "connect_tls",
+    "listen",
+    "udp_bind",
+    "udp_peer",
+    "listen_tls",
+    "unix_connect",
+    "unix_listen",
+    "unix_listen_remove_stale",
+];
+
+/// RUN-2's core `GrantSet` as plain data: the roots a runner's grant set holds, by presence,
+/// its mounts by virtual path, and its network and process rules. It names no provider and
+/// no host path, so it is what a request carries to another place.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GrantSet {
+    pub stdout: bool,
+    pub stderr: bool,
+    pub tasks: bool,
+    pub monotonic_clock: bool,
+    pub wall_clock: bool,
+    pub random: bool,
+    pub dirs: Vec<(String, Access)>,
+    pub net: Vec<NetRule>,
+    pub process: Vec<ProcessRule>,
+}
+impl GrantSet {
+    /// The grant set `grants` holds.
+    pub fn of(grants: &IoGrants) -> Self {
+        Self {
+            stdout: grants.stdout.is_some(),
+            stderr: grants.stderr.is_some(),
+            tasks: grants.tasks.is_some(),
+            monotonic_clock: grants.monotonic_clock.is_some(),
+            wall_clock: grants.wall_clock.is_some(),
+            random: grants.random.is_some(),
+            dirs: grants
+                .dirs
+                .iter()
+                .map(|m| (m.path.clone(), m.access))
+                .collect(),
+            net: grants.net.iter().flat_map(|n| n.rules.clone()).collect(),
+            process: grants
+                .process
+                .iter()
+                .flat_map(|p| p.rules.clone())
+                .collect(),
+        }
+    }
+}
+
+/// RUN-2 coverage: the grant set `grants` narrowed to exactly `keep`, when `grants` covers
+/// it; None otherwise. Flags are kept only where granted, mounts by their exact virtual path
+/// with equal or lesser access (sorted, unique), net rules under `net.narrow` coverage and
+/// process rules naming a granted program with a subset of its environment.
+pub fn narrow(grants: &IoGrants, keep: &GrantSet) -> Option<IoGrants> {
+    let flag = |kept: bool, granted: &Option<String>| match (kept, granted) {
+        (false, _) => Some(None),
+        (true, Some(provider)) => Some(Some(provider.clone())),
+        (true, None) => None,
+    };
+    let mut narrow = IoGrants {
+        stdout: flag(keep.stdout, &grants.stdout)?,
+        stderr: flag(keep.stderr, &grants.stderr)?,
+        tasks: flag(keep.tasks, &grants.tasks)?,
+        monotonic_clock: flag(keep.monotonic_clock, &grants.monotonic_clock)?,
+        wall_clock: flag(keep.wall_clock, &grants.wall_clock)?,
+        random: flag(keep.random, &grants.random)?,
+        ..IoGrants::default()
+    };
+    if keep.dirs.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+        return None;
+    }
+    for (path, access) in &keep.dirs {
+        // v1 narrows a mount's access, never to a subdirectory.
+        let mount = grants.dirs.iter().find(|m| &m.path == path)?;
+        if !access.within(mount.access) {
+            return None;
+        }
+        narrow.dirs.push(Mount {
+            path: path.clone(),
+            host: mount.host.clone(),
+            access: *access,
+        });
+    }
+    if !keep.net.is_empty() {
+        let net = grants.net.as_ref()?;
+        if !keep
+            .net
+            .iter()
+            .all(|rule| net.rules.iter().any(|wide| net_rule_within(rule, wide)))
+        {
+            return None;
+        }
+        let mut net = net.clone();
+        net.rules = keep.net.clone();
+        narrow.net = Some(net);
+    }
+    if !keep.process.is_empty() {
+        let process = grants.process.as_ref()?;
+        if !keep.process.iter().all(|rule| {
+            process
+                .rules
+                .iter()
+                .any(|wide| process_rule_within(rule, wide))
+        }) {
+            return None;
+        }
+        let mut process = process.clone();
+        process.rules = keep.process.clone();
+        narrow.process = Some(process);
+    }
+    Some(narrow)
+}

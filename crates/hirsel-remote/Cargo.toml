@@ -1,0 +1,18 @@
+[package]
+name = "hirsel-remote"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-run-schema = { path = "../hirsel-run-schema" }
+hirsel-types = { path = "../hirsel-types" }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+webpki = { package = "rustls-webpki", version = "=0.103.15", default-features = false, features = ["std"] }
+webpki-roots = "=1.0.9"
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
+tempfile = "3"
